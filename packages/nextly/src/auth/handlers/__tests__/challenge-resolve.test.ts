@@ -2,7 +2,10 @@ import { describe, it, expect, vi } from "vitest";
 
 import { ChallengeRegistry } from "../../pipeline/challenge";
 import { AuthHookRegistry } from "../../pipeline/hooks";
-import { mintPendingToken } from "../../pipeline/pending-token";
+import {
+  mintPendingToken,
+  verifyPendingToken,
+} from "../../pipeline/pending-token";
 import {
   handleChallengeResolve,
   type ChallengeResolveDeps,
@@ -113,6 +116,41 @@ describe("handleChallengeResolve (D71)", () => {
     expect(body.status).toBe("challenge");
     expect(typeof body.pendingToken).toBe("string");
     expect(body.pendingToken).not.toBe(pendingToken);
+  });
+
+  it("carries `next` and `strategy` across a wrong answer", async () => {
+    // The re-minted token REPLACES the HttpOnly cookie, so anything dropped
+    // here is gone for good: an external login that asked to land somewhere
+    // specific lost that destination on the first wrong answer, and the
+    // eventual correct one issued a session to the dashboard instead.
+    const deps = makeDeps();
+    const pendingToken = await mintPendingToken(
+      {
+        userId: "u1",
+        challengeId: "totp",
+        attempts: 0,
+        strategy: "oauth-google",
+        next: "/admin/posts",
+      },
+      SECRET,
+      300
+    );
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "000000" } }),
+      deps
+    );
+    const body = (await res.json()) as { pendingToken: string };
+
+    // Read back from the TOKEN, not from the response envelope: the claims
+    // are what the next attempt is decided from, and the envelope never
+    // carried them.
+    const reissued = await verifyPendingToken(body.pendingToken, SECRET);
+    expect(reissued?.next).toBe("/admin/posts");
+    expect(reissued?.strategy).toBe("oauth-google");
+    // The one thing that MUST change between rounds, so this is not simply
+    // asserting the original token came back.
+    expect(reissued?.attempts).toBe(1);
   });
 
   it("rejects an invalid pending token", async () => {

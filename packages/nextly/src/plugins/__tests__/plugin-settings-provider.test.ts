@@ -13,6 +13,20 @@ process.env.NEXTLY_SECRET_KEYS ??= "c".repeat(32);
 function recordingDb() {
   const spelling: string[] = [];
   const writer = {
+    // The store READS inside its transaction before writing, so the fake has
+    // to answer a select as the real builders do — awaitable, and carrying
+    // `.for` for the dialects that lock.
+    select: () => ({
+      from: () => ({
+        where: () => {
+          const p = Promise.resolve([]) as Promise<never[]> & {
+            for: (s: "update") => Promise<never[]>;
+          };
+          p.for = () => Promise.resolve([]);
+          return p;
+        },
+      }),
+    }),
     insert: () => ({
       values: () => ({
         onConflictDoUpdate: async () => {
@@ -29,7 +43,6 @@ function recordingDb() {
     spelling,
     db: {
       ...writer,
-      select: () => ({ from: () => ({ where: async () => [] }) }),
       transaction: async <T>(run: (tx: typeof writer) => Promise<T>) =>
         run(writer),
     },

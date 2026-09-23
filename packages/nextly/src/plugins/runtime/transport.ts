@@ -86,6 +86,50 @@ async function materializeBody(
   };
 }
 
+/**
+ * Hold work that precedes the socket to the same wall-clock budget.
+ *
+ * The request timer cannot cover this: it is armed against a `ClientRequest`
+ * that does not exist until the body has been read. Refusing with the same
+ * reason the socket timer uses keeps one outcome for one cause, whichever
+ * side of the connection ran out of time.
+ */
+async function withRequestDeadline<T>(
+  work: Promise<T>,
+  deadlineAt: number,
+  url: URL
+): Promise<T> {
+  const refuse = () =>
+    NextlyError.forbidden({
+      logContext: {
+        reason: "outbound-timeout",
+        host: url.hostname,
+        deadlineAt,
+      },
+    });
+
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) throw refuse();
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(refuse());
+        }, remaining);
+        // Never holds the loop open on its own; it races work that does.
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    // Cleared on every exit, so a body read that finished early does not keep
+    // a timer alive for the remainder of the budget.
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /** Header values as Node wants them, from whatever shape the caller used. */
 function toHeaders(init: RequestInit): Record<string, string> {
   const out: Record<string, string> = {};
@@ -94,6 +138,37 @@ function toHeaders(init: RequestInit): Record<string, string> {
     out[key] = value;
   });
   return out;
+}
+
+/**
+ * A header name whose values must stay SEPARATE, not comma-joined.
+ *
+ * `Set-Cookie` is the one field whose grammar forbids the list form every
+ * other repeated header uses: an `Expires` attribute contains a comma of its
+ * own, so a joined value cannot be split back apart by anyone — including
+ * `Headers.getSetCookie()`, which reported one malformed cookie where the
+ * origin sent several. Lower-case because Node reports header names that way.
+ */
+const UNJOINABLE_HEADERS = new Set(["set-cookie"]);
+
+/**
+ * Node's header bag as the tuples `Response` accepts.
+ *
+ * Repeated headers arrive as an array. Most may be comma-joined, which is what
+ * the list grammar means; `Set-Cookie` may not, so it contributes ONE TUPLE
+ * PER VALUE and `Headers` keeps them apart.
+ */
+function responseHeaderTuples(
+  headers: NodeJS.Dict<string | string[]>
+): Array<[string, string]> {
+  return Object.entries(headers).flatMap(([name, value]) => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) return [[name, value] as [string, string]];
+    if (UNJOINABLE_HEADERS.has(name.toLowerCase())) {
+      return value.map(one => [name, one] as [string, string]);
+    }
+    return [[name, value.join(", ")] as [string, string]];
+  });
 }
 
 /**
@@ -107,7 +182,16 @@ function toHeaders(init: RequestInit): Record<string, string> {
 export async function sendVetted(args: SendArgs): Promise<Response> {
   const { url, address, init, deadlineAt, maxBodyBytes } = args;
   const send = url.protocol === "https:" ? httpsRequest : httpRequest;
-  const { body, headers: bodyHeaders } = await materializeBody(init);
+  // Inside the deadline, because reading the REQUEST body happens before any
+  // socket exists and therefore before the timer below is armed. A plugin
+  // handing over a `ReadableStream` that never ends held `ctx.fetch` open
+  // indefinitely without a single byte leaving the process — the documented
+  // bound stood, and nothing had started that could enforce it.
+  const { body, headers: bodyHeaders } = await withRequestDeadline(
+    materializeBody(init),
+    deadlineAt,
+    url
+  );
 
   return new Promise<Response>((resolve, reject) => {
     const req = send(
@@ -181,16 +265,7 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
               NULL_BODY_STATUSES.has(status) ? null : Buffer.concat(chunks),
               {
                 status,
-                headers: Object.entries(response.headers).flatMap(([k, v]) =>
-                  v === undefined
-                    ? []
-                    : [
-                        [k, Array.isArray(v) ? v.join(", ") : v] as [
-                          string,
-                          string,
-                        ],
-                      ]
-                ),
+                headers: responseHeaderTuples(response.headers),
               }
             )
           );

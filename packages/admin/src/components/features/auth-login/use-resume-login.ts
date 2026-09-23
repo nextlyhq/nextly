@@ -85,6 +85,21 @@ export function hasSignInError(search?: string): boolean {
   return new URLSearchParams(query).get("error") === "signin-failed";
 }
 
+/**
+ * The challenge id core uses for a forced password change.
+ *
+ * Not a plugin challenge: no view is registered for it and none can be, since
+ * the step it names is core's own set-password flow. It arrives here the same
+ * way a real challenge does — as the `challengeId` of a pending cookie — so
+ * the login page has to tell the two apart by name.
+ *
+ * Spelled here rather than imported, as the `password_change_required` status
+ * beside it is: this module is browser code, and the server module holding the
+ * constant pulls in the auth runtime. `use-resume-login.test.ts` pins the two
+ * spellings together so they cannot drift apart unnoticed.
+ */
+const MUST_CHANGE_PASSWORD_CHALLENGE = "must-change-password";
+
 /** A challenge the login page is currently showing. */
 export interface ActiveChallenge {
   challengeType: string;
@@ -95,6 +110,14 @@ export interface ActiveChallenge {
 
 export interface ChallengeFlow {
   challenge: ActiveChallenge | null;
+  /**
+   * A resumed login that is waiting on a forced password change.
+   *
+   * Separate from `challenge`, because it is answered by core's set-password
+   * view rather than by any registered challenge view. Carries no token: the
+   * pending cookie travels with the request, and the server reads it there.
+   */
+  passwordChangeRequired: boolean;
   /** Called when a password login returns a challenge instead of a session. */
   start: (challenge: ActiveChallenge) => void;
   /** Post an answer. Navigates on success; returns the message on failure. */
@@ -128,14 +151,23 @@ export interface ChallengeAnswer {
 export function useChallengeFlow(search?: string): ChallengeFlow {
   const resume = useResumeLogin(search);
   const [challenge, setChallenge] = useState<ActiveChallenge | null>(null);
+  const [resumedPasswordChange, setResumedPasswordChange] = useState(false);
 
   useEffect(() => {
-    if (resume.status === "resume") {
-      setChallenge({
-        challengeType: resume.pending.challengeId,
-        next: resume.pending.next,
-      });
+    if (resume.status !== "resume") return;
+    // A forced password change is NOT a plugin challenge, and treating it as
+    // one rendered the missing-view fallback: nothing is registered under this
+    // id, so the person could never reach the set-password step and the login
+    // was unfinishable. `completeLogin` sends an externally authenticated
+    // account here exactly this way.
+    if (resume.pending.challengeId === MUST_CHANGE_PASSWORD_CHALLENGE) {
+      setResumedPasswordChange(true);
+      return;
     }
+    setChallenge({
+      challengeType: resume.pending.challengeId,
+      next: resume.pending.next,
+    });
   }, [resume]);
 
   async function resolve(
@@ -180,6 +212,7 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
 
   return {
     challenge,
+    passwordChangeRequired: resumedPasswordChange,
     start: setChallenge,
     resolve,
     signInFailed: hasSignInError(search),

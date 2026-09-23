@@ -226,3 +226,86 @@ describe("bodyless response statuses", () => {
     expect(await response.text()).toBe("payload");
   });
 });
+
+describe("repeated response headers", () => {
+  it("keeps each Set-Cookie separate", async () => {
+    // Joining them with ", " produces one malformed value that nobody can
+    // split back apart, because an `Expires` attribute contains a comma of
+    // its own — so `getSetCookie()` reported one cookie where the origin sent
+    // two, and a session cookie beside a CSRF cookie became neither.
+    const url = await listen((_req, res) => {
+      res.setHeader("set-cookie", [
+        "a=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Path=/",
+        "b=2; Path=/; HttpOnly",
+      ]);
+      res.end("ok");
+    });
+
+    const response = await send(url, {});
+    const cookies = response.headers.getSetCookie();
+
+    expect(cookies).toHaveLength(2);
+    expect(cookies[0]).toContain("a=1");
+    expect(cookies[0]).toContain("Expires=Wed, 21 Oct 2026");
+    expect(cookies[1]).toContain("b=2");
+  });
+
+  it("still comma-joins a header whose grammar allows it", async () => {
+    // The control. Emitting every repeated header separately would satisfy
+    // the assertion above while changing how ordinary list headers arrive.
+    const url = await listen((_req, res) => {
+      res.setHeader("x-forwarded-for", ["203.0.113.1", "198.51.100.2"]);
+      res.end("ok");
+    });
+
+    const response = await send(url, {});
+    expect(response.headers.get("x-forwarded-for")).toBe(
+      "203.0.113.1, 198.51.100.2"
+    );
+  });
+});
+
+describe("the deadline covers work BEFORE the socket", () => {
+  it("refuses a request body that never finishes", async () => {
+    // `materializeBody` consumes the body before the request exists, so the
+    // socket timer cannot cover it: a stream that never closes held
+    // `ctx.fetch` open indefinitely without a byte leaving the process, and
+    // the documented bound was one no caller could rely on.
+    const url = await listen((_req, res) => {
+      res.end("ok");
+    });
+
+    // Never enqueues and never closes.
+    const body = new ReadableStream({ start() {} });
+
+    const started = Date.now();
+    await expect(
+      sendVetted({
+        url,
+        address: LOOPBACK,
+        init: { method: "POST", body },
+        deadlineAt: started + 150,
+        maxBodyBytes: 1_000_000,
+      })
+    ).rejects.toMatchObject({
+      logContext: { reason: "outbound-timeout" },
+    });
+    // Bounded by the deadline rather than by the test timeout.
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("lets an ordinary body through", async () => {
+    // The control: refusing every body would satisfy the assertion above
+    // while breaking every POST the transport exists to make.
+    const url = await listen((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        res.end(Buffer.concat(chunks).toString());
+      });
+    });
+
+    const response = await send(url, { method: "POST", body: "hello" });
+    expect(await response.text()).toBe("hello");
+  });
+});

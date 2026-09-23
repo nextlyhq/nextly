@@ -26,7 +26,12 @@ function memoryStore(): PluginSettingsStore & { rows: PluginSettingRow[] } {
   return {
     rows,
     read: async owner => rows.filter(r => r.owner === owner),
-    write: async written => {
+    // Reads and writes in one step, as the real store does inside a
+    // transaction. The rows handed to `computeRows` are the ones this store
+    // holds, so the service is exercised through the same seam production
+    // uses rather than through a second path that only tests carry.
+    mutate: async (owner, computeRows) => {
+      const written = await computeRows(rows.filter(r => r.owner === owner));
       for (const row of written) {
         const at = rows.findIndex(
           r => r.owner === row.owner && r.key === row.key
@@ -328,5 +333,74 @@ describe("a top-level wildcard in a secret declaration", () => {
     const row = store.rows.find(r => r.key === "google");
     // The non-secret sibling inside the same row stays readable.
     expect(row?.value).toContain("Google");
+  });
+});
+
+describe("secrets held inside an array", () => {
+  /** Providers as a LIST, which is where the traversal used to stop. */
+  const listSchema = z.object({
+    providers: z
+      .array(z.object({ id: z.string(), clientSecret: z.string() }))
+      .default([]),
+  });
+
+  function listService(store: PluginSettingsStore) {
+    return new PluginSettingsService({
+      owner: "@test/p",
+      schema: listSchema,
+      secretPaths: ["providers.*.clientSecret"],
+      store,
+      secrets: () => [KEY_A],
+    });
+  }
+
+  it("ENCRYPTS a secret inside an array element", async () => {
+    // An array is not a plain object, so the traversal returned it unchanged
+    // and every secret in a list was stored as plain text. Asserted on the
+    // STORED row, since `get()` returns the value either way.
+    const store = memoryStore();
+    await listService(store).set({
+      providers: [{ id: "google", clientSecret: SECRET_VALUE }],
+    });
+
+    const row = store.rows.find(r => r.key === "providers");
+    expect(row?.isSecret).toBe(true);
+    expect(row?.value).not.toContain(SECRET_VALUE);
+    // The non-secret sibling is untouched, so the whole array was not simply
+    // encrypted wholesale — which would pass the assertion above.
+    expect(row?.value).toContain("google");
+  });
+
+  it("reads the value back, and as an ARRAY", async () => {
+    // The control. It also pins the shape: mapping an array through the
+    // object branch would return `{ "0": ... }`, which still round-trips a
+    // value while breaking every consumer that indexes or iterates it.
+    const store = memoryStore();
+    const svc = listService(store);
+    await svc.set({
+      providers: [{ id: "google", clientSecret: SECRET_VALUE }],
+    });
+
+    const after = (await svc.get()) as {
+      providers: Array<{ id: string; clientSecret: string }>;
+    };
+    expect(Array.isArray(after.providers)).toBe(true);
+    expect(after.providers).toHaveLength(1);
+    expect(after.providers[0].clientSecret).toBe(SECRET_VALUE);
+    expect(after.providers[0].id).toBe("google");
+  });
+
+  it("REDACTS a secret inside an array element", async () => {
+    // The same traversal serves redaction, so the admin was handed the
+    // credential verbatim instead of `{ set: true }`.
+    const store = memoryStore();
+    const svc = listService(store);
+    await svc.set({
+      providers: [{ id: "google", clientSecret: SECRET_VALUE }],
+    });
+
+    const shown = JSON.stringify(await svc.getRedacted());
+    expect(shown).not.toContain(SECRET_VALUE);
+    expect(shown).toContain('"set":true');
   });
 });

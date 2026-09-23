@@ -16,8 +16,15 @@ import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 
 export interface SetInitialPasswordProps {
-  /** The single-purpose token the login response handed back. */
-  pendingToken: string;
+  /**
+   * The single-purpose token the login response handed back.
+   *
+   * Absent for a login RESUMED from a provider: that one arrives by redirect
+   * with its token in an HttpOnly cookie, which the browser sends on its own
+   * and JavaScript cannot read. The endpoint already falls back to the cookie
+   * when the body carries no token, so omitting the field is the whole of it.
+   */
+  pendingToken?: string;
   /** Called once the password is set and a session has been issued. */
   onDone: () => void;
 }
@@ -42,7 +49,10 @@ export function SetInitialPassword({
     try {
       const csrfToken = await getCsrfToken();
       await api.public.post("/auth/set-initial-password", {
-        pendingToken,
+        // OMITTED rather than sent empty when there is no token: the server
+        // reads the cookie only when the field is absent, and an empty string
+        // is a present-but-invalid token it would refuse.
+        ...(pendingToken ? { pendingToken } : {}),
         newPassword: values.newPassword,
         csrfToken,
       });

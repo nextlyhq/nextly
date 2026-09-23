@@ -6,6 +6,7 @@ import {
   verifyPendingToken,
   InvalidPendingTokenError,
   PENDING_AUTH_TYP,
+  MUST_CHANGE_PASSWORD_CHALLENGE,
 } from "../pending-token";
 
 const secret = "test-secret-at-least-32-chars-long-aaaa";
@@ -71,5 +72,22 @@ describe("pending-auth token", () => {
 
   it("exposes the typ constant", () => {
     expect(PENDING_AUTH_TYP).toBe("pending-auth");
+  });
+});
+
+describe("the forced-password-change challenge id", () => {
+  it("is exactly the string the admin login page matches on", () => {
+    // A WIRE value, not an internal name. It reaches the browser as the
+    // `challengeId` of the pending cookie, and the login page has to tell it
+    // apart from a plugin challenge by name — no view is registered for it
+    // and none can be, since the step it names is core's own set-password
+    // flow. That module is browser code and cannot import this one, so the
+    // spelling is pinned here, where the constant lives.
+    //
+    // Changing it means changing `use-resume-login.ts` in `@nextlyhq/admin`
+    // in the same commit; otherwise a forced password change resumed from an
+    // external provider renders the missing-view fallback and the login can
+    // never be completed.
+    expect(MUST_CHANGE_PASSWORD_CHALLENGE).toBe("must-change-password");
   });
 });

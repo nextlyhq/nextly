@@ -1,7 +1,11 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { hasSignInError, useResumeLogin } from "../use-resume-login";
+import {
+  hasSignInError,
+  useChallengeFlow,
+  useResumeLogin,
+} from "../use-resume-login";
 
 const get = vi.hoisted(() => vi.fn());
 vi.mock("@admin/lib/api/publicApi", () => ({
@@ -76,5 +80,39 @@ describe("hasSignInError", () => {
     expect(hasSignInError("")).toBe(false);
     expect(hasSignInError("?error=locked")).toBe(false);
     expect(hasSignInError("?resume=1")).toBe(false);
+  });
+});
+
+describe("a resumed forced password change", () => {
+  it("is NOT offered as a plugin challenge", async () => {
+    // `completeLogin` sends an externally authenticated account that must
+    // replace its password here with the internal `must-change-password`
+    // sentinel as the pending cookie's challenge id. Treating that as a
+    // plugin challenge rendered the missing-view fallback — no view is
+    // registered for it and none can be — so the login was unfinishable.
+    get.mockResolvedValue({ challengeId: "must-change-password", next: null });
+
+    const { result } = renderHook(() => useChallengeFlow("?resume=1"));
+
+    await waitFor(() =>
+      expect(result.current.passwordChangeRequired).toBe(true)
+    );
+    // Not ALSO shown as a challenge: `index.tsx` prefers the password view,
+    // so a stray challenge here would be invisible now and wrong later.
+    expect(result.current.challenge).toBeNull();
+  });
+
+  it("still offers an ordinary challenge as a challenge", async () => {
+    // The control. Routing every resumed login to the password view would
+    // satisfy the assertion above while breaking second-factor sign-in.
+    get.mockResolvedValue({ challengeId: "test-totp", next: "/admin/posts" });
+
+    const { result } = renderHook(() => useChallengeFlow("?resume=1"));
+
+    await waitFor(() =>
+      expect(result.current.challenge?.challengeType).toBe("test-totp")
+    );
+    expect(result.current.passwordChangeRequired).toBe(false);
+    expect(result.current.challenge?.next).toBe("/admin/posts");
   });
 });

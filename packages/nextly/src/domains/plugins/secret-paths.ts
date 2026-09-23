@@ -81,6 +81,21 @@ export function mapSecrets(
   if (path.length > 0 && isSecretPath(path, patterns)) {
     return replace(value, path);
   }
+
+  // Arrays are walked too, with the INDEX as the path segment, so `*` covers
+  // an element exactly as it covers a key. Returning them untouched — which
+  // `isPlainObject` does, deliberately, since an array is not a settings
+  // group — meant a secret held in a list was never reached: stored in plain
+  // text on write, and handed back verbatim by `getRedacted` instead of as
+  // `{ set: true }`. The array is REBUILT rather than mapped in place, so the
+  // result is a new array of the same length and nothing is shared with the
+  // input.
+  if (Array.isArray(value)) {
+    return value.map((child, index) =>
+      mapSecrets(child, patterns, replace, [...path, String(index)])
+    );
+  }
+
   if (!isPlainObject(value)) return value;
 
   const out: Record<string, unknown> = {};

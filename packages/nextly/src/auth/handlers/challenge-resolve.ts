@@ -222,6 +222,7 @@ async function wrongAnswer(
       challengeId: string;
       attempts: number;
       strategy?: string;
+      next?: string;
     };
     usedCookie: boolean;
     requestId: string;
@@ -235,12 +236,19 @@ async function wrongAnswer(
       logContext: { reason: auditReason("challenge-failed-final") },
     });
   }
+  // `next` travels with the retry, as `strategy` does. The re-minted token
+  // REPLACES the HttpOnly cookie, so anything dropped here is gone for good:
+  // an external login that asked to land somewhere specific lost that
+  // destination on the first wrong answer, and the eventual correct one
+  // issued a session to the dashboard instead. Only the attempt count changes
+  // between rounds.
   const reissued = await mintPendingToken(
     {
       userId: args.pending.userId,
       challengeId: args.pending.challengeId,
       attempts: nextAttempts,
       strategy: args.pending.strategy,
+      ...(args.pending.next ? { next: args.pending.next } : {}),
     },
     deps.secret,
     deps.challengeTokenTTL

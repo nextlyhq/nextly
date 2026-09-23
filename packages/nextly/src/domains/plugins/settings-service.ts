@@ -45,7 +45,22 @@ export interface PluginSettingRow {
  */
 export interface PluginSettingsStore {
   read(owner: string): Promise<PluginSettingRow[]>;
-  write(rows: PluginSettingRow[]): Promise<void>;
+  /**
+   * Read, decide, and write as ONE atomic step.
+   *
+   * `computeRows` receives the stored rows and returns the rows to upsert. It
+   * runs INSIDE the store's transaction with those rows locked, which is what
+   * makes a read-modify-write safe: the merge that decides the new value is
+   * the part that must not see a stale read, and a caller that merged first
+   * and wrote afterwards lost whatever a concurrent writer had committed in
+   * between.
+   */
+  mutate(
+    owner: string,
+    computeRows: (
+      current: PluginSettingRow[]
+    ) => Promise<PluginSettingRow[]> | PluginSettingRow[]
+  ): Promise<void>;
 }
 
 export interface PluginSettingsServiceDeps {
@@ -148,7 +163,28 @@ export class PluginSettingsService {
     patch: Record<string, unknown>,
     opts?: { actorUserId?: string }
   ): Promise<void> {
-    const current = await this.readStored();
+    // The merge happens INSIDE the store's transaction, against rows it has
+    // locked. Reading first and writing afterwards let two callers patching
+    // different nested fields under one key both start from the same stored
+    // value: each merged correctly on its own, and the second write put back
+    // what the first had just changed. A rotated `clientSecret` undone by an
+    // unrelated `clientId` edit is the shape that costs the most.
+    await this.deps.store.mutate(this.deps.owner, current =>
+      this.rowsForPatch(this.decodeRows(current), patch, opts)
+    );
+  }
+
+  /**
+   * Turn a patch into the rows to store, given what is currently stored.
+   *
+   * Pure with respect to `current`, so the caller can run it inside the
+   * store's transaction against the rows that transaction locked.
+   */
+  private rowsForPatch(
+    current: Record<string, unknown>,
+    patch: Record<string, unknown>,
+    opts?: { actorUserId?: string }
+  ): PluginSettingRow[] {
     // DEEP, because a shallow spread replaces a nested object wholesale. A
     // group holding both a normal field and a secret — the ordinary shape for
     // a provider's `clientId` and `clientSecret` — lost the secret whenever
@@ -210,12 +246,22 @@ export class PluginSettingsService {
       };
     });
 
-    await this.deps.store.write(rows);
+    return rows;
   }
 
   /** The stored settings, decrypted, before the schema is applied. */
   private async readStored(): Promise<Record<string, unknown>> {
-    const rows = await this.deps.store.read(this.deps.owner);
+    return this.decodeRows(await this.deps.store.read(this.deps.owner));
+  }
+
+  /**
+   * Stored rows as a settings object.
+   *
+   * Split from `readStored` so the write path can decode the rows the
+   * TRANSACTION read, rather than issuing a second read of its own — which is
+   * the read whose staleness this whole path exists to avoid.
+   */
+  private decodeRows(rows: PluginSettingRow[]): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const row of rows) {
       const parsed: unknown = JSON.parse(row.value);

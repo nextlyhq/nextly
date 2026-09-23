@@ -210,9 +210,10 @@ export function Login() {
       title="Welcome Back"
       description={`Sign in to your ${appName} account`}
     >
-      {mustChangePassword ? (
+      {mustChangePassword || challengeFlow.passwordChangeRequired ? (
         <SetInitialPassword
-          pendingToken={mustChangePassword.pendingToken}
+          // Absent for the resumed case, where the token is in the cookie.
+          pendingToken={mustChangePassword?.pendingToken}
           onDone={() => {
             window.location.href = ROUTES.DASHBOARD;
           }}
