@@ -18,6 +18,8 @@ function recordingDb(options: { failOnRow?: number } = {}) {
   // satisfied by a read taken beforehand too, since the transaction is open
   // by the time the callback runs — which is the exact defect under test.
   const events: string[] = [];
+  const claimed: string[] = [];
+  const deleted: string[] = [];
   let transactions = 0;
   let issued = 0;
   const stored: PluginSettingRow[] = [];
@@ -55,11 +57,35 @@ function recordingDb(options: { failOnRow?: number } = {}) {
         };
         return {
           onConflictDoUpdate: () => runOne("onConflictDoUpdate"),
-          onDuplicateKeyUpdate: () => runOne("onDuplicateKeyUpdate"),
+          // On MySQL the CLAIM is spelled `onDuplicateKeyUpdate` too, so the
+          // two are told apart by what they set: the claim assigns the key to
+          // itself as a no-op, the upsert writes the value and its metadata.
+          // Counting them together made the spelling assertions meaningless.
+          onDuplicateKeyUpdate: (args: unknown) => {
+            const set = (args as { set: Record<string, unknown> }).set;
+            if (!("value" in set)) {
+              claimed.push(key);
+              events.push("claim");
+              return Promise.resolve();
+            }
+            return runOne("onDuplicateKeyUpdate");
+          },
+          // The CLAIM, recorded separately: it is a different statement with
+          // a different purpose, and counting it as an upsert would make the
+          // spelling assertions meaningless.
+          onConflictDoNothing: async () => {
+            claimed.push(key);
+            events.push("claim");
+          },
         };
       },
     }),
     update: () => ({ set: () => ({ where: async () => undefined }) }),
+    delete: () => ({
+      where: async () => {
+        deleted.push("row");
+      },
+    }),
   };
 
   return {
@@ -67,6 +93,8 @@ function recordingDb(options: { failOnRow?: number } = {}) {
     spelling,
     locks,
     events,
+    claimed,
+    deleted,
     stored,
     transactions: () => transactions,
     db: {
@@ -109,7 +137,7 @@ describe("a settings update is one transaction", () => {
     const store = createPluginSettingsStore(fake.db, "sqlite");
 
     await expect(
-      store.mutate("@test/p", () => rows("alpha", "beta"))
+      store.mutate("@test/p", ["alpha", "beta"], () => rows("alpha", "beta"))
     ).rejects.toThrow("upsert failed on row 2");
 
     expect(fake.applied).toEqual([]);
@@ -120,8 +148,10 @@ describe("a settings update is one transaction", () => {
     // The control: a store that wrote nothing at all would satisfy the
     // assertion above.
     const fake = recordingDb();
-    await createPluginSettingsStore(fake.db, "sqlite").mutate("@test/p", () =>
-      rows("alpha", "beta")
+    await createPluginSettingsStore(fake.db, "sqlite").mutate(
+      "@test/p",
+      ["alpha", "beta"],
+      () => rows("alpha", "beta")
     );
 
     expect(fake.applied).toEqual(["alpha", "beta"]);
@@ -139,7 +169,8 @@ describe("a settings update is one transaction", () => {
 
     await createPluginSettingsStore(fake.db, "postgresql").mutate(
       "@test/p",
-      current => {
+      ["alpha"],
+      (current: PluginSettingRow[]) => {
         seen = current;
         return rows("alpha");
       }
@@ -164,6 +195,7 @@ describe("the read is locked where the dialect has a row lock", () => {
     const fake = recordingDb();
     await createPluginSettingsStore(fake.db, "postgresql").mutate(
       "@test/p",
+      ["alpha"],
       () => rows("alpha")
     );
     expect(fake.locks).toEqual(["update"]);
@@ -171,8 +203,10 @@ describe("the read is locked where the dialect has a row lock", () => {
 
   it("takes FOR UPDATE on MySQL", async () => {
     const fake = recordingDb();
-    await createPluginSettingsStore(fake.db, "mysql").mutate("@test/p", () =>
-      rows("alpha")
+    await createPluginSettingsStore(fake.db, "mysql").mutate(
+      "@test/p",
+      ["alpha"],
+      () => rows("alpha")
     );
     expect(fake.locks).toEqual(["update"]);
   });
@@ -182,8 +216,10 @@ describe("the read is locked where the dialect has a row lock", () => {
     // write transaction takes a database-wide lock, and calling `.for` there
     // would be a runtime error on a builder that does not have it.
     const fake = recordingDb();
-    await createPluginSettingsStore(fake.db, "sqlite").mutate("@test/p", () =>
-      rows("alpha")
+    await createPluginSettingsStore(fake.db, "sqlite").mutate(
+      "@test/p",
+      ["alpha"],
+      () => rows("alpha")
     );
     expect(fake.locks).toEqual([]);
   });
@@ -195,7 +231,8 @@ describe("the read is locked where the dialect has a row lock", () => {
     let seen: PluginSettingRow[] | undefined;
     await createPluginSettingsStore(fake.db, "sqlite").mutate(
       "@test/p",
-      current => {
+      [],
+      (current: PluginSettingRow[]) => {
         seen = current;
         return [];
       }
@@ -209,8 +246,10 @@ describe("the upsert spelling follows the dialect it was given", () => {
     // MySQL has no `onConflictDoUpdate`. A context that could not tell which
     // dialect it was on defaulted to SQLite and the write failed outright.
     const fake = recordingDb();
-    await createPluginSettingsStore(fake.db, "mysql").mutate("@test/p", () =>
-      rows("alpha")
+    await createPluginSettingsStore(fake.db, "mysql").mutate(
+      "@test/p",
+      ["alpha"],
+      () => rows("alpha")
     );
     expect(fake.spelling).toEqual(["onDuplicateKeyUpdate"]);
   });
@@ -219,8 +258,77 @@ describe("the upsert spelling follows the dialect it was given", () => {
     const fake = recordingDb();
     await createPluginSettingsStore(fake.db, "postgresql").mutate(
       "@test/p",
+      ["alpha"],
       () => rows("alpha")
     );
     expect(fake.spelling).toEqual(["onConflictDoUpdate"]);
+  });
+});
+
+describe("a key that does not exist yet is claimed before the read", () => {
+  it("claims every key the update will write, BEFORE locking", async () => {
+    // `FOR UPDATE` can only lock a row that exists. Two first writes for the
+    // same plugin — or two patches adding the same top-level key — both found
+    // nothing to lock, both merged from an empty value, and the later upsert
+    // replaced the earlier one. Inserting the key first makes the second
+    // transaction block on the primary key until this one commits.
+    const fake = recordingDb();
+
+    await createPluginSettingsStore(fake.db, "postgresql").mutate(
+      "@test/p",
+      ["alpha", "beta"],
+      () => rows("alpha", "beta")
+    );
+
+    expect(fake.claimed).toEqual(["alpha", "beta"]);
+    // ORDER is the whole point: a claim taken after the read would leave the
+    // read unprotected, which is the defect.
+    expect(fake.events.indexOf("claim")).toBeLessThan(
+      fake.events.indexOf("select")
+    );
+    // And still inside the transaction.
+    expect(fake.events[0]).toBe("begin");
+  });
+
+  it("claims on SQLite too", async () => {
+    // The control for the dialect branch: SQLite skips the row LOCK, not the
+    // claim, and reading that as "SQLite needs nothing" would leave its first
+    // writes racing on a database that does serialize them only once a write
+    // has begun.
+    const fake = recordingDb();
+    await createPluginSettingsStore(fake.db, "sqlite").mutate(
+      "@test/p",
+      ["alpha"],
+      () => rows("alpha")
+    );
+    expect(fake.claimed).toEqual(["alpha"]);
+  });
+
+  it("removes a claim the update did not go on to write", async () => {
+    // Otherwise the placeholder commits as a real row holding `null`, which
+    // the next read would decode as the plugin's stored setting.
+    const fake = recordingDb();
+    await createPluginSettingsStore(fake.db, "postgresql").mutate(
+      "@test/p",
+      ["alpha", "ghost"],
+      () => rows("alpha")
+    );
+
+    expect(fake.claimed).toEqual(["alpha", "ghost"]);
+    expect(fake.applied).toEqual(["alpha"]);
+    // Exactly one delete: for `ghost`, not for the key that was written.
+    expect(fake.deleted).toHaveLength(1);
+  });
+
+  it("deletes nothing when every claim was written", async () => {
+    // The control: deleting unconditionally would satisfy the assertion above
+    // while removing the row the update just wrote.
+    const fake = recordingDb();
+    await createPluginSettingsStore(fake.db, "postgresql").mutate(
+      "@test/p",
+      ["alpha"],
+      () => rows("alpha")
+    );
+    expect(fake.deleted).toEqual([]);
   });
 });

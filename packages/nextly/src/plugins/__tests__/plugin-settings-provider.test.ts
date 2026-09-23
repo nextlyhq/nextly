@@ -32,12 +32,18 @@ function recordingDb() {
         onConflictDoUpdate: async () => {
           spelling.push("onConflictDoUpdate");
         },
-        onDuplicateKeyUpdate: async () => {
-          spelling.push("onDuplicateKeyUpdate");
+        // The store CLAIMS each key before reading, and on MySQL that claim
+        // is spelled `onDuplicateKeyUpdate` as well — told apart by what it
+        // sets, since only the real upsert writes a value.
+        onDuplicateKeyUpdate: async (args: unknown) => {
+          const set = (args as { set: Record<string, unknown> }).set;
+          if ("value" in set) spelling.push("onDuplicateKeyUpdate");
         },
+        onConflictDoNothing: async () => undefined,
       }),
     }),
     update: () => ({ set: () => ({ where: async () => undefined }) }),
+    delete: () => ({ where: async () => undefined }),
   };
   return {
     spelling,

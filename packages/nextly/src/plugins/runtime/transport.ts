@@ -61,10 +61,41 @@ export interface SendArgs {
  * method and headers intact and no body at all.
  */
 async function materializeBody(
-  init: RequestInit
+  init: RequestInit,
+  signal?: AbortSignal
 ): Promise<{ body: Buffer | null; headers: Record<string, string> }> {
   if (init.body === undefined || init.body === null) {
     return { body: null, headers: {} };
+  }
+
+  // A STREAM is read here rather than through `Request`, because only a
+  // stream can fail to end and only a reader we hold can be cancelled.
+  // `arrayBuffer()` LOCKS the body — measured — so once it is reading,
+  // `cancel()` throws `ReadableStream is locked` and the producer is never
+  // told to stop. Owning the reader is what makes the deadline able to
+  // release it. A stream carries no implied content type, so there is none
+  // to recover from a probe.
+  if (init.body instanceof ReadableStream) {
+    const reader = init.body.getReader();
+    const release = () => {
+      void reader.cancel().catch(() => {
+        // Already finished or already failed: nothing left to release.
+      });
+    };
+    if (signal?.aborted) release();
+    signal?.addEventListener("abort", release, { once: true });
+
+    const chunks: Buffer[] = [];
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) chunks.push(Buffer.from(value));
+      }
+    } finally {
+      signal?.removeEventListener("abort", release);
+    }
+    return { body: Buffer.concat(chunks), headers: {} };
   }
 
   // `duplex` is required before a stream body is accepted, and is not in the
@@ -95,7 +126,7 @@ async function materializeBody(
  * side of the connection ran out of time.
  */
 async function withRequestDeadline<T>(
-  work: Promise<T>,
+  run: (signal: AbortSignal) => Promise<T>,
   deadlineAt: number,
   url: URL
 ): Promise<T> {
@@ -111,12 +142,18 @@ async function withRequestDeadline<T>(
   const remaining = deadlineAt - Date.now();
   if (remaining <= 0) throw refuse();
 
+  // Takes a SIGNAL rather than a promise, so expiry CANCELS the work instead
+  // of merely stopping the wait for it. A race alone leaves the losing side
+  // running: the caller is answered and the read goes on pulling bytes with
+  // nobody left to receive them.
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      work,
+      run(controller.signal),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
+          controller.abort();
           reject(refuse());
         }, remaining);
         // Never holds the loop open on its own; it races work that does.
@@ -124,8 +161,8 @@ async function withRequestDeadline<T>(
       }),
     ]);
   } finally {
-    // Cleared on every exit, so a body read that finished early does not keep
-    // a timer alive for the remainder of the budget.
+    // Cleared on every exit, so work that finished early does not keep a
+    // timer alive for the remainder of the budget.
     if (timer !== undefined) clearTimeout(timer);
   }
 }
@@ -188,7 +225,7 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
   // indefinitely without a single byte leaving the process — the documented
   // bound stood, and nothing had started that could enforce it.
   const { body, headers: bodyHeaders } = await withRequestDeadline(
-    materializeBody(init),
+    signal => materializeBody(init, signal),
     deadlineAt,
     url
   );

@@ -309,3 +309,73 @@ describe("the deadline covers work BEFORE the socket", () => {
     expect(await response.text()).toBe("hello");
   });
 });
+
+describe("an expired body read is CANCELLED, not merely abandoned", () => {
+  it("releases the stream when the deadline passes", async () => {
+    // Racing a timer answers the caller and leaves the read running: nothing
+    // reaches `arrayBuffer()`, so it goes on pulling from a stream nobody is
+    // waiting for. One per call, so they accumulate. `cancel` firing is the
+    // observable difference between stopping the WAIT and stopping the WORK.
+    const url = await listen((_req, res) => {
+      res.end("ok");
+    });
+
+    let cancelled = false;
+    const body = new ReadableStream({
+      start() {
+        // Never enqueues, never closes.
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    await expect(
+      sendVetted({
+        url,
+        address: LOOPBACK,
+        init: { method: "POST", body },
+        deadlineAt: Date.now() + 150,
+        maxBodyBytes: 1_000_000,
+      })
+    ).rejects.toMatchObject({ logContext: { reason: "outbound-timeout" } });
+
+    // The abort propagates asynchronously; give the microtask queue a turn.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(cancelled).toBe(true);
+  });
+
+  it("does not cancel a body that finishes in time", async () => {
+    // The control: aborting unconditionally would satisfy the assertion above
+    // while breaking every request that works.
+    const url = await listen((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        res.end(Buffer.concat(chunks).toString());
+      });
+    });
+
+    let cancelled = false;
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("hello"));
+        controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    const response = await sendVetted({
+      url,
+      address: LOOPBACK,
+      init: { method: "POST", body },
+      deadlineAt: Date.now() + 5_000,
+      maxBodyBytes: 1_000_000,
+    });
+
+    expect(await response.text()).toBe("hello");
+    expect(cancelled).toBe(false);
+  });
+});

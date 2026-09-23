@@ -30,7 +30,7 @@ function memoryStore(): PluginSettingsStore & { rows: PluginSettingRow[] } {
     // transaction. The rows handed to `computeRows` are the ones this store
     // holds, so the service is exercised through the same seam production
     // uses rather than through a second path that only tests carry.
-    mutate: async (owner, computeRows) => {
+    mutate: async (owner, _keys, computeRows) => {
       const written = await computeRows(rows.filter(r => r.owner === owner));
       for (const row of written) {
         const at = rows.findIndex(

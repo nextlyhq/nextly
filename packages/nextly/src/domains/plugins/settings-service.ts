@@ -57,6 +57,14 @@ export interface PluginSettingsStore {
    */
   mutate(
     owner: string,
+    /**
+     * The top-level keys this update will write.
+     *
+     * Named up front so the store can CLAIM them before it reads: a row lock
+     * cannot hold a row that does not exist yet, so without this two first
+     * writes for the same plugin both read nothing and the later one wins.
+     */
+    keys: readonly string[],
     computeRows: (
       current: PluginSettingRow[]
     ) => Promise<PluginSettingRow[]> | PluginSettingRow[]
@@ -169,7 +177,7 @@ export class PluginSettingsService {
     // value: each merged correctly on its own, and the second write put back
     // what the first had just changed. A rotated `clientSecret` undone by an
     // unrelated `clientId` edit is the shape that costs the most.
-    await this.deps.store.mutate(this.deps.owner, current =>
+    await this.deps.store.mutate(this.deps.owner, Object.keys(patch), current =>
       this.rowsForPatch(this.decodeRows(current), patch, opts)
     );
   }
