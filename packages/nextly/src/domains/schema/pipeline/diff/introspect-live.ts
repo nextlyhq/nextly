@@ -67,6 +67,136 @@ function pgCheckExpression(definition: string): string {
  * tables, with the same empty-array-not-undefined contract as indexes: a
  * table with no constraints is TRACKED as having none.
  */
+/**
+ * Best-effort normalisation of MySQL's CHECK_CLAUSE: backticks stripped and
+ * whitespace collapsed, so the common single-condition check compares equal
+ * to its declaration. MySQL parenthesises every subexpression, so a compound
+ * clause may still differ textually from its authored spelling — the diff
+ * matches checks by NAME first, and a mismatched expression surfaces as a
+ * drop-plus-add, never as silence.
+ */
+function mysqlCheckExpression(clause: string): string {
+  return clause
+    .replace(/`/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/^\((.*)\)$/, "$1")
+    .trim();
+}
+
+/** information_schema's rules already spell the diff's ReferentialAction. */
+const MYSQL_FK_ACTION: Record<string, ForeignKeySpec["onDelete"]> = {
+  CASCADE: "cascade",
+  "SET NULL": "set null",
+  "SET DEFAULT": "set default",
+  RESTRICT: "restrict",
+  "NO ACTION": "no action",
+};
+
+/**
+ * Read foreign keys and checks from information_schema for the snapshot's
+ * tables, with the same empty-array-not-undefined contract as the other
+ * dialects.
+ */
+async function attachMysqlConstraints(
+  db: PgMysqlExecute,
+  snapshot: NextlySchemaSnapshot
+): Promise<void> {
+  const tableNamesIn = sql.join(
+    snapshot.tables.map(t => sql`${t.name}`),
+    sql`, `
+  );
+  const fkRaw = (await db.execute(
+    sql`SELECT kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME,
+               kcu.ORDINAL_POSITION, kcu.REFERENCED_TABLE_NAME,
+               kcu.REFERENCED_COLUMN_NAME, rc.DELETE_RULE, rc.UPDATE_RULE
+        FROM information_schema.KEY_COLUMN_USAGE kcu
+        JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+          ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+          AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
+          AND rc.TABLE_NAME = kcu.TABLE_NAME
+        WHERE kcu.TABLE_SCHEMA = DATABASE()
+          AND kcu.TABLE_NAME IN (${tableNamesIn})
+          AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+        ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION`
+  ));
+  const fkRows: Array<{
+    TABLE_NAME: string;
+    CONSTRAINT_NAME: string;
+    COLUMN_NAME: string;
+    REFERENCED_TABLE_NAME: string;
+    REFERENCED_COLUMN_NAME: string;
+    DELETE_RULE: string;
+    UPDATE_RULE: string;
+  }> = (Array.isArray(fkRaw) && Array.isArray((fkRaw as unknown[])[0])
+    ? (fkRaw as [typeof fkRows, unknown])[0]
+    : fkRaw) as typeof fkRows;
+
+  const fks = new Map<string, ForeignKeySpec[]>();
+  const fkColumns = new Map<string, string[]>();
+  const fkRefColumns = new Map<string, string[]>();
+  for (const row of fkRows) {
+    const key = `${row.TABLE_NAME}\u0000${row.CONSTRAINT_NAME}`;
+    fkColumns.set(key, [...(fkColumns.get(key) ?? []), row.COLUMN_NAME]);
+    fkRefColumns.set(
+      key,
+      [...(fkRefColumns.get(key) ?? []), row.REFERENCED_COLUMN_NAME]
+    );
+    const list = fks.get(row.TABLE_NAME);
+    if (list === undefined || !list.some(fk => fk.name === row.CONSTRAINT_NAME)) {
+      const fresh: ForeignKeySpec = {
+        name: row.CONSTRAINT_NAME,
+        columns: [],
+        referencesTable: row.REFERENCED_TABLE_NAME,
+        referencesColumns: [],
+        onDelete: MYSQL_FK_ACTION[row.DELETE_RULE] ?? "no action",
+        onUpdate: MYSQL_FK_ACTION[row.UPDATE_RULE] ?? "no action",
+      };
+      if (list === undefined) fks.set(row.TABLE_NAME, [fresh]);
+      else list.push(fresh);
+    }
+  }
+  for (const [table, list] of fks) {
+    for (const fk of list) {
+      const key = `${table}\u0000${fk.name}`;
+      fk.columns = fkColumns.get(key) ?? [];
+      fk.referencesColumns = fkRefColumns.get(key) ?? [];
+    }
+  }
+
+  const checkRaw = (await db.execute(
+    sql`SELECT tc.TABLE_NAME, cc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
+        FROM information_schema.TABLE_CONSTRAINTS tc
+        JOIN information_schema.CHECK_CONSTRAINTS cc
+          ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+          AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+        WHERE tc.CONSTRAINT_SCHEMA = DATABASE()
+          AND tc.CONSTRAINT_TYPE = 'CHECK'
+          AND tc.TABLE_NAME IN (${tableNamesIn})`
+  ));
+  const checkRows: Array<{
+    TABLE_NAME: string;
+    CONSTRAINT_NAME: string;
+    CHECK_CLAUSE: string;
+  }> = (Array.isArray(checkRaw) && Array.isArray((checkRaw as unknown[])[0])
+    ? (checkRaw as [typeof checkRows, unknown])[0]
+    : checkRaw) as typeof checkRows;
+
+  const checks = new Map<string, CheckSpec[]>();
+  for (const row of checkRows) {
+    const list = checks.get(row.TABLE_NAME) ?? [];
+    list.push({
+      name: row.CONSTRAINT_NAME,
+      sql: mysqlCheckExpression(row.CHECK_CLAUSE),
+    });
+    checks.set(row.TABLE_NAME, list);
+  }
+
+  for (const table of snapshot.tables) {
+    table.foreignKeys = fks.get(table.name) ?? [];
+    table.checks = checks.get(table.name) ?? [];
+  }
+}
+
 async function attachPgConstraints(
   db: PgMysqlExecute,
   snapshot: NextlySchemaSnapshot,
@@ -139,7 +269,8 @@ async function attachPgConstraints(
  * DEFINED array (possibly empty) — introspection never leaves it undefined, so
  * the diff sentinel only ever comes from pre-C1 on-disk snapshots.
  */
-function attachIndexes(snapshot: NextlySchemaSnapshot, rows: IndexRow[]): void {  const byTable = new Map<
+function attachIndexes(snapshot: NextlySchemaSnapshot, rows: IndexRow[]): void {
+  const byTable = new Map<
     string,
     Map<string, { unique: boolean; columns: string[] }>
   >();
@@ -478,6 +609,7 @@ export async function introspectLiveSnapshot(
         column: r.COLUMN_NAME,
       }))
     );
+    await attachMysqlConstraints(dbTyped, snapshot);
     normalizeIndexOrder(snapshot);
     return snapshot;
   }
@@ -581,7 +713,7 @@ async function sqliteForeignKeys(
 ): Promise<ForeignKeySpec[] | undefined> {
   const rows = (await Promise.resolve(dbAny.all(
     sql`PRAGMA foreign_key_list(${sql.identifier(table)})`
-  ))) as unknown as Array<{
+  ))) as Array<{
     id: number;
     seq: number;
     table: string;
@@ -629,7 +761,7 @@ async function sqliteChecks(
 ): Promise<CheckSpec[] | undefined> {
   const rows = (await Promise.resolve(dbAny.all(
     sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${table}`
-  ))) as unknown as Array<{ sql: string | null }>;
+  ))) as Array<{ sql: string | null }>;
   const create = rows[0]?.sql;
   if (create === undefined || create === null) return [];
   const checks: CheckSpec[] = [];
