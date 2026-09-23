@@ -236,3 +236,63 @@ describe("plugin migrations against a real database (sqlite)", () => {
     ).rejects.toThrow(/cannot be applied/i);
   });
 });
+
+describe("foreign elements never block a plugin's reconcile (C7)", () => {
+  let sqlite: Database.Database;
+  let db: unknown;
+
+  beforeAll(async () => {
+    sqlite = new Database(":memory:");
+    db = drizzle({ client: sqlite });
+    await reconcileCore({
+      db,
+      dialect: DIALECT,
+      logger: { info: () => {}, warn: () => {} },
+    });
+  });
+  afterAll(() => sqlite.close());
+
+  it("adopts a table carrying an app-contributed index the plugin never declared", async () => {
+    // Dev push created the plugin's table WITH its own unique index and an
+    // app-contributed one; the element row says whose the app's is. The
+    // plugin's reconcile excludes the foreign element and adopts.
+    const notes = defineTable(
+      "notes",
+      { id: col.id(), label: col.shortText(), ...col.timestamps() },
+      { indexes: [{ columns: ["label"], unique: true }] }
+    );
+    const built = buildPluginMigration({
+      pluginName: "plugf",
+      schemaVersion: 1,
+      name: "v1",
+      now: new Date(Date.UTC(2026, 8, 23, 11, 0, 0)),
+      tablesByDialect: await tablesByDialect("plugf", "plugf", [notes]),
+      existing: [],
+    });
+    const g = built!.module;
+    for (const stmt of g.dialects.sqlite.up) sqlite.exec(stmt);
+    // The app's index on the plugin's table, plus its element owner row.
+    sqlite.exec("CREATE INDEX idx_app_label ON plugf__notes (label)");
+    sqlite.exec(
+      `INSERT INTO nextly_schema_owners
+         (table_name, element_kind, element_name, owner_kind, owner_id, migrated_by, state, created_at, updated_at)
+       VALUES ('plugf__notes', 'index', 'idx_app_label', 'app', 'app', 'app', 'active', 0, 0)`
+    );
+    await runPluginPhase({
+      dialect: DIALECT,
+      db,
+      adapter: adapterFor(sqlite),
+      logger: createLogger({ quiet: true }),
+      pluginMigrationSets: [
+        { pluginName: "plugf", pluginVersion: "1.0.0", migrations: [g] },
+      ],
+    } as never);
+    const rows = sqlite
+      .prepare(
+        `SELECT status, statements_executed FROM nextly_schema_events WHERE filename = 'plugin:plugf/${g.name}'`
+      )
+      .all() as Array<{ status: string; statements_executed: number }>;
+    expect(rows[0]?.status).toBe("applied");
+    expect(rows[0]?.statements_executed).toBe(0);
+  });
+});

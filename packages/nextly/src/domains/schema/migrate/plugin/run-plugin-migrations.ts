@@ -51,7 +51,15 @@ export interface RunPluginMigrationsDeps {
   /** Applied `file_apply` rows keyed by qualified filename. */
   appliedShas: ReadonlyMap<string, string | null>;
   /** The live tables for a set of names, as a snapshot. */
-  introspect: (tableNames: readonly string[]) => Promise<NextlySchemaSnapshot>;
+  /**
+   * The live tables for a set of names, as THIS stream should see them:
+   * elements another stream owns are the caller's to exclude, which is why
+   * the stream identity travels with the call.
+   */
+  introspect: (
+    tableNames: readonly string[],
+    stream: string
+  ) => Promise<NextlySchemaSnapshot>;
   /** Execute one module's UP in one transaction; returns statements run. */
   executeSql: (sql: string) => Promise<number>;
   /** Ledger rows are recorded through this — `reconcileFile`'s own repo. */
@@ -168,7 +176,7 @@ async function applyModule(
   const names = [
     ...new Set([...before.tables, ...target.tables].map(table => table.name)),
   ];
-  const live = await deps.introspect(names);
+  const live = await deps.introspect(names, `plugin:${set.pluginName}`);
 
   const { state } = await reconcileFile({
     file: {

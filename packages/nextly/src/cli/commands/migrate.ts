@@ -640,21 +640,50 @@ export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
     "../../domains/schema/ownership/schema-owners-repository"
   );
   const owners = new OwnersRepo(deps.db, deps.dialect);
+  // Table-level rows only: an element row shares its table's name, and in a
+  // name-keyed map it would shadow the table row the drop guard compares.
   const ownerRows = new Map(
-    (await owners.read()).map(record => [record.tableName, record])
+    (await owners.read())
+      .filter(record => (record.elementKind ?? "table") === "table")
+      .map(record => [record.tableName, record])
   );
+  // Per-element ownership for the reconcile exclusion: a live element whose
+  // row names a different stream is not this stream's business, and reading
+  // it as drift would refuse an adoption over an index the plugin never
+  // declared.
+  const allRows = await owners.read();
+  const elementStream = new Map<string, string>();
+  for (const record of allRows) {
+    if ((record.elementKind ?? "table") === "table") continue;
+    elementStream.set(
+      `${record.tableName}\u0000${record.elementName ?? ""}`,
+      record.migratedBy
+    );
+  }
   const pluginOutcome = await runPluginMigrations(deps.pluginMigrationSets, {
     dialect: deps.dialect,
     appliedShas,
     owners: ownerRows,
-    introspect: async names => {
+    introspect: async (names, stream) => {
       const liveTables = await safeListTables(deps.adapter);
       const managed = snapshotComparableTables(
         liveTables,
         new Set(names),
         new Set()
       );
-      return introspectLiveSnapshot(deps.db, deps.dialect, managed);
+      const live = await introspectLiveSnapshot(deps.db, deps.dialect, managed);
+      // Drop live elements another stream owns, so this plugin's comparison
+      // sees only what its own stream claims.
+      for (const table of live.tables) {
+        if (table.indexes === undefined) continue;
+        table.indexes = table.indexes.filter(
+          index =>
+            elementStream.get(`${table.name}\u0000${index.name}`) ===
+              undefined ||
+            elementStream.get(`${table.name}\u0000${index.name}`) === stream
+        );
+      }
+      return live;
     },
     executeSql: buildSqlExecutor(dz, deps.dialect),
     repo: eventsRepo,
