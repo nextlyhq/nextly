@@ -165,7 +165,38 @@ describe("row 6 — partial indexes", () => {
 });
 
 describe("row 7 — expression indexes", () => {
-  it.todo("C: an expression index is expressible and survives migrate:create");
+  it("C: an expression index is expressible and survives migrate:create", async () => {
+    const searched = defineTable(
+      "searched",
+      { id: col.id(), email: col.shortText() },
+      {
+        indexes: [
+          { columns: [], expression: "lower(email)", name: "idx_searched_lower" },
+        ],
+      }
+    );
+    const schema = await buildExtensionSchema(
+      input({
+        plugins: [
+          { owner: { kind: "plugin" as const, id: "fx" }, tables: [searched] },
+        ],
+      })
+    );
+    const spec = schema.specs.find(t => t.name === "fx__searched");
+    expect(spec?.indexes).toEqual([
+      { name: "idx_searched_lower", columns: [], unique: false, expression: "lower(email)" },
+    ]);
+    // The same op migrate:create renders: the diff's add_index for this spec
+    // produces executable SQL on every dialect that supports expressions.
+    const { generateSQL } = await import("../../pipeline/sql-templates/index");
+    const sqlText = generateSQL(
+      { type: "add_index", tableName: "fx__searched", index: spec!.indexes![0] },
+      "postgresql"
+    );
+    expect(sqlText).toBe(
+      `CREATE INDEX IF NOT EXISTS "idx_searched_lower" ON "fx__searched" ((lower(email)))`
+    );
+  });
 });
 
 describe("row 8 — foreign keys with onDelete/onUpdate", () => {
