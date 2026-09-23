@@ -549,3 +549,40 @@ describe("only real redirect statuses are followed", () => {
     expect(seen).toHaveLength(2);
   });
 });
+
+describe("the IPv4-translated prefix", () => {
+  it.each([
+    ["::ffff:0:7f00:1", "loopback"],
+    ["::ffff:0:a9fe:a9fe", "link-local"],
+  ])("refuses %s (%s), judging the IPv4 it carries", address => {
+    // RFC 6145's translated form moves the ffff to bytes 8-9 and a zero to
+    // 10-11; recognizing only the mapped spelling let a translator on this
+    // prefix hand the embedded address to whoever connected.
+    const verdict = judgeIpv6(address);
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("allows the translated form carrying a public IPv4", () => {
+    expect(judgeIpv6("::ffff:0:5db8:d822").allowed).toBe(true);
+  });
+});
+
+describe("caller cancellation during DNS resolution", () => {
+  it("releases the caller without waiting for a stalled resolver", async () => {
+    // The lookup itself cannot be interrupted; the CALLER can. Without the
+    // race, an aborted request kept waiting on the resolver until the fixed
+    // deadline answered for it.
+    const controller = new AbortController();
+    const never = new Promise<never>(() => undefined);
+    const d = deps({ resolve: () => never });
+
+    const started = Date.now();
+    const pending = createPluginFetch(d)("https://api.example.com/", {
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 50);
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+});

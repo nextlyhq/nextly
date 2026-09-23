@@ -336,9 +336,16 @@ export function createPluginFetch(
     // whatever other allowed host it redirected to.
     let hop: RequestInit = init;
     for (;;) {
-      // Inside the deadline, because the DNS lookup it performs is otherwise
-      // outside every timer this function sets.
-      const address = await withDeadline(vetUrl(url, deps), deadlineAt, url);
+      // Inside the deadline AND against the caller's cancellation, because
+      // the DNS lookup it performs is outside every timer this function
+      // sets: a plugin that aborted because its own incoming request
+      // disconnected would otherwise keep waiting on a stalled resolver
+      // until the fixed budget answered for it. The lookup itself cannot
+      // be interrupted, but the caller is released the moment it cancels.
+      const address = await raceCallerAbort(
+        withDeadline(vetUrl(url, deps), deadlineAt, url),
+        init.signal ?? undefined
+      );
       const response = await deps.send({
         url,
         address,
@@ -369,4 +376,35 @@ export function createPluginFetch(
       hop = nextHop(hop, response.status, from, url);
     }
   };
+}
+
+/**
+ * Release the caller the moment it cancels, whatever the underlying work
+ * does.
+ *
+ * The DOMException shape `fetch` itself rejects with, so plugin code holding
+ * an AbortSignal recognises its cancellation by name. The work is not
+ * interrupted — a DNS query cannot be — but nothing awaits it either.
+ */
+function raceCallerAbort<T>(
+  work: Promise<T>,
+  signal: AbortSignal | undefined
+): Promise<T> {
+  if (!signal) return work;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () =>
+      reject(new DOMException("This operation was aborted", "AbortError"));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      value => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: Error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
 }

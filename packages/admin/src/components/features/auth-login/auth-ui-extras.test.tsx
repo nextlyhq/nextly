@@ -25,8 +25,27 @@ const base: AuthUiMeta = {
 };
 
 describe("AuthUiExtras (D57)", () => {
-  it("renders a labeled button for a provider without a component", () => {
+  it("renders a labeled button for a provider a host handler can start", () => {
     render(
+      <AuthUiExtras
+        authUi={{
+          ...base,
+          providers: [
+            { strategy: "oauth-google", label: "Sign in with Google" },
+          ],
+        }}
+        onProvider={() => undefined}
+      />
+    );
+    expect(screen.getByText("Sign in with Google")).toBeInTheDocument();
+  });
+
+  it("renders NOTHING for a plain-strategy provider with no host handler", () => {
+    // Neither a component nor a path, and the host handed no handler: the
+    // button would look like a way in and do nothing. Production renders
+    // this component without `onProvider`, so the omission is the common
+    // case, not an exotic one.
+    const { container } = render(
       <AuthUiExtras
         authUi={{
           ...base,
@@ -36,7 +55,8 @@ describe("AuthUiExtras (D57)", () => {
         }}
       />
     );
-    expect(screen.getByText("Sign in with Google")).toBeInTheDocument();
+    expect(screen.queryByText("Sign in with Google")).toBeNull();
+    expect(container.querySelector("button")).toBeNull();
   });
 
   it("renders a provider's custom component when supplied", () => {

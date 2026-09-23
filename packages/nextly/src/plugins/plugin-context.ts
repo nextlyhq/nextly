@@ -1250,7 +1250,14 @@ export function createPluginContext(
             // The adapter's transaction, reachable LAZILY like the handle:
             // SQLite writes need the adapter's manual BEGIN IMMEDIATE runner,
             // and the context can be built before the database is connected.
-            () => getServiceFn("adapter").transaction
+            // A CLOSURE over the adapter, never the method itself — an
+            // extracted `transaction` loses its class receiver, and the
+            // SQLite adapter reaches for instance state before it can open
+            // the transaction.
+            () => {
+              const adapter = getServiceFn("adapter");
+              return work => adapter.transaction(work);
+            }
           ),
         }
       : {}),

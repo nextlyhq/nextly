@@ -87,7 +87,7 @@ export interface PluginAuthApi {
    */
   verifyCsrf(
     request: Request
-  ): { valid: true } | { valid: false; reason: string };
+  ): Promise<{ valid: true } | { valid: false; reason: string }>;
 }
 
 /** Everything `completeLogin` needs, resolved lazily so services can initialise first. */
@@ -336,11 +336,26 @@ export function createPluginAuthApi(
       }
     },
 
-    verifyCsrf(request) {
+    async verifyCsrf(request) {
+      // The BODY is read from a clone, because the caller still needs the
+      // original to read its own fields, and the token can arrive either
+      // way: core admin requests carry csrfToken in the JSON body, and a
+      // plugin form posting the same shape was refused here for lacking the
+      // header it never needed on core routes.
+      let body: Record<string, unknown> = {};
+      try {
+        const parsed: unknown = await request.clone().json();
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          body = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // A body that is not JSON carries no token; the header is still
+        // checked.
+      }
       const result = validateCsrf(
         request,
         readCsrfCookie(request),
-        readCsrfFromRequest({}, request),
+        readCsrfFromRequest(body, request),
         env.NEXTLY_ALLOWED_ORIGINS_PARSED ?? []
       );
       return result.valid

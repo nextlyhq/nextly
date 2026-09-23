@@ -87,3 +87,58 @@ describe("createPluginSettings builds for the dialect it is GIVEN", () => {
     expect(fake.spelling).toEqual(["onConflictDoUpdate"]);
   });
 });
+
+describe("the adapter transaction the plugin context hands the store", () => {
+  it("invokes the ADAPTER's method, bound, not an extracted function", async () => {
+    // The context resolves the runner lazily as the adapter's `transaction`
+    // METHOD. Returning it extracted loses the class receiver, and the real
+    // SQLite adapter reaches for instance state before opening the
+    // transaction — a failure the boot-time test harness cannot see, because
+    // it replaces `transaction` with a bound closure. This adapter is a
+    // class-style method using `this`, the shape production has.
+    const calls: string[] = [];
+    class Adapter {
+      async transaction<T>(work: () => Promise<T>): Promise<T> {
+        // `this` is required to get here at all: an extracted call throws
+        // before the work runs.
+        if (!(this instanceof Adapter)) throw new TypeError("unbound");
+        calls.push("begin");
+        try {
+          return await work();
+        } finally {
+          calls.push("commit");
+        }
+      }
+    }
+    const adapter = new Adapter();
+    const db = {
+      select: () => ({
+        from: () => ({ where: async () => [] }),
+      }),
+      insert: () => ({
+        values: () => ({
+          onConflictDoUpdate: async () => undefined,
+          onDuplicateKeyUpdate: async () => undefined,
+        }),
+      }),
+      delete: () => ({ where: async () => undefined }),
+    };
+
+    const api = createPluginSettings(
+      {
+        name: "@a/p",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { settings: z.object({ port: z.number().default(1) }) },
+      } as never,
+      db,
+      "sqlite",
+      // Exactly what plugin-context does: hand back the method from a
+      // resolver. The bug was returning `adapter.transaction` itself.
+      () => work => adapter.transaction(work)
+    );
+
+    await api.set({ port: 2 });
+    expect(calls).toEqual(["begin", "commit"]);
+  });
+});

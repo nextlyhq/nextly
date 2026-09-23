@@ -96,10 +96,15 @@ function ProviderButton({
     );
   }
 
+  // Neither a component nor a path, so the HOST is the only thing that could
+  // start the flow — and a host that did not hand one in has nothing to run.
+  // Rendering anyway made a control that looked like a way in and did nothing.
+  if (!onProvider) return null;
+
   return (
     <button
       type="button"
-      onClick={() => onProvider?.(provider.strategy)}
+      onClick={() => onProvider(provider.strategy)}
       className={className}
     >
       {provider.label}

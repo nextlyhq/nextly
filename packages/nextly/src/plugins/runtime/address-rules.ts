@@ -236,7 +236,29 @@ export function judgeIpv6(address: string): AddressVerdict {
  * each octet actually is.
  */
 function embeddedIpv4(bytes: number[]): number[] | null {
-  // ::ffff:a.b.c.d — IPv4-mapped.
+  const ffff = ffffTranslationIpv4(bytes);
+  if (ffff !== null) return ffff;
+  // ::a.b.c.d — IPv4-compatible, deprecated but still routed by some stacks.
+  if (bytes.slice(0, 12).every(b => b === 0)) return bytes.slice(12, 16);
+  const nat64 = nat64Ipv4(bytes);
+  if (nat64 !== null) return nat64;
+  // 2002::/16 — 6to4 carries its IPv4 in the next four bytes.
+  if (bytes[0] === 0x20 && bytes[1] === 0x02) return bytes.slice(2, 6);
+  return null;
+}
+
+/**
+ * The IPv4 either `::ffff:` translation prefix carries, or null for neither.
+ *
+ * Two spellings, one marker family: the IPv4-MAPPED form `::ffff:a.b.c.d`
+ * puts the ffff at bytes 10-11, and the IPv4-TRANSLATED form
+ * `::ffff:0:a.b.c.d` of RFC 6145 moves it to bytes 8-9 behind a zero pair.
+ * Both deliver the embedded address to whoever connects — a translator on
+ * either prefix reaches whatever the IPv4 is, private or loopback included —
+ * and recognizing only the mapped spelling let the translated one through as
+ * an ordinary global address.
+ */
+function ffffTranslationIpv4(bytes: number[]): number[] | null {
   if (
     bytes.slice(0, 10).every(b => b === 0) &&
     bytes[10] === 0xff &&
@@ -244,12 +266,15 @@ function embeddedIpv4(bytes: number[]): number[] | null {
   ) {
     return bytes.slice(12, 16);
   }
-  // ::a.b.c.d — IPv4-compatible, deprecated but still routed by some stacks.
-  if (bytes.slice(0, 12).every(b => b === 0)) return bytes.slice(12, 16);
-  const nat64 = nat64Ipv4(bytes);
-  if (nat64 !== null) return nat64;
-  // 2002::/16 — 6to4 carries its IPv4 in the next four bytes.
-  if (bytes[0] === 0x20 && bytes[1] === 0x02) return bytes.slice(2, 6);
+  if (
+    bytes.slice(0, 8).every(b => b === 0) &&
+    bytes[8] === 0xff &&
+    bytes[9] === 0xff &&
+    bytes[10] === 0x00 &&
+    bytes[11] === 0x00
+  ) {
+    return bytes.slice(12, 16);
+  }
   return null;
 }
 
