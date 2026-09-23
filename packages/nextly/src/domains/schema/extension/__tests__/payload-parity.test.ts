@@ -198,7 +198,7 @@ describe("row 8 — foreign keys with onDelete/onUpdate", () => {
     const spec = schema.specs.find(t => t.name === "fx__linked");
     expect(spec?.foreignKeys).toEqual([
       {
-        name: "fk_linked_note_id",
+        name: "fk_fx__linked_note_id",
         columns: ["note_id"],
         referencesTable: "fx__notes",
         referencesColumns: ["id"],
@@ -207,7 +207,7 @@ describe("row 8 — foreign keys with onDelete/onUpdate", () => {
       },
     ]);
     expect(spec?.checks).toEqual([
-      { name: "ck_linked_note_present", sql: "note_id IS NOT NULL" },
+      { name: "ck_fx__linked_note_present", sql: "note_id IS NOT NULL" },
     ]);
   });
 });

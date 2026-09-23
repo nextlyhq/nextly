@@ -15,7 +15,7 @@
  * @since 1.0.0
  */
 import { NextlyError } from "../../../errors/nextly-error";
-import type { CheckSpec, ForeignKeySpec } from "../pipeline/diff/types";
+import type { DeclaredCheck, DeclaredForeignKey } from "./types";
 import { toSnakeCase } from "../services/field-column-descriptor";
 
 import type {
@@ -466,8 +466,8 @@ export interface TableDefinition<
   readonly name: TName;
   readonly columns: readonly ResolvedColumn[];
   readonly indexes: readonly ExtensionIndex[];
-  readonly foreignKeys: readonly ForeignKeySpec[];
-  readonly checks: readonly CheckSpec[];
+  readonly foreignKeys: readonly DeclaredForeignKey[];
+  readonly checks: readonly DeclaredCheck[];
   readonly __columns?: TColumns;
 }
 
@@ -605,7 +605,7 @@ function resolveForeignKeys(
   tableName: string,
   byName: ReadonlyMap<string, string>,
   inputs: readonly TableForeignKeyInput[]
-): ForeignKeySpec[] {
+): DeclaredForeignKey[] {
   return inputs.map((input, position) => {
     const path = `${tableName}.foreignKeys[${String(position)}]`;
     const columns = input.columns.map(columnKey => {
@@ -625,7 +625,11 @@ function resolveForeignKeys(
       );
     }
     return {
-      name: input.name ?? `fk_${tableName}_${columns.join("_")}`,
+      // Derived at COMPILE time from the FINAL table name, because that is
+      // the name live introspection also derives from — a name derived here
+      // (pre-prefix) could never match the live side and the diff would
+      // propose a drop-plus-add on every comparison.
+      name: input.name,
       columns,
       referencesTable: input.references.table,
       referencesColumns: [...input.references.columns],
@@ -639,7 +643,7 @@ function resolveForeignKeys(
 function resolveChecks(
   tableName: string,
   inputs: readonly TableCheckInput[]
-): CheckSpec[] {
+): DeclaredCheck[] {
   return inputs.map((input, position) => {
     if (input.sql.trim() === "") {
       invalid(
@@ -647,7 +651,7 @@ function resolveChecks(
         "A check must carry a SQL expression."
       );
     }
-    return { name: `ck_${tableName}_${input.name}`, sql: input.sql };
+    return { name: input.name, sql: input.sql };
   });
 }
 

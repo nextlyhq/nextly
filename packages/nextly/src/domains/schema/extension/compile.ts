@@ -127,8 +127,18 @@ export function toTableSpec(
     ...(index.where !== undefined ? { where: index.where } : {}),
     ...(index.expression !== undefined ? { expression: index.expression } : {}),
   }));
-  const foreignKeys = table.foreignKeys?.map(fk => ({ ...fk }));
-  const checks = table.checks?.map(ck => ({ ...ck }));
+  // Names derive HERE, from the FINAL table name: live introspection derives
+  // from the same name, and a name derived earlier (pre-prefix) could never
+  // match the live side — the diff would propose a drop-plus-add on every
+  // comparison. An explicit name always wins.
+  const foreignKeys = table.foreignKeys?.map(fk => ({
+    ...fk,
+    name: fk.name ?? `fk_${table.name}_${fk.columns.join("_")}`,
+  }));
+  const checks = table.checks?.map(ck => ({
+    name: `ck_${table.name}_${ck.name}`,
+    sql: ck.sql,
+  }));
 
   return {
     name: table.name,

@@ -17,7 +17,7 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
-import type { CheckSpec, ForeignKeySpec } from "../pipeline/diff/types";
+import type { DeclaredCheck, DeclaredForeignKey } from "./types";
 
 import type { ColumnBuilder, TableDefinition } from "./dsl";
 import { defineTable } from "./dsl";
@@ -62,8 +62,8 @@ interface DraftTable {
   owner: DraftOwner;
   columns: ExtensionColumn[];
   indexes: ExtensionIndex[];
-  foreignKeys?: ForeignKeySpec[];
-  checks?: CheckSpec[];
+  foreignKeys?: DeclaredForeignKey[];
+  checks?: DeclaredCheck[];
 }
 
 export interface SchemaDraft {

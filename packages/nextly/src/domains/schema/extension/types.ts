@@ -89,6 +89,18 @@ export interface ExtensionColumn {
   references?: string;
 }
 
+/** A foreign key as DECLARED: its name is derived at compile time from the final table name unless given. */
+export interface DeclaredForeignKey extends Omit<ForeignKeySpec, "name"> {
+  name?: string;
+}
+
+/** A check as DECLARED: the compile step derives the ck_<table>_<name> form. */
+export interface DeclaredCheck {
+  /** The author’s semantic name, not the final SQL constraint name. */
+  name: string;
+  sql: string;
+}
+
 export interface ExtensionIndex {
   /** SQL column names. Order is significant — it decides left-prefix lookups. */
   columns: string[];
@@ -119,7 +131,7 @@ export interface ExtensionTable {
   columns: ExtensionColumn[];
   indexes: ExtensionIndex[];
   /** Foreign keys declared with the table; undefined = none declared. */
-  foreignKeys?: ForeignKeySpec[];
+  foreignKeys?: DeclaredForeignKey[];
   /** Check constraints declared with the table; undefined = none declared. */
-  checks?: CheckSpec[];
+  checks?: DeclaredCheck[];
 }

@@ -24,7 +24,9 @@ import {
 
 import { sizeFromDeclaration } from "./declared-size";
 import type {
+  CheckSpec,
   ColumnSpec,
+  ForeignKeySpec,
   IndexSpec,
   NextlySchemaSnapshot,
   TableSpec,
@@ -455,11 +457,114 @@ export async function introspectLiveSnapshot(
             : {}),
         })
       ),
+      // Foreign keys: PRAGMA foreign_key_list, grouped by the id composite
+      // FKs share. The catalog carries no constraint name, so the SAME rule
+      // the compiler uses derives one from the final table name and columns —
+      // the two sides of any comparison spell the name identically.
+      foreignKeys: await sqliteForeignKeys(dbAny, table),
+      // Checks: SQLite has no catalog for them, so the CREATE statement is
+      // parsed for NAMED constraints. Anonymous checks stay invisible to the
+      // diff, which matches by name and could not match them anyway.
+      checks: await sqliteChecks(dbAny, table),
     });
   }
   const snapshot: NextlySchemaSnapshot = { tables };
   normalizeIndexOrder(snapshot);
   return snapshot;
+}
+
+/** The PRAGMA's action spellings, as the diff's ReferentialAction spells them. */
+const SQLITE_FK_ACTION: Record<string, ForeignKeySpec["onDelete"]> = {
+  "CASCADE": "cascade",
+  "SET NULL": "set null",
+  "SET DEFAULT": "set default",
+  "RESTRICT": "restrict",
+  "NO ACTION": "no action",
+};
+
+async function sqliteForeignKeys(
+  dbAny: { all(query: unknown): Promise<unknown> | unknown },
+  table: string
+): Promise<ForeignKeySpec[] | undefined> {
+  const rows = (await Promise.resolve(dbAny.all(
+    sql`PRAGMA foreign_key_list(${sql.identifier(table)})`
+  ))) as unknown as Array<{
+    id: number;
+    seq: number;
+    table: string;
+    from: string;
+    to: string;
+    on_delete: string;
+    on_update: string;
+  }>;
+  if (rows.length === 0) return [];
+  const byId = new Map<number, typeof rows>();
+  for (const row of rows) {
+    const list = byId.get(row.id) ?? [];
+    list.push(row);
+    byId.set(row.id, list);
+  }
+  return [...byId.values()].map(group => {
+    const first = group.reduce((a, b) => (a.seq <= b.seq ? a : b));
+    const columns = [...group]
+      .sort((a, b) => a.seq - b.seq)
+      .map(row => row.from);
+    const referenced = [...group]
+      .sort((a, b) => a.seq - b.seq)
+      .map(row => row.to);
+    return {
+      name: `fk_${table}_${columns.join("_")}`,
+      columns,
+      referencesTable: first.table,
+      referencesColumns: referenced,
+      onDelete: SQLITE_FK_ACTION[first.on_delete] ?? "no action",
+      onUpdate: SQLITE_FK_ACTION[first.on_update] ?? "no action",
+    };
+  });
+}
+
+/**
+ * Named CHECK constraints, parsed from the stored CREATE TABLE statement.
+ *
+ * Parenthesis-balanced extraction: a check expression can itself contain
+ * parentheses, and a regex that stops at the first `)` would truncate it and
+ * report a drift no migration could resolve.
+ */
+async function sqliteChecks(
+  dbAny: { all(query: unknown): Promise<unknown> | unknown },
+  table: string
+): Promise<CheckSpec[] | undefined> {
+  const rows = (await Promise.resolve(dbAny.all(
+    sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${table}`
+  ))) as unknown as Array<{ sql: string | null }>;
+  const create = rows[0]?.sql;
+  if (create === undefined || create === null) return [];
+  const checks: CheckSpec[] = [];
+  const pattern = /CONSTRAINT\s+(?:"([^"]+)"|`([^`]+)`|([A-Za-z_][\w]*))\s+CHECK\s*\(/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(create)) !== null) {
+    const name = match[1] ?? match[2] ?? match[3];
+    // Balance from the CHECK's own opening paren.
+    const openAt = match.index + match[0].length - 1;
+    let depth = 0;
+    let end = -1;
+    for (let i = openAt; i < create.length; i += 1) {
+      if (create[i] === "(") depth += 1;
+      else if (create[i] === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    if (end === -1) continue;
+    checks.push({
+      name,
+      sql: create.slice(openAt + 1, end).trim(),
+    });
+  }
+  return checks;
 }
 
 /**
