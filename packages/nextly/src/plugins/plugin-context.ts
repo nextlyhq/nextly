@@ -958,10 +958,23 @@ export const PLUGIN_SERVICE_NAMES = [
   "dialect",
   "logger",
   "config",
+  "adapter",
 ] as const;
 
 /** One of the names a plugin-context resolver must answer. */
 export type PluginServiceName = (typeof PLUGIN_SERVICE_NAMES)[number];
+
+/**
+ * The slice of the database adapter core's own stores need: a transaction
+ * that can carry awaited work on EVERY dialect. Drizzle's better-sqlite3
+ * transaction cannot (the driver refuses an async callback), so SQLite
+ * writes ride the adapter's manual `BEGIN IMMEDIATE` implementation — this
+ * type names the one method that makes dialect-correct transactions
+ * reachable without binding plugin-context to an adapter class.
+ */
+export interface AdapterTransactions {
+  transaction: <T>(work: () => Promise<T>) => Promise<T>;
+}
 
 /**
  * The database surface a plugin actually receives.
@@ -1008,7 +1021,9 @@ export function createPluginContext(
                     ? Logger
                     : T extends "config"
                       ? NextlyServiceConfig
-                      : never,
+                      : T extends "adapter"
+                        ? AdapterTransactions
+                        : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -1231,7 +1246,11 @@ export function createPluginContext(
           settings: createPluginSettings(
             plugin,
             getServiceFn("db"),
-            getServiceFn("dialect")
+            getServiceFn("dialect"),
+            // The adapter's transaction, reachable LAZILY like the handle:
+            // SQLite writes need the adapter's manual BEGIN IMMEDIATE runner,
+            // and the context can be built before the database is connected.
+            () => getServiceFn("adapter").transaction
           ),
         }
       : {}),

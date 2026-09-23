@@ -31,7 +31,13 @@ import type { PluginDefinition, PluginSettingsApi } from "./plugin-context";
 export function createPluginSettings(
   plugin: PluginDefinition,
   db: unknown,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /**
+   * The adapter's transaction runner, used on SQLite where Drizzle's own
+   * transaction cannot carry awaited work. Lazily supplied so the context can
+   * be built before the database is connected, exactly like the store.
+   */
+  adapterTransaction?: () => <T>(work: () => Promise<T>) => Promise<T>
 ): PluginSettingsApi {
   const schema = plugin.contributes?.settings;
   if (!schema) {
@@ -55,7 +61,14 @@ export function createPluginSettings(
       owner: plugin.name,
       schema,
       secretPaths: plugin.capabilities?.secrets ?? [],
-      store: createPluginSettingsStore(db, dialect),
+      store: createPluginSettingsStore(
+        db,
+        dialect,
+        // SQLite cannot use Drizzle's transaction (better-sqlite3 refuses an
+        // async callback), so writes ride the adapter's manual BEGIN IMMEDIATE
+        // runner; the store's handle shares the connection it opens.
+        dialect === "sqlite" ? adapterTransaction?.() : undefined
+      ),
       secrets: () => pluginSettingsSecrets(env),
     });
   };

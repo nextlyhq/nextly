@@ -50,6 +50,7 @@ function serviceFor(
       adapter: {
         getDrizzle: () => unknown;
         dialect: SupportedDialect;
+        transaction: <T>(run: () => Promise<T>) => Promise<T>;
       };
     }
   ).adapter;
@@ -58,7 +59,16 @@ function serviceFor(
     owner: plugin.name,
     schema,
     secretPaths: plugin.capabilities?.secrets ?? [],
-    store: createPluginSettingsStore(adapter.getDrizzle(), adapter.dialect),
+    store: createPluginSettingsStore(
+      adapter.getDrizzle(),
+      adapter.dialect,
+      // SQLite cannot use Drizzle's transaction (better-sqlite3 refuses an
+      // async callback), so the adapter's manual BEGIN IMMEDIATE runner
+      // carries the write; the store's handle shares the connection it opens.
+      adapter.dialect === "sqlite"
+        ? work => adapter.transaction(work)
+        : undefined
+    ),
     secrets: () => pluginSettingsSecrets(env),
   });
 }

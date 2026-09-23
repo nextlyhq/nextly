@@ -69,7 +69,21 @@ export const OWNER_LOCK_KEY = "";
 
 export function createPluginSettingsStore(
   db: unknown,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /**
+   * A dialect-aware transaction runner, required for SQLite.
+   *
+   * Drizzle's better-sqlite3 transaction callback is synchronous by driver
+   * design (`client.transaction(fn)[mode](tx)` — better-sqlite3 refuses a
+   * function that returns a Promise, so every async `mutate` failed with
+   * "Transaction function cannot return a promise" instead of committing).
+   * The database adapter opens SQLite transactions manually with
+   * `BEGIN IMMEDIATE` on the one shared connection precisely so awaited work
+   * fits — and the Drizzle handle this store holds is bound to that same
+   * connection, so its statements run inside that open transaction without
+   * needing a separate transaction-bound executor.
+   */
+  beginTransaction?: <T>(work: () => Promise<T>) => Promise<T>
 ): PluginSettingsStore {
   const { nextlyPluginSettings: table } = pluginSettingsTables(dialect);
   const database = db as SettingsDb;
@@ -168,7 +182,12 @@ export function createPluginSettingsStore(
       //
       // Locking the rows is what makes the second caller WAIT rather than
       // read stale, so its merge sees the first one's result.
-      return database.transaction(async tx => {
+      //
+      // The body is spelled ONCE for both transaction providers: the read,
+      // the claim, the computed rows and the lock-row cleanup are the same
+      // sequence on every dialect — only WHO opens the transaction differs,
+      // and a second copy of the body would be a second thing to keep right.
+      const run = async (writer: SettingsWriter): Promise<void> => {
         // ONE lock, for the whole owner, taken before anything is read.
         //
         // Per-KEY locks were not enough, and the reason is the validation
@@ -185,19 +204,26 @@ export function createPluginSettingsStore(
         // answers all of it: a second writer for the same plugin blocks on the
         // primary key until this transaction ends, whatever keys either of
         // them touches, and a single lock cannot be taken out of order.
-        await claim(tx, owner, OWNER_LOCK_KEY);
+        await claim(writer, owner, OWNER_LOCK_KEY);
 
-        const current = await rowsFor(tx, owner);
+        const current = await rowsFor(writer, owner);
         const rows = await computeRows(current);
-        for (const row of rows) await upsert(tx, row);
+        for (const row of rows) await upsert(writer, row);
 
         // The lock row is not settings and must never be read as any. It is
         // removed before commit, so it exists only for the life of this
         // transaction — which is exactly as long as it is needed.
-        await tx
+        await writer
           .delete(table)
           .where(and(eq(table.owner, owner), eq(table.key, OWNER_LOCK_KEY)));
-      });
+      };
+
+      // SQLite cannot take the Drizzle path: better-sqlite3 refuses an async
+      // transaction callback, so the adapter's manual `BEGIN IMMEDIATE`
+      // runner carries the same sequence, with the store's own handle bound
+      // to the one shared connection the transaction is open on.
+      if (beginTransaction) return beginTransaction(() => run(database));
+      return database.transaction(run);
     },
   };
 }

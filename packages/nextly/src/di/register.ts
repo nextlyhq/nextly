@@ -123,6 +123,7 @@ import {
 } from "../plugins/permissions/collect-permissions";
 import { setPluginAuthDepsResolver } from "../plugins/plugin-auth-provider";
 import type {
+  AdapterTransactions,
   PluginContext,
   PluginDefinition,
   PluginServiceName,
@@ -2886,6 +2887,7 @@ async function initializePlugins(
       | SupportedDialect
       | Logger
       | NextlyServiceConfig
+      | AdapterTransactions
   > = {
     collectionService: () =>
       container.get<CollectionService>("collectionService"),
@@ -2903,6 +2905,10 @@ async function initializePlugins(
     dialect: () => dialect,
     logger: () => logger,
     config: () => transformedConfig,
+    // The transaction-capable adapter, for core-owned stores that must run on
+    // EVERY dialect: Drizzle's better-sqlite3 transaction cannot carry awaited
+    // work, so SQLite writes ride the adapter's manual BEGIN IMMEDIATE path.
+    adapter: () => container.get<AdapterTransactions>("adapter"),
   };
 
   const getServiceForPlugin = <T extends PluginServiceName>(name: T) =>

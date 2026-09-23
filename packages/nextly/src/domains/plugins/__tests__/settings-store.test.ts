@@ -301,3 +301,34 @@ describe("the claim placeholder is storable on every dialect", () => {
     expect(fake.spelling).toEqual(["onDuplicateKeyUpdate"]);
   });
 });
+
+describe("a SQLite-shaped transaction runner", () => {
+  it("runs the whole mutation inside the provided runner, not Drizzles", async () => {
+    // Drizzle's better-sqlite3 transaction callback is synchronous by driver
+    // design — an async mutate failed with 'Transaction function cannot
+    // return a promise' instead of committing. SQLite writes therefore ride
+    // the adapter's manual BEGIN IMMEDIATE runner; this asserts the store
+    // takes that path when one is supplied, with the statements still flowing
+    // through the store's own handle.
+    const order: string[] = [];
+    const fake = recordingDb();
+    const runner = async <T>(work: () => Promise<T>): Promise<T> => {
+      order.push("begin");
+      try {
+        return await work();
+      } finally {
+        order.push("commit");
+      }
+    };
+
+    const store = createPluginSettingsStore(fake.db, "sqlite", runner);
+    await store.mutate("p", ["k"], async () => {
+      order.push("work");
+      return [];
+    });
+
+    expect(order[0]).toBe("begin");
+    expect(order[order.length - 1]).toBe("commit");
+    expect(order).toContain("work");
+  });
+});
