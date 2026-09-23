@@ -112,6 +112,115 @@ describe("validateCapabilities", () => {
     ).not.toThrow();
   });
 
+  it("refuses a typoed suffix reached through an ARRAY of objects", () => {
+    // An array exposes an element schema rather than a record value schema,
+    // and treating "no value schema" as "accept" waved the typo through —
+    // `mapSecrets` then never matched the real field, so every element's
+    // credential was stored in plain text and returned unredacted.
+    const settings = z.object({
+      providers: z.array(
+        z.object({ clientSecret: z.string(), name: z.string() })
+      ),
+    });
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({
+            contributes: { settings },
+            capabilities: { secrets: ["providers.*.clientSecrett"] },
+          } as never),
+        ])
+      )
+    ).toBe("unknown-secret-path");
+  });
+
+  it("accepts a correctly spelled secret path through an array's elements", () => {
+    // The control for the case above: the wildcard descends into the ELEMENT
+    // schema, so the real field is found and the path is legitimate.
+    const settings = z.object({
+      providers: z.array(
+        z.object({ clientSecret: z.string(), name: z.string() })
+      ),
+    });
+    expect(() =>
+      validateCapabilities([
+        plugin({
+          contributes: { settings },
+          capabilities: { secrets: ["providers.*.clientSecret"] },
+        } as never),
+      ])
+    ).not.toThrow();
+  });
+
+  it("refuses a NAMED member of an array, whose elements have no names", () => {
+    const settings = z.object({
+      providers: z.array(z.object({ clientSecret: z.string() })),
+    });
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({
+            contributes: { settings },
+            capabilities: { secrets: ["providers.google.clientSecret"] },
+          } as never),
+        ])
+      )
+    ).toBe("unknown-secret-path");
+  });
+
+  it("refuses a path that descends past a scalar into a typo", () => {
+    // `clientSecret.typo` over a plain string: the string is neither an
+    // object nor a record, and accepting whatever cannot be enumerated let
+    // this typo pass too — nothing inside a string can match the secret map.
+    const settings = z.object({ clientSecret: z.string() });
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({
+            contributes: { settings },
+            capabilities: { secrets: ["clientSecret.typo"] },
+          } as never),
+        ])
+      )
+    ).toBe("unknown-secret-path");
+  });
+
+  it("refuses a path descending past a scalar behind an optional", () => {
+    // The wrapper is unwrapped before the leaf is judged, so an optional
+    // credential is protected exactly where a required one is.
+    const settings = z.object({ clientSecret: z.string().optional() });
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({
+            contributes: { settings },
+            capabilities: { secrets: ["clientSecret.oops"] },
+          } as never),
+        ])
+      )
+    ).toBe("unknown-secret-path");
+  });
+
+  it("accepts a path below a union, whose options cannot be enumerated", () => {
+    // The control for the leaf refusal: a union is not a leaf — one of its
+    // options may hold the declared path — and neither accepting nor
+    // refusing can be proven from the union itself.
+    const settings = z.object({
+      config: z.union([
+        z.object({ apiKey: z.string() }),
+        z.object({ token: z.string() }),
+      ]),
+    });
+    expect(() =>
+      validateCapabilities([
+        plugin({
+          contributes: { settings },
+          capabilities: { secrets: ["config.apiKey"] },
+        } as never),
+      ])
+    ).not.toThrow();
+  });
+
   it("accepts a path below a record, whose keys cannot be enumerated", () => {
     // Traversal has to stop where the schema stops being enumerable, or every
     // legitimate per-tenant secret would be refused.

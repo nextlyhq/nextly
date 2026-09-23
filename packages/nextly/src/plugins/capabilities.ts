@@ -205,6 +205,76 @@ function recordValueSchema(node: unknown): unknown {
 }
 
 /**
+ * The schema an ARRAY's elements carry, or null when this is not an array.
+ *
+ * Unwrapped like its siblings, because an array is no less likely to arrive
+ * optional or defaulted than an object is.
+ */
+function arrayElementSchema(node: unknown): unknown {
+  let current = node;
+  for (let depth = 0; depth < 10; depth += 1) {
+    const def = (
+      current as {
+        _zod?: { def?: { element?: unknown; innerType?: unknown } };
+      }
+    )._zod?.def;
+    if (def?.element !== undefined) return def.element;
+    if (def?.innerType === undefined) return null;
+    current = def.innerType;
+  }
+  return null;
+}
+
+/**
+ * Zod type names whose instances cannot have anything BENEATH them, so a path
+ * still holding segments at one of them names a place that does not exist.
+ *
+ * Anything absent from this set — a union, a pipe, a lazy schema, `unknown` —
+ * keeps the "cannot enumerate, accept" answer below, because refusing a
+ * declaration this feature exists to support is the worse error. Membership is
+ * about what CAN be proven: a string is provably a leaf; what a lazy schema
+ * produces is provably nothing until it is asked.
+ */
+const LEAF_SCHEMA_TYPES = new Set([
+  "string",
+  "number",
+  "int",
+  "boolean",
+  "bigint",
+  "date",
+  "symbol",
+  "null",
+  "undefined",
+  "literal",
+  "nan",
+  "file",
+  "blob",
+]);
+
+/**
+ * Whether a schema node is a LEAF that no further segment can descend into.
+ *
+ * Unwraps the same wrappers the probes above unwrap before reading the type
+ * name, so an optional string is a leaf exactly where a required one is.
+ */
+function isLeafSchema(node: unknown): boolean {
+  let current = node;
+  for (let depth = 0; depth < 10; depth += 1) {
+    const def = (
+      current as {
+        _zod?: { def?: { innerType?: unknown; type?: unknown } };
+      }
+    )._zod?.def;
+    if (def?.innerType !== undefined) {
+      current = def.innerType;
+      continue;
+    }
+    return typeof def?.type === "string" && LEAF_SCHEMA_TYPES.has(def.type);
+  }
+  return false;
+}
+
+/**
  * Whether a plugin's declared settings schema contains a path.
  *
  * Every CONCRETE segment is resolved, not just the first. Checking only the
@@ -234,9 +304,57 @@ function schemaHasPath(plugin: PluginDefinition, path: string): boolean {
 }
 
 /**
+ * What a segment meets at a schema node that is neither object nor array nor
+ * record: descend into the record's values, or a final yes/no.
+ *
+ * A DISJOINT return rather than a boolean, because the record case has to
+ * hand the loop its next node — a `null | unknown` shape would read as
+ * "refuse" the moment a record's value schema is itself null.
+ */
+type NonObjectStep = { descend: unknown } | { match: boolean };
+
+/**
+ * Resolve one segment against a node that is not a plain object shape.
+ *
+ * An array holds its elements under a def of their own, which none of the
+ * other probes read: `recordValueSchema` answers null for one, and accepting
+ * on that let `providers.*.clientSecrett` pass over a list — the same typo
+ * the object walk refuses, waved through because the list spelled its
+ * children differently. A `*` means each element, so the rest of the path is
+ * checked against the element schema; a NAME matches no element, because
+ * none of them has one.
+ *
+ * A leaf with segments left is a typo of the same kind the object walk
+ * refuses: `clientSecret.typo` over `clientSecret: z.string()` names a place
+ * inside a string, which does not exist — and accepting it left `mapSecrets`
+ * matching nothing, so the real credential was stored in plain text and
+ * returned unredacted.
+ *
+ * What remains is genuinely not enumerable — a union, pipe, lazy schema or
+ * `unknown` — and refusing there would reject declarations this feature
+ * exists to support.
+ */
+function nonObjectStep(
+  node: unknown,
+  segment: string,
+  rest: string
+): NonObjectStep {
+  const elementSchema = arrayElementSchema(node);
+  if (elementSchema !== null) {
+    if (segment !== "*") return { match: false };
+    if (rest === "") return { match: true };
+    return { match: schemaHasPathFrom(elementSchema, rest) };
+  }
+  const valueSchema = recordValueSchema(node);
+  if (valueSchema !== null) return { descend: valueSchema };
+  if (isLeafSchema(node)) return { match: false };
+  return { match: true };
+}
+
+/**
  * The same walk, entered partway down rather than at a plugin's root.
  *
- * Split out so the wildcard branch above can ask the question of each value
+ * Split out so the wildcard branches above can ask the question of each value
  * in turn; `schemaHasPath` takes a plugin because that is what its callers
  * hold, and re-deriving the traversal here would be a second implementation
  * of it.
@@ -246,22 +364,23 @@ function schemaHasPathFrom(node: unknown, path: string): boolean {
   const segments = path.split(".");
   for (let at = 0; at < segments.length; at += 1) {
     const segment = segments[at];
+    const rest =
+      at + 1 < segments.length ? segments.slice(at + 1).join(".") : "";
     const shape = objectShape(current);
-    if (shape !== null) {
-      if (segment === "*") {
-        const rest = segments.slice(at + 1).join(".");
-        if (rest === "") return true;
-        return Object.values(shape).some(value =>
-          schemaHasPathFrom(value, rest)
-        );
+    if (shape === null) {
+      const step = nonObjectStep(current, segment, rest);
+      if ("descend" in step) {
+        current = step.descend;
+        continue;
       }
-      if (!Object.hasOwn(shape, segment)) return false;
-      current = shape[segment];
-      continue;
+      return step.match;
     }
-    const valueSchema = recordValueSchema(current);
-    if (valueSchema === null) return true;
-    current = valueSchema;
+    if (segment === "*") {
+      if (rest === "") return true;
+      return Object.values(shape).some(value => schemaHasPathFrom(value, rest));
+    }
+    if (!Object.hasOwn(shape, segment)) return false;
+    current = shape[segment];
   }
   return true;
 }
