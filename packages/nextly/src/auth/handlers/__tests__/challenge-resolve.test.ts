@@ -82,6 +82,29 @@ function retryPayload(body: Record<string, unknown>): {
   };
 }
 
+/**
+ * Mint a pending token the current build would mint: flow id and flow
+ * lifetime signed in. Every case uses it, so a fixture that forgets the
+ * lifetime fails as the refusable token it is rather than passing as the
+ * backward-compat shape no production mint ever produced.
+ */
+async function mint(
+  claims: { userId: string; challengeId: string; attempts?: number } & Record<
+    string,
+    unknown
+  >
+): Promise<string> {
+  return mintPendingToken(
+    {
+      attempts: 0,
+      flowExpiresAt: Math.floor(Date.now() / 1000) + 300,
+      ...claims,
+    } as never,
+    SECRET,
+    300
+  );
+}
+
 function makeRequest(body: Record<string, unknown>): Request {
   return new Request("http://localhost:3000/admin/api/auth/challenge/resolve", {
     method: "POST",
@@ -97,11 +120,7 @@ function makeRequest(body: Record<string, unknown>): Request {
 describe("handleChallengeResolve (D71)", () => {
   it("issues a session when the challenge resolves", async () => {
     const deps = makeDeps();
-    const pendingToken = await mintPendingToken(
-      { userId: "u1", challengeId: "totp", attempts: 0 },
-      SECRET,
-      300
-    );
+    const pendingToken = await mint({ userId: "u1", challengeId: "totp" });
     const res = await handleChallengeResolve(
       makeRequest({ pendingToken, response: { code: "123456" } }),
       deps
@@ -122,11 +141,7 @@ describe("handleChallengeResolve (D71)", () => {
 
   it("re-challenges with a fresh pending token on a wrong code", async () => {
     const deps = makeDeps();
-    const pendingToken = await mintPendingToken(
-      { userId: "u1", challengeId: "totp", attempts: 0 },
-      SECRET,
-      300
-    );
+    const pendingToken = await mint({ userId: "u1", challengeId: "totp" });
     const res = await handleChallengeResolve(
       makeRequest({ pendingToken, response: { code: "000000" } }),
       deps
@@ -145,17 +160,13 @@ describe("handleChallengeResolve (D71)", () => {
     // specific lost that destination on the first wrong answer, and the
     // eventual correct one issued a session to the dashboard instead.
     const deps = makeDeps();
-    const pendingToken = await mintPendingToken(
-      {
-        userId: "u1",
-        challengeId: "totp",
-        attempts: 0,
-        strategy: "oauth-google",
-        next: "/admin/posts",
-      },
-      SECRET,
-      300
-    );
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      attempts: 0,
+      strategy: "oauth-google",
+      next: "/admin/posts",
+    });
 
     const res = await handleChallengeResolve(
       makeRequest({ pendingToken, response: { code: "000000" } }),
@@ -200,11 +211,7 @@ describe("handleChallengeResolve (D71)", () => {
       return Promise.resolve({ allowed: next < limit });
     };
 
-    const replayed = await mintPendingToken(
-      { userId: "u1", challengeId: "totp", attempts: 0 },
-      SECRET,
-      300
-    );
+    const replayed = await mint({ userId: "u1", challengeId: "totp" });
 
     // "Stopped" is either a refusal response or a thrown refusal, depending
     // on which guard trips first; both end the challenge, and the property
@@ -236,11 +243,7 @@ describe("handleChallengeResolve (D71)", () => {
     // above while breaking the second factor for everyone.
     const deps = makeDeps();
     deps.countChallengeAttempt = () => Promise.resolve({ allowed: true });
-    const pendingToken = await mintPendingToken(
-      { userId: "u1", challengeId: "totp", attempts: 0 },
-      SECRET,
-      300
-    );
+    const pendingToken = await mint({ userId: "u1", challengeId: "totp" });
     const res = await handleChallengeResolve(
       makeRequest({ pendingToken, response: { code: "000000" } }),
       deps
@@ -251,11 +254,11 @@ describe("handleChallengeResolve (D71)", () => {
 
   it("fails for good once attempts are exhausted", async () => {
     const deps = makeDeps();
-    const pendingToken = await mintPendingToken(
-      { userId: "u1", challengeId: "totp", attempts: 5 },
-      SECRET,
-      300
-    );
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      attempts: 5,
+    });
     const res = await handleChallengeResolve(
       makeRequest({ pendingToken, response: { code: "123456" } }),
       deps
@@ -288,11 +291,11 @@ describe("the challenge attempt budget", () => {
         return { allowed: true };
       },
     };
-    const pendingToken = await mintPendingToken(
-      { userId, challengeId: "totp", attempts: 0 },
-      SECRET,
-      300
-    );
+    const pendingToken = await mint({
+      userId,
+      challengeId: "totp",
+      attempts: 0,
+    });
     await handleChallengeResolve(
       makeRequest({ pendingToken, response: { code: "000000" } }),
       withCounter as never
@@ -346,11 +349,7 @@ describe("the challenge budget as a precondition", () => {
         return Promise.resolve({ allowed });
       },
     };
-    const pendingToken = await mintPendingToken(
-      { userId: "u1", challengeId: "totp", attempts: 0 },
-      SECRET,
-      300
-    );
+    const pendingToken = await mint({ userId: "u1", challengeId: "totp" });
     const res = await handleChallengeResolve(
       makeRequest({ pendingToken, response: { code } }),
       withCounter as never
@@ -394,11 +393,12 @@ describe("the challenge attempt budget, per login flow", () => {
         return { allowed: true };
       },
     };
-    const pendingToken = await mintPendingToken(
-      { userId: "u1", challengeId: "totp", attempts: 0, ...claims },
-      SECRET,
-      300
-    );
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      attempts: 0,
+      ...claims,
+    });
     await handleChallengeResolve(
       makeRequest({ pendingToken, response: { code: "000000" } }),
       withCounter as never
@@ -434,11 +434,12 @@ describe("the challenge attempt budget, per login flow", () => {
         return { allowed: true };
       },
     };
-    const pendingToken = await mintPendingToken(
-      { userId: "u1", challengeId: "totp", attempts: 0, flow: "flow-one" },
-      SECRET,
-      300
-    );
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      attempts: 0,
+      flow: "flow-one",
+    });
     const first = await handleChallengeResolve(
       makeRequest({ pendingToken, response: { code: "000000" } }),
       withCounter as never
@@ -456,10 +457,22 @@ describe("the challenge attempt budget, per login flow", () => {
     expect(seen[0]).toContain("flow-one");
   });
 
-  it("shares one budget between tokens minted before flows existed", async () => {
-    // A token with no flow claim is the pre-flow shape; every such token for
-    // one account and challenge draws on the single budget that shape had.
-    expect(await keyFor({})).toBe(await keyFor({}));
+  it("REFUSES a token carrying no flow lifetime", async () => {
+    // Every mint this build makes signs a lifetime, so absence means a token
+    // nothing here could have produced — treated as unlimited, the absence
+    // would be a bypass; refused, it is an anomaly with no expiry to renew.
+    const deps = makeDeps();
+    const noLifetime = await mintPendingToken(
+      { userId: "u1", challengeId: "totp", attempts: 0, flow: "f1" },
+      SECRET,
+      300
+    );
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken: noLifetime, response: { code: "123456" } }),
+      deps
+    );
+    expect(res.status).toBe(401);
   });
 });
 
@@ -475,11 +488,12 @@ describe("a cookie-mode challenge that ends in a forced password change", () => 
       isActive: true,
       mustChangePassword: true,
     });
-    const pendingToken = await mintPendingToken(
-      { userId: "u1", challengeId: "totp", attempts: 0, flow: "f" },
-      SECRET,
-      300
-    );
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      attempts: 0,
+      flow: "f",
+    });
     const request = new Request(
       "http://localhost:3000/admin/api/auth/challenge/resolve",
       {
@@ -533,11 +547,12 @@ describe("a cookie-mode challenge that ends in a forced password change", () => 
       isActive: true,
       mustChangePassword: true,
     });
-    const pendingToken = await mintPendingToken(
-      { userId: "u1", challengeId: "totp", attempts: 0, flow: "f" },
-      SECRET,
-      300
-    );
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      attempts: 0,
+      flow: "f",
+    });
     const res = await handleChallengeResolve(
       makeRequest({ pendingToken, response: { code: "123456" } }),
       deps
@@ -611,11 +626,12 @@ describe("a cookie-mode flow that fails for good", () => {
     const deps = makeDeps();
     deps.countChallengeAttempt = async () => ({ allowed: false });
 
-    const pendingToken = await mintPendingToken(
-      { userId: "u1", challengeId: "totp", attempts: 0, flow: "f1" },
-      SECRET,
-      300
-    );
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      attempts: 0,
+      flow: "f1",
+    });
     const request = new Request(
       "http://localhost:3000/admin/api/auth/challenge/resolve",
       {

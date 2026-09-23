@@ -93,15 +93,17 @@ describe("address rules — IPv6", () => {
   });
 
   it.each([
-    ["64:ff9b:1:7f:0:100:0:0", "127.0.0.1"],
-    ["64:ff9b:1:a9:fea9:fe00:0:0", "169.254.169.254"],
-    ["64:ff9b:1:a:0:100:0:0", "10.0.0.1"],
+    // RFC 6052 /48 layout: the IPv4 splits around the u octet, octets at
+    // bytes 6-7 and 9-10. Spelled out per address so the encoding under test
+    // is checkable against the RFC by eye.
+    ["64:ff9b:1:7f00:0:100::", "127.0.0.1"],
+    ["64:ff9b:1:a9fe:a9:fe00::", "169.254.169.254"],
+    ["64:ff9b:1:a08:5:400::", "10.8.5.4"],
   ])("refuses the local-use NAT64 prefix carrying %s", address => {
-    // The RFC 8215 prefix lays the IPv4 at bytes 7-10 (48-bit prefix, u
-    // octet, address — RFC 6052), not at the end like the well-known /96;
-    // judging only the well-known form let these fall through as ordinary
-    // global addresses, and what they carry is loopback, link-local
-    // metadata, and private space — the exact refusals this judge is for.
+    // Judging the split layout as one contiguous run read the private
+    // 10.8.5.4 as the public 8.0.5.4 — the exact bypass this judge exists to
+    // prevent, since what the prefix carries can be loopback, link-local
+    // metadata, or private space.
     const verdict = judgeIpv6(address);
     expect(verdict.allowed).toBe(false);
   });
@@ -109,7 +111,7 @@ describe("address rules — IPv6", () => {
   it("allows the local-use NAT64 prefix carrying a public IPv4", () => {
     // The control: the prefix itself is not refused, only what it carries —
     // a deployment NAT-ing to a public address is ordinary outbound traffic.
-    expect(judgeIpv6("64:ff9b:1:5d:b8d8:2200:0:0").allowed).toBe(true);
+    expect(judgeIpv6("64:ff9b:1:5db8:d8:2200::").allowed).toBe(true);
   });
 
   it("allows a public IPv6 address", () => {

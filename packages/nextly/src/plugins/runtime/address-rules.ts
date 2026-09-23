@@ -203,16 +203,13 @@ export function judgeIpv6(address: string): AddressVerdict {
   const bytes = ipv6Bytes(address);
   if (!bytes) return refuse("malformed");
 
-  const asV4 = (offset: number) =>
-    judgeIpv4(bytes.slice(offset, offset + 4).join("."));
-
   if (bytes.every(b => b === 0)) return refuse("unspecified");
   if (bytes.slice(0, 15).every(b => b === 0) && bytes[15] === 1) {
     return refuse("loopback");
   }
 
-  const embedded = embeddedIpv4Offset(bytes);
-  if (embedded !== null) return asV4(embedded);
+  const embedded = embeddedIpv4(bytes);
+  if (embedded !== null) return judgeIpv4(embedded.join("."));
 
   if ((bytes[0] & 0xfe) === 0xfc) return refuse("unique-local");
   if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) {
@@ -224,55 +221,60 @@ export function judgeIpv6(address: string): AddressVerdict {
 }
 
 /**
- * Where an IPv6 address carries an embedded IPv4, as the byte offset of its
- * first octet — or null when it carries none.
+ * The IPv4 an IPv6 address embeds, as its four octets — or null when it
+ * carries none.
  *
  * Every translation prefix asks the same question — "what IPv4 does this
  * actually reach" — so each is judged as the address it carries rather than
  * as an ordinary v6 global that matches no refused prefix. The layouts
  * differ: the mapped and compatible forms and the well-known NAT64 prefix
- * end in the IPv4, the RFC 8215 local-use NAT64 prefix lays it at bytes 7-10
- * (48 bits of prefix, the u/octet, then the address, per RFC 6052), and 6to4
- * carries its own right after the /16.
+ * end in the IPv4, the RFC 8215 local-use NAT64 prefix SPLITS it around its
+ * u octet (RFC 6052: bits 48-63 and 72-87, so octets at bytes 6-7 and 9-10 —
+ * the split keeps the u octet inside the interface-identifier portion an
+ * EUI-64 expects), and 6to4 carries its own right after the /16. Answering
+ * in octets rather than an offset is what lets the split layout say where
+ * each octet actually is.
  */
-function embeddedIpv4Offset(bytes: number[]): number | null {
+function embeddedIpv4(bytes: number[]): number[] | null {
   // ::ffff:a.b.c.d — IPv4-mapped.
   if (
     bytes.slice(0, 10).every(b => b === 0) &&
     bytes[10] === 0xff &&
     bytes[11] === 0xff
   ) {
-    return 12;
+    return bytes.slice(12, 16);
   }
   // ::a.b.c.d — IPv4-compatible, deprecated but still routed by some stacks.
-  if (bytes.slice(0, 12).every(b => b === 0)) return 12;
-  const nat64 = nat64Offset(bytes);
+  if (bytes.slice(0, 12).every(b => b === 0)) return bytes.slice(12, 16);
+  const nat64 = nat64Ipv4(bytes);
   if (nat64 !== null) return nat64;
   // 2002::/16 — 6to4 carries its IPv4 in the next four bytes.
-  if (bytes[0] === 0x20 && bytes[1] === 0x02) return 2;
+  if (bytes[0] === 0x20 && bytes[1] === 0x02) return bytes.slice(2, 6);
   return null;
 }
 
 /**
- * The IPv4 offset for either NAT64 prefix, or null when the address is
- * neither.
+ * The IPv4 either NAT64 prefix carries, as four octets — or null when the
+ * address is neither.
  *
  * Two prefixes, two layouts: the well-known `64:ff9b::/96` ends in the IPv4,
- * and the RFC 8215 local-use `64:ff9b:1::/48` lays it at bytes 7-10 after
- * 48 bits of prefix and the u/octet (RFC 6052). Judging only the well-known
- * form let the local-use one fall through as an ordinary global address —
- * and the IPv4 it carries can be private, loopback, or a metadata service,
- * which is exactly what the v4 judge exists to refuse.
+ * and the RFC 8215 local-use `64:ff9b:1::/48` splits it around the u octet
+ * (octets at bytes 6-7 and 9-10 per RFC 6052). Reading the split form as one
+ * contiguous run judged the private `10.8.5.4` as the public `8.0.5.4` — the
+ * exact bypass this judge exists to prevent, since what the prefix carries
+ * can be private, loopback, or a metadata service.
  */
-function nat64Offset(bytes: number[]): number | null {
+function nat64Ipv4(bytes: number[]): number[] | null {
   if (
     bytes[0] === 0x00 &&
     bytes[1] === 0x64 &&
     bytes[2] === 0xff &&
     bytes[3] === 0x9b
   ) {
-    if (bytes.slice(4, 12).every(b => b === 0)) return 12;
-    if (bytes[4] === 0x00 && bytes[5] === 0x01) return 7;
+    if (bytes.slice(4, 12).every(b => b === 0)) return bytes.slice(12, 16);
+    if (bytes[4] === 0x00 && bytes[5] === 0x01) {
+      return [bytes[6], bytes[7], bytes[9], bytes[10]];
+    }
   }
   return null;
 }

@@ -504,15 +504,19 @@ function terminalChallengeFailure(err: NextlyError): boolean {
 }
 
 /**
- * The two ways a flow is over before its answer is even examined.
+ * The ways a flow is over before its answer is even examined.
  *
- * Both refuse identically, because both mean the same thing: no attempt this
+ * All refuse identically, because all mean the same thing: no attempt this
  * token presents is spendable. The COUNTER on the token caps replays of a
- * low-attempt mint, and the flow's signed LIFETIME caps the window-hopping a
+ * low-attempt mint, the flow's signed LIFETIME caps the window-hopping a
  * renewed token would otherwise allow — each wrong answer re-issues a token
  * with a fresh TTL while the server-side budget ages entries out, so without
  * the fixed end, replaying an old low-attempt token near each window's edge
- * kept one flow guessing far past the configured cap.
+ * kept one flow guessing far past the configured cap — and a token carrying
+ * NO lifetime at all is refused outright: every mint this build makes signs
+ * one, so absence means a token nothing here could have produced, and
+ * treating it as unlimited would make the absence a bypass rather than an
+ * anomaly.
  */
 function refuseIfFlowExhausted(
   pending: { attempts: number; flowExpiresAt?: number },
@@ -521,6 +525,11 @@ function refuseIfFlowExhausted(
   if (pending.attempts >= deps.maxChallengeAttempts) {
     throw NextlyError.invalidCredentials({
       logContext: { reason: auditReason("challenge-attempts-exhausted") },
+    });
+  }
+  if (pending.flowExpiresAt === undefined) {
+    throw NextlyError.invalidCredentials({
+      logContext: { reason: auditReason("pending-token-invalid") },
     });
   }
   if (
