@@ -14,7 +14,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { getDialectTables } from "../../database/index";
 import type { NextlyServiceConfig } from "../../di/register";
-import { buildAuditLogWriter } from "../../domains/audit/audit-log-writer";
+import {
+  buildAuditLogWriter,
+  isStrategyName,
+} from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
 import { getHookRegistry } from "../../hooks/hook-registry";
 import { env } from "../../lib/env";
@@ -464,6 +467,7 @@ export function buildAuthRouterDeps(
     }
   }
   const configStrategies = config?.auth?.strategies ?? [];
+  assertConfiguredStrategyNames(configStrategies);
 
   // Base plugin context for strategies/hooks (system-level; ctx.self empty).
   // Auth hooks share this context in v1; per-plugin ctx.self resolution in auth
@@ -502,6 +506,35 @@ export function buildAuthRouterDeps(
     maxChallengeAttempts: 5,
     authUi: aggregateAuthUi(config?.plugins ?? []),
   };
+}
+
+/**
+ * Refuse an app-configured strategy whose name the audit trail cannot carry.
+ *
+ * The same rule `completeLogin` enforces on a plugin's own strategy, applied
+ * at boot to the config's. The rule is not stylistic: the audit writer admits
+ * a strategy to a row only when the name matches it, so a name with an
+ * uppercase letter or a dot authenticated normally while being silently
+ * omitted from every success row — the attribution this field exists to
+ * carry, missing on exactly the installs that configured a custom strategy.
+ * Failing the boot names the strategy and the rule where the operator is
+ * still reading configuration, rather than leaving a working login with no
+ * trail.
+ */
+export function assertConfiguredStrategyNames(
+  strategies: readonly { name: string }[]
+): void {
+  for (const strategy of strategies) {
+    if (!isStrategyName(strategy.name)) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "auth-strategy-name-invalid",
+          strategy: strategy.name,
+          rule: "lowercase letters, digits, :, _ or -; starts with a letter or digit; at most 64 characters",
+        },
+      });
+    }
+  }
 }
 
 /** Read the sanitized NextlyServiceConfig from the DI container, if present. */

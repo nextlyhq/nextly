@@ -11,7 +11,11 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { respondAction, respondData } from "../../api/response-shapes";
+import {
+  respondAction,
+  respondData,
+  SKIP_DATE_FORMATTING_HEADER,
+} from "../../api/response-shapes";
 import type { NextlyServiceConfig } from "../../di/register";
 import {
   PluginSettingsService,
@@ -70,7 +74,14 @@ export async function dispatchPluginSettings(
   const service = serviceFor(container, config, pluginName);
 
   if (method === "getPluginSettings") {
-    return respondData({ settings: await service.getRedacted() });
+    // Marked to skip global date formatting. Settings are configuration a
+    // plugin round-trips, not records with timestamps: an ISO-looking string
+    // a plugin stored — a provider's `since` cursor, a version date — was
+    // rewritten by value into the installation's timezone, so the admin was
+    // shown, and could write back, a value the plugin never set.
+    const response = respondData({ settings: await service.getRedacted() });
+    response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+    return response;
   }
 
   if (method === "updatePluginSettings") {
