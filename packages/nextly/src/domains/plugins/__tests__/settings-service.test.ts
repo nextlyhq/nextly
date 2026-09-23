@@ -609,27 +609,45 @@ describe("a stored envelope the current manifest no longer names", () => {
 });
 
 describe("a plaintext value that claims the envelope prefix", () => {
-  it("is REFUSED when it would be stored in a secret row", async () => {
-    // Whole-row decoding opens every enc:-shaped leaf, so a plaintext value
-    // that merely begins with it is indistinguishable from an envelope —
-    // storing one meant a read that could not open it. Refused at write
-    // with the reason, before encryption adds envelopes of its own.
+  it("round-trips beside an encrypted sibling, in a secret row", async () => {
+    // The envelope walk opens every enc:-shaped leaf in a secret row, so a
+    // public sibling beginning with the prefix has to be distinguishable
+    // from ciphertext. Writes escape it, reads strip the escape: the value
+    // comes back exactly as sent, and nothing was refused.
     const store = memoryStore();
-    await expect(
-      service(store).set({
-        providers: { google: { clientId: "enc:example", clientSecret: "s" } },
-      } as never)
-    ).rejects.toSatisfy(err => {
-      if (!NextlyError.is(err)) return false;
-      return JSON.stringify(err.publicData ?? err.logContext).includes("enc:");
+    await service(store).set({
+      providers: {
+        google: { clientId: "enc:example", clientSecret: SECRET_VALUE },
+      },
     });
-    expect(store.rows).toHaveLength(0);
+
+    const settings = await service(store).get<{
+      providers: Record<string, { clientId: string; clientSecret: string }>;
+    }>();
+    expect(settings.providers.google.clientId).toBe("enc:example");
+    expect(settings.providers.google.clientSecret).toBe(SECRET_VALUE);
+    // And the stored row never carries the claim unescaped.
+    const stored = store.rows.find(r => r.key === "providers");
+    expect(stored?.value).not.toContain('"enc:example"');
   });
 
-  it("is accepted in a row stored as PUBLIC", async () => {
-    // The control: the prefix is reserved only where decoding follows
-    // envelopes. A public row never passes the whole-row decoder, so a
-    // value that begins with it is ordinary text there.
+  it("round-trips a value claiming the ESCAPE marker itself", async () => {
+    // Doubling: a value that already begins with the escape marker keeps
+    // it, because the read strips exactly one.
+    const store = memoryStore();
+    await service(store).set({
+      providers: { google: { clientId: "enc!already", clientSecret: "s" } },
+    });
+
+    const settings = await service(store).get<{
+      providers: Record<string, { clientId: string }>;
+    }>();
+    expect(settings.providers.google.clientId).toBe("enc!already");
+  });
+
+  it("is ordinary text in a row stored as PUBLIC", async () => {
+    // The control: the markers only matter where decoding follows
+    // envelopes. A public row never passes the whole-row decoder.
     const store = memoryStore();
     await service(store, [KEY_A], []).set({
       providers: { google: { clientId: "enc:example", clientSecret: "s" } },
@@ -639,29 +657,26 @@ describe("a plaintext value that claims the envelope prefix", () => {
       providers: Record<string, { clientId: string }>;
     }>();
     expect(settings.providers.google.clientId).toBe("enc:example");
+    const stored = store.rows.find(r => r.key === "providers");
+    expect(stored?.isSecret).toBe(false);
   });
 
-  it("passes through on read when nothing can open it", async () => {
-    // A row written elsewhere may carry the ambiguity. Bricking every read
-    // and write of the plugin's settings on it is worse than surfacing the
-    // string: the read hands it back as text and warns, and the plugin
-    // keeps working.
+  it("fails the read EXPLICITLY when no generation can open an envelope", async () => {
+    // A credential encrypted under a key the install no longer configures
+    // is a lost secret, and handing its ciphertext back as configuration
+    // would have the plugin authenticate with the envelope text. The read
+    // refuses with the decryption reason instead.
     const store = memoryStore();
-    store.rows.push({
-      owner: "@test/p",
-      key: "providers",
-      value: JSON.stringify({
-        google: { clientId: "enc:legacy", clientSecret: "plain" },
-      }),
-      isSecret: true,
-      updatedAt: new Date(),
-      updatedBy: null,
-    });
+    // Written under KEY_B; read under a service configured with KEY_A only.
+    await service(store, [KEY_B]).set({ clientSecret: SECRET_VALUE });
 
-    const settings = await service(store).get<{
-      providers: Record<string, { clientId: string; clientSecret: string }>;
-    }>();
-    expect(settings.providers.google.clientId).toBe("enc:legacy");
-    expect(settings.providers.google.clientSecret).toBe("plain");
+    await expect(service(store, [KEY_A]).get()).rejects.toSatisfy(err => {
+      if (!NextlyError.is(err)) return false;
+      return (
+        (err.logContext as { reason?: string } | undefined)?.reason?.includes(
+          "decrypt"
+        ) === true
+      );
+    });
   });
 });

@@ -16,7 +16,6 @@
 import type { ZodObject, ZodRawShape, ZodType } from "zod";
 
 import { NextlyError } from "../../errors/nextly-error";
-import { getNextlyLogger } from "../../observability/logger";
 import { secretGenerations } from "../../shared/lib/secret-generations";
 import { decrypt, encrypt } from "../../utils/encryption";
 
@@ -85,6 +84,14 @@ export interface PluginSettingsServiceDeps {
 
 /** A marker only this module writes, so a decrypt is never attempted on plain JSON. */
 const SECRET_ENVELOPE = "enc:" as const;
+/**
+ * The escape marker for plaintext that would otherwise claim an envelope
+ * prefix. Written by the escape walk before encryption, stripped by the read
+ * walk before anything else looks at the string — so "enc:" in a stored
+ * secret row always means ciphertext, and a public sibling value beginning
+ * with it is ordinary text that round-trips.
+ */
+const ESCAPE_PREFIX = "enc!" as const;
 
 /**
  * Keys that are never merged, because assigning them rewrites object
@@ -351,50 +358,18 @@ export class PluginSettingsService {
       }
     }
     const holdsSecret = topLevelKeyHoldsSecret(key, this.deps.secretPaths);
-    if (holdsSecret) {
-      // The envelope prefix is RESERVED in rows stored as secret: decoding
-      // opens every `enc:`-shaped leaf it meets, so a plaintext value that
-      // merely begins with it is indistinguishable from an envelope — and
-      // storing one meant a read that could not open it. Refused here with
-      // the reason, rather than left to fail wherever the ambiguity lands.
-      this.refuseEnvelopePrefixedPlaintext(key, value);
-    }
     return {
       owner: this.deps.owner,
       key,
       value: JSON.stringify(
-        holdsSecret ? this.encryptSecrets(value, [key]) : value
+        holdsSecret
+          ? this.encryptSecrets(escapeEnvelopeClaimants(value), [key])
+          : value
       ),
       isSecret: holdsSecret,
       updatedAt: new Date(),
       updatedBy: opts?.actorUserId ?? null,
     };
-  }
-
-  /**
-   * Refuse a plaintext leaf that claims the envelope prefix in a secret row.
-   *
-   * Walked at write time over the value about to be stored, BEFORE
-   * encryption adds envelopes of its own — everything `enc:`-shaped in the
-   * finished row is then something this build encrypted, and whole-row
-   * decoding never meets an ambiguity it produced. Only strings are checked:
-   * the prefix is a string property, and nested objects and arrays are the
-   * places secret paths point through.
-   */
-  private refuseEnvelopePrefixedPlaintext(key: string, value: unknown): void {
-    const offender = findEnvelopePrefixed(value, []);
-    if (offender !== undefined) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: `${key}.${offender.join(".")}`,
-            code: "INVALID",
-            message: `Values in a secret setting may not begin with "${SECRET_ENVELOPE}": that prefix marks stored ciphertext.`,
-          },
-        ],
-        logContext: { plugin: this.deps.owner },
-      });
-    }
   }
 
   /** The refusal for a settings value that cannot live in a settings row. */
@@ -456,13 +431,13 @@ export class PluginSettingsService {
    * lets a row written before a path became secret coexist with encrypted
    * ones written after.
    *
-   * A marker that NO secret generation can open is passed through as text
-   * rather than thrown: with whole-row decoding the marker alone cannot
-   * tell an envelope from a plaintext value that merely begins with it, and
-   * bricking every read and write of the plugin's settings on that
-   * ambiguity is worse than surfacing the string. Writes reserve the
-   * prefix, so a row this build produces carries the ambiguity nowhere —
-   * what remains is rows written elsewhere, and those keep working.
+   * A `enc:`-shaped string is an ENVELOPE, and one no secret generation can
+   * open fails the read explicitly: that is a credential encrypted under a
+   * key the install no longer configures, and handing its ciphertext back as
+   * configuration would have the plugin authenticate with the envelope text —
+   * a lost secret masquerading as a value. Plaintext that merely begins with
+   * the prefix cannot reach here: writes escape it, so the prefix belongs to
+   * ciphertext alone.
    */
   private decryptEnvelopes(value: unknown): unknown {
     if (Array.isArray(value)) {
@@ -475,34 +450,12 @@ export class PluginSettingsService {
       }
       return out;
     }
+    if (typeof value === "string" && value.startsWith(ESCAPE_PREFIX)) {
+      return value.slice(ESCAPE_PREFIX.length);
+    }
     if (typeof value === "string" && value.startsWith(SECRET_ENVELOPE)) {
-      return this.decryptEnvelopeOrPassThrough(value);
+      return this.decryptEnvelope(value, []);
     }
-    return value;
-  }
-
-  /**
-   * Open one envelope-shaped string, or hand it back when nothing opens it.
-   *
-   * The PATH-driven decode keeps the throwing variant's strictness: a
-   * declared secret path that fails every generation is a rotated-out
-   * credential, and losing it silently is the outcome the throw exists to
-   * prevent. The whole-row decode cannot afford that certainty, so it falls
-   * back to the text and warns — the operator keeps the signal, the plugin
-   * keeps its settings.
-   */
-  private decryptEnvelopeOrPassThrough(value: string): unknown {
-    for (const generation of this.deps.secrets()) {
-      try {
-        return decrypt(value.slice(SECRET_ENVELOPE.length), generation);
-      } catch {
-        continue;
-      }
-    }
-    getNextlyLogger().warn({
-      kind: "plugin-settings-envelope-undecryptable",
-      plugin: this.deps.owner,
-    });
     return value;
   }
 
@@ -590,31 +543,33 @@ export function pluginSettingsSecrets(env: {
 }
 
 /**
- * The path to the first string that claims the envelope prefix, or undefined.
+ * Escape every plaintext leaf that would claim an envelope marker, so the
+ * markers in a stored secret row belong to ciphertext alone.
  *
  * A module-level walk beside the service's other pure helpers, because the
  * question — does any plaintext leaf here look like an envelope — is about
- * the value's shape, not the plugin's policy.
+ * the value's shape, not the plugin's policy. Claims are prefixed with the
+ * escape marker (doubling for values that already carry it), and the read
+ * walk strips exactly one marker, so any plaintext round-trips whatever it
+ * begins with. Runs BEFORE encryption, whose own envelopes are appended
+ * after and never pass through here again.
  */
-function findEnvelopePrefixed(
-  value: unknown,
-  at: string[]
-): string[] | undefined {
+function escapeEnvelopeClaimants(value: unknown): unknown {
   if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i += 1) {
-      const found = findEnvelopePrefixed(value[i], [...at, String(i)]);
-      if (found !== undefined) return found;
-    }
-    return undefined;
+    return value.map(item => escapeEnvelopeClaimants(item));
   }
   if (isPlainObject(value)) {
+    const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
-      const found = findEnvelopePrefixed(item, [...at, key]);
-      if (found !== undefined) return found;
+      out[key] = escapeEnvelopeClaimants(item);
     }
-    return undefined;
+    return out;
   }
-  return typeof value === "string" && value.startsWith(SECRET_ENVELOPE)
-    ? at
-    : undefined;
+  if (
+    typeof value === "string" &&
+    (value.startsWith(ESCAPE_PREFIX) || value.startsWith(SECRET_ENVELOPE))
+  ) {
+    return `${ESCAPE_PREFIX}${value}`;
+  }
+  return value;
 }
