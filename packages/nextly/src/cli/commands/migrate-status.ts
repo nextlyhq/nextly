@@ -31,6 +31,7 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { scopeLedgerRows } from "../../domains/schema/events/ledger-scope";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
 import { describeError } from "../../errors/index";
 import type {
@@ -62,6 +63,10 @@ export interface MigrateStatusCommandOptions {
    * @default false
    */
   json?: boolean;
+  /**
+   * List <name>'s migration rows instead of the app's
+   */
+  plugin?: string;
 }
 
 /**
@@ -242,19 +247,24 @@ export async function runMigrateStatus(
 
     logger.debug(`Scanning migrations in ${migrationsDir}...`);
 
-    const migrationFiles = await discoverMigrations(migrationsDir, dialect);
+    // A plugin's rows name files that live in its package, not the app's
+    // migrations directory, so file discovery and matching cannot apply to
+    // them — the row itself is the truth.
+    const migrationFiles = options.plugin
+      ? []
+      : await discoverMigrations(migrationsDir, dialect);
     logger.debug(`Found ${migrationFiles.length} migration file(s)`);
 
     const appliedMigrations = await getAppliedMigrations(
       adapter as unknown as DrizzleAdapter,
-      dialect
+      dialect,
+      options.plugin
     );
     logger.debug(`${appliedMigrations.length} migration(s) in database`);
 
-    const migrationStatuses = buildMigrationStatuses(
-      migrationFiles,
-      appliedMigrations
-    );
+    const migrationStatuses = options.plugin
+      ? pluginRowsToStatuses(appliedMigrations)
+      : buildMigrationStatuses(migrationFiles, appliedMigrations);
 
     const pendingCollections = await getCollectionsWithPendingChanges(
       adapter as unknown as DrizzleAdapter,
@@ -350,11 +360,15 @@ function parseMigrationFile(
 // (`file_apply` rows), not the legacy `nextly_migrations` ledger.
 async function getAppliedMigrations(
   adapter: DrizzleAdapter,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  plugin?: string
 ): Promise<MigrationRecord[]> {
   try {
     const repo = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
-    const rows = await repo.listFileApplies();
+    // Plugin rows belong to their own migration stream: excluded unless
+    // `--plugin` names one, so the app's listing never reports them as
+    // "applied (file missing)".
+    const rows = scopeLedgerRows(await repo.listFileApplies(), plugin);
     return rows
       .filter(r => r.status === "applied" || r.status === "failed")
       .map(r => ({
@@ -445,6 +459,26 @@ async function getCollectionsWithPendingChanges(
 //   `nextly migrate` will treat the latter as MIGRATION_MISSING (exit 3),
 //   but `migrate:status` keeps surfacing it as a row so operators can
 //   investigate and either restore the file or contact whoever deleted it.
+
+/**
+ * Statuses for a plugin's ledger rows (`--plugin <name>`). A plugin's files
+ * live in its package rather than the app's migrations directory, so file
+ * matching cannot apply: the row itself is the truth, and no row may read
+ * as "applied (file missing)" for that reason alone.
+ */
+export function pluginRowsToStatuses(
+  applied: MigrationRecord[]
+): MigrationStatus[] {
+  return applied.map(record => ({
+    filename: record.filename,
+    status: record.status === "failed" ? "failed" : "applied",
+    appliedAt: record.appliedAt,
+    durationMs: record.durationMs,
+    errorJson: record.errorJson,
+    checksumMismatch: false,
+  }));
+}
+
 export function buildMigrationStatuses(
   files: ParsedMigration[],
   applied: MigrationRecord[]
@@ -646,6 +680,7 @@ export function registerMigrateStatusCommand(program: Command): void {
     .command("migrate:status")
     .description("Show current migration status")
     .option("--json", "Output as JSON for scripting/CI", false)
+    .option("--plugin <name>", "List <name>'s migrations instead of the app's")
     .action(async (cmdOptions: MigrateStatusCommandOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);

@@ -16,6 +16,7 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { scopeLedgerRows } from "../../domains/schema/events/ledger-scope";
 import { newestEvent } from "../../domains/schema/events/newest-event";
 import {
   SchemaEventsRepository,
@@ -85,6 +86,8 @@ export interface MigrateDownCoreDeps {
     allowDataLoss?: boolean;
     yes?: boolean;
     dryRun?: boolean;
+    /** Name whose migration rows to act on; undefined means the app's own. */
+    plugin?: string;
   };
   listFileApplies: () => Promise<SchemaEventRow[]>;
   fileExists: (filename: string) => Promise<boolean>;
@@ -107,7 +110,13 @@ export async function migrateDownCore(
   deps: MigrateDownCoreDeps
 ): Promise<MigrateDownResult> {
   const step = deps.options.step ?? 1;
-  const rows = await deps.listFileApplies();
+  // Plugin rows belong to their own migration stream, so they are excluded
+  // unless `--plugin` names one; an unscoped run must never revert a plugin's
+  // migration while reporting an app rollback.
+  const rows = scopeLedgerRows(
+    await deps.listFileApplies(),
+    deps.options.plugin
+  );
   const targets = selectAppliedTargets(rows, step);
 
   if (targets.length === 0) {
@@ -221,6 +230,7 @@ interface MigrateDownCommandOptions {
   yes?: boolean;
   dryRun?: boolean;
   forceUnlock?: boolean;
+  plugin?: string;
 }
 
 interface ResolvedDownOptions extends MigrateDownCommandOptions {
@@ -324,6 +334,7 @@ export async function runMigrateDown(
         allowDataLoss: options.allowDataLoss,
         yes: options.yes,
         dryRun: options.dryRun,
+        plugin: options.plugin,
       },
       listFileApplies: () => repo.listFileApplies(),
       fileExists: () => Promise.resolve(true),
@@ -372,6 +383,10 @@ export function registerMigrateDownCommand(program: Command): void {
       "--force-unlock",
       "Clear a stale migrate lock before running",
       false
+    )
+    .option(
+      "--plugin <name>",
+      "Roll back <name>'s migrations instead of the app's"
     )
     .action(async (cmdOptions: MigrateDownCommandOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals();

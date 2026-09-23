@@ -163,4 +163,81 @@ describe("migrateDownCore", () => {
     await expect(migrateDownCore(deps)).rejects.toThrow(/boom/);
     expect(failures).toEqual(["a.sql"]);
   });
+
+  describe("ledger scoping (plugin rows)", () => {
+    it("never selects a plugin's row by default", async () => {
+      // The newest applied row of ANY kind would be the plugin's, so without
+      // scoping `migrate:down` reverts a plugin's migration while reporting
+      // an app rollback.
+      const { deps, executed, recorded } = baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: false },
+        listFileApplies: async () => [
+          row("a.sql", "applied", 1000),
+          row("plugin:auth/001_init.sql", "applied", 9000),
+        ],
+      });
+      const res = await migrateDownCore(deps);
+      expect(res.rolledBack).toEqual(["a.sql"]);
+      expect(recorded).toEqual(["a.sql"]);
+      expect(executed.length).toBe(1);
+    });
+
+    it("selects only the named plugin's rows under --plugin", async () => {
+      const { deps, recorded } = baseDeps({
+        options: {
+          step: 1,
+          allowDataLoss: true,
+          yes: false,
+          dryRun: false,
+          plugin: "auth",
+        },
+        listFileApplies: async () => [
+          row("a.sql", "applied", 1000),
+          row("plugin:auth/001_init.sql", "applied", 2000),
+          row("plugin:billing/001_init.sql", "applied", 3000),
+        ],
+      });
+      const res = await migrateDownCore(deps);
+      expect(res.rolledBack).toEqual(["plugin:auth/001_init.sql"]);
+      expect(recorded).toEqual(["plugin:auth/001_init.sql"]);
+    });
+
+    it("never returns the union under --plugin", async () => {
+      // A run scoped to a plugin must not touch the app's rows even when the
+      // step budget would allow more targets.
+      const { deps, recorded } = baseDeps({
+        options: {
+          step: 5,
+          allowDataLoss: true,
+          yes: false,
+          dryRun: false,
+          plugin: "auth",
+        },
+        listFileApplies: async () => [
+          row("a.sql", "applied", 1000),
+          row("plugin:auth/001_init.sql", "applied", 2000),
+          row("plugin:billing/001_init.sql", "applied", 3000),
+        ],
+      });
+      const res = await migrateDownCore(deps);
+      expect(res.rolledBack).toEqual(["plugin:auth/001_init.sql"]);
+      expect(recorded).toEqual(["plugin:auth/001_init.sql"]);
+    });
+
+    it("reports nothing to roll back for a plugin with no rows", async () => {
+      const { deps, executed } = baseDeps({
+        options: {
+          step: 1,
+          allowDataLoss: true,
+          yes: false,
+          dryRun: false,
+          plugin: "nobody",
+        },
+        listFileApplies: async () => [row("a.sql", "applied", 1000)],
+      });
+      const res = await migrateDownCore(deps);
+      expect(res.rolledBack).toEqual([]);
+      expect(executed).toEqual([]);
+    });
+  });
 });
