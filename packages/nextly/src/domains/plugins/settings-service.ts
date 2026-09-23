@@ -24,6 +24,7 @@ import {
   redactSecrets,
   topLevelKeyHoldsSecret,
 } from "./secret-paths";
+import { OWNER_LOCK_KEY } from "./settings-store";
 
 /** One stored top-level key. */
 export interface PluginSettingRow {
@@ -213,6 +214,25 @@ export class PluginSettingsService {
       });
     }
 
+    // The empty key is REFUSED before anything else looks at the patch. The
+    // store contends on a row keyed with it to serialize writers for one
+    // plugin, and deletes that row before committing — so a settings key
+    // spelled the same way would be silently removed by the next write. A
+    // schema cannot usefully declare it either; refusing it here is what makes
+    // the store's choice of sentinel safe rather than merely unlikely.
+    if (Object.hasOwn(patch, OWNER_LOCK_KEY)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: OWNER_LOCK_KEY,
+            code: "INVALID_KEY",
+            message: "A settings key cannot be the empty string.",
+          },
+        ],
+        logContext: { plugin: this.deps.owner },
+      });
+    }
+
     // A plain zod object STRIPS what it does not know, so `{ typo: 1 }` parses
     // happily and `parsed.data.typo` is then undefined. Iterating the original
     // patch wrote `JSON.stringify(undefined)` — the value `undefined`, not a
@@ -272,6 +292,11 @@ export class PluginSettingsService {
   private decodeRows(rows: PluginSettingRow[]): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const row of rows) {
+      // The store's lock row is not settings. It is deleted before that
+      // transaction commits, so a read should never meet one — skipping it
+      // costs nothing and means a read taken mid-write could not decode a
+      // placeholder as a plugin's stored value.
+      if (row.key === OWNER_LOCK_KEY) continue;
       const parsed: unknown = JSON.parse(row.value);
       out[row.key] = row.isSecret
         ? this.decryptSecrets(parsed, [row.key])

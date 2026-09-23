@@ -57,6 +57,16 @@ interface SettingsDb extends SettingsWriter {
  * concurrent writers cannot produce two rows for one setting — the last write
  * wins and both complete, rather than one failing on a duplicate.
  */
+/**
+ * The key of the row every writer for one plugin contends on.
+ *
+ * The EMPTY string, which is not a settings key: `settings-service` refuses a
+ * patch naming it and the schema cannot declare it, so this row can never
+ * collide with a real one or be returned as a value. It exists only inside a
+ * write transaction and is deleted before commit.
+ */
+export const OWNER_LOCK_KEY = "";
+
 export function createPluginSettingsStore(
   db: unknown,
   dialect: SupportedDialect
@@ -159,33 +169,34 @@ export function createPluginSettingsStore(
       // Locking the rows is what makes the second caller WAIT rather than
       // read stale, so its merge sees the first one's result.
       return database.transaction(async tx => {
-        // CLAIMED before the read, because `FOR UPDATE` can only lock a row
-        // that already exists. Two first writes for the same plugin — or two
-        // patches adding the same top-level key — both found nothing to lock,
-        // both merged from an empty value, and the later upsert replaced the
-        // earlier one. Inserting the key first makes the second transaction
-        // block on the primary key until the first commits, so the lock below
-        // has something to hold and the merge sees the committed result.
-        // SORTED, so every writer takes its locks in the same order. Two
-        // patches sharing keys in a different order would otherwise each hold
-        // what the other is waiting for, and the database would abort one.
-        for (const key of [...keys].sort()) await claim(tx, owner, key);
+        // ONE lock, for the whole owner, taken before anything is read.
+        //
+        // Per-KEY locks were not enough, and the reason is the validation
+        // rather than the write. `computeRows` validates the COMPLETE settings
+        // object, so it reads keys this update will not write — and two
+        // patches to different keys each read the other's old value, each
+        // validated against it, and both committed. A schema with a rule
+        // spanning two keys then holds a combination it rejects, and the next
+        // `get()` throws on settings nobody could have saved deliberately.
+        //
+        // Locking every row the owner has would deadlock against the per-key
+        // claims, and `FOR UPDATE` cannot hold a row that does not exist yet,
+        // which is the case for a first write. Claiming ONE well-known row
+        // answers all of it: a second writer for the same plugin blocks on the
+        // primary key until this transaction ends, whatever keys either of
+        // them touches, and a single lock cannot be taken out of order.
+        await claim(tx, owner, OWNER_LOCK_KEY);
 
         const current = await rowsFor(tx, owner);
         const rows = await computeRows(current);
         for (const row of rows) await upsert(tx, row);
 
-        // A claim the update did not go on to write would otherwise COMMIT as
-        // a row holding the placeholder. Nothing should reach this — the
-        // caller derives its rows from the same keys — so it removes a state
-        // that must not exist rather than one that is expected.
-        const written = new Set(rows.map(row => row.key));
-        for (const key of keys) {
-          if (written.has(key)) continue;
-          await tx
-            .delete(table)
-            .where(and(eq(table.owner, owner), eq(table.key, key)));
-        }
+        // The lock row is not settings and must never be read as any. It is
+        // removed before commit, so it exists only for the life of this
+        // transaction — which is exactly as long as it is needed.
+        await tx
+          .delete(table)
+          .where(and(eq(table.owner, owner), eq(table.key, OWNER_LOCK_KEY)));
       });
     },
   };

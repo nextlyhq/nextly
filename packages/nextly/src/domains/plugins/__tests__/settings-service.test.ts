@@ -404,3 +404,23 @@ describe("secrets held inside an array", () => {
     expect(shown).toContain('"set":true');
   });
 });
+
+describe("the empty key is not a settings key", () => {
+  it("REFUSES a patch naming it", async () => {
+    // The store contends on a row keyed with the empty string to serialize
+    // writers for one plugin, and deletes that row before committing — so a
+    // settings key spelled the same way would be silently removed by the next
+    // write. Refusing it is what makes the store's sentinel safe rather than
+    // merely unlikely.
+    const store = memoryStore();
+    await expect(
+      service(store).set({ "": "anything" } as Record<string, unknown>)
+    ).rejects.toSatisfy(NextlyError.is);
+  });
+
+  it("still accepts an ordinary key", async () => {
+    // The control: refusing every patch would satisfy the test above.
+    const store = memoryStore();
+    await expect(service(store).set({ port: 8443 })).resolves.toBeUndefined();
+  });
+});
