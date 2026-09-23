@@ -15,6 +15,7 @@ import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { NextlyError } from "../../errors/nextly-error";
 import { runWithRequestScope } from "../../hooks/request-scope";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
+import { isReadOperation } from "../../middleware/rate-limit";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
 import type { PluginSelf } from "../self";
@@ -244,13 +245,31 @@ export function pluginRouteAuthRequired(
 }
 
 /**
+ * The `general` allowance one method spends from, per the configured budgets.
+ *
+ * Chosen by METHOD, through the core limiter's own split: an install
+ * configured for a hundred reads but ten writes per window meant the ten for
+ * its mutations, not a hundred of them through each plugin's bucket.
+ * `isReadOperation` is imported from the limiter so the split has one list,
+ * not two that drift.
+ */
+function generalAllowance(
+  rateLimit: { readLimit?: number; writeLimit?: number } | undefined,
+  method: string
+): number {
+  return isReadOperation(method)
+    ? (rateLimit?.readLimit ?? 100)
+    : (rateLimit?.writeLimit ?? 30);
+}
+
+/**
  * The ordinary-traffic allowance, taken from the app's own rate-limit config.
  *
  * Read from configuration rather than fixed here so a plugin route declaring
  * `general` is held to the same budget the app chose for its REST surface,
  * and so turning rate limiting off turns this off too.
  */
-async function generalRouteBudget(): Promise<{
+async function generalRouteBudget(method: string): Promise<{
   limit: number;
   windowMs: number;
 } | null> {
@@ -260,6 +279,7 @@ async function generalRouteBudget(): Promise<{
         rateLimit?: {
           enabled?: boolean;
           readLimit?: number;
+          writeLimit?: number;
           windowMs?: number;
         };
       }
@@ -272,7 +292,7 @@ async function generalRouteBudget(): Promise<{
   // explicitly turned off, that could never refuse anything.
   if (rateLimit?.enabled === false) return null;
   return {
-    limit: rateLimit?.readLimit ?? 100,
+    limit: generalAllowance(rateLimit, method),
     windowMs: rateLimit?.windowMs ?? 60_000,
   };
 }
@@ -318,7 +338,7 @@ async function applyRouteRateLimit(
   const budget =
     declared === "auth"
       ? { limit: configured.requestsPerHour, windowMs: configured.windowMs }
-      : await generalRouteBudget();
+      : await generalRouteBudget(req.method);
 
   // `null` is rate limiting switched off app-wide; a non-positive limit means
   // the same thing for the auth budget, exactly as it does for the core auth
@@ -337,20 +357,23 @@ async function applyRouteRateLimit(
     Math.ceil((verdict.resetAt.getTime() - Date.now()) / 1000)
   );
 
-  return new Response(
-    JSON.stringify({
-      error: {
-        code: "RATE_LIMITED",
-        message: "Too many requests. Please try again later.",
+  // The CANONICAL error boundary, for the reason every other refusal here
+  // uses it: this is the one plugin-route error no later wrapper decorates,
+  // so a hand-built body left these refusals without `requestId`, without
+  // `x-request-id`, and outside the development diagnostics — the 429s a
+  // client can correlate least, because they are the ones it must wait out.
+  return buildErrorResponse(
+    NextlyError.rateLimited({
+      retryAfterSeconds: retryAfter,
+      logContext: {
+        reason: "plugin-route-rate-limited",
+        plugin: matched.pluginName,
+        path: matched.route.path,
       },
     }),
     {
-      status: 429,
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-store",
-        "Retry-After": String(retryAfter),
-      },
+      requestId: readOrGenerateRequestId(req),
+      flattened: currentFlattenedErrors(),
     }
   );
 }

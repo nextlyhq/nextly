@@ -384,8 +384,12 @@ function buildDefaultKeyGenerator(
 
 /**
  * Determine if the request is a read (GET) or write (POST/PATCH/PUT/DELETE) operation.
+ *
+ * Exported because the read/write split of the configured budgets has one
+ * owner: any second list of which methods spend from which allowance drifts
+ * the day a method joins one side here and not there.
  */
-function isReadOperation(method: string): boolean {
+export function isReadOperation(method: string): boolean {
   return method === "GET" || method === "HEAD" || method === "OPTIONS";
 }
 
