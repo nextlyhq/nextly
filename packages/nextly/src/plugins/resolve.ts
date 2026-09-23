@@ -26,11 +26,23 @@ export interface ResolvePluginsOptions {
  * Pure — NOT yet wired into boot. P1 calls this from `register.ts` (runtime) and
  * `config-loader.ts` (CLI).
  */
-export function resolvePlugins(
-  plugins: PluginDefinition[],
-  opts: ResolvePluginsOptions
-): PluginDefinition[] {
-  validatePluginVersions(plugins, opts.coreVersion);
+/**
+ * Every check that must hold for the plugin list a boot actually USES.
+ *
+ * Separated from `resolvePlugins` because the list can change after it runs: a
+ * `setup` transformer may add, rename or replace entries, and everything from
+ * that point on consumes the transformed list. Re-running this against it is
+ * what stops a transformer-introduced declaration going unchecked —
+ * `assertSecretPaths` most of all, since a secret path that never matches
+ * means the credential it names is stored as ordinary text, with nothing at
+ * runtime to say so.
+ *
+ * Idempotent, so calling it twice costs a second pass and changes nothing.
+ * Version compatibility and the topological sort are NOT here: both are
+ * properties of the declared dependency graph, which a transformer that
+ * replaces a plugin cannot make compatible by rewriting.
+ */
+export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // Before any surface reads the manifest. A capability that is misspelled or
   // an outbound host that is not a hostname would otherwise be discovered as a
   // runtime surface quietly not existing, which reads as a bug in the plugin's
@@ -85,5 +97,13 @@ export function resolvePlugins(
   // the item from everyone without the never-seeded permission, which is what
   // a role legitimately lacking access looks like.
   validatePluginMenus(plugins);
+}
+
+export function resolvePlugins(
+  plugins: PluginDefinition[],
+  opts: ResolvePluginsOptions
+): PluginDefinition[] {
+  validatePluginVersions(plugins, opts.coreVersion);
+  assertPluginManifests(plugins);
   return topoSortPlugins(plugins);
 }

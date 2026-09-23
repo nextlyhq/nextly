@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import type { PluginDefinition } from "./plugin-context";
-import { resolvePlugins } from "./resolve";
+import { z } from "zod";
+
+import { assertPluginManifests, resolvePlugins } from "./resolve";
 
 const p = (
   name: string,
@@ -94,5 +96,50 @@ describe("resolvePlugins", () => {
         })
       ).not.toThrow();
     });
+  });
+});
+
+describe("assertPluginManifests", () => {
+  /**
+   * The checks a boot must apply to the list it USES, not the list it was
+   * handed. A `setup` transformer can add, rename or replace plugins, so
+   * `register.ts` calls this again on the transformed config.
+   */
+  const withSecretPath = (path: string) =>
+    ({
+      name: "@acme/thing",
+      version: "1.0.0",
+      nextly: ">=0.0.1",
+      capabilities: { secrets: [path] },
+      contributes: {
+        settings: z.object({ clientSecret: z.string().default("") }),
+      },
+    }) as unknown as PluginDefinition;
+
+  it("REFUSES a secret path the settings schema does not have", () => {
+    // The reason this set is re-run after transforms. A path that matches
+    // nothing is not inert: `ctx.settings` then stores the credential it names
+    // as ordinary text and hands it back verbatim, and nothing at runtime says
+    // so. A typo introduced by a transformer used to reach exactly that.
+    expect(() =>
+      assertPluginManifests([withSecretPath("clientSecrets")])
+    ).toThrow(/Plugin configuration is invalid/i);
+  });
+
+  it("accepts a secret path the schema does have", () => {
+    // The control: refusing every declaration would satisfy the test above
+    // while making encrypted settings undeclarable.
+    expect(() =>
+      assertPluginManifests([withSecretPath("clientSecret")])
+    ).not.toThrow();
+  });
+
+  it("is idempotent, so running it twice changes nothing", () => {
+    // `resolvePlugins` calls it and `register.ts` calls it again on the
+    // transformed list. A second pass that threw — on a hook point already
+    // published, say — would make the re-check impossible to add.
+    const plugins = [withSecretPath("clientSecret")];
+    assertPluginManifests(plugins);
+    expect(() => assertPluginManifests(plugins)).not.toThrow();
   });
 });

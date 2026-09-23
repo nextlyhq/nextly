@@ -128,7 +128,7 @@ import type {
   PluginServiceName,
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
-import { resolvePlugins } from "../plugins/resolve";
+import { assertPluginManifests, resolvePlugins } from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { collectPluginRoutes } from "../plugins/routes/collect-routes";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
@@ -148,9 +148,6 @@ import {
   registerPluginService,
 } from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
-import { assertAdminWidgets } from "../plugins/validate-admin-widgets";
-import { validatePluginMenus } from "../plugins/validate-menus";
-import { validatePluginSlugs } from "../plugins/validate-slugs";
 import { collectWidgetSources } from "../plugins/widgets/collect-widget-sources";
 import { setBootedConfig } from "../route-handler/auth-handler";
 import type {
@@ -558,33 +555,22 @@ export async function registerServices(
   // Layer 0b: Process Plugin Config Transformers (resolved order)
   // ----------------------------------------
   const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
-  // Again on the transformed list, because a `setup` transformer may add,
-  // rename or replace entries in `plugins` — and everything from here down
-  // consumes the transformed config, not the list `resolvePlugins` checked.
-  // Boot is where this should fail; without it a transformer-introduced
-  // collision would surface on the first admin-meta request instead.
-  validatePluginSlugs(setupConfig.plugins ?? []);
-  // And the menu targets on that same transformed list. A transformer may
-  // rename a contributed collection or replace a plugin outright, so an item
-  // that named a collection its plugin owned before the transform can name one
-  // it no longer does.
-  validatePluginMenus(setupConfig.plugins ?? []);
-  // And the widgets on that same transformed list, for the same reason one
-  // level in. `resolvePlugins` checks the list the CALLER passed; a transformer
-  // that adds or replaces a plugin contributes widgets that list never held, and
-  // THIS one is what `setBootedConfig` publishes and `buildPluginAdminMeta`
-  // serializes. A bigint under `query.where` there throws inside the single
-  // `JSON.stringify` that builds `/api/admin-meta/workspace`, so the whole
-  // authenticated workspace response answers 500 for every admin — the failure
-  // the resolver's check exists to prevent, reached through a second door.
+
+  // EVERY manifest check, again, on the transformed list — not just the three
+  // that used to be repeated here.
   //
-  // Checked in BOTH places rather than moved here, even though nothing between
-  // the two reads a widget. `resolvePlugins` is shared with the CLI config
-  // loader and with `collectPluginInfo`, and neither applies transformers on
-  // this path, so relocating the check would take it away from them; the
-  // duplication is the same one `validatePluginSlugs` above already carries,
-  // for the same reason.
-  assertAdminWidgets(setupConfig.plugins ?? []);
+  // A `setup` transformer may add, rename or replace entries in `plugins`, and
+  // everything from here down consumes the transformed config rather than the
+  // list `resolvePlugins` checked. The capability rules are the ones that make
+  // this urgent: a secret path introduced by a transformer and never validated
+  // is a path that matches nothing, so `ctx.settings` stores the credential it
+  // names as ordinary text and returns it verbatim, with nothing at runtime
+  // saying so. Hook points are republished for the same reason — the published
+  // map is what every seam consults, and it described the pre-transform list.
+  //
+  // Slug, menu and widget checks are inside this call now, so the three that
+  // were spelled out here individually are covered by it.
+  assertPluginManifests(setupConfig.plugins ?? []);
 
   // ----------------------------------------
   // Layer 0c: Fold declarative plugin schema contributions (D3/D12/D50)
