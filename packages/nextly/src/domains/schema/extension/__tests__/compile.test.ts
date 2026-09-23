@@ -293,3 +293,75 @@ describe("toDrizzleTable: checks on the sqlite kit table only", () => {
     expect(config.checks).toEqual([]);
   });
 });
+
+describe("kit-table foreign keys on sqlite (bundle pass two)", () => {
+  it("carries a foreign key whose referenced table is in the same bundle", async () => {
+    const { getTableConfig } = await import("drizzle-orm/sqlite-core");
+    const notes = defineTable(
+      "notes",
+      { id: col.id() },
+      { indexes: [{ columns: ["id"], unique: true }] }
+    );
+    const linked = defineTable(
+      "linked",
+      { id: col.id(), noteId: col.shortText() },
+      {
+        foreignKeys: [
+          {
+            columns: ["noteId"],
+            references: { table: "fx__notes", columns: ["id"] },
+            onDelete: "cascade",
+          },
+        ],
+      }
+    );
+    const built = await buildExtensionSchema({
+      dialect: "sqlite" as const,
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [
+        {
+          owner: { kind: "plugin" as const, id: "fx" },
+          tables: [notes, linked],
+        },
+      ],
+    });
+    const config = getTableConfig(
+      built.drizzle["fx__linked"] as never
+    );
+    // drizzle rc.4 exposes the actions and arity, not the name, on the
+    // config object; the name is carried by the builder into DDL.
+    expect(config.foreignKeys).toHaveLength(1);
+    expect(config.foreignKeys[0]?.onDelete).toBe("cascade");
+  });
+
+  it("skips a foreign key whose referenced table is outside the bundle", async () => {
+    const { getTableConfig } = await import("drizzle-orm/sqlite-core");
+    const linked = defineTable(
+      "linked",
+      { id: col.id(), userId: col.shortText() },
+      {
+        foreignKeys: [
+          {
+            columns: ["userId"],
+            references: { table: "users", columns: ["id"] },
+          },
+        ],
+      }
+    );
+    const built = await buildExtensionSchema({
+      dialect: "sqlite" as const,
+      coreTableNames: ["users"],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [
+        { owner: { kind: "plugin" as const, id: "fx" }, tables: [linked] },
+      ],
+    });
+    const config = getTableConfig(
+      built.drizzle["fx__linked"] as never
+    );
+    expect(config.foreignKeys).toEqual([]);
+  });
+});

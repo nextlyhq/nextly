@@ -22,7 +22,7 @@
  */
 import { mysqlTable } from "drizzle-orm/mysql-core";
 import { pgTable } from "drizzle-orm/pg-core";
-import { check, sqliteTable } from "drizzle-orm/sqlite-core";
+import { check, foreignKey, sqliteTable } from "drizzle-orm/sqlite-core";
 import { sql as drizzleSql } from "drizzle-orm";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
@@ -157,7 +157,17 @@ export function toTableSpec(
  */
 export function toDrizzleTable(
   table: ExtensionTable,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /**
+   * Resolves a referenced table's drizzle object, for foreign keys on the
+   * SQLite kit table. A single-table compile cannot build these — the drizzle
+   * form of a foreign key needs the REFERENCED table's column objects — so
+   * the bundle assembly passes a resolver over its pass-one tables. Absent,
+   * or naming a table outside the bundle, the foreign key is skipped on the
+   * kit table (it still reaches the statement path, where SQLite refuses
+   * in-place edits).
+   */
+  resolveReferenceTable?: (tableName: string) => unknown
 ): unknown {
   const columns: Record<string, unknown> = {};
   for (const column of table.columns) {
@@ -173,19 +183,40 @@ export function toDrizzleTable(
   if (dialect === "mysql") {
     return mysqlTable(table.name, columns as never);
   }
-  // Checks ride the kit-bound table on SQLite ONLY. This dialect cannot
-  // alter a constraint in place, so a check change must travel through the
-  // table rebuild drizzle-kit already performs — which only sees a check
-  // that is part of the table definition. PostgreSQL and MySQL apply checks
-  // through ADD/DROP CONSTRAINT statements instead, and putting them here
-  // for those dialects would double-apply (the index rule two comments up).
-  // Foreign keys stay OFF the kit table: their drizzle form needs the
-  // REFERENCED table's column objects, which a single-table compile does
-  // not hold — the recorded remainder of the sqlite rebuild path.
-  const checks = (table.checks ?? []).map(declared =>
-    check(`ck_${table.name}_${declared.name}`, drizzleSql.raw(declared.sql))
-  );
-  return checks.length > 0
-    ? sqliteTable(table.name, columns as never, () => checks)
+  const extras: unknown[] = [];
+  for (const declared of table.checks ?? []) {
+    extras.push(
+      check(`ck_${table.name}_${declared.name}`, drizzleSql.raw(declared.sql))
+    );
+  }
+  for (const fk of table.foreignKeys ?? []) {
+    const referenced =
+      resolveReferenceTable === undefined
+        ? undefined
+        : (resolveReferenceTable(fk.referencesTable) as Record<
+            string,
+            unknown
+          > | undefined);
+    if (referenced === undefined) continue;
+    const localColumns = fk.columns.map(name => columns[name]);
+    const foreignColumns = fk.referencesColumns.map(
+      name => referenced[name]
+    );
+    if (localColumns.includes(undefined) || foreignColumns.includes(undefined))
+      continue;
+    // Actions are builder-chained in drizzle rc.4 — the config-object form
+    // accepts only name/columns, which the cast would have hidden.
+    extras.push(
+      foreignKey({
+        name: fk.name ?? `fk_${table.name}_${fk.columns.join("_")}`,
+        columns: localColumns,
+        foreignColumns,
+      } as never)
+        .onDelete(fk.onDelete)
+        .onUpdate(fk.onUpdate)
+    );
+  }
+  return extras.length > 0
+    ? sqliteTable(table.name, columns as never, (() => extras) as never)
     : sqliteTable(table.name, columns as never);
 }

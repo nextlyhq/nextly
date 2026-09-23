@@ -156,6 +156,23 @@ export async function buildExtensionSchema(
     compiled[table.name] = toDrizzleTable(table, input.dialect);
     owners.set(table.name, table.owner);
   }
+  // Second pass, SQLite only: tables whose foreign keys reference another
+  // table in this bundle are rebuilt with a resolver over the pass-one
+  // objects, so the kit-bound definition carries the constraint and a
+  // change travels through the rebuild. A reference to a table OUTSIDE the
+  // bundle (core, entity) is skipped on the kit table — the resolver
+  // returns undefined and toDrizzleTable leaves that foreign key to the
+  // statement path.
+  if (input.dialect === "sqlite") {
+    for (const table of tables) {
+      if ((table.foreignKeys ?? []).length === 0) continue;
+      compiled[table.name] = toDrizzleTable(
+        table,
+        input.dialect,
+        name => compiled[name]
+      );
+    }
+  }
 
   // Core and entity tables are Nextly's to maintain, so a hook may not return
   // one. Built from the same two inputs the draft store seeds itself from,
