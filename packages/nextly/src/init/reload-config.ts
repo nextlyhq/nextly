@@ -431,7 +431,11 @@ interface ComponentRegistrySurface {
   >;
 }
 interface SchemaRegistrySurface {
-  registerDynamicSchema(tableName: string, table: unknown): void;
+  registerDynamicSchema(
+    tableName: string,
+    table: unknown,
+    edges?: ReadonlyArray<unknown>
+  ): void;
   /** Removes a table the config no longer declares. */
   retractDynamicSchema(tableName: string): void;
 }
@@ -2794,7 +2798,11 @@ async function applyReload(opts?: {
       for (const [tableName, table] of Object.entries(
         extensionSchema?.drizzle ?? {}
       )) {
-        schemaReg.registerDynamicSchema(tableName, table);
+        schemaReg.registerDynamicSchema(
+          tableName,
+          table,
+          extensionSchema?.relations.get(tableName)
+        );
       }
       // A table the new config no longer declares is retracted, so a query
       // against it fails loudly rather than reaching a table the pipeline has

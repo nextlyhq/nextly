@@ -16,7 +16,10 @@
  */
 import { createHash } from "node:crypto";
 
-import type { SupportedDialect } from "../../../database/schema-registry";
+import type {
+  DynamicRelationEdge,
+  SupportedDialect,
+} from "../../../database/schema-registry";
 import type { TableSpec } from "../pipeline/diff/types";
 
 import { type DrizzleSchemaHook, runAfterDrizzle } from "./after-drizzle";
@@ -70,6 +73,8 @@ export interface ExtensionSchema {
   drizzle: Record<string, unknown>;
   /** Table name → owner. P2-B persists this. */
   owners: Map<string, SchemaOwner>;
+  /** Table name → relation edges, for SchemaRegistry registration. */
+  relations: Map<string, DynamicRelationEdge[]>;
   /** Stable hash of the compiled output, for caches. */
   fingerprint: string;
 }
@@ -126,7 +131,22 @@ export async function buildExtensionSchema(
     indexes: table.indexes,
     ...(table.foreignKeys !== undefined ? { foreignKeys: table.foreignKeys } : {}),
     ...(table.checks !== undefined ? { checks: table.checks } : {}),
+    ...(table.relations !== undefined ? { relations: table.relations } : {}),
   }));
+
+  // Relation edges for the registry: keys snake-cased at declaration, targets
+  // kept as final table names, so a registration composes straight into the
+  // schema-wide relations config that powers db.query.
+  const relations = new Map<string, DynamicRelationEdge[]>();
+  for (const table of tables) {
+    const edges: DynamicRelationEdge[] = (table.relations ?? []).map(rel => ({
+      key: rel.name,
+      fromColumn: rel.fromColumn ?? "",
+      targetTable: rel.targetTable,
+      ...(rel.toColumn !== undefined ? { toColumn: rel.toColumn } : {}),
+    }));
+    if (edges.length > 0) relations.set(table.name, edges);
+  }
 
   // Indexes contributed to entity tables are carried separately: they belong
   // to a table this module does not own and must not be emitted as one.
@@ -199,6 +219,7 @@ export async function buildExtensionSchema(
     specs,
     drizzle,
     owners,
+    relations,
     fingerprint: fingerprintOf(specs, entityIndexes),
   };
 }

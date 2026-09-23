@@ -17,6 +17,7 @@
  */
 import type { CheckSpec, ForeignKeySpec } from "../pipeline/diff/types";
 import type { ColumnKind } from "../services/field-column-descriptor";
+import type { TableRelationInput } from "./dsl";
 
 /**
  * The kinds an extension column may take.
@@ -134,4 +135,6 @@ export interface ExtensionTable {
   foreignKeys?: DeclaredForeignKey[];
   /** Check constraints declared with the table; undefined = none declared. */
   checks?: DeclaredCheck[];
+  /** Relation edges declared with the table; undefined = none declared. */
+  relations?: TableRelationInput[];
 }

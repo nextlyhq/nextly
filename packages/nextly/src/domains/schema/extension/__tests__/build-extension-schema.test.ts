@@ -253,3 +253,57 @@ describe("owners", () => {
     });
   });
 });
+
+describe("relation edges", () => {
+  it("declared relations surface as registry edges with snake-cased keys", async () => {
+    const { col, defineTable } = await import("../dsl");
+    const notes = defineTable(
+      "notes",
+      { id: col.id(), userId: col.shortText() },
+      {
+        relations: [
+          { name: "user", kind: "one", targetTable: "users", fromColumn: "userId" },
+          { name: "audit", kind: "many", targetTable: "audit_log", toColumn: "noteId" },
+        ],
+      }
+    );
+    const built = await buildExtensionSchema({
+      dialect: "postgresql" as const,
+      coreTableNames: ["users"],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [{ owner: { kind: "plugin" as const, id: "fx" }, tables: [notes] }],
+    });
+    expect(built.relations.get("fx__notes")).toEqual([
+      { key: "user", fromColumn: "user_id", targetTable: "users" },
+      {
+        key: "audit",
+        fromColumn: "",
+        targetTable: "audit_log",
+        toColumn: "noteId",
+      },
+    ]);
+  });
+
+  it("a table with no declared relations contributes no edges", async () => {
+    const { col, defineTable } = await import("../dsl");
+    const plain = defineTable("plain", { id: col.id() });
+    const built = await buildExtensionSchema({
+      dialect: "postgresql" as const,
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [{ owner: { kind: "plugin" as const, id: "fx" }, tables: [plain] }],
+    });
+    expect(built.relations.has("fx__plain")).toBe(false);
+  });
+
+  it("refuses a one-edge without its fromColumn", async () => {
+    const { col, defineTable } = await import("../dsl");
+    expect(() =>
+      defineTable("bad", { id: col.id() }, {
+        relations: [{ name: "x", kind: "one", targetTable: "users" }],
+      })
+    ).toThrow(NextlyError);
+  });
+});

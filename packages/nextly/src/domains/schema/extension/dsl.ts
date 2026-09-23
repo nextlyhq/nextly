@@ -449,10 +449,23 @@ export interface TableCheckInput {
   sql: string;
 }
 
+/** A relation edge as the author writes it: target is the FINAL table name (prefixed, or a core table like users). */
+export interface TableRelationInput {
+  /** The property a relational query names under "with". */
+  name: string;
+  kind: "one" | "many";
+  targetTable: string;
+  /** This table column key, for a one-edge. */
+  fromColumn?: string;
+  /** The target column key, for a many-edge. */
+  toColumn?: string;
+}
+
 export interface TableDefinitionOptions {
   indexes?: TableIndexInput[];
   foreignKeys?: TableForeignKeyInput[];
   checks?: TableCheckInput[];
+  relations?: TableRelationInput[];
 }
 
 /** The output of `defineTable`: plain data, plus the column map as a phantom. */
@@ -468,6 +481,7 @@ export interface TableDefinition<
   readonly indexes: readonly ExtensionIndex[];
   readonly foreignKeys: readonly DeclaredForeignKey[];
   readonly checks: readonly DeclaredCheck[];
+  readonly relations: readonly TableRelationInput[];
   readonly __columns?: TColumns;
 }
 
@@ -639,6 +653,31 @@ function resolveForeignKeys(
   });
 }
 
+/** Resolve the author's relation edges: keys snake-cased against THIS table's columns, targets kept as final table names. */
+function resolveRelations(
+  tableName: string,
+  byName: ReadonlyMap<string, string>,
+  inputs: readonly TableRelationInput[]
+): TableRelationInput[] {
+  return inputs.map((input, position) => {
+    const path = `${tableName}.relations[${String(position)}]`;
+    if (input.fromColumn !== undefined) {
+      const sqlName = toSnakeCase(input.fromColumn);
+      if (!byName.has(sqlName)) {
+        invalid(
+          path,
+          `The relation names the column ${input.fromColumn}, which the table does not declare.`
+        );
+      }
+      return { ...input, fromColumn: sqlName };
+    }
+    if (input.kind === "one") {
+      invalid(path, "A one-edge must name its fromColumn.");
+    }
+    return input;
+  });
+}
+
 /** Resolve the author's checks to specs under the ck_ naming rule. */
 function resolveChecks(
   tableName: string,
@@ -682,6 +721,7 @@ export function defineTable<
     opts?.foreignKeys ?? []
   );
   const checks = resolveChecks(name, opts?.checks ?? []);
+  const relations = resolveRelations(name, byName, opts?.relations ?? []);
 
   return Object.freeze({
     name,
@@ -689,6 +729,7 @@ export function defineTable<
     indexes: Object.freeze(indexes),
     foreignKeys: Object.freeze(foreignKeys),
     checks: Object.freeze(checks),
+    relations: Object.freeze(relations),
   });
 }
 

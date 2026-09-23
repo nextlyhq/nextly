@@ -18,6 +18,7 @@
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { DeclaredCheck, DeclaredForeignKey } from "./types";
+import type { TableRelationInput } from "./dsl";
 
 import type { ColumnBuilder, TableDefinition } from "./dsl";
 import { defineTable } from "./dsl";
@@ -64,6 +65,7 @@ interface DraftTable {
   indexes: ExtensionIndex[];
   foreignKeys?: DeclaredForeignKey[];
   checks?: DeclaredCheck[];
+  relations?: TableRelationInput[];
 }
 
 export interface SchemaDraft {
@@ -381,6 +383,7 @@ export function createOwnerDraft(
         indexes,
         ...(def.foreignKeys.length > 0 ? { foreignKeys: [...def.foreignKeys] } : {}),
         ...(def.checks.length > 0 ? { checks: [...def.checks] } : {}),
+        ...(def.relations.length > 0 ? { relations: [...def.relations] } : {}),
       });
     },
 
