@@ -970,6 +970,7 @@ export const PLUGIN_SERVICE_NAMES = [
   "versionsService",
   "singleRegistryService",
   "db",
+  "relationalDb",
   "dialect",
   "logger",
   "config",
@@ -985,6 +986,7 @@ export const PLUGIN_SERVICE_NAMES = [
  */
 function buildPluginDatabase(
   rawDb: DatabaseInstance,
+  relationalDbHandle: DatabaseInstance,
   plugin: PluginDefinition | undefined
 ): PluginDatabase & { raw: DatabaseInstance } {
   const owner: SchemaOwner = plugin
@@ -1016,6 +1018,7 @@ function buildPluginDatabase(
         owner: table.owner,
       })),
     db: () => rawDb,
+    relationalDb: () => relationalDbHandle,
     transaction: fn => fn(rawDb),
   });
 
@@ -1174,22 +1177,21 @@ export function createPluginContext(
   const userService = getServiceFn("userService");
   const mediaService = getServiceFn("mediaService");
   const emailService = getServiceFn("emailService");
-<<<<<<< HEAD
-  // Restricted unless the plugin DECLARED raw SQL. `DatabaseInstance` already
-  // describes only the fluent surface, but the object handed over was the live
-  // Drizzle instance, which carries `execute`, `run` and its own client — so a
-  // JavaScript plugin, or TypeScript reaching past the type, had raw access
-  // whatever its manifest said, and the installation checklist could not
-  // describe the plugin's real reach.
-  const db = restrictDatabase(
+  // The RAW handle is restricted unless the plugin DECLARED raw SQL.
+  // `DatabaseInstance` already describes only the fluent surface, but the
+  // object handed over was the live Drizzle instance, which carries
+  // `execute`, `run` and its own client — so a JavaScript plugin, or
+  // TypeScript reaching past the type, had raw access whatever its manifest
+  // said. The typed surface below wraps the RESTRICTED handle, so the
+  // documented `raw` escape hatch inherits the restriction.
+  const rawDb = restrictDatabase(
     getServiceFn("db"),
     plugin?.capabilities?.db?.rawSql === true
   );
-=======
-  const rawDb = getServiceFn("db");
 
   /**
-   * `ctx.db` — the typed, owner-checked surface, with the raw handle kept.
+   * `ctx.db` — the typed, owner-checked surface over the restricted raw
+   * handle.
    *
    * Built lazily so it reads the ACTIVE extension schema at call time rather
    * than at context construction. A context outlives a reload; capturing the
@@ -1200,8 +1202,8 @@ export function createPluginContext(
    * surface plugins already depend on, in the same change that adds its
    * replacement, would break every one of them at once.
    */
-  const db = buildPluginDatabase(rawDb, plugin);
->>>>>>> c61ee0f21 (refactor(nextly): reuse the schema services that already existed)
+  const relationalDb = getServiceFn("relationalDb");
+  const db = buildPluginDatabase(rawDb, relationalDb, plugin);
   const logger = getServiceFn("logger");
   const config = getServiceFn("config");
 

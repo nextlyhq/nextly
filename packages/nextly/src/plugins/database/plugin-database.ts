@@ -64,6 +64,13 @@ export interface PluginDatabaseDeps {
   }[];
   /** The Drizzle handle. */
   db: () => unknown;
+  /**
+   * The relations-enabled Drizzle handle (`db.query` lives here). The plain
+   * `db` above is constructed without a relations config, whose query
+   * namespace is empty — this one is built per call with the registry's
+   * current relations, exactly as core services build theirs.
+   */
+  relationalDb: () => unknown;
   /** The adapter's transaction, which serialises correctly on SQLite. */
   transaction: <R>(fn: (tx: unknown) => Promise<R>) => Promise<R>;
 }
@@ -209,6 +216,20 @@ export interface PluginDatabase {
   ): PortableWhere<number>;
   delete<T extends TableDefinition>(definition: T): PortableWhere<number>;
   transaction<R>(fn: (tx: PluginTransaction) => Promise<R>): Promise<R>;
+  /**
+   * Relational queries (`db.query.<table>.findMany({ with })`), keyed by
+   * FINAL table name. The relations config is resolved per access through
+   * the same path core services use, so a registry invalidation (a Builder
+   * save, an extension reload) propagates immediately rather than stranding
+   * a plugin on edges that close over dropped table objects.
+   */
+  readonly query: Record<
+    string,
+    {
+      findMany: (config?: unknown) => Promise<unknown[]>;
+      findFirst: (config?: unknown) => Promise<unknown>;
+    }
+  >;
 }
 
 export type PluginTransaction = Omit<PluginDatabase, "transaction">;
@@ -374,6 +395,23 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         const scoped = createPluginDatabase({ ...deps, db: () => tx });
         return fn(scoped);
       });
+    },
+
+    // Resolved per access, never cached: the registry invalidates its
+    // assembled relations when a table is re-registered, and that only
+    // propagates if consumers re-resolve — the same rule core services
+    // follow through BaseService.db.
+    get query() {
+      const db = deps.relationalDb() as {
+        query: Record<
+          string,
+          {
+            findMany: (config?: unknown) => Promise<unknown[]>;
+            findFirst: (config?: unknown) => Promise<unknown>;
+          }
+        >;
+      };
+      return db.query;
     },
   };
 

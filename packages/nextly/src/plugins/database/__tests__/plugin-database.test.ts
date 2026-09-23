@@ -54,6 +54,7 @@ function harness() {
     tables: () => ({ fx__notes: { name: "fx__notes" } }),
     tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
     db: () => db,
+    relationalDb: () => db,
     transaction: fn => fn(db),
   });
 
