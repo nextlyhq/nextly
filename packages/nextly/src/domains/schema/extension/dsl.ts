@@ -15,6 +15,7 @@
  * @since 1.0.0
  */
 import { NextlyError } from "../../../errors/nextly-error";
+import type { CheckSpec, ForeignKeySpec } from "../pipeline/diff/types";
 import { toSnakeCase } from "../services/field-column-descriptor";
 
 import type {
@@ -424,10 +425,34 @@ export interface TableIndexInput {
   columns: string[];
   unique?: boolean;
   name?: string;
+  /** Partial-index predicate. PostgreSQL and SQLite only; MySQL is refused by its renderer. */
+  where?: string;
+  /** Expression index, per-dialect SQL, in place of column names. */
+  expression?: string;
+}
+
+/** A foreign key declared on the table's own columns. */
+export interface TableForeignKeyInput {
+  /** Column KEYS as authored; resolved to SQL names by `defineTable`. */
+  columns: string[];
+  references: { table: string; columns: string[] };
+  onDelete?: "cascade" | "set null" | "restrict" | "no action" | "set default";
+  onUpdate?: "cascade" | "set null" | "restrict" | "no action" | "set default";
+  /** Defaults to `fk_<table>_<cols>`. */
+  name?: string;
+}
+
+/** A check constraint; `sql` is the boolean expression over SQL column names. */
+export interface TableCheckInput {
+  /** Defaults to `ck_<table>_<name>`. */
+  name: string;
+  sql: string;
 }
 
 export interface TableDefinitionOptions {
   indexes?: TableIndexInput[];
+  foreignKeys?: TableForeignKeyInput[];
+  checks?: TableCheckInput[];
 }
 
 /** The output of `defineTable`: plain data, plus the column map as a phantom. */
@@ -441,6 +466,8 @@ export interface TableDefinition<
   readonly name: TName;
   readonly columns: readonly ResolvedColumn[];
   readonly indexes: readonly ExtensionIndex[];
+  readonly foreignKeys: readonly ForeignKeySpec[];
+  readonly checks: readonly CheckSpec[];
   readonly __columns?: TColumns;
 }
 
@@ -547,8 +574,11 @@ function resolveIndexes(
 ): ExtensionIndex[] {
   return inputs.map((index, position) => {
     const path = `${tableName}.indexes[${String(position)}]`;
-    if (index.columns.length === 0) {
-      invalid(path, "An index must name at least one column.");
+    if (index.columns.length === 0 && !index.expression) {
+      invalid(
+        path,
+        "An index must name at least one column or carry an expression."
+      );
     }
     const columns = index.columns.map(columnKey => {
       const sqlName = toSnakeCase(columnKey);
@@ -564,7 +594,60 @@ function resolveIndexes(
       columns,
       unique: index.unique === true,
       ...(index.name !== undefined ? { name: index.name } : {}),
+      ...(index.where !== undefined ? { where: index.where } : {}),
+      ...(index.expression !== undefined ? { expression: index.expression } : {}),
     };
+  });
+}
+
+/** Resolve the author's foreign keys to specs, deriving names and defaults. */
+function resolveForeignKeys(
+  tableName: string,
+  byName: ReadonlyMap<string, string>,
+  inputs: readonly TableForeignKeyInput[]
+): ForeignKeySpec[] {
+  return inputs.map((input, position) => {
+    const path = `${tableName}.foreignKeys[${String(position)}]`;
+    const columns = input.columns.map(columnKey => {
+      const sqlName = toSnakeCase(columnKey);
+      if (!byName.has(sqlName)) {
+        invalid(
+          path,
+          `The foreign key names the column "${columnKey}", which the table does not declare.`
+        );
+      }
+      return sqlName;
+    });
+    if (input.references.columns.length !== columns.length) {
+      invalid(
+        path,
+        "A foreign key must reference exactly as many columns as it declares."
+      );
+    }
+    return {
+      name: input.name ?? `fk_${tableName}_${columns.join("_")}`,
+      columns,
+      referencesTable: input.references.table,
+      referencesColumns: [...input.references.columns],
+      onDelete: input.onDelete ?? "no action",
+      onUpdate: input.onUpdate ?? "no action",
+    };
+  });
+}
+
+/** Resolve the author's checks to specs under the ck_ naming rule. */
+function resolveChecks(
+  tableName: string,
+  inputs: readonly TableCheckInput[]
+): CheckSpec[] {
+  return inputs.map((input, position) => {
+    if (input.sql.trim() === "") {
+      invalid(
+        `${tableName}.checks[${String(position)}]`,
+        "A check must carry a SQL expression."
+      );
+    }
+    return { name: `ck_${tableName}_${input.name}`, sql: input.sql };
   });
 }
 
@@ -589,11 +672,19 @@ export function defineTable<
   }
   const { resolved, byName } = resolveColumns(name, columns);
   const indexes = resolveIndexes(name, byName, opts?.indexes ?? []);
+  const foreignKeys = resolveForeignKeys(
+    name,
+    byName,
+    opts?.foreignKeys ?? []
+  );
+  const checks = resolveChecks(name, opts?.checks ?? []);
 
   return Object.freeze({
     name,
     columns: Object.freeze(resolved),
     indexes: Object.freeze(indexes),
+    foreignKeys: Object.freeze(foreignKeys),
+    checks: Object.freeze(checks),
   });
 }
 

@@ -124,6 +124,8 @@ export async function buildExtensionSchema(
     owner: table.owner as SchemaOwner,
     columns: table.columns,
     indexes: table.indexes,
+    ...(table.foreignKeys !== undefined ? { foreignKeys: table.foreignKeys } : {}),
+    ...(table.checks !== undefined ? { checks: table.checks } : {}),
   }));
 
   // Indexes contributed to entity tables are carried separately: they belong

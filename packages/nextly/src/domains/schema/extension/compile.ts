@@ -124,9 +124,19 @@ export function toTableSpec(
     name: resolveIndexName(table.name, index),
     columns: [...index.columns],
     unique: index.unique,
+    ...(index.where !== undefined ? { where: index.where } : {}),
+    ...(index.expression !== undefined ? { expression: index.expression } : {}),
   }));
+  const foreignKeys = table.foreignKeys?.map(fk => ({ ...fk }));
+  const checks = table.checks?.map(ck => ({ ...ck }));
 
-  return { name: table.name, columns, indexes };
+  return {
+    name: table.name,
+    columns,
+    indexes,
+    ...(foreignKeys !== undefined ? { foreignKeys } : {}),
+    ...(checks !== undefined ? { checks } : {}),
+  };
 }
 
 /**

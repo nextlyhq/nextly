@@ -15,6 +15,7 @@
  * @module domains/schema/extension/types
  * @since 1.0.0
  */
+import type { CheckSpec, ForeignKeySpec } from "../pipeline/diff/types";
 import type { ColumnKind } from "../services/field-column-descriptor";
 
 /**
@@ -94,6 +95,10 @@ export interface ExtensionIndex {
   unique: boolean;
   /** Optional explicit name; otherwise derived with the portable index-name rules. */
   name?: string;
+  /** Partial-index predicate (PostgreSQL/SQLite). */
+  where?: string;
+  /** Expression index: per-dialect SQL in place of columns. */
+  expression?: string;
 }
 
 /** Who added a table or index, recorded on every one of them. */
@@ -113,4 +118,8 @@ export interface ExtensionTable {
   owner: SchemaOwner;
   columns: ExtensionColumn[];
   indexes: ExtensionIndex[];
+  /** Foreign keys declared with the table; undefined = none declared. */
+  foreignKeys?: ForeignKeySpec[];
+  /** Check constraints declared with the table; undefined = none declared. */
+  checks?: CheckSpec[];
 }

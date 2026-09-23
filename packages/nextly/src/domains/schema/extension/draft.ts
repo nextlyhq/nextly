@@ -17,6 +17,7 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { CheckSpec, ForeignKeySpec } from "../pipeline/diff/types";
 
 import type { ColumnBuilder, TableDefinition } from "./dsl";
 import { defineTable } from "./dsl";
@@ -61,6 +62,8 @@ interface DraftTable {
   owner: DraftOwner;
   columns: ExtensionColumn[];
   indexes: ExtensionIndex[];
+  foreignKeys?: ForeignKeySpec[];
+  checks?: CheckSpec[];
 }
 
 export interface SchemaDraft {
@@ -370,7 +373,15 @@ export function createOwnerDraft(
         assertIndexBuildable(index, columns, name);
       }
 
-      store.set({ name, authored: def.name, owner, columns, indexes });
+      store.set({
+        name,
+        authored: def.name,
+        owner,
+        columns,
+        indexes,
+        ...(def.foreignKeys.length > 0 ? { foreignKeys: [...def.foreignKeys] } : {}),
+        ...(def.checks.length > 0 ? { checks: [...def.checks] } : {}),
+      });
     },
 
     extendTable(name, ext): void {

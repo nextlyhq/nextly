@@ -169,7 +169,47 @@ describe("row 7 — expression indexes", () => {
 });
 
 describe("row 8 — foreign keys with onDelete/onUpdate", () => {
-  it.todo("C: a foreign key is expressible, diffed and emitted per dialect");
+  it("C: a foreign key is expressible, diffed and emitted per dialect", async () => {
+    const linked = defineTable(
+      "linked",
+      {
+        id: col.id(),
+        noteId: col.shortText(),
+      },
+      {
+        indexes: [{ columns: ["noteId"] }],
+        foreignKeys: [
+          {
+            columns: ["noteId"],
+            references: { table: "fx__notes", columns: ["id"] },
+            onDelete: "cascade",
+          },
+        ],
+        checks: [{ name: "note_present", sql: "note_id IS NOT NULL" }],
+      }
+    );
+    const schema = await buildExtensionSchema(
+      input({
+        plugins: [
+          { owner: { kind: "plugin" as const, id: "fx" }, tables: [notes, linked] },
+        ],
+      })
+    );
+    const spec = schema.specs.find(t => t.name === "fx__linked");
+    expect(spec?.foreignKeys).toEqual([
+      {
+        name: "fk_linked_note_id",
+        columns: ["note_id"],
+        referencesTable: "fx__notes",
+        referencesColumns: ["id"],
+        onDelete: "cascade",
+        onUpdate: "no action",
+      },
+    ]);
+    expect(spec?.checks).toEqual([
+      { name: "ck_linked_note_present", sql: "note_id IS NOT NULL" },
+    ]);
+  });
 });
 
 describe("row 9 — check constraints", () => {
