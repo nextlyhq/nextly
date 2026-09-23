@@ -45,10 +45,15 @@
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
+import {
+  orderedMigrations,
+  type PluginMigration,
+} from "../../domains/schema/migrate/plugin/plugin-migration";
 import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
 import {
   formatBlankFile,
@@ -56,7 +61,9 @@ import {
   slugify,
 } from "../../domains/schema/migrate-create/format-file";
 import { generateMigration } from "../../domains/schema/migrate-create/generate";
+import { generatePluginMigration } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
+import type { TableSpec } from "../../domains/schema/pipeline/diff/types";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import {
   applyDeferredExtendsToManifest,
@@ -73,6 +80,10 @@ import {
 } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
+import { NextlyError } from "../../errors/nextly-error";
+import type { PluginDefinition } from "../../plugins/plugin-context";
+import { pluginAdminSlug } from "../../plugins/plugin-slug";
+import { CORE_TABLE_NAMES } from "../../schemas/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { createContext, type CommandContext } from "../program";
@@ -81,6 +92,7 @@ import {
   validateDatabaseEnv,
   type SupportedDialect,
 } from "../utils/adapter";
+import { bundleAndRequire } from "../utils/config-bundler";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
@@ -117,6 +129,13 @@ export interface MigrateCreateCommandOptions {
    * @default false
    */
   acceptRenames?: boolean;
+
+  /**
+   * Generate a PLUGIN's migration module instead of the app's `.sql` file.
+   * Path to the plugin's entry file (e.g. `./src/index.ts`); the module and
+   * its `index.ts` barrel are written beside it under `src/migrations/`.
+   */
+  plugin?: string;
 }
 
 interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
@@ -136,6 +155,12 @@ export async function runMigrateCreate(
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
+
+  if (options.plugin) {
+    await runMigrateCreatePlugin(nameArg ?? options.name, options, context);
+    return;
+  }
+
   const startTime = Date.now();
 
   logger.header("Migrate Create");
@@ -458,6 +483,133 @@ async function runBlankPath(
 // Command Registration
 // ============================================================================
 
+// ============================================================================
+// Plugin migrations (`--plugin <entry>`)
+// ============================================================================
+
+/**
+ * A plugin's modules are bundled next to the code they migrate, so the same
+ * externals list that keeps a config load off the CLI's dependency tree keeps
+ * a plugin load off it too.
+ */
+const PLUGIN_BUNDLE_EXTERNALS = [
+  "nextly",
+  "@nextlyhq/*",
+  "drizzle-orm",
+  "drizzle-orm/*",
+  "next",
+  "next/*",
+  "react",
+  "react-dom",
+  "node:*",
+];
+
+const PLUGIN_DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
+
+/**
+ * Generate one plugin's migration module: compile the plugin's declared
+ * tables per dialect, diff against the previous module's snapshot, and write
+ * the module plus the rewritten `index.ts` barrel beside the entry.
+ */
+async function runMigrateCreatePlugin(
+  name: string | undefined,
+  options: ResolvedMigrateCreateOptions,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  const cwd = options.cwd ?? process.cwd();
+  const entryPath = resolve(cwd, options.plugin!);
+  const migrationsDir = resolve(dirname(entryPath), "migrations");
+
+  const { mod } = await bundleAndRequire({
+    filepath: entryPath,
+    cwd: dirname(entryPath),
+    external: PLUGIN_BUNDLE_EXTERNALS,
+  });
+  const definition = (mod.default ?? mod) as Partial<PluginDefinition>;
+
+  if (!definition.name) {
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage: `The plugin entry ${relative(cwd, entryPath)} exports no definition with a name, so its migrations cannot be attributed.`,
+      statusCode: 400,
+    });
+  }
+  if (typeof definition.schemaVersion !== "number") {
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage: `Plugin "${definition.name}" declares no schemaVersion. A plugin needs one before migrations can be generated for it.`,
+      statusCode: 400,
+    });
+  }
+
+  const tables = definition.contributes?.schema?.tables ?? [];
+  const prefix =
+    definition.contributes?.schema?.prefix ??
+    pluginAdminSlug(definition.name).replace(/-/g, "_");
+
+  // Modules the plugin already ships; absent on first generation.
+  let existing: PluginMigration[] = [];
+  try {
+    const loaded = await bundleAndRequire({
+      filepath: resolve(migrationsDir, "index.ts"),
+      cwd: migrationsDir,
+      external: PLUGIN_BUNDLE_EXTERNALS,
+    });
+    const shipped = (loaded.mod as { migrations?: PluginMigration[] })
+      .migrations;
+    existing = orderedMigrations(shipped ?? []);
+  } catch {
+    // First generation: no barrel to read yet.
+  }
+
+  const tablesByDialect = {} as Record<SupportedDialect, TableSpec[]>;
+  for (const dialect of PLUGIN_DIALECTS) {
+    const built = await buildExtensionSchema({
+      dialect,
+      coreTableNames: CORE_TABLE_NAMES,
+      entities: [],
+      pluginPrefixes: new Map([[definition.name, prefix]]),
+      plugins: [{ owner: { kind: "plugin", id: definition.name }, tables }],
+    });
+    // Only this plugin's own tables: a plugin migration carries exactly the
+    // tables its stream owns, never an app's or another plugin's.
+    const owned = new Set(
+      built.tables
+        .filter(
+          table =>
+            table.owner.kind === "plugin" && table.owner.id === definition.name
+        )
+        .map(table => table.name)
+    );
+    tablesByDialect[dialect] = built.specs.filter(spec => owned.has(spec.name));
+  }
+
+  const result = await generatePluginMigration({
+    pluginName: definition.name,
+    schemaVersion: definition.schemaVersion,
+    name: name ?? "migration",
+    migrationsDir,
+    tablesByDialect,
+    existing,
+  });
+
+  if (!result) {
+    logger.info(
+      `No schema changes detected for plugin "${definition.name}" — nothing to generate.`
+    );
+    process.exit(2);
+  }
+
+  logger.success(`Created ${relative(cwd, result.modulePath)}`);
+  for (const dialect of PLUGIN_DIALECTS) {
+    logger.info(
+      `  ${getDialectDisplayName(dialect)}: ${result.operationCounts[dialect]} operation(s)`
+    );
+  }
+  logger.info(`Rewrote ${relative(cwd, result.indexPath)}`);
+}
+
 export function registerMigrateCreateCommand(program: Command): void {
   program
     .command("migrate:create")
@@ -476,6 +628,10 @@ export function registerMigrateCreateCommand(program: Command): void {
       "--accept-renames",
       "ADVANCED: auto-accept all rename candidates in non-interactive mode",
       false
+    )
+    .option(
+      "--plugin <entry>",
+      "Generate the PLUGIN's migration module (path to its entry, e.g. ./src/index.ts)"
     )
     .action(
       async (
