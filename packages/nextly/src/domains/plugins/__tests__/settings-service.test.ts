@@ -424,3 +424,110 @@ describe("the empty key is not a settings key", () => {
     await expect(service(store).set({ port: 8443 })).resolves.toBeUndefined();
   });
 });
+
+describe("a key that became secret in a newer manifest", () => {
+  it("re-encrypts the stored plaintext row on the next write of ANY key", async () => {
+    // The row predates the declaration: written while the key was public, it
+    // holds the credential in plain text. Nothing rewrites a key the patch
+    // does not mention, and the admin is never handed the plaintext to echo
+    // back — so without this migration the at-rest encryption the manifest
+    // promises is never applied to the old value.
+    const store = memoryStore();
+    store.rows.push({
+      owner: "@test/p",
+      key: "clientSecret",
+      value: JSON.stringify(SECRET_VALUE),
+      isSecret: false,
+      updatedAt: new Date(),
+      updatedBy: null,
+    });
+
+    // An unrelated key: the migration must run on the write, not on the read
+    // of the key it concerns.
+    await service(store).set({ port: 8443 });
+
+    const stored = store.rows.find(r => r.key === "clientSecret");
+    expect(stored?.isSecret).toBe(true);
+    expect(stored?.value).not.toContain(SECRET_VALUE);
+
+    // And the value survives the migration readable.
+    const settings = await service(store).get<{ clientSecret: string }>();
+    expect(settings.clientSecret).toBe(SECRET_VALUE);
+  });
+
+  it("leaves rows the manifest still treats as public in plain text", async () => {
+    // The control: the migration is driven by the DECLARATION, not by a
+    // blanket re-encryption of every row.
+    const store = memoryStore();
+    await service(store).set({ port: 8443 });
+
+    const stored = store.rows.find(r => r.key === "port");
+    expect(stored?.isSecret).toBe(false);
+    expect(stored?.value).toBe(JSON.stringify(8443));
+  });
+});
+
+describe("values that cannot live in a settings row", () => {
+  /** A service over a schema that accepts values JSON cannot carry back. */
+  function exoticService(
+    exotic: z.ZodObject<z.ZodRawShape>,
+    store: PluginSettingsStore
+  ): PluginSettingsService {
+    return new PluginSettingsService({
+      owner: "@test/p",
+      schema: exotic,
+      secretPaths: [],
+      store,
+      secrets: () => [KEY_A],
+    });
+  }
+
+  it("REFUSES a z.date() value rather than making every later read fail", async () => {
+    // The value parses, serializes — and the string it becomes is what the
+    // field rejects on the next read. Stored once, unreadable forever.
+    const store = memoryStore();
+    const svc = exoticService(z.object({ since: z.date() }), store);
+    await expect(
+      svc.set({ since: new Date("2026-01-02T03:04:05Z") })
+    ).rejects.toSatisfy(err => {
+      if (!NextlyError.is(err)) return false;
+      // The refusal must name the key, so the plugin author can find it.
+      return JSON.stringify(err.publicData ?? err.logContext).includes("since");
+    });
+    // And write nothing.
+    expect(store.rows).toHaveLength(0);
+  });
+
+  it("REFUSES a value that only parses on the way IN, like a transform", async () => {
+    // `z.string().transform(Number)` accepts "5" and stores 5; the next read
+    // feeds 5 to the same schema, which rejects it. The round trip is what
+    // catches it.
+    const store = memoryStore();
+    const svc = exoticService(
+      z.object({ retries: z.string().transform(Number) }),
+      store
+    );
+    await expect(svc.set({ retries: "5" })).rejects.toSatisfy(NextlyError.is);
+    expect(store.rows).toHaveLength(0);
+  });
+
+  it("REFUSES a bigint, which JSON cannot serialize at all", async () => {
+    const store = memoryStore();
+    const svc = exoticService(z.object({ count: z.bigint() }), store);
+    await expect(svc.set({ count: 10n })).rejects.toSatisfy(NextlyError.is);
+    expect(store.rows).toHaveLength(0);
+  });
+
+  it("still stores the JSON-native values plugins actually declare", async () => {
+    // The control: strings, numbers, booleans, arrays and objects all
+    // round-trip, and refusing them would make the feature unusable.
+    const store = memoryStore();
+    await service(store).set({
+      port: 8443,
+      providers: {
+        google: { clientId: "google-id", clientSecret: SECRET_VALUE },
+      },
+    });
+    expect(store.rows.length).toBeGreaterThan(0);
+  });
+});

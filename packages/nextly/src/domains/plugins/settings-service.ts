@@ -13,7 +13,7 @@
  * @module domains/plugins/settings-service
  * @since 1.0.0
  */
-import type { ZodObject, ZodRawShape } from "zod";
+import type { ZodObject, ZodRawShape, ZodType } from "zod";
 
 import { NextlyError } from "../../errors/nextly-error";
 import { secretGenerations } from "../../shared/lib/secret-generations";
@@ -178,9 +178,47 @@ export class PluginSettingsService {
     // value: each merged correctly on its own, and the second write put back
     // what the first had just changed. A rotated `clientSecret` undone by an
     // unrelated `clientId` edit is the shape that costs the most.
-    await this.deps.store.mutate(this.deps.owner, Object.keys(patch), current =>
-      this.rowsForPatch(this.decodeRows(current), patch, opts)
+    await this.deps.store.mutate(this.deps.owner, Object.keys(patch), stored =>
+      this.rowsForUpdate(stored, patch, opts)
     );
+  }
+
+  /**
+   * Every row one update must write: the patch's own keys, plus the
+   * re-encryption of stored rows a newer manifest has made secret.
+   *
+   * Split from `rowsForPatch` because the migration needs the RAW rows —
+   * `decodeRows` answers values, and whether a row was STORED as plaintext
+   * is a fact about the row, not the value.
+   */
+  private rowsForUpdate(
+    stored: PluginSettingRow[],
+    patch: Record<string, unknown>,
+    opts?: { actorUserId?: string }
+  ): PluginSettingRow[] {
+    const current = this.decodeRows(stored);
+    const rows = this.rowsForPatch(current, patch, opts);
+
+    // A key that becomes secret in a newer plugin version keeps whatever
+    // shape its row was written in, and a row written while it was public is
+    // plaintext at rest forever: nothing rewrites a key the patch does not
+    // mention, and the admin is never handed the plaintext to echo back.
+    // Reading is already safe — redaction follows the manifest, not the row —
+    // but the at-rest encryption the manifest now promises was never applied
+    // to the old value. Rewriting it here, inside the same serialized
+    // transaction as the patch, is the one place the migration can happen
+    // without a second writer racing it.
+    const migrated = stored
+      .filter(
+        row =>
+          row.key !== OWNER_LOCK_KEY &&
+          !row.isSecret &&
+          Object.hasOwn(current, row.key) &&
+          topLevelKeyHoldsSecret(row.key, this.deps.secretPaths)
+      )
+      .map(row => this.rowFor(row.key, current[row.key], opts));
+
+    return [...rows, ...migrated];
   }
 
   /**
@@ -252,29 +290,83 @@ export class PluginSettingsService {
       });
     }
 
-    const now = new Date();
     // The PATCH's keys, not the parsed result's. Parsing fills in every
     // schema default, so writing those would turn a change of one field into
     // a reset of the others — a `port` update silently overwriting a stored
     // `clientSecret` with the empty default. The refusal above is what makes
     // this safe: every remaining key is known to be present in `parsed.data`,
     // so no `undefined` can reach the column.
-    const rows: PluginSettingRow[] = Object.keys(patch).map(key => {
-      const value = parsed.data[key];
-      const holdsSecret = topLevelKeyHoldsSecret(key, this.deps.secretPaths);
-      return {
-        owner: this.deps.owner,
-        key,
-        value: JSON.stringify(
-          holdsSecret ? this.encryptSecrets(value, [key]) : value
-        ),
-        isSecret: holdsSecret,
-        updatedAt: now,
-        updatedBy: opts?.actorUserId ?? null,
-      };
-    });
+    return Object.keys(patch).map(key =>
+      this.rowFor(key, parsed.data[key], opts)
+    );
+  }
 
-    return rows;
+  /**
+   * One row to store for a key, whichever update is writing it.
+   *
+   * The value is proven STORABLE first. A settings row is JSON in a text
+   * column, so a value the schema accepts but JSON cannot carry — a `Date`,
+   * a transformed type, a bigint — writes happily and makes every LATER read
+   * fail: what comes back out of the row is JSON, and the same schema is
+   * asked to parse it again. `z.string().transform(Number)` is the quiet
+   * version — the number stores, and the next parse rejects it.
+   */
+  private rowFor(
+    key: string,
+    value: unknown,
+    opts?: { actorUserId?: string }
+  ): PluginSettingRow {
+    // Serialize, then feed what actually comes back through the field's own
+    // schema. Checking only serialization leaves the `z.date()` case: a Date
+    // serializes fine, and the string it becomes is what the field refuses.
+    let encoded: unknown;
+    try {
+      encoded = JSON.parse(JSON.stringify(value));
+    } catch {
+      throw this.unstorableValue(
+        key,
+        "its schema produces a value JSON cannot serialize, such as a bigint"
+      );
+    }
+    // The shape's values are declared as zod's widest type, which does not
+    // carry the parse methods on its TypeScript face; every value a ZodObject
+    // holds is a full schema at runtime, so this narrows to the type that
+    // states what the call does rather than asserting anything new.
+    const field = this.deps.schema.shape[key] as ZodType | undefined;
+    if (field) {
+      const recheck = field.safeParse(encoded);
+      if (!recheck.success) {
+        throw this.unstorableValue(
+          key,
+          "its schema produces a value that does not survive storage as JSON, such as a `z.date()`"
+        );
+      }
+    }
+    const holdsSecret = topLevelKeyHoldsSecret(key, this.deps.secretPaths);
+    return {
+      owner: this.deps.owner,
+      key,
+      value: JSON.stringify(
+        holdsSecret ? this.encryptSecrets(value, [key]) : value
+      ),
+      isSecret: holdsSecret,
+      updatedAt: new Date(),
+      updatedBy: opts?.actorUserId ?? null,
+    };
+  }
+
+  /** The refusal for a settings value that cannot live in a settings row. */
+  private unstorableValue(key: string, why: string): NextlyError {
+    return NextlyError.validation({
+      errors: [
+        {
+          path: key,
+          code: "NOT_STORABLE",
+          message: `The "${key}" setting cannot be stored: ${why}. Store it as a JSON-native value (an ISO string rather than a date, for example) instead.`,
+        },
+      ],
+      logContext: { plugin: this.deps.owner },
+    });
   }
 
   /** The stored settings, decrypted, before the schema is applied. */
