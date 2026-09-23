@@ -582,7 +582,7 @@ function buildSqlExecutor(
  * and stops Phase 2: later migrations assume a database state that was never
  * reached.
  */
-async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
+export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
   if (!deps.pluginMigrationSets || deps.pluginMigrationSets.length === 0) {
     return;
   }
