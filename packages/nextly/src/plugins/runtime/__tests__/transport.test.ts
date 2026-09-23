@@ -379,3 +379,81 @@ describe("an expired body read is CANCELLED, not merely abandoned", () => {
     expect(cancelled).toBe(false);
   });
 });
+
+describe("the caller's own cancellation is honoured", () => {
+  it("refuses immediately when the signal is already aborted", async () => {
+    const url = await listen((_req, res) => {
+      res.end("ok");
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      send(url, { signal: controller.signal })
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("releases a body read that never finishes, when the caller aborts", async () => {
+    // Racing the abort answers the caller and leaves the read pulling bytes
+    // for nobody — the same failure the deadline's cancel arm exists to
+    // prevent, reached by a different signal.
+    const url = await listen((_req, res) => {
+      res.end("ok");
+    });
+
+    const controller = new AbortController();
+    let cancelled = false;
+    const body = new ReadableStream({
+      start() {
+        // Never enqueues, never closes.
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    const refusal = send(
+      url,
+      { method: "POST", body, signal: controller.signal },
+      30_000
+    );
+    await new Promise(resolve => setTimeout(resolve, 50));
+    controller.abort();
+
+    await expect(refusal).rejects.toMatchObject({ name: "AbortError" });
+    // The cancel arm is the point: answered AND stopped, not answered.
+    expect(cancelled).toBe(true);
+  });
+
+  it("destroys an in-flight request when the caller aborts", async () => {
+    // A server that never answers stands in for the slow provider. The
+    // deadline is long, so only the caller's signal can end this call — the
+    // exact case the fixed deadline used to answer on the caller's behalf.
+    const url = await listen(() => {
+      // Never responds.
+    });
+
+    const controller = new AbortController();
+    const refusal = send(url, { signal: controller.signal }, 30_000);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    controller.abort();
+
+    const started = Date.now();
+    await expect(refusal).rejects.toMatchObject({ name: "AbortError" });
+    // Settled by the abort, not by the 30-second deadline.
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("leaves a request that completes normally untouched", async () => {
+    // The control: an always-aborting transport would satisfy every test
+    // above while breaking every call the transport exists to make.
+    const url = await listen((_req, res) => {
+      res.end("ok");
+    });
+
+    const controller = new AbortController();
+    const response = await send(url, { signal: controller.signal });
+    expect(await response.text()).toBe("ok");
+  });
+});

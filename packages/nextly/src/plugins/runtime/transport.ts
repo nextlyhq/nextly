@@ -147,7 +147,8 @@ async function drainStream(
 async function withRequestDeadline<T>(
   run: (signal: AbortSignal) => Promise<T>,
   deadlineAt: number,
-  url: URL
+  url: URL,
+  caller?: AbortSignal
 ): Promise<T> {
   const refuse = () =>
     NextlyError.forbidden({
@@ -167,7 +168,26 @@ async function withRequestDeadline<T>(
   // nobody left to receive them.
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // Detaches the caller-abort listener once the race settles, so a completed
+  // read leaves nothing attached to a signal its owner may hold for the life
+  // of a request of its own.
+  let detachCaller: (() => void) | undefined;
   try {
+    // The CALLER'S cancellation, racing the same race the deadline does.
+    // Aborting the controller releases the body reader exactly as an expiry
+    // would; without this arm, a plugin cancelling because its own incoming
+    // request disconnected left the body read pulling bytes for nobody until
+    // the deadline ran out.
+    const callerRace: Promise<never> | null = caller
+      ? new Promise<never>((_resolve, reject) => {
+          const onAbort = () => {
+            controller.abort();
+            reject(abortedByCaller());
+          };
+          caller.addEventListener("abort", onAbort, { once: true });
+          detachCaller = () => caller.removeEventListener("abort", onAbort);
+        })
+      : null;
     return await Promise.race([
       run(controller.signal),
       new Promise<never>((_resolve, reject) => {
@@ -178,12 +198,28 @@ async function withRequestDeadline<T>(
         // Never holds the loop open on its own; it races work that does.
         timer.unref?.();
       }),
+      ...(callerRace ? [callerRace] : []),
     ]);
   } finally {
     // Cleared on every exit, so work that finished early does not keep a
     // timer alive for the remainder of the budget.
     if (timer !== undefined) clearTimeout(timer);
+    detachCaller?.();
   }
+}
+
+/**
+ * The rejection for a caller's own cancellation.
+ *
+ * The shape `fetch` itself rejects with, because plugin code holding an
+ * `AbortSignal` recognises its cancellation by `error.name === "AbortError"`
+ * — and because a cancellation the caller asked for is not a policy refusal,
+ * which is what the NextlyError refusals in this module answer for. Platform
+ * DOMExceptions are outside the NextlyError contract by the same reasoning
+ * `read-stored-media` gives for the timeouts of `AbortSignal.timeout`.
+ */
+function abortedByCaller(): DOMException {
+  return new DOMException("This operation was aborted", "AbortError");
 }
 
 /** Header values as Node wants them, from whatever shape the caller used. */
@@ -237,6 +273,13 @@ function responseHeaderTuples(
  */
 export async function sendVetted(args: SendArgs): Promise<Response> {
   const { url, address, init, deadlineAt, maxBodyBytes } = args;
+  // The CALLER'S cancellation, honoured at every phase the deadline is. Before
+  // it was consulted nowhere: a plugin aborting because its own incoming
+  // request disconnected left the outbound call running — DNS, socket and all
+  // — until the fixed deadline answered for it. Normalised to undefined
+  // because `RequestInit.signal` may be explicitly null.
+  const caller = init.signal ?? undefined;
+  if (caller?.aborted) throw abortedByCaller();
   const send = url.protocol === "https:" ? httpsRequest : httpRequest;
   // Inside the deadline, because reading the REQUEST body happens before any
   // socket exists and therefore before the timer below is armed. A plugin
@@ -246,10 +289,12 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
   const { body, headers: bodyHeaders } = await withRequestDeadline(
     signal => materializeBody(init, signal),
     deadlineAt,
-    url
+    url,
+    caller
   );
 
   return new Promise<Response>((resolve, reject) => {
+    let cancelledByCaller = false;
     const req = send(
       {
         protocol: url.protocol,
@@ -330,6 +375,18 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
       }
     );
 
+    // The caller's cancellation, applied to the socket the same way the
+    // deadline applies itself: destroy the request rather than wait out a
+    // timer the caller has already decided the answer to. The flag keeps the
+    // AbortError the promise settles with, whichever of this handler and the
+    // socket's own error event the destroy happens to surface first.
+    const onCallerAbort = () => {
+      cancelledByCaller = true;
+      req.destroy();
+      reject(abortedByCaller());
+    };
+    if (caller) caller.addEventListener("abort", onCallerAbort, { once: true });
+
     // A wall-clock deadline, not `req.setTimeout`: that one is per-socket
     // INACTIVITY, so a server sending a byte before each expiry holds the
     // request open forever while never appearing idle.
@@ -354,11 +411,12 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
     timer.unref?.();
     const done = (): void => {
       clearTimeout(timer);
+      caller?.removeEventListener("abort", onCallerAbort);
     };
     req.on("close", done);
     req.on("error", error => {
       done();
-      reject(error);
+      reject(cancelledByCaller ? abortedByCaller() : error);
     });
 
     if (body !== null) req.write(body);
