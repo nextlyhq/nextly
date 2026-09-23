@@ -201,10 +201,10 @@ describe("validateCapabilities", () => {
     ).toBe("unknown-secret-path");
   });
 
-  it("accepts a path below a union, whose options cannot be enumerated", () => {
-    // The control for the leaf refusal: a union is not a leaf — one of its
-    // options may hold the declared path — and neither accepting nor
-    // refusing can be proven from the union itself.
+  it("accepts a path below a union when ONE alternative holds it", () => {
+    // The union's alternatives are enumerable schemas, so the path is checked
+    // against each — a union value takes exactly one of them, and a path any
+    // option can hold is a path the value may carry.
     const settings = z.object({
       config: z.union([
         z.object({ apiKey: z.string() }),
@@ -216,6 +216,47 @@ describe("validateCapabilities", () => {
         plugin({
           contributes: { settings },
           capabilities: { secrets: ["config.apiKey"] },
+        } as never),
+      ])
+    ).not.toThrow();
+  });
+
+  it("refuses a typoed suffix below a union", () => {
+    // Treating unions as opaque let this pass while every variant spelled the
+    // real field — `mapSecrets` matched nothing, so the credential was stored
+    // in plain text and returned unredacted.
+    const settings = z.object({
+      config: z.union([
+        z.object({ apiKey: z.string() }),
+        z.object({ token: z.string() }),
+      ]),
+    });
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({
+            contributes: { settings },
+            capabilities: { secrets: ["config.apiKeyy"] },
+          } as never),
+        ])
+      )
+    ).toBe("unknown-secret-path");
+  });
+
+  it("accepts a path below a DISCRIMINATED union's variant", () => {
+    // Discriminated unions carry the same alternatives array; a path any
+    // variant can hold is a path the value may take.
+    const settings = z.object({
+      credentials: z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("api"), apiKey: z.string() }),
+        z.object({ kind: z.literal("oauth"), token: z.string() }),
+      ]),
+    });
+    expect(() =>
+      validateCapabilities([
+        plugin({
+          contributes: { settings },
+          capabilities: { secrets: ["credentials.apiKey"] },
         } as never),
       ])
     ).not.toThrow();
@@ -539,5 +580,47 @@ describe("localhost is declarable for development", () => {
     // loosened pattern: `ctx.fetch` vets the resolved address, and a literal
     // declared here would bypass the name it is supposed to check.
     expect(() => validateCapabilities([outbound("127.0.0.1")])).toThrow();
+  });
+});
+
+describe("settings identifiers against the storage columns", () => {
+  it("refuses a settings key longer than the storage holds", () => {
+    // The owner and key columns are bounded on MySQL (191), so a longer key
+    // booted normally on every dialect and failed its first write under
+    // MySQL's strict mode. The bound is read from the table itself, and the
+    // narrowest dialect decides what a portable manifest may declare.
+    const settings = z.object({ [`${"k".repeat(191)}x`]: z.string() });
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({
+            contributes: { settings },
+            capabilities: { secrets: [] },
+          } as never),
+        ])
+      )
+    ).toBe("settings-key-too-long");
+  });
+
+  it("accepts a key of exactly the storage width", () => {
+    // The control: a plugin using the full column is legitimate.
+    const settings = z.object({ [`${"k".repeat(191)}`]: z.string() });
+    expect(() =>
+      validateCapabilities([plugin({ contributes: { settings } } as never)])
+    ).not.toThrow();
+  });
+
+  it("refuses a settings-storing plugin whose NAME exceeds the owner column", () => {
+    const longName = `@scope/${"p".repeat(200)}`;
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({
+            name: longName,
+            contributes: { settings: z.object({ ok: z.string() }) },
+          } as never),
+        ])
+      )
+    ).toBe("plugin-name-too-long-for-settings");
   });
 });

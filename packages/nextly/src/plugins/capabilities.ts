@@ -15,6 +15,8 @@
  * @module plugins/capabilities
  * @since 1.0.0
  */
+import { nextlyPluginSettings as mysqlPluginSettings } from "../schemas/plugin-settings/mysql";
+
 import type { PluginDefinition } from "./plugin-context";
 import { resolutionError } from "./resolution-error";
 import { satisfiesRange } from "./semver-range";
@@ -147,6 +149,52 @@ function assertSchemaVersion(plugin: PluginDefinition): void {
 }
 
 /**
+ * The identifier widths the settings storage declares, read from the MySQL
+ * table — the bounded one of the three dialects, and therefore the ceiling a
+ * portable manifest has to fit. Read as plain column properties rather than
+ * restated, so a widened column loosens the refusal with it.
+ */
+const SETTINGS_OWNER_MAX = (() => {
+  const length = (mysqlPluginSettings.owner as { length?: number }).length;
+  return typeof length === "number" ? length : Number.MAX_SAFE_INTEGER;
+})();
+const SETTINGS_KEY_MAX = (() => {
+  const length = (mysqlPluginSettings.key as { length?: number }).length;
+  return typeof length === "number" ? length : Number.MAX_SAFE_INTEGER;
+})();
+
+/**
+ * Refuse settings identifiers the storage cannot hold.
+ *
+ * The owner column carries the plugin's name and the key column a top-level
+ * schema key, both bounded on MySQL: a longer one booted normally on every
+ * dialect and failed its first `ctx.settings.set()` under MySQL's strict
+ * mode — or truncated into a collision under permissive modes. A bound the
+ * narrowest dialect enforces is a property of the storage, not of MySQL, so
+ * the refusal holds on all three.
+ */
+function assertSettingsIdentifiers(plugin: PluginDefinition): void {
+  const schema = plugin.contributes?.settings;
+  if (!schema) return;
+  if (plugin.name.length > SETTINGS_OWNER_MAX) {
+    throw resolutionError(
+      "plugin-name-too-long-for-settings",
+      `Plugin "${plugin.name}" stores settings, and its name is longer than the ${SETTINGS_OWNER_MAX} characters the settings storage holds.`,
+      { plugin: plugin.name, maxLength: SETTINGS_OWNER_MAX }
+    );
+  }
+  for (const key of Object.keys(schema.shape)) {
+    if (key.length > SETTINGS_KEY_MAX) {
+      throw resolutionError(
+        "settings-key-too-long",
+        `Plugin "${plugin.name}" declares the settings key "${key}", which is longer than the ${SETTINGS_KEY_MAX} characters the settings storage holds.`,
+        { plugin: plugin.name, key, maxLength: SETTINGS_KEY_MAX }
+      );
+    }
+  }
+}
+
+/**
  * Check every plugin's own manifest: the keys it declares, the hosts it names,
  * the secrets it lists, and its schema version.
  */
@@ -156,6 +204,7 @@ export function validateCapabilities(all: PluginDefinition[]): void {
     assertOutboundHosts(plugin);
     assertSecretPaths(plugin);
     assertSchemaVersion(plugin);
+    assertSettingsIdentifiers(plugin);
   }
 }
 
@@ -275,6 +324,28 @@ function isLeafSchema(node: unknown): boolean {
 }
 
 /**
+ * The alternatives a union offers, or null when this is not a union.
+ *
+ * Unwrapped like its siblings, because a union is no less likely to arrive
+ * optional or defaulted than an object is. Discriminated unions carry the
+ * same `options` array in their definition, so both spellings answer here.
+ */
+function unionOptions(node: unknown): unknown[] | null {
+  let current = node;
+  for (let depth = 0; depth < 10; depth += 1) {
+    const def = (
+      current as {
+        _zod?: { def?: { innerType?: unknown; options?: unknown } };
+      }
+    )._zod?.def;
+    if (Array.isArray(def?.options)) return def.options;
+    if (def?.innerType === undefined) return null;
+    current = def.innerType;
+  }
+  return null;
+}
+
+/**
  * Whether a plugin's declared settings schema contains a path.
  *
  * Every CONCRETE segment is resolved, not just the first. Checking only the
@@ -330,7 +401,13 @@ type NonObjectStep = { descend: unknown } | { match: boolean };
  * matching nothing, so the real credential was stored in plain text and
  * returned unredacted.
  *
- * What remains is genuinely not enumerable — a union, pipe, lazy schema or
+ * A union's alternatives ARE enumerable — each is a schema a value may take —
+ * so the remaining path is checked against every option and held only when
+ * one of them contains it. Treating unions as opaque let `credentials.clientSecrett`
+ * pass over a union whose every variant spells `clientSecret`, the same silent
+ * credential exposure the other probes close.
+ *
+ * What remains is genuinely not enumerable — a pipe, a lazy schema or
  * `unknown` — and refusing there would reject declarations this feature
  * exists to support.
  */
@@ -347,6 +424,11 @@ function nonObjectStep(
   }
   const valueSchema = recordValueSchema(node);
   if (valueSchema !== null) return { descend: valueSchema };
+  const options = unionOptions(node);
+  if (options !== null) {
+    const suffix = rest === "" ? segment : `${segment}.${rest}`;
+    return { match: options.some(option => schemaHasPathFrom(option, suffix)) };
+  }
   if (isLeafSchema(node)) return { match: false };
   return { match: true };
 }
