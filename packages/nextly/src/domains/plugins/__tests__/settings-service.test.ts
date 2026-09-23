@@ -607,3 +607,61 @@ describe("a stored envelope the current manifest no longer names", () => {
     });
   });
 });
+
+describe("a plaintext value that claims the envelope prefix", () => {
+  it("is REFUSED when it would be stored in a secret row", async () => {
+    // Whole-row decoding opens every enc:-shaped leaf, so a plaintext value
+    // that merely begins with it is indistinguishable from an envelope —
+    // storing one meant a read that could not open it. Refused at write
+    // with the reason, before encryption adds envelopes of its own.
+    const store = memoryStore();
+    await expect(
+      service(store).set({
+        providers: { google: { clientId: "enc:example", clientSecret: "s" } },
+      } as never)
+    ).rejects.toSatisfy(err => {
+      if (!NextlyError.is(err)) return false;
+      return JSON.stringify(err.publicData ?? err.logContext).includes("enc:");
+    });
+    expect(store.rows).toHaveLength(0);
+  });
+
+  it("is accepted in a row stored as PUBLIC", async () => {
+    // The control: the prefix is reserved only where decoding follows
+    // envelopes. A public row never passes the whole-row decoder, so a
+    // value that begins with it is ordinary text there.
+    const store = memoryStore();
+    await service(store, [KEY_A], []).set({
+      providers: { google: { clientId: "enc:example", clientSecret: "s" } },
+    });
+
+    const settings = await service(store, [KEY_A], []).get<{
+      providers: Record<string, { clientId: string }>;
+    }>();
+    expect(settings.providers.google.clientId).toBe("enc:example");
+  });
+
+  it("passes through on read when nothing can open it", async () => {
+    // A row written elsewhere may carry the ambiguity. Bricking every read
+    // and write of the plugin's settings on it is worse than surfacing the
+    // string: the read hands it back as text and warns, and the plugin
+    // keeps working.
+    const store = memoryStore();
+    store.rows.push({
+      owner: "@test/p",
+      key: "providers",
+      value: JSON.stringify({
+        google: { clientId: "enc:legacy", clientSecret: "plain" },
+      }),
+      isSecret: true,
+      updatedAt: new Date(),
+      updatedBy: null,
+    });
+
+    const settings = await service(store).get<{
+      providers: Record<string, { clientId: string; clientSecret: string }>;
+    }>();
+    expect(settings.providers.google.clientId).toBe("enc:legacy");
+    expect(settings.providers.google.clientSecret).toBe("plain");
+  });
+});
