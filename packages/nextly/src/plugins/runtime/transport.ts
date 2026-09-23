@@ -76,26 +76,8 @@ async function materializeBody(
   // release it. A stream carries no implied content type, so there is none
   // to recover from a probe.
   if (init.body instanceof ReadableStream) {
-    const reader = init.body.getReader();
-    const release = () => {
-      void reader.cancel().catch(() => {
-        // Already finished or already failed: nothing left to release.
-      });
-    };
-    if (signal?.aborted) release();
-    signal?.addEventListener("abort", release, { once: true });
-
-    const chunks: Buffer[] = [];
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) chunks.push(Buffer.from(value));
-      }
-    } finally {
-      signal?.removeEventListener("abort", release);
-    }
-    return { body: Buffer.concat(chunks), headers: {} };
+    // A stream carries no implied content type, so there is none to recover.
+    return { body: await drainStream(init.body, signal), headers: {} };
   }
 
   // `duplex` is required before a stream body is accepted, and is not in the
@@ -115,6 +97,43 @@ async function materializeBody(
     // multipart, where the boundary is part of the bytes just produced.
     headers: contentType ? { "content-type": contentType } : {},
   };
+}
+
+/**
+ * Read a stream body through a reader THIS module holds.
+ *
+ * Not `Request.arrayBuffer()`, which LOCKS the body — measured — so a later
+ * `cancel()` throws `ReadableStream is locked` and the producer is never told
+ * to stop. Owning the reader is what lets the deadline release it, instead of
+ * merely abandoning a read that goes on pulling bytes for nobody.
+ *
+ * Its own function so `materializeBody` stays a choice between body shapes
+ * rather than also being the loop.
+ */
+async function drainStream(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal
+): Promise<Buffer> {
+  const reader = body.getReader();
+  const release = () => {
+    void reader.cancel().catch(() => {
+      // Already finished or already failed: nothing left to release.
+    });
+  };
+  if (signal?.aborted) release();
+  signal?.addEventListener("abort", release, { once: true });
+
+  const chunks: Buffer[] = [];
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(Buffer.from(value));
+    }
+  } finally {
+    signal?.removeEventListener("abort", release);
+  }
+  return Buffer.concat(chunks);
 }
 
 /**

@@ -46,6 +46,23 @@ const formSchema = z.object({
     .min(8, "Password must be at least 8 characters"),
 });
 
+/**
+ * Whether any plugin contributed something to show above the sign-in form.
+ *
+ * Named rather than spelled inline: three alternatives inside a JSX branch
+ * read as one condition to a person and as three to anything counting them,
+ * in a component that is over its complexity budget before this file is
+ * touched. The wrapper exists only to space whatever `AuthUiExtras` renders,
+ * so asking it for nothing would leave an empty gap.
+ */
+function hasPreFormUi(authUi: ReturnType<typeof useAuthUi>): boolean {
+  return (
+    authUi.providers.length > 0 ||
+    authUi.slots.beforeForm.length > 0 ||
+    authUi.slots.branding.length > 0
+  );
+}
+
 export function Login() {
   const { api } = useApi();
   const appName = useAppName();
@@ -56,11 +73,6 @@ export function Login() {
   const [resendingVerification, setResendingVerification] = useState(false);
   // Auth-page UI contributed by plugins (provider buttons, slots, 2FA views) — D57.
   const authUi = useAuthUi();
-  // Set when login returns password_change_required (ASVS 6.4.1): the account
-  // holds an admin-set password and must replace it before a session is issued.
-  const [mustChangePassword, setMustChangePassword] = useState<{
-    pendingToken: string;
-  } | null>(null);
 
   // The second-factor step, including a sign-in resumed from a provider.
   // Its logic lives in the hook so this component only renders.
@@ -129,7 +141,9 @@ export function Login() {
         result?.status === "password_change_required" &&
         result.pendingToken
       ) {
-        setMustChangePassword({ pendingToken: result.pendingToken });
+        challengeFlow.requirePasswordChange({
+          pendingToken: result.pendingToken,
+        });
         setIsLoading(false);
         return;
       }
@@ -210,10 +224,10 @@ export function Login() {
       title="Welcome Back"
       description={`Sign in to your ${appName} account`}
     >
-      {mustChangePassword || challengeFlow.passwordChangeRequired ? (
+      {challengeFlow.passwordChange ? (
         <SetInitialPassword
           // Absent for the resumed case, where the token is in the cookie.
-          pendingToken={mustChangePassword?.pendingToken}
+          pendingToken={challengeFlow.passwordChange.pendingToken}
           onDone={() => {
             window.location.href = ROUTES.DASHBOARD;
           }}
@@ -223,18 +237,10 @@ export function Login() {
           authUi={authUi}
           challengeType={challengeFlow.challenge.challengeType}
           pendingToken={challengeFlow.challenge.pendingToken}
-          resolve={async response => {
-            const answer = await challengeFlow.resolve(response);
-            // Answered, and still no session: the account must replace its
-            // admin-set password first. Raised here so the set-password view
-            // renders, exactly as it does for a login that never had a second
-            // factor — without this the challenge succeeded and the user was
-            // sent to a dashboard that bounced them back to login.
-            if (answer.passwordChangeRequired) {
-              setMustChangePassword(answer.passwordChangeRequired);
-            }
-            return answer;
-          }}
+          // Answered and still no session — the account must replace its
+          // admin-set password first — is raised by the hook itself, so this
+          // passes the resolver straight through.
+          resolve={challengeFlow.resolve}
           onResolved={next => {
             window.location.href = next ?? ROUTES.DASHBOARD;
           }}
@@ -251,9 +257,7 @@ export function Login() {
               </p>
             </div>
           )}
-          {(authUi.providers.length > 0 ||
-            authUi.slots.beforeForm.length > 0 ||
-            authUi.slots.branding.length > 0) && (
+          {hasPreFormUi(authUi) && (
             <div className="mb-6">
               <AuthUiExtras authUi={authUi} />
             </div>

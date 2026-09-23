@@ -94,9 +94,10 @@ describe("a resumed forced password change", () => {
 
     const { result } = renderHook(() => useChallengeFlow("?resume=1"));
 
-    await waitFor(() =>
-      expect(result.current.passwordChangeRequired).toBe(true)
-    );
+    await waitFor(() => expect(result.current.passwordChange).not.toBeNull());
+    // No TOKEN: a resumed login's pending cookie travels with the request and
+    // the endpoint reads it there. An empty object is the whole signal.
+    expect(result.current.passwordChange?.pendingToken).toBeUndefined();
     // Not ALSO shown as a challenge: `index.tsx` prefers the password view,
     // so a stray challenge here would be invisible now and wrong later.
     expect(result.current.challenge).toBeNull();
@@ -112,7 +113,7 @@ describe("a resumed forced password change", () => {
     await waitFor(() =>
       expect(result.current.challenge?.challengeType).toBe("test-totp")
     );
-    expect(result.current.passwordChangeRequired).toBe(false);
+    expect(result.current.passwordChange).toBeNull();
     expect(result.current.challenge?.next).toBe("/admin/posts");
   });
 });

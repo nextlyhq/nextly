@@ -117,7 +117,15 @@ export interface ChallengeFlow {
    * view rather than by any registered challenge view. Carries no token: the
    * pending cookie travels with the request, and the server reads it there.
    */
-  passwordChangeRequired: boolean;
+  passwordChange: { pendingToken?: string } | null;
+  /**
+   * Raise the forced password change from a route this hook does not own.
+   *
+   * The ordinary password login reports it on its own response, before any
+   * challenge exists. It lands in the same state so the view has one thing to
+   * read and the component has none to reconcile.
+   */
+  requirePasswordChange: (raised: { pendingToken: string }) => void;
   /** Called when a password login returns a challenge instead of a session. */
   start: (challenge: ActiveChallenge) => void;
   /** Post an answer. Navigates on success; returns the message on failure. */
@@ -151,7 +159,13 @@ export interface ChallengeAnswer {
 export function useChallengeFlow(search?: string): ChallengeFlow {
   const resume = useResumeLogin(search);
   const [challenge, setChallenge] = useState<ActiveChallenge | null>(null);
-  const [resumedPasswordChange, setResumedPasswordChange] = useState(false);
+  // Held HERE rather than in the login component, because both routes to it
+  // are this hook's own: a resumed login arrives needing it, and an answered
+  // challenge reports it. Deciding that in the view meant a branch inside JSX
+  // already nested three deep, in a component over its complexity budget.
+  const [passwordChange, setPasswordChange] = useState<{
+    pendingToken?: string;
+  } | null>(null);
 
   useEffect(() => {
     if (resume.status !== "resume") return;
@@ -161,7 +175,9 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
     // was unfinishable. `completeLogin` sends an externally authenticated
     // account here exactly this way.
     if (resume.pending.challengeId === MUST_CHANGE_PASSWORD_CHALLENGE) {
-      setResumedPasswordChange(true);
+      // No token: a resumed login's pending cookie travels with the request
+      // and the endpoint reads it there.
+      setPasswordChange({});
       return;
     }
     setChallenge({
@@ -194,6 +210,7 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
         result?.status === "password_change_required" &&
         result.pendingToken
       ) {
+        setPasswordChange({ pendingToken: result.pendingToken });
         return {
           ok: true,
           passwordChangeRequired: { pendingToken: result.pendingToken },
@@ -212,7 +229,8 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
 
   return {
     challenge,
-    passwordChangeRequired: resumedPasswordChange,
+    passwordChange,
+    requirePasswordChange: setPasswordChange,
     start: setChallenge,
     resolve,
     signInFailed: hasSignInError(search),

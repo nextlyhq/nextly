@@ -1724,6 +1724,37 @@ export class UserMutationService extends BaseService {
    * account deletion, permanently, on any install whose database predates the
    * table.
    */
+  /**
+   * Whether a table is present, for a probe taken BEFORE the delete
+   * transaction opens.
+   *
+   * Asked out here because a failed statement aborts an open Postgres
+   * transaction and there would be no way back.
+   *
+   * An unanswerable probe is treated as PRESENT, so the erasure is ATTEMPTED.
+   * The other direction is worse in a way that is hard to see later: reading a
+   * transient metadata failure as "no such table" would delete the account and
+   * leave its rows behind, silently and permanently, since no later run
+   * revisits a deletion that has happened. Attempting it against a genuinely
+   * absent table fails the statement and takes the deletion with it, which is
+   * the invariant the audit erasure protects.
+   *
+   * Databases missing one of these exist: the SQLite fallback bootstrap in
+   * earlier releases created a subset of the core tables, and neither
+   * first-run setup nor boot repairs an existing database that lacks one.
+   *
+   * One helper rather than four copies of the same `try`/`catch`: they only
+   * ever differed by the name, and each copy was another branch in a method
+   * already over its complexity budget.
+   */
+  private async tablePresent(table: string): Promise<boolean> {
+    try {
+      return await this.adapter.tableExists(table);
+    } catch {
+      return true;
+    }
+  }
+
   private async scrubPluginSettingsActor(
     txDb: DrizzleTransactionLike,
     userId: string | number,
@@ -1795,12 +1826,7 @@ export class UserMutationService extends BaseService {
     // Read from the preimage inside the transaction and used again after it
     // commits, so it is declared out here rather than in the closure.
     let deletedAddress: string | undefined;
-    let deliveriesExist: boolean;
-    try {
-      deliveriesExist = await this.adapter.tableExists("email_deliveries");
-    } catch {
-      deliveriesExist = true;
-    }
+    const deliveriesExist = await this.tablePresent("email_deliveries");
 
     // Asked out here for the same reason, and treated as present when the
     // probe cannot answer, for the same reason too. `media.uploaded_by`
@@ -1815,12 +1841,7 @@ export class UserMutationService extends BaseService {
     // earlier releases created a subset of the core tables, and neither
     // first-run setup nor boot repairs an existing database that is missing
     // one.
-    let mediaExists: boolean;
-    try {
-      mediaExists = await this.adapter.tableExists("media");
-    } catch {
-      mediaExists = true;
-    }
+    const mediaExists = await this.tablePresent("media");
 
     // The account's dashboard arrangement, probed out here for the same reason
     // as the three above: a failed statement aborts an open Postgres
@@ -1839,12 +1860,7 @@ export class UserMutationService extends BaseService {
     // the invariant those two protect — an account is never removed while data
     // belonging to it is left behind. Databases without the table exist, since
     // the SQLite fallback bootstrap created a subset of the core tables.
-    let widgetLayoutExists: boolean;
-    try {
-      widgetLayoutExists = await this.adapter.tableExists(WIDGET_LAYOUT_TABLE);
-    } catch {
-      widgetLayoutExists = true;
-    }
+    const widgetLayoutExists = await this.tablePresent(WIDGET_LAYOUT_TABLE);
 
     // Who last edited a plugin's settings, probed out here for the reason the
     // three above are: a failed statement aborts an open Postgres transaction
@@ -1860,12 +1876,7 @@ export class UserMutationService extends BaseService {
     // Databases without the table exist, and not only historic ones: the table
     // arrives with the plugin runtime, so any database reconciled before it
     // lacks the table while this build's declaration is present either way.
-    let settingsExist: boolean;
-    try {
-      settingsExist = await this.adapter.tableExists(PLUGIN_SETTINGS_TABLE);
-    } catch {
-      settingsExist = true;
-    }
+    const settingsExist = await this.tablePresent(PLUGIN_SETTINGS_TABLE);
     // The two answer a legacy shape differently, because what happens to an
     // un-erased row differs. A legacy `activity_log` still cascades from the
     // account, so its rows go with the deletion and there is nothing left to

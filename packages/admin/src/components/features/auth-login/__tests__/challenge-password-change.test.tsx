@@ -6,7 +6,7 @@
  * to the dashboard, which bounced straight back to login — so the account
  * could never reach the set-password view, and the loop had no exit.
  */
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useChallengeFlow } from "../use-resume-login";
@@ -75,5 +75,38 @@ describe("answering a challenge", () => {
 
     expect(answer.ok).toBe(false);
     expect(navigatedTo).toBeUndefined();
+  });
+
+  it("RAISES the password change on the flow, with its token", async () => {
+    // The hook holds this state rather than the login component, so the view
+    // has one thing to read. Asserting only the returned answer leaves that
+    // untested: the answer can be right while nothing is raised, and then the
+    // set-password view never renders.
+    post.mockResolvedValue({
+      status: "password_change_required",
+      pendingToken: "pt-1",
+    });
+
+    const { result } = renderHook(() => useChallengeFlow());
+    expect(result.current.passwordChange).toBeNull();
+
+    await act(async () => {
+      await result.current.resolve({ code: "123456" });
+    });
+
+    expect(result.current.passwordChange).toEqual({ pendingToken: "pt-1" });
+  });
+
+  it("raises nothing when a session WAS issued", async () => {
+    // The control: raising unconditionally would satisfy the test above while
+    // showing the set-password view to everyone who signs in normally.
+    post.mockResolvedValue({ next: "/admin/collections" });
+
+    const { result } = renderHook(() => useChallengeFlow());
+    await act(async () => {
+      await result.current.resolve({ code: "123456" });
+    });
+
+    expect(result.current.passwordChange).toBeNull();
   });
 });
