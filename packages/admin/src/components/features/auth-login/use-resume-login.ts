@@ -226,9 +226,22 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
   // challenge view's own handler, often in the tick that raised this — before
   // any re-render — so a state read there would still say null.
   const continuingRef = useRef(false);
+  // Whether a continuation the PERSON started locally is showing — a challenge
+  // carrying a body token. A resumed login arriving late must not replace it:
+  // the resume effect runs when `/auth/pending` answers, which can be after
+  // the password form was already used, and either KIND of locally started
+  // continuation outranks a stale cookie-backed one.
+  const localContinuationRef = useRef(false);
 
   useEffect(() => {
     if (resume.status !== "resume") return;
+    // A locally started continuation outranks a late resume of EITHER kind.
+    // The password form stays usable while `/auth/pending` loads, so a login
+    // can raise its own challenge first — and a delayed must-change resume
+    // then raising the set-password view over it sent that submit to the
+    // stale pending cookie, a flow — possibly an account — the person had
+    // already moved past.
+    if (localContinuationRef.current) return;
     // A forced password change is NOT a plugin challenge, and treating it as
     // one rendered the missing-view fallback: nothing is registered under this
     // id, so the person could never reach the set-password step and the login
@@ -238,11 +251,8 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
       // No token: a resumed login's pending cookie travels with the request
       // and the endpoint reads it there.
       //
-      // It does NOT replace one that already has a token. The password form
-      // stays usable while `/auth/pending` is still loading, so a password
-      // login can raise its own continuation first — and overwriting that
-      // with the tokenless resumed one left `SetInitialPassword` relying on a
-      // cookie belonging to a different, possibly expired, attempt.
+      // It does NOT replace one that already has a token, for the reason the
+      // guard above states more generally now.
       continuingRef.current = true;
       setPasswordChange(current => current ?? {});
       return;
@@ -253,8 +263,7 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
       // login can raise its own challenge first — and overwriting that
       // discarded its body token for the cookie-backed challenge of a login
       // the person had already moved past, sending every later answer to the
-      // stale cookie flow instead. The same rule the password-change branch
-      // above applies to its own state.
+      // stale cookie flow instead.
       current?.pendingToken
         ? current
         : {
@@ -312,10 +321,17 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
     passwordChange,
     requirePasswordChange: raised => {
       continuingRef.current = true;
+      // A token-backed password change is a locally started continuation
+      // like a token-backed challenge: a late resume of either kind must
+      // leave it showing.
+      if (raised.pendingToken) localContinuationRef.current = true;
       setPasswordChange(raised);
     },
     isContinuing: () => continuingRef.current,
-    start: setChallenge,
+    start: started => {
+      if (started.pendingToken) localContinuationRef.current = true;
+      setChallenge(started);
+    },
     resolve,
     signInFailed: hasSignInError(search),
   };

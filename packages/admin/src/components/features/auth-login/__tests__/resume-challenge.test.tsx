@@ -217,3 +217,44 @@ describe("a resumed login does not clobber a challenge already in progress", () 
     expect(result.current.challenge?.pendingToken).toBeUndefined();
   });
 });
+
+describe("a late must-change resume does not displace a local challenge", () => {
+  it("leaves a token-backed challenge showing when the resume answers late", async () => {
+    // The mirror of the challenge-side rule: the password form stays usable
+    // while `/auth/pending` loads, so a login can start a token-backed
+    // challenge first — and a delayed must-change resume then raising the
+    // set-password view would send that submit to the stale pending cookie,
+    // a flow — possibly an account — the person had already moved past.
+    let release: (value: unknown) => void = () => undefined;
+    get.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          release = resolve;
+        })
+    );
+
+    const { result } = renderHook(() => useChallengeFlow("?resume=1"));
+
+    act(() => {
+      result.current.start({
+        challengeType: "test-totp",
+        pendingToken: "pt-password",
+        next: null,
+      });
+    });
+
+    await act(async () => {
+      release({ challengeId: "must-change-password", next: null });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(result.current.challenge).not.toBeNull());
+    expect(result.current.challenge).toEqual({
+      challengeType: "test-totp",
+      pendingToken: "pt-password",
+      next: null,
+    });
+    // The password-change view was NOT raised over it.
+    expect(result.current.passwordChange).toBeNull();
+  });
+});
