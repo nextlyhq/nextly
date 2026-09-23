@@ -591,6 +591,80 @@ function buildSqlExecutor(
 }
 
 /**
+ * Phase 1.5 — plugin migration modules, between core and the app's files,
+ * under the caller's lock. Plugins run first because an app migration may
+ * index an entity table a plugin contributes. The first failure propagates
+ * and stops Phase 2: later migrations assume a database state that was never
+ * reached.
+ */
+async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
+  if (!deps.pluginMigrationSets || deps.pluginMigrationSets.length === 0) {
+    return;
+  }
+  deps.logger.info("Phase 1.5: applying plugin migrations...");
+  const dz = deps.adapter as unknown as DrizzleAdapter;
+  const eventsRepo = new SchemaEventsRepository(deps.db, deps.dialect);
+  // Applied plugin rows only, keyed by qualified filename. First row wins:
+  // `markApplied`'s uniqueFilename guard makes one applied row per filename
+  // the invariant, and a superseded leftover would otherwise shadow the
+  // sha256 the comparison needs.
+  const appliedShas = new Map<string, string | null>();
+  for (const row of await eventsRepo.listFileApplies()) {
+    if (row.status !== "applied" || !row.filename) continue;
+    if (!row.filename.startsWith("plugin:")) continue;
+    if (!appliedShas.has(row.filename)) {
+      appliedShas.set(row.filename, row.sha256);
+    }
+  }
+
+  // Loaded here rather than imported at the top: both modules sit on cycles
+  // that close through this command, and the file's existing convention for
+  // that is a dynamic import at the point of use.
+  const { SchemaOwnersRepository: OwnersRepo } = await import(
+    "../../domains/schema/ownership/schema-owners-repository"
+  );
+  const owners = new OwnersRepo(deps.db, deps.dialect);
+  const pluginOutcome = await runPluginMigrations(deps.pluginMigrationSets, {
+    dialect: deps.dialect,
+    appliedShas,
+    introspect: async names => {
+      const liveTables = await safeListTables(deps.adapter);
+      const managed = snapshotComparableTables(
+        liveTables,
+        new Set(names),
+        new Set()
+      );
+      return introspectLiveSnapshot(deps.db, deps.dialect, managed);
+    },
+    executeSql: buildSqlExecutor(dz, deps.dialect),
+    repo: eventsRepo,
+    recordOwner: async ({
+      pluginName,
+      pluginVersion,
+      schemaVersion,
+      tables,
+    }) => {
+      await owners.upsert(
+        tables.map(tableName => ({
+          tableName,
+          ownerKind: "plugin" as const,
+          ownerId: pluginName,
+          migratedBy: `plugin:${pluginName}`,
+          ownerVersion: pluginVersion,
+          schemaVersion,
+          state: "active" as const,
+        }))
+      );
+    },
+  });
+  if (pluginOutcome.applied > 0 || pluginOutcome.adopted > 0) {
+    deps.logger.success(
+      `Plugin migrations: ${pluginOutcome.applied} applied, ${pluginOutcome.adopted} adopted, ${pluginOutcome.skipped} already recorded.`
+    );
+  }
+}
+
+/**
  * Refuse to migrate a plugin's tables when that plugin ships no migrations.
  *
  * A plugin that DOES ship migration modules is applied by the plugin phase.
@@ -800,81 +874,7 @@ export async function migrateCore(
       });
       coreChanged = r.changed;
 
-      /*
-       * Phase 1.5 — plugin migration modules, between core and the app's
-       * files, under this same lock. Plugins run first because an app
-       * migration may index an entity table a plugin contributes. The first
-       * failure propagates and stops Phase 2: later migrations assume a
-       * database state that was never reached.
-       */
-      if (deps.pluginMigrationSets && deps.pluginMigrationSets.length > 0) {
-        deps.logger.info("Phase 1.5: applying plugin migrations...");
-        const dz = deps.adapter as unknown as DrizzleAdapter & {
-          executeQuery: (statement: string) => Promise<unknown>;
-        };
-        const eventsRepo = new SchemaEventsRepository(deps.db, deps.dialect);
-        // Applied plugin rows only, keyed by qualified filename. First row
-        // wins: `markApplied`'s uniqueFilename guard makes one applied row
-        // per filename the invariant, and a superseded leftover would
-        // otherwise shadow the sha256 the comparison needs.
-        const appliedShas = new Map<string, string | null>();
-        for (const row of await eventsRepo.listFileApplies()) {
-          if (row.status !== "applied" || !row.filename) continue;
-          if (!row.filename.startsWith("plugin:")) continue;
-          if (!appliedShas.has(row.filename)) {
-            appliedShas.set(row.filename, row.sha256);
-          }
-        }
-
-        // Loaded here rather than imported at the top: both modules sit on
-        // cycles that close through this command, and the file's existing
-        // convention for that is a dynamic import at the point of use.
-        const { SchemaOwnersRepository: OwnersRepo } = await import(
-          "../../domains/schema/ownership/schema-owners-repository"
-        );
-        const owners = new OwnersRepo(deps.db, deps.dialect);
-        const pluginOutcome = await runPluginMigrations(
-          deps.pluginMigrationSets,
-          {
-            dialect: deps.dialect,
-            appliedShas,
-            introspect: async names => {
-              const liveTables = await safeListTables(deps.adapter);
-              const managed = snapshotComparableTables(
-                liveTables,
-                new Set(names),
-                new Set()
-              );
-              return introspectLiveSnapshot(deps.db, deps.dialect, managed);
-            },
-            executeSql: buildSqlExecutor(dz, deps.dialect),
-            repo: eventsRepo,
-            recordOwner: async ({
-              pluginName,
-              pluginVersion,
-              schemaVersion,
-              tables,
-            }) => {
-              await owners.upsert(
-                tables.map(tableName => ({
-                  tableName,
-                  ownerKind: "plugin" as const,
-                  ownerId: pluginName,
-                  migratedBy: `plugin:${pluginName}`,
-                  ownerVersion: pluginVersion,
-                  schemaVersion,
-                  state: "active" as const,
-                }))
-              );
-            },
-          }
-        );
-        if (pluginOutcome.applied > 0 || pluginOutcome.adopted > 0) {
-          deps.logger.success(
-            `Plugin migrations: ${pluginOutcome.applied} applied, ${pluginOutcome.adopted} adopted, ${pluginOutcome.skipped} already recorded.`
-          );
-        }
-      }
+      await runPluginPhase(deps);
 
       deps.logger.info("Phase 2: applying user migrations...");
       applied = await runFiles({
