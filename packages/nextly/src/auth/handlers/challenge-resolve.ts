@@ -134,12 +134,16 @@ function retryResponse(args: {
  * skip the gate the login path enforces.
  */
 async function passwordChangeRequired(
-  deps: Pick<ChallengeResolveDeps, "secret" | "challengeTokenTTL">,
+  deps: Pick<
+    ChallengeResolveDeps,
+    "secret" | "challengeTokenTTL" | "isProduction"
+  >,
   args: {
     userId: string;
     strategy?: string;
     requestId: string;
     next?: string;
+    usedCookie: boolean;
   }
 ): Promise<Response> {
   const pendingToken = await mintPendingToken(
@@ -158,6 +162,26 @@ async function passwordChangeRequired(
     deps.secret,
     deps.challengeTokenTTL
   );
+  // Cookie mode keeps its token in the cookie, exactly as the retry path
+  // does: the body is somewhere script can reach, and a cookie-mode client
+  // has no way to carry a body token across the reload this step survives.
+  // Leaving the OLD token in the cookie instead resumed the challenge this
+  // answer just settled — the set-password step was reachable once and then
+  // stranded, spending the challenge budget on every revisit.
+  if (args.usedCookie) {
+    return jsonResponse(
+      200,
+      { status: "password_change_required" },
+      {
+        "x-request-id": args.requestId,
+        "Set-Cookie": setPendingCookie(
+          pendingToken,
+          deps.challengeTokenTTL,
+          deps.isProduction
+        ),
+      }
+    );
+  }
   return jsonResponse(
     200,
     { status: "password_change_required", pendingToken },
@@ -195,7 +219,7 @@ async function spendChallengeAttempt(
     | "countChallengeAttempt"
     | "authRateLimit"
   >,
-  pending: { userId: string; challengeId: string }
+  pending: { userId: string; challengeId: string; flow?: string }
 ): Promise<void> {
   // The CONFIGURED store, not the module-level default. `authRateLimiter()`
   // with no argument returns the process-memory limiter whatever the install
@@ -210,12 +234,20 @@ async function spendChallengeAttempt(
       return authRateLimiter(store).check(key, limit, windowMs);
     });
 
-  // Keyed by USER and challenge. `challengeId` names the challenge DEFINITION
-  // — "totp" — so keying on it alone pooled every account's wrong answers into
-  // one budget: a handful of failures by anyone locked out every user of that
-  // challenge until the window expired.
+  // Keyed by USER, challenge, and FLOW. `challengeId` names the challenge
+  // DEFINITION — "totp" — so keying on it alone pooled every account's wrong
+  // answers into one budget: a handful of failures by anyone locked out every
+  // user of that challenge until the window expired.
+  //
+  // The FLOW narrows it to one interrupted login, which is what the cap
+  // actually bounds. Without it every login the account started — including
+  // the ones that SUCCEEDED — drew on one counter, so five completed logins
+  // inside the window refused the sixth before it was attempted. A replayed
+  // token cannot escape its own flow: the id is signed into the token, and
+  // every re-issue carries it forward. A token from before the claim existed
+  // shares one budget, exactly as every token did then.
   const verdict = await count(
-    `${pending.userId}:${pending.challengeId}`,
+    `${pending.userId}:${pending.challengeId}:${pending.flow ?? "0"}`,
     deps.maxChallengeAttempts,
     deps.challengeTokenTTL * 1000
   );
@@ -238,6 +270,7 @@ async function wrongAnswer(
       attempts: number;
       strategy?: string;
       next?: string;
+      flow?: string;
     };
     usedCookie: boolean;
     requestId: string;
@@ -256,7 +289,8 @@ async function wrongAnswer(
   // an external login that asked to land somewhere specific lost that
   // destination on the first wrong answer, and the eventual correct one
   // issued a session to the dashboard instead. Only the attempt count changes
-  // between rounds.
+  // between rounds — the flow id included, because the retry belongs to the
+  // login the first token paused, and its budget with it.
   const reissued = await mintPendingToken(
     {
       userId: args.pending.userId,
@@ -264,6 +298,7 @@ async function wrongAnswer(
       attempts: nextAttempts,
       strategy: args.pending.strategy,
       ...(args.pending.next ? { next: args.pending.next } : {}),
+      ...(args.pending.flow ? { flow: args.pending.flow } : {}),
     },
     deps.secret,
     deps.challengeTokenTTL
@@ -373,6 +408,7 @@ export async function handleChallengeResolve(
         strategy: pending.strategy,
         requestId,
         next: pending.next,
+        usedCookie,
       });
     }
 

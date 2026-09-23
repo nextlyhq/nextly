@@ -222,3 +222,25 @@ describe("a password change is not reported as a finished login", () => {
     expect(result.current.isContinuing()).toBe(false);
   });
 });
+
+describe("a password change that arrived over a cookie-mode challenge", () => {
+  it("raises the tokenless continuation the cookie carries", async () => {
+    // The server replaces the pending cookie rather than putting the token
+    // in the body, so the answer carries the status alone. Reading the
+    // absence of a token as "nothing to do" navigated to the dashboard with
+    // no session — the step the cookie exists to reach was skipped.
+    post.mockResolvedValue({ status: "password_change_required" });
+
+    const { result } = renderHook(() => useChallengeFlow());
+    let answer: Awaited<ReturnType<typeof result.current.resolve>>;
+    await act(async () => {
+      answer = await result.current.resolve({ code: "123456" });
+    });
+
+    expect(answer!.ok).toBe(true);
+    expect(answer!.continues).toBe(true);
+    expect(answer!.passwordChangeRequired).toEqual({});
+    expect(result.current.passwordChange).toEqual({});
+    expect(navigatedTo).toBeUndefined();
+  });
+});

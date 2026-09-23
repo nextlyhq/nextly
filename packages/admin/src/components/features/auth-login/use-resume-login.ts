@@ -125,13 +125,17 @@ function retryTokenIn(error: unknown): string | undefined {
  * change answers with no cookies issued, so navigating on it landed on a page
  * that immediately redirected back to login, and the account could never
  * reach the step it was being sent to.
+ *
+ * Tokenless when the login resumed from a cookie: the server replaces the
+ * pending cookie rather than putting the token in the body, so the step is
+ * raised the same way a resumed one is — with the cookie carrying the token.
  */
 function passwordChangeIn(result: {
   status?: string;
   pendingToken?: string;
-}): { pendingToken: string } | null {
+}): { pendingToken?: string } | null {
   if (result?.status !== "password_change_required") return null;
-  return result.pendingToken ? { pendingToken: result.pendingToken } : null;
+  return result.pendingToken ? { pendingToken: result.pendingToken } : {};
 }
 
 /** A challenge the login page is currently showing. */
@@ -195,9 +199,10 @@ export interface ChallengeAnswer {
    * A distinct continuation rather than a success: treating it as one
    * navigated to the dashboard with no session, so the user was bounced back
    * to login and never saw the set-password view. Carries the token that view
-   * needs, exactly as the ordinary login path does.
+   * needs when the login had one to give; a login resumed from a cookie keeps
+   * its token there instead.
    */
-  passwordChangeRequired?: { pendingToken: string };
+  passwordChangeRequired?: { pendingToken?: string };
 }
 
 /**
@@ -242,10 +247,21 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
       setPasswordChange(current => current ?? {});
       return;
     }
-    setChallenge({
-      challengeType: resume.pending.challengeId,
-      next: resume.pending.next,
-    });
+    setChallenge(current =>
+      // It does NOT replace one that already has a token. The password form
+      // stays usable while `/auth/pending` is still loading, so a password
+      // login can raise its own challenge first — and overwriting that
+      // discarded its body token for the cookie-backed challenge of a login
+      // the person had already moved past, sending every later answer to the
+      // stale cookie flow instead. The same rule the password-change branch
+      // above applies to its own state.
+      current?.pendingToken
+        ? current
+        : {
+            challengeType: resume.pending.challengeId,
+            next: resume.pending.next,
+          }
+    );
   }, [resume]);
 
   async function resolve(

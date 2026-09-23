@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { PENDING_AUTH_TYP } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
 import { verifyToken } from "../jwt/verify";
@@ -20,6 +22,25 @@ export { PENDING_AUTH_TYP };
  */
 export const MUST_CHANGE_PASSWORD_CHALLENGE = "must-change-password";
 
+/**
+ * The id of one interrupted login, minted when the login is paused and carried
+ * by every token that resumes it.
+ *
+ * The attempt budget keys on it, so two logins for one account — a second
+ * device, a retry after the first finished — each get their own cap rather
+ * than sharing one. Keyed on the challenge alone, five SUCCESSFUL logins
+ * inside the window refused the sixth: the budget answered "how many logins
+ * has this account started", which is not the question a per-challenge cap
+ * exists to bound.
+ *
+ * Minted here rather than at the call sites because every pause of a login
+ * starts exactly one flow, and one implementation of "new flow" is what keeps
+ * re-issues and first issues from diverging.
+ */
+export function newChallengeFlowId(): string {
+  return randomUUID();
+}
+
 export interface PendingClaims {
   userId: string;
   challengeId: string;
@@ -33,10 +54,16 @@ export interface PendingClaims {
   strategy?: string;
   /**
    * Where to land once the challenge is answered. Sanitized by the caller and
-   * signed in here, because the browser holding this token across the redirect
-   * must not be able to edit its own destination.
+   * signed in here, because the browser holding this token across the
+   * redirect must not be able to edit its own destination.
    */
   next?: string;
+  /**
+   * Which interrupted login this token resumes — see {@link
+   * newChallengeFlowId}. Absent only on tokens minted before the claim
+   * existed; those share one budget, as all tokens did then.
+   */
+  flow?: string;
 }
 
 /**
@@ -57,6 +84,7 @@ export async function mintPendingToken(
       attempts: claims.attempts,
       ...(claims.strategy ? { strategy: claims.strategy } : {}),
       ...(claims.next ? { next: claims.next } : {}),
+      ...(claims.flow ? { flow: claims.flow } : {}),
     },
     secret,
     ttlSeconds,
@@ -98,5 +126,7 @@ export async function verifyPendingToken(
         : "password",
     next:
       typeof result.payload.next === "string" ? result.payload.next : undefined,
+    flow:
+      typeof result.payload.flow === "string" ? result.payload.flow : undefined,
   };
 }

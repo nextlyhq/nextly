@@ -11,6 +11,7 @@ import type { AuthHookRegistry } from "../pipeline/hooks";
 import {
   mintPendingToken,
   MUST_CHANGE_PASSWORD_CHALLENGE,
+  newChallengeFlowId,
 } from "../pipeline/pending-token";
 import { runStrategyChain } from "../pipeline/strategy-chain";
 import type { AuthStrategy } from "../pipeline/types";
@@ -79,7 +80,9 @@ async function pauseWithPendingToken(
   claims: { userId: string; challengeId: string; strategy?: string }
 ): Promise<string> {
   return mintPendingToken(
-    { ...claims, attempts: 0 },
+    // A fresh FLOW per pause: each interrupted login is its own attempt
+    // budget, so a login that finished does not spend the next one's cap.
+    { ...claims, attempts: 0, flow: newChallengeFlowId() },
     deps.secret,
     deps.challengeTokenTTL
   );

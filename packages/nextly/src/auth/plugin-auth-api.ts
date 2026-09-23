@@ -30,6 +30,7 @@ import type { AuthHookRegistry } from "./pipeline/hooks";
 import {
   MUST_CHANGE_PASSWORD_CHALLENGE,
   mintPendingToken,
+  newChallengeFlowId,
 } from "./pipeline/pending-token";
 import { sanitizeAdminPath } from "./redirect/sanitize-admin-path";
 import { assertAccountUsable } from "./session/account-state";
@@ -231,6 +232,10 @@ export function createPluginAuthApi(
         attempts: 0,
         strategy: pending.strategy,
         next: pending.next,
+        // A fresh flow: each provider login this redirect pauses gets its own
+        // attempt budget, separate from the password login it may share an
+        // account and a challenge with.
+        flow: newChallengeFlowId(),
       },
       deps.secret,
       deps.challengeTokenTTL

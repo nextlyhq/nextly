@@ -164,3 +164,56 @@ describe("a resumed login does not clobber a tokenized continuation", () => {
     expect(result.current.passwordChange?.pendingToken).toBeUndefined();
   });
 });
+
+describe("a resumed login does not clobber a challenge already in progress", () => {
+  it("keeps the body token a password login's challenge carries", async () => {
+    // The password form stays usable while `/auth/pending` is loading, so a
+    // password login can pause at its own challenge first. Replacing it with
+    // the cookie-backed resume discarded that token, and every later answer
+    // went to the stale cookie flow — a login the person had already moved
+    // past, and possibly a different account's.
+    let release: (value: unknown) => void = () => undefined;
+    get.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          release = resolve;
+        })
+    );
+
+    const { result } = renderHook(() => useChallengeFlow("?resume=1"));
+
+    act(() => {
+      result.current.start({
+        challengeType: "test-totp",
+        pendingToken: "pt-password",
+        next: null,
+      });
+    });
+
+    await act(async () => {
+      release({ challengeId: "test-totp", next: "/admin/posts" });
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(result.current.challenge).toEqual({
+        challengeType: "test-totp",
+        pendingToken: "pt-password",
+        next: null,
+      })
+    );
+  });
+
+  it("still raises the cookie-backed challenge when none was in progress", async () => {
+    // The control: keeping whatever is there would satisfy the test above
+    // while never raising the resumed challenge at all.
+    get.mockResolvedValue({ challengeId: "test-totp", next: null });
+
+    const { result } = renderHook(() => useChallengeFlow("?resume=1"));
+
+    await waitFor(() =>
+      expect(result.current.challenge?.challengeType).toBe("test-totp")
+    );
+    expect(result.current.challenge?.pendingToken).toBeUndefined();
+  });
+});

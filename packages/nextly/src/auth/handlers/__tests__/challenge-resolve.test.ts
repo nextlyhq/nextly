@@ -381,3 +381,169 @@ describe("the challenge budget as a precondition", () => {
     expect(status).toBe(200);
   });
 });
+
+describe("the challenge attempt budget, per login flow", () => {
+  /** The counter key one wrong answer was charged against. */
+  async function keyFor(claims: { flow?: string }): Promise<string> {
+    const deps = makeDeps();
+    const seen: string[] = [];
+    const withCounter = {
+      ...deps,
+      countChallengeAttempt: async (key: string) => {
+        seen.push(key);
+        return { allowed: true };
+      },
+    };
+    const pendingToken = await mintPendingToken(
+      { userId: "u1", challengeId: "totp", attempts: 0, ...claims },
+      SECRET,
+      300
+    );
+    await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "000000" } }),
+      withCounter as never
+    );
+    expect(seen).toHaveLength(1);
+    return seen[0];
+  }
+
+  it("gives two interrupted logins for ONE account separate budgets", async () => {
+    // Keyed on the challenge alone, five SUCCESSFUL logins inside the window
+    // refused the sixth before it was attempted: the counter answered "how
+    // many logins has this account started", which is not what a
+    // per-challenge cap exists to bound.
+    const first = await keyFor({ flow: "flow-one" });
+    const second = await keyFor({ flow: "flow-two" });
+
+    expect(first).not.toBe(second);
+    expect(first).toContain("flow-one");
+    expect(second).toContain("flow-two");
+  });
+
+  it("keeps one budget across the retries of a single login", async () => {
+    // The control. A key carrying anything per-ATTEMPT would satisfy the test
+    // above while giving every guess a fresh budget, and the cap would never
+    // bind. The retry token re-issued by a wrong answer carries the SAME flow
+    // id, so its next answer draws on the budget the first one opened.
+    const deps = makeDeps();
+    const seen: string[] = [];
+    const withCounter = {
+      ...deps,
+      countChallengeAttempt: async (key: string) => {
+        seen.push(key);
+        return { allowed: true };
+      },
+    };
+    const pendingToken = await mintPendingToken(
+      { userId: "u1", challengeId: "totp", attempts: 0, flow: "flow-one" },
+      SECRET,
+      300
+    );
+    const first = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "000000" } }),
+      withCounter as never
+    );
+    const retryToken = retryPayload(await first.json()).pendingToken;
+    expect(retryToken).toBeTypeOf("string");
+
+    await handleChallengeResolve(
+      makeRequest({ pendingToken: retryToken, response: { code: "000000" } }),
+      withCounter as never
+    );
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toBe(seen[1]);
+    expect(seen[0]).toContain("flow-one");
+  });
+
+  it("shares one budget between tokens minted before flows existed", async () => {
+    // A token with no flow claim is the pre-flow shape; every such token for
+    // one account and challenge draws on the single budget that shape had.
+    expect(await keyFor({})).toBe(await keyFor({}));
+  });
+});
+
+describe("a cookie-mode challenge that ends in a forced password change", () => {
+  /** A wrong-then-right cookie-mode resolve for a must-change account. */
+  async function resolvedOverCookie(): Promise<Response> {
+    const deps = makeDeps();
+    deps.findUserById = vi.fn().mockResolvedValue({
+      id: "u1",
+      email: "a@b.c",
+      name: "A",
+      image: null,
+      isActive: true,
+      mustChangePassword: true,
+    });
+    const pendingToken = await mintPendingToken(
+      { userId: "u1", challengeId: "totp", attempts: 0, flow: "f" },
+      SECRET,
+      300
+    );
+    const request = new Request(
+      "http://localhost:3000/admin/api/auth/challenge/resolve",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: `nextly_csrf=tok; nextly_pending=${pendingToken}`,
+          origin: "http://localhost:3000",
+        },
+        body: JSON.stringify({
+          csrfToken: "tok",
+          response: { code: "123456" },
+        }),
+      }
+    );
+    return handleChallengeResolve(request, deps);
+  }
+
+  it("answers with the replacement token in the COOKIE, not the body", async () => {
+    // The token belongs in the cookie for the same reason the retry token
+    // does: the body is somewhere script can reach. Leaving the old token in
+    // the cookie resumed the settled challenge after a reload, spending the
+    // budget on every revisit instead of reaching the set-password step.
+    const res = await resolvedOverCookie();
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.status).toBe("password_change_required");
+    expect(body).not.toHaveProperty("pendingToken");
+
+    const setCookie = res.headers.getSetCookie().join("\n");
+    expect(setCookie).toContain("nextly_pending=");
+    const token = /nextly_pending=([^;]+)/.exec(setCookie)?.[1];
+    expect(token).toBeTypeOf("string");
+    // And the cookie holds the step it advertises: a must-change token, not
+    // another round of the challenge just answered.
+    const claims = await verifyPendingToken(token as string, SECRET);
+    expect(claims.challengeId).toBe("must-change-password");
+  });
+
+  it("keeps returning the token in the body to a caller that sent one", async () => {
+    // The control. A password login handed its challenge token in the body;
+    // the same login's password-change step has to reach it the same way,
+    // because it has no cookie to carry a replacement.
+    const deps = makeDeps();
+    deps.findUserById = vi.fn().mockResolvedValue({
+      id: "u1",
+      email: "a@b.c",
+      name: "A",
+      image: null,
+      isActive: true,
+      mustChangePassword: true,
+    });
+    const pendingToken = await mintPendingToken(
+      { userId: "u1", challengeId: "totp", attempts: 0, flow: "f" },
+      SECRET,
+      300
+    );
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.status).toBe("password_change_required");
+    expect(typeof body.pendingToken).toBe("string");
+  });
+});
