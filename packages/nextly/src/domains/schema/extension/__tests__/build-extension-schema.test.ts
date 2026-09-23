@@ -444,3 +444,69 @@ describe("adoptTable", () => {
     ).rejects.toThrow(NextlyError);
   });
 });
+
+describe("app-contributed elements on plugin tables (C7)", () => {
+  const pluginTable = async () => {
+    const { col, defineTable } = await import("../dsl");
+    return defineTable("notes", { id: col.id(), label: col.shortText() });
+  };
+
+  it("the app may index a plugin's table, and the element is recorded", async () => {
+    const notes = await pluginTable();
+    const built = await buildExtensionSchema({
+      dialect: "postgresql" as const,
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [
+        { owner: { kind: "plugin" as const, id: "fx" }, tables: [notes] },
+      ],
+      app: {
+        owner: { kind: "app" as const },
+        extend: [
+          ({ schema }) => {
+            schema.extendTable("fx__notes", {
+              indexes: [{ columns: ["label"], name: "idx_app_label" }],
+            });
+          },
+        ],
+      },
+    });
+    expect(built.elementOwners.get("fx__notes")).toEqual([
+      { elementKind: "index", elementName: "idx_app_label", owner: { kind: "app" } },
+    ]);
+    // The index still compiles into the table's spec — the APP stream
+    // creates it; the element row says whose it is.
+    const spec = built.specs.find(t => t.name === "fx__notes");
+    expect(spec?.indexes?.map(i => i.name)).toContain("idx_app_label");
+  });
+
+  it("a plugin indexing another plugin's table stays refused", async () => {
+    const { col, defineTable } = await import("../dsl");
+    const a = defineTable("alpha", { id: col.id(), tag: col.shortText() });
+    await expect(
+      buildExtensionSchema({
+        dialect: "postgresql" as const,
+        coreTableNames: [],
+        entities: [],
+        pluginPrefixes: new Map([
+          ["fa", "fa"],
+          ["fb", "fb"],
+        ]),
+        plugins: [
+          { owner: { kind: "plugin" as const, id: "fa" }, tables: [a] },
+          {
+            owner: { kind: "plugin" as const, id: "fb" },
+            extend: [
+              ({ schema }) => {
+                schema.extendTable("fa__alpha", {
+                  indexes: [{ columns: ["tag"] }],
+                });
+              },
+            ],
+          },
+        ],
+      })
+    ).rejects.toThrow(NextlyError);
+  });
+});

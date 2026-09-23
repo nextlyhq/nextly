@@ -112,6 +112,12 @@ export interface ExtensionIndex {
   where?: string;
   /** Expression index: per-dialect SQL in place of columns. */
   expression?: string;
+  /**
+   * Who CONTRIBUTED this element to a table somebody else owns — set only
+   * for app-contributed indexes on plugin tables, and what the per-element
+   * owner rows are written from.
+   */
+  contributedBy?: SchemaOwner;
 }
 
 /** Who added a table or index, recorded on every one of them. */

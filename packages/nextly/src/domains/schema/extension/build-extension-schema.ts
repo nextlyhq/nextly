@@ -75,6 +75,15 @@ export interface ExtensionSchema {
   owners: Map<string, SchemaOwner>;
   /** Table name → relation edges, for SchemaRegistry registration. */
   relations: Map<string, DynamicRelationEdge[]>;
+  /** Table name → elements contributed to a table another owner declared. */
+  elementOwners: Map<
+    string,
+    Array<{
+      elementKind: "column" | "index" | "fk" | "check";
+      elementName: string;
+      owner: SchemaOwner;
+    }>
+  >;
   /** Adopted tables: drizzle handles for typed access, never managed. */
   adopted: Record<string, unknown>;
   /** Adopted tables' relation edges, for registry registration. */
@@ -137,6 +146,33 @@ export async function buildExtensionSchema(
     ...(table.checks !== undefined ? { checks: table.checks } : {}),
     ...(table.relations !== undefined ? { relations: table.relations } : {}),
   }));
+
+  // Elements contributed to a table another owner declared: keyed for the
+  // per-element owner rows. An app-contributed index on a plugin table rides
+  // the APP migration stream while the table itself rides the plugin's —
+  // recording the element is what lets the plugin's reconcile ignore it.
+  const elementOwners = new Map<
+    string,
+    Array<{
+      elementKind: "column" | "index" | "fk" | "check";
+      elementName: string;
+      owner: SchemaOwner;
+    }>
+  >();
+  for (const table of tables) {
+    for (const index of table.indexes) {
+      if (index.contributedBy === undefined) continue;
+      const list = elementOwners.get(table.name) ?? [];
+      list.push({
+        elementKind: "index",
+        elementName:
+          index.name ??
+          `idx_${table.name}_${index.columns.join("_")}`,
+        owner: index.contributedBy,
+      });
+      elementOwners.set(table.name, list);
+    }
+  }
 
   // Relation edges for the registry: keys snake-cased at declaration, targets
   // kept as final table names, so a registration composes straight into the
@@ -248,6 +284,7 @@ export async function buildExtensionSchema(
     drizzle,
     owners,
     relations,
+    elementOwners,
     /** Adopted tables: drizzle handles for typed access, never managed. */
     adopted,
     /** Adopted tables' relation edges, for registry registration. */

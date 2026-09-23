@@ -335,14 +335,22 @@ function addColumns(
  * Entity tables are included because an index on one is carried by APP
  * migrations whoever contributed it, exactly as a plugin-contributed collection
  * already is — so there is no owner whose migration stream would be missing it.
+ *
+ * The APP may additionally index a PLUGIN's table: the app's migration stream
+ * carries the element, recorded per element in the owner registry, so a
+ * plugin's own reconcile never sees it as drift. A plugin indexing another
+ * plugin's table stays refused here — that needs `dependsOn`, which the
+ * resolver (not the draft) knows about.
  */
 function addIndexes(
   table: DraftTable,
   indexes: readonly { columns: string[]; unique?: boolean; name?: string }[],
   scope: ExtendScope
 ): void {
+  const appOnPluginTable =
+    scope.owner.kind === "app" && table.owner.kind === "plugin";
   for (const index of indexes) {
-    if (!scope.isOwn && !scope.isEntity) {
+    if (!scope.isOwn && !scope.isEntity && !appOnPluginTable) {
       refuse(
         `${scope.ownerPath}.extendTable.${table.name}`,
         `${describeOwner(scope.owner)} may not index "${table.name}", which belongs to ${describeOwner(table.owner)}.`
@@ -352,6 +360,11 @@ function addIndexes(
       columns: index.columns,
       unique: index.unique === true,
       ...(index.name !== undefined ? { name: index.name } : {}),
+      // Who CONTRIBUTED the element — distinct from who owns the table, and
+      // what the per-element owner rows are written from.
+      ...(appOnPluginTable
+        ? { contributedBy: scope.owner as SchemaOwner }
+        : {}),
     };
     // A table this layer SEEDS rather than declares carries no authoritative
     // column set: `publish.ts` seeds an entity with none at all, because the

@@ -583,6 +583,36 @@ function buildSqlExecutor(
  * and stops Phase 2: later migrations assume a database state that was never
  * reached.
  */
+/**
+ * Per-element owner rows for elements the APP contributed to tables a
+ * plugin owns (its indexes riding the app migration stream). Table-level
+ * rows are written by the streams that carry the tables; these say who
+ * owns the ELEMENT, so a plugin's reconcile can exclude it.
+ */
+async function recordElementOwners(deps: MigrateCoreDeps): Promise<void> {
+  const elementOwners = getActiveExtensionSchema(deps.dialect)?.elementOwners;
+  if (elementOwners === undefined || elementOwners.size === 0) return;
+  const { SchemaOwnersRepository: OwnersRepo } = await import(
+    "../../domains/schema/ownership/schema-owners-repository"
+  );
+  const owners = new OwnersRepo(deps.db, deps.dialect);
+  for (const [tableName, elements] of elementOwners) {
+    await owners.upsert(
+      elements.map(element => ({
+        tableName,
+        elementKind: element.elementKind,
+        elementName: element.elementName,
+        ownerKind: element.owner.kind,
+        ownerId: element.owner.kind === "app" ? "app" : element.owner.id,
+        migratedBy: "app",
+        ownerVersion: null,
+        schemaVersion: null,
+        state: "active" as const,
+      }))
+    );
+  }
+}
+
 export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
   if (!deps.pluginMigrationSets || deps.pluginMigrationSets.length === 0) {
     return;
@@ -865,6 +895,12 @@ export async function migrateCore(
       coreChanged = r.changed;
 
       await runPluginPhase(deps);
+
+      // Element rows for app-contributed elements on plugin tables: written
+      // AFTER the app's files apply, so a row exists exactly when the element
+      // does. The plugin's own reconcile ignores elements its stream does not
+      // own, which is what these rows say.
+      await recordElementOwners(deps);
 
       deps.logger.info("Phase 2: applying user migrations...");
       applied = await runFiles({
