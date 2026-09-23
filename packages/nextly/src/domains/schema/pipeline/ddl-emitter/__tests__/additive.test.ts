@@ -355,6 +355,16 @@ describe("emitAdditiveDdl — indexes and contracts", () => {
         fromDefault: undefined,
         toDefault: "'x'",
       },
+      add_check: {
+        type: "add_check",
+        tableName: "dc_a",
+        check: { name: "ck_dc_a_status", sql: "status IN (1)" },
+      },
+      drop_check: {
+        type: "drop_check",
+        tableName: "dc_a",
+        check: { name: "ck_dc_a_old", sql: "score >= 0" },
+      },
       change_foreign_key_action: {
         type: "change_foreign_key_action",
         tableName: "dc_a",

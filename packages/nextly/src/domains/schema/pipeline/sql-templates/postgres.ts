@@ -5,6 +5,7 @@
 // statements for migrate:create output).
 
 import type {
+  AddCheckOp,
   AddColumnOp,
   AddIndexOp,
   AddTableOp,
@@ -12,6 +13,7 @@ import type {
   ChangeColumnNullableOp,
   ChangeColumnTypeOp,
   ColumnSpec,
+  DropCheckOp,
   DropColumnOp,
   DropIndexOp,
   DropTableOp,
@@ -67,6 +69,10 @@ export function generatePgSQL(op: Operation): string {
       return generateChangeColumnDefault(op);
     case "add_index":
       return generateAddIndex(op);
+    case "add_check":
+      return generateAddCheck(op);
+    case "drop_check":
+      return generateDropCheck(op);
     case "drop_index":
       return generateDropIndex(op);
     case "change_foreign_key_action":
@@ -82,6 +88,16 @@ export function generatePgSQL(op: Operation): string {
 function createIndexStatement(tableName: string, index: IndexSpec): string {
   const cols = index.columns.map(q).join(", ");
   return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${q(index.name)} ON ${q(tableName)} (${cols})`;
+}
+
+function generateAddCheck(op: AddCheckOp): string {
+  // IF NOT EXISTS is not offered for constraints; the diff never emits an add
+  // for a name the previous snapshot carried, so a collision is a real drift.
+  return `ALTER TABLE ${q(op.tableName)} ADD CONSTRAINT ${q(op.check.name)} CHECK (${op.check.sql})`;
+}
+
+function generateDropCheck(op: DropCheckOp): string {
+  return `ALTER TABLE ${q(op.tableName)} DROP CONSTRAINT IF EXISTS ${q(op.check.name)}`;
 }
 
 function generateAddIndex(op: AddIndexOp): string {

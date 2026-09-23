@@ -142,6 +142,11 @@ export function generateSqliteSQL(op: Operation): string {
       return generateAddIndex(op);
     case "drop_index":
       return generateDropIndex(op);
+    case "add_check":
+    case "drop_check":
+      // SQLite cannot add or drop a CHECK in place; a check change on this
+      // dialect belongs to the table-rebuild path.
+      return unsupportedOperation("generateSqliteSQL", op);
     default:
       return unsupportedOperation("generateSqliteSQL", op);
   }

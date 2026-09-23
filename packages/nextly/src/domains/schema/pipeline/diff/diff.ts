@@ -43,6 +43,7 @@ import type {
   ChangeColumnDefaultOp,
   ChangeColumnNullableOp,
   ChangeColumnTypeOp,
+  CheckSpec,
   ColumnSpec,
   DropColumnOp,
   DropTableOp,
@@ -99,6 +100,16 @@ export function diffSnapshots(
       for (const op of diffIndexes(name, prevT.indexes, curT.indexes)) {
         if (op.type === "drop_index") dropIndexOps.push(op);
         else addIndexOps.push(op);
+      }
+      // Pass 3b: check constraints, with the same untracked sentinel — a
+      // snapshot written before checks were tracked reads as "don't know",
+      // never as "this table has none". All of them route through ONE
+      // bucket, in the order diffChecks produced: a changed expression is a
+      // drop-plus-add under the SAME name, and the add-bucket-first assembly
+      // would otherwise emit the add first — a name collision on every
+      // dialect, since constraints cannot coexist under one name.
+      for (const op of diffChecks(name, prevT.checks, curT.checks)) {
+        dropIndexOps.push(op);
       }
     }
   }
@@ -168,6 +179,39 @@ function diffIndexes(
   for (const [key, idx] of prevByKey) {
     if (!curByKey.has(key) && isManagedIndexName(idx.name)) {
       ops.push({ type: "drop_index", tableName, index: idx });
+    }
+  }
+  return ops;
+}
+
+/**
+ * Emit add_check / drop_check for a table present in both snapshots. Matched
+ * by NAME, with the expression compared textually: a changed expression is a
+ * drop plus an add under the same name, because no dialect rewrites a check's
+ * expression in place — and matching on the expression alone would leave a
+ * rename indistinguishable from an add, piling constraints under new names.
+ */
+function diffChecks(
+  tableName: string,
+  prev: CheckSpec[] | undefined,
+  cur: CheckSpec[] | undefined
+): Operation[] {
+  if (prev === undefined || cur === undefined) return [];
+  const ops: Operation[] = [];
+  const prevByName = new Map(prev.map(c => [c.name, c]));
+  const curByName = new Map(cur.map(c => [c.name, c]));
+  for (const [name, check] of curByName) {
+    const before = prevByName.get(name);
+    if (before === undefined || before.sql !== check.sql) {
+      if (before !== undefined) {
+        ops.push({ type: "drop_check", tableName, check: before });
+      }
+      ops.push({ type: "add_check", tableName, check });
+    }
+  }
+  for (const [name, check] of prevByName) {
+    if (!curByName.has(name)) {
+      ops.push({ type: "drop_check", tableName, check });
     }
   }
   return ops;

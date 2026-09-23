@@ -182,6 +182,10 @@ export function emitPostgresDdl(op: Operation): string[] {
     }
 
     case "change_foreign_key_action":
+    // Check DDL alters a live constraint, so it is not additive either; the
+    // apply routes it through the statement templates, not this pass.
+    case "add_check":
+    case "drop_check":
       // Deliberately outside the fast path: dropping and redeclaring a live
       // constraint is not one of the additive statements this emitter owns,
       // and `FAST_PATH_OP_TYPES` does not list it, so an apply carrying one

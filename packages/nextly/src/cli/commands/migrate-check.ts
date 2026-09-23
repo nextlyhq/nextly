@@ -421,6 +421,10 @@ function describeOp(op: Operation): string {
       return `add_index ${op.index.name} on ${op.tableName}`;
     case "drop_index":
       return `drop_index ${op.index.name} on ${op.tableName}`;
+    case "add_check":
+      return `add_check ${op.check.name} on ${op.tableName}`;
+    case "drop_check":
+      return `drop_check ${op.check.name} on ${op.tableName}`;
     case "change_foreign_key_action":
       return (
         `change_foreign_key_action ${op.tableName}.${op.columnName} ` +

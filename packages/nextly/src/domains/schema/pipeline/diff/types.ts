@@ -181,6 +181,8 @@ export type Operation =
   | ChangeColumnDefaultOp
   | AddIndexOp
   | DropIndexOp
+  | AddCheckOp
+  | DropCheckOp
   | ChangeForeignKeyActionOp;
 
 export interface AddTableOp {
@@ -286,6 +288,24 @@ export interface DropIndexOp {
   type: "drop_index";
   tableName: string;
   index: IndexSpec;
+}
+
+/**
+ * A check constraint is added and dropped by NAME. The expression itself is
+ * per-dialect SQL and is compared textually: a changed expression becomes a
+ * drop plus an add under the same name, because no dialect edits a check's
+ * expression in place.
+ */
+export interface AddCheckOp {
+  type: "add_check";
+  tableName: string;
+  check: CheckSpec;
+}
+
+export interface DropCheckOp {
+  type: "drop_check";
+  tableName: string;
+  check: CheckSpec;
 }
 
 /**

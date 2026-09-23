@@ -10,6 +10,7 @@
 // Pure functions. No I/O. No semicolons.
 
 import type {
+  AddCheckOp,
   AddColumnOp,
   AddIndexOp,
   AddTableOp,
@@ -17,6 +18,7 @@ import type {
   ChangeColumnNullableOp,
   ChangeColumnTypeOp,
   ColumnSpec,
+  DropCheckOp,
   DropColumnOp,
   DropIndexOp,
   DropTableOp,
@@ -70,6 +72,10 @@ export function generateMysqlSQL(op: Operation): string {
       return generateChangeColumnNullable(op);
     case "change_column_default":
       return generateChangeColumnDefault(op);
+    case "add_check":
+      return generateAddCheck(op);
+    case "drop_check":
+      return generateDropCheck(op);
     case "add_index":
       return generateAddIndex(op);
     case "drop_index":
@@ -88,6 +94,17 @@ export function generateMysqlSQL(op: Operation): string {
 function createIndexStatement(tableName: string, index: IndexSpec): string {
   const cols = index.columns.map(q).join(", ");
   return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX ${q(index.name)} ON ${q(tableName)} (${cols})`;
+}
+
+function generateAddCheck(op: AddCheckOp): string {
+  // CHECK needs MySQL >= 8.0.16; the adapter capability probe is the right
+  // place to refuse older servers, where this statement would be parsed and
+  // silently ignored rather than enforced.
+  return `ALTER TABLE \`${op.tableName}\` ADD CONSTRAINT \`${op.check.name}\` CHECK (${op.check.sql})`;
+}
+
+function generateDropCheck(op: DropCheckOp): string {
+  return `ALTER TABLE \`${op.tableName}\` DROP CHECK \`${op.check.name}\``;
 }
 
 function generateAddIndex(op: AddIndexOp): string {
