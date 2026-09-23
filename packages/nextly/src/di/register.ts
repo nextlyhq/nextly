@@ -2928,6 +2928,40 @@ async function initializePlugins(
   const teardown: Array<{ plugin: PluginDefinition; context: PluginContext }> =
     [];
   const contexts = new Map<string, PluginContext>();
+  // Only the plugins whose `init` RAN — a strict prefix of `teardown`, which
+  // holds every enabled plugin from the moment its context is built. A failed
+  // boot rolls back exactly these, never one whose init was never reached.
+  const initialized: Array<{
+    plugin: PluginDefinition;
+    context: PluginContext;
+  }> = [];
+
+  /**
+   * Destroy every initialized plugin, reverse init order, on a boot that is
+   * about to fail.
+   *
+   * The caller of a failed `initializePlugins` never receives the teardown
+   * list, and `shutdownServices` cannot stand in: registration never
+   * completed, so it returns without touching plugins. Without this loop, a
+   * timer or connection opened by an EARLIER plugin's init survived the
+   * failed boot — and a retry booted a second copy beside it. Each destroy is
+   * isolated for the same reason the shutdown loop isolates them: one
+   * plugin's failure to clean up must not spare the others'.
+   */
+  const destroyInitializedPlugins = async (): Promise<void> => {
+    for (let i = initialized.length - 1; i >= 0; i -= 1) {
+      const { plugin, context } = initialized[i];
+      if (!plugin.destroy) continue;
+      try {
+        await plugin.destroy(context);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn?.(
+          `Plugin "${plugin.name}" destroy failed during boot rollback: ${message}`
+        );
+      }
+    }
+  };
 
   // Folded once, across every plugin, so a duplicate source id or a reserved
   // namespace is a boot failure naming BOTH owners. Done before any
@@ -3020,10 +3054,16 @@ async function initializePlugins(
         logger.info?.(`Plugin "${plugin.name}" initialized`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        // A plugin that cannot finish starting has not started — and nothing
+        // that DID start may survive the boot that is now failing. See
+        // `destroyInitializedPlugins` for why this loop runs here rather than
+        // in the caller.
+        await destroyInitializedPlugins();
         throw new Error(
           `Plugin "${plugin.name}" initialization failed: ${message}`
         );
       }
+      initialized.push({ plugin, context: pluginContext });
     }
 
     // Post-init lifecycle event (D8) — best-effort, observe-only; other plugins
@@ -3065,8 +3105,10 @@ async function initializePlugins(
     } catch (error) {
       // Same policy as init: a plugin that cannot finish starting has not
       // started, and carrying on would run the system in a state it declared
-      // itself unfit for.
+      // itself unfit for. The destroy loop runs for the reason init's does:
+      // the throw below reaches the caller before anything else can clean up.
       const message = error instanceof Error ? error.message : String(error);
+      await destroyInitializedPlugins();
       throw NextlyError.internal({
         ...(error instanceof Error ? { cause: error } : {}),
         logContext: {

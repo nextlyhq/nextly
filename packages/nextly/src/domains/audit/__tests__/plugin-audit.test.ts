@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { getTableColumns } from "drizzle-orm";
+
 import { NextlyError } from "../../../errors/nextly-error";
+import { auditLog as postgresAuditLog } from "../../../schemas/audit/postgres";
 import {
   collectPluginAuditKinds,
   looksLikeSecret,
@@ -215,5 +218,53 @@ describe("metadata values are held to the declared contract", () => {
       "@acme/auth"
     );
     expect(projected?.metadata).toEqual({ s: "text", n: 42, b: true });
+  });
+});
+
+describe("collectPluginAuditKinds against the storage column", () => {
+  /** The audit trail's own `kind` width, read from the table this test guards. */
+  function kindColumnMax(): number {
+    // Derived rather than restated: the refusal must track the column, so a
+    // widened column loosens the check instead of silently disagreeing.
+    const length = (
+      getTableColumns(postgresAuditLog).kind as { length?: number }
+    ).length;
+    return length ?? Number.MAX_SAFE_INTEGER;
+  }
+
+  it("REFUSES a kind longer than the kind column can hold", () => {
+    // Postgres and MySQL store `kind` in a bounded varchar, and audit writes
+    // are fail-safe: a too-long kind accepted here fails at the column for
+    // every write, the failure becomes a log line, and the security event the
+    // plugin declared it would record never exists.
+    const max = kindColumnMax();
+    const tooLong = `${SLUG}.${"x".repeat(max - SLUG.length)}`;
+    expect(tooLong.length).toBe(max + 1);
+
+    let caught: unknown;
+    try {
+      collectPluginAuditKinds(SLUG, [{ kind: tooLong }], "@acme/auth");
+    } catch (err) {
+      caught = err;
+    }
+    expect(NextlyError.is(caught)).toBe(true);
+    const context = (caught as NextlyError).logContext as {
+      reason?: string;
+      maxLength?: number;
+    };
+    expect(context.reason).toBe("plugin-audit-kind-too-long");
+    expect(context.maxLength).toBe(max);
+  });
+
+  it("accepts a kind of exactly the column width", () => {
+    // The control: an off-by-one in the boundary check would refuse the last
+    // legal kind, and a plugin using all 64 characters is legitimate.
+    const max = kindColumnMax();
+    const exactly = `${SLUG}.${"x".repeat(max - SLUG.length - 1)}`;
+    expect(exactly.length).toBe(max);
+
+    expect(() =>
+      collectPluginAuditKinds(SLUG, [{ kind: exactly }], "@acme/auth")
+    ).not.toThrow();
   });
 });

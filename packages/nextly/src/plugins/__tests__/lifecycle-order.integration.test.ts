@@ -163,3 +163,85 @@ describe("onReady", () => {
     expect(uninstalls).toBe(0);
   });
 });
+
+describe("a failed boot destroys what it started", () => {
+  it("destroys earlier plugins when a later plugin's init throws", async () => {
+    // The boot fails before `initializePlugins` returns, so nothing else can
+    // run the destroy callbacks: the caller never receives them, and
+    // `shutdownServices` returns early because registration never completed.
+    // A timer or connection opened by the earlier plugin then survived the
+    // failed boot — and a retry booted a second copy beside it.
+    const destroyed: string[] = [];
+    const healthy = definePlugin({
+      name: "@test/healthy",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      init() {},
+      destroy() {
+        destroyed.push("@test/healthy");
+      },
+    });
+    const laterBoom = definePlugin({
+      name: "@test/later-boom",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      dependsOn: { "@test/healthy": ">=1.0.0" },
+      init() {
+        throw new Error("no");
+      },
+      destroy() {
+        destroyed.push("@test/later-boom");
+      },
+    });
+
+    await expect(
+      createTestNextly({ plugins: [healthy, laterBoom] })
+    ).rejects.toThrow();
+
+    // The initialized plugin is cleaned up; the one whose init THREW is not —
+    // a plugin that cannot finish starting has not started, and its destroy
+    // expects a state that never came to exist.
+    expect(destroyed).toEqual(["@test/healthy"]);
+  });
+
+  it("destroys every initialized plugin, reverse order, when onReady throws", async () => {
+    const destroyed: string[] = [];
+    const make = (name: string, boom: boolean) =>
+      definePlugin({
+        name,
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        init() {},
+        onReady() {
+          if (boom) throw new Error("cannot finish starting");
+        },
+        destroy() {
+          destroyed.push(name);
+        },
+      });
+
+    await expect(
+      createTestNextly({
+        plugins: [
+          make("@test/first", false),
+          make("@test/second", false),
+          make("@test/ready-boom", true),
+        ],
+      })
+    ).rejects.toSatisfy((err: unknown) => {
+      if (!NextlyError.is(err)) return false;
+      return (
+        (err.logContext as { reason?: string }).reason ===
+        "plugin-onready-failed"
+      );
+    });
+
+    // Reverse init order, mirroring the shutdown path, so a plugin that
+    // depends on another tears down before its dependency does.
+    expect(destroyed).toEqual([
+      "@test/ready-boom",
+      "@test/second",
+      "@test/first",
+    ]);
+  });
+});

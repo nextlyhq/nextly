@@ -16,8 +16,11 @@
  * @module domains/audit/plugin-audit
  * @since 1.0.0
  */
+import { getTableColumns } from "drizzle-orm";
+
 import { getNextlyLogger } from "../../observability/logger";
 import { resolutionError } from "../../plugins/resolution-error";
+import { auditLog as postgresAuditLog } from "../../schemas/audit/postgres";
 
 /** What a plugin says it will write. */
 export interface PluginAuditKind {
@@ -36,6 +39,23 @@ export interface PluginAuditEvent {
 
 /** A metadata string longer than this is truncated away rather than stored. */
 const MAX_VALUE_LENGTH = 256;
+
+/**
+ * The longest kind the trail's own column can hold, read from the table
+ * definition rather than restated beside it.
+ *
+ * Postgres and MySQL declare `kind` as a bounded varchar; SQLite declares
+ * text, which holds anything, so the bounded declaration is the one that
+ * decides. A kind longer than it is a declaration whose every write fails at
+ * the column — and audit writes are fail-safe by design, so the failure is a
+ * log line nobody reads and the security event the plugin promised to record
+ * simply never exists.
+ */
+const KIND_COLUMN_MAX = (() => {
+  const kind: unknown = getTableColumns(postgresAuditLog).kind;
+  const length = (kind as { length?: unknown }).length;
+  return typeof length === "number" ? length : Number.MAX_SAFE_INTEGER;
+})();
 
 /** A JWT, which is three base64url segments separated by dots. */
 const JWT_SHAPE = /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/;
@@ -96,6 +116,20 @@ export function collectPluginAuditKinds(
           plugin: pluginName,
           auditKind: entry.kind,
           expectedPrefix: pluginSlug,
+        }
+      );
+    }
+    // A kind the column cannot hold is refused here, at the same place the
+    // prefix is, and for the same reason: this is the only point where the
+    // declaration is observable before it silently stops recording.
+    if (entry.kind.length > KIND_COLUMN_MAX) {
+      throw resolutionError(
+        "plugin-audit-kind-too-long",
+        `Plugin "${pluginName}" declares the audit kind "${entry.kind}", which is longer than the ${KIND_COLUMN_MAX} characters the audit trail's kind column holds.`,
+        {
+          plugin: pluginName,
+          auditKind: entry.kind,
+          maxLength: KIND_COLUMN_MAX,
         }
       );
     }
