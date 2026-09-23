@@ -455,11 +455,20 @@ export function buildAuthRouterDeps(
     },
   });
 
-  // Collect plugin contributes.auth (hooks + challenges) + app-config strategies.
+  // Collect plugin contributes.auth (hooks + challenges) + app-config
+  // strategies.
+  //
+  // ENABLED plugins only, so the runtime registries and the served auth UI
+  // are derived from one set. Registering a disabled plugin's hooks let its
+  // `afterAuthenticate` challenge fire on a successful login while the login
+  // page — which filters disabled plugins — had no view for it, leaving that
+  // login unfinishable until the plugin was removed or enabled.
   const config = readServiceConfig(getService);
   const authHooks = new AuthHookRegistry();
   const challengeRegistry = new ChallengeRegistry();
-  for (const plugin of config?.plugins ?? []) {
+  for (const plugin of (config?.plugins ?? []).filter(
+    p => p.enabled !== false
+  )) {
     const authContrib = plugin.contributes?.auth;
     if (authContrib?.hooks) authHooks.add(authContrib.hooks);
     for (const def of authContrib?.challenges ?? []) {

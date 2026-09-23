@@ -921,6 +921,38 @@ export class UserMutationService extends BaseService {
           });
         }
 
+        // The roles RE-READ here, holding what exists. MySQL's `user_roles`
+        // carries no foreign key, so a role deleted between the pre-flight
+        // lookup and these inserts would have committed an active external
+        // account with a dangling — effectively empty — required role set,
+        // with `isSuperAdmin` seeing nothing to refuse. The count is the
+        // whole validation: every requested id answered a row, or the
+        // transaction refuses. SQLite needs no lock (BEGIN IMMEDIATE
+        // serializes writers), matching the anchor probe above; the limit is
+        // the requested count, which is every row the ids can answer.
+        const rolesQuery = txDb
+          .select({ id: roles.id, slug: roles.slug })
+          .from(roles)
+          .where(inArray(roles.id, input.roleIds))
+          .limit(input.roleIds.length);
+        const txRoles = (
+          this.dialect === "sqlite"
+            ? await rolesQuery
+            : await rolesQuery.for("update")
+        ) as Array<{ id: string; slug: string }>;
+        if (txRoles.length !== new Set(input.roleIds).size) {
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "roleIds",
+                code: "INVALID",
+                message: "One or more roles do not exist.",
+              },
+            ],
+            logContext: { entity: "user", email },
+          });
+        }
+
         await txDb.insert(users).values({
           id: newUserId,
           email,
@@ -938,7 +970,7 @@ export class UserMutationService extends BaseService {
 
         // In the same transaction as the account: an active user missing the
         // roles it was created with is a worse outcome than no user at all.
-        for (const role of namedRoles) {
+        for (const role of txRoles) {
           await txDb.insert(userRoles).values({
             id: randomUUID(),
             userId: newUserId,
