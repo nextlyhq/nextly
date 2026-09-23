@@ -55,6 +55,10 @@ import {
 import { getActiveExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
+import {
+  runPluginMigrations,
+  type PluginMigrationSet,
+} from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
@@ -312,12 +316,35 @@ export async function runMigrate(
     // extraneous table) and BEFORE the event is recorded; idempotent. A thrown
     // error here maps to a non-zero CLI exit (the core itself never exits).
     try {
+      // Resolver order, because a plugin's migration may reference a table a
+      // dependency created. `topoSortPlugins` is the same ordering boot uses;
+      // the full `resolvePlugins` battery belongs to boot, where a failure
+      // can name the surface that needed it.
+      // Dynamic for the same cycle reason as the owners repository above.
+      const { topoSortPlugins } = await import("../../plugins/topo-sort");
+      const pluginMigrationSets = topoSortPlugins(
+        configResult.config.plugins ?? []
+      )
+        .filter(
+          plugin =>
+            plugin.enabled !== false &&
+            (plugin.contributes?.schema?.migrations?.length ?? 0) > 0
+        )
+        .map(plugin => ({
+          pluginName: plugin.name,
+          pluginVersion: plugin.version,
+          migrations: plugin.contributes!.schema!.migrations!,
+        }));
       const { applied, metadata } = await migrateCore({
         dialect,
         db,
         adapter,
         migrationsDir: appMigrationsDir,
         logger,
+        pluginMigrationSets,
+        pluginsWithMigrations: new Set(
+          pluginMigrationSets.map(set => set.pluginName)
+        ),
         lockMode: "fail-fast",
         ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
         // A custom `options.junctionTable` name cannot be inferred from any
@@ -434,6 +461,12 @@ export interface MigrateCoreDeps {
    * absent from this set has no path to production and is refused.
    */
   pluginsWithMigrations?: ReadonlySet<string>;
+  /**
+   * The migration modules to run, in resolver order. Phase 1.5 applies them
+   * between the core reconcile and the app's files; the first failure stops
+   * the run. Omitted by callers with no plugin migrations to run.
+   */
+  pluginMigrationSets?: readonly PluginMigrationSet[];
   dialect: SupportedDialect;
   db: unknown;
   adapter: CLIDatabaseAdapter;
@@ -534,6 +567,27 @@ export function installRegistryResolver(
   });
   adapter.setTableResolver(schemaRegistry);
   return schemaRegistry;
+}
+
+/**
+ * One SQL executor for every phase: split, run in one transaction, count.
+ *
+ * Shared by the app files and the plugin modules so the two paths cannot
+ * drift about what "executed as one unit" means.
+ */
+function buildSqlExecutor(
+  dz: DrizzleAdapter,
+  dialect: SupportedDialect
+): (sqlText: string) => Promise<number> {
+  return async sqlText => {
+    const statements = splitSqlStatements(sqlText, dialect);
+    await executeTransaction(dz, dialect, async () => {
+      for (const statement of statements) {
+        await dz.executeQuery(statement);
+      }
+    });
+    return statements.length;
+  };
 }
 
 /**
@@ -746,6 +800,82 @@ export async function migrateCore(
       });
       coreChanged = r.changed;
 
+      /*
+       * Phase 1.5 — plugin migration modules, between core and the app's
+       * files, under this same lock. Plugins run first because an app
+       * migration may index an entity table a plugin contributes. The first
+       * failure propagates and stops Phase 2: later migrations assume a
+       * database state that was never reached.
+       */
+      if (deps.pluginMigrationSets && deps.pluginMigrationSets.length > 0) {
+        deps.logger.info("Phase 1.5: applying plugin migrations...");
+        const dz = deps.adapter as unknown as DrizzleAdapter & {
+          executeQuery: (statement: string) => Promise<unknown>;
+        };
+        const eventsRepo = new SchemaEventsRepository(deps.db, deps.dialect);
+        // Applied plugin rows only, keyed by qualified filename. First row
+        // wins: `markApplied`'s uniqueFilename guard makes one applied row
+        // per filename the invariant, and a superseded leftover would
+        // otherwise shadow the sha256 the comparison needs.
+        const appliedShas = new Map<string, string | null>();
+        for (const row of await eventsRepo.listFileApplies()) {
+          if (row.status !== "applied" || !row.filename) continue;
+          if (!row.filename.startsWith("plugin:")) continue;
+          if (!appliedShas.has(row.filename)) {
+            appliedShas.set(row.filename, row.sha256);
+          }
+        }
+
+        // Loaded here rather than imported at the top: both modules sit on
+        // cycles that close through this command, and the file's existing
+        // convention for that is a dynamic import at the point of use.
+        const { SchemaOwnersRepository: OwnersRepo } = await import(
+          "../../domains/schema/ownership/schema-owners-repository"
+        );
+        const owners = new OwnersRepo(deps.db, deps.dialect);
+        const pluginOutcome = await runPluginMigrations(
+          deps.pluginMigrationSets,
+          {
+            dialect: deps.dialect,
+            appliedShas,
+            introspect: async names => {
+              const liveTables = await safeListTables(deps.adapter);
+              const managed = snapshotComparableTables(
+                liveTables,
+                new Set(names),
+                new Set()
+              );
+              return introspectLiveSnapshot(deps.db, deps.dialect, managed);
+            },
+            executeSql: buildSqlExecutor(dz, deps.dialect),
+            repo: eventsRepo,
+            recordOwner: async ({
+              pluginName,
+              pluginVersion,
+              schemaVersion,
+              tables,
+            }) => {
+              await owners.upsert(
+                tables.map(tableName => ({
+                  tableName,
+                  ownerKind: "plugin" as const,
+                  ownerId: pluginName,
+                  migratedBy: `plugin:${pluginName}`,
+                  ownerVersion: pluginVersion,
+                  schemaVersion,
+                  state: "active" as const,
+                }))
+              );
+            },
+          }
+        );
+        if (pluginOutcome.applied > 0 || pluginOutcome.adopted > 0) {
+          deps.logger.success(
+            `Plugin migrations: ${pluginOutcome.applied} applied, ${pluginOutcome.adopted} adopted, ${pluginOutcome.skipped} already recorded.`
+          );
+        }
+      }
+
       deps.logger.info("Phase 2: applying user migrations...");
       applied = await runFiles({
         adapter: deps.adapter,
@@ -926,15 +1056,7 @@ export async function runFileMigrations(args: {
   const metaDir = resolve(migrationsDir, "meta");
 
   const dz = adapter as unknown as DrizzleAdapter;
-  const executeSql = async (sqlText: string): Promise<number> => {
-    const statements = splitSqlStatements(sqlText, dialect);
-    await executeTransaction(dz, dialect, async () => {
-      for (const statement of statements) {
-        await dz.executeQuery(statement);
-      }
-    });
-    return statements.length;
-  };
+  const executeSql = buildSqlExecutor(dz, dialect);
 
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;
   let applied = 0;
