@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { getTableColumns } from "drizzle-orm";
-
 import { NextlyError } from "../../../errors/nextly-error";
 import { auditLog as postgresAuditLog } from "../../../schemas/audit/postgres";
 import {
@@ -225,10 +223,11 @@ describe("collectPluginAuditKinds against the storage column", () => {
   /** The audit trail's own `kind` width, read from the table this test guards. */
   function kindColumnMax(): number {
     // Derived rather than restated: the refusal must track the column, so a
-    // widened column loosens the check instead of silently disagreeing.
-    const length = (
-      getTableColumns(postgresAuditLog).kind as { length?: number }
-    ).length;
+    // widened column loosens the check instead of silently disagreeing. The
+    // column is read as a plain property — the column-collecting helper is
+    // banned by the drizzle v1 legacy gate, and the columns are typed
+    // properties either way.
+    const length = (postgresAuditLog.kind as { length?: number }).length;
     return length ?? Number.MAX_SAFE_INTEGER;
   }
 

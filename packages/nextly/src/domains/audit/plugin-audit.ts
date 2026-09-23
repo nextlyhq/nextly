@@ -16,8 +16,6 @@
  * @module domains/audit/plugin-audit
  * @since 1.0.0
  */
-import { getTableColumns } from "drizzle-orm";
-
 import { getNextlyLogger } from "../../observability/logger";
 import { resolutionError } from "../../plugins/resolution-error";
 import { auditLog as postgresAuditLog } from "../../schemas/audit/postgres";
@@ -52,8 +50,10 @@ const MAX_VALUE_LENGTH = 256;
  * simply never exists.
  */
 const KIND_COLUMN_MAX = (() => {
-  const kind: unknown = getTableColumns(postgresAuditLog).kind;
-  const length = (kind as { length?: unknown }).length;
+  // The column itself, read as a plain property: the column-collecting helper
+  // is deprecated-but-compiles on drizzle v1 and banned by the legacy gate,
+  // while a table's columns are its own typed properties either way.
+  const length = (postgresAuditLog.kind as { length?: number }).length;
   return typeof length === "number" ? length : Number.MAX_SAFE_INTEGER;
 })();
 
