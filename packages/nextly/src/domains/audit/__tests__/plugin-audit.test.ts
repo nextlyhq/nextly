@@ -162,3 +162,58 @@ describe("looksLikeSecret", () => {
     }
   );
 });
+
+describe("metadata values are held to the declared contract", () => {
+  const kindsWith = (...keys: string[]) =>
+    collectPluginAuditKinds(SLUG, [
+      { kind: `${SLUG}.thing`, metadataKeys: keys },
+    ]);
+
+  const project = (metadata: Record<string, unknown>) =>
+    projectPluginAuditEvent(
+      { kind: `${SLUG}.thing`, metadata: metadata as never },
+      kindsWith("payload", "note"),
+      "@acme/auth"
+    );
+
+  it("DROPS an object, which the string checks never saw", () => {
+    // An allowlisted key holding an object passed every runtime check, because
+    // they all read strings — so a nested access token was retained without
+    // meeting `looksLikeSecret` or the length bound.
+    const projected = project({
+      payload: { token: "eyJhbGciOi.AAAAAAAA.BBBBBBBB" },
+      note: "kept",
+    });
+
+    expect(projected?.metadata).toEqual({ note: "kept" });
+  });
+
+  it("drops an array for the same reason", () => {
+    expect(project({ payload: ["a", "b"], note: "kept" })?.metadata).toEqual({
+      note: "kept",
+    });
+  });
+
+  it("drops a non-finite number rather than storing null", () => {
+    // `NaN` has no JSON form: stored, it reads back as a fact nobody recorded.
+    expect(project({ payload: Number.NaN, note: "kept" })?.metadata).toEqual({
+      note: "kept",
+    });
+  });
+
+  it("KEEPS the three declared kinds", () => {
+    // The control: dropping everything non-string would satisfy the tests
+    // above while making numbers and booleans unrecordable.
+    const projected = projectPluginAuditEvent(
+      {
+        kind: `${SLUG}.thing`,
+        metadata: { s: "text", n: 42, b: true } as never,
+      },
+      collectPluginAuditKinds(SLUG, [
+        { kind: `${SLUG}.thing`, metadataKeys: ["s", "n", "b"] },
+      ]),
+      "@acme/auth"
+    );
+    expect(projected?.metadata).toEqual({ s: "text", n: 42, b: true });
+  });
+});

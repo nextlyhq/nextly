@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import {
@@ -115,5 +115,52 @@ describe("a resumed forced password change", () => {
     );
     expect(result.current.passwordChange).toBeNull();
     expect(result.current.challenge?.next).toBe("/admin/posts");
+  });
+});
+
+describe("a resumed login does not clobber a tokenized continuation", () => {
+  it("keeps the token a password login already raised", async () => {
+    // The password form stays usable while `/auth/pending` is loading, so a
+    // password login can report `password_change_required` first. Replacing
+    // that with the tokenless resumed continuation left the set-password step
+    // relying on a cookie from a different — possibly expired — attempt.
+    let release: (value: unknown) => void = () => undefined;
+    get.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          release = resolve;
+        })
+    );
+
+    const { result } = renderHook(() => useChallengeFlow("?resume=1"));
+
+    act(() => {
+      result.current.requirePasswordChange({ pendingToken: "pt-password" });
+    });
+    expect(result.current.passwordChange).toEqual({
+      pendingToken: "pt-password",
+    });
+
+    await act(async () => {
+      release({ challengeId: "must-change-password", next: null });
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(result.current.passwordChange).toEqual({
+        pendingToken: "pt-password",
+      })
+    );
+  });
+
+  it("still raises it when nothing was set", async () => {
+    // The control: keeping whatever is there would satisfy the test above
+    // while never raising the resumed continuation at all.
+    get.mockResolvedValue({ challengeId: "must-change-password", next: null });
+
+    const { result } = renderHook(() => useChallengeFlow("?resume=1"));
+
+    await waitFor(() => expect(result.current.passwordChange).not.toBeNull());
+    expect(result.current.passwordChange?.pendingToken).toBeUndefined();
   });
 });

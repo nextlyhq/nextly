@@ -345,6 +345,94 @@ describe.each(getConfiguredTestDialects())(
       expect(names).not.toContain("super-admin");
     });
 
+    it("refuses a role that INHERITS super-admin", async () => {
+      // A role whose own slug is something else can still inherit
+      // `super-admin`, and the permission system resolves exactly that way —
+      // so a direct-slug test refused the obvious attempt while letting a
+      // provider mint a full administrator through one indirection.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      // Seeding the first user CREATES the super-admin role, so this reads
+      // the real one rather than writing a second row under a slug the table
+      // holds unique.
+      const db = t.adapter.getDrizzle() as unknown as {
+        select: (f: unknown) => {
+          from: (table: unknown) => {
+            where: (c: unknown) => Promise<Array<{ id: string }>>;
+          };
+        };
+        insert: (table: unknown) => {
+          values: (v: unknown) => Promise<unknown>;
+        };
+      };
+      const { roles } = getDialectTables();
+      const superAdmin = (
+        await db
+          .select({ id: roles.id })
+          .from(roles)
+          .where(eq(roles.slug, "super-admin"))
+      )[0]?.id;
+      expect(superAdmin).toBeTruthy();
+      const editor = await makeRole(t, "editor");
+
+      // `editor` inherits `super-admin`: the edge is parent -> child, so the
+      // role built on top is the PARENT, matching how the RBAC services and
+      // `getAllRoleIdsForUser` read the graph.
+      const { roleInherits } = getDialectTables();
+      await db.insert(roleInherits).values({
+        id: "ri-editor-superadmin",
+        parentRoleId: editor,
+        childRoleId: superAdmin,
+        createdAt: new Date(),
+      });
+
+      await expect(
+        services(t).users.createExternalUser(
+          {
+            email: "escalate@example.com",
+            name: "Escalate",
+            roleIds: [editor],
+            emailVerifiedAt: new Date(),
+          },
+          SYSTEM_CONTEXT
+        )
+      ).rejects.toSatisfy(NextlyError.is);
+    });
+
+    it("still allows a role that inherits nothing dangerous", async () => {
+      // The control: refusing every role with any inheritance edge would
+      // satisfy the test above while making ordinary role composition
+      // unusable through an external login.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const base = await makeRole(t, "base");
+      const editor = await makeRole(t, "editor");
+
+      const db = t.adapter.getDrizzle() as unknown as {
+        insert: (table: unknown) => {
+          values: (v: unknown) => Promise<unknown>;
+        };
+      };
+      const { roleInherits } = getDialectTables();
+      await db.insert(roleInherits).values({
+        id: "ri-editor-base",
+        parentRoleId: editor,
+        childRoleId: base,
+        createdAt: new Date(),
+      });
+
+      const created = await services(t).users.createExternalUser(
+        {
+          email: "ordinary@example.com",
+          name: "Ordinary",
+          roleIds: [editor],
+          emailVerifiedAt: new Date(),
+        },
+        SYSTEM_CONTEXT
+      );
+      expect(created.email).toBe("ordinary@example.com");
+    });
+
     it("is not blocked by a REQUIRED custom user field", async () => {
       // The merged create schema carries the install's custom fields, and a
       // provider asserts none of them — so an install that marked any custom

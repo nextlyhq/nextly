@@ -83,6 +83,11 @@ export function aggregateAuthUi(plugins: PluginDefinition[]): AuthUiMeta {
     slots: { beforeForm: [], afterForm: [], branding: [] },
   };
   for (const plugin of plugins) {
+    // A disabled plugin contributes nothing, as it does nowhere else: route
+    // and runtime registration skip it, so publishing its UI offered a
+    // provider button whose start route was never registered, and let it
+    // overwrite an ENABLED plugin's challenge view with one nothing serves.
+    if (plugin.enabled === false) continue;
     const ui = plugin.contributes?.auth?.ui;
     if (!ui) continue;
     meta.providers.push(...usableProviders(plugin.name, ui.providers ?? []));

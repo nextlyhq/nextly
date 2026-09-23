@@ -211,7 +211,13 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
     if (resume.pending.challengeId === MUST_CHANGE_PASSWORD_CHALLENGE) {
       // No token: a resumed login's pending cookie travels with the request
       // and the endpoint reads it there.
-      setPasswordChange({});
+      //
+      // It does NOT replace one that already has a token. The password form
+      // stays usable while `/auth/pending` is still loading, so a password
+      // login can raise its own continuation first — and overwriting that
+      // with the tokenless resumed one left `SetInitialPassword` relying on a
+      // cookie belonging to a different, possibly expired, attempt.
+      setPasswordChange(current => current ?? {});
       return;
     }
     setChallenge({

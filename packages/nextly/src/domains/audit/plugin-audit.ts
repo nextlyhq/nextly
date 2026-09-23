@@ -53,6 +53,20 @@ export function looksLikeSecret(value: string): boolean {
 }
 
 /**
+ * Whether a metadata value is one the row can actually hold.
+ *
+ * The contribution contract says string, number or boolean, and everything
+ * downstream — the secret shapes, the length bound, the column itself — is
+ * written for those. A non-finite number is refused with them: `NaN` and the
+ * infinities have no JSON form, so one would be stored as `null` and read back
+ * as a fact nobody recorded.
+ */
+function isStorableValue(value: unknown): value is string | number | boolean {
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/**
  * Every kind a plugin may write, and the keys each kind may carry.
  *
  * A kind must start with the plugin's own prefix, so one plugin cannot write
@@ -91,6 +105,39 @@ export function collectPluginAuditKinds(
 }
 
 /**
+ * One metadata value, or `undefined` when the row must not carry it.
+ *
+ * Three refusals, in the order their cost justifies. The TYPE first, because
+ * everything after it reads strings: an object or array slipped past all of
+ * them, so a nested access token was retained without ever meeting
+ * `looksLikeSecret` or the length bound, and a cyclic value made the writer
+ * drop the whole security event. A plugin is arbitrary code and a JavaScript
+ * one has no types at all, so the contract is checked rather than assumed.
+ *
+ * Its own function so the projection stays a walk over declared keys rather
+ * than also being the policy for each one.
+ */
+function storableMetadataValue(
+  value: unknown,
+  at: { plugin: string; auditKind: string; metadataKey: string }
+): string | number | boolean | undefined {
+  if (!isStorableValue(value)) {
+    getNextlyLogger().warn({
+      kind: "plugin-audit-metadata-type-dropped",
+      ...at,
+    });
+    return undefined;
+  }
+  if (typeof value !== "string") return value;
+  if (value.length > MAX_VALUE_LENGTH) return undefined;
+  if (looksLikeSecret(value)) {
+    getNextlyLogger().warn({ kind: "plugin-audit-secret-dropped", ...at });
+    return undefined;
+  }
+  return value;
+}
+
+/**
  * Reduce an event to what its declaration allows, or null to drop it.
  *
  * Returning the projection rather than writing it keeps the decision testable
@@ -118,19 +165,12 @@ export function projectPluginAuditEvent(
   const metadata: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(event.metadata ?? {})) {
     if (!allowedKeys.has(key)) continue;
-    if (typeof value === "string") {
-      if (value.length > MAX_VALUE_LENGTH) continue;
-      if (looksLikeSecret(value)) {
-        getNextlyLogger().warn({
-          kind: "plugin-audit-secret-dropped",
-          plugin: pluginName,
-          auditKind: event.kind,
-          metadataKey: key,
-        });
-        continue;
-      }
-    }
-    metadata[key] = value;
+    const kept = storableMetadataValue(value, {
+      plugin: pluginName,
+      auditKind: event.kind,
+      metadataKey: key,
+    });
+    if (kept !== undefined) metadata[key] = kept;
   }
 
   return {

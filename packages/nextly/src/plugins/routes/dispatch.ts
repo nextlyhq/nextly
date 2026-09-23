@@ -485,6 +485,14 @@ export async function runPluginRoute(
       matched.route
     );
   } catch (err) {
-    return markPluginResponse(toErrorResponse(req, err), matched.route);
+    // The SAME cache directive as the success path. A route declaring
+    // `noStore` — or taking the auth budget, which implies it — promises the
+    // answer is never stored, and a thrown `NextlyError.notFound()` is a
+    // cacheable status: a shared cache could hold it and go on serving a
+    // refusal the route never repeated.
+    return markPluginResponse(
+      withNoStore(toErrorResponse(req, err), matched.route),
+      matched.route
+    );
   }
 }

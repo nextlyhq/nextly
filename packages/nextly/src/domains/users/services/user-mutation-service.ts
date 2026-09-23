@@ -22,7 +22,7 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Table, Column } from "drizzle-orm";
-import { eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 
 import { hashPassword } from "@nextly/auth/password";
 import {
@@ -850,14 +850,16 @@ export class UserMutationService extends BaseService {
         logContext: { entity: "user", email },
       });
     }
-    if (namedRoles.some(r => r.slug === SUPER_ADMIN_ROLE_SLUG)) {
-      throw NextlyError.forbidden({
-        logContext: {
-          reason: "external-user-super-admin-refused",
-          email,
-        },
-      });
-    }
+    // INHERITED as well as direct. A role whose own slug is something else
+    // can still inherit `super-admin`, and the permission system resolves
+    // exactly that way — so a direct-slug test refused the obvious attempt and
+    // let a provider mint a full super-admin through one indirection. The
+    // descendant walk is the same one `getAllRoleIdsForUser` and the RBAC
+    // services resolve through, rather than a second reading of the graph.
+    await this.refuseSuperAdminRoles(
+      namedRoles.map(r => r.id),
+      email
+    );
 
     const now = new Date();
     const newUserId = randomUUID();
@@ -1798,6 +1800,57 @@ export class UserMutationService extends BaseService {
       return await this.adapter.tableExists(table);
     } catch {
       return true;
+    }
+  }
+
+  /**
+   * Refuse a role set that reaches `super-admin`, directly or by inheritance.
+   *
+   * A login provider must never be able to create an administrator. Checking
+   * the requested roles' own slugs answers a narrower question than the one
+   * that decides at request time: `isSuperAdmin` resolves the user's full role
+   * set, inheritance included, so a role built on top of `super-admin` carries
+   * the bypass while naming itself something else entirely.
+   */
+  private async refuseSuperAdminRoles(
+    roleIds: string[],
+    email: string
+  ): Promise<void> {
+    const { RoleInheritanceService } = await import(
+      "../../auth/services/role-inheritance-service"
+    );
+    const inheritance = new RoleInheritanceService(this.adapter, this.logger);
+
+    // The requested roles AND everything they reach. `listDescendantRoles`
+    // returns descendants only — it never includes the role it was asked
+    // about — so seeding the set with the requested ids is what keeps the
+    // direct case refused alongside the inherited one.
+    const reachable = new Set<string>(roleIds);
+    for (const roleId of roleIds) {
+      for (const descendant of await inheritance.listDescendantRoles(roleId)) {
+        reachable.add(descendant);
+      }
+    }
+    if (reachable.size === 0) return;
+
+    const { roles } = this.tables;
+    const superAdmin = (await this.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(
+        and(
+          inArray(roles.id, Array.from(reachable)),
+          eq(roles.slug, SUPER_ADMIN_ROLE_SLUG)
+        )
+      )) as Array<{ id: string }>;
+
+    if (superAdmin.length > 0) {
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "external-user-super-admin-refused",
+          email,
+        },
+      });
     }
   }
 
