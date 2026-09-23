@@ -50,6 +50,11 @@ export function resolvePlugins(
   // The SAME call the provider makes, so resolution cannot accept a
   // declaration the provider would refuse.
   for (const plugin of plugins) {
+    // Disabled plugins are skipped, as `collectHookPoints` skips them: a
+    // plugin that is off contributes no `ctx.audit`, so there is no trail for
+    // a bad declaration to be missing from. Refusing it would let something
+    // nobody is running stop the application from starting at all.
+    if (plugin.enabled === false) continue;
     const declared = plugin.contributes?.audit?.kinds;
     if (!declared) continue;
     collectPluginAuditKinds(
