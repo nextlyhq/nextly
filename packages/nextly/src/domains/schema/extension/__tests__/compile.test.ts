@@ -9,6 +9,8 @@
  */
 import type { Table } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { buildExtensionSchema } from "../build-extension-schema";
+import { col, defineTable } from "../dsl";
 
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -241,5 +243,53 @@ describe("explicit index names", () => {
     expect(toTableSpec(good, "postgresql").indexes?.[0]?.name).toBe(
       "idx_custom"
     );
+  });
+});
+
+describe("toDrizzleTable: checks on the sqlite kit table only", () => {
+  const withCheck = defineTable(
+    "checked",
+    { id: col.id(), score: col.integer({ nullable: true }) },
+    { checks: [{ name: "score_ok", sql: "score >= 0" }] }
+  );
+
+  it("carries checks in the sqlite table definition, named by the compile rule", async () => {
+    const { getTableConfig } = await import("drizzle-orm/sqlite-core");
+    const { toDrizzleTable } = await import("../compile");
+    const built = await buildExtensionSchema({
+      dialect: "sqlite" as const,
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [
+        { owner: { kind: "plugin" as const, id: "fx" }, tables: [withCheck] },
+      ],
+    });
+    const drizzleTable = toDrizzleTable(
+      built.tables[0] as never,
+      "sqlite" as const
+    );
+    const config = getTableConfig(drizzleTable as never);
+    expect(config.checks.map(c => c.name)).toContain("ck_fx__checked_score_ok");
+  });
+
+  it("keeps checks OFF the postgres kit table, which applies them by statement", async () => {
+    const { getTableConfig } = await import("drizzle-orm/pg-core");
+    const { toDrizzleTable } = await import("../compile");
+    const built = await buildExtensionSchema({
+      dialect: "postgresql" as const,
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [
+        { owner: { kind: "plugin" as const, id: "fx" }, tables: [withCheck] },
+      ],
+    });
+    const drizzleTable = toDrizzleTable(
+      built.tables[0] as never,
+      "postgresql" as const
+    );
+    const config = getTableConfig(drizzleTable as never);
+    expect(config.checks).toEqual([]);
   });
 });

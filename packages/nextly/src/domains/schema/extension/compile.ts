@@ -22,7 +22,8 @@
  */
 import { mysqlTable } from "drizzle-orm/mysql-core";
 import { pgTable } from "drizzle-orm/pg-core";
-import { sqliteTable } from "drizzle-orm/sqlite-core";
+import { check, sqliteTable } from "drizzle-orm/sqlite-core";
+import { sql as drizzleSql } from "drizzle-orm";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -172,5 +173,19 @@ export function toDrizzleTable(
   if (dialect === "mysql") {
     return mysqlTable(table.name, columns as never);
   }
-  return sqliteTable(table.name, columns as never);
+  // Checks ride the kit-bound table on SQLite ONLY. This dialect cannot
+  // alter a constraint in place, so a check change must travel through the
+  // table rebuild drizzle-kit already performs — which only sees a check
+  // that is part of the table definition. PostgreSQL and MySQL apply checks
+  // through ADD/DROP CONSTRAINT statements instead, and putting them here
+  // for those dialects would double-apply (the index rule two comments up).
+  // Foreign keys stay OFF the kit table: their drizzle form needs the
+  // REFERENCED table's column objects, which a single-table compile does
+  // not hold — the recorded remainder of the sqlite rebuild path.
+  const checks = (table.checks ?? []).map(declared =>
+    check(`ck_${table.name}_${declared.name}`, drizzleSql.raw(declared.sql))
+  );
+  return checks.length > 0
+    ? sqliteTable(table.name, columns as never, () => checks)
+    : sqliteTable(table.name, columns as never);
 }
