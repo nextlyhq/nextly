@@ -40,14 +40,106 @@ interface IndexRow {
   column: string;
 }
 
+/** pg_constraint's one-char referential actions, in the diff's spelling. */
+const PG_FK_ACTION: Record<string, ForeignKeySpec["onDelete"]> = {
+  a: "no action",
+  r: "restrict",
+  c: "cascade",
+  n: "set null",
+  d: "set default",
+};
+
+/**
+ * Strip pg_get_constraintdef's CHECK wrapper. PG renders `CHECK ((expr))`,
+ * with the expression itself parenthesised, so BOTH layers come off; leaving
+ * one would compare unequal against a declared expression and report drift
+ * no migration could resolve.
+ */
+function pgCheckExpression(definition: string): string {
+  const double = /^CHECK\s*\(\((.*)\)\)$/s.exec(definition);
+  if (double) return double[1].trim();
+  const single = /^CHECK\s*\((.*)\)$/s.exec(definition);
+  return (single ? single[1] : definition).trim();
+}
+
+/**
+ * Read foreign keys and named checks from pg_constraint for the snapshot's
+ * tables, with the same empty-array-not-undefined contract as indexes: a
+ * table with no constraints is TRACKED as having none.
+ */
+async function attachPgConstraints(
+  db: PgMysqlExecute,
+  snapshot: NextlySchemaSnapshot,
+  tableNamesIn: ReturnType<typeof sql.join> | unknown
+): Promise<void> {
+  const fkResult = (await db.execute(
+    sql`SELECT con.conname AS name, tbl.relname AS table, ref.relname AS ref_table,
+               con.confdeltype AS on_delete, con.confupdtype AS on_update,
+               (SELECT array_agg(att.attname ORDER BY ord)
+                FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                JOIN pg_attribute att
+                  ON att.attrelid = con.conrelid AND att.attnum = k.attnum) AS columns,
+               (SELECT array_agg(att.attname ORDER BY ord)
+                FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+                JOIN pg_attribute att
+                  ON att.attrelid = con.confrelid AND att.attnum = k.attnum) AS ref_columns
+        FROM pg_constraint con
+        JOIN pg_class tbl ON tbl.oid = con.conrelid
+        JOIN pg_class ref ON ref.oid = con.confrelid
+        WHERE con.contype = 'f' AND tbl.relname IN (${tableNamesIn})`
+  )) as {
+    rows: Array<{
+      name: string;
+      table: string;
+      ref_table: string;
+      on_delete: string;
+      on_update: string;
+      columns: string[];
+      ref_columns: string[];
+    }>;
+  };
+  const checkResult = (await db.execute(
+    sql`SELECT con.conname AS name, tbl.relname AS table,
+               pg_get_constraintdef(con.oid) AS definition
+        FROM pg_constraint con
+        JOIN pg_class tbl ON tbl.oid = con.conrelid
+        WHERE con.contype = 'c' AND tbl.relname IN (${tableNamesIn})`
+  )) as {
+    rows: Array<{ name: string; table: string; definition: string }>;
+  };
+
+  const fks = new Map<string, ForeignKeySpec[]>();
+  for (const row of fkResult.rows) {
+    const list = fks.get(row.table) ?? [];
+    list.push({
+      name: row.name,
+      columns: [...row.columns],
+      referencesTable: row.ref_table,
+      referencesColumns: [...row.ref_columns],
+      onDelete: PG_FK_ACTION[row.on_delete] ?? "no action",
+      onUpdate: PG_FK_ACTION[row.on_update] ?? "no action",
+    });
+    fks.set(row.table, list);
+  }
+  const checks = new Map<string, CheckSpec[]>();
+  for (const row of checkResult.rows) {
+    const list = checks.get(row.table) ?? [];
+    list.push({ name: row.name, sql: pgCheckExpression(row.definition) });
+    checks.set(row.table, list);
+  }
+  for (const table of snapshot.tables) {
+    table.foreignKeys = fks.get(table.name) ?? [];
+    table.checks = checks.get(table.name) ?? [];
+  }
+}
+
 /**
  * Group index rows (one per index column, ordered) by table + index name, and
  * attach an `indexes` array to every table in the snapshot. Every table gets a
  * DEFINED array (possibly empty) — introspection never leaves it undefined, so
  * the diff sentinel only ever comes from pre-C1 on-disk snapshots.
  */
-function attachIndexes(snapshot: NextlySchemaSnapshot, rows: IndexRow[]): void {
-  const byTable = new Map<
+function attachIndexes(snapshot: NextlySchemaSnapshot, rows: IndexRow[]): void {  const byTable = new Map<
     string,
     Map<string, { unique: boolean; columns: string[] }>
   >();
@@ -313,6 +405,7 @@ export async function introspectLiveSnapshot(
         column: r.column,
       }))
     );
+    await attachPgConstraints(dbTyped, snapshot, tableNamesIn);
     normalizeIndexOrder(snapshot);
     return snapshot;
   }
