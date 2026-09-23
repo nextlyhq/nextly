@@ -306,7 +306,30 @@ describe("row 11 — any Drizzle column type", () => {
 });
 
 describe("row 12 — relations for typed relational queries", () => {
-  it.todo("C: extension tables declare relations for typed relational queries");
+  it("C: extension tables declare relations for typed relational queries", async () => {
+    // The declared chain: a ref column compiles to a one-edge the registry
+    // accepts. The query half — a `with` query returning the nested row on
+    // a real database — is proven by relations-roundtrip.integration.
+    const { col, defineTable } = await import("../dsl");
+    const linked = defineTable("linked", {
+      id: col.id(),
+      ownerId: col.ref("fx__owners"),
+    });
+    const built = await buildExtensionSchema(
+      input({
+        coreTableNames: ["users", "fx__owners"],
+        plugins: [
+          {
+            owner: { kind: "plugin" as const, id: "fx" },
+            tables: [linked],
+          },
+        ],
+      })
+    );
+    expect(built.relations.get("fx__linked")).toEqual([
+      { key: "ownerId", fromColumn: "owner_id", targetTable: "fx__owners" },
+    ]);
+  });
 });
 
 describe("row 13 — typed access to added tables", () => {
