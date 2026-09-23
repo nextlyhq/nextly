@@ -104,5 +104,19 @@ export function validateRouteOptions(route: PluginRoute): string | null {
   if (route.rawBody === true && !UNSAFE_METHODS.has(route.method)) {
     return `rawBody is only meaningful on a method with a body, not ${route.method}`;
   }
+  // The union is a TYPESCRIPT guarantee, and an unchecked JavaScript plugin
+  // has none: a typo like "authn" parsed happily, made `rateLimitKey` answer
+  // null, and the route then ran with no limiter at all — silently losing the
+  // credential-stuffing budget the author believed they had declared, and the
+  // no-store protection an auth route gets. Refused at collection, where the
+  // declared/known mismatch is still a configuration error rather than a
+  // running route missing its protection.
+  if (
+    route.rateLimit !== undefined &&
+    route.rateLimit !== "auth" &&
+    route.rateLimit !== "general"
+  ) {
+    return `rateLimit must be "auth" or "general", not ${JSON.stringify(route.rateLimit)}`;
+  }
   return null;
 }

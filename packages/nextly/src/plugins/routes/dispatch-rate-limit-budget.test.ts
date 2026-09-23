@@ -141,3 +141,44 @@ describe("a plugin rate-limit refusal answers through the canonical boundary", (
     expect(body.error.requestId).toBe(res.headers.get("x-request-id"));
   });
 });
+
+describe("a plugin CSRF refusal answers through the canonical boundary", () => {
+  it("carries the request id and the envelope", async () => {
+    // Same reasoning as the rate-limit refusal: this is one of the errors no
+    // later wrapper decorates, so a hand-built body was the one 403 a client
+    // could not correlate.
+    const res = await runPluginRoute(
+      new Request("http://localhost/admin/api/plugins/@a/x/r", {
+        method: "POST",
+        // A cookie caller with no CSRF token: `csrf: true` + POST + cookie.
+        headers: { cookie: "nextly_csrf=absent" },
+      }),
+      matchWithCsrf()
+    );
+
+    expect(res.status).toBe(403);
+    expect(res.headers.get("x-request-id")).toBeTruthy();
+    expect(res.headers.get("cache-control")).toBe("no-store");
+
+    const body = (await res.json()) as {
+      error: { code: string; requestId: string };
+    };
+    expect(body.error.requestId).toBe(res.headers.get("x-request-id"));
+  });
+});
+
+/** A cookie-caller POST route that declares CSRF, so the check runs. */
+function matchWithCsrf(): RouteMatch {
+  return {
+    pluginName: "@a/x",
+    route: {
+      method: "POST",
+      path: "/r",
+      public: true,
+      csrf: true,
+      handler: () => Response.json({ ok: true }),
+    } as PluginRoute,
+    baseCtx,
+    params: {},
+  };
+}

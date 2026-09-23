@@ -407,21 +407,27 @@ async function applyRouteCsrf(
   );
   if (result.valid) return null;
 
-  return new Response(
-    JSON.stringify({
-      error: {
-        code: "CSRF_FAILED",
-        message: result.error ?? "CSRF check failed.",
+  // The CANONICAL error boundary, like the rate-limit refusal beside it: this
+  // is one of the errors no later wrapper decorates, so a hand-built body left
+  // it without `requestId`, without `x-request-id`, and outside the
+  // development diagnostics. `no-store` is set on the built response because
+  // the builder does not know a CSRF refusal must never be cached.
+  const refusal = buildErrorResponse(
+    NextlyError.forbidden({
+      ...(result.error !== undefined ? { logMessage: result.error } : {}),
+      logContext: {
+        reason: "plugin-route-csrf-failed",
+        plugin: matched.pluginName,
+        path: matched.route.path,
       },
     }),
     {
-      status: 403,
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-store",
-      },
+      requestId: readOrGenerateRequestId(req),
+      flattened: currentFlattenedErrors(),
     }
   );
+  refusal.headers.set("Cache-Control", "no-store");
+  return refusal;
 }
 
 /**

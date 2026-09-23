@@ -173,3 +173,25 @@ describe("rateLimitKey", () => {
     expect(rateLimitKey(route(), "acme-auth", "1.2.3.4")).toBeNull();
   });
 });
+
+describe("validateRouteOptions: the rate-limit mode", () => {
+  it("refuses a mode outside the declared union", () => {
+    // The union is a TypeScript guarantee; an unchecked JavaScript plugin
+    // has none. A typo made `rateLimitKey` answer null and the route ran
+    // with no limiter — silently losing the budget the author declared.
+    const problem = validateRouteOptions(
+      route({ rateLimit: "authn" as never })
+    );
+    expect(problem).toContain("rateLimit");
+    expect(problem).toContain("authn");
+  });
+
+  it.each(["auth", "general"] as const)("accepts %s", mode => {
+    // The control: both declared modes stay declarable.
+    expect(validateRouteOptions(route({ rateLimit: mode }))).toBeNull();
+  });
+
+  it("accepts a route that declares no mode", () => {
+    expect(validateRouteOptions(route())).toBeNull();
+  });
+});
