@@ -44,6 +44,7 @@ import {
 } from "../../../database/drizzle-kit-lazy";
 import { isMissingColumnError } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
+import { pluginMigratedTableSet } from "../ownership/drop-guard";
 
 import { currentMysqlDatabaseName } from "./database-url";
 import {
@@ -145,7 +146,13 @@ async function applyPushResult(
 ): Promise<FreshPushResult> {
   const desiredTableNames = drizzleTableNames(schema);
   const pieces = splitStatements(result.sqlStatements);
-  const safe = filterUnsafeStatements(pieces, desiredTableNames);
+  // Plugin-migrated tables are never dropped by push, whatever the desired
+  // set says; an unreadable registry reads as "nothing claimed".
+  const safe = filterUnsafeStatements(
+    pieces,
+    desiredTableNames,
+    await pluginMigratedTableSet(db, dialect)
+  );
 
   // Boot-safety: strip (never execute) destructive statements the kit
   // emitted unexpectedly, and surface them via hints + warn. See the

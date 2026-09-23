@@ -19,9 +19,11 @@
  * @module domains/schema/ownership/drop-guard
  * @since 1.0.0
  */
+import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 
 import type { OwnerRecord } from "./owner-registry";
+import { SchemaOwnersRepository } from "./schema-owners-repository";
 
 /**
  * Tables a statement drops.
@@ -114,4 +116,36 @@ export function pushMayDropTable(
   const owner = owners.get(canonicalTableName(table));
   if (!owner) return true;
   return !owner.migratedBy.startsWith("plugin:");
+}
+
+/** Whether one statement is a DROP of a plugin-migrated table. */
+export function dropsPluginMigratedTable(
+  statement: string,
+  pluginMigratedTables: ReadonlySet<string>
+): boolean {
+  const match = DROP_TABLE.exec(statement);
+  if (!match) return false;
+  return pluginMigratedTables.has(canonicalTableName(match[1]).toLowerCase());
+}
+
+/**
+ * The plugin-migrated table set dev push refuses to drop, from the owner
+ * registry. Undefined when the registry cannot be read (a database that
+ * predates it, or a fresh install before core reconcile), which callers read
+ * as "nothing is claimed" — the pre-registry behaviour exactly.
+ */
+export async function pluginMigratedTableSet(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<ReadonlySet<string> | undefined> {
+  try {
+    const rows = await new SchemaOwnersRepository(db, dialect).read();
+    return new Set(
+      rows
+        .filter(row => row.migratedBy.startsWith("plugin:"))
+        .map(row => row.tableName.toLowerCase())
+    );
+  } catch {
+    return undefined;
+  }
 }

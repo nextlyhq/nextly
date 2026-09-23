@@ -119,9 +119,27 @@ function inferOwnerTableFromObjectName(
  */
 export function filterUnsafeStatements(
   statements: string[],
-  desiredTableNames: string[]
+  desiredTableNames: string[],
+  /**
+   * Tables whose owner rows name a plugin migration stream, lower-cased.
+   *
+   * Dev push reconciles what the CONFIG describes, and a plugin removed from
+   * config is exactly the moment its tables' data is most at risk — the
+   * plugin is being uninstalled, and that is a decision for
+   * `plugin:uninstall`, not a side effect of a reload. So an in-desired drop
+   * of one of these is refused: the only new behaviour this adds, and only
+   * in the direction of refusing. Absent (or empty) = no stream has claimed
+   * anything, which is the pre-registry behaviour exactly.
+   */
+  pluginMigratedTables?: ReadonlySet<string>
 ): string[] {
   const desiredSet = new Set(desiredTableNames.map(t => t.toLowerCase()));
+  // A SQLite rebuild drops a `__new_<table>` twin; the owner is the table it
+  // rebuilds.
+  const pluginOwned = (name: string) =>
+    pluginMigratedTables !== undefined &&
+    (pluginMigratedTables.has(name.toLowerCase()) ||
+      pluginMigratedTables.has(name.toLowerCase().replace(/^__new_/, "")));
 
   return statements.filter(stmt => {
     // ── DROP TABLE ──────────────────────────────────────────────────
@@ -133,6 +151,12 @@ export function filterUnsafeStatements(
       const isInDesired = desiredSet.has(tableName.toLowerCase());
 
       if (isInDesired) {
+        if (pluginOwned(tableName)) {
+          console.warn(
+            `[Nextly schema] Blocked DROP TABLE "${tableName}": its owner row names a plugin migration stream. Plugin tables are removed by \`nextly plugin:uninstall\`, never by dev push.`
+          );
+          return false;
+        }
         // Intentional drop — rebuild pattern, system-table refresh, etc.
         return true;
       }

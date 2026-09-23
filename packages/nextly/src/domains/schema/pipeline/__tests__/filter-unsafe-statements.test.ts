@@ -171,3 +171,42 @@ describe("stripKitDropsOfDeclaredIndexes", () => {
     expect(out.strippedCount).toBe(0);
   });
 });
+
+describe("filterUnsafeStatements: plugin-migrated tables", () => {
+  const pluginSet = new Set(["auth__identities", "billing__x"]);
+
+  it("blocks an in-desired drop of a plugin-migrated table", () => {
+    const kept = filterUnsafeStatements(
+      ['DROP TABLE "auth__identities"', "CREATE TABLE t (id INT)"],
+      ["auth__identities", "t"],
+      pluginSet
+    );
+    expect(kept).toEqual(["CREATE TABLE t (id INT)"]);
+  });
+
+  it("keeps the rebuild drop for tables no plugin stream claims", () => {
+    const kept = filterUnsafeStatements(
+      ["DROP TABLE dc_posts", "DROP TABLE __new_dc_posts"],
+      ["dc_posts", "__new_dc_posts"],
+      pluginSet
+    );
+    expect(kept).toEqual(["DROP TABLE dc_posts", "DROP TABLE __new_dc_posts"]);
+  });
+
+  it("resolves a SQLite rebuild twin to the table it rebuilds", () => {
+    const kept = filterUnsafeStatements(
+      ["DROP TABLE __new_billing__x"],
+      ["__new_billing__x"],
+      pluginSet
+    );
+    expect(kept).toEqual([]);
+  });
+
+  it("without the set, keeps today's behaviour exactly", () => {
+    const kept = filterUnsafeStatements(
+      ['DROP TABLE "auth__identities"'],
+      ["auth__identities"]
+    );
+    expect(kept).toEqual(['DROP TABLE "auth__identities"']);
+  });
+});

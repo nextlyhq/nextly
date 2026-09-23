@@ -40,6 +40,10 @@ import {
   resolveRegistryNameFromCatalog,
 } from "../../field-groups/storage/resolve-storage-names";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
+import {
+  dropsPluginMigratedTable,
+  pluginMigratedTableSet,
+} from "../ownership/drop-guard";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
@@ -1236,9 +1240,25 @@ export class PushSchemaPipeline {
         // emitted from those approved operations, so there is no orphan to
         // find; the destructive scan and the lock filter below still apply to
         // both routes.
+        // Plugin-migrated tables are never dropped by dev push, whatever the
+        // desired set says: their removal is `plugin:uninstall`'s decision,
+        // not a reload's side effect. The kit route enforces this inside
+        // filterUnsafeStatements; the fast path bypasses that filter (its
+        // statements come from approved operations), so it gets the same
+        // refusal applied directly to its drops.
+        const pluginMigrated = await pluginMigratedTableSet(db, dialect);
         const unlocked = useFastPath
-          ? emittedStatements
-          : filterUnsafeStatements(emittedStatements, desiredTableNames);
+          ? pluginMigrated
+            ? emittedStatements.filter(
+                statement =>
+                  !dropsPluginMigratedTable(statement, pluginMigrated)
+              )
+            : emittedStatements
+          : filterUnsafeStatements(
+              emittedStatements,
+              desiredTableNames,
+              pluginMigrated
+            );
         // Op-level lock filtering covers what this pipeline decided to do, but
         // drizzle-kit re-derives drift from the full desired schema, so on the
         // kit path it can still emit DDL for a locked table. Scope reduction
