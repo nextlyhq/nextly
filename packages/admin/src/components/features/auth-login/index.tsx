@@ -228,8 +228,10 @@ export function Login() {
         <SetInitialPassword
           // Absent for the resumed case, where the token is in the cookie.
           pendingToken={challengeFlow.passwordChange.pendingToken}
-          onDone={() => {
-            window.location.href = ROUTES.DASHBOARD;
+          // The server's own destination when it has one: the sanitized
+          // `next` the pending token carried. Otherwise the dashboard.
+          onDone={next => {
+            window.location.href = next ?? ROUTES.DASHBOARD;
           }}
         />
       ) : challengeFlow.challenge ? (

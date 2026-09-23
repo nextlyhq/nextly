@@ -253,7 +253,7 @@ export function pluginRouteAuthRequired(
 async function generalRouteBudget(): Promise<{
   limit: number;
   windowMs: number;
-}> {
+} | null> {
   const { getService } = await import("../../di/register");
   const config = getService("config") as
     | {
@@ -265,11 +265,12 @@ async function generalRouteBudget(): Promise<{
       }
     | undefined;
   const rateLimit = config?.rateLimit;
-  // Disabled app-wide means disabled here: an effectively infinite budget,
-  // rather than a second switch a reader would have to know about.
-  if (rateLimit?.enabled === false) {
-    return { limit: Number.MAX_SAFE_INTEGER, windowMs: 60_000 };
-  }
+  // Disabled app-wide means NOT LIMITED here, answered as `null` rather than
+  // as an enormous number. A huge limit is still a limit: the check ran on
+  // every request, calling a configured remote store and, with the in-memory
+  // one, keeping an entry alive for every distinct bucket — work the install
+  // explicitly turned off, that could never refuse anything.
+  if (rateLimit?.enabled === false) return null;
   return {
     limit: rateLimit?.readLimit ?? 100,
     windowMs: rateLimit?.windowMs ?? 60_000,
@@ -319,12 +320,13 @@ async function applyRouteRateLimit(
       ? { limit: configured.requestsPerHour, windowMs: configured.windowMs }
       : await generalRouteBudget();
 
-  // A non-positive limit means DISABLED, exactly as it does for the core auth
-  // router (`checkAuthIpRateLimit`). Copying the number into a `check` instead
-  // made `requestsPerHour: 0` mean "refuse everything": no request can be
-  // within a limit of zero, so plugin auth routes answered 429 to everyone
-  // while the core routes the setting was written for ran unlimited.
-  if (budget.limit <= 0) return null;
+  // `null` is rate limiting switched off app-wide; a non-positive limit means
+  // the same thing for the auth budget, exactly as it does for the core auth
+  // router (`checkAuthIpRateLimit`). Copying the number into a `check`
+  // instead made `requestsPerHour: 0` mean "refuse everything": no request
+  // can be within a limit of zero, so plugin auth routes answered 429 to
+  // everyone while the core routes the setting was written for ran unlimited.
+  if (!budget || budget.limit <= 0) return null;
 
   const limiter = authRateLimiter(configured.store);
   const verdict = await limiter.check(key, budget.limit, budget.windowMs);

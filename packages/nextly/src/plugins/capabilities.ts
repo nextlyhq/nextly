@@ -36,6 +36,20 @@ const IP_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
 const OUTBOUND_HOST =
   /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
 
+/**
+ * The one name with no dot that a manifest may still declare.
+ *
+ * The pattern above requires a dot, so `capabilities.net.outbound:
+ * ["localhost"]` failed BOOT — which made the documented development-only
+ * loopback exception unreachable through a real manifest: no plugin could
+ * declare the host it needs to reach a fake provider in its own tests.
+ *
+ * Accepting the name here is not what permits the connection. `ctx.fetch`
+ * still resolves it and refuses a loopback address outside development, so
+ * production is unchanged by this.
+ */
+const LOOPBACK_HOST = "localhost";
+
 function plugins(all: PluginDefinition[]): PluginDefinition[] {
   // A disabled plugin contributes nothing, so it neither provides a capability
   // another plugin could require nor has a manifest worth enforcing.
@@ -68,7 +82,8 @@ function assertOutboundHosts(plugin: PluginDefinition): void {
     // every label is digits — so it is refused explicitly. An allowlist is a
     // statement about WHO a plugin talks to, and an address is not who
     // anybody is.
-    if (!OUTBOUND_HOST.test(host) || IP_LITERAL.test(host)) {
+    const named = host === LOOPBACK_HOST || OUTBOUND_HOST.test(host);
+    if (!named || IP_LITERAL.test(host)) {
       throw resolutionError(
         "invalid-outbound-host",
         `Plugin "${plugin.name}" declares an outbound host that is not a hostname: "${host}".`,
@@ -258,6 +273,20 @@ export function resolveProvides(
   const provided = new Map<string, { plugin: string; version: string }>();
   for (const plugin of plugins(all)) {
     for (const capability of plugin.provides ?? []) {
+      const existing = provided.get(capability);
+      if (existing) {
+        // REFUSED rather than overwritten. Replacing the first provider made
+        // the winner depend on the order the plugins happen to sit in the
+        // config array, so a consumer's version requirement passed or failed
+        // for a reason no manifest records — and nothing downstream can tell
+        // which implementation it actually got. Both names, because with one
+        // the reader has to go and find the other.
+        throw resolutionError(
+          "capability-provided-twice",
+          `Plugins "${existing.plugin}" and "${plugin.name}" both provide the capability "${capability}".`,
+          { capability, providers: [existing.plugin, plugin.name] }
+        );
+      }
       provided.set(capability, {
         plugin: plugin.name,
         version: plugin.version,

@@ -100,12 +100,27 @@ function retryResponse(args: {
       setPendingCookie(args.token, args.challengeTokenTTL, args.isProduction)
     );
   }
+  // The CANONICAL error envelope, so the retry token survives the trip.
+  // This answers 401, and an admin fetcher throws on that before anything
+  // reads the body — so a token returned at the top level was discarded and
+  // the client went on replaying the token it already had, spending the
+  // budget without ever advancing. `parseApiError` exposes `error.data`,
+  // which is where a caller can actually reach it.
   return new Response(
     JSON.stringify({
-      status: "challenge",
-      challengeType: args.challengeId,
-      ...(args.usedCookie ? {} : { pendingToken: args.token }),
-      error: "Invalid code.",
+      error: {
+        code: "AUTH_INVALID_CREDENTIALS",
+        message: "Invalid code.",
+        requestId: args.requestId,
+        data: {
+          status: "challenge",
+          challengeType: args.challengeId,
+          // Cookie-mode clients never receive it in the body: the re-issued
+          // token replaces the cookie in the header above, where script
+          // cannot reach it.
+          ...(args.usedCookie ? {} : { pendingToken: args.token }),
+        },
+      },
     }),
     { status: 401, headers }
   );

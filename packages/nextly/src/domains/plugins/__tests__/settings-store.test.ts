@@ -19,6 +19,7 @@ function recordingDb(options: { failOnRow?: number } = {}) {
   // by the time the callback runs — which is the exact defect under test.
   const events: string[] = [];
   const claimed: string[] = [];
+  const claimedRows: PluginSettingRow[] = [];
   const deleted: string[] = [];
   let transactions = 0;
   let issued = 0;
@@ -28,25 +29,15 @@ function recordingDb(options: { failOnRow?: number } = {}) {
     select: () => ({
       from: () => ({
         where: () => {
-          // Awaitable on its own AND carrying `.for`, exactly as the
-          // Postgres/MySQL builders are — so the store's choice between them
-          // is observable rather than assumed.
           events.push("select");
-          const rows = stored.slice();
-          const p = Promise.resolve(rows) as Promise<PluginSettingRow[]> & {
-            for: (s: "update") => Promise<PluginSettingRow[]>;
-          };
-          p.for = (strength: "update") => {
-            locks.push(strength);
-            return Promise.resolve(rows);
-          };
-          return p;
+          return Promise.resolve(stored.slice());
         },
       }),
     }),
     insert: () => ({
       values: (row: unknown) => {
         const key = (row as PluginSettingRow).key;
+        const values = row as PluginSettingRow;
         const runOne = async (how: string) => {
           issued += 1;
           if (options.failOnRow === issued) {
@@ -56,7 +47,19 @@ function recordingDb(options: { failOnRow?: number } = {}) {
           applied.push(key);
         };
         return {
-          onConflictDoUpdate: () => runOne("onConflictDoUpdate"),
+          // The CLAIM is a no-op `DO UPDATE` on every dialect now, because
+          // `DO NOTHING` takes no lock on an existing row. Told apart from
+          // the real upsert by what it sets.
+          onConflictDoUpdate: (args: unknown) => {
+            const set = (args as { set: Record<string, unknown> }).set;
+            if (!("value" in set)) {
+              claimed.push(key);
+              claimedRows.push(values);
+              events.push("claim");
+              return Promise.resolve();
+            }
+            return runOne("onConflictDoUpdate");
+          },
           // On MySQL the CLAIM is spelled `onDuplicateKeyUpdate` too, so the
           // two are told apart by what they set: the claim assigns the key to
           // itself as a no-op, the upsert writes the value and its metadata.
@@ -65,17 +68,11 @@ function recordingDb(options: { failOnRow?: number } = {}) {
             const set = (args as { set: Record<string, unknown> }).set;
             if (!("value" in set)) {
               claimed.push(key);
+              claimedRows.push(values);
               events.push("claim");
               return Promise.resolve();
             }
             return runOne("onDuplicateKeyUpdate");
-          },
-          // The CLAIM, recorded separately: it is a different statement with
-          // a different purpose, and counting it as an upsert would make the
-          // spelling assertions meaningless.
-          onConflictDoNothing: async () => {
-            claimed.push(key);
-            events.push("claim");
           },
         };
       },
@@ -94,6 +91,7 @@ function recordingDb(options: { failOnRow?: number } = {}) {
     locks,
     events,
     claimed,
+    claimedRows,
     deleted,
     stored,
     transactions: () => transactions,
@@ -188,56 +186,33 @@ describe("a settings update is one transaction", () => {
   });
 });
 
-describe("the read is locked where the dialect has a row lock", () => {
-  it("takes FOR UPDATE on Postgres", async () => {
-    // Without the lock the second caller reads the stale row rather than
-    // waiting, so its merge overwrites the first one's commit.
+describe("locks are taken in one consistent order", () => {
+  it("claims keys SORTED, whatever order the caller names them in", async () => {
+    // Two patches sharing keys in opposite orders would each hold what the
+    // other waits for, and the database would abort one. Sorting is what
+    // makes the order the same for every writer.
     const fake = recordingDb();
+    await createPluginSettingsStore(fake.db, "postgresql").mutate(
+      "@test/p",
+      ["zeta", "alpha", "mu"],
+      () => rows("zeta", "alpha", "mu")
+    );
+    expect(fake.claimed).toEqual(["alpha", "mu", "zeta"]);
+  });
+
+  it("does not lock the owner's other rows", async () => {
+    // Claiming its own keys and then locking every row for the owner is what
+    // deadlocked two concurrent patches to DIFFERENT keys. A key this update
+    // never writes is read, not held.
+    const fake = recordingDb();
+    fake.stored.push(...rows("untouched"));
     await createPluginSettingsStore(fake.db, "postgresql").mutate(
       "@test/p",
       ["alpha"],
       () => rows("alpha")
     );
-    expect(fake.locks).toEqual(["update"]);
-  });
-
-  it("takes FOR UPDATE on MySQL", async () => {
-    const fake = recordingDb();
-    await createPluginSettingsStore(fake.db, "mysql").mutate(
-      "@test/p",
-      ["alpha"],
-      () => rows("alpha")
-    );
-    expect(fake.locks).toEqual(["update"]);
-  });
-
-  it("does NOT on SQLite, which has no row lock", async () => {
-    // The control, and a real constraint rather than an omission: SQLite's
-    // write transaction takes a database-wide lock, and calling `.for` there
-    // would be a runtime error on a builder that does not have it.
-    const fake = recordingDb();
-    await createPluginSettingsStore(fake.db, "sqlite").mutate(
-      "@test/p",
-      ["alpha"],
-      () => rows("alpha")
-    );
+    expect(fake.claimed).toEqual(["alpha"]);
     expect(fake.locks).toEqual([]);
-  });
-
-  it("reads the rows on SQLite even without the lock", async () => {
-    // Otherwise "no lock" could be satisfied by not reading at all.
-    const fake = recordingDb();
-    fake.stored.push(...rows("existing"));
-    let seen: PluginSettingRow[] | undefined;
-    await createPluginSettingsStore(fake.db, "sqlite").mutate(
-      "@test/p",
-      [],
-      (current: PluginSettingRow[]) => {
-        seen = current;
-        return [];
-      }
-    );
-    expect(seen?.map(r => r.key)).toEqual(["existing"]);
   });
 });
 
@@ -330,5 +305,36 @@ describe("a key that does not exist yet is claimed before the read", () => {
       () => rows("alpha")
     );
     expect(fake.deleted).toEqual([]);
+  });
+});
+
+describe("the claim placeholder is storable on every dialect", () => {
+  it("carries a timestamp MySQL accepts", async () => {
+    // MySQL's `TIMESTAMP` range begins AFTER 1970-01-01 00:00:00, and under
+    // the strict mode most installations run it rejects that value outright.
+    // The epoch here failed the first write of any key before the real upsert
+    // was reached, so no plugin setting could ever be created.
+    const fake = recordingDb();
+    await createPluginSettingsStore(fake.db, "mysql").mutate(
+      "@test/p",
+      ["alpha"],
+      () => rows("alpha")
+    );
+
+    expect(fake.claimedRows).toHaveLength(1);
+    expect(fake.claimedRows[0].updatedAt.getTime()).toBeGreaterThan(0);
+  });
+
+  it("still writes the real value over it", async () => {
+    // The control: a claim carrying a valid timestamp is no use if the row it
+    // leaves behind is the placeholder rather than the setting.
+    const fake = recordingDb();
+    await createPluginSettingsStore(fake.db, "mysql").mutate(
+      "@test/p",
+      ["alpha"],
+      () => rows("alpha")
+    );
+    expect(fake.applied).toEqual(["alpha"]);
+    expect(fake.spelling).toEqual(["onDuplicateKeyUpdate"]);
   });
 });

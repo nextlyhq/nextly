@@ -25,6 +25,17 @@ import { NextlyError } from "../../errors/nextly-error";
 import { hostAllowed, judgeAddress } from "./address-rules";
 import type { SendArgs } from "./transport";
 
+/**
+ * The statuses that are actually a redirect.
+ *
+ * The whole 3xx range is not: `304 Not Modified` and `305 Use Proxy` live
+ * there too, and a `304` carrying a stale `Location` was being FOLLOWED —
+ * the plugin got the redirected resource instead of the not-modified answer
+ * it asked for, and a POST was rewritten to GET on the way. This is the set
+ * `fetch` itself recognises.
+ */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
 /** How many redirects a request may follow before it is treated as a loop. */
 const MAX_REDIRECTS = 3;
 /** A response body larger than this is refused rather than buffered. */
@@ -339,8 +350,9 @@ export function createPluginFetch(
       });
 
       const location = response.headers.get("location");
-      const isRedirect = response.status >= 300 && response.status < 400;
-      if (!isRedirect || !location) return response;
+      if (!REDIRECT_STATUSES.has(response.status) || !location) {
+        return response;
+      }
 
       if (remaining === 0) {
         refuse("too-many-redirects", { host: url.hostname });

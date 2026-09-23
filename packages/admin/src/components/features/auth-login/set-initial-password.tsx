@@ -25,8 +25,15 @@ export interface SetInitialPasswordProps {
    * when the body carries no token, so omitting the field is the whole of it.
    */
   pendingToken?: string;
-  /** Called once the password is set and a session has been issued. */
-  onDone: () => void;
+  /**
+   * Called once the password is set and a session has been issued.
+   *
+   * Carries the destination the SERVER chose, which is the sanitized `next`
+   * the pending token was minted with. Dropping it sent an external login
+   * that asked to land somewhere specific to the dashboard instead, after
+   * the backend had gone to the trouble of preserving it.
+   */
+  onDone: (next?: string) => void;
 }
 
 /**
@@ -48,15 +55,18 @@ export function SetInitialPassword({
     setIsLoading(true);
     try {
       const csrfToken = await getCsrfToken();
-      await api.public.post("/auth/set-initial-password", {
-        // OMITTED rather than sent empty when there is no token: the server
-        // reads the cookie only when the field is absent, and an empty string
-        // is a present-but-invalid token it would refuse.
-        ...(pendingToken ? { pendingToken } : {}),
-        newPassword: values.newPassword,
-        csrfToken,
-      });
-      onDone();
+      const result = await api.public.post<{ next?: string }>(
+        "/auth/set-initial-password",
+        {
+          // OMITTED rather than sent empty when there is no token: the server
+          // reads the cookie only when the field is absent, and an empty string
+          // is a present-but-invalid token it would refuse.
+          ...(pendingToken ? { pendingToken } : {}),
+          newPassword: values.newPassword,
+          csrfToken,
+        }
+      );
+      onDone(result?.next);
     } catch (error: unknown) {
       toast.error("Could not set your password", {
         description: apiErrorMessage(

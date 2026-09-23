@@ -354,3 +354,81 @@ describe("resolveProvides", () => {
     expect(map.has("z")).toBe(false);
   });
 });
+
+describe("a capability has ONE provider", () => {
+  const providing = (name: string, capability: string) =>
+    ({
+      name,
+      version: "1.0.0",
+      nextly: ">=0.0.1",
+      provides: [capability],
+    }) as unknown as PluginDefinition;
+
+  it("REFUSES two plugins providing the same capability, naming both", () => {
+    // Overwriting made the winner depend on config array order, so a
+    // consumer's version requirement passed or failed for a reason no
+    // manifest records.
+    let caught: unknown;
+    try {
+      validateRequires([
+        providing("@acme/a", "webhook-signing"),
+        providing("@acme/b", "webhook-signing"),
+      ]);
+    } catch (err) {
+      caught = err;
+    }
+    const context = (caught as NextlyError | undefined)?.logContext as
+      | { reason?: string; providers?: string[] }
+      | undefined;
+    expect(context?.reason).toBe("capability-provided-twice");
+    expect(context?.providers).toEqual(["@acme/a", "@acme/b"]);
+  });
+
+  it("allows two plugins providing DIFFERENT capabilities", () => {
+    // The control: refusing any two providers at all would satisfy the test
+    // above while making a second plugin impossible to install.
+    expect(() =>
+      validateRequires([
+        providing("@acme/a", "webhook-signing"),
+        providing("@acme/b", "image-resizing"),
+      ])
+    ).not.toThrow();
+  });
+
+  it("ignores a DISABLED plugin's provides", () => {
+    // A plugin that is off provides nothing, so it cannot collide.
+    expect(() =>
+      validateRequires([
+        providing("@acme/a", "webhook-signing"),
+        {
+          ...providing("@acme/b", "webhook-signing"),
+          enabled: false,
+        } as unknown as PluginDefinition,
+      ])
+    ).not.toThrow();
+  });
+});
+
+describe("localhost is declarable for development", () => {
+  const outbound = (host: string) =>
+    ({
+      name: "@acme/p",
+      version: "1.0.0",
+      nextly: ">=0.0.1",
+      capabilities: { net: { outbound: [host] } },
+    }) as unknown as PluginDefinition;
+
+  it("accepts the bare name, which has no dot", () => {
+    // The documented development-only loopback exception was unreachable
+    // through a real manifest: the hostname pattern requires a dot, so a
+    // plugin could not declare the host its own tests need.
+    expect(() => validateCapabilities([outbound("localhost")])).not.toThrow();
+  });
+
+  it("still refuses an address literal", () => {
+    // The control, and the reason the exception is a NAME rather than a
+    // loosened pattern: `ctx.fetch` vets the resolved address, and a literal
+    // declared here would bypass the name it is supposed to check.
+    expect(() => validateCapabilities([outbound("127.0.0.1")])).toThrow();
+  });
+});

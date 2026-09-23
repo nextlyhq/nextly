@@ -29,8 +29,12 @@ function recordingDb() {
     }),
     insert: () => ({
       values: () => ({
-        onConflictDoUpdate: async () => {
-          spelling.push("onConflictDoUpdate");
+        // The store CLAIMS each key before reading, and that claim is a
+        // no-op `DO UPDATE` on every dialect — told apart from the real
+        // upsert by what it sets, since only the upsert writes a value.
+        onConflictDoUpdate: async (args: unknown) => {
+          const set = (args as { set: Record<string, unknown> }).set;
+          if ("value" in set) spelling.push("onConflictDoUpdate");
         },
         // The store CLAIMS each key before reading, and on MySQL that claim
         // is spelled `onDuplicateKeyUpdate` as well — told apart by what it
@@ -39,7 +43,7 @@ function recordingDb() {
           const set = (args as { set: Record<string, unknown> }).set;
           if ("value" in set) spelling.push("onDuplicateKeyUpdate");
         },
-        onConflictDoNothing: async () => undefined,
+        delete: async () => undefined,
       }),
     }),
     update: () => ({ set: () => ({ where: async () => undefined }) }),

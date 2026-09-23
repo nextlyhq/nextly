@@ -22,7 +22,7 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Table, Column } from "drizzle-orm";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, isNotNull } from "drizzle-orm";
 
 import { hashPassword } from "@nextly/auth/password";
 import {
@@ -758,7 +758,19 @@ export class UserMutationService extends BaseService {
     input: CreateExternalUserData,
     _context?: RequestActor
   ): Promise<UserMutationResponse> {
-    const validation = this.getCreateSchema().safeParse({
+    // The CORE schema, not the merged one. `getCreateSchema()` includes the
+    // install's custom user fields, and this path has no way to supply them:
+    // the input type carries only what a provider asserts. An install that
+    // declared any REQUIRED custom field therefore failed every external
+    // login on a field the caller could not have sent.
+    //
+    // Validating narrowly rather than widening the input is deliberate. A
+    // value a provider never asserted would have to be invented here, and a
+    // custom field an operator marked required is exactly the kind of thing
+    // that should not be filled in with a guess. Accounts created this way
+    // carry the core fields; anything else is set afterwards, by an admin or
+    // by the account itself.
+    const validation = CreateLocalUserSchema.safeParse({
       email: input.email,
       name: input.name,
       image: input.image ?? null,
@@ -790,6 +802,10 @@ export class UserMutationService extends BaseService {
 
     const { users, roles, userRoles } = this.tables;
 
+    // A cheap refusal before any work, and NOT the one that decides: the
+    // binding check runs inside the transaction below, holding the row it
+    // found. This one only saves the round trips when the install is plainly
+    // empty.
     const existingUser = await this.db.query.users.findFirst({
       columns: { id: true },
     });
@@ -857,6 +873,36 @@ export class UserMutationService extends BaseService {
     try {
       await this.withTransaction(async tx => {
         const txDb = tx as DrizzleTransactionLike;
+
+        // Re-checked HERE, holding whatever account it finds. The check above
+        // is a read: the last remaining user could be deleted between it and
+        // this insert, and the provider-created account would become the
+        // install's only one — exactly the first account this path refuses to
+        // create. Setup would then see a non-empty table and decline to make
+        // the super-admin, leaving the install with no administrator.
+        //
+        // Locking the found row is what makes a concurrent deletion WAIT
+        // rather than race: it cannot remove the account this transaction is
+        // holding until the new one is committed beside it.
+        const anchorQuery = txDb
+          .select({ id: users.id })
+          .from(users)
+          .where(isNotNull(users.id))
+          .limit(1);
+        const anchor = (
+          this.dialect === "sqlite"
+            ? await anchorQuery
+            : await anchorQuery.for("update")
+        )[0];
+        if (!anchor) {
+          throw NextlyError.forbidden({
+            logContext: {
+              reason: "external-user-on-empty-install",
+              email,
+            },
+          });
+        }
+
         await txDb.insert(users).values({
           id: newUserId,
           email,

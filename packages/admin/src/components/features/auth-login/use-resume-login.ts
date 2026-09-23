@@ -100,6 +100,40 @@ export function hasSignInError(search?: string): boolean {
  */
 const MUST_CHANGE_PASSWORD_CHALLENGE = "must-change-password";
 
+/**
+ * The replacement pending token a refused answer carries, if it carries one.
+ *
+ * A wrong answer answers 401, which the fetcher throws, so the fresh token
+ * rides in the error envelope's `data` — the only place a client that throws
+ * on a non-2xx status can still reach it. Advancing to it is what lets the
+ * next attempt carry the new counter: replaying the old token spends the
+ * budget without ever moving it, so the cap ran out while the person was
+ * still on an early guess.
+ *
+ * A cookie-mode client gets none here by design: its replacement arrives as a
+ * `Set-Cookie` the browser applies on its own, where script cannot read it.
+ */
+function retryTokenIn(error: unknown): string | undefined {
+  const data = (error as { data?: { pendingToken?: unknown } }).data;
+  return typeof data?.pendingToken === "string" ? data.pendingToken : undefined;
+}
+
+/**
+ * The forced password change a SUCCESSFUL answer reports, if it reports one.
+ *
+ * A 200 is not necessarily a session. The forced first-sign-in password
+ * change answers with no cookies issued, so navigating on it landed on a page
+ * that immediately redirected back to login, and the account could never
+ * reach the step it was being sent to.
+ */
+function passwordChangeIn(result: {
+  status?: string;
+  pendingToken?: string;
+}): { pendingToken: string } | null {
+  if (result?.status !== "password_change_required") return null;
+  return result.pendingToken ? { pendingToken: result.pendingToken } : null;
+}
+
 /** A challenge the login page is currently showing. */
 export interface ActiveChallenge {
   challengeType: string;
@@ -203,23 +237,21 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
           : {}),
       });
 
-      // A successful RESPONSE is not necessarily a session. The forced
-      // first-sign-in password change answers 200 with no cookies issued, so
-      // navigating here lands on a page that immediately redirects back.
-      if (
-        result?.status === "password_change_required" &&
-        result.pendingToken
-      ) {
-        setPasswordChange({ pendingToken: result.pendingToken });
-        return {
-          ok: true,
-          passwordChangeRequired: { pendingToken: result.pendingToken },
-        };
+      const raised = passwordChangeIn(result);
+      if (raised) {
+        setPasswordChange(raised);
+        return { ok: true, passwordChangeRequired: raised };
       }
 
       window.location.href = result?.next ?? ROUTES.DASHBOARD;
       return { ok: true };
     } catch (error: unknown) {
+      const advanced = retryTokenIn(error);
+      if (advanced) {
+        setChallenge(current =>
+          current ? { ...current, pendingToken: advanced } : current
+        );
+      }
       return {
         ok: false,
         error: apiErrorMessage(error, "That code was not accepted."),

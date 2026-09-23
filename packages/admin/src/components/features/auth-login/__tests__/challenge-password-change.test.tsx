@@ -110,3 +110,57 @@ describe("answering a challenge", () => {
     expect(result.current.passwordChange).toBeNull();
   });
 });
+
+describe("a wrong answer advances the token", () => {
+  /** The shape `parseApiError` produces for a canonical error envelope. */
+  function envelopeError(data: Record<string, unknown>) {
+    return Object.assign(new Error("Invalid code."), {
+      status: 401,
+      code: "AUTH_INVALID_CREDENTIALS",
+      data,
+    });
+  }
+
+  it("replaces the pending token it will send next", async () => {
+    // A wrong answer answers 401, which the fetcher throws, so the fresh
+    // token rides in the error envelope. Ignoring it meant the next attempt
+    // replayed the OLD counter: the budget was spent without ever advancing,
+    // so the cap ran out while the person was still guessing.
+    const { result } = renderHook(() => useChallengeFlow());
+    act(() => {
+      result.current.start({
+        challengeType: "totp",
+        pendingToken: "pt-first",
+        next: null,
+      });
+    });
+
+    post.mockRejectedValueOnce(envelopeError({ pendingToken: "pt-second" }));
+    await act(async () => {
+      await result.current.resolve({ code: "000000" });
+    });
+
+    expect(result.current.challenge?.pendingToken).toBe("pt-second");
+  });
+
+  it("keeps the token it has when the failure carries none", async () => {
+    // The control, and the cookie-mode case: there the replacement arrives as
+    // a `Set-Cookie` the browser applies, and the body carries no token at
+    // all. Clearing it here would strand the next attempt with nothing.
+    const { result } = renderHook(() => useChallengeFlow());
+    act(() => {
+      result.current.start({
+        challengeType: "totp",
+        pendingToken: "pt-first",
+        next: null,
+      });
+    });
+
+    post.mockRejectedValueOnce(envelopeError({}));
+    await act(async () => {
+      await result.current.resolve({ code: "000000" });
+    });
+
+    expect(result.current.challenge?.pendingToken).toBe("pt-first");
+  });
+});

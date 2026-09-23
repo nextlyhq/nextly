@@ -474,3 +474,56 @@ describe("redirect method rules", () => {
     expect(sent.get("accept")).toBe("application/json");
   });
 });
+
+describe("only real redirect statuses are followed", () => {
+  it("returns a 304 with a Location header as-is", async () => {
+    // The whole 3xx range is not a redirect. A `304 Not Modified` carrying a
+    // stale `Location` was followed, so the plugin received the redirected
+    // resource instead of the not-modified answer it asked for — and a POST
+    // was rewritten to GET on the way there.
+    const seen: string[] = [];
+    const fetchFn = createPluginFetch({
+      allowlist: ["api.example.com"],
+      allowLoopback: false,
+      resolve: async () => [{ address: "93.184.216.34", family: 4 }],
+      send: async ({ url }) => {
+        seen.push(url.toString());
+        return new Response(null, {
+          status: 304,
+          headers: { location: "https://api.example.com/other" },
+        });
+      },
+    });
+
+    const response = await fetchFn("https://api.example.com/thing");
+
+    expect(response.status).toBe(304);
+    // ONE request: the Location was not followed.
+    expect(seen).toEqual(["https://api.example.com/thing"]);
+  });
+
+  it("still follows a 302", async () => {
+    // The control: refusing to follow anything would satisfy the assertion
+    // above while breaking every redirect the runtime exists to handle.
+    const seen: string[] = [];
+    const fetchFn = createPluginFetch({
+      allowlist: ["api.example.com"],
+      allowLoopback: false,
+      resolve: async () => [{ address: "93.184.216.34", family: 4 }],
+      send: async ({ url }) => {
+        seen.push(url.toString());
+        return seen.length === 1
+          ? new Response(null, {
+              status: 302,
+              headers: { location: "https://api.example.com/other" },
+            })
+          : new Response("done", { status: 200 });
+      },
+    });
+
+    const response = await fetchFn("https://api.example.com/thing");
+
+    expect(response.status).toBe(200);
+    expect(seen).toHaveLength(2);
+  });
+});

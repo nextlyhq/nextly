@@ -62,6 +62,26 @@ function makeDeps() {
   };
 }
 
+/**
+ * The retry payload, read from wherever the response carries it.
+ *
+ * A wrong answer answers 401 with the CANONICAL error envelope, so the retry
+ * data sits under `error.data` — the only place a client that throws on a
+ * non-2xx status can still reach it.
+ */
+function retryPayload(body: Record<string, unknown>): {
+  status?: string;
+  challengeType?: string;
+  pendingToken?: string;
+} {
+  const error = body.error as { data?: Record<string, unknown> } | undefined;
+  return (error?.data ?? {}) as {
+    status?: string;
+    challengeType?: string;
+    pendingToken?: string;
+  };
+}
+
 function makeRequest(body: Record<string, unknown>): Request {
   return new Request("http://localhost:3000/admin/api/auth/challenge/resolve", {
     method: "POST",
@@ -113,9 +133,10 @@ describe("handleChallengeResolve (D71)", () => {
     );
     expect(res.status).toBe(401);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body.status).toBe("challenge");
-    expect(typeof body.pendingToken).toBe("string");
-    expect(body.pendingToken).not.toBe(pendingToken);
+    const retry = retryPayload(body);
+    expect(retry.status).toBe("challenge");
+    expect(typeof retry.pendingToken).toBe("string");
+    expect(retry.pendingToken).not.toBe(pendingToken);
   });
 
   it("carries `next` and `strategy` across a wrong answer", async () => {
@@ -145,7 +166,10 @@ describe("handleChallengeResolve (D71)", () => {
     // Read back from the TOKEN, not from the response envelope: the claims
     // are what the next attempt is decided from, and the envelope never
     // carried them.
-    const reissued = await verifyPendingToken(body.pendingToken, SECRET);
+    const reissued = await verifyPendingToken(
+      retryPayload(body).pendingToken as string,
+      SECRET
+    );
     expect(reissued?.next).toBe("/admin/posts");
     expect(reissued?.strategy).toBe("oauth-google");
     // The one thing that MUST change between rounds, so this is not simply
@@ -197,7 +221,7 @@ describe("handleChallengeResolve (D71)", () => {
           deps
         );
         const body = (await res.json()) as Record<string, unknown>;
-        if (body.status !== "challenge") stoppedAfter = attempt;
+        if (retryPayload(body).status !== "challenge") stoppedAfter = attempt;
       } catch {
         stoppedAfter = attempt;
       }
@@ -222,7 +246,7 @@ describe("handleChallengeResolve (D71)", () => {
       deps
     );
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body.status).toBe("challenge");
+    expect(retryPayload(body).status).toBe("challenge");
   });
 
   it("fails for good once attempts are exhausted", async () => {
@@ -238,7 +262,7 @@ describe("handleChallengeResolve (D71)", () => {
     );
     expect(res.status).toBe(401);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body.status).not.toBe("challenge");
+    expect(retryPayload(body).status).not.toBe("challenge");
   });
 });
 

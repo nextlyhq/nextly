@@ -19,19 +19,13 @@ import type { PluginSettingRow, PluginSettingsStore } from "./settings-service";
 interface SettingsWriter {
   select: () => {
     from: (table: unknown) => {
-      where: (condition: unknown) => Promise<PluginSettingRow[]> & {
-        // `.for("update")` exists on the Postgres/MySQL builders; SQLite has
-        // no row lock and serializes writers itself. Invoked only off SQLite,
-        // and the query is awaitable either way.
-        for: (strength: "update") => Promise<PluginSettingRow[]>;
-      };
+      where: (condition: unknown) => Promise<PluginSettingRow[]>;
     };
   };
   insert: (table: unknown) => {
     values: (data: unknown) => {
       onConflictDoUpdate: (args: unknown) => Promise<unknown>;
       onDuplicateKeyUpdate: (args: unknown) => Promise<unknown>;
-      onConflictDoNothing: () => Promise<unknown>;
     };
   };
   delete: (table: unknown) => {
@@ -70,28 +64,39 @@ export function createPluginSettingsStore(
   const { nextlyPluginSettings: table } = pluginSettingsTables(dialect);
   const database = db as SettingsDb;
 
-  /** This plugin's rows, optionally locked against a concurrent writer. */
+  /**
+   * This plugin's rows.
+   *
+   * Unlocked, deliberately. The rows this update will WRITE are already held
+   * by `claim`, and locking the owner's whole set on top of that is what
+   * deadlocked two concurrent patches: each held its own key and then asked
+   * for every key, including the one the other was holding. A key this update
+   * does not write may move underneath the read, and that is harmless — it is
+   * read to validate the whole settings object, never written back.
+   */
   async function rowsFor(
     reader: SettingsWriter,
-    owner: string,
-    lock: boolean
+    owner: string
   ): Promise<PluginSettingRow[]> {
-    const query = reader.select().from(table).where(eq(table.owner, owner));
-    // SQLite has no row lock and does not need one: its write transaction
-    // takes a database-wide lock, so a second writer cannot interleave.
-    return lock && dialect !== "sqlite" ? query.for("update") : query;
+    return reader.select().from(table).where(eq(table.owner, owner));
   }
 
   /**
-   * Take the row for `(owner, key)` so it can be locked, creating it if
-   * absent.
+   * Take the row for `(owner, key)`, creating it if absent, and HOLD it.
    *
-   * The placeholder never becomes visible: either the transaction goes on to
-   * overwrite it with the real value and commits, or it rolls back and the
-   * row disappears with it. What the statement BUYS is the primary-key
-   * conflict — a second transaction inserting the same key waits here until
-   * this one finishes, which is the serialization a lock on a non-existent
-   * row cannot provide.
+   * This is the only lock the update takes. A row that does not exist cannot
+   * be locked by `FOR UPDATE`, so the statement inserts one; a row that does
+   * exist is locked by updating it, which is why the conflict arm assigns the
+   * key to itself rather than doing nothing. `DO NOTHING` takes no lock on
+   * the existing row, so it would leave exactly the concurrent merge this
+   * exists to prevent.
+   *
+   * The placeholder never becomes visible: the transaction either overwrites
+   * it with the real value and commits, or rolls back and the row goes with
+   * it. `updatedAt` is still the CURRENT time rather than the epoch, because
+   * MySQL's `TIMESTAMP` range begins after 1970-01-01 00:00:00 and rejects it
+   * under the strict mode most installations run — which failed the first
+   * write of any key before the real upsert was ever reached.
    */
   async function claim(tx: SettingsWriter, owner: string, key: string) {
     const placeholder: PluginSettingRow = {
@@ -99,17 +104,17 @@ export function createPluginSettingsStore(
       key,
       value: "null",
       isSecret: false,
-      updatedAt: new Date(0),
+      updatedAt: new Date(),
       updatedBy: null,
     };
     const insert = tx.insert(table).values(placeholder);
     if (dialect === "mysql") {
-      // MySQL has no `DO NOTHING`. Assigning the key to itself is the
-      // conventional no-op, and it still takes the row lock — which is the
-      // point of the statement.
       await insert.onDuplicateKeyUpdate({ set: { key } });
     } else {
-      await insert.onConflictDoNothing();
+      await insert.onConflictDoUpdate({
+        target: [table.owner, table.key],
+        set: { key },
+      });
     }
   }
 
@@ -136,7 +141,7 @@ export function createPluginSettingsStore(
 
   return {
     async read(owner) {
-      return rowsFor(database, owner, false);
+      return rowsFor(database, owner);
     },
 
     async mutate(owner, keys, computeRows) {
@@ -161,9 +166,12 @@ export function createPluginSettingsStore(
         // earlier one. Inserting the key first makes the second transaction
         // block on the primary key until the first commits, so the lock below
         // has something to hold and the merge sees the committed result.
-        for (const key of keys) await claim(tx, owner, key);
+        // SORTED, so every writer takes its locks in the same order. Two
+        // patches sharing keys in a different order would otherwise each hold
+        // what the other is waiting for, and the database would abort one.
+        for (const key of [...keys].sort()) await claim(tx, owner, key);
 
-        const current = await rowsFor(tx, owner, true);
+        const current = await rowsFor(tx, owner);
         const rows = await computeRows(current);
         for (const row of rows) await upsert(tx, row);
 

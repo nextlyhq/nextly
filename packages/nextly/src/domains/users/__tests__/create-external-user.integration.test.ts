@@ -10,7 +10,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../../database/index";
 import { generateSqliteCoreTableStatements } from "../../../database/sqlite-core-tables";
+import { z } from "zod";
+
 import { NextlyError } from "../../../errors";
+import { CreateLocalUserSchema } from "../../../schemas/_zod/user";
 import { ServiceContainer } from "../../../services/index";
 import {
   createTestNextly,
@@ -340,6 +343,62 @@ describe.each(getConfiguredTestDialects())(
         String(created.id)
       );
       expect(names).not.toContain("super-admin");
+    });
+
+    it("is not blocked by a REQUIRED custom user field", async () => {
+      // The merged create schema carries the install's custom fields, and a
+      // provider asserts none of them — so an install that marked any custom
+      // field required failed every external login on a value the caller had
+      // no way to send. The external path validates the CORE schema instead.
+      //
+      // The merged schema is installed on the instance rather than configured
+      // through the harness, because what is under test is WHICH schema this
+      // path consults, not how custom fields are declared.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const editor = await makeRole(t, "editor");
+
+      const users = services(t).users;
+      const mutation = (
+        users as unknown as {
+          mutationService: { createSchema: unknown; schemasStale?: boolean };
+        }
+      ).mutationService;
+      mutation.createSchema = CreateLocalUserSchema.extend({
+        department: z.string().min(1, "Department is required"),
+      });
+
+      const created = await users.createExternalUser(
+        {
+          email: "custom@example.com",
+          name: "Custom",
+          roleIds: [editor],
+          emailVerifiedAt: new Date(),
+        },
+        SYSTEM_CONTEXT
+      );
+
+      expect(created.email).toBe("custom@example.com");
+    });
+
+    it("still refuses input the CORE schema rejects", async () => {
+      // The control: ignoring the merged schema must not mean validating
+      // nothing, or a malformed address would reach the insert.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const editor = await makeRole(t, "editor");
+
+      await expect(
+        services(t).users.createExternalUser(
+          {
+            email: "not-an-address",
+            name: "Bad",
+            roleIds: [editor],
+            emailVerifiedAt: new Date(),
+          },
+          SYSTEM_CONTEXT
+        )
+      ).rejects.toSatisfy(NextlyError.is);
     });
 
     it("reports a unique violation from the INSERT as a duplicate", async () => {

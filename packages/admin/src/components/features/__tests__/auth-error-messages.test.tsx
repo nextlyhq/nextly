@@ -109,9 +109,9 @@ describe("Signup", () => {
 });
 
 describe("SetInitialPassword", () => {
-  async function submitAPassword() {
+  async function submitAPassword(onDone: (next?: string) => void = vi.fn()) {
     const user = userEvent.setup({ delay: null });
-    render(<SetInitialPassword pendingToken="pending" onDone={vi.fn()} />);
+    render(<SetInitialPassword pendingToken="pending" onDone={onDone} />);
 
     // Both fields must satisfy `passwordSchema` client-side, or the submit
     // never reaches the request whose rejection is under test.
@@ -125,6 +125,31 @@ describe("SetInitialPassword", () => {
     );
     await user.click(screen.getByRole("button", { name: /set password/i }));
   }
+
+  it("hands the server's destination to onDone", async () => {
+    // The backend preserves the `next` an external login asked for and mints
+    // it into the pending token. Discarding the response here sent the person
+    // to the dashboard anyway, so that work never reached the browser.
+    post.mockResolvedValue({ next: "/admin/posts" });
+    const onDone = vi.fn();
+
+    await submitAPassword(onDone);
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(onDone).toHaveBeenCalledWith("/admin/posts");
+  });
+
+  it("passes nothing when the server names no destination", async () => {
+    // The control: inventing a destination would be worse than the bug, and
+    // the caller falls back to the dashboard on `undefined`.
+    post.mockResolvedValue({});
+    const onDone = vi.fn();
+
+    await submitAPassword(onDone);
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(onDone).toHaveBeenCalledWith(undefined);
+  });
 
   it("says which rule the password broke", async () => {
     post.mockImplementation(() =>
