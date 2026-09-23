@@ -436,7 +436,23 @@ describe("row 19 — custom table name", () => {
 });
 
 describe("row 20 — virtual fields", () => {
-  it.todo("C: a virtual field produces no column, on any field type");
+  it("C: a virtual field produces no column, on any field type", async () => {
+    // The descriptor is the one rule every consumer honours for column-less
+    // fields (component fields), so the root-level `virtual` flag rides it:
+    // no column in the desired table, therefore no DDL, no insert, no
+    // select — the field is computed in afterRead. The spelling group and
+    // repeater have always documented keeps working beside it.
+    const {
+      fieldProducesColumn,
+    } = await import("../../services/field-column-descriptor");
+    expect(fieldProducesColumn({ type: "text", virtual: true })).toBe(false);
+    expect(fieldProducesColumn({ type: "number", virtual: true })).toBe(false);
+    expect(fieldProducesColumn({ type: "email", virtual: true })).toBe(false);
+    expect(
+      fieldProducesColumn({ type: "text", options: { virtual: true } })
+    ).toBe(false);
+    expect(fieldProducesColumn({ type: "text" })).toBe(true);
+  });
 });
 
 describe("row 21 — server-only custom config", () => {

@@ -203,8 +203,21 @@ export function columnsDeclaredBy(
 export function fieldProducesColumn(field: {
   type?: unknown;
   options?: unknown;
+  /** The root-level `virtual` flag every field type accepts. */
+  virtual?: unknown;
 }): boolean {
   if (typeof field.type !== "string") return true;
+  // A virtual field stores nothing: no column, no insert, no select. The
+  // root spelling is the one every field type carries; group and repeater
+  // keep their documented options.virtual spelling working beside it.
+  if (field.virtual === true) return false;
+  if (
+    typeof field.options === "object" &&
+    field.options !== null &&
+    (field.options as { virtual?: unknown }).virtual === true
+  ) {
+    return false;
+  }
   // Field-group and component values live in their own dedicated tables (fg_{slug} or
   // comp_{slug}) and are stripped from the parent row on write, so the parent needs no column.
   if (isFieldGroupFieldType(field.type)) return false;

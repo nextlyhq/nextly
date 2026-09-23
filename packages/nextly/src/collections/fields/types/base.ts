@@ -558,6 +558,15 @@ export interface BaseFieldConfig {
   required?: boolean;
 
   /**
+   * Mark the field as virtual: it produces no database column, is excluded
+   * from inserts and selects, and is meant to be computed in an `afterRead`
+   * hook. Available on every field type; group and repeater also accept the
+   * equivalent `options.virtual` spelling they have always documented.
+   * @default false
+   */
+  virtual?: boolean;
+
+  /**
    * Whether the field value must be unique across all documents.
    *
    * Enforced at the database level with a unique constraint.
