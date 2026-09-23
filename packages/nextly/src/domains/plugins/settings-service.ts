@@ -397,11 +397,45 @@ export class PluginSettingsService {
       // placeholder as a plugin's stored value.
       if (row.key === OWNER_LOCK_KEY) continue;
       const parsed: unknown = JSON.parse(row.value);
-      out[row.key] = row.isSecret
-        ? this.decryptSecrets(parsed, [row.key])
-        : parsed;
+      // Decoded by ENVELOPE, not by the current manifest's paths: a plugin
+      // update can remove or rename a secret path, and a path-driven decode
+      // then left the old encrypted leaf as its literal `enc:...` text —
+      // `get()` returned corrupted configuration, and a later patch could
+      // persist that ciphertext as a public value, losing the credential.
+      // The envelope is self-describing, so every encrypted leaf in a row
+      // stored as secret is opened whatever the manifest now calls secret;
+      // where it is RE-encrypted is a write-time decision, made against the
+      // paths the current manifest declares.
+      out[row.key] = row.isSecret ? this.decryptEnvelopes(parsed) : parsed;
     }
     return out;
+  }
+
+  /**
+   * Open every encrypted leaf in a stored secret row, wherever it sits.
+   *
+   * The path-driven walk above still serves reads that want to know what the
+   * CURRENT manifest considers secret; this one answers the storage's own
+   * question — what did a past manifest encrypt — which only the envelope
+   * markers can say. Plaintext leaves pass through untouched, which is what
+   * lets a row written before a path became secret coexist with encrypted
+   * ones written after.
+   */
+  private decryptEnvelopes(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map(item => this.decryptEnvelopes(item));
+    }
+    if (isPlainObject(value)) {
+      const out: Record<string, unknown> = {};
+      for (const [key, item] of Object.entries(value)) {
+        out[key] = this.decryptEnvelopes(item);
+      }
+      return out;
+    }
+    if (typeof value === "string" && value.startsWith(SECRET_ENVELOPE)) {
+      return this.decryptEnvelope(value, []);
+    }
+    return value;
   }
 
   private encryptSecrets(value: unknown, path: string[]): unknown {
@@ -441,37 +475,37 @@ export class PluginSettingsService {
   }
 
   private decryptSecrets(value: unknown, path: string[]): unknown {
-    return mapSecrets(
-      value,
-      this.deps.secretPaths,
-      secret => {
-        if (typeof secret !== "string" || !secret.startsWith(SECRET_ENVELOPE)) {
-          return secret;
-        }
-        const ciphertext = secret.slice(SECRET_ENVELOPE.length);
-        // Every generation in turn: after a secret rotation the current key
-        // cannot read rows written under the previous one, and a value that
-        // silently fails to decrypt is a credential that stops working with no
-        // way to tell why.
-        for (const generation of this.deps.secrets()) {
-          try {
-            return decrypt(ciphertext, generation);
-          } catch {
-            continue;
-          }
-        }
-        throw NextlyError.internal({
-          logContext: {
-            reason:
-              "plugin setting could not be decrypted with any secret generation",
-            plugin: this.deps.owner,
-            path: path.join("."),
-          },
-        });
-      },
-      path
-    );
+    return mapSecrets(value, this.deps.secretPaths, this.decryptEnvelope, path);
   }
+
+  /**
+   * Open one `enc:`-enveloped value, trying every secret generation in turn.
+   *
+   * After a secret rotation the current key cannot read rows written under
+   * the previous one, and a value that silently fails to decrypt is a
+   * credential that stops working with no way to tell why.
+   */
+  private decryptEnvelope = (secret: unknown, path: string[] = []): unknown => {
+    if (typeof secret !== "string" || !secret.startsWith(SECRET_ENVELOPE)) {
+      return secret;
+    }
+    const ciphertext = secret.slice(SECRET_ENVELOPE.length);
+    for (const generation of this.deps.secrets()) {
+      try {
+        return decrypt(ciphertext, generation);
+      } catch {
+        continue;
+      }
+    }
+    throw NextlyError.internal({
+      logContext: {
+        reason:
+          "plugin setting could not be decrypted with any secret generation",
+        plugin: this.deps.owner,
+        path: path.join("."),
+      },
+    });
+  };
 }
 
 /** The secret generations this install can read with, newest first. */

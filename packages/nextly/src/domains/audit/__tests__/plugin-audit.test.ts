@@ -267,3 +267,46 @@ describe("collectPluginAuditKinds against the storage column", () => {
     ).not.toThrow();
   });
 });
+
+describe("collectPluginAuditKinds: one kind declared once", () => {
+  it("REFUSES the same kind declared twice, naming it", () => {
+    // Keeping the last entry silently replaced the first one's allowlist: a
+    // metadata key only the first entry declared was dropped from every row,
+    // and the manifest promised a trail it did not keep.
+    let caught: unknown;
+    try {
+      collectPluginAuditKinds(
+        SLUG,
+        [
+          { kind: `${SLUG}.login`, metadataKeys: ["provider"] },
+          { kind: `${SLUG}.login`, metadataKeys: ["subject"] },
+        ],
+        "@acme/auth"
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(NextlyError.is(caught)).toBe(true);
+    const context = (caught as NextlyError).logContext as {
+      reason?: string;
+      auditKind?: string;
+    };
+    expect(context.reason).toBe("plugin-audit-kind-declared-twice");
+    expect(context.auditKind).toBe(`${SLUG}.login`);
+  });
+
+  it("accepts the same METADATA KEY on two different kinds", () => {
+    // The control: the refusal is about one kind declared twice, not about
+    // shared vocabulary between a plugin's events.
+    expect(() =>
+      collectPluginAuditKinds(
+        SLUG,
+        [
+          { kind: `${SLUG}.login`, metadataKeys: ["provider"] },
+          { kind: `${SLUG}.logout`, metadataKeys: ["provider"] },
+        ],
+        "@acme/auth"
+      )
+    ).not.toThrow();
+  });
+});

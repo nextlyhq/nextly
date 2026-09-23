@@ -133,6 +133,18 @@ export function collectPluginAuditKinds(
         }
       );
     }
+    // A kind declared TWICE is refused beside the other declarations, because
+    // keeping the last entry silently replaced the first one's allowlist: a
+    // metadata key only the first entry declared was dropped from every row,
+    // and the manifest promised a trail it did not keep. Which entry wins is
+    // not something an operator should have to know.
+    if (kinds.has(entry.kind)) {
+      throw resolutionError(
+        "plugin-audit-kind-declared-twice",
+        `Plugin "${pluginName}" declares the audit kind "${entry.kind}" more than once; declare it once with the full list of metadata keys.`,
+        { plugin: pluginName, auditKind: entry.kind }
+      );
+    }
     kinds.set(entry.kind, new Set(entry.metadataKeys ?? []));
   }
   return kinds;

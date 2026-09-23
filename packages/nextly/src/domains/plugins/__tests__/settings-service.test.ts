@@ -558,3 +558,52 @@ describe("a newly secret key that the SAME patch updates", () => {
     expect(stored?.value).not.toContain(ROTATED_SECRET_VALUE);
   });
 });
+
+describe("a stored envelope the current manifest no longer names", () => {
+  it("is still DECRYPTED on read, not handed back as enc: text", async () => {
+    // A plugin update can remove or rename a secret path; a path-driven
+    // decode then left the old encrypted leaf as its literal `enc:...`
+    // envelope — get() returned corrupted configuration, and a later patch
+    // could persist that ciphertext as a public value, losing the
+    // credential. The envelope is self-describing, so decoding follows it.
+    const store = memoryStore();
+    // Written under a manifest that declared the path secret.
+    await service(store, [KEY_A], ["clientSecret"]).set({
+      clientSecret: SECRET_VALUE,
+    });
+    const stored = store.rows.find(r => r.key === "clientSecret");
+    expect(stored?.isSecret).toBe(true);
+
+    // The newer manifest no longer names the path. What is stored still
+    // opens: the row was written as secret, and its envelopes decrypt.
+    const settings = await service(store, [KEY_A], []).get<{
+      clientSecret: string;
+    }>();
+    expect(settings.clientSecret).toBe(SECRET_VALUE);
+  });
+
+  it("leaves plaintext leaves in the same secret row untouched", async () => {
+    // The control: decoding follows envelopes, not the row's flag — a value
+    // that never encrypted (the pre-migration plaintext shape) passes
+    // through as itself.
+    const store = memoryStore();
+    store.rows.push({
+      owner: "@test/p",
+      key: "providers",
+      value: JSON.stringify({
+        google: { clientId: "google-id", clientSecret: "plain" },
+      }),
+      isSecret: true,
+      updatedAt: new Date(),
+      updatedBy: null,
+    });
+
+    const settings = await service(store).get<{
+      providers: Record<string, { clientId: string; clientSecret: string }>;
+    }>();
+    expect(settings.providers.google).toEqual({
+      clientId: "google-id",
+      clientSecret: "plain",
+    });
+  });
+});
