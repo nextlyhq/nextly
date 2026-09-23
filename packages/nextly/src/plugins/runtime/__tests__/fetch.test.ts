@@ -92,6 +92,26 @@ describe("address rules — IPv6", () => {
     expect(verdict.allowed === false && verdict.reason).toBe("loopback");
   });
 
+  it.each([
+    ["64:ff9b:1:7f:0:100:0:0", "127.0.0.1"],
+    ["64:ff9b:1:a9:fea9:fe00:0:0", "169.254.169.254"],
+    ["64:ff9b:1:a:0:100:0:0", "10.0.0.1"],
+  ])("refuses the local-use NAT64 prefix carrying %s", address => {
+    // The RFC 8215 prefix lays the IPv4 at bytes 7-10 (48-bit prefix, u
+    // octet, address — RFC 6052), not at the end like the well-known /96;
+    // judging only the well-known form let these fall through as ordinary
+    // global addresses, and what they carry is loopback, link-local
+    // metadata, and private space — the exact refusals this judge is for.
+    const verdict = judgeIpv6(address);
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("allows the local-use NAT64 prefix carrying a public IPv4", () => {
+    // The control: the prefix itself is not refused, only what it carries —
+    // a deployment NAT-ing to a public address is ordinary outbound traffic.
+    expect(judgeIpv6("64:ff9b:1:5d:b8d8:2200:0:0").allowed).toBe(true);
+  });
+
   it("allows a public IPv6 address", () => {
     expect(judgeIpv6("2606:2800:220:1:248:1893:25c8:1946").allowed).toBe(true);
   });

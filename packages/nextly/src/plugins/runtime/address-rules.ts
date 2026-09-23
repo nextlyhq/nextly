@@ -211,28 +211,8 @@ export function judgeIpv6(address: string): AddressVerdict {
     return refuse("loopback");
   }
 
-  // ::ffff:a.b.c.d — IPv4-mapped.
-  if (
-    bytes.slice(0, 10).every(b => b === 0) &&
-    bytes[10] === 0xff &&
-    bytes[11] === 0xff
-  ) {
-    return asV4(12);
-  }
-  // ::a.b.c.d — IPv4-compatible, deprecated but still routed by some stacks.
-  if (bytes.slice(0, 12).every(b => b === 0)) return asV4(12);
-  // 64:ff9b::/96 — NAT64.
-  if (
-    bytes[0] === 0x00 &&
-    bytes[1] === 0x64 &&
-    bytes[2] === 0xff &&
-    bytes[3] === 0x9b &&
-    bytes.slice(4, 12).every(b => b === 0)
-  ) {
-    return asV4(12);
-  }
-  // 2002::/16 — 6to4 carries its IPv4 in the next four bytes.
-  if (bytes[0] === 0x20 && bytes[1] === 0x02) return asV4(2);
+  const embedded = embeddedIpv4Offset(bytes);
+  if (embedded !== null) return asV4(embedded);
 
   if ((bytes[0] & 0xfe) === 0xfc) return refuse("unique-local");
   if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) {
@@ -241,6 +221,60 @@ export function judgeIpv6(address: string): AddressVerdict {
   if (bytes[0] === 0xff) return refuse("multicast");
 
   return ALLOWED;
+}
+
+/**
+ * Where an IPv6 address carries an embedded IPv4, as the byte offset of its
+ * first octet — or null when it carries none.
+ *
+ * Every translation prefix asks the same question — "what IPv4 does this
+ * actually reach" — so each is judged as the address it carries rather than
+ * as an ordinary v6 global that matches no refused prefix. The layouts
+ * differ: the mapped and compatible forms and the well-known NAT64 prefix
+ * end in the IPv4, the RFC 8215 local-use NAT64 prefix lays it at bytes 7-10
+ * (48 bits of prefix, the u/octet, then the address, per RFC 6052), and 6to4
+ * carries its own right after the /16.
+ */
+function embeddedIpv4Offset(bytes: number[]): number | null {
+  // ::ffff:a.b.c.d — IPv4-mapped.
+  if (
+    bytes.slice(0, 10).every(b => b === 0) &&
+    bytes[10] === 0xff &&
+    bytes[11] === 0xff
+  ) {
+    return 12;
+  }
+  // ::a.b.c.d — IPv4-compatible, deprecated but still routed by some stacks.
+  if (bytes.slice(0, 12).every(b => b === 0)) return 12;
+  const nat64 = nat64Offset(bytes);
+  if (nat64 !== null) return nat64;
+  // 2002::/16 — 6to4 carries its IPv4 in the next four bytes.
+  if (bytes[0] === 0x20 && bytes[1] === 0x02) return 2;
+  return null;
+}
+
+/**
+ * The IPv4 offset for either NAT64 prefix, or null when the address is
+ * neither.
+ *
+ * Two prefixes, two layouts: the well-known `64:ff9b::/96` ends in the IPv4,
+ * and the RFC 8215 local-use `64:ff9b:1::/48` lays it at bytes 7-10 after
+ * 48 bits of prefix and the u/octet (RFC 6052). Judging only the well-known
+ * form let the local-use one fall through as an ordinary global address —
+ * and the IPv4 it carries can be private, loopback, or a metadata service,
+ * which is exactly what the v4 judge exists to refuse.
+ */
+function nat64Offset(bytes: number[]): number | null {
+  if (
+    bytes[0] === 0x00 &&
+    bytes[1] === 0x64 &&
+    bytes[2] === 0xff &&
+    bytes[3] === 0x9b
+  ) {
+    if (bytes.slice(4, 12).every(b => b === 0)) return 12;
+    if (bytes[4] === 0x00 && bytes[5] === 0x01) return 7;
+  }
+  return null;
 }
 
 /** Judge an address of either family. */
