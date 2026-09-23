@@ -223,7 +223,9 @@ export function emitAdditiveDdl(
     // Check DDL alters a live constraint, so it is not additive either; the
     // apply routes it through the statement templates, not this pass.
     case "add_check":
+    case "add_foreign_key":
     case "drop_check":
+    case "drop_foreign_key":
       // Not emittable on SQLite (table rebuild) / MySQL (full MODIFY
       // definition) — canEmitWithoutDrizzleKit routes these to drizzle-kit.
       // A referential-action change is not additive either: it drops a live

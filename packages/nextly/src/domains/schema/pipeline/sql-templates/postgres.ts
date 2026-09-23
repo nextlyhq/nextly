@@ -6,6 +6,7 @@
 
 import type {
   AddCheckOp,
+  AddForeignKeyOp,
   AddColumnOp,
   AddIndexOp,
   AddTableOp,
@@ -14,6 +15,7 @@ import type {
   ChangeColumnTypeOp,
   ColumnSpec,
   DropCheckOp,
+  DropForeignKeyOp,
   DropColumnOp,
   DropIndexOp,
   DropTableOp,
@@ -73,6 +75,10 @@ export function generatePgSQL(op: Operation): string {
       return generateAddCheck(op);
     case "drop_check":
       return generateDropCheck(op);
+    case "add_foreign_key":
+      return generateAddForeignKey(op);
+    case "drop_foreign_key":
+      return generateDropForeignKey(op);
     case "drop_index":
       return generateDropIndex(op);
     case "change_foreign_key_action":
@@ -98,6 +104,18 @@ function generateAddCheck(op: AddCheckOp): string {
 
 function generateDropCheck(op: DropCheckOp): string {
   return `ALTER TABLE ${q(op.tableName)} DROP CONSTRAINT IF EXISTS ${q(op.check.name)}`;
+}
+
+function generateAddForeignKey(op: AddForeignKeyOp): string {
+  const { foreignKey } = op;
+  const cols = foreignKey.columns.map(q).join(", ");
+  const refCols = foreignKey.referencesColumns.map(q).join(", ");
+  const actions = ` ON DELETE ${foreignKey.onDelete.toUpperCase()} ON UPDATE ${foreignKey.onUpdate.toUpperCase()}`;
+  return `ALTER TABLE ${q(op.tableName)} ADD CONSTRAINT ${q(foreignKey.name)} FOREIGN KEY (${cols}) REFERENCES ${q(foreignKey.referencesTable)} (${refCols})${actions}`;
+}
+
+function generateDropForeignKey(op: DropForeignKeyOp): string {
+  return `ALTER TABLE ${q(op.tableName)} DROP CONSTRAINT IF EXISTS ${q(op.foreignKey.name)}`;
 }
 
 function generateAddIndex(op: AddIndexOp): string {

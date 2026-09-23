@@ -44,6 +44,7 @@ import type {
   ChangeColumnNullableOp,
   ChangeColumnTypeOp,
   CheckSpec,
+  ForeignKeySpec,
   ColumnSpec,
   DropColumnOp,
   DropTableOp,
@@ -109,6 +110,15 @@ export function diffSnapshots(
       // would otherwise emit the add first — a name collision on every
       // dialect, since constraints cannot coexist under one name.
       for (const op of diffChecks(name, prevT.checks, curT.checks)) {
+        dropIndexOps.push(op);
+      }
+      // Pass 3c: foreign keys, structurally compared, with the same
+      // sentinel and the same one-group routing for the same reason.
+      for (const op of diffForeignKeys(
+        name,
+        prevT.foreignKeys,
+        curT.foreignKeys
+      )) {
         dropIndexOps.push(op);
       }
     }
@@ -179,6 +189,45 @@ function diffIndexes(
   for (const [key, idx] of prevByKey) {
     if (!curByKey.has(key) && isManagedIndexName(idx.name)) {
       ops.push({ type: "drop_index", tableName, index: idx });
+    }
+  }
+  return ops;
+}
+
+/**
+ * Emit add_foreign_key / drop_foreign_key for a table present in both
+ * snapshots. Matched by NAME and compared STRUCTURALLY — introspection
+ * reports columns, target and actions reliably on every dialect, unlike the
+ * textual shapes checks compare. A changed shape is a drop-plus-add under
+ * the same name, in that order, for the same collision reason as checks.
+ */
+function diffForeignKeys(
+  tableName: string,
+  prev: ForeignKeySpec[] | undefined,
+  cur: ForeignKeySpec[] | undefined
+): Operation[] {
+  if (prev === undefined || cur === undefined) return [];
+  const ops: Operation[] = [];
+  const prevByName = new Map(prev.map(f => [f.name, f]));
+  const curByName = new Map(cur.map(f => [f.name, f]));
+  const sameShape = (a: ForeignKeySpec, b: ForeignKeySpec) =>
+    a.columns.join("\u0000") === b.columns.join("\u0000") &&
+    a.referencesTable === b.referencesTable &&
+    a.referencesColumns.join("\u0000") === b.referencesColumns.join("\u0000") &&
+    a.onDelete === b.onDelete &&
+    a.onUpdate === b.onUpdate;
+  for (const [name, fk] of curByName) {
+    const before = prevByName.get(name);
+    if (before === undefined) {
+      ops.push({ type: "add_foreign_key", tableName, foreignKey: fk });
+    } else if (!sameShape(before, fk)) {
+      ops.push({ type: "drop_foreign_key", tableName, foreignKey: before });
+      ops.push({ type: "add_foreign_key", tableName, foreignKey: fk });
+    }
+  }
+  for (const [name, fk] of prevByName) {
+    if (!curByName.has(name)) {
+      ops.push({ type: "drop_foreign_key", tableName, foreignKey: fk });
     }
   }
   return ops;

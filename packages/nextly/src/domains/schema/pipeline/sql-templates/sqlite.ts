@@ -147,6 +147,12 @@ export function generateSqliteSQL(op: Operation): string {
       // SQLite cannot add or drop a CHECK in place; a check change on this
       // dialect belongs to the table-rebuild path.
       return unsupportedOperation("generateSqliteSQL", op);
+    case "add_foreign_key":
+    case "drop_foreign_key":
+      // Nor a FOREIGN KEY: PRAGMA foreign_keys cannot be toggled inside the
+      // transaction an apply runs in, so a foreign-key change on this dialect
+      // belongs to the table-rebuild path as well.
+      return unsupportedOperation("generateSqliteSQL", op);
     default:
       return unsupportedOperation("generateSqliteSQL", op);
   }

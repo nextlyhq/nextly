@@ -183,6 +183,8 @@ export type Operation =
   | DropIndexOp
   | AddCheckOp
   | DropCheckOp
+  | AddForeignKeyOp
+  | DropForeignKeyOp
   | ChangeForeignKeyActionOp;
 
 export interface AddTableOp {
@@ -306,6 +308,25 @@ export interface DropCheckOp {
   type: "drop_check";
   tableName: string;
   check: CheckSpec;
+}
+
+/**
+ * A foreign key is added and dropped whole. Compared STRUCTURALLY (columns,
+ * target, actions) rather than textually, because introspection reports those
+ * reliably on every dialect; a changed action alone arrives as a
+ * `change_foreign_key_action` from the column-level diff when the name and
+ * shape are unchanged.
+ */
+export interface AddForeignKeyOp {
+  type: "add_foreign_key";
+  tableName: string;
+  foreignKey: ForeignKeySpec;
+}
+
+export interface DropForeignKeyOp {
+  type: "drop_foreign_key";
+  tableName: string;
+  foreignKey: ForeignKeySpec;
 }
 
 /**

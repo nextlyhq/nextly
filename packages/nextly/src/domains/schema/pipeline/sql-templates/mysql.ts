@@ -11,6 +11,7 @@
 
 import type {
   AddCheckOp,
+  AddForeignKeyOp,
   AddColumnOp,
   AddIndexOp,
   AddTableOp,
@@ -19,6 +20,7 @@ import type {
   ChangeColumnTypeOp,
   ColumnSpec,
   DropCheckOp,
+  DropForeignKeyOp,
   DropColumnOp,
   DropIndexOp,
   DropTableOp,
@@ -76,6 +78,10 @@ export function generateMysqlSQL(op: Operation): string {
       return generateAddCheck(op);
     case "drop_check":
       return generateDropCheck(op);
+    case "add_foreign_key":
+      return generateAddForeignKey(op);
+    case "drop_foreign_key":
+      return generateDropForeignKey(op);
     case "add_index":
       return generateAddIndex(op);
     case "drop_index":
@@ -105,6 +111,20 @@ function generateAddCheck(op: AddCheckOp): string {
 
 function generateDropCheck(op: DropCheckOp): string {
   return `ALTER TABLE \`${op.tableName}\` DROP CHECK \`${op.check.name}\``;
+}
+
+function generateAddForeignKey(op: AddForeignKeyOp): string {
+  const { foreignKey } = op;
+  const cols = foreignKey.columns.map(c => `\`${c}\``).join(", ");
+  const refCols = foreignKey.referencesColumns
+    .map(c => `\`${c}\``)
+    .join(", ");
+  const actions = ` ON DELETE ${foreignKey.onDelete.toUpperCase()} ON UPDATE ${foreignKey.onUpdate.toUpperCase()}`;
+  return `ALTER TABLE \`${op.tableName}\` ADD CONSTRAINT \`${foreignKey.name}\` FOREIGN KEY (${cols}) REFERENCES \`${foreignKey.referencesTable}\` (${refCols})${actions}`;
+}
+
+function generateDropForeignKey(op: DropForeignKeyOp): string {
+  return `ALTER TABLE \`${op.tableName}\` DROP FOREIGN KEY \`${op.foreignKey.name}\``;
 }
 
 function generateAddIndex(op: AddIndexOp): string {

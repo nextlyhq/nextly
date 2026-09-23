@@ -425,6 +425,10 @@ function describeOp(op: Operation): string {
       return `add_check ${op.check.name} on ${op.tableName}`;
     case "drop_check":
       return `drop_check ${op.check.name} on ${op.tableName}`;
+    case "add_foreign_key":
+      return `add_foreign_key ${op.foreignKey.name} on ${op.tableName}`;
+    case "drop_foreign_key":
+      return `drop_foreign_key ${op.foreignKey.name} on ${op.tableName}`;
     case "change_foreign_key_action":
       return (
         `change_foreign_key_action ${op.tableName}.${op.columnName} ` +

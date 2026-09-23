@@ -9,7 +9,11 @@
 import { describe, expect, it } from "vitest";
 
 import { diffSnapshots } from "../diff";
-import type { CheckSpec, TableSpec } from "../types";
+import type {
+  CheckSpec,
+  ForeignKeySpec,
+  TableSpec,
+} from "../types";
 import { generateSQL } from "../../sql-templates/index";
 import { buildInverseOperations } from "../../../migrate-create/down-generator";
 
@@ -108,6 +112,84 @@ describe("check rendering", () => {
     const inverse = buildInverseOperations([op as never], { tables: [] });
     expect(inverse).toEqual([
       { type: "drop_check", tableName: "fx__orders", check: op.check },
+    ]);
+  });
+});
+
+describe("diffForeignKeys", () => {
+  const fk = (
+    name: string,
+    over: Partial<ForeignKeySpec> = {}
+  ): ForeignKeySpec => ({
+    name,
+    columns: ["author_id"],
+    referencesTable: "dc_authors",
+    referencesColumns: ["id"],
+    onDelete: "cascade",
+    onUpdate: "no action",
+      ...over,
+    }) as never;
+  const tableWithFks = (fks: unknown[] | undefined) => ({
+    ...tableWith([]),
+    checks: [],
+    foreignKeys: fks as never,
+  });
+
+  it("adds a foreign key the previous snapshot did not carry", () => {
+    const ops = diffSnapshots(
+      { tables: [tableWithFks([])] },
+      { tables: [tableWithFks([fk("fk_dc_a_author_id")])] }
+    );
+    expect(ops.map(op => op.type)).toEqual(["add_foreign_key"]);
+  });
+
+  it("changes a foreign key's shape as drop-then-add under the same name", () => {
+    const ops = diffSnapshots(
+      { tables: [tableWithFks([fk("fk_x", { onDelete: "restrict" })])] },
+      { tables: [tableWithFks([fk("fk_x")])] }
+    );
+    expect(ops.map(op => op.type)).toEqual([
+      "drop_foreign_key",
+      "add_foreign_key",
+    ]);
+  });
+
+  it("keeps an identical foreign key and drops a removed one", () => {
+    const ops = diffSnapshots(
+      { tables: [tableWithFks([fk("fk_keep"), fk("fk_gone")])] },
+      { tables: [tableWithFks([fk("fk_keep")])] }
+    );
+    expect(ops.map(op => op.type)).toEqual(["drop_foreign_key"]);
+  });
+
+  it("emits nothing when either side did not track foreign keys", () => {
+    expect(
+      diffSnapshots(
+        { tables: [tableWithFks(undefined)] },
+        { tables: [tableWithFks([fk("fk_x")])] }
+      )
+    ).toEqual([]);
+  });
+
+  it("renders ADD/DROP with the dialect's own verb and inverts in the down", () => {
+    const op = {
+      type: "add_foreign_key",
+      tableName: "fx__notes",
+      foreignKey: fk("fk_fx__notes_user", {
+        columns: ["user_id"],
+        referencesTable: "users",
+      }),
+    } as never;
+    expect(generateSQL(op, "postgresql")).toBe(
+      'ALTER TABLE "fx__notes" ADD CONSTRAINT "fk_fx__notes_user" FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE NO ACTION'
+    );
+    expect(generateSQL(op, "mysql")).toBe(
+      "ALTER TABLE `fx__notes` ADD CONSTRAINT `fk_fx__notes_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION"
+    );
+    expect(() => generateSQL(op, "sqlite")).toThrow();
+    const inverse = buildInverseOperations([op], { tables: [] });
+    expect(inverse.map(o => (o as { type: string }).type)).toEqual([
+      "drop_foreign_key",
     ]);
   });
 });

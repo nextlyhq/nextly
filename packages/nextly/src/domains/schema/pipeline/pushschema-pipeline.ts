@@ -357,9 +357,11 @@ export function computeJournalSummaryFromOperations(
         added++;
         break;
       case "add_check":
+      case "add_foreign_key":
         added++;
         break;
       case "drop_check":
+      case "drop_foreign_key":
         removed++;
         break;
       case "rename_table":
@@ -444,7 +446,9 @@ export function operationTargetTable(op: Operation): string | null {
     case "drop_index":
       return op.tableName;
     case "add_check":
+    case "add_foreign_key":
     case "drop_check":
+    case "drop_foreign_key":
       return op.tableName;
     default: {
       // Exhaustiveness check: a new Operation kind must be classified here.
@@ -920,6 +924,8 @@ export class PushSchemaPipeline {
           case "drop_index":
           case "add_check":
           case "drop_check":
+          case "add_foreign_key":
+          case "drop_foreign_key":
             affectedTableNames.add(op.tableName);
             break;
           default: {
