@@ -531,3 +531,30 @@ describe("values that cannot live in a settings row", () => {
     expect(store.rows.length).toBeGreaterThan(0);
   });
 });
+
+describe("a newly secret key that the SAME patch updates", () => {
+  it("keeps the patched value; the migration does not overwrite it", async () => {
+    // The store upserts rows in order. Emitting a migration row for a key the
+    // patch also wrote put the OLD stored value after the new one, so the
+    // first rotation of a newly protected credential was silently discarded
+    // while the API reported success.
+    const store = memoryStore();
+    store.rows.push({
+      owner: "@test/p",
+      key: "clientSecret",
+      value: JSON.stringify(SECRET_VALUE),
+      isSecret: false,
+      updatedAt: new Date(),
+      updatedBy: null,
+    });
+
+    await service(store).set({ clientSecret: ROTATED_SECRET_VALUE });
+
+    const settings = await service(store).get<{ clientSecret: string }>();
+    expect(settings.clientSecret).toBe(ROTATED_SECRET_VALUE);
+    const stored = store.rows.find(r => r.key === "clientSecret");
+    expect(stored?.isSecret).toBe(true);
+    expect(stored?.value).not.toContain(SECRET_VALUE);
+    expect(stored?.value).not.toContain(ROTATED_SECRET_VALUE);
+  });
+});

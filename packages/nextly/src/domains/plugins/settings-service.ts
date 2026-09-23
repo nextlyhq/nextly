@@ -208,10 +208,17 @@ export class PluginSettingsService {
     // to the old value. Rewriting it here, inside the same serialized
     // transaction as the patch, is the one place the migration can happen
     // without a second writer racing it.
+    //
+    // A key the PATCH itself writes is excluded: its row is already the new
+    // value under the new declaration, and the store upserts these rows in
+    // order — a migration row appended behind it is built from the OLD stored
+    // value and would silently overwrite the fresh one, discarding the first
+    // rotation of a newly protected credential while the API reported success.
     const migrated = stored
       .filter(
         row =>
           row.key !== OWNER_LOCK_KEY &&
+          !Object.hasOwn(patch, row.key) &&
           !row.isSecret &&
           Object.hasOwn(current, row.key) &&
           topLevelKeyHoldsSecret(row.key, this.deps.secretPaths)
