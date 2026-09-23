@@ -658,3 +658,62 @@ describe("a cookie-mode flow that fails for good", () => {
     );
   });
 });
+
+describe("the flow lifetime on the pending-status path", () => {
+  it("is enforced by /auth/pending too", async () => {
+    // A wrong answer near the flow's end re-issues a token whose JWT is
+    // fresh for another TTL while the flow is over; reporting it resumable
+    // kept the login page hiding its ordinary options behind a continuation
+    // nothing can finish.
+    const { handlePending } = await import("../pending");
+    const deps = makeDeps() as never;
+    const expired = await mintPendingToken(
+      {
+        userId: "u1",
+        challengeId: "totp",
+        attempts: 0,
+        flow: "f1",
+        flowExpiresAt: Math.floor(Date.now() / 1000) - 10,
+      },
+      SECRET,
+      300
+    );
+    const request = new Request(
+      "http://localhost:3000/admin/api/auth/pending",
+      {
+        headers: { cookie: `nextly_pending=${expired}` },
+      }
+    );
+
+    const res = await handlePending(request, deps);
+    expect(res.status).toBe(204);
+  });
+
+  it("still reports a live flow", async () => {
+    const { handlePending } = await import("../pending");
+    const deps = makeDeps() as never;
+    const live = await mintPendingToken(
+      {
+        userId: "u1",
+        challengeId: "totp",
+        attempts: 0,
+        flow: "f1",
+        flowExpiresAt: Math.floor(Date.now() / 1000) + 300,
+      },
+      SECRET,
+      300
+    );
+    const request = new Request(
+      "http://localhost:3000/admin/api/auth/pending",
+      {
+        headers: { cookie: `nextly_pending=${live}` },
+      }
+    );
+
+    const res = await handlePending(request, deps);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { challengeId: string }).challengeId).toBe(
+      "totp"
+    );
+  });
+});

@@ -41,12 +41,20 @@ export function callerCredential(request: Request): CallerCredential {
 }
 
 /** Whether this request must present a CSRF token. */
-export function csrfApplies(route: PluginRoute, request: Request): boolean {
+export function csrfApplies(
+  route: PluginRoute,
+  request: Request,
+  credential: CallerCredential = callerCredential(request)
+): boolean {
   if (route.csrf !== true) return false;
   if (!UNSAFE_METHODS.has(request.method.toUpperCase())) return false;
   // Only a cookie travels automatically, so only a cookie-authenticated
-  // request can be made by a site the user did not intend to act on.
-  return callerCredential(request) === "cookie";
+  // request can be made by a site the user did not intend to act on. The
+  // RESOLVED credential wins when the caller has one: a browser can attach
+  // an Authorization header on its own (ambient HTTP authentication), and
+  // classifying by header presence then skipped CSRF for a request whose
+  // session cookie was the credential that admitted it.
+  return credential === "cookie";
 }
 
 /** Check the CSRF token, when one is required. */

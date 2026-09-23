@@ -233,3 +233,28 @@ describe("rateLimitKey: reads and writes spend separate counters", () => {
     expect(get).toBe(post);
   });
 });
+
+describe("csrfApplies with the resolved credential", () => {
+  it("applies when the SESSION admitted the request, header notwithstanding", () => {
+    // A browser can attach an Authorization header on its own (ambient HTTP
+    // authentication); classifying by header presence then skipped CSRF for
+    // a request whose session cookie was the credential that let it in.
+    const req = request("POST", {
+      authorization: "Basic dXNlcjpwYXNz",
+      cookie: "nextly_session=x",
+    });
+    expect(csrfApplies(route({ csrf: true }), req, "cookie")).toBe(true);
+    // The header-only sniff would have said bearer.
+    expect(callerCredential(req)).toBe("bearer");
+  });
+
+  it("still skips when the header actually authenticated", () => {
+    expect(
+      csrfApplies(
+        route({ csrf: true }),
+        request("POST", { authorization: "Bearer k" }),
+        "bearer"
+      )
+    ).toBe(false);
+  });
+});

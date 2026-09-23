@@ -212,6 +212,28 @@ function isExpectedLoginRefusal(err: unknown): boolean {
   return EXPECTED_LOGIN_REFUSALS.some(code => NextlyError.isCode(err, code));
 }
 
+/**
+ * Requests whose response consulted a session.
+ *
+ * currentUser records here, keyed by the Request object it read, so the
+ * plugin-route wrapper can mark the response it sends uncacheable: a public
+ * route whose answer depends on who is asking must never reach a shared
+ * proxy cache, whatever the route declaration said. A WeakMap because the
+ * request is the only thing both halves hold, and its lifetime is exactly
+ * the lifetime of the answer.
+ */
+const sessionConsulted = new WeakMap<Request, boolean>();
+
+/** Record that a response was built from this request's session. */
+export function markSessionConsulted(request: Request): void {
+  sessionConsulted.set(request, true);
+}
+
+/** Whether the handler behind this request read a session. */
+export function wasSessionConsulted(request: Request): boolean {
+  return sessionConsulted.get(request) === true;
+}
+
 export function createPluginAuthApi(
   getDeps: () => CompleteLoginDeps
 ): PluginAuthApi {
@@ -366,6 +388,10 @@ export function createPluginAuthApi(
     async currentUser(request) {
       const deps = getDeps();
       const result = await getSession(request, deps.secret);
+      // Recorded even when nobody is signed in: the ANSWER differs between
+      // an anonymous and a signed-in caller either way, and the cache
+      // decision is about the response, not the user.
+      markSessionConsulted(request);
       return result.authenticated
         ? { id: String(result.user.id), email: String(result.user.email) }
         : null;

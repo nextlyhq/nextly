@@ -12,8 +12,8 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import {
-  respondAction,
   respondData,
+  respondMutation,
   SKIP_DATE_FORMATTING_HEADER,
 } from "../../api/response-shapes";
 import type { NextlyServiceConfig } from "../../di/register";
@@ -116,7 +116,11 @@ export async function dispatchPluginSettings(
     await service.set(body as Record<string, unknown>, {
       actorUserId: readAuthenticatedUser(params)?.id,
     });
-    return respondAction("Settings updated.");
+    // The CANONICAL mutation envelope, with the updated redacted value as
+    // the item: a client processing this update like every other mutation
+    // gets the resulting settings instead of a bare message. Redacted for
+    // the same reason the GET is — a secret is never handed back.
+    return respondMutation("Settings updated.", await service.getRedacted());
   }
 
   throw NextlyError.notFound({

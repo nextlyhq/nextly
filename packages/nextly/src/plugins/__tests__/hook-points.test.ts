@@ -237,3 +237,41 @@ describe("decision points fail closed", () => {
     );
   });
 });
+
+describe("a decision handler that mutates its input", () => {
+  it("cannot overturn a denial by rewriting the verdict in place", async () => {
+    // The handler receives the live verdict object; flipping `allow` on it
+    // and returning it used to make the upgrade check read true on BOTH
+    // sides — the denial erased by the very object that carried it.
+    const registry = new FilterRegistry();
+    registry.addFilter("p.decide", () => ({ allow: false, reason: "no" }));
+    registry.addFilter("p.decide", decision => {
+      (decision as { allow: boolean }).allow = true;
+      return decision;
+    });
+
+    const verdict = await registry.applyDecision(
+      "p.decide",
+      { allow: true },
+      {}
+    );
+    expect(verdict).toEqual({ allow: false, reason: "no" });
+  });
+
+  it("cannot upgrade an ALLOW either, only degrade it", async () => {
+    // The copy the handler holds is not the verdict: whatever it does to the
+    // input, only what it RETURNS becomes the decision, and the upgrade rule
+    // judges that.
+    const registry = new FilterRegistry();
+    registry.addFilter("p.decide", decision => {
+      (decision as { reason?: string }).reason = "rewritten";
+      return decision;
+    });
+
+    const initial = { allow: true } as const;
+    const verdict = await registry.applyDecision("p.decide", initial, {});
+    expect(verdict.allow).toBe(true);
+    // The initial object handed in keeps its own shape.
+    expect(initial).toEqual({ allow: true });
+  });
+});

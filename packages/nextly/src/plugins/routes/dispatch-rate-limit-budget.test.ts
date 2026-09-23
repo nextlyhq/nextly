@@ -9,6 +9,7 @@
  * exactly that traffic.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { z } from "zod";
 
 vi.mock("../../auth/middleware", () => ({
   requireAuthentication: vi.fn(),
@@ -244,3 +245,59 @@ function matchAuth(): RouteMatch {
     params: {},
   };
 }
+
+describe("a settings update over REST", () => {
+  it("answers with the canonical mutation envelope and the redacted item", async () => {
+    // The PATCH is a resource update: the repository's mutation contract
+    // is { message, item }, and a bare message left every client processing
+    // updates the same way with nothing to read.
+    const rows: Array<Record<string, unknown>> = [];
+    const fakeDb = {
+      select: () => ({
+        from: () => ({
+          where: () => Promise.resolve(rows.map(r => ({ ...r }))),
+        }),
+      }),
+      insert: () => ({
+        values: (v: unknown) => ({
+          onConflictDoUpdate: async () => {
+            rows.length = 0;
+            rows.push(v as Record<string, unknown>);
+          },
+        }),
+      }),
+      delete: () => ({ where: async () => undefined }),
+    };
+    const container = {
+      adapter: {
+        getDrizzle: () => fakeDb,
+        dialect: "sqlite",
+        transaction: async <T>(work: () => Promise<T>) => work(),
+      },
+    } as never;
+    const config = {
+      plugins: [
+        {
+          name: "acme-auth",
+          contributes: {
+            settings: z.object({ since: z.string().default("") }),
+          },
+        },
+      ],
+    } as never;
+    const { dispatchPluginSettings } = await import(
+      "../../dispatcher/handlers/plugin-settings-dispatcher"
+    );
+    const response = (await dispatchPluginSettings(
+      container,
+      config,
+      "updatePluginSettings",
+      { plugin: "acme-auth" },
+      { since: "x" }
+    )) as Response;
+
+    const body = (await response.json()) as { message: string; item: unknown };
+    expect(body.message).toBe("Settings updated.");
+    expect(body.item).toEqual({ since: "x" });
+  });
+});

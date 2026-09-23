@@ -40,6 +40,20 @@ export async function handlePending(
 
   try {
     const pending = await verifyPendingToken(token, deps.secret);
+    // The flow's signed LIFETIME, the same predicate the resolve path
+    // enforces. A wrong answer near the end re-issues a token whose JWT is
+    // fresh for another TTL while the flow is over — reporting that as
+    // resumable kept the login page hiding its ordinary sign-in options
+    // behind a continuation nothing can finish.
+    if (
+      pending.flowExpiresAt !== undefined &&
+      Date.now() / 1000 >= pending.flowExpiresAt
+    ) {
+      return new Response(null, {
+        status: 204,
+        headers: { "Cache-Control": "no-store", "x-request-id": requestId },
+      });
+    }
     return new Response(
       JSON.stringify({
         challengeId: pending.challengeId,

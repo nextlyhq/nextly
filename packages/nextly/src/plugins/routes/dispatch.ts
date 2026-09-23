@@ -12,6 +12,7 @@ import {
   requirePermission,
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
+import { wasSessionConsulted } from "../../auth/plugin-auth-api";
 import { NextlyError } from "../../errors/nextly-error";
 import { runWithRequestScope } from "../../hooks/request-scope";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
@@ -27,10 +28,12 @@ import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
 import { buildPluginRouteCaller } from "./route-caller";
 import {
+  callerCredential,
   checkRouteCsrf,
   csrfApplies,
   rateLimitKey,
   shouldNotStore,
+  type CallerCredential,
 } from "./route-options";
 import { resolveRoutePermission } from "./route-permission";
 import type { RouteMatch } from "./route-registry";
@@ -89,22 +92,99 @@ async function resolvePluginRouteAuth(
       user: AuthUser | null;
       authenticatedScope?: AuthenticatedScope;
       caller: PluginRouteCaller | null;
+      /** How the caller actually authenticated, for the CSRF decision. */
+      credential: "cookie" | "bearer";
     }
   | { error: NextlyError }
 > {
-  if (route.public === true) return { user: null, caller: null };
+  if (route.public === true) {
+    return {
+      user: null,
+      caller: null,
+      // No credential resolved anyone on a public route; the sniffed answer
+      // feeds the CSRF decision the same way it always did.
+      credential: callerCredential(req) === "cookie" ? "cookie" : "bearer",
+    };
+  }
 
-  // The permission this route requires ON THIS INSTALL. A route gating on one
-  // of the plugin's own collections gives a function, because the host may have
-  // renamed it and a fixed slug would name a grant nobody was seeded.
-  let required: string | undefined;
+  const required = requiredPermissionOrRefusal(route, self);
+  if ("error" in required) return required;
+
+  // requirePermission already enforces authentication, so the permission-gated
+  // path needs a single call (avoids verifying the session twice).
+  const authResult = required.permission
+    ? await requirePermission(req, ...permissionArgs(required.permission))
+    : await requireAuthentication(req);
+
+  if (isErrorResponse(authResult)) {
+    return { error: toNextlyAuthError(authResult) };
+  }
+  return authenticatedCaller(authResult);
+}
+
+/**
+ * The successful half of route auth: who is asking, with what scope, and how
+ * they actually authenticated.
+ *
+ * Split from the resolver so the mapping is one function with one job. The
+ * `credential` answers the CSRF decision: a browser can attach an
+ * `Authorization` header automatically (ambient HTTP authentication), and
+ * classifying by header presence then skipped CSRF for a request whose
+ * session cookie was the credential that let it in — the resolved method
+ * cannot lie about which one admitted the request. The API-key scope beside
+ * it carries the key's own grants rather than its owner's: a viewer-scoped
+ * key minted by a super-admin is judged by the key, not the owner.
+ */
+function authenticatedCaller(
+  authResult: Exclude<
+    Awaited<ReturnType<typeof requireAuthentication>>,
+    { statusCode: number }
+  >
+): {
+  user: AuthUser;
+  authenticatedScope?: AuthenticatedScope;
+  caller: PluginRouteCaller;
+  credential: "cookie" | "bearer";
+} {
+  const user: AuthUser = {
+    id: authResult.userId as AuthUser["id"],
+    email: authResult.userEmail ?? "",
+    name: authResult.userName ?? null,
+  };
+  return {
+    user,
+    authenticatedScope:
+      authResult.authMethod === "api-key"
+        ? apiKeyScopeFrom(authResult)
+        : undefined,
+    // Built from the same `authResult` the scope above is derived from, so
+    // the raw grant and the question asked of it cannot disagree about who
+    // is asking.
+    caller: buildPluginRouteCaller(authResult),
+    credential: authResult.authMethod === "session" ? "cookie" : "bearer",
+  };
+}
+
+/**
+ * The permission slug this route requires on this install, or the refusal a
+ * gate that cannot be computed owes.
+ *
+ * A route gating on one of the plugin's own collections gives a function,
+ * because the host may have renamed it and a fixed slug would name a grant
+ * nobody was seeded. And a gate that cannot be computed REFUSES: falling
+ * through to `requireAuthentication` would drop the permission check
+ * entirely and admit any signed-in caller — a thrown resolver silently
+ * OPENING the route it was written to close.
+ */
+function requiredPermissionOrRefusal(
+  route: PluginRoute,
+  self: PluginSelf
+): { permission?: string } | { error: NextlyError } {
   try {
-    required = resolveRoutePermission(route.requiredPermission, self);
+    return {
+      permission: resolveRoutePermission(route.requiredPermission, self),
+    };
   } catch (cause) {
-    // A gate that cannot be computed refuses. Falling through to
-    // `requireAuthentication` would drop the permission check entirely and
-    // admit any signed-in caller — a thrown resolver silently OPENING the route
-    // it was written to close.
     return {
       error: NextlyError.forbidden({
         ...(cause instanceof Error ? { cause } : {}),
@@ -116,38 +196,6 @@ async function resolvePluginRouteAuth(
       }),
     };
   }
-
-  // requirePermission already enforces authentication, so the permission-gated
-  // path needs a single call (avoids verifying the session twice).
-  const authResult = required
-    ? await requirePermission(req, ...permissionArgs(required))
-    : await requireAuthentication(req);
-
-  if (isErrorResponse(authResult)) {
-    return { error: toNextlyAuthError(authResult) };
-  }
-
-  const user: AuthUser = {
-    id: authResult.userId as AuthUser["id"],
-    email: authResult.userEmail ?? "",
-    name: authResult.userName ?? null,
-  };
-  // An API key's own grants travel beside the owner it names. `user` carries
-  // the owner, so a service that resolves permissions from `user.id` reaches
-  // the owner's roles — which is how a viewer-scoped key minted by a
-  // super-admin came to be judged as a super-admin on this path. A session
-  // caller carries no scope and keeps resolving the normal way.
-  const authenticatedScope =
-    authResult.authMethod === "api-key"
-      ? apiKeyScopeFrom(authResult)
-      : undefined;
-  // Built from the same `authResult` the scope above is derived from, so the
-  // raw grant and the question asked of it cannot disagree about who is asking.
-  return {
-    user,
-    authenticatedScope,
-    caller: buildPluginRouteCaller(authResult),
-  };
 }
 
 function permissionArgs(slug: string): [string, string] {
@@ -198,12 +246,24 @@ function permissionArgs(slug: string): [string, string] {
  * response whose headers are immutable — one that came from `fetch`, say —
  * and setting a header on that throws, turning a marking step into a 500.
  */
-function markPluginResponse(response: Response, route: PluginRoute): Response {
+function markPluginResponse(
+  response: Response,
+  route: PluginRoute,
+  req?: Request
+): Response {
   const headers = new Headers(response.headers);
   if (route.formatTimestamps !== true) {
     headers.set(SKIP_TIMEZONE_FORMAT_HEADER, "1");
   }
   if (route.public !== true) applySessionCacheHeaders(headers);
+  // A handler that read the caller's session answered personally, however
+  // the route was declared: a shared proxy caching that answer would serve
+  // one caller's data to another. currentUser flags the request on the way
+  // through; this is where the flag becomes a header, so no plugin can
+  // forget it.
+  if (req && wasSessionConsulted(req)) {
+    headers.set("Cache-Control", "no-store");
+  }
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -390,9 +450,10 @@ async function applyRouteRateLimit(
 /** Check the route's CSRF requirement, returning the refusal when it fails. */
 async function applyRouteCsrf(
   req: Request,
-  matched: RouteMatch
+  matched: RouteMatch,
+  credential: CallerCredential
 ): Promise<Response | null> {
-  if (!csrfApplies(matched.route, req)) return null;
+  if (!csrfApplies(matched.route, req, credential)) return null;
 
   // Read without consuming: the handler still needs the body. A clone is the
   // only way to look at it twice.
@@ -502,7 +563,7 @@ export async function runPluginRoute(
     );
   }
 
-  const csrf = await applyRouteCsrf(req, matched);
+  const csrf = await applyRouteCsrf(req, matched, auth.credential);
   if (csrf) return markPluginResponse(csrf, matched.route);
 
   const ctx: PluginRouteContext = {
@@ -530,7 +591,8 @@ export async function runPluginRoute(
     );
     return markPluginResponse(
       withNoStore(response, matched.route),
-      matched.route
+      matched.route,
+      req
     );
   } catch (err) {
     // The SAME cache directive as the success path. A route declaring
@@ -540,7 +602,8 @@ export async function runPluginRoute(
     // refusal the route never repeated.
     return markPluginResponse(
       withNoStore(toErrorResponse(req, err), matched.route),
-      matched.route
+      matched.route,
+      req
     );
   }
 }

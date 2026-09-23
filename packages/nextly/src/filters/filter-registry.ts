@@ -132,16 +132,21 @@ export class FilterRegistry {
 
     let decision = initial;
     for (const fn of [...list]) {
+      // A COPY of the verdict goes in, never the authoritative object: a
+      // JavaScript handler can rewrite `allow` in place, and the mutated
+      // input would then read as true on BOTH sides of the upgrade check
+      // below — the denial overturned by the very object that carried it.
+      const prior = decision;
+      const input = { ...decision };
       let next: Decision;
       try {
-        next =
-          (await (fn as Filter<Decision, C>)(decision, context)) ?? decision;
+        next = (await (fn as Filter<Decision, C>)(input, context)) ?? prior;
       } catch (err) {
         this.logError("decision", name, err);
         return { allow: false, reason: "hook-error" };
       }
 
-      if (!decision.allow && next.allow) {
+      if (!prior.allow && next.allow) {
         // Logged rather than silently ignored: a plugin trying to overrule a
         // denial is a mistake worth seeing, and letting it through would make
         // the verdict depend on load order.
