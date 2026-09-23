@@ -134,7 +134,7 @@ async function attachMysqlConstraints(
   const fks = new Map<string, ForeignKeySpec[]>();
   const fkColumns = new Map<string, string[]>();
   const fkRefColumns = new Map<string, string[]>();
-  for (const row of fkRows) {
+  for (const row of fkRows ?? []) {
     const key = `${row.TABLE_NAME}\u0000${row.CONSTRAINT_NAME}`;
     fkColumns.set(key, [...(fkColumns.get(key) ?? []), row.COLUMN_NAME]);
     fkRefColumns.set(
@@ -182,7 +182,7 @@ async function attachMysqlConstraints(
     : checkRaw) as typeof checkRows;
 
   const checks = new Map<string, CheckSpec[]>();
-  for (const row of checkRows) {
+  for (const row of checkRows ?? []) {
     const list = checks.get(row.TABLE_NAME) ?? [];
     list.push({
       name: row.CONSTRAINT_NAME,
@@ -239,7 +239,7 @@ async function attachPgConstraints(
   };
 
   const fks = new Map<string, ForeignKeySpec[]>();
-  for (const row of fkResult.rows) {
+  for (const row of fkResult?.rows ?? []) {
     const list = fks.get(row.table) ?? [];
     list.push({
       name: row.name,
@@ -252,7 +252,7 @@ async function attachPgConstraints(
     fks.set(row.table, list);
   }
   const checks = new Map<string, CheckSpec[]>();
-  for (const row of checkResult.rows) {
+  for (const row of checkResult?.rows ?? []) {
     const list = checks.get(row.table) ?? [];
     list.push({ name: row.name, sql: pgCheckExpression(row.definition) });
     checks.set(row.table, list);
@@ -722,7 +722,7 @@ async function sqliteForeignKeys(
     on_delete: string;
     on_update: string;
   }>;
-  if (rows.length === 0) return [];
+  if ((rows ?? []).length === 0) return [];
   const byId = new Map<number, typeof rows>();
   for (const row of rows) {
     const list = byId.get(row.id) ?? [];
@@ -762,7 +762,7 @@ async function sqliteChecks(
   const rows = (await Promise.resolve(dbAny.all(
     sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${table}`
   ))) as Array<{ sql: string | null }>;
-  const create = rows[0]?.sql;
+  const create = (rows ?? [])[0]?.sql;
   if (create === undefined || create === null) return [];
   const checks: CheckSpec[] = [];
   const pattern = /CONSTRAINT\s+(?:"([^"]+)"|`([^`]+)`|([A-Za-z_][\w]*))\s+CHECK\s*\(/gi;

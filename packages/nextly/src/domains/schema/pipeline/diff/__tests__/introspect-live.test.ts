@@ -53,7 +53,7 @@ describe("introspectLiveSnapshot - postgresql", () => {
       "dc_posts",
     ]);
 
-    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledTimes(4);
     expect(snapshot.tables[0].columns).toEqual([
       {
         name: "id",
@@ -152,7 +152,7 @@ describe("introspectLiveSnapshot - mysql", () => {
     expect(snapshot.tables[0].indexes).toEqual([
       { name: "idx_dc_posts_views", columns: ["views"], unique: false },
     ]);
-    expect(execute).toHaveBeenCalledTimes(3);
+    expect(execute).toHaveBeenCalledTimes(5);
   });
 
   it("keys only the columns the PRIMARY index names", async () => {
