@@ -244,6 +244,13 @@ export function Login() {
           // passes the resolver straight through.
           resolve={challengeFlow.resolve}
           onResolved={next => {
+            // A challenge view calls this when it reads the answer as "done".
+            // A forced password change is accepted and NOT done: the host is
+            // already rendering that step, and navigating would land on a page
+            // with no session that bounces straight back to login. Checked
+            // here rather than trusted to the view, which may predate the
+            // `continues` field entirely.
+            if (challengeFlow.isContinuing()) return;
             window.location.href = next ?? ROUTES.DASHBOARD;
           }}
         />

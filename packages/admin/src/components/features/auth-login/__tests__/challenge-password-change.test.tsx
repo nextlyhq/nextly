@@ -164,3 +164,61 @@ describe("a wrong answer advances the token", () => {
     expect(result.current.challenge?.pendingToken).toBe("pt-first");
   });
 });
+
+describe("a password change is not reported as a finished login", () => {
+  it("marks the answer as CONTINUING", async () => {
+    // A challenge view reads `ok` as "done" and calls `onResolved`, which
+    // navigates. The factor was correct, so this is not a failure — but the
+    // login is not finished either, and the host is already rendering the
+    // set-password step.
+    post.mockResolvedValue({
+      status: "password_change_required",
+      pendingToken: "pt-1",
+    });
+
+    const { result } = renderHook(() => useChallengeFlow());
+    let answer: Awaited<ReturnType<typeof result.current.resolve>> | undefined;
+    await act(async () => {
+      answer = await result.current.resolve({ code: "123456" });
+    });
+
+    expect(answer).toMatchObject({ ok: true, continues: true });
+  });
+
+  it("reports isContinuing SYNCHRONOUSLY, for a callback that closed over an older render", async () => {
+    // `onResolved` is invoked from the view's own handler, often in the tick
+    // that raised the continuation. A state read there is still the stale one,
+    // which is why the host checks a ref instead.
+    post.mockResolvedValue({
+      status: "password_change_required",
+      pendingToken: "pt-1",
+    });
+
+    const { result } = renderHook(() => useChallengeFlow());
+    expect(result.current.isContinuing()).toBe(false);
+
+    // The accessor captured BEFORE the answer, as a view's callback would be.
+    const isContinuing = result.current.isContinuing;
+    await act(async () => {
+      await result.current.resolve({ code: "123456" });
+    });
+
+    expect(isContinuing()).toBe(true);
+  });
+
+  it("does NOT mark an ordinary success as continuing", async () => {
+    // The control: reporting every answer as continuing would satisfy both
+    // tests above while stopping a normal second-factor login from ever
+    // navigating anywhere.
+    post.mockResolvedValue({ next: "/admin/collections" });
+
+    const { result } = renderHook(() => useChallengeFlow());
+    let answer: Awaited<ReturnType<typeof result.current.resolve>> | undefined;
+    await act(async () => {
+      answer = await result.current.resolve({ code: "123456" });
+    });
+
+    expect(answer?.continues).toBeUndefined();
+    expect(result.current.isContinuing()).toBe(false);
+  });
+});

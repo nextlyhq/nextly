@@ -822,11 +822,19 @@ export class UserMutationService extends BaseService {
       });
     }
 
-    const duplicate = await this.db.query.users.findFirst({
-      columns: { id: true },
-      where: { email: requireFilterValue(email, "email") },
-    });
-    if (duplicate) {
+    // BOTH spellings, in one OR, exactly as `createLocalUser` probes them.
+    // `email` here is the canonical form the schema produced; `input.email` is
+    // what the provider actually sent. A row written before normalization is
+    // reachable only by that second spelling on a case-sensitive `=`, and the
+    // unique index is case-sensitive on Postgres and SQLite — so probing the
+    // canonical form alone admitted a SECOND account for a mailbox that
+    // already had one, splitting the identity rather than refusing.
+    const duplicate = await (this.db as unknown as DrizzleChain)
+      .select({ id: users.id })
+      .from(users)
+      .where(inArray(users.email, [email, input.email]))
+      .limit(1);
+    if (duplicate.length > 0) {
       throw NextlyError.duplicate({
         logContext: { entity: "user", email },
       });

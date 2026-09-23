@@ -345,6 +345,69 @@ describe.each(getConfiguredTestDialects())(
       expect(names).not.toContain("super-admin");
     });
 
+    it("refuses a LEGACY row spelled with different case", async () => {
+      // A row written before normalization keeps its original spelling, and
+      // the unique index is case-sensitive on Postgres and SQLite. Probing
+      // only the canonical form let a provider create a SECOND account for a
+      // mailbox that already had one — an identity split rather than a
+      // refusal, and the account it splits from is the person's real one.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const editor = await makeRole(t, "editor");
+
+      // Written directly, because every service path normalises on the way in
+      // and so cannot produce the row this test is about.
+      const db = t.adapter.getDrizzle() as unknown as {
+        insert: (table: unknown) => {
+          values: (v: unknown) => Promise<unknown>;
+        };
+      };
+      const { users } = getDialectTables();
+      await db.insert(users).values({
+        id: "legacy-1",
+        email: "Legacy@Example.com",
+        name: "Legacy",
+        passwordHash: null,
+        isActive: true,
+        mustChangePassword: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      await expect(
+        services(t).users.createExternalUser(
+          {
+            // The spelling the provider asserts, which is the row's own.
+            email: "Legacy@Example.com",
+            name: "Legacy",
+            roleIds: [editor],
+            emailVerifiedAt: new Date(),
+          },
+          SYSTEM_CONTEXT
+        )
+      ).rejects.toMatchObject({ code: "DUPLICATE" });
+    });
+
+    it("still creates an account for an address nobody holds", async () => {
+      // The control: refusing every address would satisfy the test above
+      // while making external sign-in impossible.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const editor = await makeRole(t, "editor");
+
+      const created = await services(t).users.createExternalUser(
+        {
+          email: "Fresh@Example.com",
+          name: "Fresh",
+          roleIds: [editor],
+          emailVerifiedAt: new Date(),
+        },
+        SYSTEM_CONTEXT
+      );
+      // Stored normalised, whatever spelling the provider sent.
+      expect(created.email).toBe("fresh@example.com");
+    });
+
     it("refuses a role that INHERITS super-admin", async () => {
       // A role whose own slug is something else can still inherit
       // `super-admin`, and the permission system resolves exactly that way —

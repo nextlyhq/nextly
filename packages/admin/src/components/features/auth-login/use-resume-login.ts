@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ROUTES } from "@admin/constants/routes";
 import { getCsrfToken } from "@admin/lib/api/csrf";
@@ -145,6 +145,15 @@ export interface ActiveChallenge {
 export interface ChallengeFlow {
   challenge: ActiveChallenge | null;
   /**
+   * Whether the login has a step left, readable at CALL time.
+   *
+   * A function rather than a value because the caller is a callback a
+   * challenge view holds: it closed over the render in which it was created,
+   * where nothing was pending yet, so a boolean read there is always the stale
+   * one. This reads a ref updated at the moment the continuation is raised.
+   */
+  isContinuing: () => boolean;
+  /**
    * A resumed login that is waiting on a forced password change.
    *
    * Separate from `challenge`, because it is answered by core's set-password
@@ -171,6 +180,14 @@ export interface ChallengeFlow {
 export interface ChallengeAnswer {
   ok: boolean;
   error?: string;
+  /**
+   * Accepted, and the login is not finished.
+   *
+   * Mirrors `ChallengeResolveResult.continues`, which is the shape a challenge
+   * view receives: `ok` alone reads as "done" and would have the view navigate
+   * away from the step the host is about to render.
+   */
+  continues?: boolean;
   /**
    * The challenge was answered and STILL no session exists, because the
    * account holds an admin-set password it must replace first.
@@ -200,6 +217,10 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
   const [passwordChange, setPasswordChange] = useState<{
     pendingToken?: string;
   } | null>(null);
+  // The same fact, readable synchronously. `onResolved` is invoked from a
+  // challenge view's own handler, often in the tick that raised this — before
+  // any re-render — so a state read there would still say null.
+  const continuingRef = useRef(false);
 
   useEffect(() => {
     if (resume.status !== "resume") return;
@@ -217,6 +238,7 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
       // login can raise its own continuation first — and overwriting that
       // with the tokenless resumed one left `SetInitialPassword` relying on a
       // cookie belonging to a different, possibly expired, attempt.
+      continuingRef.current = true;
       setPasswordChange(current => current ?? {});
       return;
     }
@@ -245,8 +267,12 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
 
       const raised = passwordChangeIn(result);
       if (raised) {
+        continuingRef.current = true;
         setPasswordChange(raised);
-        return { ok: true, passwordChangeRequired: raised };
+        // `continues` says the login is not finished. `ok` alone reads as
+        // "done" to a challenge view, which would call `onResolved` and
+        // navigate away from the step the host is about to render.
+        return { ok: true, continues: true, passwordChangeRequired: raised };
       }
 
       window.location.href = result?.next ?? ROUTES.DASHBOARD;
@@ -268,7 +294,11 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
   return {
     challenge,
     passwordChange,
-    requirePasswordChange: setPasswordChange,
+    requirePasswordChange: raised => {
+      continuingRef.current = true;
+      setPasswordChange(raised);
+    },
+    isContinuing: () => continuingRef.current,
     start: setChallenge,
     resolve,
     signInFailed: hasSignInError(search),

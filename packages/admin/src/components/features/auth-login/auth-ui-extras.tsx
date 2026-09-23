@@ -167,6 +167,20 @@ export interface ChallengeResolveResult {
   ok: boolean;
   /** A message to show when `ok` is false. Generic by design. */
   error?: string;
+  /**
+   * The answer was accepted and the login is NOT finished.
+   *
+   * A forced password change ends here rather than in a session: the factor
+   * was correct, so this is not a failure, but there is another step and the
+   * host is already rendering it. A view that treats `ok` as "done" and calls
+   * `onResolved` would navigate away from that step, to a page with no session
+   * that bounces straight back to login.
+   *
+   * A view that does not know about this field is not broken by it: the host
+   * ignores `onResolved` while a continuation is pending, so the redirect
+   * cannot happen either way. Reading it lets a view skip the call entirely.
+   */
+  continues?: boolean;
 }
 
 /**
