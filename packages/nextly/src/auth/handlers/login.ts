@@ -82,7 +82,16 @@ async function pauseWithPendingToken(
   return mintPendingToken(
     // A fresh FLOW per pause: each interrupted login is its own attempt
     // budget, so a login that finished does not spend the next one's cap.
-    { ...claims, attempts: 0, flow: newChallengeFlowId() },
+    // The flow's EXPIRY is fixed here and carried unchanged by every
+    // re-issue — the token's TTL renews on each wrong answer, and without a
+    // non-resetting end, replaying old tokens near each window's edge kept
+    // one flow guessing far past the cap.
+    {
+      ...claims,
+      attempts: 0,
+      flow: newChallengeFlowId(),
+      flowExpiresAt: Math.floor(Date.now() / 1000) + deps.challengeTokenTTL,
+    },
     deps.secret,
     deps.challengeTokenTTL
   );

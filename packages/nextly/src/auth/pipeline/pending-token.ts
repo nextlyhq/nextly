@@ -64,6 +64,18 @@ export interface PendingClaims {
    * existed; those share one budget, as all tokens did then.
    */
   flow?: string;
+  /**
+   * When the FLOW expires, as epoch seconds — fixed when the login is paused
+   * and carried unchanged by every re-issued token.
+   *
+   * The token's own TTL renews on each wrong answer, and the server-side
+   * budget is a window entries age out of; without a non-resetting end,
+   * replaying an old low-attempt token near each window's edge kept a single
+   * flow guessing far past its configured cap. The original expiry is signed
+   * where the holder cannot edit it, and the resolve path refuses a flow
+   * whose lifetime is over even when the token presenting it is still fresh.
+   */
+  flowExpiresAt?: number;
 }
 
 /**
@@ -85,6 +97,9 @@ export async function mintPendingToken(
       ...(claims.strategy ? { strategy: claims.strategy } : {}),
       ...(claims.next ? { next: claims.next } : {}),
       ...(claims.flow ? { flow: claims.flow } : {}),
+      ...(claims.flowExpiresAt !== undefined
+        ? { flowExpiresAt: claims.flowExpiresAt }
+        : {}),
     },
     secret,
     ttlSeconds,
@@ -128,5 +143,9 @@ export async function verifyPendingToken(
       typeof result.payload.next === "string" ? result.payload.next : undefined,
     flow:
       typeof result.payload.flow === "string" ? result.payload.flow : undefined,
+    flowExpiresAt:
+      typeof result.payload.flowExpiresAt === "number"
+        ? result.payload.flowExpiresAt
+        : undefined,
   };
 }

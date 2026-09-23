@@ -234,8 +234,11 @@ export function createPluginAuthApi(
         next: pending.next,
         // A fresh flow: each provider login this redirect pauses gets its own
         // attempt budget, separate from the password login it may share an
-        // account and a challenge with.
+        // account and a challenge with. The flow's expiry is FIXED here and
+        // carried unchanged by every re-issue, so a renewed token cannot
+        // extend the lifetime the budget is bounded by.
         flow: newChallengeFlowId(),
+        flowExpiresAt: Math.floor(Date.now() / 1000) + deps.challengeTokenTTL,
       },
       deps.secret,
       deps.challengeTokenTTL

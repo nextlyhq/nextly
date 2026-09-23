@@ -219,7 +219,12 @@ async function spendChallengeAttempt(
     | "countChallengeAttempt"
     | "authRateLimit"
   >,
-  pending: { userId: string; challengeId: string; flow?: string }
+  pending: {
+    userId: string;
+    challengeId: string;
+    flow?: string;
+    flowExpiresAt?: number;
+  }
 ): Promise<void> {
   // The CONFIGURED store, not the module-level default. `authRateLimiter()`
   // with no argument returns the process-memory limiter whatever the install
@@ -271,6 +276,7 @@ async function wrongAnswer(
       strategy?: string;
       next?: string;
       flow?: string;
+      flowExpiresAt?: number;
     };
     usedCookie: boolean;
     requestId: string;
@@ -299,6 +305,12 @@ async function wrongAnswer(
       strategy: args.pending.strategy,
       ...(args.pending.next ? { next: args.pending.next } : {}),
       ...(args.pending.flow ? { flow: args.pending.flow } : {}),
+      // The ORIGINAL expiry, not a renewed one: the token's TTL refreshes so
+      // the holder can keep answering, while the flow's lifetime — the bound
+      // the attempt budget is enforced within — stays where the pause set it.
+      ...(args.pending.flowExpiresAt !== undefined
+        ? { flowExpiresAt: args.pending.flowExpiresAt }
+        : {}),
     },
     deps.secret,
     deps.challengeTokenTTL
@@ -329,6 +341,9 @@ export async function handleChallengeResolve(
 ): Promise<Response> {
   const startTime = Date.now();
   const requestId = readOrGenerateRequestId(request);
+  // Declared outside the try so the catch can read it: whether the pending
+  // token arrived by cookie decides what a terminal failure owes the browser.
+  let usedCookie = false;
 
   try {
     const body = (await request.json()) as Record<string, unknown>;
@@ -343,8 +358,7 @@ export async function handleChallengeResolve(
     // pending token lives in an HttpOnly cookie rather than in a variable the
     // page could have kept — see auth/cookies/pending-cookie.
     const cookieToken = readPendingCookie(request);
-    const usedCookie =
-      typeof body.pendingToken !== "string" && cookieToken !== null;
+    usedCookie = typeof body.pendingToken !== "string" && cookieToken !== null;
     const pendingTokenInput =
       typeof body.pendingToken === "string"
         ? body.pendingToken
@@ -360,11 +374,7 @@ export async function handleChallengeResolve(
       });
     }
 
-    if (pending.attempts >= deps.maxChallengeAttempts) {
-      throw NextlyError.invalidCredentials({
-        logContext: { reason: auditReason("challenge-attempts-exhausted") },
-      });
-    }
+    refuseIfFlowExhausted(pending, deps);
 
     // BEFORE the answer is examined. Spending the budget only on a wrong
     // answer left a correct one free, and a replayed token could therefore
@@ -443,12 +453,82 @@ export async function handleChallengeResolve(
       userAgent: request.headers.get("user-agent"),
       metadata: auditFailureMetadata(err, requestId),
     });
-    if (NextlyError.is(err)) {
-      return buildAuthErrorResponse(err, requestId);
-    }
+    return challengeErrorResponse(err, requestId, usedCookie);
+  }
+}
+
+/**
+ * The catch path's answer: the canonical error envelope, plus the cookie a
+ * terminal cookie-mode failure owes the browser.
+ *
+ * A cookie-mode flow that failed FOR GOOD takes its cookie with it. The
+ * terminal token still verifies until its TTL expires, so leaving the cookie
+ * in place kept `/auth/pending` reporting the exhausted challenge after
+ * every reload — the login page hiding its password and provider options
+ * behind a continuation nothing can finish. Only the terminal refusals clear
+ * it: a wrong answer REPLACES the cookie with its retry token, and clearing
+ * on transient failures would throw away an attempt the person still has.
+ */
+function challengeErrorResponse(
+  err: unknown,
+  requestId: string,
+  usedCookie: boolean
+): Response {
+  if (!NextlyError.is(err)) {
     return buildAuthErrorResponse(
       NextlyError.internal({ cause: err as Error }),
       requestId
     );
+  }
+  const response = buildAuthErrorResponse(err, requestId);
+  if (usedCookie && terminalChallengeFailure(err)) {
+    response.headers.append("Set-Cookie", clearPendingCookie());
+  }
+  return response;
+}
+
+/**
+ * Whether an error is a challenge flow's FINAL refusal — the attempt budget
+ * exhausted, or the last permitted wrong answer spent.
+ *
+ * A narrow test on the audit reason, because that is the identity the two
+ * throw sites already share and nothing else in this handler's catch should
+ * take a cookie from the browser.
+ */
+function terminalChallengeFailure(err: NextlyError): boolean {
+  const reason = err.logContext?.reason;
+  return (
+    reason === auditReason("challenge-attempts-exhausted") ||
+    reason === auditReason("challenge-failed-final")
+  );
+}
+
+/**
+ * The two ways a flow is over before its answer is even examined.
+ *
+ * Both refuse identically, because both mean the same thing: no attempt this
+ * token presents is spendable. The COUNTER on the token caps replays of a
+ * low-attempt mint, and the flow's signed LIFETIME caps the window-hopping a
+ * renewed token would otherwise allow — each wrong answer re-issues a token
+ * with a fresh TTL while the server-side budget ages entries out, so without
+ * the fixed end, replaying an old low-attempt token near each window's edge
+ * kept one flow guessing far past the configured cap.
+ */
+function refuseIfFlowExhausted(
+  pending: { attempts: number; flowExpiresAt?: number },
+  deps: Pick<ChallengeResolveDeps, "maxChallengeAttempts">
+): void {
+  if (pending.attempts >= deps.maxChallengeAttempts) {
+    throw NextlyError.invalidCredentials({
+      logContext: { reason: auditReason("challenge-attempts-exhausted") },
+    });
+  }
+  if (
+    pending.flowExpiresAt !== undefined &&
+    Date.now() / 1000 >= pending.flowExpiresAt
+  ) {
+    throw NextlyError.invalidCredentials({
+      logContext: { reason: auditReason("challenge-attempts-exhausted") },
+    });
   }
 }

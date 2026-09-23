@@ -547,3 +547,98 @@ describe("a cookie-mode challenge that ends in a forced password change", () => 
     expect(typeof body.pendingToken).toBe("string");
   });
 });
+
+describe("the flow's fixed lifetime", () => {
+  it("refuses a token whose flow has expired, whatever its attempt count", async () => {
+    // Each wrong answer re-issues a token with a FRESH TTL, and the
+    // server-side budget is a window entries age out of — so without a
+    // non-resetting end signed at the pause, replaying an old low-attempt
+    // token near each window's edge kept one flow guessing far past the cap.
+    const deps = makeDeps();
+    const expiredFlow = await mintPendingToken(
+      {
+        userId: "u1",
+        challengeId: "totp",
+        attempts: 0,
+        flow: "f1",
+        flowExpiresAt: Math.floor(Date.now() / 1000) - 10,
+      },
+      SECRET,
+      300
+    );
+
+    const res = await handleChallengeResolve(
+      makeRequest({
+        pendingToken: expiredFlow,
+        response: { code: "123456" },
+      }),
+      deps
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  it("still accepts a correct answer inside the flow's lifetime", async () => {
+    // The control: the fixed end bounds the flow, it does not shorten it —
+    // the token is as fresh as its own TTL says right up to that instant.
+    const deps = makeDeps();
+    const liveFlow = await mintPendingToken(
+      {
+        userId: "u1",
+        challengeId: "totp",
+        attempts: 0,
+        flow: "f1",
+        flowExpiresAt: Math.floor(Date.now() / 1000) + 300,
+      },
+      SECRET,
+      300
+    );
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken: liveFlow, response: { code: "123456" } }),
+      deps
+    );
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("a cookie-mode flow that fails for good", () => {
+  it("clears the pending cookie on the terminal refusal", async () => {
+    // The terminal token still verifies until its TTL expires, so leaving
+    // the cookie in place kept `/auth/pending` reporting the exhausted
+    // challenge after every reload — the login page hiding its password and
+    // provider options behind a continuation nothing can finish.
+    const deps = makeDeps();
+    deps.countChallengeAttempt = async () => ({ allowed: false });
+
+    const pendingToken = await mintPendingToken(
+      { userId: "u1", challengeId: "totp", attempts: 0, flow: "f1" },
+      SECRET,
+      300
+    );
+    const request = new Request(
+      "http://localhost:3000/admin/api/auth/challenge/resolve",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: `nextly_csrf=tok; nextly_pending=${pendingToken}`,
+          origin: "http://localhost:3000",
+        },
+        body: JSON.stringify({
+          csrfToken: "tok",
+          response: { code: "123456" },
+        }),
+      }
+    );
+
+    const res = await handleChallengeResolve(request, deps);
+    expect(res.status).toBe(401);
+    // The clear-serialization the cookie helper emits: empty value, gone at
+    // once. What matters is that a Set-Cookie for the pending cookie is on
+    // the refusal at all.
+    expect(res.headers.getSetCookie().join("\n")).toMatch(
+      /nextly_pending=;.*Max-Age=0/
+    );
+  });
+});
