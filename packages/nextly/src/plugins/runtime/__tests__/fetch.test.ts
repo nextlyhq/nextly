@@ -586,3 +586,12 @@ describe("caller cancellation during DNS resolution", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 });
+
+describe("the deprecated site-local range", () => {
+  it("refuses fec0:: addresses as internal", () => {
+    // Deprecated since 2004 but still routed on networks that predate the
+    // deprecation; falling through as public let a declared host reach
+    // internal v6 services through the vetted address.
+    expect(judgeIpv6("fec0::1").allowed).toBe(false);
+  });
+});

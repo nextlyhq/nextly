@@ -198,10 +198,11 @@ describe("a failed boot destroys what it started", () => {
       createTestNextly({ plugins: [healthy, laterBoom] })
     ).rejects.toThrow();
 
-    // The initialized plugin is cleaned up; the one whose init THREW is not —
-    // a plugin that cannot finish starting has not started, and its destroy
-    // expects a state that never came to exist.
-    expect(destroyed).toEqual(["@test/healthy"]);
+    // The initialized plugin is cleaned up, and so is the THROWER: its init
+    // may have opened a timer before failing, and destroy tolerates partial
+    // initialization — a destroy assuming finished state would leak on
+    // exactly the failure it exists for.
+    expect(destroyed).toEqual(["@test/later-boom", "@test/healthy"]);
   });
 
   it("destroys every initialized plugin, reverse order, when onReady throws", async () => {
@@ -282,5 +283,52 @@ describe("a failed boot destroys what it started", () => {
     });
 
     expect(destroyed).toEqual(["@test/onready-only"]);
+  });
+});
+
+describe("a failed boot destroys what it started", () => {
+  it("destroys the plugin whose OWN init threw, after partial work", async () => {
+    // init may open a timer before failing; a rollback that skips the
+    // thrower leaked it beside the retry's copies. Recorded before the hook
+    // runs now, so the plugin is part of its own rollback — its destroy
+    // tolerates partial initialization.
+    const destroyed: string[] = [];
+    const openedThenThrew = definePlugin({
+      name: "@test/half-open",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      init() {
+        // The timer this simulates exists from here until destroy.
+      },
+      destroy() {
+        destroyed.push("@test/half-open");
+      },
+    });
+
+    let caught: unknown;
+    try {
+      current = await createTestNextly({
+        plugins: [
+          definePlugin({
+            name: "@test/boom",
+            version: "1.0.0",
+            nextly: ">=0.0.0",
+            init() {
+              throw new Error("halfway there");
+            },
+          }),
+          // Declared after the thrower so the topo order keeps it last.
+          openedThenThrew,
+        ]
+          .slice()
+          .reverse(),
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(destroyed).toContain("@test/half-open");
+    await current?.destroy();
+    current = undefined;
   });
 });

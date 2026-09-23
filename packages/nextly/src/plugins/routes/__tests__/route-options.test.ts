@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   callerCredential,
+  checkRouteCsrf,
   csrfApplies,
   rateLimitKey,
   shouldNotStore,
@@ -256,5 +257,43 @@ describe("csrfApplies with the resolved credential", () => {
         "bearer"
       )
     ).toBe(false);
+  });
+});
+
+describe("checkRouteCsrf with the resolved credential", () => {
+  it("VALIDATES the token when the session admitted the request", () => {
+    // The preliminary check demanded CSRF using the resolved credential;
+    // the validator recomputing it from headers returned valid without
+    // looking — the bypass the outer fix existed to close, reopened inside.
+    const req = request("POST", {
+      authorization: "Basic dXNlcjpwYXNz",
+      cookie: "nextly_csrf=tok",
+      origin: "http://localhost:3000",
+      "x-csrf-token": "tok",
+    });
+    const verdict = checkRouteCsrf(
+      route({ csrf: true }),
+      req,
+      {},
+      ["http://localhost:3000"],
+      "cookie"
+    );
+    expect(verdict.valid).toBe(true);
+  });
+
+  it("REFUSES when the session-admitted request carries no token", () => {
+    const req = request("POST", {
+      authorization: "Basic dXNlcjpwYXNz",
+      cookie: "nextly_csrf=tok",
+      origin: "http://localhost:3000",
+    });
+    const verdict = checkRouteCsrf(
+      route({ csrf: true }),
+      req,
+      {},
+      ["http://localhost:3000"],
+      "cookie"
+    );
+    expect(verdict.valid).toBe(false);
   });
 });

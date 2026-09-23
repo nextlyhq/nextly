@@ -15,6 +15,7 @@ import {
 } from "../pipeline/pending-token";
 import { runStrategyChain } from "../pipeline/strategy-chain";
 import type { AuthStrategy } from "../pipeline/types";
+import { assertAccountUsable } from "../session/account-state";
 
 import {
   jsonResponse,
@@ -236,6 +237,12 @@ export async function handleLogin(
     }
 
     if (outcome.type === "challenge") {
+      // The SAME gate the session path runs, asked before the flow is
+      // minted: a challenge for an account the gate would refuse gave the
+      // person a second-factor prompt to solve before the refusal arrived,
+      // and sent the code the challenge exists to verify. The password
+      // lockout stays a password-strategy concern, as it is at session time.
+      await gateAccountForSession(deps, outcome.challenge.userId, strategy);
       const pendingToken = await pauseWithPendingToken(deps, {
         userId: outcome.challenge.userId,
         challengeId: outcome.challenge.id,
@@ -246,6 +253,12 @@ export async function handleLogin(
     }
 
     // outcome.type === "authenticated"
+    // Before hooks or continuations: an afterAuthenticate hook may send a
+    // code, and a continuation may pause the login — both are work done for
+    // an account the session gate would refuse, and refusing only at session
+    // time meant the person solved a challenge before learning they could
+    // not sign in.
+    await gateAccountForSession(deps, outcome.user.id, strategy);
     const afterAuth = await deps.authHooks.runAfterAuthenticate(
       outcome.user,
       deps.pluginCtx
@@ -301,4 +314,35 @@ export async function handleLogin(
       requestId
     );
   }
+}
+
+/**
+ * Ask the shared account-state gate about the account a strategy just
+ * authenticated, before anything is minted or run on its behalf.
+ *
+ * The session path asks the same question inside `mintSession`; asking it
+ * HERE keeps a refused account from receiving a challenge prompt, a sent
+ * code, or a paused login it could never finish. The password lockout stays
+ * scoped to the password strategy, exactly as the session-time gate scopes
+ * it — no other strategy'"'"'s failures may be answerable by typing passwords
+ * at an address someone does not own.
+ */
+async function gateAccountForSession(
+  deps: Pick<
+    IssueSessionDeps,
+    "fetchAccountState" | "requireEmailVerification"
+  >,
+  userId: string,
+  strategy: string | undefined
+): Promise<void> {
+  const state = await deps.fetchAccountState(userId);
+  if (!state) {
+    throw NextlyError.invalidCredentials({
+      logContext: { userId, reason: auditReason("user-not-found") },
+    });
+  }
+  assertAccountUsable(state, {
+    requireEmailVerification: deps.requireEmailVerification,
+    enforcePasswordLockout: strategy === undefined || strategy === "password",
+  });
 }

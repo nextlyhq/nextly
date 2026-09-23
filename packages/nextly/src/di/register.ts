@@ -3066,6 +3066,12 @@ async function initializePlugins(
     const pluginContext = contexts.get(plugin.name)!;
 
     if (plugin.init) {
+      // Recorded BEFORE the hook runs, so a plugin whose init throws is part
+      // of its own rollback: init may have opened a timer or connection
+      // before failing, and those survive a boot that did not. Its destroy
+      // must therefore tolerate partial initialization — a destroy that
+      // assumes finished state leaks on exactly the failure it exists for.
+      initialized.push({ plugin, context: pluginContext });
       try {
         await plugin.init(pluginContext);
         logger.info?.(`Plugin "${plugin.name}" initialized`);
@@ -3080,7 +3086,6 @@ async function initializePlugins(
           `Plugin "${plugin.name}" initialization failed: ${message}`
         );
       }
-      initialized.push({ plugin, context: pluginContext });
     }
 
     // Post-init lifecycle event (D8) — best-effort, observe-only; other plugins
@@ -3116,6 +3121,14 @@ async function initializePlugins(
   // before itself.
   for (const { plugin, context } of teardown) {
     if (!plugin.onReady) continue;
+    // Recorded BEFORE the hook runs — `init` is optional, so onReady may be
+    // where a plugin opens everything it owns, and a throw after partial
+    // work deserves the same rollback a throwing init now gets. Only when
+    // init did not record it already, so the reverse-order rollback visits
+    // each plugin once.
+    if (!initialized.some(entry => entry.plugin === plugin)) {
+      initialized.push({ plugin, context });
+    }
     try {
       await plugin.onReady(context);
       logger.info?.(`Plugin "${plugin.name}" ready`);
@@ -3134,15 +3147,6 @@ async function initializePlugins(
           message,
         },
       });
-    }
-    // Recorded as started HERE as well, because `init` is optional: a plugin
-    // whose only lifecycle is `onReady` opens its timers and connections
-    // there, and a later plugin's onReady failing would otherwise leave them
-    // out of the rollback — running beside the retry's copies. A plugin whose
-    // onReady THREW is not recorded, mirroring the init decision: it has not
-    // finished starting, and its destroy expects a state that never existed.
-    if (!initialized.some(entry => entry.plugin === plugin)) {
-      initialized.push({ plugin, context });
     }
   }
 

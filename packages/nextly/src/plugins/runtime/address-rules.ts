@@ -30,6 +30,7 @@ export type AddressRefusal =
   | "broadcast"
   | "reserved"
   | "unique-local"
+  | "site-local"
   | "malformed";
 
 export type AddressVerdict =
@@ -214,6 +215,13 @@ export function judgeIpv6(address: string): AddressVerdict {
   if ((bytes[0] & 0xfe) === 0xfc) return refuse("unique-local");
   if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) {
     return refuse("link-local");
+  }
+  // fec0::/10 — site-local, deprecated since 2004 but still routed on
+  // networks that predate the deprecation. Internal-only by design, like the
+  // unique-local range above it, and falling through as public let a
+  // declared host reach internal v6 services through the vetted address.
+  if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0xc0) {
+    return refuse("site-local");
   }
   if (bytes[0] === 0xff) return refuse("multicast");
 

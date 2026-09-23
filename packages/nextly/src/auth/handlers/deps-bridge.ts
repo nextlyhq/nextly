@@ -22,13 +22,17 @@ import { NextlyError } from "../../errors";
 import { getHookRegistry } from "../../hooks/hook-registry";
 import { env } from "../../lib/env";
 import type { RateLimitStore } from "../../middleware/rate-limit";
-import { createPluginContext } from "../../plugins/plugin-context";
+import {
+  createPluginContext,
+  type PluginContext,
+} from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
 import { readProxyTrustSettings } from "../../utils/proxy-trust";
 import { verifyCredentials } from "../credentials/verify-credentials";
 import { ChallengeRegistry } from "../pipeline/challenge";
 import { AuthHookRegistry } from "../pipeline/hooks";
 import { createPasswordStrategy } from "../pipeline/password-strategy";
+import type { AuthHooks, ChallengeDefinition } from "../pipeline/types";
 
 import { aggregateAuthUi } from "./auth-ui";
 import type { AuthRouterDeps } from "./router";
@@ -455,36 +459,12 @@ export function buildAuthRouterDeps(
     },
   });
 
-  // Collect plugin contributes.auth (hooks + challenges) + app-config
-  // strategies.
-  //
-  // ENABLED plugins only, so the runtime registries and the served auth UI
-  // are derived from one set. Registering a disabled plugin's hooks let its
-  // `afterAuthenticate` challenge fire on a successful login while the login
-  // page — which filters disabled plugins — had no view for it, leaving that
-  // login unfinishable until the plugin was removed or enabled.
-  const config = readServiceConfig(getService);
-  const authHooks = new AuthHookRegistry();
-  const challengeRegistry = new ChallengeRegistry();
-  for (const plugin of (config?.plugins ?? []).filter(
-    p => p.enabled !== false
-  )) {
-    const authContrib = plugin.contributes?.auth;
-    if (authContrib?.hooks) authHooks.add(authContrib.hooks);
-    for (const def of authContrib?.challenges ?? []) {
-      challengeRegistry.add(def);
-    }
-  }
-  const configStrategies = config?.auth?.strategies ?? [];
-  assertConfiguredStrategyNames(configStrategies);
-
-  // Base plugin context for strategies/hooks (system-level; ctx.self empty).
-  // Auth hooks share this context in v1; per-plugin ctx.self resolution in auth
-  // hooks is a documented future refinement (the AuthHooks contract is unchanged).
+  // Base plugin-context resolver for the auth pipeline.
   //
   // createPluginContext resolves "db" as the drizzle instance (not a raw DI
   // service), so translate "db" → adapter.getDrizzle() the same way di/register
-  // does; everything else delegates to the container.
+  // does; everything else delegates to the container. The ADAPTER entry is
+  // what lets a plugin's own settings store transact on SQLite.
   const ctxGetService = ((name: string) => {
     if (name === "db") {
       const adapter = getService("adapter") as { getDrizzle: () => unknown };
@@ -501,9 +481,50 @@ export function buildAuthRouterDeps(
       };
       return adapter.getCapabilities().dialect;
     }
+    if (name === "adapter") {
+      // The transaction-capable adapter, reached LAZILY like the handle:
+      // the context can be built before the database is connected.
+      return getService(name);
+    }
     return getService(name);
   }) as Parameters<typeof createPluginContext>[0];
   const pluginCtx = createPluginContext(ctxGetService, getHookRegistry());
+  // Collect plugin contributes.auth (hooks + challenges) + app-config
+  // strategies.
+  //
+  // ENABLED plugins only, so the runtime registries and the served auth UI
+  // are derived from one set. Registering a disabled plugin's hooks let its
+  // `afterAuthenticate` challenge fire on a successful login while the login
+  // page — which filters disabled plugins — had no view for it, leaving that
+  // login unfinishable until the plugin was removed or enabled.
+  const config = readServiceConfig(getService);
+  const authHooks = new AuthHookRegistry();
+  const challengeRegistry = new ChallengeRegistry();
+  for (const plugin of (config?.plugins ?? []).filter(
+    p => p.enabled !== false
+  )) {
+    const authContrib = plugin.contributes?.auth;
+    if (!authContrib) continue;
+    // Each contribution receives the OWNING plugin's context, not the
+    // system one: a hook that reads its plugin's settings, fetches through
+    // its declared hosts, or audits under its prefix needs exactly the
+    // surfaces every other lifecycle method of that plugin gets — a TOTP
+    // hook reading its encrypted secret from ctx.settings threw on a
+    // context whose `self` was empty and whose settings were absent.
+    const ownCtx = createPluginContext(
+      ctxGetService,
+      getHookRegistry(),
+      plugin
+    );
+    if (authContrib.hooks) {
+      authHooks.add(bindHooksToContext(authContrib.hooks, ownCtx));
+    }
+    for (const def of authContrib.challenges ?? []) {
+      challengeRegistry.add(bindChallengeToContext(def, ownCtx));
+    }
+  }
+  const configStrategies = config?.auth?.strategies ?? [];
+  assertConfiguredStrategyNames(configStrategies);
 
   return {
     ...base,
@@ -695,4 +716,42 @@ export function readAuthRateLimit(getService: (name: string) => unknown): {
   } catch {
     return fallback;
   }
+}
+
+/**
+ * Bind every phase of a plugin's auth hooks to that plugin's context.
+ *
+ * The registries pass ONE context to whatever they invoke; the owning
+ * plugin's is the only correct one — `ctx.settings`, `ctx.fetch`,
+ * `ctx.audit` and `ctx.self` are per-plugin surfaces, and a hook reading
+ * its own encrypted settings through a system context threw on a `self`
+ * that was empty. Wrapping at registration keeps the registries and the
+ * AuthHooks contract untouched.
+ */
+export function bindHooksToContext(
+  hooks: AuthHooks,
+  ctx: PluginContext
+): AuthHooks {
+  const bound: Record<string, unknown> = {};
+  for (const [phase, fn] of Object.entries(hooks)) {
+    if (typeof fn !== "function") continue;
+    void phase;
+    // Every phase takes its arguments and receives the context LAST; the
+    // wrapper swaps whatever context the registry passes for the owning
+    // plugin's, so phases and contract stay untouched.
+    bound[phase] = (...args: unknown[]) =>
+      (fn as (...a: unknown[]) => unknown)(...args.slice(0, -1), ctx);
+  }
+  return bound;
+}
+
+/** Bind a plugin's challenge definition to that plugin's context. */
+export function bindChallengeToContext(
+  def: ChallengeDefinition,
+  ctx: PluginContext
+): ChallengeDefinition {
+  return {
+    id: def.id,
+    resolve: (args, _ctx) => def.resolve(args, ctx),
+  };
 }

@@ -62,9 +62,14 @@ export function checkRouteCsrf(
   route: PluginRoute,
   request: Request,
   body: Record<string, unknown> | undefined,
-  allowedOrigins: string[]
+  allowedOrigins: string[],
+  credential: CallerCredential = callerCredential(request)
 ): { valid: boolean; error?: string } {
-  if (!csrfApplies(route, request)) return { valid: true };
+  // The RESOLVED credential, when the caller has one — the same argument the
+  // preliminary check takes. Recomputing it from header presence here let a
+  // session-authenticated request carrying an ambient Authorization header
+  // slip past the validation the outer check had just demanded.
+  if (!csrfApplies(route, request, credential)) return { valid: true };
   return validateCsrf(
     request,
     readCsrfCookie(request),

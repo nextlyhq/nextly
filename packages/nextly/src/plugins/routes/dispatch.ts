@@ -473,7 +473,8 @@ async function applyRouteCsrf(
     matched.route,
     req,
     body,
-    env.NEXTLY_ALLOWED_ORIGINS_PARSED ?? []
+    env.NEXTLY_ALLOWED_ORIGINS_PARSED ?? [],
+    credential
   );
   if (result.valid) return null;
 
