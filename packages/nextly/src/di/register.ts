@@ -1291,6 +1291,54 @@ export async function registerServices(
   }
 
   // ----------------------------------------
+  // Layer 6.75: schemaVersion gate, BEFORE any plugin initialises
+  // ----------------------------------------
+  // A plugin whose code expects a schema the database has not applied would
+  // fail its first query, far from any mention of migrations — so the boot
+  // refuses here, naming the command that fixes it. Production refuses;
+  // development logs, because dev push reconciles the schema on every reload
+  // and a behind state there resolves itself moments later. An UNINSTALLED
+  // plugin still in config refuses everywhere: dev push would otherwise
+  // recreate the tables an uninstall deliberately removed.
+  {
+    const plugins = transformedConfig.plugins ?? [];
+    if (plugins.length > 0) {
+      const { SchemaOwnersRepository } = await import(
+        "../domains/schema/ownership/schema-owners-repository"
+      );
+      const { assertSchemaVersionUsable } = await import(
+        "../domains/schema/ownership/schema-version-check"
+      );
+      const rows = await new SchemaOwnersRepository(
+        adapterDrizzleDb,
+        adapter.dialect
+      ).read();
+      const production = process.env.NODE_ENV === "production";
+      for (const plugin of plugins) {
+        const own = rows.filter(r => r.ownerId === plugin.name);
+        assertSchemaVersionUsable(
+          {
+            name: plugin.name,
+            declaredVersion: plugin.schemaVersion,
+            appliedVersion: own.reduce<number | null>(
+              (max, row) =>
+                row.schemaVersion === null
+                  ? max
+                  : Math.max(max ?? 0, row.schemaVersion),
+              null
+            ),
+            uninstalled: own.some(r => r.state === "uninstalled"),
+          },
+          {
+            production,
+            warn: m => resolvedLogger.warn?.(m),
+          }
+        );
+      }
+    }
+  }
+
+  // ----------------------------------------
   // Layer 7: Initialize Plugins
   // ----------------------------------------
   // Stash the resolved plugins + their contexts so shutdownServices can run

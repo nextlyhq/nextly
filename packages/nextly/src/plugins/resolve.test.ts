@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { NextlyError } from "../errors/nextly-error";
 import type { PluginDefinition } from "./plugin-context";
 import { z } from "zod";
 
@@ -141,5 +142,59 @@ describe("assertPluginManifests", () => {
     const plugins = [withSecretPath("clientSecret")];
     assertPluginManifests(plugins);
     expect(() => assertPluginManifests(plugins)).not.toThrow();
+  });
+});
+
+describe("resolvePlugins: schemaVersion declarations", () => {
+  const opts = { coreVersion: "0.0.2-alpha.66" };
+
+  it("refuses a schemaVersion with no migrations to reach it", () => {
+    expect(() =>
+      resolvePlugins(
+        [p("stub", { schemaVersion: 2 } as Partial<PluginDefinition>)],
+        opts
+      )
+    ).toThrow(NextlyError);
+  });
+
+  it("refuses a schemaVersion its newest migration does not equal", () => {
+    expect(() =>
+      resolvePlugins(
+        [
+          p("stub", {
+            schemaVersion: 3,
+            contributes: {
+              schema: {
+                migrations: [
+                  { name: "001", schemaVersion: 1, checksum: "a", dialects: {} as never, snapshot: {} as never, before: {} as never },
+                  { name: "002", schemaVersion: 2, checksum: "b", dialects: {} as never, snapshot: {} as never, before: {} as never },
+                ],
+              },
+            },
+          } as Partial<PluginDefinition>),
+        ],
+        opts
+      )
+    ).toThrow(NextlyError);
+  });
+
+  it("accepts a declaration its newest migration reaches", () => {
+    expect(
+      resolvePlugins(
+        [
+          p("stub", {
+            schemaVersion: 2,
+            contributes: {
+              schema: {
+                migrations: [
+                  { name: "002", schemaVersion: 2, checksum: "b", dialects: {} as never, snapshot: {} as never, before: {} as never },
+                ],
+              },
+            },
+          } as Partial<PluginDefinition>),
+        ],
+        opts
+      )
+      ).toHaveLength(1);
   });
 });
