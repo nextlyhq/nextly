@@ -22,7 +22,7 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Table, Column } from "drizzle-orm";
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 
 import { hashPassword } from "@nextly/auth/password";
 import {
@@ -822,17 +822,18 @@ export class UserMutationService extends BaseService {
       });
     }
 
-    // BOTH spellings, in one OR, exactly as `createLocalUser` probes them.
-    // `email` here is the canonical form the schema produced; `input.email` is
-    // what the provider actually sent. A row written before normalization is
-    // reachable only by that second spelling on a case-sensitive `=`, and the
-    // unique index is case-sensitive on Postgres and SQLite — so probing the
-    // canonical form alone admitted a SECOND account for a mailbox that
-    // already had one, splitting the identity rather than refusing.
+    // CASE-INSENSITIVE, because the spellings are unbounded. `email` here is
+    // the canonical form the schema produced, and probing the canonical form
+    // plus the caller's exact spelling still missed a legacy row stored in a
+    // THIRD capitalization — `User@Example.com` against a provider that had
+    // already sent `user@example.com` made both probe values identical, and
+    // the case-sensitive unique index admitted a second account for the same
+    // mailbox. One lowercased comparison is the whole mailbox's identity,
+    // whichever spelling a pre-normalization row keeps.
     const duplicate = await (this.db as unknown as DrizzleChain)
       .select({ id: users.id })
       .from(users)
-      .where(inArray(users.email, [email, input.email]))
+      .where(sql`lower(${users.email}) = lower(${email})`)
       .limit(1);
     if (duplicate.length > 0) {
       throw NextlyError.duplicate({
@@ -1093,15 +1094,15 @@ export class UserMutationService extends BaseService {
       // ("Resource already exists.") via NextlyError.duplicate; the email and
       // entity travel only through logContext.
       //
-      // Both spellings are probed in one OR. The canonical form covers this
-      // and every future write; the caller's exact input is the only spelling
-      // legacy rows (written before normalization) are reachable by on a
-      // case-sensitive `=` — the unique index would otherwise admit a second
-      // account for the same address.
+      // CASE-INSENSITIVE, for the same reason the external path's probe is:
+      // the canonical form and the caller's exact spelling together still
+      // missed a legacy row in a third capitalization, and the
+      // case-sensitive unique index would admit a second account for the
+      // same address.
       const existingUser = await (this.db as unknown as DrizzleChain)
         .select({ id: users.id, email: users.email })
         .from(users)
-        .where(inArray(users.email, [email, userData.email]))
+        .where(sql`lower(${users.email}) = lower(${email})`)
         .limit(1);
       if (existingUser.length > 0) {
         throw NextlyError.duplicate({

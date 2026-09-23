@@ -388,6 +388,49 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toMatchObject({ code: "DUPLICATE" });
     });
 
+    it("refuses a legacy row when the provider sends the NORMALIZED spelling", async () => {
+      // The gap the two-spelling probe left: a provider that had already
+      // normalized the address made both probe values identical, so a legacy
+      // row in a third capitalization matched neither — and the
+      // case-sensitive unique index admitted a second account for the
+      // mailbox. The comparison is one lowercase identity now, so the row is
+      // found whichever spelling it keeps and whichever the provider sends.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const editor = await makeRole(t, "editor");
+
+      const db = t.adapter.getDrizzle() as unknown as {
+        insert: (table: unknown) => {
+          values: (v: unknown) => Promise<unknown>;
+        };
+      };
+      const { users } = getDialectTables();
+      await db.insert(users).values({
+        id: "legacy-2",
+        email: "Legacy@Example.com",
+        name: "Legacy",
+        passwordHash: null,
+        isActive: true,
+        mustChangePassword: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      await expect(
+        services(t).users.createExternalUser(
+          {
+            // Already normalized: identical to the canonical form, so the
+            // row's own spelling is reachable only case-insensitively.
+            email: "legacy@example.com",
+            name: "Legacy",
+            roleIds: [editor],
+            emailVerifiedAt: new Date(),
+          },
+          SYSTEM_CONTEXT
+        )
+      ).rejects.toMatchObject({ code: "DUPLICATE" });
+    });
+
     it("still creates an account for an address nobody holds", async () => {
       // The control: refusing every address would satisfy the test above
       // while making external sign-in impossible.
