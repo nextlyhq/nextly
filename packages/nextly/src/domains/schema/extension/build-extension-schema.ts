@@ -75,6 +75,10 @@ export interface ExtensionSchema {
   owners: Map<string, SchemaOwner>;
   /** Table name → relation edges, for SchemaRegistry registration. */
   relations: Map<string, DynamicRelationEdge[]>;
+  /** Adopted tables: drizzle handles for typed access, never managed. */
+  adopted: Record<string, unknown>;
+  /** Adopted tables' relation edges, for registry registration. */
+  adoptedRelations: Map<string, DynamicRelationEdge[]>;
   /** Stable hash of the compiled output, for caches. */
   fingerprint: string;
 }
@@ -212,6 +216,30 @@ export async function buildExtensionSchema(
     protectedTables,
   });
 
+  // Adopted tables compile to drizzle ONLY: registered for typed access and
+  // queries, absent from specs (so no diff ever proposes DDL for them), from
+  // the fingerprint (a cache key over managed state), and from the kit bundle
+  // (so drizzle-kit never sees — never mind alters — a table Nextly does not
+  // own). Their exclusion is structural, not a filter somebody must remember.
+  const adopted: Record<string, unknown> = {};
+  const adoptedRelations = new Map<string, DynamicRelationEdge[]>();
+  for (const table of store.adoptedTables()) {
+    adopted[table.name] = toDrizzleTable(
+      table as never as ExtensionTable,
+      input.dialect
+    );
+    // App-owned, so nextly.db reaches the table and a plugin's owner check
+    // does not — the access rule the plan gives adopted tables.
+    owners.set(table.name, { kind: "app" });
+    const edges: DynamicRelationEdge[] = (table.relations ?? []).map(rel => ({
+      key: rel.name,
+      fromColumn: rel.fromColumn ?? "",
+      targetTable: rel.targetTable,
+      ...(rel.toColumn !== undefined ? { toColumn: rel.toColumn } : {}),
+    }));
+    if (edges.length > 0) adoptedRelations.set(table.name, edges);
+  }
+
   return {
     tables,
     entityIndexes,
@@ -220,6 +248,10 @@ export async function buildExtensionSchema(
     drizzle,
     owners,
     relations,
+    /** Adopted tables: drizzle handles for typed access, never managed. */
+    adopted,
+    /** Adopted tables' relation edges, for registry registration. */
+    adoptedRelations,
     fingerprint: fingerprintOf(specs, entityIndexes),
   };
 }

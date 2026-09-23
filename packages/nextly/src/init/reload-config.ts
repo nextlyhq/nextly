@@ -2804,17 +2804,32 @@ async function applyReload(opts?: {
           extensionSchema?.relations.get(tableName)
         );
       }
+      // Adopted tables register the same way — typed access and queries —
+      // but never enter the desired set, so nothing downstream manages them.
+      for (const [tableName, table] of Object.entries(
+        extensionSchema?.adopted ?? {}
+      )) {
+        schemaReg.registerDynamicSchema(
+          tableName,
+          table,
+          extensionSchema?.adoptedRelations.get(tableName)
+        );
+      }
       // A table the new config no longer declares is retracted, so a query
       // against it fails loudly rather than reaching a table the pipeline has
-      // stopped maintaining.
+      // stopped maintaining. Adopted tables retract on the same rule.
       for (const tableName of previousExtensionTables) {
-        if (extensionSchema?.owners.has(tableName) !== true) {
+        const stillPresent =
+          extensionSchema?.owners.has(tableName) === true ||
+          extensionSchema?.adopted[tableName] !== undefined;
+        if (!stillPresent) {
           schemaReg.retractDynamicSchema(tableName);
         }
       }
-      previousExtensionTables = new Set(
-        Object.keys(extensionSchema?.drizzle ?? {})
-      );
+      previousExtensionTables = new Set([
+        ...Object.keys(extensionSchema?.drizzle ?? {}),
+        ...Object.keys(extensionSchema?.adopted ?? {}),
+      ]);
     } catch {
       // Non-fatal: next request will still fail with stale schema, but
       // a server restart will recover. Log is intentionally omitted here

@@ -72,6 +72,12 @@ export interface SchemaDraft {
   readonly dialect: SupportedDialect;
   /** Adds a table owned by the caller. For a plugin the prefix is applied. */
   addTable(def: TableDefinition): void;
+  /**
+   * Claims an EXISTING table for typed access: no DDL, no diff, no
+   * migration, never dropped. App only — a plugin's tables are created and
+   * owned by the plugin, so there is nothing for it to adopt.
+   */
+  adoptTable(def: TableDefinition): void;
   /** Adds columns (own tables only) and indexes (own and entity tables). */
   extendTable(
     name: string,
@@ -176,6 +182,47 @@ export class SchemaDraftStore {
     return [...this.tables.values()].filter(
       table => table.owner.kind === "plugin" || table.owner.kind === "app"
     );
+  }
+
+  /**
+   * Adopted tables: existing tables the app claims for TYPED ACCESS only —
+   * never in the desired set, never diffed, never migrated, never dropped.
+   * Kept in their own map precisely so no managed-table rule can reach them
+   * by accident: `extensionTables` and `all` do not include them.
+   */
+  private readonly adopted = new Map<string, DraftTable>();
+
+  adopt(def: TableDefinition, owner: SchemaOwner): void {
+    if (owner.kind !== "app") {
+      refuse(
+        `plugin.${owner.id}.schema.adoptTable`,
+        "Only the app may adopt an existing table; a plugin's tables are created and owned by the plugin."
+      );
+    }
+    if (this.tables.has(def.name)) {
+      refuse(
+        `app.db.schema.adoptTable.${def.name}`,
+        `"${def.name}" is a managed table and cannot be adopted; adoptTable is for tables Nextly does not own.`
+      );
+    }
+    if (this.adopted.has(def.name)) {
+      refuse(
+        `app.db.schema.adoptTable.${def.name}`,
+        `"${def.name}" is already adopted.`
+      );
+    }
+    this.adopted.set(def.name, {
+      name: def.name,
+      authored: def.name,
+      owner,
+      columns: def.columns.map(column => ({ ...column })),
+      indexes: [],
+      ...(def.relations.length > 0 ? { relations: [...def.relations] } : {}),
+    });
+  }
+
+  adoptedTables(): DraftTable[] {
+    return [...this.adopted.values()];
   }
 
   all(): DraftTable[] {
@@ -354,6 +401,13 @@ export function createOwnerDraft(
 
   return {
     dialect: store.dialect,
+
+    adoptTable(def: TableDefinition): void {
+      // The name is used AS WRITTEN: an adopted table exists already, so
+      // there is nothing to prefix or validate beyond the collision checks
+      // the store itself makes.
+      store.adopt(def, owner);
+    },
 
     addTable(def: TableDefinition): void {
       const name = resolveOwnName(def.name);

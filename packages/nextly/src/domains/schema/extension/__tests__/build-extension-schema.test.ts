@@ -359,3 +359,88 @@ describe("ref columns auto-produce one edges", () => {
     ]);
   });
 });
+
+describe("adoptTable", () => {
+  const legacy = async () => {
+    const { col, defineTable } = await import("../dsl");
+    return defineTable("legacy_orders", {
+      id: col.id(),
+      total: col.integer({ nullable: true }),
+    });
+  };
+
+  it("an adopted table compiles to typed access but never enters managed state", async () => {
+    const def = await legacy();
+    const built = await buildExtensionSchema({
+      dialect: "postgresql" as const,
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map(),
+      plugins: [],
+      app: {
+        owner: { kind: "app" as const },
+        extend: [
+          async ({ schema }) => {
+            schema.adoptTable(def);
+          },
+        ],
+      },
+    });
+    // Typed access exists...
+    expect(Object.keys(built.adopted)).toEqual(["legacy_orders"]);
+    expect(built.owners.get("legacy_orders")).toEqual({ kind: "app" });
+    // ...and managed state does not: no spec for the diff, no kit table, no
+    // fingerprint contribution (the hash covers specs + entity indexes only,
+    // and the adopted table is in neither).
+    expect(built.specs.find(t => t.name === "legacy_orders")).toBeUndefined();
+    expect(built.drizzle["legacy_orders"]).toBeUndefined();
+  });
+
+  it("refuses to adopt a managed table's name", async () => {
+    const { col, defineTable } = await import("../dsl");
+    const owned = defineTable("taken", { id: col.id() });
+    await expect(
+      buildExtensionSchema({
+        dialect: "postgresql" as const,
+        coreTableNames: [],
+        entities: [],
+        pluginPrefixes: new Map([["fx", "fx"]]),
+        plugins: [
+          { owner: { kind: "plugin" as const, id: "fx" }, tables: [owned] },
+        ],
+        app: {
+          owner: { kind: "app" as const },
+          extend: [
+            async ({ schema }) => {
+              schema.adoptTable(defineTable("fx__taken", { id: col.id() }));
+            },
+          ],
+        },
+      })
+    ).rejects.toThrow(NextlyError);
+  });
+
+  it("refuses adoption from a plugin", async () => {
+    const { col, defineTable } = await import("../dsl");
+    await expect(
+      buildExtensionSchema({
+        dialect: "postgresql" as const,
+        coreTableNames: [],
+        entities: [],
+        pluginPrefixes: new Map([["fx", "fx"]]),
+        plugins: [
+          {
+            owner: { kind: "plugin" as const, id: "fx" },
+            extend: [
+              async ({ schema }) => {
+                schema.adoptTable(
+                  defineTable("legacy_orders", { id: col.id() })
+                );
+              },
+            ],
+          },
+        ],
+      })
+    ).rejects.toThrow(NextlyError);
+  });
+});

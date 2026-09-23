@@ -348,7 +348,30 @@ describe("row 13 — typed access to added tables", () => {
 });
 
 describe("row 14 — adopt an existing table without dropping it", () => {
-  it.todo("C: an existing unmanaged table is adopted rather than dropped");
+  it("C: an existing unmanaged table is adopted rather than dropped", async () => {
+    // The adoption contract: the table is visible for typed access and
+    // owned by the app, and structurally absent from everything that could
+    // drop it — no spec (the diff's desired side), no kit table, no
+    // fingerprint contribution. The unsafe-drop filter blocks tables
+    // outside the desired set, which is exactly where this table lives.
+    const { col, defineTable } = await import("../dsl");
+    const legacy = defineTable("legacy_orders", { id: col.id() });
+    const built = await buildExtensionSchema(
+      input({
+        app: {
+          owner: { kind: "app" as const },
+          extend: [
+            async ({ schema }) => {
+              schema.adoptTable(legacy);
+            },
+          ],
+        },
+      })
+    );
+    expect(Object.keys(built.adopted)).toEqual(["legacy_orders"]);
+    expect(built.specs.find(t => t.name === "legacy_orders")).toBeUndefined();
+    expect(built.drizzle["legacy_orders"]).toBeUndefined();
+  });
 });
 
 describe("row 15 — extend core system tables", () => {

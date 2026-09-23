@@ -1010,13 +1010,26 @@ function buildPluginDatabase(
     owner,
     dependsOn,
     owners: () => active()?.owners ?? new Map(),
-    tables: () => active()?.drizzle ?? {},
+    tables: () => ({
+      ...(active()?.drizzle ?? {}),
+      // Adopted tables are readable through the same owner check as any
+      // other: app-owned, so nextly.db reaches them and a plugin's check
+      // does not.
+      ...(active()?.adopted ?? {}),
+    }),
     tableList: () =>
-      (active()?.tables ?? []).map(table => ({
-        name: table.name,
-        authored: table.authored,
-        owner: table.owner,
-      })),
+      [
+        ...(active()?.tables ?? []).map(table => ({
+          name: table.name,
+          authored: table.authored,
+          owner: table.owner,
+        })),
+        ...Object.keys(active()?.adopted ?? {}).map(name => ({
+          name,
+          authored: name,
+          owner: { kind: "app" as const },
+        })),
+      ],
     db: () => rawDb,
     relationalDb: () => relationalDbHandle,
     transaction: fn => fn(rawDb),
