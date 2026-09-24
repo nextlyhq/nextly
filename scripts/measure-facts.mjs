@@ -26,11 +26,18 @@ import { writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { handOver } from "./bounded.mjs";
+
 // Measurements are properties of the repository, not of wherever the caller
 // happens to stand, so every command runs from the repository root.
 process.chdir(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
 
 const FULL = process.argv.includes("--full");
+
+// The forced turbo runs are heavy, so a full run hands itself to the bounded
+// runner first: the machine's heavy slot, the derived limits, and a stop when
+// its caller is killed. The rows still show the commands that ran, inside it.
+if (FULL) handOver(fileURLToPath(import.meta.url), process.argv.slice(2));
 const STDOUT = process.argv.includes("--stdout");
 const onlyArg = process.argv.find(a => a.startsWith("--only="));
 const ONLY = onlyArg ? onlyArg.slice(7).split(",") : null;

@@ -100,34 +100,23 @@ const ABANDONED = 143;
 const EXITED = new Set(["Z", "X"]);
 
 /**
- * The variables that mark a CI run — `CI_ENV_VARS` in
- * `packages/telemetry/src/environment.ts`. A test holds this list, and the
- * pre-push hook's, to that one.
- */
-export const CI_MARKERS = [
-  "CI",
-  "GITHUB_ACTIONS",
-  "GITLAB_CI",
-  "CIRCLECI",
-  "TRAVIS",
-  "JENKINS_URL",
-  "BUILDKITE",
-  "VERCEL",
-  "NETLIFY",
-  "RENDER",
-];
-
-function isSet(value) {
-  return typeof value === "string" && value !== "" && value !== "0" && value !== "false";
-}
-
-/**
- * Whether this is CI, as `detectIsCi` decides it: any of its markers set to
- * anything but empty, "0" or "false". A developer with `CI=false` in their
- * environment is on their own machine, and gets the bounds.
+ * Whether this is a CI run, where the local safety — the slot, the limits and
+ * the pre-push gates — does not apply. The pre-push hook asks this function
+ * rather than deciding for itself, so the two cannot disagree.
+ *
+ * Only `CI` counts, with the value rule `detectIsCi` applies: set to anything
+ * but empty, "0" or "false". `detectIsCi` in packages/telemetry also counts
+ * platform variables such as `VERCEL` and `NETLIFY`, and that is right for the
+ * question it answers — whether a telemetry event came from automation, where
+ * a wrong guess mislabels an event. Here a wrong guess switches the safety
+ * off: a developer whose shell loads `VERCEL=1` from a pulled `.env` would push
+ * with no gates at all. Every CI provider sets `CI`, and this repository's
+ * GitHub Actions does; a CI host that does not set it gets the local bounds,
+ * which is slower and never unsafe.
  */
 export function isCi(env = process.env) {
-  return CI_MARKERS.some(marker => isSet(env[marker]));
+  const value = env.CI;
+  return typeof value === "string" && value !== "" && value !== "0" && value !== "false";
 }
 
 // ---------------------------------------------------------------------------
@@ -287,8 +276,7 @@ function isAncestor(pid, chain) {
  * nothing is waiting for the answer. The start time guards against a pid being
  * reused by an unrelated process while the run is in flight.
  */
-export function waitingChain(pid = process.pid) {
-  const view = processView();
+export function waitingChain(pid = process.pid, view = processView()) {
   const chain = [identify(pid, view)];
   for (let current = parentOf(pid, view); isAncestor(current, chain); current = parentOf(current, view)) {
     chain.push(identify(current, view));
@@ -544,9 +532,11 @@ function abandonIfUnwatched(watch, command) {
 async function acquire(dir, count, record, watch) {
   let lastReport = 0;
   for (;;) {
+    // Before each attempt, not after: a caller gone during the last wait must
+    // not win the slot that just freed and start the command for nobody.
+    abandonIfUnwatched(watch, record.command);
     const result = tryAcquire(dir, count, record);
     if (result.path) return result.path;
-    abandonIfUnwatched(watch, record.command);
     if (Date.now() - lastReport >= WAIT_REPORT_MS) {
       lastReport = Date.now();
       reportWaiting(result.holders, count);
@@ -807,6 +797,18 @@ function parseRequest(argv) {
   return { command, vitestWorkers };
 }
 
+/**
+ * Re-runs the calling script under the runner, unless it already is under one
+ * or this is CI — the way the pre-push hook hands itself over. A script with a
+ * heavy mode calls this before any heavy work, and everything it then starts
+ * takes the slot, the limits and the watch.
+ */
+export function handOver(script, args, env = process.env) {
+  if (env[NESTED] || isCi(env)) return;
+  const result = spawnSync(process.execPath, [SELF, process.execPath, script, ...args], { stdio: "inherit", env });
+  process.exit(exitCode(result.status, result.signal));
+}
+
 function boundedCommand(request, limits) {
   return request.vitestWorkers ? withWorkerCap(request.command, limits.maxWorkers) : request.command;
 }
@@ -826,10 +828,24 @@ function boundedEnv(limits) {
 }
 
 /** Takes the heavy slot, then runs the command in a session of its own while holding it. */
+/**
+ * Says so when the process tree cannot be read. Only the direct parent is then
+ * known, so a killed caller further up — `git push`, above the hook's shell —
+ * would not stop the run. A degraded watch is reported, never silent.
+ */
+function warnIfBlind(view) {
+  if (view !== false || viewPlatform() === "win32") return;
+  process.stderr.write(
+    "bounded: could not read the process tree (ps failed) — only the direct parent is watched, so a killed caller further up will not stop this run\n"
+  );
+}
+
 async function runExclusively({ command, env, limits }) {
   const count = slotCount();
   // Read before queueing, and watched while queued as well as while running.
-  const watch = waitingChain();
+  const view = processView();
+  warnIfBlind(view);
+  const watch = waitingChain(process.pid, view);
   const record = {
     pid: process.pid,
     start: watch[0].start,
@@ -854,9 +870,16 @@ async function runExclusively({ command, env, limits }) {
   runInGroup(command, env, watch, slot);
 }
 
+/** The runner's own entry points: a run's leader, and the pre-push hook's CI question. */
+const MODES = {
+  "--lead": argv => lead(JSON.parse(argv[1]), argv[2], argv.slice(argv.indexOf("--") + 1)),
+  "--is-ci": () => process.exit(isCi() ? 0 : 1),
+};
+
 async function main() {
   const argv = process.argv.slice(2);
-  if (argv[0] === "--lead") return lead(JSON.parse(argv[1]), argv[2], argv.slice(argv.indexOf("--") + 1));
+  const mode = MODES[argv[0]];
+  if (mode) return mode(argv);
 
   const request = parseRequest(argv);
   if (isCi()) process.exit(runDirect(request.command, process.env));

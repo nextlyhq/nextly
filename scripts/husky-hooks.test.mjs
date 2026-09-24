@@ -37,8 +37,6 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { CI_MARKERS } from "./bounded.mjs";
-
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const hook = async name =>
@@ -74,7 +72,7 @@ const shellCode = source =>
  * inherits.
  */
 const FIRST_TOOL =
-  /^\s*(?:if\s+command\s+-v\s+|exec\s+)?(?:pnpm|npx|node|turbo|gitleaks)\b/m;
+  /^\s*(?:if\s+command\s+-v\s+|if\s+|exec\s+)?(?:pnpm|npx|node|turbo|gitleaks)\b/m;
 
 /**
  * The first GATE pre-push runs. Not the same as the first tool: the hand-over
@@ -117,14 +115,19 @@ describe.each(["pre-push", "pre-commit"])("the %s hook", name => {
 });
 
 describe("the pre-push hook specifically", () => {
-  it("still short-circuits in CI before doing any of it", async () => {
+  /*
+   * The runner answers whether this is CI, so the hook and the heavy commands
+   * cannot disagree — and the hook asks before it does anything heavy.
+   */
+  it("asks the runner whether this is CI, before the hand-over or any gate", async () => {
     const source = shellCode(await hook("pre-push"));
 
-    const ciGuard = source.search(/^for marker in CI\b/m);
-    const unsetAt = source.search(CLEARS_GIT_DIR);
+    const ciGuard = source.search(/^if node scripts\/bounded\.mjs --is-ci; then$/m);
+    const handover = source.search(/^\s*exec node scripts\/bounded\.mjs /m);
 
     expect(ciGuard).toBeGreaterThan(-1);
-    expect(ciGuard).toBeLessThan(unsetAt);
+    expect(ciGuard).toBeLessThan(handover);
+    expect(ciGuard).toBeLessThan(source.search(FIRST_GATE));
   });
 
   it("declares a POSIX shell, so dash and Git Bash both accept it", async () => {
@@ -242,7 +245,13 @@ describe("the pre-push hook before its gates", () => {
     stubs = mkdtempSync(path.join(tmpdir(), "pre-push-stubs-"));
     for (const name of ["node", "pnpm"]) {
       const file = path.join(stubs, name);
-      writeFileSync(file, `#!/bin/sh\necho "stub ${name} $*" >&2\nexit 99\n`);
+      // The one real call let through is the CI question, which the runner
+      // answers and which starts nothing.
+      const passThrough =
+        name === "node"
+          ? `if [ "$1" = "scripts/bounded.mjs" ] && [ "$2" = "--is-ci" ]; then exec ${JSON.stringify(process.execPath)} "$@"; fi\n`
+          : "";
+      writeFileSync(file, `#!/bin/sh\n${passThrough}echo "stub ${name} $*" >&2\nexit 99\n`);
       chmodSync(file, 0o755);
     }
   });
@@ -255,10 +264,8 @@ describe("the pre-push hook before its gates", () => {
   const update = branch => `refs/heads/${branch} ${SHA} refs/heads/${branch} ${ZERO}\n`;
 
   function push(stdin, extra = {}) {
-    // Every CI marker goes, not just CI: GitHub Actions sets GITHUB_ACTIONS,
-    // and any one of them skips the hook.
     const env = { ...process.env };
-    for (const name of [...CI_MARKERS, "NEXTLY_BOUNDED"]) delete env[name];
+    for (const name of ["CI", "NEXTLY_BOUNDED"]) delete env[name];
     return spawnSync("sh", ["-e", ".husky/pre-push", "origin", "git@example.com:o/r.git"], {
       cwd: ROOT,
       input: stdin,
@@ -299,14 +306,13 @@ describe("the pre-push hook before its gates", () => {
    * "0" nor "false". A presence test skipped every gate for a developer with
    * CI=false in their environment.
    */
-  it("checks the same CI markers as the runner, which checks telemetry's", async () => {
-    const line = /^for marker in (.+); do$/m.exec(shellCode(await hook("pre-push")));
-    expect(line[1].split(/\s+/)).toEqual(CI_MARKERS);
-  });
-
-  it.runIf(process.platform !== "win32")("skips under any CI marker, as the runner does", () => {
-    expect(push(update("feature"), { GITHUB_ACTIONS: "true" }).status).toBe(0);
-    expect(push(update("feature"), { JENKINS_URL: "https://ci.example" }).status).toBe(0);
+  /*
+   * 🔴 Read as CI, a deployment platform's variable loaded into a developer's
+   * shell — VERCEL=1 from a pulled `.env` — skipped every gate.
+   */
+  it.runIf(process.platform !== "win32")("gates a push whose shell carries a deployment platform's variable", () => {
+    expect(push(update("feature"), { VERCEL: "1" }).status).toBe(99);
+    expect(push(update("feature"), { NETLIFY: "true" }).status).toBe(99);
   });
 
   it.runIf(process.platform !== "win32")("skips in CI, and gates a machine whose CI is set to false or 0", () => {

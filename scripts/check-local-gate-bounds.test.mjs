@@ -12,8 +12,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   BOUNDED_RUNNER,
+  HEAVY_ENTRIES,
   HEAVY_SCRIPTS,
   boundsProblems,
+  entryProblems,
   handoverProblems,
   heavyScriptProblems,
   runnerProblems,
@@ -421,3 +423,27 @@ describe("holding the heavy root scripts to the bounded runner", () => {
     expect(heavyScriptProblems(rest)).toEqual([expect.stringContaining("'lint' is missing")]);
   });
 });
+
+describe("holding scripts with a heavy mode to the bounded runner", () => {
+  const handsOver = 'if (FULL) handOver(fileURLToPath(import.meta.url), process.argv.slice(2));';
+
+  it("is silent when every heavy entry point hands itself over", () => {
+    expect(entryProblems(Object.fromEntries(HEAVY_ENTRIES.map(path => [path, handsOver])))).toEqual([]);
+  });
+
+  /*
+   * 🔴 `measure-facts --full` forced turbo runs across every package outside
+   * the runner — no slot, and turbo's default of 10 package tasks — while this
+   * check reported every heavy command bounded.
+   */
+  it("names a heavy entry point that runs its heavy mode directly", () => {
+    const direct = { "scripts/measure-facts.mjs": 'spawnSync("bash", ["-c", "pnpm turbo run lint --force"]);' };
+    expect(entryProblems(direct)).toEqual([expect.stringContaining("scripts/measure-facts.mjs: has a heavy mode")]);
+  });
+
+  it("does not accept a hand-over that exists only in a comment, or a file that is missing", () => {
+    expect(entryProblems({ "scripts/measure-facts.mjs": "// handOver(script) would go here" })).toHaveLength(1);
+    expect(entryProblems({})).toHaveLength(1);
+  });
+});
+

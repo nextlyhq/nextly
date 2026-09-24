@@ -31,7 +31,6 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  CI_MARKERS,
   descendantsIn,
   isAlive,
   isCi,
@@ -116,9 +115,7 @@ const record = (pid, extra = {}) => ({
  */
 function cleanEnv(extra = {}) {
   const env = { ...process.env };
-  // Every CI marker, not just CI: GitHub Actions sets GITHUB_ACTIONS too, and
-  // any one of them makes a run a pass-through.
-  for (const name of [...CI_MARKERS, "NEXTLY_BOUNDED", "TURBO_CONCURRENCY", "TURBO_UI"]) delete env[name];
+  for (const name of ["CI", "NEXTLY_BOUNDED", "NEXTLY_BOUNDED_PS", "TURBO_CONCURRENCY", "TURBO_UI"]) delete env[name];
   return { ...env, NEXTLY_HEAVY_SLOT_DIR: dir, ...extra };
 }
 
@@ -386,20 +383,22 @@ describe("the machine-wide heavy slot", () => {
 
 describe("deciding whether this is CI", () => {
   /*
-   * One question, one answer: the list is telemetry's, copied because a root
-   * script cannot import a package's TypeScript source — and held to it here,
-   * so the copy cannot drift.
+   * 🔴 Telemetry's list counts platform variables such as VERCEL, which is
+   * right for labelling an event and wrong here: read as CI, a VERCEL=1 loaded
+   * into a developer's shell from a pulled `.env` switched every pre-push gate
+   * off. Only CI counts.
    */
-  it("knows the same CI markers as the telemetry package", async () => {
-    const source = readFileSync(path.join(HERE, "..", "packages", "telemetry", "src", "environment.ts"), "utf8");
-    const list = /const CI_ENV_VARS = \[([^\]]*)\]/.exec(source)[1];
-    expect(CI_MARKERS).toEqual([...list.matchAll(/"([A-Z_]+)"/g)].map(match => match[1]));
+  it("does not read a deployment platform's variable as CI", () => {
+    for (const marker of ["VERCEL", "NETLIFY", "RENDER", "GITHUB_ACTIONS"]) {
+      expect(isCi({ [marker]: "1" })).toBe(false);
+    }
   });
 
-  it("reads any of those markers as CI, as telemetry does", () => {
-    expect(isCi({ GITHUB_ACTIONS: "true" })).toBe(true);
-    expect(isCi({ JENKINS_URL: "https://ci.example" })).toBe(true);
-    expect(isCi({ GITHUB_ACTIONS: "false", CI: "0" })).toBe(false);
+  it("answers the hook's question on the command line", () => {
+    const ask = env => spawnSync(process.execPath, [BOUNDED, "--is-ci"], { env: { ...cleanEnv(), ...env } }).status;
+    expect(ask({ CI: "true" })).toBe(0);
+    expect(ask({ CI: "false" })).toBe(1);
+    expect(ask({ VERCEL: "1" })).toBe(1);
   });
 
   /*
@@ -622,6 +621,42 @@ describe.runIf(POSIX)("running a command bounded", () => {
   }, 20_000);
 
   /*
+   * A watch that cannot see past the direct parent would miss a killed
+   * `git push` above the hook's shell. That is said, never left silent.
+   */
+  it.runIf(LINUX)("says so when it cannot read the process tree", async () => {
+    const empty = path.join(dir, "no-ps");
+    mkdirSync(empty);
+    const child = runBounded([process.execPath, "-e", "process.exit(0)"], { NEXTLY_BOUNDED_PS: "1", PATH: empty });
+    expect((await child.done).code).toBe(0);
+    expect(child.err).toMatch(/could not read the process tree \(ps failed\)/);
+  });
+
+  /*
+   * A script with a heavy mode — `measure-facts --full` — hands itself to the
+   * runner the way the pre-push hook does, and runs again inside it.
+   */
+  it("re-runs a script that hands itself over inside a bounded run", async () => {
+    const script = path.join(dir, "heavy.mjs");
+    writeFileSync(
+      script,
+      [
+        `import { handOver } from ${JSON.stringify(BOUNDED)};`,
+        "handOver(process.argv[1], process.argv.slice(2));",
+        'console.log("inside:" + process.env.NEXTLY_BOUNDED + ":" + process.argv.slice(2).join(","));',
+      ].join("\n")
+    );
+    const child = spawn(process.execPath, [script, "--full"], { env: cleanEnv(), stdio: ["ignore", "pipe", "pipe"] });
+    spawned.push(child.pid);
+    let out = "";
+    child.stdout.on("data", chunk => (out += chunk));
+    const code = await new Promise(resolve => child.on("close", resolve));
+
+    expect(code).toBe(0);
+    expect(out.trim()).toBe("inside:1:--full");
+  });
+
+  /*
    * The hook runs `pnpm run build` inside its own bounded run. Waiting for the
    * slot there would wait on the run that is waiting for the build.
    */
@@ -649,6 +684,32 @@ describe.runIf(POSIX)("running a command bounded", () => {
    * 🔴 A push killed while it queued took the slot when it freed and ran every
    * gate for nobody: the caller was watched only once the command had started.
    */
+  /*
+   * 🔴 The caller was checked after each attempt at the slot, so one that died
+   * during a wait could still win the slot that had just freed, and the
+   * command started for nobody. It is checked before each attempt now.
+   */
+  it("does not start when its caller dies and the slot frees in the same moment", async () => {
+    const { path: held } = tryAcquire(dir, 1, record(process.pid));
+    const marker = path.join(dir, "ran");
+    const write = 'require("fs").writeFileSync(process.argv[1], "ran")';
+    const shell = spawn("sh", ["-c", `"${process.execPath}" "${BOUNDED}" "${process.execPath}" -e '${write}' "${marker}"; true`], {
+      env: cleanEnv(),
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    spawned.push(shell.pid);
+    let err = "";
+    shell.stderr.on("data", chunk => (err += chunk));
+    await waitUntil(() => /waiting for the heavy slot/.test(err), 5000);
+
+    process.kill(shell.pid, "SIGKILL");
+    release(held, process.pid);
+
+    expect(await waitUntil(() => /is gone — not starting/.test(err), 5000)).toBe(true);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    expect(existsSync(marker)).toBe(false);
+  });
+
   it("does not start at all when what was waiting for it is killed while it queues", async () => {
     const { path: held } = tryAcquire(dir, 1, record(process.pid));
     const marker = path.join(dir, "ran");

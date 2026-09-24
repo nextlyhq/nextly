@@ -155,6 +155,26 @@ export function turboInvocations(script) {
 }
 
 /**
+ * Scripts with a heavy mode of their own, which must hand themselves to
+ * {@link HEAVY_RUNNER} before any heavy work — as the hook does. `measure-facts
+ * --full` forces turbo runs across every package, and one run outside the
+ * runner takes no slot and turbo's default of 10 package tasks.
+ */
+export const HEAVY_ENTRIES = ["scripts/measure-facts.mjs"];
+
+/** Problems with the heavy entry points: each must call `handOver`. */
+export function entryProblems(sources) {
+  return HEAVY_ENTRIES.filter(path => !/\bhandOver\(/.test(withoutComments(sources[path] ?? ""))).map(
+    path => `${path}: has a heavy mode that does not hand itself to ${HEAVY_RUNNER}`
+  );
+}
+
+/** Source text without its comments — prose that names a call is not the call. */
+function withoutComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
+}
+
+/**
  * The line on which the hook hands its gates to {@link HEAVY_RUNNER}, or null.
  *
  * The hook re-runs itself under the runner, so what follows the hand-over is
@@ -379,6 +399,11 @@ async function main() {
     ...handoverProblems(script),
     ...scriptProblems(manifest.scripts ?? {}),
     ...heavyScriptProblems(manifest.scripts ?? {}),
+    ...entryProblems(
+      Object.fromEntries(
+        HEAVY_ENTRIES.map(path => [path, existsSync(join(root, path)) ? readFileSync(join(root, path), "utf8") : undefined])
+      )
+    ),
     ...(existsSync(join(root, HEAVY_RUNNER))
       ? []
       : [`${HEAVY_RUNNER}: missing, but the heavy root scripts and the hook run through it`]),
