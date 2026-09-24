@@ -711,14 +711,25 @@ async function loadConfigInternal(
 function publishConfiguredPostgresSchema(config: {
   db?: { postgres?: { schema?: string } };
 }): void {
-  const configured = config.db?.postgres?.schema;
-  if (configured === undefined) return;
   const dialect =
     process.env.DB_DIALECT ??
     (process.env.DATABASE_URL?.startsWith("postgres") === true
       ? "postgresql"
       : "sqlite");
-  setActivePostgresSchema(resolvePostgresSchema(configured, dialect));
+  // Published on EVERY load, including one that names no schema.
+  //
+  // Returning early when the key was absent made the value sticky: a process
+  // that loaded a config naming `cms` and then loaded one without the key kept
+  // `cms` active, so the second config's commands read and wrote a schema it
+  // never asked for — its migrations and ledger landing somewhere its own
+  // settings do not describe. The CLI reloads config (watch mode, a second
+  // command in one process), so this is reachable, not theoretical.
+  //
+  // `resolvePostgresSchema` already answers `public` for `undefined`, so the
+  // absent case has a value; it was simply never being published.
+  setActivePostgresSchema(
+    resolvePostgresSchema(config.db?.postgres?.schema, dialect)
+  );
 }
 
 /**

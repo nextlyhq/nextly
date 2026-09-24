@@ -121,12 +121,24 @@ export async function runPluginInstallCommand(
   // second thing that can be wrong.
   await deps.applyMigrations(plugin);
 
-  await deps.runLifecycleHook(plugin, "onInstall", { keepData: false });
-
+  // The owner rows go back to `active` BEFORE the hook, not after.
+  //
+  // A REINSTALL is what makes the order load-bearing. After a full uninstall
+  // the rows survive marked `uninstalled`, and the boot check refuses an
+  // `uninstalled` owner that is still listed in config — deliberately, since
+  // that state means "its tables were dropped". `runLifecycleHook` boots the
+  // runtime to build the plugin's context, so with the reset after the hook, a
+  // reinstall of a plugin declaring `onInstall` could never complete: boot
+  // rejected the plugin the install was in the middle of restoring.
+  //
+  // Migrations still run first, which is the order that matters for the hook's
+  // own contract — it reads the plugin's tables, and they have to exist.
   const owned = await registry.listByOwner(plugin.name);
   if (owned.length > 0) {
     await registry.setState(plugin.name, "active");
   }
+
+  await deps.runLifecycleHook(plugin, "onInstall", { keepData: false });
 
   deps.logger.success(
     `${plugin.name} installed (${String(owned.length)} table(s) recorded).`

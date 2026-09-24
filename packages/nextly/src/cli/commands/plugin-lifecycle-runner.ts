@@ -11,6 +11,14 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { qualifiedFilename } from "../../domains/schema/migrate/plugin/plugin-migration";
+import { resolveMigration } from "../../domains/schema/migrate/resolve";
+import { assertNoForeignDrops } from "../../domains/schema/ownership/drop-guard";
+import {
+  SchemaOwnersRepository,
+  tableOwnersByName,
+} from "../../domains/schema/ownership/schema-owners-repository";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import type { CommandContext } from "../program";
 import { createCliAdapter } from "../utils/adapter";
@@ -83,13 +91,30 @@ async function connect(options: RunnerOptions, context: CommandContext) {
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
 
   /**
-   * Undo one module, newest first, exactly as the apply path runs its UP.
+   * Undo one module, newest first, exactly as the apply path runs its UP —
+   * guarded like it, and recorded like it.
    *
    * Supplied rather than left undefined: the command calls this optionally,
    * so an absent implementation made `uninstall` log every module as reverted
    * and record the plugin uninstalled while its tables and their data stayed
    * in the database. The statements come from the plugin's own definition —
    * the lifecycle view carries module NAMES, not their SQL.
+   *
+   * Three things happen around the execution, and leaving any of them out
+   * makes uninstall the one destructive path with weaker rules than `migrate`:
+   *
+   * 1. **The drop guard, before anything runs.** A plugin's DOWN is its own
+   *    code, and nothing constrains what it drops. Passing its statements
+   *    straight to the executor let a plugin's uninstall drop an app-owned or
+   *    another plugin's table — refused everywhere else, and here the data is
+   *    least recoverable. Judged for the module as a WHOLE so a refusal leaves
+   *    nothing partly undone.
+   * 2. **The ledger, after.** The module's latest entry stayed `applied`, so a
+   *    later `migrate:down --plugin` could select a module already reverted,
+   *    and a later `migrate` treated it as still applied.
+   * 3. **Recording inside the transaction.** If a later module fails, the
+   *    reversals that already ran are still recorded, because the ledger write
+   *    committed with the SQL that earned it.
    */
   const runDown = async (
     plugin: LifecyclePlugin,
@@ -101,12 +126,40 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     );
     const statements = module?.dialects[dialect]?.down ?? [];
     if (statements.length === 0) return 0;
+
+    const filename = qualifiedFilename(plugin.name, moduleName);
+    const owners = tableOwnersByName(
+      await new SchemaOwnersRepository(
+        drizzleAdapter.getDrizzle(),
+        dialect
+      ).read()
+    );
+    assertNoForeignDrops({
+      statements,
+      stream: `plugin:${plugin.name}`,
+      owners,
+      source: filename,
+    });
+
+    const repo = new SchemaEventsRepository(
+      drizzleAdapter.getDrizzle(),
+      dialect
+    );
     // One transaction for the module, like the UP path: a module half undone
     // is a state no snapshot describes.
     await executeTransaction(drizzleAdapter, dialect, async () => {
       for (const statement of statements) {
         await drizzleAdapter.executeQuery(statement);
       }
+      await resolveMigration({
+        mode: "rolled-back",
+        filename,
+        repo,
+        // rolled-back mode does not read these; provide inert resolvers.
+        fileExists: () => Promise.resolve(true),
+        loadTargetSnapshot: () => Promise.resolve(null),
+        introspectLive: () => Promise.resolve({ tables: [] }),
+      });
     });
     return statements.length;
   };

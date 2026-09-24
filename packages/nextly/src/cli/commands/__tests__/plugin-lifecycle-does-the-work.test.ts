@@ -152,6 +152,59 @@ describe("plugins uninstall", () => {
     });
   });
 
+  it("clears the uninstalled mark BEFORE the hook boots", async () => {
+    // The reinstall case. After a full uninstall the owner rows survive marked
+    // `uninstalled`, and boot refuses an `uninstalled` owner that is still
+    // listed in config — so a hook booting before the reset could never
+    // complete a reinstall of a plugin declaring `onInstall`.
+    const order: string[] = [];
+
+    // One EXISTING row for this plugin, so `setState` has something to write:
+    // with no rows it returns early and the ordering under test never happens.
+    const row = {
+      tableName: "fx__notes",
+      elementKind: "table",
+      elementName: "",
+      ownerKind: "plugin",
+      ownerId: "@acme/fx",
+      migratedBy: "plugin:@acme/fx",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "uninstalled",
+    };
+    const registryDb = {
+      select: () => ({
+        from: () => Object.assign([row], { where: () => [row] }),
+      }),
+      update: () => ({
+        set: (values: { state?: string }) => ({
+          where: () => {
+            order.push(`state:${values.state ?? "?"}`);
+            return Promise.resolve();
+          },
+        }),
+      }),
+      insert: () => ({ values: () => Promise.resolve() }),
+    };
+
+    await runPluginInstallCommand(
+      "@acme/fx",
+      deps({
+        db: registryDb as never,
+        applyMigrations: vi.fn(async () => {
+          order.push("migrations");
+        }),
+        runLifecycleHook: vi.fn(async () => {
+          order.push("hook");
+        }),
+      })
+    );
+
+    // Migrations first (the hook reads the plugin's own tables), then the
+    // state reset, and only then the boot that would have rejected it.
+    expect(order).toEqual(["migrations", "state:active", "hook"]);
+  });
+
   it("reports the statement count it actually ran", async () => {
     // The log used to omit the count entirely when nothing ran, which read
     // identically to a module that had been reverted.

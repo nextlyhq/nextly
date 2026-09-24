@@ -33,6 +33,23 @@ describe("the schema a CLI command resolves in", () => {
     expect(activePostgresSchema()).toBe("cms");
   });
 
+  it("goes BACK to the default when a later config names no schema", () => {
+    // The sequence a CLI process actually performs: `loadConfig` publishes on
+    // every load, and watch mode (or a second command in one process) loads
+    // more than once.
+    //
+    // `publishConfiguredPostgresSchema` used to return early when the key was
+    // absent, which made the value sticky — a process that had loaded `cms`
+    // kept it, so the second config's migrations and ledger targeted a schema
+    // its own settings never mentioned. Publishing unconditionally is the fix,
+    // and `resolvePostgresSchema` already answers the default for `undefined`.
+    setActivePostgresSchema(resolvePostgresSchema("cms", "postgresql"));
+    expect(activePostgresSchema()).toBe("cms");
+
+    setActivePostgresSchema(resolvePostgresSchema(undefined, "postgresql"));
+    expect(activePostgresSchema()).toBe(DEFAULT_POSTGRES_SCHEMA);
+  });
+
   it("stays the default when nothing is configured", () => {
     // The control: a command must not start inventing a namespace for an
     // installation that never asked for one.
