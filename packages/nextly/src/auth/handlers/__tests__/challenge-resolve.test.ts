@@ -659,6 +659,54 @@ describe("a cookie-mode flow that fails for good", () => {
   });
 });
 
+describe("a legacy cookie with no signed flow lifetime", () => {
+  it("reports NOTHING resumable, hiding the unfinishable challenge", async () => {
+    // Minted before the claim existed: the resolve path refuses it, but
+    // /auth/pending was still answering 200 — the login UI stayed stuck
+    // on a challenge nothing could finish until the JWT expired. The
+    // must-change sentinel is exempt: its token never carries the claim.
+    const { handlePending } = await import("../pending");
+    const legacy = await mintPendingToken(
+      { userId: "u1", challengeId: "totp", attempts: 0 },
+      SECRET,
+      300
+    );
+    const request = new Request(
+      "http://localhost:3000/admin/api/auth/pending",
+      {
+        headers: { cookie: `nextly_pending=${legacy}` },
+      }
+    );
+
+    const res = await handlePending(request, makeDeps() as never);
+    expect(res.status).toBe(204);
+  });
+
+  it("still reports a legacy MUST-CHANGE cookie", async () => {
+    // The control: the sentinel never carries the lifetime, and the
+    // set-password step reads the cookie directly — hiding it would break
+    // a legitimate forced change for an upgraded install.
+    const { handlePending } = await import("../pending");
+    const legacy = await mintPendingToken(
+      { userId: "u1", challengeId: "must-change-password", attempts: 0 },
+      SECRET,
+      300
+    );
+    const request = new Request(
+      "http://localhost:3000/admin/api/auth/pending",
+      {
+        headers: { cookie: `nextly_pending=${legacy}` },
+      }
+    );
+
+    const res = await handlePending(request, makeDeps() as never);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { challengeId: string }).challengeId).toBe(
+      "must-change-password"
+    );
+  });
+});
+
 describe("the flow lifetime on the pending-status path", () => {
   it("is enforced by /auth/pending too", async () => {
     // A wrong answer near the flow's end re-issues a token whose JWT is

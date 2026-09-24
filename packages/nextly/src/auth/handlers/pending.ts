@@ -11,7 +11,10 @@
  */
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { readPendingCookie } from "../cookies/pending-cookie";
-import { verifyPendingToken } from "../pipeline/pending-token";
+import {
+  MUST_CHANGE_PASSWORD_CHALLENGE,
+  verifyPendingToken,
+} from "../pipeline/pending-token";
 
 export interface PendingHandlerDeps {
   secret: string;
@@ -41,14 +44,18 @@ export async function handlePending(
   try {
     const pending = await verifyPendingToken(token, deps.secret);
     // The flow's signed LIFETIME, the same predicate the resolve path
-    // enforces. A wrong answer near the end re-issues a token whose JWT is
-    // fresh for another TTL while the flow is over — reporting that as
-    // resumable kept the login page hiding its ordinary sign-in options
-    // behind a continuation nothing can finish.
-    if (
-      pending.flowExpiresAt !== undefined &&
-      Date.now() / 1000 >= pending.flowExpiresAt
-    ) {
+    // enforces — including its ABSENCE. A wrong answer near the end re-issues
+    // a token whose JWT is fresh for another TTL while the flow is over, and
+    // a cookie minted before the claim existed cannot be resolved at all;
+    // reporting either as resumable kept the login page hiding its ordinary
+    // sign-in options behind a continuation nothing can finish. The
+    // must-change sentinel is exempt by design: its token never carries the
+    // claim, and the set-password step reads the cookie directly.
+    const expired =
+      pending.flowExpiresAt === undefined
+        ? pending.challengeId !== MUST_CHANGE_PASSWORD_CHALLENGE
+        : Date.now() / 1000 >= pending.flowExpiresAt;
+    if (expired) {
       return new Response(null, {
         status: 204,
         headers: { "Cache-Control": "no-store", "x-request-id": requestId },
