@@ -6,7 +6,7 @@
  * The failure it exists to stop was measured: `AGENTS.md` recorded that
  * `pnpm docker:test` does NOT start the integration containers — it probes the
  * DEV stack's `postgres` service — while
- * `.claude/skills/writing-integration-tests/SKILL.md` and
+ * `.agents/skills/writing-integration-tests/SKILL.md` and
  * `.claude/rules/integration-tests.md` both told the reader to start them with
  * it. An agent following either walked into the exact trap `AGENTS.md`
  * documents, and nothing in the repository could tell the three apart. One
@@ -32,6 +32,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems } from "./agent-skills.mjs";
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
@@ -45,7 +47,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  */
 export const REVIEW_PROMPT = ".github/review-prompt.md";
 
-export const ANCHORS = ["AGENTS.md", ".claude/rules", ".claude/skills", REVIEW_PROMPT];
+export const ANCHORS = ["AGENTS.md", ".claude/rules", SKILLS_HOME, REVIEW_PROMPT];
 
 /**
  * Rules AGENTS.md promises are loaded in EVERY session, named individually.
@@ -434,7 +436,10 @@ export function instructionFiles(base = root) {
       if (existsSync(nested)) files.push(`${dir}/${pkg}/AGENTS.md`);
     }
   }
-  for (const dir of [".claude/rules", ".claude/skills"]) {
+  // The skills are read where they live; the Claude Code copy is held
+  // identical to them separately, so reading it too would report each finding
+  // twice.
+  for (const dir of [".claude/rules", SKILLS_HOME]) {
     for (const found of markdownUnder(join(base, dir))) {
       files.push(found.slice(base.length + 1));
     }
@@ -461,7 +466,7 @@ export function missingAnchors(files) {
 /**
  * The skills AGENTS.md routes to, and the skills that exist, must be one set.
  *
- * The router table is a derived view of `.claude/skills/`, and a derived view
+ * The router table is a derived view of the skills directory, and a derived view
  * drifts — which this repository has a rule about. Both directions matter and
  * they fail differently: a routed skill that does not exist sends a reader to
  * nothing, and a skill absent from the router is knowledge that loads only if
@@ -469,8 +474,8 @@ export function missingAnchors(files) {
  */
 export function routerDisagreements(routed, present) {
   return [
-    ...[...routed].filter(name => !present.has(name)).map(name => ({ name, side: "routed but absent from .claude/skills" })),
-    ...[...present].filter(name => !routed.has(name)).map(name => ({ name, side: "present in .claude/skills but not routed by AGENTS.md" })),
+    ...[...routed].filter(name => !present.has(name)).map(name => ({ name, side: `routed but absent from ${SKILLS_HOME}` })),
+    ...[...present].filter(name => !routed.has(name)).map(name => ({ name, side: `present in ${SKILLS_HOME} but not routed by AGENTS.md` })),
   ];
 }
 
@@ -526,16 +531,30 @@ export function gitIgnored(paths, cwd = root) {
  * finding about itself.
  *
  * So this scans EVERY tracked file rather than the instruction files, and
- * looks only for `.claude/...` paths. Narrow subject, complete population:
+ * looks only for paths under the two agent directories, `.claude` and
+ * `.agents`. Narrow subject, complete population:
  * the opposite trade from the rest of this module, and the right one here
  * because the citation is unambiguous wherever it appears.
  */
 export function guidanceReferences(text) {
   const found = new Set();
-  for (const match of text.matchAll(/`(\.claude\/[A-Za-z0-9._/-]+)`/g)) {
+  for (const match of text.matchAll(/`(\.(?:claude|agents)\/[A-Za-z0-9._/-]+)`/g)) {
     found.add(match[1].replace(/[.,;:)]+$/, ""));
   }
   return found;
+}
+
+/**
+ * The skills' own findings: the Claude Code copy out of step with the skills,
+ * and a skill either harness would fail to load. The copy is generated, so a
+ * difference is fixed by running the generator, never by editing either side
+ * into agreement by hand.
+ */
+export function skillFindings(base = root) {
+  return [
+    ...skillCopyDrift(base).map(({ path, problem }) => ({ file: path, kind: "skills copy", claim: problem, fix: "pnpm skills:sync" })),
+    ...skillFrontmatterProblems(base).map(({ skill, problem }) => ({ file: `${SKILLS_HOME}/${skill}/SKILL.md`, kind: "skill", claim: problem })),
+  ];
 }
 
 function main() {
@@ -575,7 +594,7 @@ function main() {
   // and must not let its silence imply it checked.
   const unverified = [];
 
-  const skillsDir = join(root, ".claude/skills");
+  const skillsDir = join(root, SKILLS_HOME);
   const present = new Set(
     existsSync(skillsDir)
       ? readdirSync(skillsDir).filter(name =>
@@ -587,6 +606,7 @@ function main() {
   for (const { name, side } of routerDisagreements(routed, present)) {
     findings.push({ file: "AGENTS.md", kind: "router", claim: `${name} — ${side}` });
   }
+  findings.push(...skillFindings(root));
 
   for (const file of files) {
     const text = readFileSync(join(root, file), "utf8");
@@ -656,9 +676,10 @@ function main() {
   } else if (findings.length > 0) {
     // The verdict first, because a refusal printed below a reader's `head` is
     // a refusal nobody saw — `derived-checks.md` on a gate's output.
-    console.error(`agent-contract: FAIL — ${findings.length} stale reference(s)`);
-    for (const { file, kind, claim } of findings) {
-      console.error(`  ${file}: ${kind} '${claim}' does not resolve`);
+    console.error(`agent-contract: FAIL — ${findings.length} finding(s)`);
+    for (const { file, kind, claim, fix } of findings) {
+      if (kind === "skills copy" || kind === "skill") console.error(`  ${file}: ${claim}${fix ? ` — run ${fix}` : ""}`);
+      else console.error(`  ${file}: ${kind} '${claim}' does not resolve`);
     }
     console.error(`\nread ${files.length} instruction file(s)`);
   } else {

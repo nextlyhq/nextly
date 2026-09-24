@@ -9,10 +9,13 @@ for all published packages. Status: alpha, all packages version in lockstep.
 
 ## Skills, and when to load one
 
-Procedures live in `.claude/skills/` rather than here, because a procedure
-needed once per task should not occupy context in every session. This table is
-the router: Claude selects a skill from its description, and the table is what
-survives a description that underperforms. Load the skill BEFORE the act, not
+Procedures live in `.agents/skills/` rather than here, because a procedure
+needed once per task should not occupy context in every session. Codex reads
+them there; Claude Code reads `.claude/skills/`, a generated copy that
+`pnpm skills:sync` rewrites and `pnpm check:agent-contract` holds identical —
+edit the skills, never the copy. This table is the router: an agent selects a
+skill from its description, and the table is what survives a description that
+underperforms. Load the skill BEFORE the act, not
 after it goes wrong.
 
 | Load this                     | When you are about to                                   |
