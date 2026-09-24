@@ -40,46 +40,95 @@ export default defineConfig({
 Hooks, challenges, and UI follow normal contribution rules (active as soon as the
 plugin is installed). Strategies don't — that's deliberate (secure-by-default).
 
-## Worked example: an OAuth strategy
+## Worked example: signing in with an external provider
 
-A strategy returns one of four outcomes: `authenticated`, `challenge`, `fail`, or
-`pass` ("not my credential — try the next strategy"). This is the WordPress
-`authenticate`-chain model, typed.
+A provider whose sign-in starts with a redirect does not fit the strategy chain,
+which runs against a request that already carries a credential. Such a plugin
+mounts its own routes and finishes the login with `ctx.auth.completeLogin`.
 
 ```ts
-import type { AuthStrategy, AuthUser } from "@nextlyhq/plugin-sdk";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 
-export function googleOAuth(opts: { clientId: string }): AuthStrategy {
-  return {
-    name: "oauth-google",
-    async authenticate(input, ctx) {
-      // Only claim requests carrying a Google id_token; otherwise pass through.
-      const idToken = input.body.googleIdToken;
-      if (typeof idToken !== "string") return { type: "pass" };
+export const googleAuth = definePlugin({
+  name: "@acme/google-auth",
+  version: "1.0.0",
+  nextly: ">=0.1.0",
+  contributes: {
+    routes: [
+      {
+        method: "GET",
+        path: "/google/authorize",
+        public: true,
+        handler: (_req, ctx) => redirectToGoogle(ctx),
+      },
+      {
+        method: "GET",
+        path: "/google/callback",
+        public: true,
+        async handler(request, ctx) {
+          // Whatever the provider takes to prove who this is. Everything up to
+          // here is the plugin's business; core has no opinion about it.
+          const profile = await exchangeCodeForProfile(request, ctx);
 
-      const profile = await verifyGoogleToken(idToken, opts.clientId);
-      if (!profile) return { type: "fail", reason: "invalid-google-token" };
+          const user = await findLocalUserFor(profile, ctx);
+          if (!user) return Response.redirect("/admin/login?error=signin-failed");
 
-      // Find-or-link the local user via the managed services (secure-by-default).
-      const existing = await ctx.services.collections.listEntries(
-        "users",
-        { where: { email: profile.email } },
-        { as: "system" }
-      );
-      const user = existing.data[0];
-      if (!user) return { type: "fail", reason: "no-linked-account" };
-
-      return {
-        type: "authenticated",
-        user: { id: user.id as AuthUser["id"], email: user.email as string },
-      };
+          // Core finishes the login: the account-state gate, the hooks, the
+          // audit row, the cookies, and a second factor if one is configured.
+          return ctx.auth.completeLogin(user.id, {
+            request,
+            strategy: "oauth-google",
+            next: "/admin",
+          });
+        },
+      },
+    ],
+    auth: {
+      ui: {
+        providers: [
+          {
+            strategy: "oauth-google",
+            label: "Continue with Google",
+            // Where the button goes. A provider button with no href and no
+            // component of its own renders and does nothing.
+            href: "/admin/api/plugins/acme-google-auth/google/authorize",
+          },
+        ],
+      },
     },
-  };
-}
+  },
+});
+
+declare function redirectToGoogle(ctx: unknown): Response;
+declare function exchangeCodeForProfile(
+  request: Request,
+  ctx: unknown
+): Promise<{ email: string }>;
+declare function findLocalUserFor(
+  profile: { email: string },
+  ctx: unknown
+): Promise<{ id: string } | null>;
 ```
 
-Add a **provider button** so it shows on the login screen
-(`contributes.auth.ui.providers`) and you have Strapi-style social login.
+**What `completeLogin` does for you**, in this order: loads the user by id, so a
+caller cannot fabricate profile fields; runs the `beforeLogin` hooks, so a
+maintenance mode or an IP allowlist applies to an external login too; checks
+that the account may hold a session at all; runs the `afterAuthenticate` hooks,
+which is where a second factor interrupts; and only then mints the session.
+
+The password-attempt lockout does NOT apply here. An external login is not a
+password attempt, and otherwise anyone who knows an address could lock its
+owner out of their provider with five wrong guesses.
+
+It always answers with a redirect and never throws for a login outcome, so
+every plugin fails the same safe way: a refusal lands on
+`/admin/login?error=signin-failed` with an audit row that names no account, and
+a second factor lands on `/admin/login?resume=1` with the pending token in an
+HttpOnly cookie rather than in the URL.
+
+Strategies remain app-level: they live in `defineConfig({ auth: { strategies } })`
+rather than in a plugin, so installing a plugin can never add a new way to
+authenticate without the app saying so.
 
 ## Worked example: TOTP two-factor (a challenge)
 

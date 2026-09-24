@@ -33,6 +33,15 @@ export type Action<P = unknown, C = unknown> = (
   context: C
 ) => void | Promise<void>;
 
+/**
+ * A veto point's verdict.
+ *
+ * A decision is a VALUE rather than a thrown refusal because filters are
+ * error-isolated — a handler that vetoed by throwing would be skipped, and the
+ * chain would come back allow.
+ */
+export type Decision = { allow: true } | { allow: false; reason: string };
+
 /** @experimental Minimal logger shape for filter/action error diagnostics (D63). */
 export interface FilterLogger {
   warn?(message: string, meta?: unknown): void;
@@ -98,6 +107,59 @@ export class FilterRegistry {
     return acc;
   }
 
+  /**
+   * Run a chain of handlers that VETO rather than transform.
+   *
+   * Ordinary filters are error-isolated: a throwing handler is logged and
+   * skipped so one bad plugin cannot break a seam. That is right for
+   * transforming a value and exactly wrong for deciding whether something is
+   * allowed — a crashing "deny" would be skipped, and the answer would come
+   * back allow. A veto has to fail CLOSED.
+   *
+   * Two rules make that true:
+   *  - a handler that throws denies, and stops the chain;
+   *  - a handler may keep or DOWNGRADE the decision, never upgrade it. Once
+   *    something has said no, a later handler cannot overrule it, so the order
+   *    plugins happen to load in cannot decide access.
+   */
+  async applyDecision<C = unknown>(
+    name: FilterName,
+    initial: Decision,
+    context: C
+  ): Promise<Decision> {
+    const list = this.filters.get(name);
+    if (!list || list.length === 0) return initial;
+
+    let decision = initial;
+    for (const fn of [...list]) {
+      // A COPY of the verdict goes in, never the authoritative object: a
+      // JavaScript handler can rewrite `allow` in place, and the mutated
+      // input would then read as true on BOTH sides of the upgrade check
+      // below — the denial overturned by the very object that carried it.
+      const prior = decision;
+      const input = { ...decision };
+      let next: Decision;
+      try {
+        next = (await (fn as Filter<Decision, C>)(input, context)) ?? prior;
+      } catch (err) {
+        this.logError("decision", name, err);
+        return { allow: false, reason: "hook-error" };
+      }
+
+      if (!prior.allow && next.allow) {
+        // Logged rather than silently ignored: a plugin trying to overrule a
+        // denial is a mistake worth seeing, and letting it through would make
+        // the verdict depend on load order.
+        this.logger?.warn?.(
+          `[nextly] A decision handler for "${name}" tried to overrule a denial; ignored.`
+        );
+        continue;
+      }
+      decision = next;
+    }
+    return decision;
+  }
+
   addAction<P = unknown, C = unknown>(
     name: FilterName,
     fn: Action<P, C>
@@ -153,7 +215,7 @@ export class FilterRegistry {
   }
 
   private logError(
-    kind: "filter" | "action",
+    kind: "filter" | "action" | "decision",
     name: string,
     err: unknown
   ): void {

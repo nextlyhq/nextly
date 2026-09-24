@@ -9,6 +9,7 @@ export default defineConfig({
     "src/blocks.ts",
     "src/routing.ts",
     "src/widgets.ts",
+    "src/db.ts",
   ],
   format: ["esm"],
   dts: true,

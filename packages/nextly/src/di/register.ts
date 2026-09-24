@@ -25,8 +25,10 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 
+import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
@@ -119,7 +121,9 @@ import {
   collectUnresolvedPermissionTargets,
   finalizePermissionTargets,
 } from "../plugins/permissions/collect-permissions";
+import { setPluginAuthDepsResolver } from "../plugins/plugin-auth-provider";
 import type {
+  AdapterTransactions,
   PluginContext,
   PluginDefinition,
   PluginServiceName,
@@ -145,9 +149,6 @@ import {
   registerPluginService,
 } from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
-import { assertAdminWidgets } from "../plugins/validate-admin-widgets";
-import { validatePluginMenus } from "../plugins/validate-menus";
-import { validatePluginSlugs } from "../plugins/validate-slugs";
 import { collectWidgetSources } from "../plugins/widgets/collect-widget-sources";
 import { setBootedConfig } from "../route-handler/auth-handler";
 import type {
@@ -555,33 +556,28 @@ export async function registerServices(
   // Layer 0b: Process Plugin Config Transformers (resolved order)
   // ----------------------------------------
   const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
-  // Again on the transformed list, because a `setup` transformer may add,
-  // rename or replace entries in `plugins` — and everything from here down
-  // consumes the transformed config, not the list `resolvePlugins` checked.
-  // Boot is where this should fail; without it a transformer-introduced
-  // collision would surface on the first admin-meta request instead.
-  validatePluginSlugs(setupConfig.plugins ?? []);
-  // And the menu targets on that same transformed list. A transformer may
-  // rename a contributed collection or replace a plugin outright, so an item
-  // that named a collection its plugin owned before the transform can name one
-  // it no longer does.
-  validatePluginMenus(setupConfig.plugins ?? []);
-  // And the widgets on that same transformed list, for the same reason one
-  // level in. `resolvePlugins` checks the list the CALLER passed; a transformer
-  // that adds or replaces a plugin contributes widgets that list never held, and
-  // THIS one is what `setBootedConfig` publishes and `buildPluginAdminMeta`
-  // serializes. A bigint under `query.where` there throws inside the single
-  // `JSON.stringify` that builds `/api/admin-meta/workspace`, so the whole
-  // authenticated workspace response answers 500 for every admin — the failure
-  // the resolver's check exists to prevent, reached through a second door.
-  //
-  // Checked in BOTH places rather than moved here, even though nothing between
-  // the two reads a widget. `resolvePlugins` is shared with the CLI config
-  // loader and with `collectPluginInfo`, and neither applies transformers on
-  // this path, so relocating the check would take it away from them; the
-  // duplication is the same one `validatePluginSlugs` above already carries,
-  // for the same reason.
-  assertAdminWidgets(setupConfig.plugins ?? []);
+
+  // RE-RESOLVED in full, not merely re-checked. A `setup` transformer may
+  // add, rename or replace entries in `plugins`, and everything from here
+  // down consumes the transformed config rather than the list
+  // `resolvePlugins` first checked. Running the WHOLE resolver again —
+  // versions, dependencies, cycles, every manifest assertion and the
+  // topological sort — makes the transformed list as checked as the declared
+  // one was: a transformer-added plugin with an incompatible core version or
+  // a missing dependency fails the boot here, a transformer-introduced
+  // secret-path typo is refused before anything stores the credential it
+  // names, and the order the rest of registration initializes in is the
+  // sorted one rather than whatever order the transformer left the array in.
+  // The published hook-point map is rewritten by the same call, and the
+  // schema folding below receives this list, so a transformer-added plugin's
+  // collections and singles fold exactly like a declared plugin's.
+  const transformedPlugins = resolvePlugins(setupConfig.plugins ?? [], {
+    coreVersion: getCoreVersion(),
+  });
+  const transformedSetupConfig: NextlyServiceConfig = {
+    ...setupConfig,
+    plugins: transformedPlugins,
+  };
 
   // ----------------------------------------
   // Layer 0c: Fold declarative plugin schema contributions (D3/D12/D50)
@@ -595,7 +591,10 @@ export async function registerServices(
   // Builder-made collections) and finalized after the DB is reachable below —
   // this is how extending/relating to a Builder collection works (P8/D3/R2).
   const { config: contributedConfig, deferredExtends } =
-    applyPluginSchemaContributionsDeferred(setupConfig, resolvedPlugins);
+    applyPluginSchemaContributionsDeferred(
+      transformedSetupConfig,
+      transformedPlugins
+    );
 
   // Re-resolved from the TRANSFORMED nested block, because a `setup`
   // transformer may have replaced it. The flattened `emailRetention` was
@@ -655,11 +654,11 @@ export async function registerServices(
   // finalized once Builder slugs are loaded from the DB (below).
   const unresolvedRelations =
     collectUnresolvedRelationTargets(transformedConfig);
-  validateCrossPluginRelations(resolvedPlugins);
+  validateCrossPluginRelations(transformedPlugins);
 
   // Fail fast on invalid plugin-declared custom permissions (D36). Validation
   // only here; the list is re-derived + seeded in runPostInitTasks.
-  collectCustomPermissions(transformedConfig, resolvedPlugins);
+  collectCustomPermissions(transformedConfig, transformedPlugins);
 
   // The half of that check the config cannot answer. A CRUD action on a
   // resource the config does not define may name a Schema Builder collection,
@@ -668,19 +667,19 @@ export async function registerServices(
   // so the verdict waits for Builder slugs, the same way relation targets do.
   const unresolvedPermissions = collectUnresolvedPermissionTargets(
     transformedConfig,
-    resolvedPlugins
+    transformedPlugins
   );
 
   // Fail fast on role-bundle collisions (D67). Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
-  collectRoles(transformedConfig, resolvedPlugins);
+  collectRoles(transformedConfig, transformedPlugins);
 
   // Register plugin custom field types (C7/D16) BEFORE schema sync, so the DDL
   // classifier (classifyFieldKind) maps each custom type to its storage
   // primitive. Declarative + schema-affecting, so registered for ALL plugins
   // (incl. disabled, per D49). Clear-and-rebuild per boot; fail-fast on collision.
   clearFieldTypes();
-  for (const fieldTypePlugin of resolvedPlugins) {
+  for (const fieldTypePlugin of transformedPlugins) {
     for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
       registerFieldType(withoutDisabledBehavior(fieldType, fieldTypePlugin));
     }
@@ -1217,6 +1216,7 @@ export async function registerServices(
   globalForReg.__nextly_pluginTeardown = await initializePlugins(
     transformedConfig,
     adapterDrizzleDb,
+    adapter.getCapabilities().dialect,
     resolvedLogger,
     hookRegistry
   );
@@ -1252,7 +1252,7 @@ export async function registerServices(
       transformedConfig.collections.length > 0
     ) {
       const disabledCollectionSlugs = collectPluginContributedSlugs(
-        resolvedPlugins.filter(plugin => plugin.enabled === false),
+        transformedPlugins.filter(plugin => plugin.enabled === false),
         "collections"
       );
       const hookedCollections = transformedConfig.collections.filter(
@@ -1279,7 +1279,7 @@ export async function registerServices(
       // contract means its runtime hooks must NOT run. Skip singles a disabled
       // plugin contributed; app and enabled-plugin singles register normally.
       const disabledSingleSlugs = collectPluginContributedSlugs(
-        resolvedPlugins.filter(plugin => plugin.enabled === false),
+        transformedPlugins.filter(plugin => plugin.enabled === false),
         "singles"
       );
       const hookedSingles = transformedConfig.singles.filter(
@@ -2847,6 +2847,7 @@ async function reconcileSingleTablesForBoot(
 async function initializePlugins(
   transformedConfig: NextlyServiceConfig,
   adapterDrizzleDb: DatabaseInstance,
+  dialect: SupportedDialect,
   logger: Logger,
   hookRegistry: HookRegistry | undefined
 ): Promise<Array<{ plugin: PluginDefinition; context: PluginContext }>> {
@@ -2883,8 +2884,10 @@ async function initializePlugins(
       | VersionsService
       | SingleRegistryService
       | DatabaseInstance
+      | SupportedDialect
       | Logger
       | NextlyServiceConfig
+      | AdapterTransactions
   > = {
     collectionService: () =>
       container.get<CollectionService>("collectionService"),
@@ -2895,8 +2898,17 @@ async function initializePlugins(
     singleRegistryService: () =>
       container.get<SingleRegistryService>("singleRegistryService"),
     db: () => adapterDrizzleDb,
+    // The adapter's own answer. Everything that turns a plugin's settings into
+    // SQL picks its table metadata and its upsert spelling from this, and the
+    // database handle a plugin receives is a restricted wrapper that carries
+    // no dialect of its own to infer one from.
+    dialect: () => dialect,
     logger: () => logger,
     config: () => transformedConfig,
+    // The transaction-capable adapter, for core-owned stores that must run on
+    // EVERY dialect: Drizzle's better-sqlite3 transaction cannot carry awaited
+    // work, so SQLite writes ride the adapter's manual BEGIN IMMEDIATE path.
+    adapter: () => container.get<AdapterTransactions>("adapter"),
   };
 
   const getServiceForPlugin = <T extends PluginServiceName>(name: T) =>
@@ -2907,6 +2919,18 @@ async function initializePlugins(
   // EventBus + HookRegistry never accumulate duplicates across module
   // re-evaluation. Mirrors the route registry's clear-and-rebuild below. Core
   // (non-plugin) subscriptions are untracked and untouched.
+  // Teach `ctx.auth` how to reach the auth router, and drop any memo held from
+  // a previous registration. Registered rather than imported by the provider,
+  // because the auth bridge reaches back into the plugin context it would
+  // otherwise have to import. Lazy on purpose: the deps are built per call, so
+  // hooks added by a config reload apply without rebuilding the API.
+  setPluginAuthDepsResolver(() =>
+    // The container's own resolver, not the plugin-facing one: the auth
+    // bridge asks for services (the adapter, the config) that are
+    // deliberately outside what a plugin may name.
+    buildAuthRouterDeps(getService as (name: string) => unknown)
+  );
+
   clearPluginSubscriptions();
   // Re-register plugin services from scratch each boot (D64) — same
   // clear-and-rebuild posture as subscriptions/routes, so HMR never leaks stale
@@ -2919,6 +2943,42 @@ async function initializePlugins(
   const teardown: Array<{ plugin: PluginDefinition; context: PluginContext }> =
     [];
   const contexts = new Map<string, PluginContext>();
+  // Only the plugins whose lifecycle RAN — `init` or `onReady` (init is
+  // optional, and a plugin may start all of its work in onReady). A subset
+  // of `teardown`, which holds every enabled plugin from the moment its
+  // context is built. A failed boot rolls back exactly these, never one
+  // whose lifecycle was never reached.
+  const initialized: Array<{
+    plugin: PluginDefinition;
+    context: PluginContext;
+  }> = [];
+
+  /**
+   * Destroy every initialized plugin, reverse init order, on a boot that is
+   * about to fail.
+   *
+   * The caller of a failed `initializePlugins` never receives the teardown
+   * list, and `shutdownServices` cannot stand in: registration never
+   * completed, so it returns without touching plugins. Without this loop, a
+   * timer or connection opened by an EARLIER plugin's init survived the
+   * failed boot — and a retry booted a second copy beside it. Each destroy is
+   * isolated for the same reason the shutdown loop isolates them: one
+   * plugin's failure to clean up must not spare the others'.
+   */
+  const destroyInitializedPlugins = async (): Promise<void> => {
+    for (let i = initialized.length - 1; i >= 0; i -= 1) {
+      const { plugin, context } = initialized[i];
+      if (!plugin.destroy) continue;
+      try {
+        await plugin.destroy(context);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn?.(
+          `Plugin "${plugin.name}" destroy failed during boot rollback: ${message}`
+        );
+      }
+    }
+  };
 
   // Folded once, across every plugin, so a duplicate source id or a reserved
   // namespace is a boot failure naming BOTH owners. Done before any
@@ -2957,7 +3017,18 @@ async function initializePlugins(
     for (const [svcName, factory] of Object.entries(
       plugin.contributes?.services ?? {}
     )) {
-      registerPluginService(plugin.name, svcName, () => factory(pluginContext));
+      registerPluginService(plugin.name, svcName, () => {
+        // First resolution recorded as the plugin having RUN: the factory is
+        // the plugin's own code, and it may open a connection the moment it
+        // executes. A later plugin's init resolving this service and then
+        // throwing left that connection out of the rollback — the boot
+        // failed, but the plugin whose factory ran was never "initialized",
+        // so its destroy never came. Partial-safe, like init's own entry.
+        if (!initialized.some(entry => entry.plugin === plugin)) {
+          initialized.push({ plugin, context: pluginContext });
+        }
+        return factory(pluginContext);
+      });
     }
 
     // Contributed widget SOURCES, bound the same way and for the same reason.
@@ -3006,11 +3077,22 @@ async function initializePlugins(
     const pluginContext = contexts.get(plugin.name)!;
 
     if (plugin.init) {
+      // Recorded BEFORE the hook runs, so a plugin whose init throws is part
+      // of its own rollback: init may have opened a timer or connection
+      // before failing, and those survive a boot that did not. Its destroy
+      // must therefore tolerate partial initialization — a destroy that
+      // assumes finished state leaks on exactly the failure it exists for.
+      initialized.push({ plugin, context: pluginContext });
       try {
         await plugin.init(pluginContext);
         logger.info?.(`Plugin "${plugin.name}" initialized`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        // A plugin that cannot finish starting has not started — and nothing
+        // that DID start may survive the boot that is now failing. See
+        // `destroyInitializedPlugins` for why this loop runs here rather than
+        // in the caller.
+        await destroyInitializedPlugins();
         throw new Error(
           `Plugin "${plugin.name}" initialization failed: ${message}`
         );
@@ -3042,6 +3124,41 @@ async function initializePlugins(
       }
     }
     logger.info?.(`Registered ${collectedRoutes.length} plugin route(s)`);
+  }
+
+  // PASS 3 — `onReady`, after every plugin's init AND after the route registry
+  // is rebuilt, so a plugin reading the assembled system sees all of it. In
+  // topological order like init, so a plugin still observes its dependencies
+  // before itself.
+  for (const { plugin, context } of teardown) {
+    if (!plugin.onReady) continue;
+    // Recorded BEFORE the hook runs — `init` is optional, so onReady may be
+    // where a plugin opens everything it owns, and a throw after partial
+    // work deserves the same rollback a throwing init now gets. Only when
+    // init did not record it already, so the reverse-order rollback visits
+    // each plugin once.
+    if (!initialized.some(entry => entry.plugin === plugin)) {
+      initialized.push({ plugin, context });
+    }
+    try {
+      await plugin.onReady(context);
+      logger.info?.(`Plugin "${plugin.name}" ready`);
+    } catch (error) {
+      // Same policy as init: a plugin that cannot finish starting has not
+      // started, and carrying on would run the system in a state it declared
+      // itself unfit for. The destroy loop runs for the reason init's does:
+      // the throw below reaches the caller before anything else can clean up.
+      const message = error instanceof Error ? error.message : String(error);
+      await destroyInitializedPlugins();
+      throw NextlyError.internal({
+        ...(error instanceof Error ? { cause: error } : {}),
+        logContext: {
+          reason: "plugin-onready-failed",
+          plugin: plugin.name,
+          message,
+        },
+      });
+    }
   }
 
   return teardown;

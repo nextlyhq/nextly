@@ -325,7 +325,7 @@ describe("webhook outbox capture (integration)", () => {
     current = await createTestNextly({
       collections: [
         defineCollection({
-          slug: "accounts",
+          slug: "credential_holders",
           fields: [text({ name: "title" }), password({ name: "secret" })],
         }),
       ],
@@ -334,7 +334,7 @@ describe("webhook outbox capture (integration)", () => {
       current.getService<CollectionsHandler>("collectionsHandler");
 
     await handler.createEntry(
-      { collectionName: "accounts", overrideAccess: true },
+      { collectionName: "credential_holders", overrideAccess: true },
       { title: "acct", secret: "SuperSecret123!" }
     );
 
@@ -559,7 +559,7 @@ describe("webhook outbox capture (integration)", () => {
     current = await createTestNextly({
       collections: [
         defineCollection({
-          slug: "accounts",
+          slug: "credential_holders",
           fields: [text({ name: "title" }), password({ name: "secret" })],
         }),
       ],
@@ -568,13 +568,13 @@ describe("webhook outbox capture (integration)", () => {
       current.getService<CollectionsHandler>("collectionsHandler");
 
     const created = await handler.createEntry(
-      { collectionName: "accounts", overrideAccess: true },
+      { collectionName: "credential_holders", overrideAccess: true },
       { title: "acct", secret: "SuperSecret123!" }
     );
     const id = (created.data as { id: string }).id;
 
     await handler.deleteEntry({
-      collectionName: "accounts",
+      collectionName: "credential_holders",
       entryId: id,
       overrideAccess: true,
     });

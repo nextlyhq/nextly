@@ -3,10 +3,14 @@ import { auditFailureMetadata } from "../../domains/audit/audit-log-writer";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
+import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
-import { validateCsrf } from "../csrf/validate";
+import {
+  clearPendingCookie,
+  readPendingCookie,
+  setPendingCookie,
+} from "../cookies/pending-cookie";
 import type { ChallengeRegistry } from "../pipeline/challenge";
 import {
   mintPendingToken,
@@ -18,6 +22,7 @@ import {
   jsonResponse,
   stallResponse,
   buildAuthErrorResponse,
+  csrfRefusal,
 } from "./handler-utils";
 import { issueSession, type IssueSessionDeps } from "./issue-session";
 
@@ -27,6 +32,35 @@ export interface ChallengeResolveDeps extends IssueSessionDeps {
   challengeTokenTTL: number;
   /** Max attempts before a challenge fails for good. */
   maxChallengeAttempts: number;
+  /**
+   * Counts one attempt against a challenge, server-side.
+   *
+   * The cap cannot be carried in the pending token: minting a replacement does
+   * not invalidate the one that was presented, so a caller could resubmit the
+   * original `attempts: 0` token after every wrong answer and guess until the
+   * TTL expired. Counting against the CHALLENGE makes the cap hold whichever
+   * token arrives.
+   *
+   * Injected so the rule is testable without a store, and defaulted to the
+   * shared limiter's counter — a fixed window over a key is exactly what this
+   * needs, and a second implementation of one is a second thing to get right.
+   */
+  countChallengeAttempt?: (
+    challengeId: string,
+    limit: number,
+    windowMs: number
+  ) => Promise<{ allowed: boolean }>;
+  /**
+   * Where the attempt window lives, when one is configured.
+   *
+   * The same store the rest of auth rate-limits against, for the same reason:
+   * absent, the window is this process's memory, so every worker enforces its
+   * own copy of the budget and the real cap is `maxChallengeAttempts` times
+   * the instance count. That is the multi-worker and serverless case — exactly
+   * where an operator has configured a shared store and is entitled to think
+   * the MFA cap holds.
+   */
+  authRateLimit?: { store?: RateLimitStore };
   allowedOrigins: string[];
   loginStallTimeMs: number;
   auditLog: AuditLogWriter;
@@ -38,6 +72,257 @@ export interface ChallengeResolveDeps extends IssueSessionDeps {
     isActive: boolean;
     mustChangePassword: boolean | null;
   } | null>;
+}
+
+/**
+ * Hand a wrong answer back with a fresh token carrying the next attempt count.
+ *
+ * Where the token goes depends on how it arrived. A cookie-mode client never
+ * sees it — returning it in the body would put it somewhere script can reach —
+ * so the re-issued token replaces the cookie instead. Without that the next
+ * attempt would replay the old counter and the cap would never bite.
+ */
+function retryResponse(args: {
+  token: string;
+  challengeId: string;
+  usedCookie: boolean;
+  requestId: string;
+  challengeTokenTTL: number;
+  isProduction: boolean;
+}): Response {
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    "x-request-id": args.requestId,
+  });
+  if (args.usedCookie) {
+    headers.append(
+      "Set-Cookie",
+      setPendingCookie(args.token, args.challengeTokenTTL, args.isProduction)
+    );
+  }
+  // The CANONICAL error envelope, so the retry token survives the trip.
+  // This answers 401, and an admin fetcher throws on that before anything
+  // reads the body — so a token returned at the top level was discarded and
+  // the client went on replaying the token it already had, spending the
+  // budget without ever advancing. `parseApiError` exposes `error.data`,
+  // which is where a caller can actually reach it.
+  return new Response(
+    JSON.stringify({
+      error: {
+        code: "AUTH_INVALID_CREDENTIALS",
+        message: "Invalid code.",
+        requestId: args.requestId,
+        data: {
+          status: "challenge",
+          challengeType: args.challengeId,
+          // Cookie-mode clients never receive it in the body: the re-issued
+          // token replaces the cookie in the header above, where script
+          // cannot reach it.
+          ...(args.usedCookie ? {} : { pendingToken: args.token }),
+        },
+      },
+    }),
+    { status: 401, headers }
+  );
+}
+
+/**
+ * Hand back the token that lets a must-change account replace its password.
+ *
+ * A challenge cleared by an account still holding an admin-set password does
+ * not end in a session: it ends here, so the challenge path cannot be used to
+ * skip the gate the login path enforces.
+ */
+async function passwordChangeRequired(
+  deps: Pick<
+    ChallengeResolveDeps,
+    "secret" | "challengeTokenTTL" | "isProduction"
+  >,
+  args: {
+    userId: string;
+    strategy?: string;
+    requestId: string;
+    next?: string;
+    usedCookie: boolean;
+  }
+): Promise<Response> {
+  const pendingToken = await mintPendingToken(
+    {
+      userId: args.userId,
+      challengeId: MUST_CHANGE_PASSWORD_CHALLENGE,
+      attempts: 0,
+      strategy: args.strategy,
+      // Carried across. An external login signs its destination into the
+      // pending token, and dropping it here sent the account to the dashboard
+      // after setting a password instead of the page it asked for. Already
+      // sanitized when it was first signed, so it is not re-derived from the
+      // request.
+      ...(args.next ? { next: args.next } : {}),
+    },
+    deps.secret,
+    deps.challengeTokenTTL
+  );
+  // Cookie mode keeps its token in the cookie, exactly as the retry path
+  // does: the body is somewhere script can reach, and a cookie-mode client
+  // has no way to carry a body token across the reload this step survives.
+  // Leaving the OLD token in the cookie instead resumed the challenge this
+  // answer just settled — the set-password step was reachable once and then
+  // stranded, spending the challenge budget on every revisit.
+  if (args.usedCookie) {
+    return jsonResponse(
+      200,
+      { status: "password_change_required" },
+      {
+        "x-request-id": args.requestId,
+        "Set-Cookie": setPendingCookie(
+          pendingToken,
+          deps.challengeTokenTTL,
+          deps.isProduction
+        ),
+      }
+    );
+  }
+  return jsonResponse(
+    200,
+    { status: "password_change_required", pendingToken },
+    { "x-request-id": args.requestId }
+  );
+}
+
+/**
+ * Answer a wrong challenge response: one more attempt, or a final refusal.
+ *
+ * The attempt counter lives in the token rather than in a row, so advancing it
+ * means minting a new one — and the strategy has to be carried across, or a
+ * second attempt would record the session as coming from the password path
+ * whatever actually signed the person in.
+ */
+/**
+ * Spend one attempt from this account's budget for this challenge.
+ *
+ * A PRECONDITION, so it runs before the answer is examined. Counting only
+ * wrong answers left the budget unspent by a correct one, and the pending
+ * token is a JWT that minting a replacement does not revoke — so replaying the
+ * original `attempts: 0` token kept guessing, and whichever guess happened to
+ * be right was accepted however many had come before it. Charging every
+ * attempt is what makes `maxChallengeAttempts` a cap rather than a display.
+ *
+ * The count is held server-side because the token's own number is attacker
+ * supplied. That number is still carried forward, for a client showing
+ * progress, but it is not what enforces anything.
+ */
+async function spendChallengeAttempt(
+  deps: Pick<
+    ChallengeResolveDeps,
+    | "challengeTokenTTL"
+    | "maxChallengeAttempts"
+    | "countChallengeAttempt"
+    | "authRateLimit"
+  >,
+  pending: {
+    userId: string;
+    challengeId: string;
+    flow?: string;
+    flowExpiresAt?: number;
+  }
+): Promise<void> {
+  // The CONFIGURED store, not the module-level default. `authRateLimiter()`
+  // with no argument returns the process-memory limiter whatever the install
+  // configured, so each worker counted its own five attempts and the cap was
+  // effectively multiplied by the instance count — in the deployments that
+  // have a shared store precisely because they run more than one process.
+  const store = deps.authRateLimit?.store;
+  const count =
+    deps.countChallengeAttempt ??
+    (async (key: string, limit: number, windowMs: number) => {
+      const { authRateLimiter } = await import("../middleware/rate-limiter");
+      return authRateLimiter(store).check(key, limit, windowMs);
+    });
+
+  // Keyed by USER, challenge, and FLOW. `challengeId` names the challenge
+  // DEFINITION — "totp" — so keying on it alone pooled every account's wrong
+  // answers into one budget: a handful of failures by anyone locked out every
+  // user of that challenge until the window expired.
+  //
+  // The FLOW narrows it to one interrupted login, which is what the cap
+  // actually bounds. Without it every login the account started — including
+  // the ones that SUCCEEDED — drew on one counter, so five completed logins
+  // inside the window refused the sixth before it was attempted. A replayed
+  // token cannot escape its own flow: the id is signed into the token, and
+  // every re-issue carries it forward. A token from before the claim existed
+  // shares one budget, exactly as every token did then.
+  const verdict = await count(
+    `${pending.userId}:${pending.challengeId}:${pending.flow ?? "0"}`,
+    deps.maxChallengeAttempts,
+    deps.challengeTokenTTL * 1000
+  );
+  if (!verdict.allowed) {
+    throw NextlyError.invalidCredentials({
+      logContext: { reason: auditReason("challenge-attempts-exhausted") },
+    });
+  }
+}
+
+async function wrongAnswer(
+  deps: Pick<
+    ChallengeResolveDeps,
+    "secret" | "challengeTokenTTL" | "maxChallengeAttempts" | "isProduction"
+  >,
+  args: {
+    pending: {
+      userId: string;
+      challengeId: string;
+      attempts: number;
+      strategy?: string;
+      next?: string;
+      flow?: string;
+      flowExpiresAt?: number;
+    };
+    usedCookie: boolean;
+    requestId: string;
+  }
+): Promise<Response> {
+  // The budget was already spent by `spendChallengeAttempt` before the answer
+  // was examined; this only decides whether to offer another round.
+  const nextAttempts = args.pending.attempts + 1;
+  if (nextAttempts >= deps.maxChallengeAttempts) {
+    throw NextlyError.invalidCredentials({
+      logContext: { reason: auditReason("challenge-failed-final") },
+    });
+  }
+  // `next` travels with the retry, as `strategy` does. The re-minted token
+  // REPLACES the HttpOnly cookie, so anything dropped here is gone for good:
+  // an external login that asked to land somewhere specific lost that
+  // destination on the first wrong answer, and the eventual correct one
+  // issued a session to the dashboard instead. Only the attempt count changes
+  // between rounds — the flow id included, because the retry belongs to the
+  // login the first token paused, and its budget with it.
+  const reissued = await mintPendingToken(
+    {
+      userId: args.pending.userId,
+      challengeId: args.pending.challengeId,
+      attempts: nextAttempts,
+      strategy: args.pending.strategy,
+      ...(args.pending.next ? { next: args.pending.next } : {}),
+      ...(args.pending.flow ? { flow: args.pending.flow } : {}),
+      // The ORIGINAL expiry, not a renewed one: the token's TTL refreshes so
+      // the holder can keep answering, while the flow's lifetime — the bound
+      // the attempt budget is enforced within — stays where the pause set it.
+      ...(args.pending.flowExpiresAt !== undefined
+        ? { flowExpiresAt: args.pending.flowExpiresAt }
+        : {}),
+    },
+    deps.secret,
+    deps.challengeTokenTTL
+  );
+  return retryResponse({
+    token: reissued,
+    challengeId: args.pending.challengeId,
+    usedCookie: args.usedCookie,
+    requestId: args.requestId,
+    challengeTokenTTL: deps.challengeTokenTTL,
+    isProduction: deps.isProduction,
+  });
 }
 
 /**
@@ -56,29 +341,28 @@ export async function handleChallengeResolve(
 ): Promise<Response> {
   const startTime = Date.now();
   const requestId = readOrGenerateRequestId(request);
+  // Declared outside the try so the catch can read it: whether the pending
+  // token arrived by cookie decides what a terminal failure owes the browser.
+  let usedCookie = false;
 
   try {
     const body = (await request.json()) as Record<string, unknown>;
 
-    const csrfCookie = readCsrfCookie(request);
-    const csrfToken = readCsrfFromRequest(body, request);
-    const csrfResult = validateCsrf(
-      request,
-      csrfCookie,
-      csrfToken,
-      deps.allowedOrigins
-    );
-    if (!csrfResult.valid) {
+    const refusal = csrfRefusal(request, body, deps, requestId);
+    if (refusal) {
       await stallResponse(startTime, deps.loginStallTimeMs);
-      return jsonResponse(
-        403,
-        { error: { code: "CSRF_FAILED", message: csrfResult.error } },
-        { "x-request-id": requestId }
-      );
+      return refusal;
     }
 
+    // Body or cookie. An external login redirected the browser here, so its
+    // pending token lives in an HttpOnly cookie rather than in a variable the
+    // page could have kept — see auth/cookies/pending-cookie.
+    const cookieToken = readPendingCookie(request);
+    usedCookie = typeof body.pendingToken !== "string" && cookieToken !== null;
     const pendingTokenInput =
-      typeof body.pendingToken === "string" ? body.pendingToken : "";
+      typeof body.pendingToken === "string"
+        ? body.pendingToken
+        : (cookieToken ?? "");
     const challengeResponse = (body.response ?? {}) as Record<string, unknown>;
 
     let pending;
@@ -90,11 +374,12 @@ export async function handleChallengeResolve(
       });
     }
 
-    if (pending.attempts >= deps.maxChallengeAttempts) {
-      throw NextlyError.invalidCredentials({
-        logContext: { reason: auditReason("challenge-attempts-exhausted") },
-      });
-    }
+    refuseIfFlowExhausted(pending, deps);
+
+    // BEFORE the answer is examined. Spending the budget only on a wrong
+    // answer left a correct one free, and a replayed token could therefore
+    // keep guessing until one landed.
+    await spendChallengeAttempt(deps, pending);
 
     const result = await deps.challengeRegistry.resolve(
       pending.challengeId,
@@ -103,42 +388,18 @@ export async function handleChallengeResolve(
     );
 
     if (!result.ok) {
-      const nextAttempts = pending.attempts + 1;
       await stallResponse(startTime, deps.loginStallTimeMs);
-      if (nextAttempts >= deps.maxChallengeAttempts) {
-        // Out of attempts — fail for good (generic 401).
-        throw NextlyError.invalidCredentials({
-          logContext: { reason: auditReason("challenge-failed-final") },
-        });
-      }
-      // Re-issue a fresh pending token carrying the incremented counter.
-      const reissued = await mintPendingToken(
-        {
-          userId: pending.userId,
-          challengeId: pending.challengeId,
-          attempts: nextAttempts,
-        },
-        deps.secret,
-        deps.challengeTokenTTL
-      );
-      return new Response(
-        JSON.stringify({
-          status: "challenge",
-          challengeType: pending.challengeId,
-          pendingToken: reissued,
-          error: "Invalid code.",
-        }),
-        {
-          status: 401,
-          headers: {
-            "Content-Type": "application/json",
-            "x-request-id": requestId,
-          },
-        }
-      );
+      return wrongAnswer(deps, {
+        pending,
+        usedCookie,
+        requestId,
+      });
     }
 
     // Challenge resolved → load the candidate user and issue the real session.
+    // This early check stays: `issueSession` runs the full account-state gate
+    // as well, but refusing here keeps this path's response timing and its
+    // own audit reason, which the generic gate does not carry.
     const u = await deps.findUserById(pending.userId);
     if (!u || !u.isActive) {
       throw NextlyError.invalidCredentials({
@@ -151,21 +412,14 @@ export async function handleChallengeResolve(
     // still replace its admin-set password before any session is issued, or the
     // challenge path would bypass the gate the login path enforces.
     if (u.mustChangePassword) {
-      const pwPendingToken = await mintPendingToken(
-        {
-          userId: u.id,
-          challengeId: MUST_CHANGE_PASSWORD_CHALLENGE,
-          attempts: 0,
-        },
-        deps.secret,
-        deps.challengeTokenTTL
-      );
       await stallResponse(startTime, deps.loginStallTimeMs);
-      return jsonResponse(
-        200,
-        { status: "password_change_required", pendingToken: pwPendingToken },
-        { "x-request-id": requestId }
-      );
+      return passwordChangeRequired(deps, {
+        userId: u.id,
+        strategy: pending.strategy,
+        requestId,
+        next: pending.next,
+        usedCookie,
+      });
     }
 
     const user: AuthUser = {
@@ -174,7 +428,18 @@ export async function handleChallengeResolve(
       name: u.name,
       image: u.image,
     };
-    const response = await issueSession(user, deps, request, requestId);
+    // The strategy the pending token carries, not this handler's own: the
+    // method that signed the person in is the one that authenticated them,
+    // not the one that answered the challenge.
+    const response = await issueSession(user, deps, request, requestId, {
+      strategy: pending.strategy,
+      // Where the login was headed before the challenge interrupted it. It was
+      // sanitized before being signed into the token, so it is a safe path.
+      next: pending.next,
+    });
+    // The challenge is settled either way, so the pending cookie has no reason
+    // to survive it; leaving it would let a stale token be replayed.
+    response.headers.append("Set-Cookie", clearPendingCookie());
     await stallResponse(startTime, deps.loginStallTimeMs);
     return response;
   } catch (err) {
@@ -188,12 +453,91 @@ export async function handleChallengeResolve(
       userAgent: request.headers.get("user-agent"),
       metadata: auditFailureMetadata(err, requestId),
     });
-    if (NextlyError.is(err)) {
-      return buildAuthErrorResponse(err, requestId);
-    }
+    return challengeErrorResponse(err, requestId, usedCookie);
+  }
+}
+
+/**
+ * The catch path's answer: the canonical error envelope, plus the cookie a
+ * terminal cookie-mode failure owes the browser.
+ *
+ * A cookie-mode flow that failed FOR GOOD takes its cookie with it. The
+ * terminal token still verifies until its TTL expires, so leaving the cookie
+ * in place kept `/auth/pending` reporting the exhausted challenge after
+ * every reload — the login page hiding its password and provider options
+ * behind a continuation nothing can finish. Only the terminal refusals clear
+ * it: a wrong answer REPLACES the cookie with its retry token, and clearing
+ * on transient failures would throw away an attempt the person still has.
+ */
+function challengeErrorResponse(
+  err: unknown,
+  requestId: string,
+  usedCookie: boolean
+): Response {
+  if (!NextlyError.is(err)) {
     return buildAuthErrorResponse(
       NextlyError.internal({ cause: err as Error }),
       requestId
     );
+  }
+  const response = buildAuthErrorResponse(err, requestId);
+  if (usedCookie && terminalChallengeFailure(err)) {
+    response.headers.append("Set-Cookie", clearPendingCookie());
+  }
+  return response;
+}
+
+/**
+ * Whether an error is a challenge flow's FINAL refusal — the attempt budget
+ * exhausted, or the last permitted wrong answer spent.
+ *
+ * A narrow test on the audit reason, because that is the identity the two
+ * throw sites already share and nothing else in this handler's catch should
+ * take a cookie from the browser.
+ */
+function terminalChallengeFailure(err: NextlyError): boolean {
+  const reason = err.logContext?.reason;
+  return (
+    reason === auditReason("challenge-attempts-exhausted") ||
+    reason === auditReason("challenge-failed-final")
+  );
+}
+
+/**
+ * The ways a flow is over before its answer is even examined.
+ *
+ * All refuse identically, because all mean the same thing: no attempt this
+ * token presents is spendable. The COUNTER on the token caps replays of a
+ * low-attempt mint, the flow's signed LIFETIME caps the window-hopping a
+ * renewed token would otherwise allow — each wrong answer re-issues a token
+ * with a fresh TTL while the server-side budget ages entries out, so without
+ * the fixed end, replaying an old low-attempt token near each window's edge
+ * kept one flow guessing far past the configured cap — and a token carrying
+ * NO lifetime at all is refused outright: every mint this build makes signs
+ * one, so absence means a token nothing here could have produced, and
+ * treating it as unlimited would make the absence a bypass rather than an
+ * anomaly.
+ */
+function refuseIfFlowExhausted(
+  pending: { attempts: number; flowExpiresAt?: number },
+  deps: Pick<ChallengeResolveDeps, "maxChallengeAttempts">
+): void {
+  if (pending.attempts >= deps.maxChallengeAttempts) {
+    throw NextlyError.invalidCredentials({
+      logContext: { reason: auditReason("challenge-attempts-exhausted") },
+    });
+  }
+  if (pending.flowExpiresAt === undefined) {
+    throw NextlyError.invalidCredentials({
+      logContext: { reason: auditReason("pending-token-invalid") },
+    });
+  }
+  if (
+    pending.flowExpiresAt !== undefined &&
+    Date.now() / 1000 >= pending.flowExpiresAt
+  ) {
+    throw NextlyError.invalidCredentials({
+      logContext: { reason: auditReason("challenge-attempts-exhausted") },
+    });
   }
 }

@@ -110,27 +110,6 @@ describe("dispatchUser — actions (respondAction)", () => {
     const body = await response.json();
     expect(body).toEqual({ message: "Password hash updated." });
   });
-
-  it("unlinkAccountForUser returns { message, provider, providerAccountId }", async () => {
-    const container = {
-      users: { unlinkAccountForUser: vi.fn().mockResolvedValue(undefined) },
-    } as unknown as ServiceContainer;
-
-    const result = await dispatchUser(
-      container,
-      "unlinkAccountForUser",
-      { userId: "u1", provider: "google", providerAccountId: "g123" },
-      undefined
-    );
-
-    const response = result as Response;
-    const body = await response.json();
-    expect(body).toEqual({
-      message: "Account unlinked.",
-      provider: "google",
-      providerAccountId: "g123",
-    });
-  });
 });
 
 describe("dispatchUser — bare data reads (respondData)", () => {
@@ -187,26 +166,5 @@ describe("dispatchUser — bare data reads (respondData)", () => {
     const response = result as Response;
     const body = await response.json();
     expect(body).toEqual({ hasPassword: true });
-  });
-
-  it("getAccounts returns { accounts: [...] } body", async () => {
-    const fakeAccounts = [
-      { id: "a1", provider: "google" },
-      { id: "a2", provider: "github" },
-    ];
-    const container = {
-      users: { getAccounts: vi.fn().mockResolvedValue(fakeAccounts) },
-    } as unknown as ServiceContainer;
-
-    const result = await dispatchUser(
-      container,
-      "getAccounts",
-      { userId: "u1" },
-      undefined
-    );
-
-    const response = result as Response;
-    const body = await response.json();
-    expect(body).toEqual({ accounts: fakeAccounts });
   });
 });

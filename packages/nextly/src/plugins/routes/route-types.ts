@@ -189,6 +189,38 @@ export interface PluginRoute {
   /** Opt out of auth — the route is publicly callable. */
   public?: boolean;
   /**
+   * @experimental Apply a per-IP rate limit.
+   *
+   * `"auth"` uses the same limit and window as `/auth/*`, in its OWN key
+   * namespace — a plugin's sign-in route is as much a credential-stuffing
+   * target as core's, and sharing core's bucket would let either exhaust the
+   * other's budget.
+   */
+  rateLimit?: "general" | "auth";
+  /**
+   * @experimental Hand the handler the untouched request body.
+   *
+   * For a signed webhook, whose signature is computed over the exact bytes
+   * sent: anything that parses and re-serialises the body first changes them,
+   * and the signature then never matches.
+   */
+  rawBody?: boolean;
+  /**
+   * @experimental Require a valid double-submit CSRF token for unsafe methods
+   * when the caller is cookie-authenticated.
+   *
+   * API-key and Bearer callers are exempt, because a browser cannot attach
+   * those cross-site — the attack this prevents needs the credential to travel
+   * automatically, which is what a cookie does and a header does not.
+   */
+  csrf?: boolean;
+  /**
+   * @experimental Add `Cache-Control: no-store` to every response. Always set
+   * for `rateLimit: "auth"`, whose responses describe an authentication
+   * attempt.
+   */
+  noStore?: boolean;
+  /**
    * Convert stored timestamps to the installation's configured timezone, the
    * way every built-in collection read does.
    *

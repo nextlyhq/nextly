@@ -170,6 +170,7 @@ describe("the context's service names and the resolver that answers them", () =>
       "versionsService",
       "singleRegistryService",
       "db",
+      "dialect",
       "logger",
       "config",
     ]);

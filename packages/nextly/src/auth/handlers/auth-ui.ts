@@ -9,6 +9,8 @@ export interface AuthUiProvider {
   label: string;
   icon?: string;
   component?: string;
+  /** A same-origin path the button navigates to, when it has no component. */
+  href?: string;
 }
 
 /**
@@ -30,6 +32,49 @@ export interface AuthUiMeta {
   };
 }
 
+/**
+ * Whether a value is a path this origin will serve, rather than somewhere else.
+ *
+ * A login button is the most valuable place on a site to plant an open
+ * redirect, so the check is by construction rather than by recognising hostile
+ * URLs: exactly one leading slash, and a second character that cannot begin an
+ * authority. That rejects `//evil`, `/\\evil`, every scheme, and the encodings
+ * of those, including ones not yet invented.
+ */
+export function isSameOriginPath(href: string): boolean {
+  if (typeof href !== "string" || !href.startsWith("/")) return false;
+  if (href.length > 1 && (href[1] === "/" || href[1] === "\\")) return false;
+  // A control character can split or truncate the attribute it lands in.
+  for (let i = 0; i < href.length; i++) {
+    const code = href.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return false;
+  }
+  return true;
+}
+
+/**
+ * The providers whose buttons can safely be rendered.
+ *
+ * One with an unusable `href` is dropped rather than failing boot: a single bad
+ * button should not stop a site from starting, and a provider missing from the
+ * login page is a visible failure an operator can act on.
+ */
+function usableProviders(
+  pluginName: string,
+  providers: readonly AuthUiProvider[]
+): AuthUiProvider[] {
+  return providers.filter(provider => {
+    if (provider.href === undefined || isSameOriginPath(provider.href)) {
+      return true;
+    }
+    console.warn(
+      `[nextly] Ignoring provider "${provider.strategy}" from ${pluginName}: ` +
+        `href must be a same-origin path beginning with a single "/".`
+    );
+    return false;
+  });
+}
+
 /** Fold every plugin's `contributes.auth.ui` into one served {@link AuthUiMeta}. */
 export function aggregateAuthUi(plugins: PluginDefinition[]): AuthUiMeta {
   const meta: AuthUiMeta = {
@@ -38,9 +83,14 @@ export function aggregateAuthUi(plugins: PluginDefinition[]): AuthUiMeta {
     slots: { beforeForm: [], afterForm: [], branding: [] },
   };
   for (const plugin of plugins) {
+    // A disabled plugin contributes nothing, as it does nowhere else: route
+    // and runtime registration skip it, so publishing its UI offered a
+    // provider button whose start route was never registered, and let it
+    // overwrite an ENABLED plugin's challenge view with one nothing serves.
+    if (plugin.enabled === false) continue;
     const ui = plugin.contributes?.auth?.ui;
     if (!ui) continue;
-    if (ui.providers) meta.providers.push(...ui.providers);
+    meta.providers.push(...usableProviders(plugin.name, ui.providers ?? []));
     if (ui.challengeViews)
       Object.assign(meta.challengeViews, ui.challengeViews);
     if (ui.slots?.beforeForm) meta.slots.beforeForm.push(ui.slots.beforeForm);

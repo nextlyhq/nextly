@@ -10,7 +10,7 @@
  * @since v0.0.3-alpha (Plan A Task 17 — replaces database/schema/sqlite.ts)
  */
 
-export { users, accounts, sessions } from "../users/sqlite";
+export { users } from "../users/sqlite";
 
 // The field-group storage migration's mutual-exclusion row. Present here, and not only in
 // `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what
@@ -18,6 +18,10 @@ export { users, accounts, sessions } from "../users/sqlite";
 export { nextlyFieldGroupLock } from "../field-group-lock/sqlite";
 export { nextlyDocumentLock } from "../document-lock/sqlite";
 export { nextlyRbacEpoch } from "../rbac-epoch/sqlite";
+// Where a plugin's configuration lives. In the bundle as well as in
+// CORE_TABLE_NAMES: the manifest decides what is EXPECTED, this decides what
+// is CREATED, and a table in one but not the other is never made.
+export { nextlyPluginSettings } from "../plugin-settings/sqlite";
 export { nextlyWidgetLayout } from "../widget-layout/sqlite";
 
 export {

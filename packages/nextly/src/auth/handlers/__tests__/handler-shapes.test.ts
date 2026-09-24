@@ -52,6 +52,21 @@ import { createPasswordStrategy } from "../../pipeline/password-strategy";
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 
 /**
+ * The account-state gate every session-issuing path now runs. These fixtures
+ * assert response shapes rather than account state, so the gate is given a
+ * usable account and the shape under test is what decides the result.
+ */
+const usableAccountGate = {
+  requireEmailVerification: true,
+  fetchAccountState: async (userId: string) => ({
+    userId,
+    isActive: true,
+    lockedUntil: null,
+    emailVerified: new Date("2026-01-01T00:00:00Z"),
+  }),
+};
+
+/**
  * Build the auth-pipeline deps a login-path test needs: the built-in password
  * strategy (wrapping verifyCredentials with the given lockout deps, exactly as
  * deps-bridge does), an empty hook registry, and the challenge token TTL. With
@@ -144,6 +159,7 @@ describe("login handler: respondAction shape", () => {
     const resetFailedAttempts = vi.fn().mockResolvedValue(undefined);
 
     const deps = {
+      ...usableAccountGate,
       secret: SECRET,
       isProduction: false,
       accessTokenTTL: 900,
@@ -226,6 +242,7 @@ describe("login handler: respondAction shape", () => {
       requireEmailVerification: true,
     });
     const deps = {
+      ...usableAccountGate,
       secret: SECRET,
       accessTokenTTL: 900,
       refreshTokenTTL: 604800,
@@ -299,6 +316,7 @@ describe("login handler: respondAction shape", () => {
       },
     } as never);
     const deps = {
+      ...usableAccountGate,
       secret: SECRET,
       accessTokenTTL: 900,
       refreshTokenTTL: 604800,
@@ -461,6 +479,16 @@ describe("login handler: respondAction shape", () => {
       fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
       fetchCustomFields: vi.fn().mockResolvedValue({}),
       storeRefreshToken,
+      // Read earlier than the session path now: the account-state gate runs
+      // before any continuation is minted, so these deps carry it even for
+      // a login that pauses before a session.
+      fetchAccountState: vi.fn().mockResolvedValue({
+        userId: "u1",
+        isActive: true,
+        lockedUntil: null,
+        emailVerified: fakeUser.emailVerified,
+        mustChangePassword: true,
+      }),
       ...loginPipelineDeps({
         findUserByEmail,
         incrementFailedAttempts,
@@ -517,6 +545,7 @@ describe("refresh handler: respondData shape", () => {
   it("returns { user, accessToken, refreshToken, expiresAt } with no message", async () => {
     const tokenHash = hashRefreshToken("raw-refresh-token");
     const deps = {
+      ...usableAccountGate,
       secret: SECRET,
       isProduction: false,
       accessTokenTTL: 900,
@@ -1124,3 +1153,71 @@ describe("csrf handler: respondData shape", () => {
 void setCsrfCookie;
 void setAccessTokenCookie;
 void setRefreshTokenCookie;
+
+describe("the account-state gate before continuations", () => {
+  it("refuses an INACTIVE account before any hook or challenge runs", async () => {
+    // A custom strategy authenticating an inactive account used to reach the
+    // challenge/hook machinery before the session-time gate refused: the
+    // person got a second-factor prompt to solve — and the code the
+    // challenge sent — before learning they could not sign in at all.
+    const seen: string[] = [];
+    const custom = {
+      name: "header-token",
+      authenticate: async () => ({
+        type: "authenticated",
+        user: { id: "u1", email: "a@b.c", name: "A", image: null },
+      }),
+    };
+    const hooks = new AuthHookRegistry();
+    hooks.add({
+      afterAuthenticate: async user => {
+        seen.push("afterAuthenticate");
+        return user;
+      },
+    });
+
+    // The handler answers its failures with a Response rather than a throw,
+    // so the refusal is the status — and the hook list stays empty either
+    // way, which is the separating assertion.
+    const res = await handleLogin(
+      makeRequest("POST", { email: "a@b.c", password: "x" }),
+      {
+        ...usableAccountGate,
+        secret: SECRET,
+        isProduction: false,
+        accessTokenTTL: 900,
+        refreshTokenTTL: 604800,
+        maxLoginAttempts: 5,
+        lockoutDurationSeconds: 900,
+        loginStallTimeMs: 0,
+        requireEmailVerification: true,
+        allowedOrigins: ALLOWED_ORIGINS,
+        trustProxy: false,
+        trustedProxyIps: [],
+        findUserByEmail: vi.fn().mockResolvedValue(null),
+        incrementFailedAttempts: vi.fn().mockResolvedValue(undefined),
+        lockAccount: vi.fn().mockResolvedValue(undefined),
+        resetFailedAttempts: vi.fn().mockResolvedValue(undefined),
+        fetchRoleIds: vi.fn().mockResolvedValue([]),
+        fetchCustomFields: vi.fn().mockResolvedValue({}),
+        storeRefreshToken: vi.fn().mockResolvedValue(undefined),
+        authStrategies: [custom] as never,
+        authHooks: hooks,
+        pluginCtx: {} as never,
+        challengeTokenTTL: 300,
+        auditLog: { write: vi.fn().mockResolvedValue(undefined) },
+        fetchAccountState: async (userId: string) => ({
+          userId,
+          isActive: false,
+          lockedUntil: null,
+          emailVerified: new Date("2026-01-01T00:00:00Z"),
+        }),
+      } as never
+    );
+
+    expect(res.status).toBe(401);
+    // The hook never ran: the refusal arrived before anything was done on
+    // the account's behalf.
+    expect(seen).toEqual([]);
+  });
+});

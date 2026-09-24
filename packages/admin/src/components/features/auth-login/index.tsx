@@ -25,8 +25,14 @@ import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage, type ApiError } from "@admin/lib/api/parseApiError";
 import type { ActionResponse } from "@admin/lib/api/response-types";
 
-import { AuthUiExtras, AuthChallenge, useAuthUi } from "./auth-ui-extras";
+import {
+  AuthUiExtras,
+  AuthUiExtrasAfter,
+  AuthChallenge,
+  useAuthUi,
+} from "./auth-ui-extras";
 import { SetInitialPassword } from "./set-initial-password";
+import { useChallengeFlow } from "./use-resume-login";
 
 const formSchema = z.object({
   email: z
@@ -40,6 +46,23 @@ const formSchema = z.object({
     .min(8, "Password must be at least 8 characters"),
 });
 
+/**
+ * Whether any plugin contributed something to show above the sign-in form.
+ *
+ * Named rather than spelled inline: three alternatives inside a JSX branch
+ * read as one condition to a person and as three to anything counting them,
+ * in a component that is over its complexity budget before this file is
+ * touched. The wrapper exists only to space whatever `AuthUiExtras` renders,
+ * so asking it for nothing would leave an empty gap.
+ */
+function hasPreFormUi(authUi: ReturnType<typeof useAuthUi>): boolean {
+  return (
+    authUi.providers.length > 0 ||
+    authUi.slots.beforeForm.length > 0 ||
+    authUi.slots.branding.length > 0
+  );
+}
+
 export function Login() {
   const { api } = useApi();
   const appName = useAppName();
@@ -50,16 +73,10 @@ export function Login() {
   const [resendingVerification, setResendingVerification] = useState(false);
   // Auth-page UI contributed by plugins (provider buttons, slots, 2FA views) — D57.
   const authUi = useAuthUi();
-  // Set when a login returns a multi-step challenge (D71); shows the challenge view.
-  const [challenge, setChallenge] = useState<{
-    challengeType: string;
-    pendingToken: string;
-  } | null>(null);
-  // Set when login returns password_change_required (ASVS 6.4.1): the account
-  // holds an admin-set password and must replace it before a session is issued.
-  const [mustChangePassword, setMustChangePassword] = useState<{
-    pendingToken: string;
-  } | null>(null);
+
+  // The second-factor step, including a sign-in resumed from a provider.
+  // Its logic lives in the hook so this component only renders.
+  const challengeFlow = useChallengeFlow();
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -109,9 +126,10 @@ export function Login() {
         result.challengeType &&
         result.pendingToken
       ) {
-        setChallenge({
+        challengeFlow.start({
           challengeType: result.challengeType,
           pendingToken: result.pendingToken,
+          next: null,
         });
         setIsLoading(false);
         return;
@@ -123,7 +141,9 @@ export function Login() {
         result?.status === "password_change_required" &&
         result.pendingToken
       ) {
-        setMustChangePassword({ pendingToken: result.pendingToken });
+        challengeFlow.requirePasswordChange({
+          pendingToken: result.pendingToken,
+        });
         setIsLoading(false);
         return;
       }
@@ -204,24 +224,57 @@ export function Login() {
       title="Welcome Back"
       description={`Sign in to your ${appName} account`}
     >
-      {mustChangePassword ? (
+      {challengeFlow.passwordChange ? (
         <SetInitialPassword
-          pendingToken={mustChangePassword.pendingToken}
-          onDone={() => {
-            window.location.href = ROUTES.DASHBOARD;
+          // Absent for the resumed case, where the token is in the cookie.
+          pendingToken={challengeFlow.passwordChange.pendingToken}
+          // The server's own destination when it has one: the sanitized
+          // `next` the pending token carried. Otherwise the dashboard.
+          onDone={next => {
+            window.location.href = next ?? ROUTES.DASHBOARD;
           }}
+          // The pending token is spent, so the step it stood for is over.
+          // Clearing it brings the sign-in form back, which is the only
+          // thing left that can help.
+          onCredentialRejected={challengeFlow.abandonPasswordChange}
         />
-      ) : challenge ? (
+      ) : challengeFlow.challenge ? (
         <AuthChallenge
           authUi={authUi}
-          challengeType={challenge.challengeType}
-          pendingToken={challenge.pendingToken}
-          onResolved={() => {
-            window.location.href = ROUTES.DASHBOARD;
+          challengeType={challengeFlow.challenge.challengeType}
+          pendingToken={challengeFlow.challenge.pendingToken}
+          // Answered and still no session — the account must replace its
+          // admin-set password first — is raised by the hook itself, so this
+          // passes the resolver straight through.
+          resolve={challengeFlow.resolve}
+          onResolved={next => {
+            // A challenge view calls this when it reads the answer as "done".
+            // A forced password change is accepted and NOT done: the host is
+            // already rendering that step, and navigating would land on a page
+            // with no session that bounces straight back to login. Checked
+            // here rather than trusted to the view, which may predate the
+            // `continues` field entirely.
+            if (challengeFlow.isContinuing()) return;
+            window.location.href = next ?? ROUTES.DASHBOARD;
           }}
         />
       ) : (
         <>
+          {challengeFlow.signInFailed && (
+            <div
+              className="flex items-start gap-3 rounded-lg border border-destructive bg-destructive/10 p-4 mb-6"
+              data-testid="signin-failed"
+            >
+              <p className="text-sm text-foreground">
+                Sign-in failed. Try again or use another method.
+              </p>
+            </div>
+          )}
+          {hasPreFormUi(authUi) && (
+            <div className="mb-6">
+              <AuthUiExtras authUi={authUi} />
+            </div>
+          )}
           <FormProvider {...form}>
             <form
               onSubmit={e => {
@@ -332,12 +385,9 @@ export function Login() {
               </Button>
             </form>
           </FormProvider>
-          {(authUi.providers.length > 0 ||
-            authUi.slots.beforeForm.length > 0 ||
-            authUi.slots.afterForm.length > 0 ||
-            authUi.slots.branding.length > 0) && (
+          {authUi.slots.afterForm.length > 0 && (
             <div className="mt-6">
-              <AuthUiExtras authUi={authUi} />
+              <AuthUiExtrasAfter authUi={authUi} />
             </div>
           )}
           <div className="mt-8 text-left">

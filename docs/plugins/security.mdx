@@ -1,0 +1,145 @@
+---
+title: Plugin security
+description: What a plugin can reach, what it must declare, and where the boundaries actually are.
+---
+
+# Plugin security
+
+## Plugins are trusted code
+
+A Nextly plugin runs in your application's own process, with your database
+connection and your file system. It is not sandboxed, and nothing in this page
+should be read as though it were.
+
+That is worth saying plainly, because the features below — declared
+capabilities, a restricted `fetch`, an allowlisted audit surface — look like a
+sandbox and are not one. A plugin that wanted to bypass any of them could
+import Node's modules directly, and nothing would stop it.
+
+**Installing a plugin is the security decision.** Treat it the way you would
+treat adding a dependency that runs on your server, because that is what it is.
+
+## What the manifest is for, then
+
+A manifest makes a plugin's reach **legible before you install it**. Instead of
+reading its source to find out whether it calls an external service, you read
+what it declared:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+
+export default definePlugin({
+  name: "@acme/auth",
+  version: "1.0.0",
+  nextly: ">=0.1.0",
+  capabilities: {
+    net: { outbound: ["accounts.google.com", "*.googleapis.com"] },
+    secrets: ["providers.*.clientSecret"],
+  },
+  provides: ["auth-provider"],
+  requires: { "webhook-signing": ">=2.0.0" },
+});
+```
+
+The runtime holds the plugin to what it declared, for the things it can:
+`ctx.fetch` reaches only those hosts, the settings store encrypts exactly those
+keys, and a capability the plugin did not declare gives it no API at all. An
+invalid manifest fails boot with the plugin named, rather than becoming a
+surface that quietly does not exist.
+
+## Outbound requests
+
+`ctx.fetch` exists only for a plugin that declared `capabilities.net.outbound`.
+
+A hostname allowlist on its own does not prevent server-side request forgery: a
+name the plugin declared can resolve to an address inside your network, and can
+resolve differently on the second lookup than it did on the check. So the
+decision is made about the resolved **address**, and the request is sent to the
+address that was vetted rather than to the name again.
+
+Refused by construction:
+
+- anything that is not `https:` (`http:` to `localhost` is allowed outside
+  production, so a fake provider can be used in tests);
+- a host not on the allowlist, matched on whole labels — `*.example.com` covers
+  `a.example.com` and not `example.com.evil.com`;
+- private, loopback, link-local, carrier-NAT, benchmark, multicast and reserved
+  addresses, including `169.254.169.254`, which on most cloud providers answers
+  with the instance's own credentials;
+- the IPv6 ways of writing those — IPv4-mapped, IPv4-compatible, NAT64 and
+  6to4 are each judged as the IPv4 address they carry;
+- a name that answers with one public address and one internal one;
+- a redirect to anything the rules above refuse — each hop is re-checked;
+- more than three redirects, a response over 10 MB, or 30 seconds.
+
+## Route protections
+
+A plugin route can ask for the same protections core's own routes have:
+
+```ts
+{
+  method: "POST",
+  path: "/callback",
+  rateLimit: "auth",   // the per-IP auth limit, in this plugin's own bucket
+  csrf: true,          // for cookie-authenticated callers on unsafe methods
+  rawBody: true,       // the exact bytes, for a signed webhook
+  noStore: true,       // never cached
+}
+```
+
+Two things are worth knowing. `csrf` applies only to **cookie**-authenticated
+callers: a browser cannot attach an API key cross-site, so there is no
+cross-site request to forge. And `rateLimit: "auth"` uses core's limit and
+window in a bucket namespaced to the plugin, so one plugin's traffic cannot
+exhaust the budget protecting another's — or core's login.
+
+Declaring `csrf` on a `public` route fails boot. A public route has no cookie
+identity to protect, and accepting the combination would advertise a protection
+that is not there.
+
+## Secrets
+
+Settings keys named in `capabilities.secrets` are encrypted at rest with your
+`NEXTLY_SECRET`, and read back through the generations in
+`NEXTLY_SECRET_PREVIOUS`, so rotating the secret does not break stored
+credentials.
+
+A secret path may be nested and may use `*` to cover every key of a record:
+`providers.*.clientSecret` encrypts each provider's secret while leaving its
+client id readable in the same stored value.
+
+**A secret is never returned to the browser.** The admin API answers with
+`{ set: true }` or `{ set: false }`, which is what an operator needs in order to
+decide whether to replace it. A path declared as a secret that the settings
+schema does not contain fails boot, because silently storing a credential in
+plain text is the worst way for that mistake to land.
+
+## The audit trail
+
+`ctx.audit.write` records only kinds the plugin declared, namespaced under its
+own slug, so one plugin cannot write rows that read as another's — or as core's.
+Metadata keys are allowlisted per kind, values that look like credentials are
+dropped, and long strings are not stored.
+
+The restriction exists because audit rows are retained and some of them
+deliberately name nobody, which means nothing links them to a person and no
+later deletion can find them. What can enter has to be bounded rather than left
+to each plugin.
+
+## Finishing a login
+
+A plugin that authenticated someone elsewhere does not assemble a session
+itself. `ctx.auth.completeLogin` applies the same account-state rules, hooks and
+audit trail as a password login, so a plugin cannot grant a session core would
+have refused. See [plugin authentication](/docs/plugins/auth).
+
+## A checklist before installing
+
+- Read the manifest. Does what it declares match what the plugin says it does?
+- Does it ask for outbound hosts you recognise?
+- Does it ask for raw SQL (`capabilities.db.rawSql`)? Most plugins should not.
+- Does the source match the published package?
+- Is it maintained by someone you would give a database credential to?
+
+That last question is the real one. Everything above narrows what a mistake can
+reach; none of it narrows what a decision can.

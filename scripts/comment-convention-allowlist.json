@@ -1155,10 +1155,9 @@
     "digests": ["3dbce00600c3785d", "c643dd986b9518e4"]
   },
   "packages/nextly/src/services/users.ts": {
-    "count": 10,
+    "count": 9,
     "digests": [
       "02c7870b83bd1c45",
-      "21d9cf12d1b865cc",
       "509c8651c65f3f34",
       "592658a0b2045773",
       "9fe33c0125cf2c95",

@@ -37,10 +37,7 @@ import {
   roles as rolesSqlite,
   userRoles as userRolesSqlite,
 } from "../../../schemas/rbac/sqlite";
-import {
-  accounts as accountsSqlite,
-  users as usersSqlite,
-} from "../../../schemas/users/sqlite";
+import { users as usersSqlite } from "../../../schemas/users/sqlite";
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
 import { UserQueryService } from "../services/user-query-service";
 import { UserService } from "../services/user-service";
@@ -61,7 +58,6 @@ async function ddl(): Promise<string[]> {
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
       users: usersSqlite,
-      accounts: accountsSqlite,
       roles: rolesSqlite,
       userRoles: userRolesSqlite,
     })

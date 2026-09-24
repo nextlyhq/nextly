@@ -10,20 +10,29 @@
  * we use the database adapter directly.
  */
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
 import { getDialectTables } from "../../database/index";
 import type { NextlyServiceConfig } from "../../di/register";
-import { buildAuditLogWriter } from "../../domains/audit/audit-log-writer";
+import {
+  buildAuditLogWriter,
+  isStrategyName,
+} from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
 import { getHookRegistry } from "../../hooks/hook-registry";
 import { env } from "../../lib/env";
 import type { RateLimitStore } from "../../middleware/rate-limit";
-import { createPluginContext } from "../../plugins/plugin-context";
+import {
+  createPluginContext,
+  type PluginContext,
+} from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
 import { readProxyTrustSettings } from "../../utils/proxy-trust";
 import { verifyCredentials } from "../credentials/verify-credentials";
 import { ChallengeRegistry } from "../pipeline/challenge";
 import { AuthHookRegistry } from "../pipeline/hooks";
 import { createPasswordStrategy } from "../pipeline/password-strategy";
+import type { AuthHooks, ChallengeDefinition } from "../pipeline/types";
 
 import { aggregateAuthUi } from "./auth-ui";
 import type { AuthRouterDeps } from "./router";
@@ -97,6 +106,28 @@ export function buildAuthRouterDeps(
       const { eq } = await import("drizzle-orm");
       const result = await db
         .select()
+        .from(schema.users)
+        .where(eq(schema.users.id, userId))
+        .limit(1);
+      return result[0] || null;
+    },
+
+    fetchAccountState: async (userId: string) => {
+      // Errors propagate, like findUserById above: a swallowed DB error
+      // returning null would be read as "account unusable" and tear down a
+      // healthy session on a transient hiccup.
+      const adapter = getService("adapter");
+      const db = adapter.getDrizzle();
+      const schema = getDialectTables();
+      const { eq } = await import("drizzle-orm");
+      const result = await db
+        .select({
+          userId: schema.users.id,
+          isActive: schema.users.isActive,
+          lockedUntil: schema.users.lockedUntil,
+          emailVerified: schema.users.emailVerified,
+          mustChangePassword: schema.users.mustChangePassword,
+        })
         .from(schema.users)
         .where(eq(schema.users.id, userId))
         .limit(1);
@@ -429,34 +460,72 @@ export function buildAuthRouterDeps(
     },
   });
 
-  // Collect plugin contributes.auth (hooks + challenges) + app-config strategies.
-  const config = readServiceConfig(getService);
-  const authHooks = new AuthHookRegistry();
-  const challengeRegistry = new ChallengeRegistry();
-  for (const plugin of config?.plugins ?? []) {
-    const authContrib = plugin.contributes?.auth;
-    if (authContrib?.hooks) authHooks.add(authContrib.hooks);
-    for (const def of authContrib?.challenges ?? []) {
-      challengeRegistry.add(def);
-    }
-  }
-  const configStrategies = config?.auth?.strategies ?? [];
-
-  // Base plugin context for strategies/hooks (system-level; ctx.self empty).
-  // Auth hooks share this context in v1; per-plugin ctx.self resolution in auth
-  // hooks is a documented future refinement (the AuthHooks contract is unchanged).
+  // Base plugin-context resolver for the auth pipeline.
   //
   // createPluginContext resolves "db" as the drizzle instance (not a raw DI
   // service), so translate "db" → adapter.getDrizzle() the same way di/register
-  // does; everything else delegates to the container.
+  // does; everything else delegates to the container. The ADAPTER entry is
+  // what lets a plugin's own settings store transact on SQLite.
   const ctxGetService = ((name: string) => {
     if (name === "db") {
       const adapter = getService("adapter") as { getDrizzle: () => unknown };
       return adapter.getDrizzle();
     }
+    // Also not a DI service. The container registers the adapter, and the
+    // dialect is something it is asked for; a plugin's settings store picks
+    // its table metadata and its upsert spelling from this answer, and the
+    // restricted database handle it receives carries no dialect to infer one
+    // from.
+    if (name === "dialect") {
+      const adapter = getService("adapter") as {
+        getCapabilities: () => { dialect: SupportedDialect };
+      };
+      return adapter.getCapabilities().dialect;
+    }
+    if (name === "adapter") {
+      // The transaction-capable adapter, reached LAZILY like the handle:
+      // the context can be built before the database is connected.
+      return getService(name);
+    }
     return getService(name);
   }) as Parameters<typeof createPluginContext>[0];
   const pluginCtx = createPluginContext(ctxGetService, getHookRegistry());
+  // Collect plugin contributes.auth (hooks + challenges) + app-config
+  // strategies.
+  //
+  // ENABLED plugins only, so the runtime registries and the served auth UI
+  // are derived from one set. Registering a disabled plugin's hooks let its
+  // `afterAuthenticate` challenge fire on a successful login while the login
+  // page — which filters disabled plugins — had no view for it, leaving that
+  // login unfinishable until the plugin was removed or enabled.
+  const config = readServiceConfig(getService);
+  const authHooks = new AuthHookRegistry();
+  const challengeRegistry = new ChallengeRegistry();
+  for (const plugin of (config?.plugins ?? []).filter(
+    p => p.enabled !== false
+  )) {
+    const authContrib = plugin.contributes?.auth;
+    if (!authContrib) continue;
+    // Each contribution receives the OWNING plugin's context, not the
+    // system one: a hook that reads its plugin's settings, fetches through
+    // its declared hosts, or audits under its prefix needs exactly the
+    // surfaces every other lifecycle method of that plugin gets — a TOTP
+    // hook reading its encrypted secret from ctx.settings threw on a
+    // context whose `self` was empty and whose settings were absent.
+    const ownCtx = createPluginContext(
+      ctxGetService,
+      getHookRegistry(),
+      plugin
+    );
+    if (authContrib.hooks) {
+      authHooks.add(bindHooksToContext(authContrib.hooks, ownCtx));
+    }
+    for (const def of authContrib.challenges ?? []) {
+      challengeRegistry.add(bindChallengeToContext(def, ownCtx));
+    }
+  }
+  const configStrategies = config?.auth?.strategies ?? [];
+  assertConfiguredStrategyNames(configStrategies);
 
   return {
     ...base,
@@ -468,6 +537,35 @@ export function buildAuthRouterDeps(
     maxChallengeAttempts: 5,
     authUi: aggregateAuthUi(config?.plugins ?? []),
   };
+}
+
+/**
+ * Refuse an app-configured strategy whose name the audit trail cannot carry.
+ *
+ * The same rule `completeLogin` enforces on a plugin's own strategy, applied
+ * at boot to the config's. The rule is not stylistic: the audit writer admits
+ * a strategy to a row only when the name matches it, so a name with an
+ * uppercase letter or a dot authenticated normally while being silently
+ * omitted from every success row — the attribution this field exists to
+ * carry, missing on exactly the installs that configured a custom strategy.
+ * Failing the boot names the strategy and the rule where the operator is
+ * still reading configuration, rather than leaving a working login with no
+ * trail.
+ */
+export function assertConfiguredStrategyNames(
+  strategies: readonly { name: string }[]
+): void {
+  for (const strategy of strategies) {
+    if (!isStrategyName(strategy.name)) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "auth-strategy-name-invalid",
+          strategy: strategy.name,
+          rule: "lowercase letters, digits, :, _ or -; starts with a letter or digit; at most 64 characters",
+        },
+      });
+    }
+  }
 }
 
 /** Read the sanitized NextlyServiceConfig from the DI container, if present. */
@@ -579,7 +677,14 @@ function numberOr(value: unknown, fallback: number): number {
   return typeof value === "number" ? value : fallback;
 }
 
-function readAuthRateLimit(getService: (name: string) => unknown): {
+/**
+ * The configured per-IP auth limit.
+ *
+ * Exported so a plugin route opting into `rateLimit: "auth"` uses the same
+ * limit and window as core's, rather than a second set of numbers that can
+ * drift from it.
+ */
+export function readAuthRateLimit(getService: (name: string) => unknown): {
   requestsPerHour: number;
   windowMs: number;
   store?: RateLimitStore;
@@ -612,4 +717,42 @@ function readAuthRateLimit(getService: (name: string) => unknown): {
   } catch {
     return fallback;
   }
+}
+
+/**
+ * Bind every phase of a plugin's auth hooks to that plugin's context.
+ *
+ * The registries pass ONE context to whatever they invoke; the owning
+ * plugin's is the only correct one — `ctx.settings`, `ctx.fetch`,
+ * `ctx.audit` and `ctx.self` are per-plugin surfaces, and a hook reading
+ * its own encrypted settings through a system context threw on a `self`
+ * that was empty. Wrapping at registration keeps the registries and the
+ * AuthHooks contract untouched.
+ */
+export function bindHooksToContext(
+  hooks: AuthHooks,
+  ctx: PluginContext
+): AuthHooks {
+  const bound: Record<string, unknown> = {};
+  for (const [phase, fn] of Object.entries(hooks)) {
+    if (typeof fn !== "function") continue;
+    void phase;
+    // Every phase takes its arguments and receives the context LAST; the
+    // wrapper swaps whatever context the registry passes for the owning
+    // plugin's, so phases and contract stay untouched.
+    bound[phase] = (...args: unknown[]) =>
+      (fn as (...a: unknown[]) => unknown)(...args.slice(0, -1), ctx);
+  }
+  return bound;
+}
+
+/** Bind a plugin's challenge definition to that plugin's context. */
+export function bindChallengeToContext(
+  def: ChallengeDefinition,
+  ctx: PluginContext
+): ChallengeDefinition {
+  return {
+    id: def.id,
+    resolve: (args, _ctx) => def.resolve(args, ctx),
+  };
 }

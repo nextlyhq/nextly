@@ -293,6 +293,9 @@ export async function runMigrate(
 
     // Operator-set override; never in CI config (spec §4.6.1).
     const allowCoreDestructive = process.env.NEXTLY_ALLOW_CORE_DESTRUCTIVE === "1"; // prettier-ignore
+    // Separate flag, because losing rows is a different decision from
+    // accepting a schema change; read here so both live at the same edge.
+    const allowDropNonEmptyRetired = process.env.NEXTLY_DROP_NONEMPTY_RETIRED === "1"; // prettier-ignore
 
     const dz = adapter as unknown as DrizzleAdapter & {
       tableExists: (n: string) => Promise<boolean>;
@@ -322,6 +325,7 @@ export async function runMigrate(
         // resolve.
         knownJunctions: resolvedSchema.knownJunctions,
         allowDestructive: allowCoreDestructive,
+        allowDropNonEmptyRetired,
         ensureLedger: async () => {
           if (!(await dz.tableExists("nextly_schema_events"))) {
             for (const stmt of getSchemaEventsDdl(dialect)) {
@@ -431,6 +435,14 @@ export interface MigrateCoreDeps {
   ttlSeconds?: number;
   isSettled?: () => Promise<boolean>;
   allowDestructive?: boolean;
+  /**
+   * NEXTLY_DROP_NONEMPTY_RETIRED=1: also drop a retired table holding rows.
+   *
+   * Read at the CLI edge and threaded, like `allowDestructive`, rather than
+   * read here — a core that consults the environment cannot be tested for the
+   * other answer.
+   */
+  allowDropNonEmptyRetired?: boolean;
   ensureLedger?: () => Promise<void>;
   step?: number;
   reconcileCoreFn?: typeof reconcileCore;
@@ -625,6 +637,20 @@ export async function migrateCore(
         dialect: deps.dialect,
         getDrizzle: <T>() => deps.db as T,
       });
+      // DETECTED rather than asserted. Not every caller builds a full adapter:
+      // the dev-boot path wraps the Drizzle adapter in a small object carrying
+      // `executeQuery` and nothing else, so a cast to a shape with
+      // `tableExists` produced a call on `undefined` — a TypeError the boot
+      // handler catches, which silently skipped the whole migration phase. The
+      // cleanup already reports itself as skipped when these are absent, so
+      // omitting them degrades to a note instead of a crash.
+      const retiredOps = deps.adapter as unknown as {
+        tableExists?: (table: string) => Promise<boolean>;
+        executeQuery?: (sql: string) => Promise<unknown>;
+      };
+      const canDropRetired =
+        typeof retiredOps.tableExists === "function" &&
+        typeof retiredOps.executeQuery === "function";
       const r = await reconcile({
         db: deps.db,
         dialect: deps.dialect,
@@ -634,6 +660,36 @@ export async function migrateCore(
           warn: m => deps.logger.warn(m),
         },
         allowDestructive: deps.allowDestructive,
+        ...(deps.allowDropNonEmptyRetired === true
+          ? { allowDropNonEmptyRetired: true }
+          : {}),
+        // The operations the retired-table drop needs. Without them the
+        // cleanup returned at its first guard, so the documented
+        // NEXTLY_ALLOW_CORE_DESTRUCTIVE flow dropped nothing and said nothing.
+        // Passed as a group: half of them is not a usable cleanup, and the
+        // guard reads their absence as "this caller is not asking for it".
+        ...(canDropRetired
+          ? {
+              tableExists: (table: string) =>
+                (retiredOps.tableExists as (t: string) => Promise<boolean>)(
+                  table
+                ),
+              countRows: async (
+                database: unknown,
+                d: SupportedDialect,
+                table: string
+              ) => {
+                const { countRows } = await import(
+                  "../../domains/schema/pipeline/classifier/count-helpers"
+                );
+                return countRows(database, d, table);
+              },
+              executeSql: (sql: string) =>
+                (retiredOps.executeQuery as (s: string) => Promise<unknown>)(
+                  sql
+                ),
+            }
+          : {}),
         ensureLedger: deps.ensureLedger,
       });
       coreChanged = r.changed;

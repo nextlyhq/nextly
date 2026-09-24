@@ -222,4 +222,6 @@ export type SanitizationConfigInput = z.infer<typeof SanitizationConfigSchema>;
 export type SecurityLimitsConfigInput = z.infer<
   typeof SecurityLimitsConfigSchema
 >;
-export type AuthRateLimitConfigInput = z.infer<typeof AuthRateLimitConfigSchema>;
+export type AuthRateLimitConfigInput = z.infer<
+  typeof AuthRateLimitConfigSchema
+>;

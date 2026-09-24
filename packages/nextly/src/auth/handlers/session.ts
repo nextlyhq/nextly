@@ -231,6 +231,10 @@ async function attemptDevAutoLogin(
     );
   }
 
+  // The shared account-state gate does not run on this path. It mints a
+  // session directly rather than through `issueSession`, and it is hard-blocked
+  // in production above, so the only accounts it can reach are ones a developer
+  // named in their own config.
   const [roleIds, customFields] = await Promise.all([
     deps.fetchRoleIds(user.id),
     deps.fetchCustomFields(user.id),

@@ -164,15 +164,33 @@ async function runCoreSchemaChecks(
   // is what decides whether there is anything to count — asking a table that
   // no longer has it would be the error this check exists to avoid causing.
   const carrying = findRetiredAccessRulesColumns(live);
-  if (carrying.length === 0) return;
-  const found = await countRetiredAccessRules(
+  if (carrying.length > 0) {
+    const found = await countRetiredAccessRules(
+      adapter.getDrizzle(),
+      adapter.dialect,
+      carrying,
+      { countNulls, countRows }
+    );
+    if (found.length > 0) {
+      logger.warn(formatRetiredAccessRulesWarning(found));
+    }
+  }
+
+  // Asked of the database directly rather than read off the snapshot above:
+  // these tables are no longer core, so `getCoreTableNames` does not name them
+  // and the introspection never looked for them.
+  const { findRetiredAuthTables, formatRetiredAuthTablesWarning } =
+    await import("./retired-auth-tables");
+  const retiredAuth = await findRetiredAuthTables(
     adapter.getDrizzle(),
     adapter.dialect,
-    carrying,
-    { countNulls, countRows }
+    {
+      tableExists: (table: string) => adapter.tableExists(table),
+      countRows,
+    }
   );
-  if (found.length > 0) {
-    logger.warn(formatRetiredAccessRulesWarning(found));
+  if (retiredAuth.length > 0) {
+    logger.warn(formatRetiredAuthTablesWarning(retiredAuth));
   }
 }
 
