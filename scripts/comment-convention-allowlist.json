@@ -39,10 +39,6 @@
     "count": 1,
     "digests": ["4466be5c8d0ef87e"]
   },
-  ".github/workflows/secret-scan.yml": {
-    "count": 2,
-    "digests": ["7aab1e73e1bbee0b", "abe25d9f5bce2423"]
-  },
   "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx": {
     "count": 2,
     "digests": ["69eafeb47e136856", "92043ca6e49d929a"]

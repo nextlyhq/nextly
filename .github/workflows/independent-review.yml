@@ -1,10 +1,9 @@
 name: Independent review
 
 # The merge queue lands a pull request only when a model from a different
-# family than the one that wrote it has reviewed the exact revision it lands:
-# Codex, or, when Codex is held up by a rate or quota limit, the Nextly review
-# bot. `scripts/independent-review.mjs` carries the rule and the evidence it
-# accepts.
+# family than the one that wrote it has reviewed the exact revision it lands.
+# `scripts/independent-review.mjs` carries the rule, the reviewers it accepts
+# and the evidence it reads.
 #
 # It decides in the queue, where the reviews a pull request is going to get
 # have had their chance to arrive. On a pull request the job is skipped, which

@@ -24,6 +24,7 @@ const QUEUE_CHECKS = {
   ".github/workflows/integration.yml": ["Integration (postgres)", "Integration (mysql)", "Integration (sqlite)"],
   ".github/workflows/pr-title.yml": ["Validate PR title follows Conventional Commits"],
   ".github/workflows/independent-review.yml": ["Independent review of the revision being merged"],
+  ".github/workflows/secret-scan.yml": ["gitleaks"],
 };
 
 describe("every workflow behind a required check, in the merge queue", () => {
@@ -76,6 +77,22 @@ describe("the changeset check in the queue", () => {
     expect(step.env.QUEUE_BASE).toBe("${{ github.event.merge_group.base_sha }}");
     expect(step.run).toMatch(/git diff --name-only --diff-filter=ACMRT "\$base" HEAD/);
     expect(step.run).toMatch(/base="\$QUEUE_BASE"/);
+  });
+});
+
+describe("the secret scan in the queue", () => {
+  /*
+   * A group's head holds every member's commits, so the scan reads the whole
+   * range from the queue's base. A range from the head's parent would scan the
+   * last member only and pass the others unread.
+   */
+  it("scans every commit from the queue's base to its head", () => {
+    const step = read(".github/workflows/secret-scan.yml").jobs.gitleaks.steps.find(candidate => candidate.name === "Run gitleaks on the commits this run adds");
+    expect(step.env.QUEUE_BASE).toBe("${{ github.event.merge_group.base_sha }}");
+    expect(step.env.QUEUE_HEAD).toBe("${{ github.event.merge_group.head_sha }}");
+    expect(step.run).toMatch(/merge_group\)[^;]*RANGE="\$\{QUEUE_BASE\}\.\.\$\{QUEUE_HEAD\}"/);
+    // The command spans lines joined by a trailing backslash; the range is one of its options.
+    expect(step.run).toMatch(/gitleaks detect(?:[^\n]*\\\n)*[^\n]*--log-opts="\$RANGE"/);
   });
 });
 
