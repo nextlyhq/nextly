@@ -58,29 +58,47 @@ function makeCtx(plugin?: unknown) {
 
 describe("createPluginContext (P1 reshape)", () => {
   it("exposes db and logger at the top level", () => {
-    const { ctx, db, logger } = makeCtx();
-    // `ctx.db` is the typed surface; the raw handle it used to BE is
-    // preserved at `.raw` so existing plugins keep working — and a plugin
-    // that did not declare `db.rawSql` gets only the fluent methods, so
+    const { ctx, logger } = makeCtx();
+    // `ctx.db` is the typed, owner-checked surface; the raw handle it used
+    // to BE is preserved at `.raw` as a RESTRICTED wrapper — a plugin that
+    // did not declare `db.rawSql` gets only the fluent methods there, so
     // `execute` and `run` are not reachable however the plugin is written.
-    expect(ctx.db.raw).toBe(db);
+    expect(ctx.db.raw).toBeDefined();
     expect(typeof ctx.db.table).toBe("function");
     expect(
       (Object.keys(ctx.db) as string[]).filter(k => k !== "raw").sort()
-    ).toEqual(["delete", "insert", "select", "table", "update"]);
+    ).toEqual([
+      "delete",
+      "insert",
+      "insertReturning",
+      "query",
+      "select",
+      "table",
+      "transaction",
+      "update",
+    ]);
+    // The restriction applies to the escape hatch too: the raw handle a
+    // plugin without rawSql receives carries only the fluent four.
+    expect(Object.keys(ctx.db.raw as object).sort()).toEqual([
+      "delete",
+      "insert",
+      "select",
+      "update",
+    ]);
     expect(ctx.logger).toBe(logger);
   });
 
   it("hands the live instance to a plugin that declared rawSql", () => {
     // The control: a wrapper applied unconditionally would make the declared
-    // capability buy nothing.
+    // capability buy nothing. With rawSql declared, the raw escape hatch IS
+    // the live instance the resolver handed over.
     const { ctx, db } = makeCtx({
       name: "@test/raw",
       version: "1.0.0",
       nextly: "*",
       capabilities: { db: { rawSql: true } },
     });
-    expect(ctx.db).toBe(db);
+    expect(ctx.db.raw).toBe(db);
   });
 
   it("checks a filter payload against the schema its point declared", async () => {
