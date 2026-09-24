@@ -10,6 +10,7 @@
  * on, so the shape is checked here, before it is.
  */
 import { readFileSync } from "node:fs";
+import { isBuiltin } from "node:module";
 
 import { load } from "js-yaml";
 import { describe, expect, it } from "vitest";
@@ -178,7 +179,32 @@ describe("the independent-review gate", () => {
     expect(Object.values(job.permissions)).toEqual(["read", "read", "read"]);
     expect(job.steps.at(-1).run).toBe("node scripts/independent-review.mjs");
   });
+
+  // The job installs no packages, so everything the script loads has to be
+  // Node's own or a file of this repository's. A package import would pass
+  // every test here, where the packages are installed, and fail in the queue.
+  it("runs a script that loads nothing the job does not install", () => {
+    expect(job.steps.some(step => /\binstall\b/.test(String(step.run)))).toBe(false);
+    expect(packageImports(new URL("./independent-review.mjs", import.meta.url))).toEqual([]);
+  });
 });
+
+const IMPORTED = /^\s*(?:import|export)\s[^;]*?\sfrom\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/gm;
+
+/** The specifiers a module names in its static and literal dynamic imports. */
+function specifiersOf(url) {
+  return [...readFileSync(url, "utf8").matchAll(IMPORTED)].map(match => match.slice(1).find(Boolean));
+}
+
+/** The package specifiers a module reaches through its relative imports, however deep. */
+function packageImports(url, seen = new Set()) {
+  if (seen.has(url.href)) return [];
+  seen.add(url.href);
+  return specifiersOf(url).flatMap(specifier => {
+    if (specifier.startsWith(".")) return packageImports(new URL(specifier, url), seen);
+    return isBuiltin(specifier) ? [] : [specifier];
+  });
+}
 
 describe("the title check's permissions", () => {
   const workflow = read(".github/workflows/pr-title.yml");

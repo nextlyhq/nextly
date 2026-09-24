@@ -106,7 +106,11 @@ async function getJson(path, { token, fetchImpl }) {
   return response.json();
 }
 
-/** Every page of a list, kept as pages; a list longer than the ceiling is refused rather than cut short. */
+/**
+ * Every page of a list, kept as pages. A list longer than the ceiling is
+ * refused rather than cut short; a full last page may be the whole list, so
+ * only an item past the ceiling refuses it.
+ */
 async function getPages(path, context) {
   const pages = [];
   for (let page = 1; page <= MAX_PAGES; page += 1) {
@@ -114,7 +118,9 @@ async function getPages(path, context) {
     pages.push(items);
     if (items.length < 100) return pages;
   }
-  throw new Error(`GET ${path}: more than ${MAX_PAGES * 100} items`);
+  const beyond = await getJson(`${path}?per_page=100&page=${MAX_PAGES + 1}`, context);
+  if (beyond.length > 0) throw new Error(`GET ${path}: more than ${MAX_PAGES * 100} items`);
+  return pages;
 }
 
 async function evidenceFor(number, context) {

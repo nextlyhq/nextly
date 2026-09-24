@@ -133,7 +133,9 @@ describe("the command", () => {
     const routes = {};
     for (const number of [11, 12]) {
       routes[`repos/o/r/pulls/${number}`] = { head: { sha: heads[number] }, commits: 1 };
-      routes[`repos/o/r/pulls/${number}/reviews?per_page=100&page=1`] = reviewsFor(number, heads[number]);
+      pagesOf(reviewsFor(number, heads[number])).forEach((page, index) => {
+        routes[`repos/o/r/pulls/${number}/reviews?per_page=100&page=${index + 1}`] = page;
+      });
       routes[`repos/o/r/issues/${number}/comments?per_page=100&page=1`] = [];
       routes[`repos/o/r/pulls/${number}/commits?per_page=100&page=1`] = [{ sha: heads[number] }];
       routes[`repos/o/r/issues/${number}/timeline?per_page=100&page=1`] = [];
@@ -144,6 +146,13 @@ describe("the command", () => {
     };
     const env = { GITHUB_EVENT_NAME: "merge_group", GITHUB_EVENT_PATH: event, GITHUB_REPOSITORY: "o/r" };
     return { env, deps: { git: args => readGit(args, { cwd: repo }), fetchImpl } };
+  }
+
+  /** A list as the API pages it: 100 to a page, and an empty page after a full one. */
+  function pagesOf(items) {
+    const pages = [];
+    for (let start = 0; start <= items.length; start += 100) pages.push(items.slice(start, start + 100));
+    return pages;
   }
 
   const printed = () => console.log.mock.calls.map(call => call.join(" ")).join("\n");
@@ -166,6 +175,15 @@ describe("the command", () => {
     const unreadable = queueOf(() => []);
     expect(await main(unreadable.env, { ...unreadable.deps, fetchImpl: async () => ({ ok: false, status: 500 }) })).toBe(1);
     expect(printed()).toMatch(/Could not read the queued pull requests' reviews: GET repos\/o\/r\/pulls\/1[12]: HTTP 500/);
+  });
+
+  it("reads a list that exactly fills the page ceiling, and refuses one past it", async () => {
+    const withFiller = count => (number, head) => [...Array.from({ length: count }, () => codexReview(OLD)), codexReview(head)];
+    const full = queueOf(withFiller(999));
+    expect(await main(full.env, full.deps)).toBe(0);
+    const past = queueOf(withFiller(1000));
+    expect(await main(past.env, past.deps)).toBe(1);
+    expect(printed()).toMatch(/GET repos\/o\/r\/pulls\/1[12]\/reviews: more than 1000 items/);
   });
 
   it("decides only in the queue, even over a queue whose every member was reviewed", async () => {

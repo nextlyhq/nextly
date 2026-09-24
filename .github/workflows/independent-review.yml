@@ -8,6 +8,11 @@ name: Independent review
 # It decides in the queue, where the reviews a pull request is going to get
 # have had their chance to arrive. On a pull request the job is skipped, which
 # is a result the queue can be entered with; the queue is where this is held.
+#
+# It runs the queue base's copy of the script, so no queued change judges its
+# own review. It follows that the check can be made required only once this
+# workflow and its script are on `main`: before that, a base without them fails
+# the job.
 on:
   pull_request:
     branches: [main]
