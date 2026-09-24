@@ -7,11 +7,11 @@
  * A change is reviewed by a model from a different family than the one that
  * wrote it. The standing reviewer is Codex, a GPT model; when it is held up by
  * a rate or quota limit it is substituted, never skipped, by the Nextly review
- * bot, a GLM model run on request (`@nextly-bot review`). Both differ from
- * Claude, which writes this repository's agent changes, so a review of the
- * head by either is independent of such a change. A change written by a GPT
- * model would need the review bot, and nothing may record who wrote a change,
- * so this cannot tell; it says so here rather than implying it can.
+ * bot, a GLM model run on request (`@nextly-bot review`). A change from any
+ * other family is independent of both; one from either family needs the
+ * other. Nothing records which model wrote a change, so this accepts either
+ * reviewer and cannot tell those cases apart; it says so here rather than
+ * implying it can.
  *
  * Coverage means the revision being merged: a review of an earlier head, or
  * one made before the base last moved, read a different diff. The Codex half is
