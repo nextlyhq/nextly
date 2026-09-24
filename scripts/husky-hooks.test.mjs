@@ -170,6 +170,23 @@ describe("the pre-push hook specifically", () => {
     expect(buildAt).toBeLessThan(typesAt);
   });
 
+  it("lints AFTER the build, which is what lets a fresh checkout pass", async () => {
+    /*
+     * `import-x/no-unresolved` and every type-aware rule resolve a workspace
+     * import through the sibling's `dist`. Linting first refused every push
+     * from a checkout that had never been built — 16 of 23 lint tasks, all on
+     * unresolved imports — and a new worktree is exactly that checkout.
+     */
+    const source = shellCode(await hook("pre-push"));
+
+    const buildAt = source.search(/^\s*pnpm run build\b/m);
+    const lintAt = source.search(/^\s*pnpm turbo lint\b/m);
+
+    expect(buildAt).toBeGreaterThan(-1);
+    expect(lintAt).toBeGreaterThan(-1);
+    expect(buildAt).toBeLessThan(lintAt);
+  });
+
   it("records what is uncommitted BEFORE the first gate runs", async () => {
     /*
      * Every gate here runs against the working tree while Git pushes HEAD, so

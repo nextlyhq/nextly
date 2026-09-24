@@ -3,10 +3,9 @@
 # Skip in CI. The release workflow does an internal `git push` (via
 # `changesets/action`) when it commits version bumps; CI's `ci.yml`
 # already runs the same lint+build validation as a separate gated step.
-# Running them again here is redundant and broke the release flow:
-# `pnpm turbo lint` runs *before* `pnpm run build` in this hook, so
-# in CI (where the turbo cache is fresh) lint can't resolve workspace
-# package imports until build has produced the dist outputs.
+# Running them again here is redundant, and it once broke the release flow:
+# this hook linted before it built, and on CI's fresh tree lint could not
+# resolve workspace package imports with no dist outputs to resolve to.
 #
 # Local pushes still get the full pre-push validation.
 if [ -n "$CI" ]; then
@@ -127,9 +126,15 @@ pnpm lint:design
 pnpm lint:workspace
 pnpm lint:scripts
 
+# The build BEFORE lint, for the reason the typecheck below follows it.
+# `import-x/no-unresolved` and every type-aware rule resolve a workspace import
+# through the sibling's `dist`, so lint on an unbuilt tree reports the missing
+# build rather than the diff. Linting first refused every push from a checkout
+# that had never been built — 16 of 23 lint tasks, all on unresolved imports —
+# and a new `pnpm worktree` checkout is exactly that.
+pnpm run build
 pnpm turbo lint --continue \
   --filter='./packages/*'
-pnpm run build
 
 # Types AFTER the build, and over every package rather than the changed ones.
 #
