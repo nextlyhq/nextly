@@ -81,6 +81,13 @@ export interface ExtensionColumn {
   hidden?: boolean;
 
   /**
+   * Who CONTRIBUTED this hidden column to a table another owner declared —
+   * set only for foreign-table contributions, and what the per-element owner
+   * rows are written from.
+   */
+  contributedBy?: SchemaOwner;
+
+  /**
    * Documentation-only target of a reference column.
    *
    * Never a database constraint: `IndexSpec` cannot express a foreign key and

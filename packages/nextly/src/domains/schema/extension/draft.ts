@@ -315,13 +315,28 @@ function addColumns(
 ): void {
   if (!columns || Object.keys(columns).length === 0) return;
 
-  assertMayAddColumns(targetOf(table, scope), table.name, scope.owner);
+  // Same foreign-contribution rule as indexes: the app anywhere, a plugin on
+  // a declared dependency's tables. The column is hidden either way, so the
+  // entry API never sees it, and per-element rows name the contributor.
+  const pluginOnDependencyTable =
+    scope.owner.kind === "plugin" &&
+    table.owner.kind === "plugin" &&
+    (scope.mayIndexForeignTablesOf?.has(table.owner.id) ?? false);
+  assertMayAddColumns(
+    targetOf(table, scope),
+    table.name,
+    scope.owner,
+    pluginOnDependencyTable
+  );
 
   // Reuse the DSL so an extension column is validated exactly as a declared
   // one: the snake-casing and the per-column rules are the same question, and
   // asking it twice is how the two answers drift.
   const resolved = defineTable(table.name, columns);
   const onSomeoneElsesTable = !scope.isOwn;
+  const contributedForeign =
+    (scope.owner.kind === "app" && table.owner.kind === "plugin") ||
+    pluginOnDependencyTable;
 
   for (const column of resolved.columns) {
     if (table.columns.some(existing => existing.name === column.name)) {
@@ -336,7 +351,13 @@ function addColumns(
     if (onSomeoneElsesTable) {
       assertAddableToExistingRows(column, table.name);
     }
-    table.columns.push({ ...column, hidden: onSomeoneElsesTable });
+    table.columns.push({
+      ...column,
+      hidden: onSomeoneElsesTable,
+      ...(contributedForeign
+        ? { contributedBy: scope.owner as SchemaOwner }
+        : {}),
+    });
   }
 }
 

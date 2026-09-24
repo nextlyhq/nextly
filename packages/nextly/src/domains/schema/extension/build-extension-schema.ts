@@ -179,6 +179,19 @@ export async function buildExtensionSchema(
       });
       elementOwners.set(table.name, list);
     }
+    // Hidden columns a foreign contributor added, element-recorded the same
+    // way: the column rides the contributor's stream, and the table owner's
+    // reconcile excludes it.
+    for (const column of table.columns) {
+      if (column.contributedBy === undefined) continue;
+      const list = elementOwners.get(table.name) ?? [];
+      list.push({
+        elementKind: "column",
+        elementName: column.name,
+        owner: column.contributedBy,
+      });
+      elementOwners.set(table.name, list);
+    }
   }
 
   // Relation edges for the registry: keys snake-cased at declaration, targets

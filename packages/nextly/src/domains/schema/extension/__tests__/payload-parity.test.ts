@@ -396,9 +396,46 @@ describe("row 15 — extend core system tables", () => {
 });
 
 describe("row 16 — the app extending a plugin's tables", () => {
-  it.todo(
-    "C: per-element ownership decides what each owner may read and change"
-  );
+  it("C: per-element ownership decides what each owner may read and change", async () => {
+    // The app may add COLUMNS and INDEXES to any plugin's table; a plugin,
+    // only to a declared dependency's. Every contributed element is recorded
+    // per element — the contributor's migration stream carries it, and the
+    // table owner's reconcile excludes it (the C7 adoption property).
+    const { col, defineTable } = await import("../dsl");
+    const notes = defineTable("r16notes", { id: col.id(), tag: col.shortText() });
+    const built = await buildExtensionSchema(
+      input({
+        app: {
+          owner: { kind: "app" as const },
+          extend: [
+            ({ schema }) => {
+              schema.extendTable("fx__notes", {
+                columns: { appId: col.shortText({ nullable: true }) },
+                indexes: [{ columns: ["app_id"], name: "idx_r16_app" }],
+              });
+            },
+          ],
+        },
+      })
+    );
+    // On the base fixture's fx__notes table: both elements recorded to app.
+    expect(built.elementOwners.get("fx__notes")).toEqual([
+      {
+        elementKind: "index",
+        elementName: "idx_r16_app",
+        owner: { kind: "app" },
+      },
+      {
+        elementKind: "column",
+        elementName: "app_id",
+        owner: { kind: "app" },
+      },
+    ]);
+    // And the column is hidden from the entry API, the index in the spec.
+    const spec = built.specs.find(t => t.name === "fx__notes");
+    expect(spec?.columns.map(c => c.name)).toContain("app_id");
+    expect(spec?.indexes?.map(i => i.name)).toContain("idx_r16_app");
+  });
 });
 
 describe("row 17 — appears in migrations", () => {

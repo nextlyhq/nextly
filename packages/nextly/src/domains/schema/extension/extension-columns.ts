@@ -93,7 +93,9 @@ export function assertAddableToExistingRows(
 export function assertMayAddColumns(
   target: ExtensionTarget,
   tableName: string,
-  caller: SchemaOwner
+  caller: SchemaOwner,
+  /** Precomputed by the caller's scope: plugin-on-dependency. */
+  mayContributeForeign = false
 ): void {
   const who = caller.kind === "plugin" ? `plugin "${caller.id}"` : "the app";
 
@@ -115,12 +117,19 @@ export function assertMayAddColumns(
       break;
 
     case "foreign":
-      // Element-level ownership arrives in C7. Until then a table another
-      // owner declared is theirs alone, because nothing yet records which
-      // migration stream would carry the added column.
+      // Element-level ownership (C7): the column is hidden from the entry
+      // API and rides the CONTRIBUTOR's migration stream, recorded per
+      // element — so the app may extend any plugin's table, and a plugin a
+      // dependency's, the same way either may index one.
+      if (
+        mayContributeForeign ||
+        (caller.kind === "app" && target.owner.kind === "plugin")
+      ) {
+        return;
+      }
       refuse(
         `${tableName}`,
-        `${who} may not add columns to "${tableName}", which belongs to ${target.owner.kind === "plugin" ? `plugin "${target.owner.id}"` : "the app"}.`
+        `${who} may not add columns to "${tableName}", which belongs to ${target.owner.kind === "plugin" ? `plugin "${target.owner.id}"` : "the app"}.${caller.kind === "plugin" ? " Name the owner in dependsOn (or optionalDependsOn) to extend its tables." : ""}`
       );
   }
 }
