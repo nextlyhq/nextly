@@ -388,7 +388,37 @@ describe("row 10 — enums", () => {
     expect(row.state).toBe("open");
   });
 
-  it.todo("C8: the enum lifecycle — create, add value, refused removal");
+  it("C8: the enum lifecycle — create, add value, refused removal", async () => {
+    const { removedEnumValues } = await import("../enum-check");
+    const orders = (values: readonly string[]) => ({
+      name: "fx__orders",
+      authored: "orders",
+      owner: { kind: "plugin" as const, id: "fx" },
+      columns: defineTable("orders", {
+        id: col.id(),
+        state: col.enum(values as [string, ...string[]]),
+      }).columns.map(c => ({ ...c })),
+      indexes: [],
+    });
+
+    const checkSql = (values: readonly string[]): string =>
+      toTableSpec(orders(values), "postgresql").checks?.[0]?.sql ?? "";
+
+    // CREATE: the values are enforced, on every dialect, by the one mechanism
+    // all three have. Payload reaches `pgEnum` and stops at PostgreSQL.
+    const created = checkSql(["open"]);
+    expect(created).toBe("state IN (\'open\')");
+
+    // ADD VALUE: an ordinary check change, which the diff already turns into
+    // drop_check + add_check with no new machinery.
+    const widened = checkSql(["open", "closed"]);
+    expect(removedEnumValues(created, widened)).toEqual([]);
+
+    // REFUSED REMOVAL: the database refuses a CHECK an existing row violates,
+    // and this names the value so the error is usable. The live half — a row
+    // holding "closed" making the apply fail — is in the Postgres lane.
+    expect(removedEnumValues(widened, created)).toEqual(["closed"]);
+  });
 });
 
 describe("row 11 — any Drizzle column type", () => {
@@ -693,7 +723,29 @@ describe("row 23 — client-supplied id on create", () => {
 });
 
 describe("row 24 — a Postgres schema other than public", () => {
-  it.todo("C: a collection resolves to a Postgres schema other than public");
+  it("C: a collection resolves to a Postgres schema other than public", async () => {
+    const {
+      resolvePostgresSchema,
+      setActivePostgresSchema,
+      activePostgresSchema,
+      clearActivePostgresSchema,
+    } = await import("../../services/postgres-schema");
+
+    // One resolution, published once: the adapter applies it as `search_path`
+    // and drizzle-kit filters introspection by it. Payload reaches the same
+    // place through `schemaName`; the difference is that here the lock row and
+    // the ledger follow the path too, because they are ordinary tables.
+    try {
+      setActivePostgresSchema(resolvePostgresSchema("cms", "postgresql"));
+      expect(activePostgresSchema()).toBe("cms");
+    } finally {
+      clearActivePostgresSchema();
+    }
+
+    // The live half — a fresh install creating everything in `cms` and nothing
+    // in `public`, and two apps sharing one database — needs a real server and
+    // lives in the Postgres integration lane.
+  });
 });
 
 describe("row 25 — plugin-registrable schema changes", () => {

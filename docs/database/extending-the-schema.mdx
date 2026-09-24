@@ -20,6 +20,7 @@ thought to create.
 ## A table of your own
 
 ```ts
+import { defineConfig } from "nextly";
 import { col, defineTable } from "nextly/schema-extension";
 
 const auditTrail = defineTable(
@@ -197,10 +198,13 @@ them because the DSL is the one path that keeps them in migrations and drift.
 | Collection `indexes` | Collection `indexes`, now actually emitted |
 | `.references()` / `RawForeignKey` | `foreignKeys` on `defineTable` |
 | `check()` | `checks` on `defineTable` |
+| A plugin's `(config) => config` over other plugins' collections | `contributes.transform` (and `contributes.extend` for added fields) |
+| `defaultIDType` | `db.idType` per collection (`uuid` or `uuidv7`) |
+| A client-supplied `id` on create | `db.allowIdOnCreate` per collection |
 | `.where()` partial index | `indexes: [{ columns, where }]` (PostgreSQL/SQLite) |
 | `relations()` | `relations` on `defineTable` + `ref()` auto-edges |
-| `pgEnum` | not supported in the neutral model — use `afterDrizzle` |
-| `schemaName` | not supported yet |
+| `pgEnum` | `col.enum([...])` — stored as text, values enforced by a CHECK on every dialect |
+| `schemaName` | `db.postgres.schema` |
 | `generate:db-schema` | not needed — types come from the declaration |
 
 Two differences worth knowing:
@@ -213,9 +217,86 @@ Payload's `extendTable` reaches into Drizzle's internal symbols, and its hook
 tables lose their types. Ours build Drizzle objects from the neutral model and
 type them from the declaration, so `ctx.db` is checked without a codegen step.
 
+## One schema for the whole installation
+
+```ts
+import { defineConfig } from "nextly";
+
+export default defineConfig({
+  db: { postgres: { schema: "cms" } },
+});
+```
+
+Every managed table, index and constraint lives in `cms` — core tables,
+entity tables, extension tables, the migrate lock and the ledger alike. It is
+applied as `search_path` on every connection rather than by qualifying each
+table, so one setting covers everything that resolves a name, including SQL
+nobody wrote through the query builder. The schema is created if it is
+missing, because a `search_path` naming a schema that does not exist does not
+fail — it falls through, and the tables land in `public` instead.
+
+MySQL and SQLite have no equivalent (MySQL's schema IS its database, SQLite is
+one file). They ignore the setting and warn, so a config shared across
+dialects does not have to branch.
+
+## Generated integer keys
+
+```ts
+defineTable("counters", {
+  id: col.id(),
+  seq: col.serial(),
+});
+```
+
+`serial` on PostgreSQL, `int AUTO_INCREMENT` on MySQL, and on SQLite a plain
+`INTEGER` primary key, which is the rowid alias and auto-assigns. Never
+nullable and never written — the database assigns it, so a value you supply is
+one the sequence does not know about.
+
+Only on a table its own owner declares. Added to somebody else's, it would be
+a second auto-assigning column on a row whose identity is already decided, and
+MySQL will not accept a second AUTO_INCREMENT column at all.
+
+## Enums
+
+```ts
+defineTable("orders", {
+  id: col.id(),
+  state: col.enum(["open", "closed"]),
+});
+```
+
+The column is text and the values are enforced by a CHECK constraint, on all
+three dialects. That is a deliberate trade: a native PostgreSQL enum is a
+schema object with its own lifecycle — created before the table, altered by
+`ALTER TYPE ... ADD VALUE`, dropped after its last column — while MySQL spells
+it inline and SQLite has nothing. A CHECK is one mechanism this pipeline
+already diffs, emits and introspects everywhere.
+
+Adding a value is an ordinary constraint change. **Removing one is refused by
+the database** while a row still holds it, which is the correct answer: the
+rows would otherwise violate the constraint the moment it applied.
+
+## Columns on a table you do not own
+
+`extendTable` accepts `columns` as well as `indexes`, on your own tables, on
+entity tables, on the extendable core tables, and — for the app, or for a
+plugin naming the owner in `dependsOn` — on another owner's tables.
+
+A column added this way is **hidden from the entry API**: it is on the table,
+so migrations and SQLite rebuilds keep it and `ctx.db` can read it, and it is
+stripped from every REST response, Direct API read, version snapshot and
+webhook payload. Both halves matter — unhidden it leaks into every response,
+and absent from the runtime table the next push proposes dropping it.
+
 ## What is not supported
 
-Views; `col.ref()` alone records a reference for documentation and validation
+Views; native PostgreSQL enum TYPES (the values are a CHECK instead, see
+above); `col.serial()` on a table you do not own — a generated key belongs to
+the table that declares it, and MySQL will not take a second AUTO_INCREMENT
+column anyway; columns added to an extendable CORE table are not created by
+dev push, because core tables are migration-owned and the column rides the
+contributor's migration stream; `col.ref()` alone records a reference for documentation and validation
 — a constraint comes from `foreignKeys`. Resizing a `varchar(n)` or
 `decimal(p, s)` produces no migration — the diff normalises type modifiers
 away, and collections behave the same. Add a new column and migrate the data

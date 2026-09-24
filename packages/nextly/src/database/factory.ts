@@ -209,8 +209,18 @@ export async function createAdapter(
  *
  * @public
  */
-export async function createAdapterFromEnv(): Promise<DrizzleAdapter> {
-  return createAdapter();
+export async function createAdapterFromEnv(
+  /**
+   * Config-declared options the environment cannot carry.
+   *
+   * `db.postgres.schema` is the first: it comes from `nextly.config.ts`, not
+   * from an env var, and the adapter is the thing that has to apply it.
+   */
+  options?: { schema?: string }
+): Promise<DrizzleAdapter> {
+  return createAdapter(
+    options?.schema !== undefined ? { schema: options.schema } : undefined
+  );
 }
 
 /**

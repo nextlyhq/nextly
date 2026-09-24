@@ -45,6 +45,7 @@ import {
   dropsPluginMigratedTable,
   pluginMigratedTableSet,
 } from "../ownership/drop-guard";
+import { activePostgresSchema } from "../services/postgres-schema";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
@@ -1632,7 +1633,11 @@ export class PushSchemaPipeline {
           // which on v1 throws its resolver's HintsHandler internal error.
           pushSchema: (schema, db, tablesFilter) =>
             kit.pushSchema(schema, db, {
-              schemas: ["public"],
+              // The CONFIGURED schema, not a hard-coded "public". The adapter
+              // puts every table in it through `search_path`, so a kit still
+              // introspecting `public` compared an empty namespace against a
+              // full desired set and proposed creating everything, forever.
+              schemas: [activePostgresSchema()],
               tables: tablesFilter,
             }),
         };

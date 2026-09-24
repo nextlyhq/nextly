@@ -36,6 +36,7 @@ import type {
 } from "../collections/config/define-config";
 import type { FieldConfig } from "../collections/fields/types";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
+import { resolveRelations } from "../database/resolve-relations";
 import type { SchemaRegistry } from "../database/schema-registry";
 import { requireNextly } from "../direct-api/nextly";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
@@ -77,6 +78,10 @@ import {
 import { builtByFor } from "../domains/schema/pipeline/registered-collections";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
 import type { ColumnOrigin } from "../domains/schema/services/field-column-descriptor";
+import {
+  resolvePostgresSchema,
+  setActivePostgresSchema,
+} from "../domains/schema/services/postgres-schema";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
 import type { SingleMetadataService } from "../domains/singles/services/single-metadata-service";
 import type {
@@ -200,7 +205,6 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { UserConfig } from "../users/config/types";
 
 import { container } from "./container";
-import { resolveRelations } from "../database/resolve-relations";
 import {
   type LoadedBuilderEntity,
   loadBuilderEntities,
@@ -279,6 +283,12 @@ export interface NextlyServiceConfig {
     migrationsDir: string;
     migrateLockTtlSeconds?: number;
     uiSchemaFile: string;
+    /**
+     * Forwarded because the adapter is built HERE and is the thing that
+     * applies it, and because the value comes from `nextly.config.ts` rather
+     * than from any environment variable.
+     */
+    postgres?: { schema?: string };
   };
 
   /**
@@ -760,7 +770,26 @@ export async function registerServices(
   // ----------------------------------------
   // Layer 1: Create and Connect Adapter
   // ----------------------------------------
-  const adapter = await resolveAdapter(providedAdapter, resolvedLogger);
+  // The RAW configured value goes to the adapter, which validates it itself
+  // at the point of interpolation and is the only dialect that reads it.
+  const adapter = await resolveAdapter(
+    providedAdapter,
+    resolvedLogger,
+    transformedConfig.db?.postgres?.schema
+  );
+
+  // Published once the dialect is known, because the warning depends on it:
+  // MySQL and SQLite have no schema namespace, and a config shared across
+  // dialects must not have to branch. Everything downstream — drizzle-kit's
+  // introspection filter above all — reads this one answer, so the pipeline
+  // cannot compare a namespace the adapter is not writing to.
+  setActivePostgresSchema(
+    resolvePostgresSchema(
+      transformedConfig.db?.postgres?.schema,
+      adapter.getCapabilities().dialect,
+      message => resolvedLogger.warn?.(message)
+    )
+  );
 
   // ----------------------------------------
   // Layer 2: Register Infrastructure
@@ -1532,7 +1561,9 @@ async function applyPluginConfigTransformers(
 
 async function resolveAdapter(
   providedAdapter: DrizzleAdapter | undefined,
-  logger: Logger
+  logger: Logger,
+  /** `db.postgres.schema`, which no environment variable carries. */
+  postgresSchema: string | undefined
 ): Promise<DrizzleAdapter> {
   if (providedAdapter) {
     logger.info?.("Using provided database adapter");
@@ -1548,7 +1579,9 @@ async function resolveAdapter(
     );
   }
 
-  const adapter = await createAdapterFromEnv();
+  const adapter = await createAdapterFromEnv(
+    postgresSchema !== undefined ? { schema: postgresSchema } : undefined
+  );
   const capabilities = adapter.getCapabilities();
   logger.info?.(`Database adapter initialized: ${capabilities.dialect}`);
   logger.info?.(`  - JSONB support: ${capabilities.supportsJsonb ? "✓" : "✗"}`);

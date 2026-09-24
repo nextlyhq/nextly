@@ -28,6 +28,11 @@
       "import": "./dist/migrations.mjs",
       "require": "./dist/migrations.cjs"
     },
+    "./schema-name": {
+      "types": "./dist/schema-name.d.ts",
+      "import": "./dist/schema-name.mjs",
+      "require": "./dist/schema-name.cjs"
+    },
     "./version-check": {
       "types": "./dist/version-check.d.ts",
       "import": "./dist/version-check.mjs",

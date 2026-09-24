@@ -104,6 +104,9 @@ them with `plugin.rename({...})` (D54). Read the resolved slug from `ctx.self`:
 ```ts
 const slug = ctx.self.collections.redirects; // resolved, post-rename
 await ctx.services.collections.listEntries(slug, {}, { as: "system" });
+
+declare const ctx: PluginContext;
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 ```
 
 ## Provenance (D14)
@@ -146,6 +149,7 @@ never sees — and a collection is the wrong shape for it.
 Declare a table instead:
 
 ```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 import { col, defineTable } from "@nextlyhq/plugin-sdk/schema";
 
 const identities = defineTable(
@@ -168,6 +172,8 @@ const identities = defineTable(
 
 definePlugin({
   name: "@acme/nextly-plugin-auth",
+  version: "1.0.0",
+  nextly: ">=0.1.0",
   contributes: {
     schema: { prefix: "auth", tables: [identities] },
   },
@@ -194,6 +200,20 @@ expressed cannot drift between them.
 is a compile error rather than an `undefined` at runtime.
 
 ```ts
+import { eq } from "drizzle-orm";
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import { col, defineTable } from "@nextlyhq/plugin-sdk/schema";
+
+// The table declared above, and the scope a handler runs in.
+const identities = defineTable("identities", {
+  id: col.id(),
+  provider: col.shortText(),
+  providerAccountId: col.shortText(),
+  userId: col.ref("users"),
+});
+declare const ctx: PluginContext;
+declare const user: { id: string };
+
 await ctx.db.insert(identities, {
   provider: "github",
   providerAccountId: "12345",

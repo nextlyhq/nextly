@@ -19,7 +19,7 @@
  * @module plugins/database/plugin-database
  * @since 1.0.0
  */
-import type { SQL } from "drizzle-orm";
+import type { AnyColumn, SQL } from "drizzle-orm";
 import { eq } from "drizzle-orm";
 
 import type { SupportedDialect } from "../../database/schema-registry";
@@ -199,8 +199,26 @@ function toColumns(
   return out;
 }
 
+/**
+ * The Drizzle columns of a declared table, keyed as the author wrote them.
+ *
+ * `table()` returned `unknown`, which made the one thing it exists for —
+ * naming a column in a `where` predicate — impossible without a cast. Every
+ * other entry point on this surface is typed from the definition; this one
+ * promised access to a column and handed back a value nothing could be read
+ * from.
+ *
+ * `AnyColumn` rather than the precise per-column type: what a predicate needs
+ * is something `eq`, `gt` and friends accept, and the phantom column map
+ * carries builders rather than built columns.
+ */
+export type TableColumns<T> =
+  T extends TableDefinition<string, infer TColumns>
+    ? Record<keyof TColumns & string, AnyColumn>
+    : Record<string, AnyColumn>;
+
 export interface PluginDatabase {
-  table<T extends TableDefinition>(definition: T): unknown;
+  table<T extends TableDefinition>(definition: T): TableColumns<T>;
   select<T extends TableDefinition>(definition: T): PortableSelect<T>;
   insert<T extends TableDefinition>(
     definition: T,
@@ -249,7 +267,13 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
 
   const surface: PluginDatabase = {
     table(definition) {
-      return resolveTable(definition, deps).table;
+      // `resolveTable` carries the Drizzle object as `unknown` — it is built
+      // by the compiler from the neutral model, which has no Drizzle types to
+      // thread through. The cast is where that erasure is paid back, once,
+      // rather than at every call site that wants to name a column.
+      return resolveTable(definition, deps).table as TableColumns<
+        typeof definition
+      >;
     },
 
     select(definition) {

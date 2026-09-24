@@ -106,6 +106,29 @@ export interface DatabaseConfig {
   };
 
   /**
+   * @experimental PostgreSQL-only storage options.
+   */
+  postgres?: {
+    /**
+     * The schema every managed table, index and enum lives in.
+     *
+     * Defaults to `public`. Setting it puts core tables, entity tables,
+     * extension tables, the migrate lock and the ledger in one namespace, so
+     * two applications can share a database without colliding — the thing a
+     * shared cluster is usually bought for.
+     *
+     * Applied as `search_path` on every connection rather than by qualifying
+     * each table, so one setting covers everything that resolves a name,
+     * including SQL nobody wrote through the query builder.
+     *
+     * MySQL and SQLite have no equivalent (MySQL's schema IS its database,
+     * SQLite is one file) and ignore it with a warning, so a config shared
+     * across dialects does not have to branch.
+     */
+    schema?: string;
+  };
+
+  /**
    * Directory for generated Drizzle schema files.
    * Each collection generates a separate schema file.
    *
@@ -875,6 +898,9 @@ export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
   // An empty object rather than undefined, so a caller can read
   // `db.schema.extend` without a guard and get an empty list.
   schema: {},
+  // Likewise: `db.postgres.schema` reads as undefined rather than throwing,
+  // and undefined is what "public" means here.
+  postgres: {},
   schemasDir: "./src/db/schemas/collections",
   migrationsDir: "./src/db/migrations",
   uiSchemaFile: "./ui-schema.json",
@@ -996,6 +1022,16 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       schema: {
         extend: config.db?.schema?.extend ?? [],
         afterDrizzle: config.db?.schema?.afterDrizzle ?? [],
+      },
+      postgres: {
+        // Left undefined rather than defaulted to "public": the resolver
+        // treats absent as the default, and a value present here would make
+        // "the operator chose public" and "the operator said nothing"
+        // indistinguishable — which is the difference the non-PG warning
+        // depends on.
+        ...(config.db?.postgres?.schema !== undefined
+          ? { schema: config.db.postgres.schema }
+          : {}),
       },
       schemasDir: config.db?.schemasDir ?? DEFAULT_DB_CONFIG.schemasDir,
       migrationsDir:

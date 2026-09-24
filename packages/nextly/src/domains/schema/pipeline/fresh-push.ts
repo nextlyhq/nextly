@@ -45,6 +45,7 @@ import {
 import { isMissingColumnError } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
 import { pluginMigratedTableSet } from "../ownership/drop-guard";
+import { activePostgresSchema } from "../services/postgres-schema";
 
 import { currentMysqlDatabaseName } from "./database-url";
 import {
@@ -229,7 +230,10 @@ async function pushForDialect(
       // fresh-push is create-only reconcile — orphans are none of its
       // business.
       return kit.pushSchema(schema, db, {
-        schemas: ["public"],
+        // The configured schema, for the same reason the pipeline's Phase D
+        // uses it: the adapter writes through `search_path`, so introspecting
+        // `public` would compare against a namespace nothing is in.
+        schemas: [activePostgresSchema()],
         tables: drizzleTableNames(schema),
       });
     }

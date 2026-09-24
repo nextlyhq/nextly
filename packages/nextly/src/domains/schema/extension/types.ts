@@ -56,6 +56,18 @@ export interface ExtensionColumn {
   default?: string | number | boolean | DefaultToken;
   generated?: "uuidv7";
   /**
+   * The values an `enum` column permits.
+   *
+   * Carried to the compiler because the constraint that enforces them is
+   * derived here: an enum is stored as text and constrained by a CHECK, which
+   * is the one mechanism all three dialects have. Declared and never read,
+   * the values reached no spec and the column was text with nothing stopping
+   * any string going into it.
+   */
+  enumValues?: readonly string[];
+  /** An explicit name for the constraint the values become. */
+  enumName?: string;
+  /**
    * Refreshed on every update, as a portable token.
    *
    * Written here rather than left to the caller because an `updated_at` that

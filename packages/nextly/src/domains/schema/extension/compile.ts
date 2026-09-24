@@ -34,6 +34,7 @@ import { indexNameForColumns } from "../services/index-name";
 import { buildUserDrizzleColumn } from "../services/runtime-schema-generator";
 
 import { toColumnDescriptor } from "./column-descriptor";
+import { enumChecks } from "./enum-check";
 import type { ExtensionColumn, ExtensionIndex, ExtensionTable } from "./types";
 
 function invalid(path: string, message: string): never {
@@ -134,10 +135,20 @@ export function toTableSpec(
     ...fk,
     name: fk.name ?? `fk_${table.name}_${fk.columns.join("_")}`,
   }));
-  const checks = table.checks?.map(ck => ({
-    name: `ck_${table.name}_${ck.name}`,
-    sql: ck.sql,
-  }));
+  // Declared checks, plus the one each enum column implies. Concatenated
+  // rather than kept apart because they are the same thing to everything
+  // downstream: the diff compares checks by name, and an enum's constraint is
+  // a check whose expression the author did not have to write.
+  const declared =
+    table.checks?.map(ck => ({
+      name: `ck_${table.name}_${ck.name}`,
+      sql: ck.sql,
+    })) ?? [];
+  const fromEnums = enumChecks(table.name, table.columns, dialect);
+  const checks =
+    declared.length + fromEnums.length > 0
+      ? [...declared, ...fromEnums]
+      : undefined;
 
   return {
     name: table.name,
