@@ -219,11 +219,20 @@ jobs:
           MYSQL_DATABASE: nextly_test
         ports:
           - 3306:3306
+        # The data directory lives in memory, as docker-compose.test.yml has
+        # always kept it for local runs. On the runner's disk, this leg's step
+        # took anywhere from 22 to 56 minutes on main, while the postgres and
+        # sqlite legs of the same commits held steady. MySQL syncs to disk on
+        # every commit and every schema change, and the suite creates and drops
+        # tables file after file, so its time followed the speed of a shared
+        # runner's disk. A sync to memory costs nothing, and a database the job
+        # throws away needs none of that durability.
         options: >-
           --health-cmd "mysqladmin ping -h 127.0.0.1 -pnextly"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+          --tmpfs /var/lib/mysql
 
     steps:
       - name: Checkout
