@@ -220,8 +220,8 @@ describe("the allowlist", () => {
   // entries without removing or lowering any, one more when it learned the bracketed form, and one
   // more when patterns began reading normalised text and a label wrapped across lines became
   // visible. A raise for any other reason is the silencing this guards against.
-  const EXPECTED_ENTRIES = 228;
-  const EXPECTED_TOTAL = 507;
+  const EXPECTED_ENTRIES = 226;
+  const EXPECTED_TOTAL = 503;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

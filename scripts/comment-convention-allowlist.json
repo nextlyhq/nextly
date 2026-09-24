@@ -17,10 +17,6 @@
       "e02630891b827e51"
     ]
   },
-  ".github/workflows/integration.yml": {
-    "count": 2,
-    "digests": ["84381fd424963009", "84381fd424963009"]
-  },
   ".github/workflows/package-smoke.yml": {
     "count": 2,
     "digests": ["4a52eb35ec67f7ec", "c8af348842e7280a"]
@@ -42,10 +38,6 @@
   ".github/workflows/scaffold-build.yml": {
     "count": 1,
     "digests": ["4466be5c8d0ef87e"]
-  },
-  ".github/workflows/secret-scan.yml": {
-    "count": 2,
-    "digests": ["7aab1e73e1bbee0b", "abe25d9f5bce2423"]
   },
   "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx": {
     "count": 2,

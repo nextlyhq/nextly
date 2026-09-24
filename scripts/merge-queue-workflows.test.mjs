@@ -10,6 +10,7 @@
  * on, so the shape is checked here, before it is.
  */
 import { readFileSync } from "node:fs";
+import { isBuiltin } from "node:module";
 
 import { load } from "js-yaml";
 import { describe, expect, it } from "vitest";
@@ -23,6 +24,8 @@ const QUEUE_CHECKS = {
   ".github/workflows/ci.yml": ["CI gate", "Comment convention (describes code, not process)"],
   ".github/workflows/integration.yml": ["Integration (postgres)", "Integration (mysql)", "Integration (sqlite)"],
   ".github/workflows/pr-title.yml": ["Validate PR title follows Conventional Commits"],
+  ".github/workflows/independent-review.yml": ["Independent review of the revision being merged"],
+  ".github/workflows/secret-scan.yml": ["gitleaks"],
 };
 
 describe("every workflow behind a required check, in the merge queue", () => {
@@ -93,36 +96,308 @@ describe("the last commit Integration tested", () => {
   });
 });
 
-describe("steps limited to one event", () => {
+describe("conditions that skip the queue's run", () => {
   /*
-   * A step limited to pull requests is skipped in the queue while its job still
-   * reports success, and a job limited to them reports `skipped`, which the
-   * gate accepts; either way the queue would merge on a check that did less there
-   * than on a pull request's own run. Every such condition in a workflow the queue
-   * requires has to name the queue's event too.
+   * A step that runs on a pull request's own run but not in the queue is
+   * skipped there while its job still reports success, and a job like that
+   * reports `skipped`, which the gate accepts; either way the queue would merge
+   * on a check that did less there than it does for a pull request. So no
+   * condition in a job a required check stands on may run for a pull request's
+   * event and not for the queue's.
    */
-  for (const path of Object.keys(QUEUE_CHECKS)) {
-    it(`${path} names the queue's event wherever it names the pull request's`, () => {
-      expect(pullRequestOnly(read(path))).toEqual([]);
+  for (const [path, checks] of Object.entries(QUEUE_CHECKS)) {
+    it(`${path} does in the queue whatever it does on a pull request, in every job its required checks stand on`, () => {
+      const workflow = read(path);
+      expect(skippedInTheQueue(workflow, requiredJobs(workflow, checks))).toEqual([]);
     });
   }
+
+  it("decides a condition by evaluating it for each event, not by its spelling", () => {
+    const skips = [
+      "github.event_name == 'pull_request'",
+      "${{ always() && github.event_name == 'pull_request_target' }}",
+      "github.event_name != 'merge_group'",
+      "!(github.event_name == 'merge_group')",
+      "contains(fromJSON('[\"push\", \"pull_request\"]'), github.event_name)",
+      "startsWith(github.event_name, 'pull_request')",
+      "GITHUB.EVENT_NAME == 'Pull_Request'",
+      // False in the queue whatever the unknown side is.
+      "needs.changes.outputs.inert != 'true' && github.event_name == 'pull_request'",
+    ];
+    const runs = [
+      "",
+      "github.event_name == 'pull_request' || github.event_name == 'merge_group'",
+      "github.event_name == 'merge_group'",
+      // Runs on neither, so it does no less in the queue.
+      "github.event_name == 'push'",
+      // Undecided by the event's name alone.
+      "!cancelled()",
+      "needs.changes.outputs.inert != 'true'",
+      "github.event.pull_request.head.repo.fork == false",
+      "needs.changes.outputs.inert != 'true' || github.event_name == 'pull_request'",
+    ];
+    for (const condition of skips) expect(skipsTheQueue(condition), condition).toBe(true);
+    for (const condition of runs) expect(skipsTheQueue(condition), condition).toBe(false);
+  });
+
+  it("refuses a condition it cannot read, rather than passing it", () => {
+    expect(() => skipsTheQueue("github.event_name == 'pull_request' &&")).toThrow(/cannot read the condition/);
+    expect(() => skipsTheQueue("github.event_name == ")).toThrow(/cannot read the condition/);
+    expect(() => skipsTheQueue("github.event_name 'pull_request'")).toThrow(/cannot read the condition/);
+  });
+
+  it("reads a gate's dependencies as part of it, and leaves a job no required check stands on out", () => {
+    const ci = read(".github/workflows/ci.yml");
+    expect(requiredJobs(ci, QUEUE_CHECKS[".github/workflows/ci.yml"])).toEqual(expect.arrayContaining(["gate", "ci", "changes", "comments"]));
+    const title = read(".github/workflows/pr-title.yml");
+    expect(requiredJobs(title, QUEUE_CHECKS[".github/workflows/pr-title.yml"])).toEqual(["lint"]);
+  });
 });
 
-/** The jobs and steps whose condition names a pull request's event and not the queue's. */
-function pullRequestOnly(workflow) {
-  return Object.entries(workflow.jobs).flatMap(([id, job]) => [...guardedJob(id, job), ...guardedSteps(id, job)]);
+/**
+ * The jobs a workflow's required checks stand on: each check's own job, and
+ * every job it `needs`, however deep. A job outside that set, such as one that
+ * only comments on a pull request, may be limited to a pull request's events.
+ */
+function requiredJobs(workflow, checks) {
+  const seen = new Set();
+  const visit = id => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    [workflow.jobs[id]?.needs ?? []].flat().forEach(visit);
+  };
+  Object.entries(workflow.jobs).filter(([, job]) => checks.includes(job.name)).forEach(([id]) => visit(id));
+  return [...seen];
 }
 
-function guardedJob(id, job) {
-  return limitedToPullRequests(String(job.if ?? "")) ? [id] : [];
+/** The given jobs, and the steps in them, whose condition skips the queue's run. */
+function skippedInTheQueue(workflow, ids) {
+  return ids.flatMap(id => [...skippingJob(id, workflow.jobs[id]), ...skippingSteps(id, workflow.jobs[id])]);
 }
 
-function guardedSteps(id, job) {
-  return (job.steps ?? []).filter(step => limitedToPullRequests(String(step.if ?? ""))).map(step => `${id}: ${step.name}`);
+function skippingJob(id, job) {
+  return skipsTheQueue(String(job.if ?? "")) ? [id] : [];
 }
 
-function limitedToPullRequests(condition) {
-  return /event_name == 'pull_request'/.test(condition) && !/event_name == 'merge_group'/.test(condition);
+function skippingSteps(id, job) {
+  return (job.steps ?? []).filter(step => skipsTheQueue(String(step.if ?? ""))).map(step => `${id}: ${step.name}`);
+}
+
+/**
+ * Whether a condition can run for a pull request's event, `pull_request` or
+ * `pull_request_target`, and cannot for the queue's. It is evaluated, not
+ * matched by its spelling. The event's name is the one value known; any other
+ * value is unknown, and a condition the name alone does not decide is left
+ * undecided, which is not a skip.
+ */
+function skipsTheQueue(condition) {
+  const outcome = event => truth(evaluate(condition, { "github.event_name": event }));
+  return ["pull_request", "pull_request_target"].some(event => outcome(event) !== false) && outcome("merge_group") === false;
+}
+
+const UNKNOWN = Symbol("unknown");
+const TOKEN = /\s*(?:('(?:[^']|'')*')|(\d+(?:\.\d+)?)|(==|!=|<=|>=|&&|\|\||[!<>(),])|([A-Za-z_][\w-]*(?:\.[\w*-]+)*))/y;
+const LITERALS = { true: true, false: false, null: null };
+const RELATIONS = { "<": (a, b) => a < b, "<=": (a, b) => a <= b, ">": (a, b) => a > b, ">=": (a, b) => a >= b };
+
+/** The expression functions a condition can be decided by; any other, such as `success()`, is unknown. */
+const FUNCTIONS = {
+  always: () => true,
+  contains: (within, item) => (Array.isArray(within) ? within.some(entry => looseEqual(entry, item)) : lower(within).includes(lower(item))),
+  startswith: (text, prefix) => lower(text).startsWith(lower(prefix)),
+  endswith: (text, suffix) => lower(text).endsWith(lower(suffix)),
+  fromjson: text => JSON.parse(text),
+};
+
+/** A condition's value, with `${{ }}` optional around it, as GitHub accepts it; no condition always runs. */
+function evaluate(condition, known) {
+  const text = condition.trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1").trim();
+  if (text === "") return true;
+  const parser = { tokens: tokenize(text, condition), at: 0, known, condition };
+  const value = parseOr(parser);
+  if (parser.at !== parser.tokens.length) unreadable(parser.condition);
+  return value;
+}
+
+function tokenize(text, condition) {
+  const pattern = new RegExp(TOKEN.source, "y");
+  const tokens = [];
+  while (pattern.lastIndex < text.length) {
+    const match = pattern.exec(text) ?? unreadable(condition);
+    tokens.push(tokenOf(match));
+  }
+  return tokens;
+}
+
+function tokenOf([, string, number, operator, name]) {
+  if (string !== undefined) return { value: string.slice(1, -1).replaceAll("''", "'") };
+  if (number !== undefined) return { value: Number(number) };
+  return operator ?? { name };
+}
+
+function unreadable(condition) {
+  throw new Error(`cannot read the condition ${JSON.stringify(condition)}`);
+}
+
+function parseOr(parser) {
+  let left = parseAnd(parser);
+  while (take(parser, "||")) left = or3(left, parseAnd(parser));
+  return left;
+}
+
+function parseAnd(parser) {
+  let left = parseEquality(parser);
+  while (take(parser, "&&")) left = and3(left, parseEquality(parser));
+  return left;
+}
+
+function parseEquality(parser) {
+  let left = parseRelation(parser);
+  for (let operator = takeAny(parser, ["==", "!="]); operator; operator = takeAny(parser, ["==", "!="])) {
+    const equal = operator === "==";
+    left = known2(left, parseRelation(parser), (a, b) => looseEqual(a, b) === equal);
+  }
+  return left;
+}
+
+function parseRelation(parser) {
+  let left = parseUnary(parser);
+  for (let operator = takeAny(parser, Object.keys(RELATIONS)); operator; operator = takeAny(parser, Object.keys(RELATIONS))) {
+    const relation = RELATIONS[operator];
+    left = known2(left, parseUnary(parser), (a, b) => relation(Number(a), Number(b)));
+  }
+  return left;
+}
+
+function parseUnary(parser) {
+  if (!take(parser, "!")) return parsePrimary(parser);
+  const operand = parseUnary(parser);
+  return operand === UNKNOWN ? UNKNOWN : !operand;
+}
+
+function parsePrimary(parser) {
+  if (take(parser, "(")) return closed(parser, parseOr(parser));
+  const token = nextOperand(parser);
+  if ("value" in token) return token.value;
+  return take(parser, "(") ? call(token.name, parseArguments(parser)) : lookUp(token.name, parser.known);
+}
+
+/** A literal or a name; an operator, or nothing, where one belongs cannot be read. */
+function nextOperand(parser) {
+  const token = parser.tokens[parser.at];
+  if (typeof token !== "object") unreadable(parser.condition);
+  parser.at += 1;
+  return token;
+}
+
+function parseArguments(parser) {
+  const values = [];
+  if (take(parser, ")")) return values;
+  do values.push(parseOr(parser));
+  while (take(parser, ","));
+  return closed(parser, values);
+}
+
+function closed(parser, value) {
+  if (!take(parser, ")")) unreadable(parser.condition);
+  return value;
+}
+
+function take(parser, operator) {
+  if (parser.tokens[parser.at] !== operator) return false;
+  parser.at += 1;
+  return true;
+}
+
+function takeAny(parser, operators) {
+  return operators.find(operator => take(parser, operator));
+}
+
+function lookUp(name, known) {
+  const key = name.toLowerCase();
+  if (Object.hasOwn(LITERALS, key)) return LITERALS[key];
+  return Object.hasOwn(known, key) ? known[key] : UNKNOWN;
+}
+
+function call(name, values) {
+  const key = name.toLowerCase();
+  return Object.hasOwn(FUNCTIONS, key) && !values.includes(UNKNOWN) ? FUNCTIONS[key](...values) : UNKNOWN;
+}
+
+/** `&&` with an unknown side: false when the other side is, since either way the result is. */
+function and3(left, right) {
+  if (left === UNKNOWN) return truth(right) === false ? false : UNKNOWN;
+  return left ? right : left;
+}
+
+/** `||` with an unknown side: true when the other side is, since either way the result is. */
+function or3(left, right) {
+  if (left === UNKNOWN) return truth(right) === true ? true : UNKNOWN;
+  return left || right;
+}
+
+function known2(left, right, operation) {
+  return left === UNKNOWN || right === UNKNOWN ? UNKNOWN : operation(left, right);
+}
+
+/** GitHub's `==`: strings ignore case, and values of different types compare as numbers. */
+function looseEqual(a, b) {
+  if (typeof a === "string" && typeof b === "string") return lower(a) === lower(b);
+  return typeof a === typeof b ? a === b : Number(a) === Number(b);
+}
+
+function lower(value) {
+  return String(value).toLowerCase();
+}
+
+function truth(value) {
+  return value === UNKNOWN ? UNKNOWN : Boolean(value);
+}
+
+describe("the independent-review gate", () => {
+  const workflow = read(".github/workflows/independent-review.yml");
+  const job = workflow.jobs.review;
+
+  /*
+   * The queue is where the reviews a pull request will get have had time to
+   * arrive, and where the gate decides. It judges from the queue's base with
+   * read-only access, so no queued change can rewrite what counts as a review
+   * of itself.
+   */
+  it("decides in the queue, from the queue's base, with read access only", () => {
+    expect(job.if).toBe("github.event_name == 'merge_group'");
+    const checkout = job.steps.find(step => String(step.uses).startsWith("actions/checkout@"));
+    expect(checkout.with.ref).toBe("${{ github.event.merge_group.base_sha }}");
+    expect(checkout.with["fetch-depth"]).toBe(0);
+    expect(workflow.permissions).toEqual({});
+    expect(Object.values(job.permissions)).toEqual(["read", "read", "read"]);
+    expect(job.steps.at(-1).run).toBe("node scripts/independent-review.mjs");
+  });
+
+  // The job installs no packages, so everything the script loads has to be
+  // Node's own or a file of this repository's. A package import would pass
+  // every test here, where the packages are installed, and fail in the queue.
+  it("runs a script that loads nothing the job does not install", () => {
+    expect(job.steps.some(step => /\binstall\b/.test(String(step.run)))).toBe(false);
+    expect(packageImports(new URL("./independent-review.mjs", import.meta.url))).toEqual([]);
+  });
+});
+
+const IMPORTED = /^\s*(?:import|export)\s[^;]*?\sfrom\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/gm;
+
+/** The specifiers a module names in its static and literal dynamic imports. */
+function specifiersOf(url) {
+  return [...readFileSync(url, "utf8").matchAll(IMPORTED)].map(match => match.slice(1).find(Boolean));
+}
+
+/** The package specifiers a module reaches through its relative imports, however deep. */
+function packageImports(url, seen = new Set()) {
+  if (seen.has(url.href)) return [];
+  seen.add(url.href);
+  return specifiersOf(url).flatMap(specifier => {
+    if (specifier.startsWith(".")) return packageImports(new URL(specifier, url), seen);
+    return isBuiltin(specifier) ? [] : [specifier];
+  });
 }
 
 describe("the title check's permissions", () => {

@@ -71,7 +71,31 @@ const verdictComment = (login, sha, created_at = undefined) => ({
  * cannot tell a clean verdict from silence. Every case below fixes what a
  * comment must carry before it counts as coverage.
  */
+/** Codex's summary comment, as it keeps it up to date on a pull request. */
+const summaryComment = (login, sha, status = "✅ **Completed**", marker = "<!-- codex-pull-request-review-summary -->") => ({
+  user: { login },
+  body: `${marker}\n\n## Codex Review Summary\n\n| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n| 📝 **Code Review** | ${status} <relative-time datetime="2026-09-24T18:50:01Z">2026-09-24T18:50:01Z</relative-time> | \`${sha.slice(0, 7)}\` | New commits |\n`,
+});
+
 describe("verdictCommentReviewers", () => {
+  /*
+   * A clean Codex review leaves no review object and no other comment: only
+   * this summary row and a reaction. The row is a verdict only when it is a
+   * completed code review, in the summary comment its marker identifies.
+   */
+  it("grants coverage from Codex's summary of a completed review of the head", () => {
+    expect(verdictCommentReviewers([summaryComment(CODEX, HEAD)], HEAD, { knownRevisions: [HEAD] })).toEqual([CODEX]);
+  });
+
+  it("does not count a review still running, a summary without its marker, or one naming another revision", () => {
+    const running = summaryComment(CODEX, HEAD, "🔄 **Running** since");
+    const unmarked = summaryComment(CODEX, HEAD, "✅ **Completed**", "");
+    const other = summaryComment(CODEX, OLD);
+    for (const comment of [running, unmarked, other]) {
+      expect(verdictCommentReviewers([comment], HEAD, { knownRevisions: [HEAD] })).toEqual([]);
+    }
+  });
+
   it("grants coverage from a comment naming the head", () => {
     expect(
       verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD, {
