@@ -52,6 +52,77 @@ export default defineConfig({
 App tables carry no prefix, and they go into your migrations like any other
 table.
 
+A table can also declare **checks, foreign keys, and partial or expression
+indexes**. They ride the same declaration, the same migrations, and (for checks
+and bundle-internal foreign keys) the same table rebuild on SQLite:
+
+```ts
+const orders = defineTable(
+  "orders",
+  {
+    id: col.id(),
+    userId: col.ref("users"),
+    status: col.shortText(),
+    total: col.integer({ nullable: true }),
+  },
+  {
+    checks: [{ name: "total_ok", sql: "total IS NULL OR total >= 0" }],
+    foreignKeys: [
+      {
+        columns: ["userId"],
+        references: { table: "users", columns: ["id"] },
+        onDelete: "cascade",
+      },
+    ],
+    indexes: [
+      // Partial (PostgreSQL and SQLite; MySQL has none and refuses one):
+      { columns: ["status"], where: "status = 'open'", name: "idx_open" },
+    ],
+  }
+);
+```
+
+A foreign key's target must exist when the migration runs; within your own
+bundle, creation order follows declaration.
+
+## Adopt an existing table
+
+```ts
+db: {
+  schema: {
+    extend: [
+      ({ schema }) => {
+        schema.adoptTable(defineTable("legacy_orders", {
+          id: col.id(),
+        }));
+      },
+    ],
+  },
+}
+```
+
+`adoptTable` claims a table Nextly does not own: typed access through
+`nextly.db`, relation queries, and **nothing else** — no DDL, no diff, no
+migration, never dropped. The name is used as written, and adopting a managed
+table's name is refused.
+
+## Relations
+
+Tables declared with `ref()` columns carry a one-edge automatically, and any
+table can declare more:
+
+```ts
+const linked = defineTable("linked", {
+  id: col.id(),
+  orderId: col.shortText(),
+}, {
+  relations: [{ name: "order", kind: "one", targetTable: "app__orders", fromColumn: "orderId" }],
+});
+```
+
+Edges register with the schema registry, so `db.query.<table>.findMany({ with })`
+traverses them like any core relation.
+
 ## Indexes on your collections
 
 `indexes` on a collection config now reaches the database. If you declared one
@@ -109,12 +180,11 @@ This is the app's alone; plugins have no equivalent, because a per-dialect
 choice about your database is yours rather than a plugin's.
 
 Anything the schema model cannot carry into migrations and drift detection is
-**refused at boot**, naming the table and the construct: partial and
-expression indexes, check constraints, foreign keys, unique constraints,
-composite primary keys, generated and identity columns, and native enums.
-
-That refusal is the point. The alternative is a constraint that exists on your
-machine and on no deployment, with nothing reporting the difference.
+**refused at boot**, naming the table and the construct — because the
+alternative is a constraint that exists on your machine and on no deployment,
+with nothing reporting the difference. Checks, foreign keys and partial or
+expression indexes all carry through the DSL above; the escape hatch refuses
+them because the DSL is the one path that keeps them in migrations and drift.
 
 ## Coming from Payload
 
@@ -125,12 +195,19 @@ machine and on no deployment, with nothing reporting the difference.
 | `extendTable` | `schema.extendTable`, with ownership rules |
 | `rawTables` | `defineTable` + `col.*`, the primary path rather than an escape |
 | Collection `indexes` | Collection `indexes`, now actually emitted |
+| `.references()` / `RawForeignKey` | `foreignKeys` on `defineTable` |
+| `check()` | `checks` on `defineTable` |
+| `.where()` partial index | `indexes: [{ columns, where }]` (PostgreSQL/SQLite) |
+| `relations()` | `relations` on `defineTable` + `ref()` auto-edges |
+| `pgEnum` | not supported in the neutral model — use `afterDrizzle` |
+| `schemaName` | not supported yet |
+| `generate:db-schema` | not needed — types come from the declaration |
 
 Two differences worth knowing:
 
 Payload's hooks are app-only. Ours accept plugins too, in dependency order,
-with ownership recorded on every table and index — so two plugins cannot
-quietly fight over one table.
+with ownership recorded on every table, index, check and foreign key — so two
+plugins cannot quietly fight over one table.
 
 Payload's `extendTable` reaches into Drizzle's internal symbols, and its hook
 tables lose their types. Ours build Drizzle objects from the neutral model and
@@ -138,10 +215,8 @@ type them from the declaration, so `ctx.db` is checked without a codegen step.
 
 ## What is not supported
 
-Foreign keys, check constraints, partial and expression indexes, views, and
-relational queries over extension tables. `col.ref()` records a reference for
-documentation and validation; no constraint reaches the database.
-
-Resizing a `varchar(n)` or `decimal(p, s)` produces no migration — the diff
-normalises type modifiers away, and collections behave the same. Add a new
-column and migrate the data across.
+Views; `col.ref()` alone records a reference for documentation and validation
+— a constraint comes from `foreignKeys`. Resizing a `varchar(n)` or
+`decimal(p, s)` produces no migration — the diff normalises type modifiers
+away, and collections behave the same. Add a new column and migrate the data
+across.

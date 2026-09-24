@@ -252,14 +252,17 @@ REST, admin, validation and access control as well.
 
 ## What is deliberately unsupported
 
-Foreign keys, check constraints, partial and expression indexes, views, and
-native enums. The diff engine cannot express any of them, so a constraint you
-declared would exist on your machine and on no deployment — which is worse
-than not having it. `col.ref()` records a reference for documentation and
-validation; it creates no database constraint.
+Views and native enums. Checks, foreign keys, and partial or expression
+indexes ARE supported: declare them on `defineTable` and they travel through
+dev push, plugin migrations and drift checks on every dialect — inline in the
+table's `CREATE TABLE` on its first migration, and through the table rebuild
+where a dialect cannot add one in place. `col.ref()` alone records a reference
+for documentation and validation; a constraint comes from the `foreignKeys`
+option.
 
-Drizzle relational queries (`db.query.x.findMany({ with })`) do not work over
-extension tables. Use joins through `select`.
+Drizzle relational queries (`ctx.db.query.<table>.findMany({ with })`) work
+over extension tables: a `ref()` column carries its one-edge automatically,
+and more can be declared through the `relations` option.
 
 ## Access rules
 
@@ -273,7 +276,11 @@ incompatible version.
 
 ## Production
 
-Plugin-owned tables are created by development push today. Running migrations
-while a plugin declares tables fails with `PLUGIN_MIGRATIONS_UNAVAILABLE`,
-deliberately and loudly — the alternative is a migration run that reports
-success having created none of them.
+A plugin that declares tables ships **migration modules**
+(`contributes.schema.migrations`) and a `schemaVersion`. Generate them with
+`nextly migrate:create --plugin ./src/index.ts`, bumping `schemaVersion` each
+time; `nextly migrate` applies them in dependency order under the migrate lock,
+before any plugin initialises. The ledger records them under qualified names
+(`plugin:<name>/<file>`), an app rollback never touches them, and a production
+boot refuses a plugin whose declared version the database has not applied
+(`PLUGIN_SCHEMA_BEHIND`).
