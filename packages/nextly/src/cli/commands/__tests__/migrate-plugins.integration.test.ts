@@ -370,3 +370,138 @@ describe("a plugin's first migration creates its constraints inline (C8)", () =>
     expect(remaining[0]?.n).toBe(0);
   });
 });
+
+describe("the all-constructs round trip (C8)", () => {
+  let sqlite: Database.Database;
+  let db: unknown;
+
+  beforeAll(async () => {
+    sqlite = new Database(":memory:");
+    db = drizzle({ client: sqlite });
+    await reconcileCore({
+      db,
+      dialect: DIALECT,
+      logger: { info: () => {}, warn: () => {} },
+    });
+  });
+  afterAll(() => sqlite.close());
+
+  async function buildModule() {
+    const owners = defineTable(
+      "rtowners",
+      { id: col.id(), email: col.shortText() },
+      {
+        indexes: [
+          { columns: [], expression: "lower(email)", name: "idx_rt_expr" },
+        ],
+      }
+    );
+    const linked = defineTable(
+      "rtlinked",
+      {
+        id: col.id(),
+        ownerId: col.shortText(),
+        score: col.integer({ nullable: true }),
+      },
+      {
+        foreignKeys: [
+          {
+            columns: ["ownerId"],
+            references: { table: "rtx__rtowners", columns: ["id"] },
+            onDelete: "cascade",
+          },
+        ],
+        checks: [{ name: "score_ok", sql: "score >= 0" }],
+        indexes: [
+          { columns: ["score"], where: "score IS NOT NULL", name: "idx_rt_partial" },
+        ],
+      }
+    );
+    const built = buildPluginMigration({
+      pluginName: "rtx",
+      schemaVersion: 1,
+      name: "v1",
+      now: new Date(Date.UTC(2026, 8, 24, 2, 0, 0)),
+      tablesByDialect: await tablesByDialect("rtx", "rtx", [owners, linked]),
+      existing: [],
+    });
+    return built!.module;
+  }
+
+  it("applies, enforces, rolls back, and re-applies with every construct aboard", async () => {
+    const g = await buildModule();
+    const phase = {
+      dialect: "sqlite" as const,
+      db,
+      adapter: adapterFor(sqlite),
+      logger: createLogger({ quiet: true }),
+      pluginMigrationSets: [
+        { pluginName: "rtx", pluginVersion: "1.0.0", migrations: [g] },
+      ],
+    };
+    // 1. Apply: tables, check, FK cascade, both indexes exist.
+    await runPluginPhase(phase as never);
+    const tables = await adapterFor(sqlite).listTables();
+    expect(tables).toContain("rtx__rtowners");
+    expect(tables).toContain("rtx__rtlinked");
+    const indexNames = (table: string) =>
+      (
+        sqlite
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?"
+          )
+          .all(table) as Array<{ name: string }>
+      ).map(r => r.name);
+    expect(indexNames("rtx__rtlinked")).toContain("idx_rt_partial");
+    expect(indexNames("rtx__rtowners")).toContain("idx_rt_expr");
+    let rejected = false;
+    try {
+      sqlite.exec(
+        `INSERT INTO rtx__rtlinked (id, owner_id, score) VALUES ('x', 'o', -1)`
+      );
+    } catch {
+      rejected = true;
+    }
+    expect(rejected).toBe(true);
+    sqlite.exec(`INSERT INTO rtx__rtowners (id, email) VALUES ('o', 'A@B.c')`);
+    sqlite.exec(
+      `INSERT INTO rtx__rtlinked (id, owner_id, score) VALUES ('l', 'o', 1)`
+    );
+    sqlite.exec(`DELETE FROM rtx__rtowners WHERE id = 'o'`);
+    expect(
+      (
+        sqlite
+          .prepare(`SELECT COUNT(*) AS n FROM rtx__rtlinked`)
+          .all() as Array<{ n: number }>
+      )[0]?.n
+    ).toBe(0);
+
+    // 2. Roll back: the DOWN statements drop what the UP created, and the
+    //    uninstall path supersedes the ledger row — without that, a re-run
+    //    would rightly treat the module as still applied and skip it.
+    for (const stmt of [...g.dialects.sqlite.down].reverse()) {
+      sqlite.exec(stmt);
+    }
+    expect(await adapterFor(sqlite).listTables()).not.toContain("rtx__rtlinked");
+    sqlite.exec(
+      `INSERT INTO nextly_schema_events
+         (id, event_type, status, source, filename, started_at, ended_at)
+       VALUES ('rb1', 'file_apply', 'rolled_back', 'cli-migrate', 'plugin:rtx/${g.name}', 9999999999999, 9999999999999)`
+    );
+
+    // 3. Re-apply: the ledger's newest state is rolled_back, so the runner
+    //    executes the module again — and adoption is NOT the path, because
+    //    the table is genuinely gone.
+    await runPluginPhase(phase as never);
+    expect(await adapterFor(sqlite).listTables()).toContain("rtx__rtlinked");
+    let reRejected = false;
+    try {
+      sqlite.exec(
+        `INSERT INTO rtx__rtlinked (id, owner_id, score) VALUES ('y', 'o', -2)`
+      );
+    } catch {
+      reRejected = true;
+    }
+    expect(reRejected).toBe(true);
+  });
+});

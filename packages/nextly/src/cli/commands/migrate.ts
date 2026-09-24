@@ -622,14 +622,27 @@ export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
   const eventsRepo = new SchemaEventsRepository(deps.db, deps.dialect);
   // Applied plugin rows only, keyed by qualified filename. First row wins:
   // `markApplied`'s uniqueFilename guard makes one applied row per filename
-  // the invariant, and a superseded leftover would otherwise shadow the
-  // sha256 the comparison needs.
+  // the invariant — but a rolled_back event INSERTED after one (the shape
+  // `migrate:down` records) means the newest state, not the first row, is
+  // what "is this module applied?" asks. Decided by newest startedAt per
+  // filename, the same rule migrate:down's target selection uses.
   const appliedShas = new Map<string, string | null>();
+  const newestByFilename = new Map<string, { sha256: string | null; status: string; at: number }>();
   for (const row of await eventsRepo.listFileApplies()) {
-    if (row.status !== "applied" || !row.filename) continue;
-    if (!row.filename.startsWith("plugin:")) continue;
-    if (!appliedShas.has(row.filename)) {
-      appliedShas.set(row.filename, row.sha256);
+    if (!row.filename || !row.filename.startsWith("plugin:")) continue;
+    const at = row.startedAt.getTime();
+    const existing = newestByFilename.get(row.filename);
+    if (existing === undefined || at >= existing.at) {
+      newestByFilename.set(row.filename, {
+        sha256: row.sha256,
+        status: row.status,
+        at,
+      });
+    }
+  }
+  for (const [filename, newest] of newestByFilename) {
+    if (newest.status === "applied") {
+      appliedShas.set(filename, newest.sha256);
     }
   }
 
