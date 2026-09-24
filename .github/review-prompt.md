@@ -36,9 +36,9 @@ Read before forming any opinion (PR-side versions if the PR touches them):
 - `ARCHITECTURE.md`: layering rules and the "Key invariants (do not break these)" section.
 - the `derived-checks` skill and the `verifying-merged-work` skill: the
   detailed guidance behind several AGENTS.md rules, with worked examples. These load
-  automatically only in Claude clients, which is why they are enumerated here — a reviewer
+  automatically in Claude Code and in Codex, and are enumerated here because a reviewer
   running anywhere else would otherwise never see them.
-- `.claude/skills/reviewing-a-pr/SKILL.md` and `.claude/skills/release-and-changesets/SKILL.md`.
+- `.agents/skills/reviewing-a-pr/SKILL.md` and `.agents/skills/release-and-changesets/SKILL.md`.
 - `packages/nextly/AGENTS.md` / `packages/admin/AGENTS.md` when the PR touches those packages.
 - `packages/plugin-sdk/STABILITY.md` / `packages/ui/STABILITY.md` when public surface changes.
 
