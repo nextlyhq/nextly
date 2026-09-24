@@ -233,6 +233,10 @@ export function Login() {
           onDone={next => {
             window.location.href = next ?? ROUTES.DASHBOARD;
           }}
+          // The pending token is spent, so the step it stood for is over.
+          // Clearing it brings the sign-in form back, which is the only
+          // thing left that can help.
+          onCredentialRejected={challengeFlow.abandonPasswordChange}
         />
       ) : challengeFlow.challenge ? (
         <AuthChallenge

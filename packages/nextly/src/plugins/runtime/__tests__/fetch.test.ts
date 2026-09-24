@@ -14,7 +14,7 @@ const PUBLIC: ResolvedAddress = { address: "93.184.216.34", family: 4 };
 function deps(over: Partial<PluginFetchDeps> = {}): PluginFetchDeps {
   return {
     allowlist: ["api.example.com", "*.provider.example"],
-    resolve: vi.fn(async () => [PUBLIC]),
+    resolve: vi.fn(async (): Promise<ResolvedAddress[]> => [PUBLIC]),
     send: vi.fn(async () => new Response("ok", { status: 200 })),
     allowLoopback: false,
     ...over,
@@ -628,7 +628,9 @@ describe("DNS failover", () => {
   it("tries the next vetted answer when the first refuses the connection", async () => {
     const DEAD = { address: "93.184.216.34", family: 4 } as never;
     const LIVE = { address: "93.184.216.35", family: 4 } as never;
-    const d = deps({ resolve: vi.fn(async () => [DEAD, LIVE]) });
+    const d = deps({
+      resolve: vi.fn(async (): Promise<ResolvedAddress[]> => [DEAD, LIVE]),
+    });
     (d.send as ReturnType<typeof vi.fn>)
       .mockRejectedValueOnce(
         Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" })
@@ -644,10 +646,12 @@ describe("DNS failover", () => {
 
   it("rethrows the transport failure when every answer refuses", async () => {
     const d = deps({
-      resolve: vi.fn(async () => [
-        { address: "93.184.216.34", family: 4 },
-        { address: "93.184.216.35", family: 4 },
-      ]),
+      resolve: vi.fn(
+        async (): Promise<ResolvedAddress[]> => [
+          { address: "93.184.216.34", family: 4 },
+          { address: "93.184.216.35", family: 4 },
+        ]
+      ),
     });
     (d.send as ReturnType<typeof vi.fn>).mockRejectedValue(
       Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" })
@@ -666,10 +670,11 @@ describe("failover safety", () => {
     // never connected; replaying it duplicates whatever it did. Only
     // idempotent methods fail over.
     const d = deps({
-      resolve: vi.fn(async () => [
-        { address: "93.184.216.34", family: 4 },
-        { address: "93.184.216.35", family: 4 },
-      ]),
+      resolve: vi.fn(
+        async (): Promise<ResolvedAddress[]> => [
+          { address: "93.184.216.35", family: 4 },
+        ]
+      ),
     });
     (d.send as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error("ECONNRESET")
@@ -687,10 +692,12 @@ describe("failover safety", () => {
   it("does not turn a caller cancellation into another send", async () => {
     const controller = new AbortController();
     const d = deps({
-      resolve: vi.fn(async () => [
-        { address: "93.184.216.34", family: 4 },
-        { address: "93.184.216.35", family: 4 },
-      ]),
+      resolve: vi.fn(
+        async (): Promise<ResolvedAddress[]> => [
+          { address: "93.184.216.34", family: 4 },
+          { address: "93.184.216.35", family: 4 },
+        ]
+      ),
     });
     (d.send as ReturnType<typeof vi.fn>).mockImplementation(
       () =>

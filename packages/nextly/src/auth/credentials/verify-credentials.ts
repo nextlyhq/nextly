@@ -53,7 +53,13 @@ export async function verifyCredentials(
       email: string;
       name: string;
       image: string | null;
-      passwordHash: string;
+      /**
+       * NULLABLE, because an account can exist without one: a user created
+       * through an external identity provider is stored with no password at
+       * all. Declared as `string` here while the column was nullable, which
+       * is how the passwordless case reached `verifyPassword` unexamined.
+       */
+      passwordHash: string | null;
       emailVerified: Date | null;
       isActive: boolean;
       mustChangePassword: boolean | null;
@@ -70,12 +76,26 @@ export async function verifyCredentials(
 ): Promise<VerifiedUser> {
   const user = await deps.findUserByEmail(input.email);
 
-  // Timing equalisation: always run bcrypt compare exactly once, regardless
-  // of whether we found a user. Without this branch, the miss path returns
-  // immediately and an attacker can enumerate registered emails via timing.
-  const passwordOk = user
-    ? await verifyPassword(input.password, user.passwordHash)
-    : await verifyPassword(input.password, DUMMY_HASH);
+  // Timing equalisation: always run bcrypt compare exactly once, against a
+  // REAL cost-12 hash. Without it the miss path returns immediately and an
+  // attacker can enumerate registered emails via timing.
+  //
+  // The decoy stands in for an account that HAS no password as well as for
+  // one that does not exist. `verifyPassword` returns on the spot when the
+  // stored hash is empty, so an externally-authenticated account — created
+  // with a null hash — answered a password attempt faster than an unknown
+  // address did. That is the enumeration oracle again, and a sharper one:
+  // it does not merely say an address is registered, it says the address
+  // signs in through the identity provider, which is the account whose
+  // password can never be the thing that stops an attacker.
+  const storedHash = user?.passwordHash;
+  const compared = await verifyPassword(
+    input.password,
+    storedHash || DUMMY_HASH
+  );
+  // A passwordless account can never be admitted BY a password, whatever the
+  // comparison against the decoy answered.
+  const passwordOk = Boolean(storedHash) && compared;
 
   if (!user || !passwordOk) {
     if (user) {

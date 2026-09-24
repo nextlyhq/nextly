@@ -109,9 +109,18 @@ describe("Signup", () => {
 });
 
 describe("SetInitialPassword", () => {
-  async function submitAPassword(onDone: (next?: string) => void = vi.fn()) {
+  async function submitAPassword(
+    onDone: (next?: string) => void = vi.fn(),
+    onCredentialRejected: () => void = vi.fn()
+  ) {
     const user = userEvent.setup({ delay: null });
-    render(<SetInitialPassword pendingToken="pending" onDone={onDone} />);
+    render(
+      <SetInitialPassword
+        pendingToken="pending"
+        onDone={onDone}
+        onCredentialRejected={onCredentialRejected}
+      />
+    );
 
     // Both fields must satisfy `passwordSchema` client-side, or the submit
     // never reaches the request whose rejection is under test.
@@ -190,6 +199,77 @@ describe("SetInitialPassword", () => {
         description: "An error occurred",
       }
     );
+  });
+
+  it("gives up the flow when the pending token is rejected", async () => {
+    // This view is the ONLY thing on screen while a password change is
+    // pending. A spent token — expired, replayed, or for a flow the account
+    // has already left — cannot be made good by typing another password, so
+    // a toast on its own left the person on a form that could only fail, with
+    // the sign-in controls hidden behind the state this failure disproves.
+    post.mockImplementation(() =>
+      rejection(
+        {
+          error: {
+            code: "AUTH_INVALID_CREDENTIALS",
+            message: "Invalid credentials.",
+            requestId: "req_test",
+          },
+        },
+        401
+      )
+    );
+    const onCredentialRejected = vi.fn();
+
+    await submitAPassword(vi.fn(), onCredentialRejected);
+
+    await waitFor(() => expect(onCredentialRejected).toHaveBeenCalled());
+    // And says so in words the person can act on, rather than repeating the
+    // deliberately generic server message.
+    expect(toast.error).toHaveBeenCalledWith("Could not set your password", {
+      description: "This link is no longer valid. Please sign in again.",
+    });
+  });
+
+  it("KEEPS the form when the password itself was refused", async () => {
+    // The must-differ control. A weak or reused password is the one failure
+    // the next attempt can fix, and taking the form away would make the
+    // rule impossible to satisfy.
+    post.mockImplementation(() =>
+      rejection(
+        validationFailure("newPassword", "WEAK_PASSWORD", "Too short."),
+        400
+      )
+    );
+    const onCredentialRejected = vi.fn();
+
+    await submitAPassword(vi.fn(), onCredentialRejected);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(onCredentialRejected).not.toHaveBeenCalled();
+  });
+
+  it("KEEPS the form when the server faulted", async () => {
+    // The second control. A 500 says nothing about the token, so the flow is
+    // still alive and retrying is the right thing to offer.
+    post.mockImplementation(() =>
+      rejection(
+        {
+          error: {
+            code: "INTERNAL_ERROR",
+            message: "Something went wrong.",
+            requestId: "req_test",
+          },
+        },
+        500
+      )
+    );
+    const onCredentialRejected = vi.fn();
+
+    await submitAPassword(vi.fn(), onCredentialRejected);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(onCredentialRejected).not.toHaveBeenCalled();
   });
 });
 

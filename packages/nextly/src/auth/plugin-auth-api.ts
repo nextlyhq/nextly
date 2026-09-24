@@ -10,6 +10,8 @@
  * @module auth/plugin-auth-api
  * @since 1.0.0
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import {
   auditFailureMetadata,
   isStrategyName,
@@ -204,45 +206,74 @@ async function loadUsableUser(
  * present an infrastructure failure as a verdict about the person's
  * credentials.
  */
-// The codes that are VERDICTS about the caller rather than the state of
-// the world. Anything typed outside this set — SERVICE_UNAVAILABLE,
-// EXTERNAL_SERVICE_ERROR, a storage timeout — is an operational failure
-// the login could not be judged through, and keeps travelling: answering
-// it as a refusal recorded an outage as a rejection of the person.
-const LOGIN_REFUSAL_CODES = new Set([
-  "AUTH_INVALID_CREDENTIALS",
-  "FORBIDDEN",
-  "RATE_LIMITED",
-  "AUTH_REQUIRED",
-  "VALIDATION_ERROR",
-  "CONFLICT",
-]);
-
+// Decided on the STATUS the error carries, not on a list of codes. The
+// question — is this a verdict about the caller, or the state of the world —
+// is the question 4xx and 5xx already answer, and the catalogue assigns one
+// to every code.
+//
+// A list had to be complete to be right, and was not: it named six codes, so
+// a `beforeLogin` hook aborting with `NOT_FOUND`, `BUSINESS_RULE_VIOLATION`,
+// `TOKEN_EXPIRED` or `PAYLOAD_TOO_LARGE` — all 4xx, all decisions about the
+// caller — was rethrown as an outage. The contract this function serves is
+// that a refusal always becomes the audited redirect, and a list that must be
+// extended for every new refusal code breaks that contract by default.
+//
+// An untyped throw and an unrecognised code both land on system failure,
+// which is where an error nobody classified belongs: `NextlyError` resolves
+// an unknown code to 500 unless the thrower declares otherwise, and a plugin
+// code meaning a refusal declares its status, as the code catalogue requires.
 function isSystemFailure(err: unknown): boolean {
   if (!NextlyError.is(err)) return true;
-  return !LOGIN_REFUSAL_CODES.has(err.code);
+  return err.statusCode >= 500;
 }
 
 /**
- * Requests whose response consulted a session.
+ * Whether the answer being built consulted a session.
  *
- * currentUser records here, keyed by the Request object it read, so the
- * plugin-route wrapper can mark the response it sends uncacheable: a public
- * route whose answer depends on who is asking must never reach a shared
- * proxy cache, whatever the route declaration said. A WeakMap because the
- * request is the only thing both halves hold, and its lifetime is exactly
- * the lifetime of the answer.
+ * Per INVOCATION, not per `Request` object. Keyed by the request, this missed
+ * `ctx.auth.currentUser(req.clone())` — and `new Request(req)`, and any other
+ * equivalent copy — because the clone is a different object: the flag landed
+ * on something the dispatcher never looks at, the personalised answer stayed
+ * cacheable, and a shared cache could serve one caller's data to another. A
+ * route only has to read the session through a copy of its own request, which
+ * is an ordinary thing to do when a handler wants to read the body twice.
+ *
+ * `AsyncLocalStorage` because the two halves are in different frames with
+ * nothing but the call stack between them, and a module variable would be
+ * shared by every request the process is serving at once.
  */
-const sessionConsulted = new WeakMap<Request, boolean>();
+const consultationScope = new AsyncLocalStorage<{ consulted: boolean }>();
 
-/** Record that a response was built from this request's session. */
-export function markSessionConsulted(request: Request): void {
-  sessionConsulted.set(request, true);
+/**
+ * Begin tracking one route invocation's session consultation.
+ *
+ * The caller holds the box, so the flag is readable after the scope exits AND
+ * after the invocation THREW. An error response is personal too when the
+ * handler read a session before failing, and a refusal a shared cache holds
+ * for one caller is the same defect as an answer it holds.
+ */
+export function beginSessionConsultation(): {
+  run: <T>(fn: () => Promise<T>) => Promise<T>;
+  consulted: () => boolean;
+} {
+  const box = { consulted: false };
+  return {
+    run: fn => consultationScope.run(box, fn),
+    consulted: () => box.consulted,
+  };
 }
 
-/** Whether the handler behind this request read a session. */
-export function wasSessionConsulted(request: Request): boolean {
-  return sessionConsulted.get(request) === true;
+/**
+ * Record that the answer being built was informed by a session.
+ *
+ * Takes no request: whichever object the caller read from, it is this
+ * invocation's answer that becomes personal. Outside a tracked invocation —
+ * the Direct API, a test calling the surface on its own — there is no box and
+ * nothing to record, which is correct rather than an error to report.
+ */
+export function markSessionConsulted(): void {
+  const box = consultationScope.getStore();
+  if (box) box.consulted = true;
 }
 
 export function createPluginAuthApi(
@@ -397,7 +428,7 @@ export function createPluginAuthApi(
       // Recorded even when nobody is signed in: the ANSWER differs between
       // an anonymous and a signed-in caller either way, and the cache
       // decision is about the response, not the user.
-      markSessionConsulted(request);
+      markSessionConsulted();
       return result.authenticated
         ? { id: String(result.user.id), email: String(result.user.email) }
         : null;

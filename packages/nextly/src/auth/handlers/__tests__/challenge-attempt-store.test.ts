@@ -72,7 +72,15 @@ function makeDeps(authRateLimit?: { store?: unknown }) {
 
 async function resolveOnce(deps: ReturnType<typeof makeDeps>) {
   const pendingToken = await mintPendingToken(
-    { userId: "u1", challengeId: "totp", attempts: 0 },
+    {
+      userId: "u1",
+      challengeId: "totp",
+      attempts: 0,
+      // The signed flow lifetime. A token without one is refused as an
+      // anomaly rather than treated as unlimited, so a fixture that omits it
+      // never reaches the limiter this file is about.
+      flowExpiresAt: Math.floor(Date.now() / 1000) + 300,
+    },
     SECRET,
     300
   );

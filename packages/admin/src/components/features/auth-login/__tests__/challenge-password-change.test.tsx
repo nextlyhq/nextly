@@ -147,6 +147,35 @@ describe("a wrong answer advances the token", () => {
     // The control, and the cookie-mode case: there the replacement arrives as
     // a `Set-Cookie` the browser applies, and the body carries no token at
     // all. Clearing it here would strand the next attempt with nothing.
+    //
+    // `status: "challenge"` is what makes it the cookie-mode case rather than
+    // a spent flow: the resolve endpoint puts it in every retry envelope
+    // beside whatever token it can hand over, and terminal refusals carry
+    // none. A bare `{}` is a shape no live retry produces.
+    const { result } = renderHook(() => useChallengeFlow());
+    act(() => {
+      result.current.start({
+        challengeType: "totp",
+        pendingToken: "pt-first",
+        next: null,
+      });
+    });
+
+    post.mockRejectedValueOnce(
+      envelopeError({ status: "challenge", challengeType: "totp" })
+    );
+    await act(async () => {
+      await result.current.resolve({ code: "000000" });
+    });
+
+    expect(result.current.challenge?.pendingToken).toBe("pt-first");
+  });
+
+  it("drops the challenge when the refusal is terminal", async () => {
+    // The other half of the same marker, so the fixture above is pinned as a
+    // distinction and not just as a passing shape. A spent budget carries no
+    // `status`, and leaving the challenge rendered hides the password and
+    // provider options behind a continuation nothing can finish.
     const { result } = renderHook(() => useChallengeFlow());
     act(() => {
       result.current.start({
@@ -161,7 +190,8 @@ describe("a wrong answer advances the token", () => {
       await result.current.resolve({ code: "000000" });
     });
 
-    expect(result.current.challenge?.pendingToken).toBe("pt-first");
+    expect(result.current.challenge).toBeNull();
+    expect(result.current.isContinuing()).toBe(false);
   });
 });
 

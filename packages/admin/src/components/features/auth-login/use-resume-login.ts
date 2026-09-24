@@ -187,6 +187,17 @@ export interface ChallengeFlow {
    * read and the component has none to reconcile.
    */
   requirePasswordChange: (raised: { pendingToken: string }) => void;
+  /**
+   * Abandon a forced password change whose credential the server rejected.
+   *
+   * The set-password view is rendered INSTEAD of the sign-in form, so a flow
+   * that can no longer complete — an expired, replayed, or already-answered
+   * pending token — has to be cleared from here or the person is left on a
+   * form that only fails, with no way back but a page reload. Clearing the
+   * continuation refs too: an abandoned flow is not a continuation, and
+   * leaving them set kept a later resume from ever showing.
+   */
+  abandonPasswordChange: () => void;
   /** Called when a password login returns a challenge instead of a session. */
   start: (challenge: ActiveChallenge) => void;
   /** Post an answer. Navigates on success; returns the message on failure. */
@@ -349,6 +360,11 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
       // leave it showing.
       if (raised.pendingToken) localContinuationRef.current = true;
       setPasswordChange(raised);
+    },
+    abandonPasswordChange: () => {
+      continuingRef.current = false;
+      localContinuationRef.current = false;
+      setPasswordChange(null);
     },
     isContinuing: () => continuingRef.current,
     start: started => {

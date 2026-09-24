@@ -1,4 +1,5 @@
 import { buildErrorResponse } from "../../api/error-response";
+import { readBoundedJsonBody } from "../../api/read-json-body";
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { applySessionCacheHeaders } from "../../api/response-shapes";
 import {
@@ -12,7 +13,7 @@ import {
   requirePermission,
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
-import { wasSessionConsulted } from "../../auth/plugin-auth-api";
+import { beginSessionConsultation } from "../../auth/plugin-auth-api";
 import { NextlyError } from "../../errors/nextly-error";
 import { runWithRequestScope } from "../../hooks/request-scope";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
@@ -249,7 +250,12 @@ function permissionArgs(slug: string): [string, string] {
 function markPluginResponse(
   response: Response,
   route: PluginRoute,
-  req?: Request
+  /**
+   * Whether the invocation read a session, as `trackSessionConsultation`
+   * reports it. A boolean rather than the request, because the answer is a
+   * property of the invocation and not of any one `Request` object.
+   */
+  sessionConsulted = false
 ): Response {
   const headers = new Headers(response.headers);
   if (route.formatTimestamps !== true) {
@@ -261,7 +267,7 @@ function markPluginResponse(
   // one caller's data to another. currentUser flags the request on the way
   // through; this is where the flag becomes a header, so no plugin can
   // forget it.
-  if (req && wasSessionConsulted(req)) {
+  if (sessionConsulted) {
     headers.set("Cache-Control", "no-store");
   }
   return new Response(response.body, {
@@ -447,6 +453,61 @@ async function applyRouteRateLimit(
   );
 }
 
+/**
+ * How much of a body may be read while looking for a CSRF token.
+ *
+ * The token is consulted only as a top-level `csrfToken` string, so a body
+ * that needs more than this to reach it is one the `x-csrf-token` header
+ * exists to serve.
+ */
+const MAX_CSRF_BODY_BYTES = 64 * 1024;
+
+/**
+ * The body fields the CSRF check may consult, read WITHOUT buffering whatever
+ * the caller sent.
+ *
+ * Both bounds exist because this runs BEFORE the token is validated: a caller
+ * about to be refused must not be able to decide how much the refusal costs.
+ * `req.clone().json()` let an unauthenticated-in-effect request buffer a body
+ * of any size — chunked, so no `Content-Length` announced it — and the
+ * dispatcher paid for all of it before deciding the request was forged.
+ *
+ *  - A request carrying `x-csrf-token` is not read at all. The header is what
+ *    `readCsrfFromRequest` returns whenever it is present, so reading a body
+ *    to find a value that would then be ignored was pure cost.
+ *  - Otherwise the read stops at {@link MAX_CSRF_BODY_BYTES}.
+ *
+ * The read is on a CLONE so the handler still receives the body, and because
+ * a clone tees the stream, bounding this read is also what bounds the copy
+ * the original branch buffers behind it.
+ */
+async function readCsrfBody(
+  req: Request
+): Promise<{ body?: Record<string, unknown>; tooLarge: boolean }> {
+  if (req.headers.get("x-csrf-token")) return { tooLarge: false };
+
+  try {
+    const parsed: unknown = await readBoundedJsonBody(
+      req.clone(),
+      MAX_CSRF_BODY_BYTES
+    );
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { body: parsed as Record<string, unknown>, tooLarge: false };
+    }
+    return { tooLarge: false };
+  } catch (err) {
+    // A body that is not JSON carries no token; the header is still checked.
+    // The size refusal is reported separately — it is the one case where a
+    // token may well have been present, so an operator reading the 403 needs
+    // to see that nothing looked for it rather than that nothing was sent.
+    // `body-too-large` is the reason `readBoundedJsonBody` documents for it.
+    return {
+      tooLarge:
+        NextlyError.is(err) && err.logContext?.reason === "body-too-large",
+    };
+  }
+}
+
 /** Check the route's CSRF requirement, returning the refusal when it fails. */
 async function applyRouteCsrf(
   req: Request,
@@ -455,18 +516,7 @@ async function applyRouteCsrf(
 ): Promise<Response | null> {
   if (!csrfApplies(matched.route, req, credential)) return null;
 
-  // Read without consuming: the handler still needs the body. A clone is the
-  // only way to look at it twice.
-  let body: Record<string, unknown> | undefined;
-  try {
-    const parsed: unknown = await req.clone().json();
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      body = parsed as Record<string, unknown>;
-    }
-  } catch {
-    // A body that is not JSON carries no token; the header is still checked.
-    body = undefined;
-  }
+  const { body, tooLarge } = await readCsrfBody(req);
 
   const { env } = await import("../../lib/env");
   const result = checkRouteCsrf(
@@ -490,6 +540,7 @@ async function applyRouteCsrf(
         reason: "plugin-route-csrf-failed",
         plugin: matched.pluginName,
         path: matched.route.path,
+        ...(tooLarge ? { bodyUnreadable: "too-large" } : {}),
       },
     }),
     {
@@ -580,6 +631,12 @@ export async function runPluginRoute(
     matched.route.handler
   );
 
+  // Declared OUTSIDE the try, so the failure path can read it too: a handler
+  // that read a session and then threw produced a personal error response,
+  // and a refusal a shared cache holds for one caller is the same defect as
+  // an answer it holds.
+  const session = beginSessionConsultation();
+
   try {
     // Both scopes pinned for the length of the handler, so a service call
     // inside it inherits the key's grants and the request without the handler
@@ -587,13 +644,15 @@ export async function runPluginRoute(
     // existed composes `{ as: "user", user }` by hand: an opt-in field leaves
     // all of them authorizing the key as its owner, and leaves every read and
     // write they make looking like background work to a hook.
-    const response = await runWithRequestScope(req, () =>
-      runWithCallerScope(auth.authenticatedScope, () => run(req, ctx))
+    const response = await session.run(() =>
+      runWithRequestScope(req, () =>
+        runWithCallerScope(auth.authenticatedScope, () => run(req, ctx))
+      )
     );
     return markPluginResponse(
       withNoStore(response, matched.route),
       matched.route,
-      req
+      session.consulted()
     );
   } catch (err) {
     // The SAME cache directive as the success path. A route declaring
@@ -604,7 +663,9 @@ export async function runPluginRoute(
     return markPluginResponse(
       withNoStore(toErrorResponse(req, err), matched.route),
       matched.route,
-      req
+      // An error response is personal too when the handler read a session
+      // before it failed.
+      session.consulted()
     );
   }
 }

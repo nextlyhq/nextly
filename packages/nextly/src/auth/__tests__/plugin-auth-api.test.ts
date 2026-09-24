@@ -246,6 +246,107 @@ describe("ctx.auth.completeLogin", () => {
     expect(fetchAccountState).not.toHaveBeenCalled();
   });
 
+  // Every 4xx is a verdict about the caller, so every one of them owes the
+  // audited redirect. An allowlist of six codes answered only six of them and
+  // rethrew the rest as outages — a hook denying by a rule, an expired
+  // provider token, an oversized callback — which broke the documented
+  // always-return-a-redirect contract and skipped the `login-failed` row.
+  it.each([
+    ["NOT_FOUND", 404],
+    ["BUSINESS_RULE_VIOLATION", 422],
+    ["TOKEN_EXPIRED", 401],
+    ["PAYLOAD_TOO_LARGE", 413],
+  ])("redirects when a beforeLogin hook aborts with %s", async code => {
+    const hooks = new AuthHookRegistry();
+    hooks.add({
+      beforeLogin: () => {
+        throw new NextlyError({
+          code: code as never,
+          publicMessage: "Refused.",
+        });
+      },
+    });
+
+    const res = await api(makeDeps({ hooks })).completeLogin("u1", {
+      request,
+      strategy: "oauth-test",
+    });
+
+    expect(res.headers.get("Location")).toBe(
+      "/admin/login?error=signin-failed"
+    );
+  });
+
+  // The must-differ control. Substituting a redirect for everything would
+  // satisfy the tests above and report an outage as a rejection of the
+  // person, which is the failure the classifier exists to prevent.
+  it.each([
+    ["SERVICE_UNAVAILABLE", 503],
+    ["EXTERNAL_SERVICE_ERROR", 502],
+    ["DATABASE_ERROR", 500],
+  ])("lets a beforeLogin hook's %s keep travelling", async code => {
+    const hooks = new AuthHookRegistry();
+    hooks.add({
+      beforeLogin: () => {
+        throw new NextlyError({
+          code: code as never,
+          publicMessage: "Unavailable.",
+        });
+      },
+    });
+
+    await expect(
+      api(makeDeps({ hooks })).completeLogin("u1", {
+        request,
+        strategy: "oauth-test",
+      })
+    ).rejects.toSatisfy((e: unknown) => NextlyError.is(e) && e.code === code);
+  });
+
+  // A plugin's own code, which the catalogue does not carry. It resolves to
+  // 500 unless the thrower declares otherwise, so the two halves of that
+  // contract are pinned here: declared 4xx is answered, undeclared escapes.
+  it("answers a plugin code that DECLARES a 4xx status", async () => {
+    const hooks = new AuthHookRegistry();
+    hooks.add({
+      beforeLogin: () => {
+        throw new NextlyError({
+          code: "ACME_SEAT_LIMIT_REACHED" as never,
+          statusCode: 402,
+          publicMessage: "No seats left.",
+        });
+      },
+    });
+
+    const res = await api(makeDeps({ hooks })).completeLogin("u1", {
+      request,
+      strategy: "oauth-test",
+    });
+
+    expect(res.headers.get("Location")).toBe(
+      "/admin/login?error=signin-failed"
+    );
+  });
+
+  it("lets an undeclared plugin code escape", async () => {
+    const hooks = new AuthHookRegistry();
+    hooks.add({
+      beforeLogin: () => {
+        throw new NextlyError({
+          code: "ACME_SOMETHING_BROKE" as never,
+          publicMessage: "Broke.",
+        });
+      },
+    });
+
+    await expect(
+      api(makeDeps({ hooks })).completeLogin("u1", {
+        request,
+        strategy: "oauth-test",
+      })
+    ).rejects.toThrow();
+  });
+
   it("throws on a malformed strategy name, because that is a plugin bug", async () => {
     await expect(
       api(makeDeps()).completeLogin("u1", {

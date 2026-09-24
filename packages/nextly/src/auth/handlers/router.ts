@@ -131,7 +131,8 @@ export interface AuthRouterDeps {
     email: string;
     name: string;
     image: string | null;
-    passwordHash: string;
+    /** Null for an account that authenticates through an external provider. */
+    passwordHash: string | null;
     emailVerified: Date | null;
     isActive: boolean;
     mustChangePassword: boolean | null;
