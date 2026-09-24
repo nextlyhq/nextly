@@ -162,11 +162,22 @@ export function turboInvocations(script) {
  */
 export const HEAVY_ENTRIES = ["scripts/measure-facts.mjs"];
 
-/** Problems with the heavy entry points: each must call `handOver`. */
+/**
+ * Problems with the heavy entry points. Each must call `handOver`, and guard
+ * its heavy work with `requireBounded`: a text check cannot tell whether the
+ * hand-over runs before the heavy work, and the guard makes that a refusal at
+ * run time rather than a question for this check.
+ */
 export function entryProblems(sources) {
-  return HEAVY_ENTRIES.filter(path => !/\bhandOver\(/.test(withoutComments(sources[path] ?? ""))).map(
-    path => `${path}: has a heavy mode that does not hand itself to ${HEAVY_RUNNER}`
-  );
+  return HEAVY_ENTRIES.flatMap(path => entryProblem(path, withoutComments(sources[path] ?? "")));
+}
+
+function entryProblem(path, code) {
+  if (!/\bhandOver\(/.test(code)) return [`${path}: has a heavy mode that does not hand itself to ${HEAVY_RUNNER}`];
+  if (!/\brequireBounded\(/.test(code)) {
+    return [`${path}: runs heavy work without requireBounded(), so a hand-over moved or never reached would run it unbounded`];
+  }
+  return [];
 }
 
 /** Source text without its comments — prose that names a call is not the call. */

@@ -425,7 +425,10 @@ describe("holding the heavy root scripts to the bounded runner", () => {
 });
 
 describe("holding scripts with a heavy mode to the bounded runner", () => {
-  const handsOver = 'if (FULL) handOver(fileURLToPath(import.meta.url), process.argv.slice(2));';
+  const handsOver = [
+    'function turboRow(cmd) { requireBounded("a forced turbo run"); }',
+    'if (FULL) handOver(fileURLToPath(import.meta.url), process.argv.slice(2));',
+  ].join("\n");
 
   it("is silent when every heavy entry point hands itself over", () => {
     expect(entryProblems(Object.fromEntries(HEAVY_ENTRIES.map(path => [path, handsOver])))).toEqual([]);
@@ -439,6 +442,17 @@ describe("holding scripts with a heavy mode to the bounded runner", () => {
   it("names a heavy entry point that runs its heavy mode directly", () => {
     const direct = { "scripts/measure-facts.mjs": 'spawnSync("bash", ["-c", "pnpm turbo run lint --force"]);' };
     expect(entryProblems(direct)).toEqual([expect.stringContaining("scripts/measure-facts.mjs: has a heavy mode")]);
+  });
+
+  /*
+   * A text check cannot tell whether the hand-over runs before the heavy work
+   * — it could sit in a string, a dead branch, or after the turbo runs. The
+   * guard at the heavy work makes that a refusal at run time, so its absence
+   * is what this check names.
+   */
+  it("names a heavy entry point whose heavy work is not guarded", () => {
+    const unguarded = { "scripts/measure-facts.mjs": "if (FULL) handOver(script, args);" };
+    expect(entryProblems(unguarded)).toEqual([expect.stringContaining("runs heavy work without requireBounded()")]);
   });
 
   it("does not accept a hand-over that exists only in a comment, or a file that is missing", () => {

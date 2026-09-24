@@ -38,6 +38,7 @@ import {
   parseProcessTable,
   processTable,
   release,
+  requireBounded,
   runMembers,
   slotCount,
   slotDir,
@@ -378,6 +379,14 @@ describe("the machine-wide heavy slot", () => {
     expect(existsSync(slot)).toBe(true);
     release(slot, process.pid);
     expect(existsSync(slot)).toBe(false);
+  });
+});
+
+describe("refusing heavy work outside a bounded run", () => {
+  it("refuses outside a run, and allows it inside one or in CI", () => {
+    expect(() => requireBounded("a forced turbo run", {})).toThrow(/must run inside scripts\/bounded\.mjs/);
+    expect(() => requireBounded("a forced turbo run", { NEXTLY_BOUNDED: "1" })).not.toThrow();
+    expect(() => requireBounded("a forced turbo run", { CI: "true" })).not.toThrow();
   });
 });
 

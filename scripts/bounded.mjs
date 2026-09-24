@@ -809,6 +809,16 @@ export function handOver(script, args, env = process.env) {
   process.exit(exitCode(result.status, result.signal));
 }
 
+/**
+ * Refuses heavy work outside a bounded run. A script with a heavy mode calls
+ * this where the heavy work starts, so a hand-over that was removed, moved
+ * after it or never reached fails loudly, instead of running unbounded.
+ */
+export function requireBounded(what, env = process.env) {
+  if (env[NESTED] || isCi(env)) return;
+  throw new Error(`bounded: ${what} is heavy and must run inside scripts/bounded.mjs — call handOver() first`);
+}
+
 function boundedCommand(request, limits) {
   return request.vitestWorkers ? withWorkerCap(request.command, limits.maxWorkers) : request.command;
 }
