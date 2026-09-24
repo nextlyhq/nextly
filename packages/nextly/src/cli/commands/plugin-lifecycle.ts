@@ -50,8 +50,25 @@ export interface PluginLifecycleDeps {
     hook: "onInstall" | "onUninstall",
     opts: { keepData: boolean }
   ) => Promise<void>;
-  /** Executes DOWN statements for one module, newest first. */
-  runDown?: (plugin: LifecyclePlugin, moduleName: string) => Promise<number>;
+  /**
+   * Executes DOWN statements for one module, newest first.
+   *
+   * REQUIRED for the same reason `applyMigrations` is: optional, it was never
+   * passed, so a confirmed uninstall logged every module as reverted and
+   * recorded the plugin uninstalled while its tables and their data stayed
+   * exactly where they were.
+   */
+  runDown: (plugin: LifecyclePlugin, moduleName: string) => Promise<number>;
+  /**
+   * Applies the plugin's pending migration modules.
+   *
+   * REQUIRED, unlike the two above. Install previously recorded a plugin as
+   * installed and reported success without applying anything, so an operator
+   * was told the tables were there and every later query disagreed. An
+   * optional callback is what allowed that: the one caller simply did not
+   * pass it, and nothing said so.
+   */
+  applyMigrations: (plugin: LifecyclePlugin) => Promise<void>;
 }
 
 function find(
@@ -90,6 +107,13 @@ export async function runPluginInstallCommand(
 
   deps.logger.info(`Installing ${plugin.name}@${plugin.version}...`);
 
+  // BEFORE the hook, because `onInstall` is documented as running against the
+  // plugin's own tables: a hook that seeds a row cannot do it into a table no
+  // migration has created yet. The phase reports its own applied/adopted
+  // counts — this command does not restate them, because a second count is a
+  // second thing that can be wrong.
+  await deps.applyMigrations(plugin);
+
   await deps.runLifecycleHook?.(plugin, "onInstall", { keepData: false });
 
   const owned = await registry.listByOwner(plugin.name);
@@ -120,9 +144,7 @@ export async function runPluginUninstallCommand(
   // Element rows on this plugin's tables that somebody else owns — they go
   // with the table on a full uninstall, and the confirmation names them.
   const foreignElements = (
-    await repository.read(
-      [...new Set(owned.map(row => row.tableName))]
-    )
+    await repository.read([...new Set(owned.map(row => row.tableName))])
   ).filter(
     row =>
       (row.elementKind ?? "table") !== "table" && row.ownerId !== plugin.name
@@ -166,9 +188,9 @@ export async function runPluginUninstallCommand(
   });
 
   for (const moduleName of plan.downModules) {
-    const executed = await deps.runDown?.(plugin, moduleName);
+    const executed = await deps.runDown(plugin, moduleName);
     deps.logger.info(
-      `Reverted ${moduleName}${executed === undefined ? "" : ` (${String(executed)} statement(s))`}`
+      `Reverted ${moduleName} (${String(executed)} statement(s))`
     );
   }
 

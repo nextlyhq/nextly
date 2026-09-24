@@ -67,5 +67,29 @@ record is never dropped by anything.
 `--keep-data`, a refusal while another plugin depends on it, and a refusal
 when a migration cannot be undone.
 
+**A column contributed to a table you do not own now arrives.**
+`extendTable({ columns })` validated the column, marked it hidden and recorded
+who contributed it, then reached nothing: no table spec, so it was never
+created, and no runtime table, so `ctx.db` could not have used it. It now
+reaches the desired spec, the runtime table and the schema fingerprint, and is
+stripped from every entry the API returns — a column on the table is a column
+`select()` returns, and this one is no field of the entity.
+
+**`contributes.transform`** lets a plugin change entities another plugin
+declared, not only add fields to them. `setup(config)` runs before plugin
+schema contributions are merged and never sees them; transforms run after, in
+dependency order, each handed a frozen copy.
+
+**`db.postgres.schema`** puts every managed table, the migrate lock and the
+ledger in one PostgreSQL schema, applied as `search_path` so it covers SQL
+that never went through the query builder. MySQL and SQLite warn and ignore
+it.
+
+**`col.enum()` enforces its values** through a check constraint — the one
+mechanism all three dialects have — and `col.serial()` declares a
+database-assigned key. A collection can choose `db.idType` between random and
+time-ordered UUIDs, and accept a client-supplied id with
+`db.allowIdOnCreate`.
+
 Full details: `docs/plugins/schema.mdx`, `docs/database/extending-the-schema.mdx`
 and `docs/guides/production-migrations.mdx`.

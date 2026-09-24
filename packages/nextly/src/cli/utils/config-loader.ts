@@ -38,6 +38,10 @@ import {
   snapshotFieldTypes,
   withoutDisabledBehavior,
 } from "../../domains/schema/field-types/field-type-registry";
+import {
+  resolvePostgresSchema,
+  setActivePostgresSchema,
+} from "../../domains/schema/services/postgres-schema";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
 import { NextlyError, describeError } from "../../errors/index";
@@ -693,6 +697,31 @@ async function loadConfigInternal(
 }
 
 /**
+ * Make the config's PostgreSQL schema the one this CLI process resolves in.
+ *
+ * The runtime publishes the same value at boot, from the dialect the adapter
+ * reports. A CLI command has no adapter yet when it loads the config, so it
+ * resolves against the dialect the environment names — the same answer, taken
+ * one step earlier.
+ *
+ * Without this the application ran in `cms` while `migrate`, `migrate:down`
+ * and the status commands worked through `public`: a split lock, a split
+ * ledger, and DDL applied to a namespace nothing reads.
+ */
+function publishConfiguredPostgresSchema(config: {
+  db?: { postgres?: { schema?: string } };
+}): void {
+  const configured = config.db?.postgres?.schema;
+  if (configured === undefined) return;
+  const dialect =
+    process.env.DB_DIALECT ??
+    (process.env.DATABASE_URL?.startsWith("postgres") === true
+      ? "postgresql"
+      : "sqlite");
+  setActivePostgresSchema(resolvePostgresSchema(configured, dialect));
+}
+
+/**
  * Load the Nextly configuration from file.
  *
  * Searches for config files in the following locations (in order):
@@ -744,6 +773,12 @@ export async function loadConfig(
     // This config is now the installed one, so its registry is what a
     // superseded reload has to put back if it finishes after the swap.
     markInstalledFieldTypes(loaded);
+    // And its PostgreSQL schema is now the one every CLI command resolves in.
+    // Published HERE because this is the one place every command that reads
+    // `nextly.config.ts` passes through: the adapter factory and the schema
+    // pipeline both read the active value, so `migrate` cannot end up applying
+    // DDL to `public` while the application it is migrating runs in `cms`.
+    publishConfiguredPostgresSchema(loaded.config);
     return loaded;
   });
 

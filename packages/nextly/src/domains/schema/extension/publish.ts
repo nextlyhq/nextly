@@ -20,6 +20,8 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../../plugins/plugin-slug";
 import { CORE_TABLE_NAMES } from "../../../schemas";
+import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
+import { resolveComponentTableName } from "../utils/resolve-table-name";
 
 import type { DrizzleSchemaHook } from "./after-drizzle";
 import {
@@ -45,6 +47,10 @@ interface PublishInput {
    */
   config: {
     collections?: readonly unknown[];
+    // Seeded alongside collections, because a hook may target any entity
+    // table and the draft accepts all three kinds.
+    singles?: readonly unknown[];
+    fieldGroups?: readonly unknown[];
     db?: unknown;
   };
   logger: { warn: (message: string) => void; debug?: (m: string) => void };
@@ -145,19 +151,52 @@ export async function compileAndPublishExtensionSchema(
     return undefined;
   }
 
+  // All three entity kinds, not collections alone. A hook may index or extend
+  // a single or a field group exactly as it may a collection — the draft
+  // accepts `single_*` and `comp_*` as entity targets, and the desired-spec
+  // side carries contributed columns for all three — but a table absent from
+  // this seed is one `getTable` cannot find, so the hook failed at boot with
+  // "Table ... does not exist" before any of that could run.
+  //
+  // Names come from the canonical resolvers rather than from a prefix spelled
+  // here: a single may carry a `dbName`, and a field group's prefix is a
+  // storage-format constant. Spelling either by hand is how the seed comes to
+  // disagree with the table the pipeline actually creates.
   const collections = (input.config.collections ?? []) as {
     slug: string;
   }[];
-  const entities: SeedEntityTable[] = collections.map(collection => ({
-    name: `dc_${collection.slug}`,
-    slug: collection.slug,
-    entityKind: "collection",
-    // Columns are seeded empty: a hook looks a table UP to check it exists
-    // and to index it, and the diff derives the real columns from the
-    // fields. Listing them here would be a second derivation of the same
-    // thing, and the one that drifts is the one nobody reads.
-    columns: [],
-  }));
+  const singles = (input.config.singles ?? []) as {
+    slug: string;
+    dbName?: string;
+  }[];
+  const fieldGroups = (input.config.fieldGroups ?? []) as {
+    slug: string;
+  }[];
+
+  // Columns are seeded empty for every kind: a hook looks a table UP to check
+  // it exists and to index it, and the diff derives the real columns from the
+  // fields. Listing them here would be a second derivation of the same thing,
+  // and the one that drifts is the one nobody reads.
+  const entities: SeedEntityTable[] = [
+    ...collections.map(collection => ({
+      name: `dc_${collection.slug}`,
+      slug: collection.slug,
+      entityKind: "collection" as const,
+      columns: [],
+    })),
+    ...singles.map(single => ({
+      name: resolveSingleTableName(single),
+      slug: single.slug,
+      entityKind: "single" as const,
+      columns: [],
+    })),
+    ...fieldGroups.map(group => ({
+      name: resolveComponentTableName(group.slug),
+      slug: group.slug,
+      entityKind: "component" as const,
+      columns: [],
+    })),
+  ];
 
   const schema = await buildExtensionSchema({
     dialect: input.dialect,
