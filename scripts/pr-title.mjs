@@ -135,7 +135,9 @@ function eventTitle(title) {
 }
 
 /**
- * The subjects of the commits the queue would put on `main`, oldest first.
+ * The subjects of the commits the queue would put on `main`, oldest first,
+ * following `main`'s own line: the first parent at each step, so a commit
+ * reachable only through a merge's second parent is not one that lands there.
  * With squash merging each is one pull request's commit, its subject the title
  * and `(#number)`; a merge commit's subject is not a Conventional Commits
  * title, so a queue that merges rather than squashes is refused here too.
@@ -150,7 +152,7 @@ function bothEnds({ base_sha: base, head_sha: head }) {
 }
 
 function subjectsBetween(base, head, git) {
-  const log = git(["log", "--reverse", "--format=%s%x00", `${base}..${head}`]);
+  const log = git(["log", "--first-parent", "--reverse", "--format=%s%x00", `${base}..${head}`]);
   if (!log.ok) return { problem: `Could not read the commits between the queue's base ${base} and its head ${head}.` };
   const titles = log.out.split("\0").map(subject => subject.trim()).filter(Boolean);
   return titles.length > 0 ? { titles } : { problem: "The merge queue's head adds no commits to its base." };

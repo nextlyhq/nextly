@@ -491,13 +491,23 @@ jobs:
       # changeset the branch picked up by merging `main` as one this branch
       # wrote, which is how a guard starts failing PRs over other people's files.
       #
-      # The merge queue's commit has the same shape: its first parent is the
-      # queue's base, or the pull request ahead of it, so `HEAD^1` again leaves
-      # exactly this pull request's changes, and the check runs there too.
+      # In the merge queue the comparison is with the queue's base instead. A
+      # group's head holds every member's changes, and `HEAD^1` would leave
+      # only the last member's, so an earlier member's changeset would never be
+      # read against the group it lands with.
       - name: Changeset covers the lockstep group
         if: ${{ !cancelled() && steps.install.outcome == 'success' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+        env:
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
           set -euo pipefail
+          # Two commits are all a diff reads, so the queue's base is fetched
+          # alone rather than the history between it and the head.
+          base="HEAD^1"
+          if [ -n "$QUEUE_BASE" ]; then
+            git fetch --quiet --no-tags --depth=1 origin "$QUEUE_BASE"
+            base="$QUEUE_BASE"
+          fi
           # `git diff` runs on its own line so a failure — an unavailable `HEAD^1`
           # in some other checkout shape, a broken object store — aborts the step
           # under `set -e`. Inside a pipeline with a trailing `|| true` it would
@@ -519,7 +529,7 @@ jobs:
           # `/` while `@changesets/read` lists `.changeset` non-recursively — so
           # a file under `.changeset/archive/` is something the release never
           # reads, and checking it would fail a pull request over a note.
-          touched="$(git diff --name-only --diff-filter=ACMRT HEAD^1 HEAD -- '.changeset/*.md' ':(exclude).changeset/*/**')"
+          touched="$(git diff --name-only --diff-filter=ACMRT "$base" HEAD -- '.changeset/*.md' ':(exclude).changeset/*/**')"
           printf '%s\n' "$touched" | node scripts/release/check-changesets.mjs
 
       # Enforce the design-token theming contract in the admin + plugin packages

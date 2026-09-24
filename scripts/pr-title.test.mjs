@@ -125,6 +125,16 @@ describe("where the titles come from", () => {
     expect(problem).not.toMatch(/handle a timeout/);
   });
 
+  it("follows the line that lands, not a merge's second parent", () => {
+    const base = commit("chore: the base");
+    run("checkout", "-q", "-b", "side");
+    commit("wip on the side");
+    run("checkout", "-q", "main");
+    run("-c", "user.name=test", "-c", "user.email=test@example.com", "merge", "-q", "--no-ff", "-m", "feat(admin): add a dialog (#1)", "side");
+    const head = run("rev-parse", "HEAD");
+    expect(titlesFor(queued(base, head), inRepo)).toEqual({ titles: ["feat(admin): add a dialog (#1)"] });
+  });
+
   it("is a problem, never a pass, when the queued commits cannot be read", () => {
     const base = commit("chore: the base");
     expect(titlesFor({ event: "merge_group", payload: { merge_group: { head_sha: base } } }, inRepo)).toEqual({ problem: "The merge-queue event names no base or no head commit." });

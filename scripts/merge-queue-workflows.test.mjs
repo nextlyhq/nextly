@@ -64,6 +64,20 @@ describe("the change scope, which decides whether required jobs run", () => {
   }
 });
 
+describe("the changeset check in the queue", () => {
+  /*
+   * A group's head holds every member's changes. Compared with `HEAD^1` it
+   * would read only the last member's changesets, so in the queue it is
+   * compared with the queue's base.
+   */
+  it("compares a queued group with the queue's base", () => {
+    const step = read(".github/workflows/ci.yml").jobs.ci.steps.find(candidate => candidate.name === "Changeset covers the lockstep group");
+    expect(step.env.QUEUE_BASE).toBe("${{ github.event.merge_group.base_sha }}");
+    expect(step.run).toMatch(/git diff --name-only --diff-filter=ACMRT "\$base" HEAD/);
+    expect(step.run).toMatch(/base="\$QUEUE_BASE"/);
+  });
+});
+
 describe("the last commit Integration tested", () => {
   /*
    * The change scope of a push compares with the last commit this workflow
