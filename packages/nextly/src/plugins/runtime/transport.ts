@@ -32,6 +32,15 @@ import type { ResolvedAddress } from "./fetch";
  */
 const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 
+//
+// The byte cap a REQUEST body may buffer to, mirroring the response cap the
+// caller passes. Buffering precedes any socket, so nothing downstream can
+// push back on a producer that keeps enqueueing -- the cap is the only
+// bound between a public route forwarding a fast stream and the memory of
+// the worker hosting it.
+//
+const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
+
 export interface SendArgs {
   url: URL;
   address: ResolvedAddress;
@@ -124,11 +133,29 @@ async function drainStream(
   signal?.addEventListener("abort", release, { once: true });
 
   const chunks: Buffer[] = [];
+  // Bounded like the response side. Buffering the whole body before any
+  // socket exists means no backpressure can apply: an unbounded drain let a
+  // public proxy or upload route hand `ctx.fetch` a fast body far larger
+  // than anything the response cap permits, and exhaust the worker's memory
+  // well before the deadline — refusing is the only bound that holds.
+  let size = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (value) chunks.push(Buffer.from(value));
+      if (value) {
+        size += value.length;
+        if (size > MAX_REQUEST_BODY_BYTES) {
+          release();
+          throw NextlyError.forbidden({
+            logContext: {
+              reason: "outbound-request-body-too-large",
+              limit: MAX_REQUEST_BODY_BYTES,
+            },
+          });
+        }
+        chunks.push(Buffer.from(value));
+      }
     }
   } finally {
     signal?.removeEventListener("abort", release);

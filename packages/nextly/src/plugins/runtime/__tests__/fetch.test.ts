@@ -595,3 +595,67 @@ describe("the deprecated site-local range", () => {
     expect(judgeIpv6("fec0::1").allowed).toBe(false);
   });
 });
+
+describe("cross-origin redirects", () => {
+  it("drops a custom credential header the caller sent", async () => {
+    // X-API-Key and every provider-invented spelling ride a denylist gap;
+    // the hop keeps only body/transport headers now.
+    const d = deps();
+    (d.send as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://other.provider.example/x" },
+        })
+      )
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const res = await createPluginFetch(d)("https://api.example.com/token", {
+      headers: { "x-api-key": "sk-live", "content-type": "application/json" },
+    });
+    expect(res.status).toBe(200);
+
+    const second = (d.send as ReturnType<typeof vi.fn>).mock.calls[1][0] as {
+      init: RequestInit;
+    };
+    const sent = new Headers(second.init.headers);
+    expect(sent.get("x-api-key")).toBeNull();
+    expect(sent.get("content-type")).toBe("application/json");
+  });
+});
+
+describe("DNS failover", () => {
+  it("tries the next vetted answer when the first refuses the connection", async () => {
+    const DEAD = { address: "93.184.216.34", family: 4 } as never;
+    const LIVE = { address: "93.184.216.35", family: 4 } as never;
+    const d = deps({ resolve: vi.fn(async () => [DEAD, LIVE]) });
+    (d.send as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(
+        Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" })
+      )
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const res = await createPluginFetch(d)("https://api.example.com/token");
+    expect(res.status).toBe(200);
+    const calls = (d.send as ReturnType<typeof vi.fn>).mock.calls;
+    expect((calls[0][0] as { address: unknown }).address).toBe(DEAD);
+    expect((calls[1][0] as { address: unknown }).address).toBe(LIVE);
+  });
+
+  it("rethrows the transport failure when every answer refuses", async () => {
+    const d = deps({
+      resolve: vi.fn(async () => [
+        { address: "93.184.216.34", family: 4 },
+        { address: "93.184.216.35", family: 4 },
+      ]),
+    });
+    (d.send as ReturnType<typeof vi.fn>).mockRejectedValue(
+      Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" })
+    );
+
+    await expect(
+      createPluginFetch(d)("https://api.example.com/token")
+    ).rejects.toThrow("ECONNREFUSED");
+    expect((d.send as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(2);
+  });
+});

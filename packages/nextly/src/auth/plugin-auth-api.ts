@@ -195,21 +195,21 @@ async function loadUsableUser(
 }
 
 /**
- * The refusals a login may legitimately end in, as opposed to failures.
+ * Whether an error is the SYSTEM failing rather than a refusal.
  *
- * Every one of these is a decision ABOUT the caller, so each is answered the
- * same audited way. Anything outside this set means the attempt could not be
- * judged at all.
+ * completeLogin answers every typed refusal with the audited redirect its
+ * contract promises — a hook aborting with validation() or conflict() is a
+ * decision about the caller, not an outage. Only errors the system raised
+ * about itself keep travelling: answering those as "sign-in failed" would
+ * present an infrastructure failure as a verdict about the person's
+ * credentials.
  */
-const EXPECTED_LOGIN_REFUSALS = [
-  "AUTH_INVALID_CREDENTIALS",
-  "FORBIDDEN",
-  "RATE_LIMITED",
-  "AUTH_REQUIRED",
-] as const;
-
-function isExpectedLoginRefusal(err: unknown): boolean {
-  return EXPECTED_LOGIN_REFUSALS.some(code => NextlyError.isCode(err, code));
+function isSystemFailure(err: unknown): boolean {
+  return (
+    !NextlyError.is(err) ||
+    err.code === "INTERNAL_ERROR" ||
+    err.code === "DATABASE_ERROR"
+  );
 }
 
 /**
@@ -329,12 +329,7 @@ export function createPluginAuthApi(
         // by policy or rate limit broke the documented always-return-a-redirect
         // contract, skipped the `login-failed` row, and surfaced the exception
         // in whichever plugin route had called in.
-        //
-        // A NAMED set rather than "any NextlyError": an INTERNAL_ERROR or a
-        // DATABASE_ERROR reaching here means the login could not be decided,
-        // and answering "sign-in failed" would present an outage as a verdict
-        // about the person's credentials.
-        if (!isExpectedLoginRefusal(err)) throw err;
+        if (isSystemFailure(err)) throw err;
         // Actor-less, like the login handler: naming the account on a failure
         // is the enumeration leak the generic response exists to avoid.
         await deps.auditLog.write({

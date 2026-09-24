@@ -126,6 +126,7 @@ export function buildAuthRouterDeps(
           isActive: schema.users.isActive,
           lockedUntil: schema.users.lockedUntil,
           emailVerified: schema.users.emailVerified,
+          mustChangePassword: schema.users.mustChangePassword,
         })
         .from(schema.users)
         .where(eq(schema.users.id, userId))

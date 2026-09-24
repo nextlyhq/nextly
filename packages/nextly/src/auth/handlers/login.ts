@@ -15,7 +15,10 @@ import {
 } from "../pipeline/pending-token";
 import { runStrategyChain } from "../pipeline/strategy-chain";
 import type { AuthStrategy } from "../pipeline/types";
-import { assertAccountUsable } from "../session/account-state";
+import {
+  assertAccountUsable,
+  type AccountState,
+} from "../session/account-state";
 
 import {
   jsonResponse,
@@ -119,9 +122,10 @@ async function interruptedLogin(
     afterAuth: Awaited<ReturnType<AuthHookRegistry["runAfterAuthenticate"]>>;
     strategy?: string;
     requestId: string;
+    mustChangePassword: boolean;
   }
 ): Promise<LoginContinuation> {
-  const { afterAuth, strategy, requestId } = args;
+  const { afterAuth, strategy, requestId, mustChangePassword } = args;
 
   if (afterAuth && typeof afterAuth === "object" && "challenge" in afterAuth) {
     const ch = afterAuth.challenge;
@@ -133,7 +137,7 @@ async function interruptedLogin(
     return { interrupted: challengeResponse(ch, pendingToken, requestId) };
   }
 
-  if (afterAuth.mustChangePassword) {
+  if (mustChangePassword) {
     const pendingToken = await pauseWithPendingToken(deps, {
       userId: afterAuth.id,
       challengeId: MUST_CHANGE_PASSWORD_CHALLENGE,
@@ -258,7 +262,11 @@ export async function handleLogin(
     // an account the session gate would refuse, and refusing only at session
     // time meant the person solved a challenge before learning they could
     // not sign in.
-    await gateAccountForSession(deps, outcome.user.id, strategy);
+    const accountState = await gateAccountForSession(
+      deps,
+      outcome.user.id,
+      strategy
+    );
     const afterAuth = await deps.authHooks.runAfterAuthenticate(
       outcome.user,
       deps.pluginCtx
@@ -267,6 +275,12 @@ export async function handleLogin(
       afterAuth,
       strategy,
       requestId,
+      // The PERSISTED flag, not the hook-threaded one: an afterAuthenticate
+      // hook that returns a fresh user object without copying the optional
+      // field silently skipped the forced change, and the session gate does
+      // not re-read it — an admin-set temporary password stayed usable
+      // through a benign profile-transforming hook.
+      mustChangePassword: accountState.mustChangePassword === true,
     });
     if ("interrupted" in continuation) {
       await stallResponse(startTime, deps.loginStallTimeMs);
@@ -334,7 +348,7 @@ async function gateAccountForSession(
   >,
   userId: string,
   strategy: string | undefined
-): Promise<void> {
+): Promise<AccountState> {
   const state = await deps.fetchAccountState(userId);
   if (!state) {
     throw NextlyError.invalidCredentials({
@@ -345,4 +359,5 @@ async function gateAccountForSession(
     requireEmailVerification: deps.requireEmailVerification,
     enforcePasswordLockout: strategy === undefined || strategy === "password",
   });
+  return state;
 }

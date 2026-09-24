@@ -8,12 +8,14 @@ import {
 } from "../use-resume-login";
 
 const get = vi.hoisted(() => vi.fn());
+const post = vi.hoisted(() => vi.fn());
 vi.mock("@admin/lib/api/publicApi", () => ({
-  publicApi: { get },
+  publicApi: { get, post },
 }));
 
 beforeEach(() => {
   get.mockReset();
+  post.mockReset();
 });
 
 describe("useResumeLogin", () => {
@@ -256,5 +258,58 @@ describe("a late must-change resume does not displace a local challenge", () => 
     });
     // The password-change view was NOT raised over it.
     expect(result.current.passwordChange).toBeNull();
+  });
+});
+
+describe("a terminal failure exits the challenge UI", () => {
+  it("clears the challenge when no replacement token arrives", async () => {
+    // The budget is spent; the server answers a terminal 401 with no retry
+    // token. Keeping the challenge rendered hid the password and provider
+    // options behind a continuation nothing can finish.
+    const { result } = renderHook(() => useChallengeFlow("?resume=1"));
+
+    act(() => {
+      result.current.start({
+        challengeType: "test-totp",
+        pendingToken: "pt-1",
+        next: null,
+      });
+    });
+    expect(result.current.challenge).not.toBeNull();
+
+    post.mockRejectedValue(new Error("no retry token in the envelope"));
+
+    let answer: { ok: boolean } | undefined;
+    await act(async () => {
+      answer = await result.current.resolve({ code: "000000" });
+    });
+
+    expect(answer?.ok).toBe(false);
+    expect(result.current.challenge).toBeNull();
+  });
+
+  it("keeps the challenge when a replacement token arrives", async () => {
+    // The control: an ordinary wrong answer still advances, not exits.
+    const { result } = renderHook(() => useChallengeFlow("?resume=1"));
+
+    act(() => {
+      result.current.start({
+        challengeType: "test-totp",
+        pendingToken: "pt-1",
+        next: null,
+      });
+    });
+
+    post.mockRejectedValueOnce(
+      Object.assign(new Error("wrong"), {
+        data: { pendingToken: "pt-2" },
+      })
+    );
+
+    await act(async () => {
+      await result.current.resolve({ code: "000000" });
+    });
+
+    expect(result.current.challenge?.pendingToken).toBe("pt-2");
   });
 });

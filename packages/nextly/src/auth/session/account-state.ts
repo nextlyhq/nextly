@@ -24,6 +24,13 @@ export interface AccountState {
   isActive: boolean;
   lockedUntil: Date | null;
   emailVerified: Date | null;
+  /**
+   * Whether the account still holds an admin-set password it must replace.
+   * Read from the ROW by whoever makes the forced-change decision: a
+   * hook-modified user object may drop the field, and trusting that copy
+   * let a benign profile-transforming hook skip the forced change.
+   */
+  mustChangePassword?: boolean | null;
 }
 
 export interface AccountGateOptions {

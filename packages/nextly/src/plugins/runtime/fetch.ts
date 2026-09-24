@@ -49,11 +49,27 @@ const TIMEOUT_MS = 30_000;
  * name the caller chose to spell differently is exactly the miss that would
  * let a credential through.
  */
-const CREDENTIAL_HEADERS = new Set([
-  "authorization",
-  "proxy-authorization",
-  "cookie",
-  "cookie2",
+// An allowlist, not a denylist: APIs authenticate with headers of their own
+// design (X-API-Key, X-Auth-Token, and every spelling a provider invents
+// next), and a denylist enumerating today's names leaks tomorrow's to any
+// host a redirect lands on. A cross-origin hop keeps only headers that are
+// about the BODY or the transport — everything else is the caller's
+// business with the first origin alone.
+const CROSS_ORIGIN_SAFE_HEADERS = new Set([
+  "accept",
+  "accept-charset",
+  "accept-language",
+  "cache-control",
+  "content-encoding",
+  "content-type",
+  "content-length",
+  "if-match",
+  "if-modified-since",
+  "if-none-match",
+  "if-range",
+  "if-unmodified-since",
+  "range",
+  "user-agent",
 ]);
 /**
  * Headers that describe the body rather than the request.
@@ -176,7 +192,7 @@ function stripCredentialHeaders(
   const kept: Record<string, string> = {};
   const source = new Headers(headers ?? {});
   source.forEach((value, name) => {
-    if (CREDENTIAL_HEADERS.has(name.toLowerCase())) return;
+    if (!CROSS_ORIGIN_SAFE_HEADERS.has(name.toLowerCase())) return;
     kept[name] = value;
   });
   return kept;
@@ -285,7 +301,7 @@ function assertAnswersUsable(
 export async function vetUrl(
   url: URL,
   deps: PluginFetchDeps
-): Promise<ResolvedAddress> {
+): Promise<ResolvedAddress[]> {
   // `https:` only, with one exception for a local development server: a fake
   // identity provider in a test suite has no certificate, and requiring one
   // would mean the only way to test a plugin is to turn this off entirely.
@@ -304,7 +320,11 @@ export async function vetUrl(
 
   assertAnswersUsable(answers, url, isLocalhost, deps.allowLoopback);
 
-  return answers[0];
+  // Every answer, not just the first: a provider publishing several records
+  // for failover expects a client to fall back when one is temporarily
+  // unreachable, and pinning the first answer turned an ordinary outage of
+  // a single host into an outage of the provider.
+  return answers;
 }
 
 /**
@@ -342,19 +362,28 @@ export function createPluginFetch(
       // disconnected would otherwise keep waiting on a stalled resolver
       // until the fixed budget answered for it. The lookup itself cannot
       // be interrupted, but the caller is released the moment it cancels.
-      const address = await raceCallerAbort(
+      const addresses = await raceCallerAbort(
         withDeadline(vetUrl(url, deps), deadlineAt, url),
         init.signal ?? undefined
       );
-      const response = await deps.send({
-        url,
-        address,
-        // `manual`, so a redirect comes back here to be checked rather than
-        // being followed by the transport without one.
-        init: { ...hop, redirect: "manual" },
-        deadlineAt,
-        maxBodyBytes: MAX_BODY_BYTES,
-      });
+      // Each vetted answer in turn: a provider publishing several records
+      // for failover expects a client to fall back when one host is
+      // temporarily unreachable, and pinning the first answer turned an
+      // outage of a single host into an outage of the provider. Only a
+      // failure to CONNECT moves to the next answer — a refused connection
+      // is the failover case, while a completed HTTP exchange (any status)
+      // and a policy refusal are answers in themselves.
+      const response = await firstConnectedAddress(addresses, address =>
+        deps.send({
+          url,
+          address,
+          // `manual`, so a redirect comes back here to be checked rather than
+          // being followed by the transport without one.
+          init: { ...hop, redirect: "manual" },
+          deadlineAt,
+          maxBodyBytes: MAX_BODY_BYTES,
+        })
+      );
 
       const location = response.headers.get("location");
       if (!REDIRECT_STATUSES.has(response.status) || !location) {
@@ -407,4 +436,31 @@ function raceCallerAbort<T>(
       }
     );
   });
+}
+
+/**
+ * Send to each vetted address until one CONNECTS.
+ *
+ * A rejection from the send is a transport-level failure — connection
+ * refused, reset, unreachable — which is exactly the case DNS failover
+ * exists for; a completed exchange resolves with whatever status it
+ * produced, and a policy refusal (NextlyError) has nothing to do with which
+ * address was tried, so it propagates untouched. The last address's
+ * rejection rethrows, so the caller sees the failure it would have seen
+ * without the fallback.
+ */
+async function firstConnectedAddress(
+  addresses: readonly ResolvedAddress[],
+  send: (address: ResolvedAddress) => Promise<Response>
+): Promise<Response> {
+  let lastError: unknown;
+  for (const address of addresses) {
+    try {
+      return await send(address);
+    } catch (error) {
+      if (NextlyError.is(error)) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError;
 }

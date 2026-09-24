@@ -3017,7 +3017,18 @@ async function initializePlugins(
     for (const [svcName, factory] of Object.entries(
       plugin.contributes?.services ?? {}
     )) {
-      registerPluginService(plugin.name, svcName, () => factory(pluginContext));
+      registerPluginService(plugin.name, svcName, () => {
+        // First resolution recorded as the plugin having RUN: the factory is
+        // the plugin's own code, and it may open a connection the moment it
+        // executes. A later plugin's init resolving this service and then
+        // throwing left that connection out of the rollback — the boot
+        // failed, but the plugin whose factory ran was never "initialized",
+        // so its destroy never came. Partial-safe, like init's own entry.
+        if (!initialized.some(entry => entry.plugin === plugin)) {
+          initialized.push({ plugin, context: pluginContext });
+        }
+        return factory(pluginContext);
+      });
     }
 
     // Contributed widget SOURCES, bound the same way and for the same reason.

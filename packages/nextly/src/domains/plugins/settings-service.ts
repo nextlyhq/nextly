@@ -388,7 +388,43 @@ export class PluginSettingsService {
 
   /** The stored settings, decrypted, before the schema is applied. */
   private async readStored(): Promise<Record<string, unknown>> {
-    return this.decodeRows(await this.deps.store.read(this.deps.owner));
+    const rows = await this.deps.store.read(this.deps.owner);
+    // Read-repair for rows a NEWER manifest reclassified: a key that became
+    // secret but was stored while public stays plaintext at rest until some
+    // future PATCH touches it — backups and the database keep the credential
+    // unencrypted indefinitely on an install that merely upgraded and kept
+    // reading. The repair rewrites exactly those rows through the store's
+    // serialized mutation, so it races no one; it only runs from the read
+    // path (the write path migrates inside its own transaction), and its
+    // failure does not fail the read — the value is already in hand, and a
+    // broken repair must not take the plugin's settings down with it.
+    await this.repairNewlySecretRows(rows).catch(() => undefined);
+    return this.decodeRows(rows);
+  }
+
+  /**
+   * Re-encrypt stored plaintext rows whose key the CURRENT manifest
+   * declares secret, whenever they are reached by a read.
+   *
+   * The same filter the write path migrates with, applied to rows the read
+   * already holds; the rowsForPatch machinery is reused verbatim so there
+   * is one implementation of "what a row should look like now".
+   */
+  private async repairNewlySecretRows(rows: PluginSettingRow[]): Promise<void> {
+    const current = this.decodeRows(rows);
+    const keys = rows
+      .filter(
+        row =>
+          row.key !== OWNER_LOCK_KEY &&
+          !row.isSecret &&
+          Object.hasOwn(current, row.key) &&
+          topLevelKeyHoldsSecret(row.key, this.deps.secretPaths)
+      )
+      .map(row => row.key);
+    if (keys.length === 0) return;
+    await this.deps.store.mutate(this.deps.owner, keys, stored =>
+      this.rowsForUpdate(stored, {}, undefined)
+    );
   }
 
   /**

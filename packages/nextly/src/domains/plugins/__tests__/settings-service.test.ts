@@ -711,3 +711,42 @@ describe("a declared SECRET whose own text claims a marker", () => {
     expect(settings.clientSecret).toBe(SECRET_VALUE);
   });
 });
+
+describe("the read-repair for newly secret rows", () => {
+  it("re-encrypts a plaintext row on GET, without any patch", async () => {
+    // The write path migrated only on PATCH; an install that upgraded and
+    // kept READING held the credential in plain text at rest indefinitely —
+    // in the database and in every backup — despite the manifest promising
+    // encryption. The read now repairs what it reaches.
+    const store = memoryStore();
+    store.rows.push({
+      owner: "@test/p",
+      key: "clientSecret",
+      value: JSON.stringify(SECRET_VALUE),
+      isSecret: false,
+      updatedAt: new Date(),
+      updatedBy: null,
+    });
+
+    await service(store).get();
+
+    const stored = store.rows.find(r => r.key === "clientSecret");
+    expect(stored?.isSecret).toBe(true);
+    expect(stored?.value).not.toContain(SECRET_VALUE);
+    // And the read itself still answered the plaintext value it had.
+    const settings = await service(store).get<{ clientSecret: string }>();
+    expect(settings.clientSecret).toBe(SECRET_VALUE);
+  });
+
+  it("leaves public rows and untouched-secret rows alone", async () => {
+    // The control: the repair is driven by the declaration, same as the
+    // write-side migration, and reads of healthy rows write nothing.
+    const store = memoryStore();
+    await service(store).set({ port: 8443 });
+    const before = JSON.stringify(store.rows.find(r => r.key === "port"));
+
+    await service(store).get();
+
+    expect(JSON.stringify(store.rows.find(r => r.key === "port"))).toBe(before);
+  });
+});

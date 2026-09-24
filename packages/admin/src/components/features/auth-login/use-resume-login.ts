@@ -308,6 +308,15 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
         setChallenge(current =>
           current ? { ...current, pendingToken: advanced } : current
         );
+      } else {
+        // No replacement token means the failure was TERMINAL — the budget
+        // is spent, and the server has cleared or invalidated whatever this
+        // flow was carrying. Keeping the challenge rendered hid the password
+        // and provider options behind a continuation nothing can finish;
+        // dropping it returns the page to its ordinary sign-in choices.
+        continuingRef.current = false;
+        localContinuationRef.current = false;
+        setChallenge(null);
       }
       return {
         ok: false,

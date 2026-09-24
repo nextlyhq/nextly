@@ -487,6 +487,7 @@ describe("login handler: respondAction shape", () => {
         isActive: true,
         lockedUntil: null,
         emailVerified: fakeUser.emailVerified,
+        mustChangePassword: true,
       }),
       ...loginPipelineDeps({
         findUserByEmail,
