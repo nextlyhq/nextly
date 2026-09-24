@@ -84,6 +84,16 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // A run's leader is in a session of its own, and one stopped or left by a
+  // failed case would outlive the case: it and its group go too.
+  try {
+    const { leader } = JSON.parse(readFileSync(path.join(dir, "slot-0.json"), "utf8"));
+    // Only a real run's leader: fixtures record this test's own process as a
+    // holder, and killing it would end the test run itself.
+    if (Number.isInteger(leader) && leader !== process.pid && leader !== process.ppid) spawned.push(-leader, leader);
+  } catch {
+    // No slot held, or no leader recorded.
+  }
   for (const pid of spawned.splice(0)) {
     try {
       process.kill(pid, "SIGKILL");
@@ -579,6 +589,32 @@ describe.runIf(POSIX)("running a command bounded", () => {
     expect(seen.leader).not.toBe(child.pid);
   });
 
+  /*
+   * The last check before the command starts. A caller gone after the slot
+   * was taken would otherwise see a short command run to its end for nobody,
+   * before the leader's first check on the timer.
+   */
+  it("does not start a command whose caller is gone by the time its leader would start it", async () => {
+    const slot = path.join(dir, "slot-0.json");
+    writeFileSync(slot, JSON.stringify(record(process.pid)));
+    const marker = path.join(dir, "ran");
+    const watch = [{ pid: process.pid, start: null }, { pid: deadPid(), start: null }];
+    const leader = spawn(
+      process.execPath,
+      [BOUNDED, "--lead", JSON.stringify(watch), slot, "--",
+        process.execPath, "-e", 'require("fs").writeFileSync(process.argv[1], "ran")', marker],
+      { env: cleanEnv(), stdio: ["ignore", "ignore", "pipe"] }
+    );
+    spawned.push(leader.pid);
+    let err = "";
+    leader.stderr.on("data", chunk => (err += chunk));
+    const code = await new Promise(resolve => leader.on("close", resolve));
+
+    expect(code).toBe(143);
+    expect(err).toMatch(/is gone — not starting/);
+    expect(existsSync(marker)).toBe(false);
+  });
+
   it("does not start a command whose slot is no longer its caller's", async () => {
     const slot = path.join(dir, "slot-0.json");
     writeFileSync(slot, JSON.stringify(record(deadPid())));
@@ -882,6 +918,23 @@ describe.runIf(POSIX)("running a command bounded", () => {
     expect(Date.now() - started).toBeLessThan(8000);
     expect((await child.done).code).toBe(143);
   }, 15_000);
+
+  /*
+   * 🔴 Ctrl-Z stopped only the wrapper: the run, in a session of its own, ran
+   * on, and one that finished meanwhile left its slot held by a stopped
+   * process. The stop and the resume now reach every process of the run.
+   */
+  it.runIf(LINUX)("suspends the whole run with Ctrl-Z, and resumes it with the caller", async () => {
+    const child = runBounded(WITH_GRANDCHILD);
+    const grandchild = await grandchildOf(child);
+
+    process.kill(child.pid, "SIGTSTP");
+    expect(await waitUntil(() => stateOf(grandchild) === "T", 5000)).toBe(true);
+    expect(stateOf(child.pid)).toBe("T");
+
+    process.kill(child.pid, "SIGCONT");
+    expect(await waitUntil(() => !["T", null].includes(stateOf(grandchild)), 5000)).toBe(true);
+  });
 
   it("passes Ctrl-C on to the run, whose group the terminal does not reach", async () => {
     const child = runBounded(WITH_GRANDCHILD);

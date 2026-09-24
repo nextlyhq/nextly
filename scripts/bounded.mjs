@@ -646,6 +646,13 @@ function signalOthers(seen, signal) {
   }
 }
 
+/** Stops every other process of the run, then this one, as a terminal's Ctrl-Z would have. */
+function suspendRun(seen) {
+  remember(seen, process.pid);
+  signalOthers(seen, "SIGSTOP");
+  process.kill(process.pid, "SIGSTOP");
+}
+
 /**
  * Kills every other process of the run, then ends the leader with a status.
  * The run is sampled first: where there is no /proc, a task started since the
@@ -712,8 +719,17 @@ async function lead(watch, slot, argv) {
     process.stderr.write("bounded: this run's heavy slot was taken over before it started — not starting\n");
     process.exit(ABANDONED);
   }
+  // Once more, immediately before starting: a caller gone since the slot was
+  // taken would otherwise have a short command run to the end for nobody,
+  // before the first check on the timer below.
+  abandonIfUnwatched(watch, describe(argv));
   const seen = new Map();
   process.on("SIGUSR2", () => finish(seen, ABANDONED));
+  // Ctrl-Z reaches the caller only; it passes the stop on to this process,
+  // which stops every process of the run and then itself. The caller's
+  // resume arrives as SIGCONT, which resumes this process and is passed on.
+  process.on("SIGTSTP", () => suspendRun(seen));
+  process.on("SIGCONT", () => signalOthers(seen, "SIGCONT"));
 
   const child = spawn(argv[0], argv.slice(1), { stdio: "inherit" });
   let stopping = false;
@@ -767,6 +783,17 @@ function runInGroup(command, env, watch, slot) {
     env,
     detached: true,
   });
+
+  // 🔴 Ctrl-Z stops the caller's group only, and the run is in a session of
+  // its own: the wrapper stopped while turbo and Vitest ran on, and a run that
+  // finished meanwhile left its slot held by a stopped process. The stop and
+  // the resume are passed to the leader, and this process then stops itself,
+  // as the terminal meant.
+  process.on("SIGTSTP", () => {
+    sendSignal(leader.pid, "SIGTSTP");
+    process.kill(process.pid, "SIGSTOP");
+  });
+  process.on("SIGCONT", () => sendSignal(leader.pid, "SIGCONT"));
 
   let escalation = null;
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
