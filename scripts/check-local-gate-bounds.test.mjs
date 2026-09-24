@@ -12,7 +12,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   BOUNDED_RUNNER,
+  HEAVY_SCRIPTS,
   boundsProblems,
+  handoverProblems,
+  heavyScriptProblems,
   runnerProblems,
   concurrencyExportLine,
   scriptProblems,
@@ -290,5 +293,101 @@ describe("validating the runner the root scripts delegate to", () => {
 
   it("names the runner by the path the scripts delegate to", () => {
     expect(BOUNDED_RUNNER).toBe("scripts/verify.mjs");
+  });
+});
+
+describe("handing the hook's gates to the bounded runner", () => {
+  /** The control: the hand-over first, then the gates. */
+  const handedOver = [
+    "#!/usr/bin/env sh",
+    'if [ -z "$NEXTLY_BOUNDED" ]; then',
+    '  exec node scripts/bounded.mjs sh -e .husky/pre-push "$@"',
+    "fi",
+    ...BOUNDED.split("\n").slice(1),
+  ].join("\n");
+
+  it("is silent when every gate runs after the hand-over", () => {
+    expect(handoverProblems(handedOver)).toEqual([]);
+  });
+
+  it("names a hook that never hands over, which takes no heavy slot", () => {
+    expect(handoverProblems(BOUNDED)).toEqual([expect.stringContaining("never hands its gates")]);
+  });
+
+  /*
+   * A gate above the hand-over runs in the first pass, before the slot is
+   * taken or the group exists — bounded in name only, and every other line of
+   * the hook still reads correctly.
+   */
+  it("names a gate that runs before the hand-over", () => {
+    const early = handedOver.replace("#!/usr/bin/env sh", "#!/usr/bin/env sh\npnpm turbo lint --continue");
+    expect(handoverProblems(early)).toEqual([expect.stringContaining(":2: runs turbo before handing over")]);
+  });
+
+  it("does not accept a hand-over that exists only in a comment", () => {
+    const commented = handedOver.replace("  exec node", "  # exec node");
+    expect(handoverProblems(commented)).toEqual([expect.stringContaining("never hands its gates")]);
+  });
+});
+
+describe("holding the heavy root scripts to the bounded runner", () => {
+  /** The control: every heavy script through the runner, tests with the cap. */
+  const heavy = Object.fromEntries(
+    HEAVY_SCRIPTS.map(name => [
+      name,
+      name.startsWith("test")
+        ? "node scripts/bounded.mjs --vitest-workers turbo run test"
+        : "node scripts/bounded.mjs turbo run build",
+    ])
+  );
+
+  it("is silent when every heavy script runs through it", () => {
+    expect(heavyScriptProblems(heavy)).toEqual([]);
+  });
+
+  /*
+   * 🔴 The shape this list exists for: `pnpm lint` as a bare `turbo run lint`
+   * is ten eslint processes at about 1.9 GiB each, and it is the command the
+   * agent guide tells every agent to run.
+   */
+  it("names a heavy script that runs turbo directly", () => {
+    expect(heavyScriptProblems({ ...heavy, lint: "turbo run lint" })).toEqual([
+      expect.stringContaining("'lint' runs heavy work without scripts/bounded.mjs"),
+    ]);
+  });
+
+  it("names a test script that runs through it without the worker cap", () => {
+    expect(heavyScriptProblems({ ...heavy, test: "node scripts/bounded.mjs turbo run test" })).toEqual([
+      expect.stringContaining("'test' runs tests without --vitest-workers"),
+    ]);
+    expect(
+      heavyScriptProblems({ ...heavy, "test:scripts": "node scripts/bounded.mjs vitest run --dir scripts" })
+    ).toEqual([expect.stringContaining("'test:scripts' runs tests without --vitest-workers")]);
+  });
+
+  it("reads a script that sets its database URL before the command", () => {
+    const leg = "TEST_MYSQL_URL=mysql://root:root@localhost:3307/x node scripts/bounded.mjs --vitest-workers turbo run test:integration";
+    expect(heavyScriptProblems({ ...heavy, "test:integration:mysql": leg })).toEqual([]);
+  });
+
+  /*
+   * Named anywhere but as the command, the runner bounds nothing: here turbo
+   * runs unbounded after an echo that mentions it.
+   */
+  it("does not accept the runner named anywhere but as the command", () => {
+    expect(
+      heavyScriptProblems({ ...heavy, build: "echo node scripts/bounded.mjs && turbo run build" })
+    ).toEqual([expect.stringContaining("'build' runs heavy work without")]);
+  });
+
+  it("holds the verify entry points to it too, which is what gives them the slot", () => {
+    expect(heavyScriptProblems({ ...heavy, "verify:pr": "node scripts/verify.mjs pr" })).toEqual([
+      expect.stringContaining("'verify:pr' runs heavy work without"),
+    ]);
+  });
+
+  it("names a heavy script that has gone missing rather than passing it", () => {
+    const { lint: _lint, ...rest } = heavy;
+    expect(heavyScriptProblems(rest)).toEqual([expect.stringContaining("'lint' is missing")]);
   });
 });

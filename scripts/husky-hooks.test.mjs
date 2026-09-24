@@ -28,11 +28,14 @@
  *
  * @module husky-hooks.test
  */
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -64,10 +67,19 @@ const shellCode = source =>
 /**
  * The first command either hook spawns. `command -v` counts: it is how
  * pre-commit reaches gitleaks, and a clear placed after it would already be
- * too late for anything that call touched.
+ * too late for anything that call touched. So does `exec`: it is how pre-push
+ * hands itself to `scripts/bounded.mjs`, and turbo runs under what that
+ * inherits.
  */
 const FIRST_TOOL =
-  /^\s*(?:if\s+command\s+-v\s+)?(?:pnpm|npx|node|turbo|gitleaks)\b/m;
+  /^\s*(?:if\s+command\s+-v\s+|exec\s+)?(?:pnpm|npx|node|turbo|gitleaks)\b/m;
+
+/**
+ * The first GATE pre-push runs. Not the same as the first tool: the hand-over
+ * to `scripts/bounded.mjs` runs this same hook again, and that second run
+ * reaches the gates.
+ */
+const FIRST_GATE = /^\s*pnpm\b/m;
 const CLEARS_GIT_DIR = /^unset .*\bGIT_DIR\b/m;
 
 describe.each(["pre-push", "pre-commit"])("the %s hook", name => {
@@ -168,10 +180,10 @@ describe("the pre-push hook specifically", () => {
     const source = shellCode(await hook("pre-push"));
 
     const recordAt = source.search(/^DIRTY=/m);
-    const firstTool = source.search(FIRST_TOOL);
+    const firstGate = source.search(FIRST_GATE);
 
     expect(recordAt).toBeGreaterThan(-1);
-    expect(recordAt).toBeLessThan(firstTool);
+    expect(recordAt).toBeLessThan(firstGate);
   });
 
   it("reports it LAST, so it is still on screen when the push proceeds", async () => {
@@ -192,5 +204,77 @@ describe("the pre-push hook specifically", () => {
     expect(shellCode(await hook("pre-push"))).toMatch(
       /^DIRTY=.*\|\| true\)"?$/m
     );
+  });
+});
+
+/*
+ * What pre-push does before any gate, run for real.
+ *
+ * `node` and `pnpm` are replaced on PATH by stubs that print what they were
+ * asked and exit 99. Nothing here can start a gate: the first command that
+ * would is a stub, and its exit status says how far the hook got. Run from the
+ * repository root, as husky runs it, and without CI, which skips the hook.
+ */
+describe("the pre-push hook before its gates", () => {
+  const ROOT = path.join(HERE, "..");
+  let stubs;
+
+  beforeAll(() => {
+    stubs = mkdtempSync(path.join(tmpdir(), "pre-push-stubs-"));
+    for (const name of ["node", "pnpm"]) {
+      const file = path.join(stubs, name);
+      writeFileSync(file, `#!/bin/sh\necho "stub ${name} $*" >&2\nexit 99\n`);
+      chmodSync(file, 0o755);
+    }
+  });
+
+  afterAll(() => rmSync(stubs, { recursive: true, force: true }));
+
+  const ZERO = "0".repeat(40);
+  const SHA = "a".repeat(40);
+  const deletion = branch => `refs/heads/${branch} ${ZERO} refs/heads/${branch} ${SHA}\n`;
+  const update = branch => `refs/heads/${branch} ${SHA} refs/heads/${branch} ${ZERO}\n`;
+
+  function push(stdin, extra = {}) {
+    const { CI: _ci, NEXTLY_BOUNDED: _nested, ...env } = process.env;
+    return spawnSync("sh", ["-e", ".husky/pre-push", "origin", "git@example.com:o/r.git"], {
+      cwd: ROOT,
+      input: stdin,
+      encoding: "utf8",
+      env: { ...env, PATH: `${stubs}${path.delimiter}${env.PATH}`, ...extra },
+    });
+  }
+
+  it.runIf(process.platform !== "win32")("lets a push that only deletes branches through without a gate", () => {
+    const result = push(deletion("gone") + deletion("also-gone"));
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/only deleting remote branches/);
+    expect(result.stderr).not.toMatch(/stub/);
+  });
+
+  it.runIf(process.platform !== "win32")("hands a push that carries code to the bounded runner", () => {
+    const result = push(update("feature"));
+    expect(result.status).toBe(99);
+    expect(result.stderr).toMatch(/^stub node scripts\/bounded\.mjs sh -e \.husky\/pre-push origin /m);
+  });
+
+  it.runIf(process.platform !== "win32")("gates a push that deletes one branch and updates another", () => {
+    expect(push(deletion("gone") + update("feature")).status).toBe(99);
+  });
+
+  /*
+   * "Every ref is a deletion" is true of no refs at all. Reading that as an
+   * all-clear is the vacuous pass this repository keeps finding, so an empty
+   * list — and a line with no sha to judge — is gated.
+   */
+  it.runIf(process.platform !== "win32")("does not read an empty or malformed ref list as only deletions", () => {
+    expect(push("").status).toBe(99);
+    expect(push("refs/heads/feature\n").status).toBe(99);
+  });
+
+  it.runIf(process.platform !== "win32")("goes straight to the gates in the run the runner started", () => {
+    const result = push(deletion("gone"), { NEXTLY_BOUNDED: "1" });
+    expect(result.status).toBe(99);
+    expect(result.stderr).toMatch(/^stub node scripts\/local-limits\.mjs/m);
   });
 });

@@ -33,6 +33,38 @@ unset GIT_DIR GIT_WORK_TREE
 
 set -e
 
+# Everything below runs under scripts/bounded.mjs: it takes this machine's heavy
+# slot, so two checkouts pushing at once take turns rather than each taking the
+# whole machine; it runs the gates in a process group of their own; and it
+# stops them when the push that started them is killed, instead of leaving them
+# to run with nobody waiting. The hook hands itself over once, and the second
+# run finds NEXTLY_BOUNDED set and goes straight on to the gates.
+if [ -z "$NEXTLY_BOUNDED" ]; then
+  # A push that only DELETES remote branches carries no code, so there is
+  # nothing to gate — yet it ran every gate below, holding the machine for
+  # minutes to answer a question nobody asked. Git gives each ref on stdin as
+  # `<local ref> <local sha> <remote ref> <remote sha>`, and a deletion's local
+  # sha is all zeros. No refs at all is NOT read as "only deletions": an empty
+  # list is not an all-clear. A terminal on stdin means the hook was run by
+  # hand, and there are no refs to read.
+  if [ ! -t 0 ]; then
+    REFS=0
+    DELETIONS=0
+    while read -r _local_ref local_sha _remote_ref _remote_sha; do
+      REFS=$((REFS + 1))
+      case "$local_sha" in
+        '' | *[!0]*) ;;
+        *) DELETIONS=$((DELETIONS + 1)) ;;
+      esac
+    done
+    if [ "$REFS" -gt 0 ] && [ "$DELETIONS" -eq "$REFS" ]; then
+      echo "pre-push: only deleting remote branches — nothing to gate."
+      exit 0
+    fi
+  fi
+  exec node scripts/bounded.mjs sh -e .husky/pre-push "$@"
+fi
+
 # How much of this machine the gates below may take.
 #
 # The gates fan out two levels: turbo runs several package tasks at once, and
