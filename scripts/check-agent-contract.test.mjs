@@ -9,9 +9,11 @@
  * correct prose, which `derived-checks.md` calls the failure that gets an
  * advisory check deleted.
  */
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -34,7 +36,11 @@ import {
   pnpmScriptsIn,
   routedSkills,
   routerDisagreements,
+  skillFindings,
 } from "./check-agent-contract.mjs";
+import { syncSkillCopy } from "./agent-skills.mjs";
+
+const CHECK = fileURLToPath(new URL("./check-agent-contract.mjs", import.meta.url));
 
 const names = text => pnpmScriptsIn(text).map(entry => entry.name);
 
@@ -201,7 +207,7 @@ describe("refusing a file set that cannot have found anything", () => {
    * them either — a collector that dropped AGENTS.md while picking up three
    * skills matches any total. Membership is what gets asserted.
    */
-  const COMPLETE = ["AGENTS.md", ...REQUIRED_RULES, ".claude/skills/y/SKILL.md", REVIEW_PROMPT];
+  const COMPLETE = ["AGENTS.md", ...REQUIRED_RULES, ".agents/skills/y/SKILL.md", REVIEW_PROMPT];
 
   it("names every anchor missing from an empty set", () => {
     expect(missingAnchors([])).toEqual([...ANCHORS, ...REQUIRED_RULES]);
@@ -253,14 +259,81 @@ describe("holding the skill router and the skills directory to one set", () => {
    */
   it("names a skill the router invented", () => {
     expect(routerDisagreements(new Set(["ghost"]), new Set())).toEqual([
-      { name: "ghost", side: "routed but absent from .claude/skills" },
+      { name: "ghost", side: "routed but absent from .agents/skills" },
     ]);
   });
 
   it("names a skill the router forgot", () => {
     expect(routerDisagreements(new Set(), new Set(["orphan"]))).toEqual([
-      { name: "orphan", side: "present in .claude/skills but not routed by AGENTS.md" },
+      { name: "orphan", side: "present in .agents/skills but not routed by AGENTS.md" },
     ]);
+  });
+});
+
+describe("the command, run against another checkout", () => {
+  /*
+   * The findings are asserted through their functions above; this runs the
+   * command itself, as CI does with `--root`, on a checkout whose copy has
+   * drifted, so the wiring from a finding to the exit code and the printed fix
+   * is covered too. The second run is the control: the same checkout, synced.
+   */
+  it("fails on a drifted copy, naming the fix, and passes once it is synced", () => {
+    const base = mkdtempSync(join(tmpdir(), "agent-contract-cli-"));
+    const put = (path, text) => {
+      mkdirSync(dirname(join(base, path)), { recursive: true });
+      writeFileSync(join(base, path), text);
+    };
+    try {
+      put("AGENTS.md", "| `a` | when a applies |\n");
+      put(".claude/rules/whole-file-writes.md", "A rule.\n");
+      put(".claude/rules/integration-tests.md", "A rule.\n");
+      put(".github/review-prompt.md", "Review.\n");
+      put("package.json", "{}\n");
+      put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\n---\n");
+      put(".claude/skills/a/SKILL.md", "---\nname: a\ndescription: edited in the copy by hand\n---\n");
+      execFileSync("git", ["init", "-q"], { cwd: base });
+      execFileSync("git", ["add", "-A"], { cwd: base });
+      const run = () => spawnSync(process.execPath, [CHECK, "--root", base], { encoding: "utf8" });
+
+      const drifted = run();
+      expect(drifted.status).toBe(1);
+      expect(drifted.stderr).toContain(".claude/skills/a/SKILL.md: differs from .agents/skills — run pnpm skills:sync");
+
+      syncSkillCopy(base);
+      const synced = run();
+      expect(synced.stderr).toBe("");
+      expect(synced.status).toBe(0);
+
+      // A flag with no directory is refused, not read as this checkout.
+      expect(spawnSync(process.execPath, [CHECK, "--root"], { encoding: "utf8" }).status).toBe(64);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("reporting the skills themselves", () => {
+  /*
+   * The copy and the frontmatter are the check's own findings, not stale
+   * references, so they are asserted through the function the check reports
+   * from: a copy out of step names the fix, and a broken skill names itself.
+   */
+  it("reports a Claude Code copy out of step, naming the fix, and a skill no harness would load", () => {
+    const base = mkdtempSync(join(tmpdir(), "agent-contract-skills-"));
+    try {
+      mkdirSync(join(base, ".agents/skills/a"), { recursive: true });
+      writeFileSync(join(base, ".agents/skills/a/SKILL.md"), "---\ndescription: nameless\n---\n");
+      expect(skillFindings(base)).toEqual([
+        { file: ".claude/skills/a/SKILL.md", kind: "skills copy", claim: "is missing from the Claude Code copy", fix: "pnpm skills:sync" },
+        { file: ".agents/skills/a/SKILL.md", kind: "skill", claim: "has no name in its frontmatter" },
+      ]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("reports nothing for this repository's own skills", () => {
+    expect(skillFindings()).toEqual([]);
   });
 });
 
@@ -337,7 +410,7 @@ describe("the population the check actually reads", () => {
 
   it("holds the review prompt as an anchor, so its deletion refuses", () => {
     expect(ANCHORS).toContain(REVIEW_PROMPT);
-    expect(missingAnchors(["AGENTS.md", ...REQUIRED_RULES, ".claude/skills/y/SKILL.md"]))
+    expect(missingAnchors(["AGENTS.md", ...REQUIRED_RULES, ".agents/skills/y/SKILL.md"]))
       .toEqual([REVIEW_PROMPT]);
   });
 
@@ -406,6 +479,17 @@ describe("finding citations of agent guidance anywhere in the repository", () =>
   it("finds a skill directory citation", () => {
     expect([...guidanceReferences("the `.claude/skills/derived-checks/SKILL.md` skill")]).toEqual([
       ".claude/skills/derived-checks/SKILL.md",
+    ]);
+  });
+
+  /*
+   * The skills now live under `.agents`, so a citation of one there must be
+   * checked too, or moving a skill would leave its citations pointing at
+   * nothing while this stayed green.
+   */
+  it("finds a citation under the shared skills directory as well", () => {
+    expect([...guidanceReferences("the `.agents/skills/derived-checks/SKILL.md` skill")]).toEqual([
+      ".agents/skills/derived-checks/SKILL.md",
     ]);
   });
 
@@ -542,7 +626,7 @@ describe("analysing a real instruction file on disk", () => {
     withRepo(base => {
       const found = unresolvedIn({
         base,
-        file: ".claude/skills/x/SKILL.md",
+        file: ".agents/skills/x/SKILL.md",
         text: "The entry point is `src/config.ts`.",
         ...facts,
       });

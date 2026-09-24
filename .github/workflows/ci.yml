@@ -142,7 +142,7 @@ jobs:
           #                    rather than to this one.
           #
           # `.github/**` is absent on purpose: this workflow lives there.
-          INERT_PATHS: '^(docs/|\.claude/|[^/]*\.md$|LICENSE$|\.editorconfig$|\.vscode/)'
+          INERT_PATHS: '^(docs/|\.claude/|\.agents/|[^/]*\.md$|LICENSE$|\.editorconfig$|\.vscode/)'
 
           # AGENTS.md and AGENTS.measured.md are documents, but their guard
           # tests (scripts/agents-md-scopes-agree, scripts/measured-file-fresh)
@@ -238,6 +238,18 @@ jobs:
       - name: Agent instructions resolve
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:agent-contract
+
+      # Claude Code reads a copy of the skills, and Git for Windows checks
+      # symbolic links out as small text files by default. The copy is real
+      # files for that reason, and this is where a link slipped in instead
+      # would show: the same check, on a clone made the way Windows makes one.
+      # It runs from this checkout, whose dependencies are installed, against
+      # the clone, which has none.
+      - name: Skills survive a checkout without symbolic links
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          git -c core.symlinks=false clone --quiet --no-local . "$RUNNER_TEMP/without-symlinks"
+          node scripts/check-agent-contract.mjs --root "$RUNNER_TEMP/without-symlinks"
 
       # The local gates must say how much of a machine they may take.
       # Unbounded, the pre-push hook meets turbo's default of 10 package tasks

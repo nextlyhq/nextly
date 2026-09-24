@@ -6,7 +6,7 @@
  * The failure it exists to stop was measured: `AGENTS.md` recorded that
  * `pnpm docker:test` does NOT start the integration containers — it probes the
  * DEV stack's `postgres` service — while
- * `.claude/skills/writing-integration-tests/SKILL.md` and
+ * `.agents/skills/writing-integration-tests/SKILL.md` and
  * `.claude/rules/integration-tests.md` both told the reader to start them with
  * it. An agent following either walked into the exact trap `AGENTS.md`
  * documents, and nothing in the repository could tell the three apart. One
@@ -32,6 +32,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems } from "./agent-skills.mjs";
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
@@ -45,7 +47,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  */
 export const REVIEW_PROMPT = ".github/review-prompt.md";
 
-export const ANCHORS = ["AGENTS.md", ".claude/rules", ".claude/skills", REVIEW_PROMPT];
+export const ANCHORS = ["AGENTS.md", ".claude/rules", SKILLS_HOME, REVIEW_PROMPT];
 
 /**
  * Rules AGENTS.md promises are loaded in EVERY session, named individually.
@@ -434,7 +436,10 @@ export function instructionFiles(base = root) {
       if (existsSync(nested)) files.push(`${dir}/${pkg}/AGENTS.md`);
     }
   }
-  for (const dir of [".claude/rules", ".claude/skills"]) {
+  // The skills are read where they live; the Claude Code copy is held
+  // identical to them separately, so reading it too would report each finding
+  // twice.
+  for (const dir of [".claude/rules", SKILLS_HOME]) {
     for (const found of markdownUnder(join(base, dir))) {
       files.push(found.slice(base.length + 1));
     }
@@ -461,7 +466,7 @@ export function missingAnchors(files) {
 /**
  * The skills AGENTS.md routes to, and the skills that exist, must be one set.
  *
- * The router table is a derived view of `.claude/skills/`, and a derived view
+ * The router table is a derived view of the skills directory, and a derived view
  * drifts — which this repository has a rule about. Both directions matter and
  * they fail differently: a routed skill that does not exist sends a reader to
  * nothing, and a skill absent from the router is knowledge that loads only if
@@ -469,8 +474,8 @@ export function missingAnchors(files) {
  */
 export function routerDisagreements(routed, present) {
   return [
-    ...[...routed].filter(name => !present.has(name)).map(name => ({ name, side: "routed but absent from .claude/skills" })),
-    ...[...present].filter(name => !routed.has(name)).map(name => ({ name, side: "present in .claude/skills but not routed by AGENTS.md" })),
+    ...[...routed].filter(name => !present.has(name)).map(name => ({ name, side: `routed but absent from ${SKILLS_HOME}` })),
+    ...[...present].filter(name => !routed.has(name)).map(name => ({ name, side: `present in ${SKILLS_HOME} but not routed by AGENTS.md` })),
   ];
 }
 
@@ -526,21 +531,35 @@ export function gitIgnored(paths, cwd = root) {
  * finding about itself.
  *
  * So this scans EVERY tracked file rather than the instruction files, and
- * looks only for `.claude/...` paths. Narrow subject, complete population:
+ * looks only for paths under the two agent directories, `.claude` and
+ * `.agents`. Narrow subject, complete population:
  * the opposite trade from the rest of this module, and the right one here
  * because the citation is unambiguous wherever it appears.
  */
 export function guidanceReferences(text) {
   const found = new Set();
-  for (const match of text.matchAll(/`(\.claude\/[A-Za-z0-9._/-]+)`/g)) {
+  for (const match of text.matchAll(/`(\.(?:claude|agents)\/[A-Za-z0-9._/-]+)`/g)) {
     found.add(match[1].replace(/[.,;:)]+$/, ""));
   }
   return found;
 }
 
-function main() {
+/**
+ * The skills' own findings: the Claude Code copy out of step with the skills,
+ * and a skill either harness would fail to load. The copy is generated, so a
+ * difference is fixed by running the generator, never by editing either side
+ * into agreement by hand.
+ */
+export function skillFindings(base = root) {
+  return [
+    ...skillCopyDrift(base).map(({ path, problem }) => ({ file: path, kind: "skills copy", claim: problem, fix: "pnpm skills:sync" })),
+    ...skillFrontmatterProblems(base).map(({ skill, problem }) => ({ file: `${SKILLS_HOME}/${skill}/SKILL.md`, kind: "skill", claim: problem })),
+  ];
+}
+
+function main(base = root) {
   const asJson = process.argv.includes("--json");
-  const files = instructionFiles();
+  const files = instructionFiles(base);
 
   const absent = missingAnchors(files);
   if (absent.length > 0) {
@@ -554,20 +573,20 @@ function main() {
   // The real top-level directories, read rather than listed: a hand-kept list
   // is the recomputation this repository has a rule about.
   const topLevel = new Set(
-    readdirSync(root).filter(entry => statSync(join(root, entry)).isDirectory())
+    readdirSync(base).filter(entry => statSync(join(base, entry)).isDirectory())
   );
 
   // Every basename in the repository, so a bare reference can be told from a
   // stale one. Read once rather than per file.
-  const tracked = execFileSync("git", ["ls-files"], { cwd: root, encoding: "utf8" })
+  const tracked = execFileSync("git", ["ls-files"], { cwd: base, encoding: "utf8" })
     .split("\n")
     .filter(Boolean);
   const basenames = new Set(tracked.map(path => path.split("/").pop()));
 
   const scripts = new Set(
-    Object.keys(JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {})
+    Object.keys(JSON.parse(readFileSync(join(base, "package.json"), "utf8")).scripts ?? {})
   );
-  const byWorkspace = workspaceScripts();
+  const byWorkspace = workspaceScripts(base);
 
   const findings = [];
   // Claims this module can see but cannot decide. Kept apart from findings:
@@ -575,7 +594,7 @@ function main() {
   // and must not let its silence imply it checked.
   const unverified = [];
 
-  const skillsDir = join(root, ".claude/skills");
+  const skillsDir = join(base, SKILLS_HOME);
   const present = new Set(
     existsSync(skillsDir)
       ? readdirSync(skillsDir).filter(name =>
@@ -583,13 +602,14 @@ function main() {
         )
       : []
   );
-  const routed = routedSkills(readFileSync(join(root, "AGENTS.md"), "utf8"));
+  const routed = routedSkills(readFileSync(join(base, "AGENTS.md"), "utf8"));
   for (const { name, side } of routerDisagreements(routed, present)) {
     findings.push({ file: "AGENTS.md", kind: "router", claim: `${name} — ${side}` });
   }
+  findings.push(...skillFindings(base));
 
   for (const file of files) {
-    const text = readFileSync(join(root, file), "utf8");
+    const text = readFileSync(join(base, file), "utf8");
     for (const { filter, name, subcommands } of pnpmScriptsIn(text)) {
       for (const subcommand of subcommands) {
         unverified.push({ file, claim: `pnpm ${filter ? `--filter ${filter} ` : ""}${name} ${subcommand}` });
@@ -615,8 +635,8 @@ function main() {
         findings.push({ file, kind: "script", claim: `pnpm --filter ${filter} ${name}` });
       }
     }
-    const unresolved = unresolvedIn({ file, text, topLevel, basenames });
-    const ignored = gitIgnored(unresolved);
+    const unresolved = unresolvedIn({ file, text, base, topLevel, basenames });
+    const ignored = gitIgnored(unresolved, base);
     for (const path of unresolved) {
       if (ignored.has(path)) continue;
       findings.push({ file, kind: "path", claim: path });
@@ -629,19 +649,19 @@ function main() {
     if (GUIDANCE_SCAN_EXCLUDES.includes(file)) continue;
     let text;
     try {
-      text = readFileSync(join(root, file), "utf8");
+      text = readFileSync(join(base, file), "utf8");
     } catch {
       continue; // binary, or removed since `git ls-files` ran
     }
     for (const reference of guidanceReferences(text)) {
-      if (existsSync(join(root, reference))) continue;
+      if (existsSync(join(base, reference))) continue;
       if (!guidanceMisses.has(reference)) guidanceMisses.set(reference, []);
       guidanceMisses.get(reference).push(file);
     }
   }
   // Asked once for the whole set: a gitignored path is not a claim that a file
   // exists, and `.claude/settings.local.json` is written per worktree.
-  const ignoredGuidance = gitIgnored([...guidanceMisses.keys()]);
+  const ignoredGuidance = gitIgnored([...guidanceMisses.keys()], base);
   for (const [reference, files] of guidanceMisses) {
     if (ignoredGuidance.has(reference)) continue;
     for (const file of files) findings.push({ file, kind: "guidance", claim: reference });
@@ -656,9 +676,10 @@ function main() {
   } else if (findings.length > 0) {
     // The verdict first, because a refusal printed below a reader's `head` is
     // a refusal nobody saw — `derived-checks.md` on a gate's output.
-    console.error(`agent-contract: FAIL — ${findings.length} stale reference(s)`);
-    for (const { file, kind, claim } of findings) {
-      console.error(`  ${file}: ${kind} '${claim}' does not resolve`);
+    console.error(`agent-contract: FAIL — ${findings.length} finding(s)`);
+    for (const { file, kind, claim, fix } of findings) {
+      if (kind === "skills copy" || kind === "skill") console.error(`  ${file}: ${claim}${fix ? ` — run ${fix}` : ""}`);
+      else console.error(`  ${file}: ${kind} '${claim}' does not resolve`);
     }
     console.error(`\nread ${files.length} instruction file(s)`);
   } else {
@@ -675,5 +696,14 @@ function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]).endsWith("check-agent-contract.mjs")) {
-  main();
+  // `--root` checks another checkout with this one's code and dependencies,
+  // as CI does with a clone made without symbolic links, which has none
+  // installed. A flag given without a directory is refused rather than read
+  // as this checkout, which would pass while checking the wrong tree.
+  const at = process.argv.indexOf("--root");
+  if (at !== -1 && !process.argv[at + 1]) {
+    console.error("usage: node scripts/check-agent-contract.mjs [--json] [--root <dir>]");
+    process.exit(64);
+  }
+  main(at === -1 ? root : resolve(process.argv[at + 1]));
 }

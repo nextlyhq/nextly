@@ -29,6 +29,7 @@
     "check:test-lanes": "node scripts/check-test-lanes.mjs",
     "check:instance-boot-lane": "node scripts/check-instance-boot-lane.mjs",
     "check:agent-contract": "node scripts/check-agent-contract.mjs",
+    "skills:sync": "node scripts/agent-skills.mjs sync",
     "check:comments": "node scripts/check-comment-convention.mjs",
     "check:docs-claims": "node scripts/check-docs-claims.mjs",
     "check:docs-compile": "node scripts/check-docs-compile.mjs",
