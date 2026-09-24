@@ -290,6 +290,10 @@ You may reach your own tables and the tables of plugins you named in
 `dependsOn`. Nothing else. Core tables stay behind `ctx.services`, where access
 control, validation and hooks apply.
 
+The rule covers `ctx.db.query` as well as the other methods: the relational
+namespace only names tables you may reach, and `ctx.db.query.users` throws the
+same refusal `ctx.db.select` would.
+
 `dependsOn` is what makes a cross-plugin read legitimate rather than
 incidental: it lets the resolver order the two plugins and refuse an
 incompatible version.

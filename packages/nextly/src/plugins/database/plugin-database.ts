@@ -32,7 +32,11 @@ import type { SchemaOwner } from "../../domains/schema/extension/types";
 import { NextlyError } from "../../errors/nextly-error";
 import { uuidV7 } from "../../utils/uuid-v7";
 
-import { assertTableAccess, type TableAccessRules } from "./access";
+import {
+  assertTableAccess,
+  canAccessTable,
+  type TableAccessRules,
+} from "./access";
 
 /** What a caller may narrow a read or a write with. */
 export interface PortableWhere<TResult> {
@@ -236,21 +240,82 @@ export interface PluginDatabase {
   transaction<R>(fn: (tx: PluginTransaction) => Promise<R>): Promise<R>;
   /**
    * Relational queries (`db.query.<table>.findMany({ with })`), keyed by
-   * FINAL table name. The relations config is resolved per access through
-   * the same path core services use, so a registry invalidation (a Builder
-   * save, an extension reload) propagates immediately rather than stranding
-   * a plugin on edges that close over dropped table objects.
+   * FINAL table name and owner-checked like every other method. The
+   * relations config is resolved per access through the same path core
+   * services use, so a registry invalidation (a Builder save, an extension
+   * reload) propagates immediately rather than stranding a plugin on edges
+   * that close over dropped table objects.
    */
-  readonly query: Record<
-    string,
-    {
-      findMany: (config?: unknown) => Promise<unknown[]>;
-      findFirst: (config?: unknown) => Promise<unknown>;
-    }
-  >;
+  readonly query: RelationalQueries;
 }
 
+/** One table's relational-query entry point. */
+export interface RelationalQuery {
+  findMany: (config?: unknown) => Promise<unknown[]>;
+  findFirst: (config?: unknown) => Promise<unknown>;
+}
+
+/** The relational-query namespace, keyed by final table name. */
+export type RelationalQueries = Record<string, RelationalQuery>;
+
 export type PluginTransaction = Omit<PluginDatabase, "transaction">;
+
+/**
+ * The relational-query namespace, behind the same check as every other method.
+ *
+ * Drizzle's namespace is schema-WIDE: it names core tables and every other
+ * plugin's tables alongside the caller's own. Handing it back unwrapped was a
+ * read path around the boundary the rest of this surface enforces —
+ * `ctx.db.select(users)` refuses, and `ctx.db.query.users.findMany()`
+ * answered. The check is the same `assertTableAccess`, so the two can only
+ * disagree by someone changing the rule in one place, which there no longer
+ * is one of.
+ *
+ * A Proxy rather than a filtered copy, for the reason the getter is not
+ * cached: the namespace is rebuilt whenever the registry invalidates its
+ * relations, and a copy taken here would name the tables of a schema that has
+ * since been replaced.
+ *
+ * `has` and `ownKeys` answer for the same rule, so enumerating the namespace
+ * does not advertise a table a call would refuse — except where a property is
+ * non-configurable, which a Proxy may not hide. Drizzle builds these as plain
+ * assignments, so that branch is a guard against a future shape, not a hole
+ * in the current one.
+ */
+function ownedQueries(
+  namespace: RelationalQueries,
+  deps: PluginDatabaseDeps
+): RelationalQueries {
+  const hideable = (target: RelationalQueries, key: string): boolean => {
+    if (!Object.hasOwn(target, key)) return false;
+    const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+    return descriptor?.configurable !== false;
+  };
+
+  return new Proxy(namespace, {
+    get(target, property, receiver) {
+      if (typeof property === "string" && Object.hasOwn(target, property)) {
+        assertTableAccess(property, rulesOf(deps));
+      }
+      return Reflect.get(target, property, receiver);
+    },
+    has(target, property) {
+      if (typeof property === "string" && hideable(target, property)) {
+        return canAccessTable(property, rulesOf(deps));
+      }
+      return Reflect.has(target, property);
+    },
+    ownKeys(target) {
+      const rules = rulesOf(deps);
+      return Reflect.ownKeys(target).filter(
+        key =>
+          typeof key !== "string" ||
+          !hideable(target, key) ||
+          canAccessTable(key, rules)
+      );
+    },
+  });
+}
 
 /** Build the database surface one owner sees. */
 export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
@@ -426,16 +491,8 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
     // propagates if consumers re-resolve — the same rule core services
     // follow through BaseService.db.
     get query() {
-      const db = deps.relationalDb() as {
-        query: Record<
-          string,
-          {
-            findMany: (config?: unknown) => Promise<unknown[]>;
-            findFirst: (config?: unknown) => Promise<unknown>;
-          }
-        >;
-      };
-      return db.query;
+      const db = deps.relationalDb() as { query: RelationalQueries };
+      return ownedQueries(db.query, deps);
     },
   };
 

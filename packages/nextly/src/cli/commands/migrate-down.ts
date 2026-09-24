@@ -341,15 +341,9 @@ export async function runMigrateDown(
 
     // Owner rows for the drop guard, read before the run so a foreign drop
     // is refused before any statement executes.
-    const { SchemaOwnersRepository: OwnersRepo } = await import(
-      "../../domains/schema/ownership/schema-owners-repository"
-    );
-    const owners = new Map(
-      (await new OwnersRepo(db, dialect).read()).map(record => [
-        record.tableName,
-        record,
-      ])
-    );
+    const { SchemaOwnersRepository: OwnersRepo, tableOwnersByName } =
+      await import("../../domains/schema/ownership/schema-owners-repository");
+    const owners = tableOwnersByName(await new OwnersRepo(db, dialect).read());
 
     const result = await migrateDownCore({
       dialect,

@@ -544,6 +544,18 @@ async function runMigrateCreatePlugin(
   }
 
   const tables = definition.contributes?.schema?.tables ?? [];
+  // The HOOKS as well as the declarative tables. `schema.addTable()` inside
+  // `schema.extend` is a documented way to declare one — boot compiles and
+  // pushes whatever it produces — and passing only `tables` here generated an
+  // empty module for such a plugin. The table then existed through dev push
+  // and was missing after a production migration, which is the one difference
+  // migrations exist to prevent.
+  //
+  // A hook reaching for an ENTITY table finds none: this command compiles the
+  // plugin alone, deliberately, because a plugin's migration must not depend
+  // on which app installs it. Such a hook is refused by name here rather than
+  // silently producing a module without it.
+  const extend = definition.contributes?.schema?.extend ?? [];
   const prefix =
     definition.contributes?.schema?.prefix ??
     pluginAdminSlug(definition.name).replace(/-/g, "_");
@@ -570,7 +582,9 @@ async function runMigrateCreatePlugin(
       coreTableNames: CORE_TABLE_NAMES,
       entities: [],
       pluginPrefixes: new Map([[definition.name, prefix]]),
-      plugins: [{ owner: { kind: "plugin", id: definition.name }, tables }],
+      plugins: [
+        { owner: { kind: "plugin", id: definition.name }, tables, extend },
+      ],
     });
     // Only this plugin's own tables: a plugin migration carries exactly the
     // tables its stream owns, never an app's or another plugin's.

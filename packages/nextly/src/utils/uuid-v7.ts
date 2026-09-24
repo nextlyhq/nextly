@@ -52,8 +52,14 @@ function randomBytes(length: number): Uint8Array {
  */
 export function uuidV7(now?: number): string {
   const explicit = now !== undefined;
-  const timestamp = explicit ? now : nextMonotonicTimestamp(Date.now());
-  return formatUuidV7(timestamp, nextCounter(timestamp));
+  const requested = explicit ? now : nextMonotonicTimestamp(Date.now());
+  // The counter answers with the timestamp it actually issued under. When it
+  // runs out of room it borrows the next millisecond, and formatting with the
+  // timestamp captured BEFORE that borrow encoded the overflowing id as
+  // (old millisecond, counter 0) — sorting it before every id already issued
+  // in that millisecond, which is the one property v7 is chosen for.
+  const issued = nextCounter(requested);
+  return formatUuidV7(issued.timestamp, issued.counter);
 }
 
 /**
@@ -80,21 +86,26 @@ function nextMonotonicTimestamp(clock: number): number {
  * tight loop produces ids sharing a timestamp that order randomly, which
  * defeats the reason for choosing v7.
  */
-function nextCounter(timestamp: number): number {
+function nextCounter(timestamp: number): {
+  timestamp: number;
+  counter: number;
+} {
   if (timestamp !== counterTimestamp) {
     counterTimestamp = timestamp;
     counter = 0;
-    return counter;
+    return { timestamp: counterTimestamp, counter };
   }
   counter += 1;
   if (counter > COUNTER_MAX) {
     // Out of counter space. Borrowing the next millisecond keeps ids strictly
-    // increasing, at the cost of a timestamp at most 1ms early.
+    // increasing, at the cost of a timestamp at most 1ms early. The borrowed
+    // millisecond is RETURNED, not just recorded: an id formatted with the
+    // millisecond that overflowed would sort before its own predecessors.
     counterTimestamp += 1;
     lastTimestamp = Math.max(lastTimestamp, counterTimestamp);
     counter = 0;
   }
-  return counter;
+  return { timestamp: counterTimestamp, counter };
 }
 
 /** Lay the timestamp, version, counter, variant and random bits into 16 bytes. */

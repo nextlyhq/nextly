@@ -627,7 +627,10 @@ export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
   // what "is this module applied?" asks. Decided by newest startedAt per
   // filename, the same rule migrate:down's target selection uses.
   const appliedShas = new Map<string, string | null>();
-  const newestByFilename = new Map<string, { sha256: string | null; status: string; at: number }>();
+  const newestByFilename = new Map<
+    string,
+    { sha256: string | null; status: string; at: number }
+  >();
   for (const row of await eventsRepo.listFileApplies()) {
     if (!row.filename || !row.filename.startsWith("plugin:")) continue;
     const at = row.startedAt.getTime();
@@ -1130,14 +1133,10 @@ export async function runFileMigrations(args: {
   // table is refused whole, before its first statement. Read once; absent
   // registry reads as "nothing is claimed" and refuses nothing, which is a
   // database predating the registry.
-  const { SchemaOwnersRepository: OwnersRepoForFiles } = await import(
-    "../../domains/schema/ownership/schema-owners-repository"
-  );
-  const fileOwners = new Map(
-    (await new OwnersRepoForFiles(db, dialect).read()).map(record => [
-      record.tableName,
-      record,
-    ])
+  const { SchemaOwnersRepository: OwnersRepoForFiles, tableOwnersByName } =
+    await import("../../domains/schema/ownership/schema-owners-repository");
+  const fileOwners = tableOwnersByName(
+    await new OwnersRepoForFiles(db, dialect).read()
   );
 
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;

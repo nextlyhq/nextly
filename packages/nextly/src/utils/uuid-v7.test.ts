@@ -91,3 +91,26 @@ describe("ordering", () => {
     expect(ids.size).toBe(5_000);
   });
 });
+
+describe("more ids in one millisecond than the counter can hold", () => {
+  it("keeps every id strictly increasing past the 4096th", () => {
+    // The overflow the 10,000-id test could never reach: it does not freeze
+    // the clock, so its loop spans several milliseconds and each one starts a
+    // fresh counter. Frozen, every id competes for the same 12-bit counter and
+    // the 4,097th must borrow the next millisecond — encoded WITH that
+    // millisecond, or it sorts before ids already issued.
+    const frozen = 1_700_000_000_000;
+    const realNow = Date.now;
+    Date.now = () => frozen;
+    try {
+      const ids: string[] = [];
+      for (let i = 0; i < 5000; i += 1) ids.push(uuidV7());
+      const sorted = [...ids].sort();
+      expect(sorted).toEqual(ids);
+      // And no two are equal, which a reset counter would produce.
+      expect(new Set(ids).size).toBe(ids.length);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+});

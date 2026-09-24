@@ -162,3 +162,114 @@ describe("transaction", () => {
     await expect(surface.transaction(boom)).rejects.toThrow("rolled back");
   });
 });
+
+describe("relational queries", () => {
+  /**
+   * A namespace shaped like Drizzle's: schema-wide, naming a core table and
+   * another plugin's table alongside the caller's own. That width is the
+   * whole point — the surface has to narrow it, because the handle it comes
+   * from cannot.
+   */
+  function queryHarness(dependsOn: string[] = []) {
+    const answered: string[] = [];
+    const entry = (name: string) => ({
+      findMany: async () => {
+        answered.push(name);
+        return [];
+      },
+      findFirst: async () => {
+        answered.push(name);
+        return null;
+      },
+    });
+
+    const relational = {
+      query: {
+        fx__notes: entry("fx__notes"),
+        other__invoices: entry("other__invoices"),
+        users: entry("users"),
+      },
+    };
+
+    const surface = createPluginDatabase({
+      dialect: "postgresql",
+      owner: OWNER,
+      dependsOn: new Set(dependsOn),
+      owners: () =>
+        new Map<string, SchemaOwner>([
+          ["fx__notes", OWNER],
+          ["other__invoices", { kind: "plugin", id: "other" }],
+        ]),
+      tables: () => ({ fx__notes: { name: "fx__notes" } }),
+      tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
+      db: () => relational,
+      relationalDb: () => relational,
+      transaction: fn => fn(relational),
+    });
+
+    return { surface, answered };
+  }
+
+  it("answers for a table this owner owns", async () => {
+    // The must-differ control. A namespace that refused everything would
+    // satisfy every test below and break the feature.
+    const { surface, answered } = queryHarness();
+    await surface.query.fx__notes.findMany();
+    expect(answered).toEqual(["fx__notes"]);
+  });
+
+  it("refuses a core table", async () => {
+    // `ctx.db.select(users)` already refuses; reaching the same rows through
+    // `query` was a way around it. Core tables stay behind ctx.services.
+    const { surface, answered } = queryHarness();
+    expect(() => surface.query.users).toThrow(NextlyError);
+    expect(answered).toEqual([]);
+  });
+
+  it("refuses another plugin's table that was not declared in dependsOn", () => {
+    const { surface } = queryHarness();
+    expect(() => surface.query.other__invoices).toThrow(NextlyError);
+  });
+
+  it("answers for another plugin's table once dependsOn declares it", async () => {
+    const { surface, answered } = queryHarness(["other"]);
+    await surface.query.other__invoices.findFirst();
+    expect(answered).toEqual(["other__invoices"]);
+  });
+
+  it("re-reads the rules per access, so a new dependency takes effect", () => {
+    // The getter is not cached, and neither is the check inside it: a
+    // namespace captured once would keep answering for the schema it was
+    // taken from.
+    const dependsOn = new Set<string>();
+    const relational = {
+      query: { other__invoices: { findMany: async () => [] } },
+    };
+    const surface = createPluginDatabase({
+      dialect: "postgresql",
+      owner: OWNER,
+      dependsOn,
+      owners: () =>
+        new Map<string, SchemaOwner>([
+          ["other__invoices", { kind: "plugin", id: "other" }],
+        ]),
+      tables: () => ({}),
+      tableList: () => [],
+      db: () => relational,
+      relationalDb: () => relational,
+      transaction: fn => fn(relational),
+    });
+
+    const namespace = surface.query;
+    expect(() => namespace.other__invoices).toThrow(NextlyError);
+    dependsOn.add("other");
+    expect(() => namespace.other__invoices).not.toThrow();
+  });
+
+  it("does not enumerate a table it would refuse", () => {
+    const { surface } = queryHarness();
+    expect(Object.keys(surface.query)).toEqual(["fx__notes"]);
+    expect("users" in surface.query).toBe(false);
+    expect("fx__notes" in surface.query).toBe(true);
+  });
+});

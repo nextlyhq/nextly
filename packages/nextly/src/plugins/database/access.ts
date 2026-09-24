@@ -35,6 +35,56 @@ function describe(owner: SchemaOwner): string {
 }
 
 /**
+ * Why this caller may not reach a table, or `null` when it may.
+ *
+ * The rule lives here, once, because two callers ask it two ways: a method
+ * about to run a query wants the refusal thrown, and the relational-query
+ * namespace wants a yes/no so it can omit a key it would refuse. Asking the
+ * question by catching the throw would work until the two drifted.
+ */
+function denial(
+  tableName: string,
+  rules: TableAccessRules
+): Record<string, string> | null {
+  const owner = rules.owners.get(tableName);
+
+  if (!owner) {
+    return {
+      reason: "table-not-declared",
+      table: tableName,
+      caller: describe(rules.owner),
+    };
+  }
+
+  if (rules.owner.kind === "app") {
+    // An app reaches its own tables. A plugin's table belongs to that
+    // plugin's migrations, and an app writing to it would make those
+    // migrations describe a shape nobody maintains.
+    if (owner.kind !== "app") {
+      return {
+        reason: "table-owned-by-plugin",
+        table: tableName,
+        tableOwner: describe(owner),
+      };
+    }
+    return null;
+  }
+
+  if (owner.kind === "plugin" && owner.id === rules.owner.id) return null;
+  if (owner.kind === "plugin" && rules.dependsOn.has(owner.id)) return null;
+
+  return {
+    reason:
+      owner.kind === "plugin"
+        ? "table-owner-not-a-declared-dependency"
+        : "table-not-reachable",
+    table: tableName,
+    tableOwner: describe(owner),
+    caller: describe(rules.owner),
+  };
+}
+
+/**
  * Refuse a table this caller may not reach.
  *
  * The message names the reason rather than merely refusing, because the two
@@ -45,46 +95,14 @@ export function assertTableAccess(
   tableName: string,
   rules: TableAccessRules
 ): void {
-  const owner = rules.owners.get(tableName);
+  const refusal = denial(tableName, rules);
+  if (refusal) throw NextlyError.forbidden({ logContext: refusal });
+}
 
-  if (!owner) {
-    throw NextlyError.forbidden({
-      logContext: {
-        reason: "table-not-declared",
-        table: tableName,
-        caller: describe(rules.owner),
-      },
-    });
-  }
-
-  if (rules.owner.kind === "app") {
-    // An app reaches its own tables. A plugin's table belongs to that
-    // plugin's migrations, and an app writing to it would make those
-    // migrations describe a shape nobody maintains.
-    if (owner.kind !== "app") {
-      throw NextlyError.forbidden({
-        logContext: {
-          reason: "table-owned-by-plugin",
-          table: tableName,
-          tableOwner: describe(owner),
-        },
-      });
-    }
-    return;
-  }
-
-  if (owner.kind === "plugin" && owner.id === rules.owner.id) return;
-  if (owner.kind === "plugin" && rules.dependsOn.has(owner.id)) return;
-
-  throw NextlyError.forbidden({
-    logContext: {
-      reason:
-        owner.kind === "plugin"
-          ? "table-owner-not-a-declared-dependency"
-          : "table-not-reachable",
-      table: tableName,
-      tableOwner: describe(owner),
-      caller: describe(rules.owner),
-    },
-  });
+/** The same rule, answered rather than thrown. */
+export function canAccessTable(
+  tableName: string,
+  rules: TableAccessRules
+): boolean {
+  return denial(tableName, rules) === null;
 }

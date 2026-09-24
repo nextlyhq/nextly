@@ -67,6 +67,28 @@ function elementKeyOf(row: OwnerRecord): string {
   return `${row.tableName}\u0000${row.elementKind ?? "table"}\u0000${row.elementName ?? ""}`;
 }
 
+/**
+ * Owner records by table, for the drop guard.
+ *
+ * TABLE-level rows only. Ownership became element-granular, so one table
+ * carries a row for itself and a row for every column or index another owner
+ * contributed — all with the same `tableName`. Keyed by that name alone, the
+ * last row read won: an app element on a plugin's table made the map say the
+ * TABLE was app-owned, and the drop guard then let an app migration drop it.
+ *
+ * An element row says who may change that element, never who owns the table,
+ * which is the only question a drop asks.
+ */
+export function tableOwnersByName(
+  records: readonly OwnerRecord[]
+): Map<string, OwnerRecord> {
+  return new Map(
+    records
+      .filter(record => (record.elementKind ?? "table") === "table")
+      .map(record => [record.tableName, record])
+  );
+}
+
 export class SchemaOwnersRepository {
   private readonly db: AnyDb;
   private readonly table: ReturnType<
@@ -108,8 +130,8 @@ export class SchemaOwnersRepository {
   async upsert(rows: readonly OwnerRecord[]): Promise<void> {
     if (rows.length === 0) return;
     const existing = new Set(
-      (await this.read([...new Set(rows.map(row => row.tableName))])).map(
-        row => elementKeyOf(row)
+      (await this.read([...new Set(rows.map(row => row.tableName))])).map(row =>
+        elementKeyOf(row)
       )
     );
     const now = new Date();
@@ -131,10 +153,7 @@ export class SchemaOwnersRepository {
           .where(
             and(
               eq(this.table.tableName, row.tableName),
-              eq(
-                this.table.elementKind,
-                row.elementKind ?? "table"
-              ),
+              eq(this.table.elementKind, row.elementKind ?? "table"),
               eq(this.table.elementName, row.elementName ?? "")
             )
           );
