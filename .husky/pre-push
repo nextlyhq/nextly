@@ -1,19 +1,5 @@
 #!/usr/bin/env sh
 
-# Skip in CI. The release workflow does an internal `git push` (via
-# `changesets/action`) when it commits version bumps; CI's `ci.yml`
-# already runs the same lint+build validation as a separate gated step.
-# Running them again here is redundant and broke the release flow:
-# `pnpm turbo lint` runs *before* `pnpm run build` in this hook, so
-# in CI (where the turbo cache is fresh) lint can't resolve workspace
-# package imports until build has produced the dist outputs.
-#
-# Local pushes still get the full pre-push validation.
-if [ -n "$CI" ]; then
-  echo "Pre-push hook skipped in CI (validated by .github/workflows/ci.yml)"
-  exit 0
-fi
-
 # Git exports GIT_DIR into every hook, and in a worktree it names that
 # worktree's admin directory (<main>/.git/worktrees/<name>) rather than a
 # plain .git. Turbo shells out to git to hash inputs, inherits that pointer,
@@ -31,7 +17,56 @@ fi
 # something already unset is a no-op.
 unset GIT_DIR GIT_WORK_TREE
 
+# Skip in CI. The release workflow does an internal `git push` (via
+# `changesets/action`) when it commits version bumps; CI's `ci.yml`
+# already runs the same lint+build validation as a separate gated step.
+# Running them again here is redundant, and it once broke the release flow:
+# this hook linted before it built, and on CI's fresh tree lint could not
+# resolve workspace package imports with no dist outputs to resolve to.
+# Local pushes still get the full pre-push validation.
+#
+# Whether this is CI is scripts/bounded.mjs's answer — the one the heavy
+# commands use — so the hook and the runner cannot disagree about it. It asks
+# only `CI`, with telemetry's value rule, so a developer with CI=false, or with
+# a deployment platform's VERCEL=1 loaded into their shell, is still gated.
+if node scripts/bounded.mjs --is-ci; then
+  echo "Pre-push hook skipped in CI (validated by .github/workflows/ci.yml)"
+  exit 0
+fi
+
 set -e
+
+# Everything below runs under scripts/bounded.mjs: it takes this machine's heavy
+# slot, so two checkouts pushing at once take turns rather than each taking the
+# whole machine; it runs the gates in a process group of their own; and it
+# stops them when the push that started them is killed, instead of leaving them
+# to run with nobody waiting. The hook hands itself over once, and the second
+# run finds NEXTLY_BOUNDED set and goes straight on to the gates.
+if [ -z "$NEXTLY_BOUNDED" ]; then
+  # A push that only DELETES remote branches carries no code, so there is
+  # nothing to gate — yet it ran every gate below, holding the machine for
+  # minutes to answer a question nobody asked. Git gives each ref on stdin as
+  # `<local ref> <local sha> <remote ref> <remote sha>`, and a deletion's local
+  # sha is all zeros. No refs at all is NOT read as "only deletions": an empty
+  # list is not an all-clear. A terminal on stdin means the hook was run by
+  # hand, and there are no refs to read.
+  if [ ! -t 0 ]; then
+    REFS=0
+    DELETIONS=0
+    while read -r _local_ref local_sha _remote_ref _remote_sha; do
+      REFS=$((REFS + 1))
+      case "$local_sha" in
+        '' | *[!0]*) ;;
+        *) DELETIONS=$((DELETIONS + 1)) ;;
+      esac
+    done
+    if [ "$REFS" -gt 0 ] && [ "$DELETIONS" -eq "$REFS" ]; then
+      echo "pre-push: only deleting remote branches — nothing to gate."
+      exit 0
+    fi
+  fi
+  exec node scripts/bounded.mjs sh -e .husky/pre-push "$@"
+fi
 
 # How much of this machine the gates below may take.
 #
@@ -95,9 +130,15 @@ pnpm lint:design
 pnpm lint:workspace
 pnpm lint:scripts
 
+# The build BEFORE lint, for the reason the typecheck below follows it.
+# `import-x/no-unresolved` and every type-aware rule resolve a workspace import
+# through the sibling's `dist`, so lint on an unbuilt tree reports the missing
+# build rather than the diff. Linting first refused every push from a checkout
+# that had never been built — 16 of 23 lint tasks, all on unresolved imports —
+# and a new `pnpm worktree` checkout is exactly that.
+pnpm run build
 pnpm turbo lint --continue \
   --filter='./packages/*'
-pnpm run build
 
 # Types AFTER the build, and over every package rather than the changed ones.
 #

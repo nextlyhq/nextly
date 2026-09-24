@@ -49,6 +49,45 @@ export const BOUNDED_SCRIPTS = ["verify:pr", "verify:full"];
 export const BOUNDED_RUNNER = "scripts/verify.mjs";
 
 /**
+ * What every heavy command runs through: the derived limits, the machine-wide
+ * heavy slot, a process group of its own, and a stop when whatever started it
+ * is gone (`scripts/bounded.mjs`).
+ */
+export const HEAVY_RUNNER = "scripts/bounded.mjs";
+
+/**
+ * Root scripts that run heavy work, each of which must run it through
+ * {@link HEAVY_RUNNER}.
+ *
+ * 🔴 These are the commands agents are TOLD to run, and until this list existed
+ * they were the unbounded ones: `pnpm test` was a bare `turbo run test`, turbo's
+ * default of 10 package tasks times one Vitest worker per core — the arithmetic
+ * the hook's bound exists to stop, one command away from it.
+ *
+ * `test:watch` and `test:ui` are deliberately absent: they are interactive and
+ * long-lived, and one holding the machine's only heavy slot would block every
+ * other checkout for as long as it stayed open.
+ */
+export const HEAVY_SCRIPTS = [
+  "build",
+  "build:all",
+  "check-types",
+  "lint",
+  "lint:fix",
+  "test",
+  "test:unit",
+  "test:coverage",
+  "test:scripts",
+  "test:integration",
+  "test:integration:postgres15",
+  "test:integration:postgres17",
+  "test:integration:mysql",
+  "test:integration:sqlite",
+  "verify:pr",
+  "verify:full",
+];
+
+/**
  * Whether the delegated runner actually applies the bounds it is trusted for.
  *
  * 🔴 Accepting `node scripts/verify.mjs` on the strength of the filename means
@@ -113,6 +152,54 @@ export function turboInvocations(script) {
     found.push({ line: index + 1, text: line });
   });
   return found;
+}
+
+/**
+ * Scripts with a heavy mode of their own, which must hand themselves to
+ * {@link HEAVY_RUNNER} before any heavy work — as the hook does. `measure-facts
+ * --full` forces turbo runs across every package, and one run outside the
+ * runner takes no slot and turbo's default of 10 package tasks.
+ */
+export const HEAVY_ENTRIES = ["scripts/measure-facts.mjs"];
+
+/**
+ * Problems with the heavy entry points. Each must call `handOver`, and guard
+ * its heavy work with `requireBounded`: a text check cannot tell whether the
+ * hand-over runs before the heavy work, and the guard makes that a refusal at
+ * run time rather than a question for this check.
+ */
+export function entryProblems(sources) {
+  return HEAVY_ENTRIES.flatMap(path => entryProblem(path, withoutComments(sources[path] ?? "")));
+}
+
+function entryProblem(path, code) {
+  if (!/\bhandOver\(/.test(code)) return [`${path}: has a heavy mode that does not hand itself to ${HEAVY_RUNNER}`];
+  if (!/\brequireBounded\(/.test(code)) {
+    return [`${path}: runs heavy work without requireBounded(), so a hand-over moved or never reached would run it unbounded`];
+  }
+  return [];
+}
+
+/** Source text without its comments — prose that names a call is not the call. */
+function withoutComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
+}
+
+/**
+ * The line on which the hook hands its gates to {@link HEAVY_RUNNER}, or null.
+ *
+ * The hook re-runs itself under the runner, so what follows the hand-over is
+ * what takes the heavy slot and dies with a killed push. A turbo invocation
+ * ABOVE it would run before either is in place.
+ */
+export function handoverLine(script) {
+  const found = codeLines(script).find(({ text }) => /^exec\s+node\s+scripts\/bounded\.mjs\s/.test(text));
+  return found ? found.line : null;
+}
+
+/** Each line with its number, the `#` comment removed — prose is not a command. */
+function codeLines(script) {
+  return script.split("\n").map((raw, index) => ({ line: index + 1, text: raw.replace(/#.*$/, "").trim() }));
 }
 
 /** The line that exports turbo's concurrency variable, or null. */
@@ -222,6 +309,86 @@ export function scriptProblems(scripts) {
   return problems;
 }
 
+/**
+ * Problems with how the hook hands its gates to {@link HEAVY_RUNNER}.
+ *
+ * Separate from {@link boundsProblems} because it is a different property:
+ * those bound how MUCH of the machine a run takes, this is what makes it take
+ * turns with other checkouts and stop when its push is killed. A hook can have
+ * either without the other.
+ */
+export function handoverProblems(script) {
+  const handover = handoverLine(script);
+  if (handover === null) {
+    return [
+      `${HOOK}: never hands its gates to ${HEAVY_RUNNER}, so they take no heavy slot and outlive a killed push`,
+    ];
+  }
+  return turboInvocations(script)
+    .filter(({ line }) => line < handover)
+    .map(
+      ({ line, text }) =>
+        `${HOOK}:${line}: runs turbo before handing over to ${HEAVY_RUNNER} on line ${handover} — '${text}'`
+    );
+}
+
+/**
+ * Problems with the heavy root scripts: each must run through
+ * {@link HEAVY_RUNNER}, and one that runs tests must hand it the worker cap.
+ *
+ * The runner is required as the COMMAND — `node scripts/bounded.mjs` first,
+ * after any environment assignments — because an occurrence anywhere else in
+ * the body, as an argument or in an echo, would satisfy a looser match without
+ * bounding anything.
+ */
+export function heavyScriptProblems(scripts) {
+  return HEAVY_SCRIPTS.map(name => heavyScriptProblem(name, scripts[name])).filter(Boolean);
+}
+
+/** The runner, as the command itself. */
+const RUNS_BOUNDED = /^node\s+scripts\/bounded\.mjs(\s|$)/;
+
+/**
+ * The runner's worker-cap flag, in the one position the runner reads it: first.
+ * Anywhere else it is handed to turbo, and Vitest runs uncapped.
+ */
+const CAPS_WORKERS = /^node\s+scripts\/bounded\.mjs\s+--vitest-workers(\s|$)/;
+
+/**
+ * Shell syntax that runs a second command. `bounded … && turbo run build`
+ * starts with the runner and then runs the build outside it — no slot and no
+ * bound — so a heavy script is one command, and composes bounded scripts
+ * rather than commands if it needs more.
+ */
+const COMPOSES = /[;&|`\n]|\$\(/;
+
+/** What is wrong with one heavy script, or null. */
+function heavyScriptProblem(name, body) {
+  if (body === undefined) {
+    return `package.json: '${name}' is missing — update HEAVY_SCRIPTS if it was removed on purpose`;
+  }
+  // The integration legs set their database URL for the whole run with an
+  // assignment in front of the command.
+  return commandProblem(name, body.replace(/^(\s*[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/, ""));
+}
+
+function commandProblem(name, command) {
+  if (!RUNS_BOUNDED.test(command)) {
+    return `package.json: '${name}' runs heavy work without ${HEAVY_RUNNER}, so it takes no heavy slot and turbo runs its default of 10 package tasks`;
+  }
+  if (COMPOSES.test(command)) {
+    return `package.json: '${name}' runs a second command after ${HEAVY_RUNNER}, outside its slot and its bounds`;
+  }
+  if (missesWorkerCap(command)) {
+    return `package.json: '${name}' runs tests without --vitest-workers straight after ${HEAVY_RUNNER}, so Vitest spawns one worker per core`;
+  }
+  return null;
+}
+
+function missesWorkerCap(command) {
+  return /\bturbo\s+run\s+test\S*|\bvitest\b/.test(command) && !CAPS_WORKERS.test(command);
+}
+
 async function main() {
   const script = readFileSync(join(root, HOOK), "utf8");
   const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -240,7 +407,17 @@ async function main() {
   }
   const problems = [
     ...boundsProblems(script),
+    ...handoverProblems(script),
     ...scriptProblems(manifest.scripts ?? {}),
+    ...heavyScriptProblems(manifest.scripts ?? {}),
+    ...entryProblems(
+      Object.fromEntries(
+        HEAVY_ENTRIES.map(path => [path, existsSync(join(root, path)) ? readFileSync(join(root, path), "utf8") : undefined])
+      )
+    ),
+    ...(existsSync(join(root, HEAVY_RUNNER))
+      ? []
+      : [`${HEAVY_RUNNER}: missing, but the heavy root scripts and the hook run through it`]),
     // A missing runner is not a pass: the scripts delegate to it.
     ...(runner === null
       ? [`${BOUNDED_RUNNER}: missing, but the root scripts delegate their bounds to it`]
@@ -258,7 +435,7 @@ async function main() {
   const invocations = turboInvocations(script);
   console.log(
     `local-gate-bounds: OK — ${invocations.length} turbo invocation(s) in ${HOOK} ` +
-      `and ${BOUNDED_SCRIPTS.length} root script(s), all bounded`
+      `and ${HEAVY_SCRIPTS.length} heavy root script(s), all bounded`
   );
 }
 
