@@ -64,12 +64,31 @@ const FULL_TIP = "91fd9500285dcf264e3609a916b7518b591b51f3";
 const CODE_CHANGE = ["packages/nextly/src/index.ts"];
 /** A change set `integration.yml` ignores at the trigger, so it never runs. */
 const DOCS_CHANGE = ["docs/guide.md", "docs/api/reference.md"];
-/** The integration filter, read from the workflow exactly as the gate reads it. */
+/** The integration workflow as it is now, read exactly as the gate reads it. */
 const INTEGRATION_YML = readFileSync(
   fileURLToPath(new URL("../.github/workflows/integration.yml", import.meta.url)),
   "utf8"
 );
-const PR_IGNORE = workflowPathsIgnore(INTEGRATION_YML, "pull_request");
+/**
+ * A workflow that filters its integration legs at the trigger. The gate reads
+ * the workflow as it stood at the revision it judges, so it has to read this
+ * shape wherever a revision declares it, and the filter's semantics are
+ * exercised on it.
+ */
+const FILTERED_INTEGRATION_YML = [
+  "on:",
+  "  push:",
+  "    branches: [main]",
+  "    paths-ignore:",
+  '      - "docs/**"',
+  '      - "**/*.md"',
+  "  pull_request:",
+  "    branches: [main]",
+  "    paths-ignore:",
+  '      - "docs/**"',
+  '      - "**/*.md"',
+].join("\n");
+const PR_IGNORE = workflowPathsIgnore(FILTERED_INTEGRATION_YML, "pull_request");
 const REQUIRED = requiredChecks(PR_IGNORE, { merged: false });
 
 /**
@@ -658,11 +677,11 @@ describe("PATH_FILTER_COMMIT_LIMIT", () => {
 
 describe("statusAsRun", () => {
   it("treats a pending status as NOT passing", () => {
-    // The title check reports through the statuses API, not check-runs. A
-    // gate that reads only check-runs calls the revision green while the
-    // title check is still pending.
+    // An app that reports only through the statuses API is invisible to a
+    // gate that reads only check-runs, which calls the revision green while
+    // that status is still pending.
     expect(
-      jobPasses(statusAsRun({ context: "PR title", state: "pending" }))
+      jobPasses(statusAsRun({ context: "a status-only check", state: "pending" }))
     ).toBe(false);
   });
 
@@ -1016,7 +1035,7 @@ describe("workflowPathsIgnore", () => {
   // The parser is the only implementation of the integration filter, so these
   // cover it directly rather than comparing it against a second copy.
   it("reads the filter the workflow declares for a trigger", () => {
-    const globs = workflowPathsIgnore(INTEGRATION_YML, "pull_request");
+    const globs = workflowPathsIgnore(FILTERED_INTEGRATION_YML, "pull_request");
 
     // Non-empty first: a parser that silently found nothing would satisfy any
     // comparison against another empty list, so the failure to read would
@@ -1030,7 +1049,7 @@ describe("workflowPathsIgnore", () => {
     // from `pull_request`. The two blocks are edited independently, so a parser
     // exercised on only one of them can be correct there and wrong for every
     // merged pull request the gate looks at.
-    const globs = workflowPathsIgnore(INTEGRATION_YML, "push");
+    const globs = workflowPathsIgnore(FILTERED_INTEGRATION_YML, "push");
 
     expect(globs.length).toBeGreaterThan(0);
   });
@@ -1056,7 +1075,15 @@ describe("workflowPathsIgnore", () => {
     // Empty means "no filter", which `workflowApplies` treats as always
     // applicable — the direction that requires the check rather than excusing
     // it.
-    expect(workflowPathsIgnore(INTEGRATION_YML, "schedule")).toEqual([]);
+    expect(workflowPathsIgnore(FILTERED_INTEGRATION_YML, "schedule")).toEqual([]);
+  });
+
+  it("finds no filter in the integration workflow as it is now, so its legs are always due", () => {
+    // Its path filter is decided in a job, where a skipped leg still reports
+    // `skipped`. At the trigger, the same filter would leave a required check
+    // with no result at all.
+    expect(workflowPathsIgnore(INTEGRATION_YML, "pull_request")).toEqual([]);
+    expect(workflowPathsIgnore(INTEGRATION_YML, "push")).toEqual([]);
   });
 
   it("refuses input it cannot read rather than reporting no filter", () => {

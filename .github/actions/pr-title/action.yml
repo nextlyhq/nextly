@@ -1,0 +1,53 @@
+name: PR title
+description: >
+  Holds a pull request's title to Conventional Commits and this repository's
+  types and scopes, on a pull request or in the merge queue, where the title
+  is read back from the pull request being merged.
+
+# The rules arrive as inputs so they stay in the workflow that calls this, the
+# one place AGENTS.md and the measured facts read the scope list from. They are
+# handed to the script through the environment, never spliced into the shell
+# text: a title, or a rule, is data here and cannot become a command.
+
+inputs:
+  types:
+    description: The accepted types, one per line.
+    required: true
+  scopes:
+    description: The accepted scopes, one per line.
+    required: true
+  requireScope:
+    description: "`true` to refuse a title with no scope."
+    required: false
+    default: "false"
+  subjectPattern:
+    description: A pattern the whole subject must match.
+    required: false
+    default: ""
+  subjectPatternError:
+    description: "The message when it does not; `{subject}` and `{title}` are filled in."
+    required: false
+    default: ""
+  token:
+    description: A token that can read pull requests, for the title of a queued one.
+    required: true
+
+outputs:
+  error_message:
+    description: Why the title was refused; empty when it passed.
+    value: ${{ steps.check.outputs.error_message }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the title
+      id: check
+      shell: bash
+      env:
+        TYPES: ${{ inputs.types }}
+        SCOPES: ${{ inputs.scopes }}
+        REQUIRE_SCOPE: ${{ inputs.requireScope }}
+        SUBJECT_PATTERN: ${{ inputs.subjectPattern }}
+        SUBJECT_PATTERN_ERROR: ${{ inputs.subjectPatternError }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: node "$GITHUB_WORKSPACE/scripts/pr-title.mjs"

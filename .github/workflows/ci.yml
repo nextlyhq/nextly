@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The merge queue tests each pull request again, combined with the latest
+  # `main` and anything ahead of it in the queue, and merges it only if the
+  # required checks pass there too. A required job that did not run on this
+  # event would leave the queue waiting for a result that never comes.
+  merge_group:
+    types: [checks_requested]
 
 # Every job only reads the repo; nothing here writes, comments, or tags.
 # Restricting the token caps what a compromised dependency or action
@@ -35,6 +41,10 @@ permissions:
 # runs therefore start, ask and stop within seconds, and only the newest
 # tests. The queue stays short without anything being cancelled, and
 # `cancelled` keeps meaning what it says.
+#
+# A merge-queue run is keyed by its commit as well. Each queued pull request
+# is tested on a commit of its own, and cancelling one entry's run because
+# another entry started would fail a pull request that did nothing wrong.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
@@ -81,6 +91,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
       # A push to `main` that a newer push has already overtaken can affect
       # nothing: the newer run's verdict includes this commit. Asked before the
       # diff, because a superseded run should not spend the diff either. The
@@ -94,78 +109,17 @@ jobs:
           substantive-job: Lint / Typecheck / Test / Build
           token: ${{ github.token }}
 
+      # Which commits a push, a pull request and the merge queue each compare,
+      # and why anything that cannot be read runs everything, live in
+      # `scripts/change-scope.mjs`, which the Integration workflow shares.
+      # What stays here is this workflow's own claim about which paths are
+      # inert.
       - name: Decide
         id: decide
         env:
-          # On a push to `main`, the diff base is the last commit this workflow
-          # actually TESTED, not merely the previous commit. A README-only push
-          # landing after a superseded code push would otherwise diff against
-          # that code push alone, read as inert, and leave the code untested.
-          # No fallback to `before` when no tested commit is known: that is
-          # the same hole with the history lookup failed, and an empty base
-          # below runs everything instead.
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || steps.newer.outputs.last-tested-sha }}
-          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           SUPERSEDED: ${{ steps.newer.outputs.superseded }}
-        run: |
-          set -uo pipefail
-
-          # Superseded reads as inert to every job gated on `inert`, since the
-          # effect is the same: nothing here needs to run. The gate is told the
-          # REASON separately, so it never describes a superseded run as one
-          # that touched only inert paths.
-          if [ "$SUPERSEDED" = "true" ]; then
-            echo "inert=true" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Superseded::a newer push to main already has a run; this one skips its jobs."
-            exit 0
-          fi
-
-          # Anything this job cannot read, it does not get to skip. Every early
-          # exit here sets `inert=false`, so a broken comparison costs a full
-          # run rather than silently certifying a commit nobody examined.
-          fail_open() {
-            echo "inert=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Full CI::$1"
-            exit 0
-          }
-
-          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
-            fail_open "no tested base or no head SHA for ${{ github.event_name }}; running everything."
-          fi
-          # A first push to a branch reports an all-zero `before`, and a force
-          # push can leave a base that is no longer fetchable.
-          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            fail_open "base $BASE_SHA is not present; running everything."
-          fi
-
-          # On a pull request, compare against the MERGE BASE rather than the
-          # base branch's current tip. `pull_request.base.sha` moves as `main`
-          # advances, so diffing from it reports every commit `main` gained
-          # since the branch point as though this pull request had made it.
-          # Measured here: a change touching one `.claude/` file read as six
-          # files and ran the full matrix. The error is in the safe direction —
-          # it can only ever run MORE — but in a repository with several
-          # branches active it fires on nearly every pull request, which is the
-          # whole cost this job exists to remove.
-          #
-          # A push already carries the right value in `before`: the previous tip
-          # of that branch, which is the merge base by construction.
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            MERGE_BASE=$(git merge-base "$BASE_SHA" "$HEAD_SHA" 2>/dev/null) || \
-              fail_open "no merge base for $BASE_SHA..$HEAD_SHA; running everything."
-            [ -n "$MERGE_BASE" ] || fail_open "empty merge base; running everything."
-            BASE_SHA="$MERGE_BASE"
-          fi
-
-          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null) || \
-            fail_open "could not diff $BASE_SHA..$HEAD_SHA; running everything."
-
-          # No files changed is not evidence of inertness — it is the shape of a
-          # comparison that asked the wrong question.
-          if [ -z "$CHANGED" ]; then
-            fail_open "diff listed no files; running everything."
-          fi
-
+          LAST_TESTED_SHA: ${{ steps.newer.outputs.last-tested-sha }}
+          SCOPE_TITLE: CI scope
           # Paths that cannot change what any job below builds, runs or packs.
           # Every entry is a CLAIM that nothing here reads it, checked rather
           # than assumed, and a wrong entry removes real coverage rather than
@@ -188,13 +142,14 @@ jobs:
           #                    rather than to this one.
           #
           # `.github/**` is absent on purpose: this workflow lives there.
-          INERT='^(docs/|\.claude/|[^/]*\.md$|LICENSE$|\.editorconfig$|\.vscode/)'
+          INERT_PATHS: '^(docs/|\.claude/|[^/]*\.md$|LICENSE$|\.editorconfig$|\.vscode/)'
 
           # AGENTS.md and AGENTS.measured.md are documents, but their guard
           # tests (scripts/agents-md-scopes-agree, scripts/measured-file-fresh)
           # run only inside the gated ci job — so an edit to either must not
-          # skip the very job that checks it. They are re-added after the
-          # inert filter rather than encoded in it, because ERE cannot negate.
+          # skip the very job that checks it. They are listed apart, as paths
+          # this workflow always runs for, rather than carved out of the inert
+          # pattern above.
           #
           # `docs/` is re-added for the same reason and it is a newer one: the
           # published pages carry TypeScript the `Doc samples compile` step
@@ -208,55 +163,8 @@ jobs:
           # nothing, which this repository learned the expensive way when a
           # change that could not compile reached production because no check
           # built the app.
-          NOT_INERT=$({ printf '%s\n' "$CHANGED" | grep -vE "$INERT" || true
-                        printf '%s\n' "$CHANGED" | grep -xE 'AGENTS(\.measured)?\.md' || true
-                        printf '%s\n' "$CHANGED" | grep -E '^docs/' || true; } | sort -u | grep . || true)
-
-          {
-            echo "### CI scope"
-            echo
-            echo "\`$BASE_SHA\` → \`$HEAD_SHA\`, $(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') file(s) changed."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ -z "$NOT_INERT" ]; then
-            # Named individually rather than counted. A summary saying "12 files
-            # skipped" is unreadable as evidence; the list is what lets someone
-            # notice a path that should never have been on it.
-            {
-              echo
-              echo "Every changed file is inert, so the build, test, e2e and"
-              echo "scaffold jobs were skipped. Files:"
-              echo
-              printf '%s\n' "$CHANGED" | sed 's/^/- `/;s/$/`/'
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "inert=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Counted before the list is trimmed, so the summary can say how much it
-          # is not showing. A bare "first files" told a reader neither how many
-          # there were nor that anything had been left out.
-          NOT_INERT_COUNT=$(printf '%s\n' "$NOT_INERT" | wc -l | tr -d ' ')
-          {
-            echo
-            echo "Running in full. $NOT_INERT_COUNT file(s) require it:"
-            echo
-            # `sed` reading the WHOLE stream rather than `head` stopping early.
-            # A reader that stops closes the pipe, `printf` then fails with EPIPE,
-            # and `pipefail` makes that failure the step's exit status — so this
-            # summary line failed the job that every other job depends on, as soon
-            # as the file list outgrew the pipe buffer. It is a race on the buffer
-            # rather than a fixed threshold, which is why it went unseen until a
-            # pull request touching a thousand files hit it.
-            printf '%s\n' "$NOT_INERT" | sed -n '1,20{s/^/- `/;s/$/`/;p;}'
-            # An `if`, not `[ ... ] && echo`: a false test as the last command in
-            # this group would be the group's exit status, which is the same shape
-            # of failure as the one above.
-            if [ "$NOT_INERT_COUNT" -gt 20 ]; then
-              echo "- …and $((NOT_INERT_COUNT - 20)) more"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "inert=false" >> "$GITHUB_OUTPUT"
+          ALWAYS_RUN_PATHS: '^(AGENTS(\.measured)?\.md$|docs/)'
+        run: node scripts/change-scope.mjs
 
   comments:
     name: Comment convention (describes code, not process)
@@ -570,8 +478,12 @@ jobs:
       # base. Diffing against the base branch TIP instead would report every
       # changeset the branch picked up by merging `main` as one this branch
       # wrote, which is how a guard starts failing PRs over other people's files.
+      #
+      # The merge queue's commit has the same shape: its first parent is the
+      # queue's base, or the pull request ahead of it, so `HEAD^1` again leaves
+      # exactly this pull request's changes, and the check runs there too.
       - name: Changeset covers the lockstep group
-        if: ${{ !cancelled() && steps.install.outcome == 'success' && github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
         run: |
           set -euo pipefail
           # `git diff` runs on its own line so a failure — an unavailable `HEAD^1`

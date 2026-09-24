@@ -232,6 +232,20 @@ describe("strictDescriptionMatch", () => {
     ).toBe(false);
   });
 
+  it("is lenient in the merge queue, whose branch has not landed either", () => {
+    // The queue tests a pull request on a branch it makes for it, before that
+    // pull request lands, which is where a pull request's own run stands too.
+    expect(
+      strictDescriptionMatch(
+        {
+          GITHUB_EVENT_NAME: "merge_group",
+          GITHUB_REF_NAME: `gh-readonly-queue/main/pr-1-${"a".repeat(40)}`,
+        },
+        "main"
+      )
+    ).toBe(false);
+  });
+
   it("is strict on a laptop, where someone ran the check deliberately", () => {
     expect(strictDescriptionMatch({}, "main")).toBe(true);
   });

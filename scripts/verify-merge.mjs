@@ -31,10 +31,11 @@
  *   fails to create its check-runs is invisible here unless it is listed. Adding
  *   one is deliberate work; the list does not derive itself.
  *
- * - **A retained commit status is accepted as current.** The title check runs on
- *   `edited` as well as on a push, and GitHub keeps the previous successful
- *   status until the rerun replaces it — so a title edited without moving the
- *   head can be judged on the status of the title it replaced.
+ * - **A retained commit status is accepted as current.** GitHub keeps a
+ *   status context's previous state until a rerun replaces it, so a status can
+ *   describe a revision as it was rather than as it is. The title check reports
+ *   as a check-run, so a title edited without moving the head is judged by the
+ *   run that edit started.
  *
  * - **`refs/pull/N/merge` is resolved, not pinned.** A base branch advancing
  *   mid-run can change which revision that ref names, and the filter would then
@@ -518,10 +519,10 @@ export function pageWrapping(key) {
  * A commit STATUS, expressed as a check-run so one rule judges both.
  *
  * GitHub has two independent surfaces and a gate that reads one sees a partial
- * picture: `amannn/action-semantic-pull-request` and CodeRabbit both report
- * through the statuses API, so a check-runs-only query calls a revision green
- * while the title check is failing. Normalising here means `jobPasses` stays
- * the single definition of passing rather than growing a second one.
+ * picture: some apps, CodeRabbit among them, report only through the statuses
+ * API, so a check-runs-only query calls a revision green while one of them is
+ * failing. Normalising here means `jobPasses` stays the single definition of
+ * passing rather than growing a second one.
  */
 /**
  * Status contexts published by reviewers the gate reports rather than requires.
@@ -741,9 +742,9 @@ export function requiredChecks(integrationPathsIgnore, { merged = false } = {}) 
     { name: "Integration (postgres)", pathsIgnore: integrationPathsIgnore },
     { name: "Integration (mysql)", pathsIgnore: integrationPathsIgnore },
     { name: "Integration (sqlite)", pathsIgnore: integrationPathsIgnore },
-    // Reports through the STATUSES surface from its own workflow, and only on a
-    // pull request — a push to the base branch has no title to validate, so
-    // requiring it post-merge would demand a status that is never written.
+    // Reported by its own workflow, on a pull request and in the merge queue,
+    // and never on a push to the base branch, which has no title to validate,
+    // so requiring it post-merge would demand a result that is never written.
     // Judged only when present, a run that never started left the title
     // unvalidated and the gate green.
     ...(merged
@@ -1315,8 +1316,8 @@ export function main(argv) {
   // Scoped to THIS revision: a review of an earlier one is not coverage of it.
   const coderabbit = reviewsCoveringTip(reviews, tip, CODERABBIT).length;
 
-  // Commit STATUSES are a separate surface from check-runs, and this
-  // repository's title check and CodeRabbit both report through it.
+  // Commit STATUSES are a separate surface from check-runs, and some apps,
+  // CodeRabbit among them, report only through it.
   // Guarded like the check-runs lookup above. Unguarded, an empty `tip`
   // produced `commits//status`, which throws before the script can print
   // NOT CHECKABLE or return its exit code — so the documented refusal became
