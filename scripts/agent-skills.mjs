@@ -13,9 +13,13 @@
  * `scripts/check-agent-contract.mjs` holds the two identical (`skillCopyDrift`)
  * and every skill loadable by every harness (`skillFrontmatterProblems`).
  */
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { load } from "js-yaml";
+
+import { isCliEntry } from "./cli-entry.mjs";
 
 export const SKILLS_HOME = ".agents/skills";
 export const CLAUDE_COPY = ".claude/skills";
@@ -48,13 +52,20 @@ export function filesUnder(dir) {
  * copy, one that differs, one in the copy that the skills do not have, and any
  * symbolic link, which a checkout with links off turns into a text file.
  *
+ * Either directory being a link, or not a directory at all, is reported on its
+ * own: a link at the skills' own root would otherwise be followed, and two
+ * identical trees behind it would compare clean.
+ *
  * @returns {{ path: string, problem: string }[]}
  */
 export function skillCopyDrift(base = root) {
   const home = join(base, SKILLS_HOME);
   const copy = join(base, CLAUDE_COPY);
-  const unusable = copyRootProblem(entryAt(copy));
-  if (unusable) return [{ path: CLAUDE_COPY, problem: unusable }];
+  const unusable = [
+    { path: SKILLS_HOME, problem: rootProblem(entryAt(home), "skills are real files") },
+    { path: CLAUDE_COPY, problem: rootProblem(entryAt(copy), "it must be a real copy") },
+  ].filter(found => found.problem);
+  if (unusable.length > 0) return unusable;
   const source = filesUnder(home);
   const copied = new Map(filesUnder(copy).map(file => [file.path, file]));
   const known = new Set(source.map(file => file.path));
@@ -64,11 +75,11 @@ export function skillCopyDrift(base = root) {
   ];
 }
 
-/** Why the copy's root cannot hold a copy at all, or null when it can. */
-function copyRootProblem(stat) {
-  if (stat?.isSymbolicLink()) return "is a symbolic link — it must be a real copy";
+/** Why a directory's root cannot hold what it should, or null when it can, or is absent. */
+function rootProblem(stat, rule) {
+  if (stat?.isSymbolicLink()) return `is a symbolic link — ${rule}`;
   // A link checked out with links off is a small text file, not a directory.
-  if (stat && !stat.isDirectory()) return "is not a directory — it must be a real copy";
+  if (stat && !stat.isDirectory()) return `is not a directory — ${rule}`;
   return null;
 }
 
@@ -95,53 +106,110 @@ function entryAt(path) {
   }
 }
 
-/** Rewrites the Claude Code copy from the skills: every file copied, anything else removed. */
+/**
+ * Rewrites the Claude Code copy from the skills: every file copied, anything
+ * else removed. The new copy is built beside the old one and swapped in, so a
+ * sync that fails part-way — the skills missing or unreadable — leaves the
+ * copy Claude Code reads as it was.
+ */
 export function syncSkillCopy(base = root) {
   const copy = join(base, CLAUDE_COPY);
+  mkdirSync(dirname(copy), { recursive: true });
+  const staging = mkdtempSync(join(dirname(copy), ".skills-sync-"));
+  try {
+    cpSync(join(base, SKILLS_HOME), staging, { recursive: true, dereference: true });
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
   rmSync(copy, { recursive: true, force: true });
-  mkdirSync(copy, { recursive: true });
-  cpSync(join(base, SKILLS_HOME), copy, { recursive: true, dereference: true });
+  renameSync(staging, copy);
 }
 
 /**
- * Skills a harness would fail to load: a `SKILL.md` without the `name` and
- * `description` that every harness reads from its frontmatter, or
- * whose `name` is not its folder's.
+ * Skills a harness would fail to load: a skill folder with no `SKILL.md`, and
+ * a `SKILL.md` whose frontmatter does not parse as YAML, or lacks the `name`
+ * and `description` every harness reads from it, or names another folder.
  *
  * @returns {{ skill: string, problem: string }[]}
  */
 export function skillFrontmatterProblems(base = root) {
   const home = join(base, SKILLS_HOME);
   if (!existsSync(home)) return [];
-  return readdirSync(home)
+  const folders = readdirSync(home, { withFileTypes: true }).filter(entry => entry.isDirectory());
+  return folders
+    .map(entry => entry.name)
     .sort()
-    .filter(skill => existsSync(join(home, skill, "SKILL.md")))
-    .flatMap(skill => loadProblems(skill, frontmatter(readFileSync(join(home, skill, "SKILL.md"), "utf8"))));
+    .flatMap(skill => skillProblems(home, skill));
 }
 
-/** The `key: value` fields of a Markdown file's leading frontmatter block. */
+/** What would stop a harness loading one skill folder. */
+function skillProblems(home, skill) {
+  const file = join(home, skill, "SKILL.md");
+  if (!existsSync(file)) return [{ skill, problem: "has no SKILL.md, so no harness loads it" }];
+  const { fields, problem } = frontmatter(readFileSync(file, "utf8"));
+  return problem ? [{ skill, problem }] : loadProblems(skill, fields);
+}
+
+/**
+ * A Markdown file's leading frontmatter, parsed as YAML, as the harnesses
+ * parse it — or why it cannot be. A line that merely looks like `key: value`
+ * is not evidence: `description: [` is not YAML, and a folded `>-` with no
+ * text under it is an empty string.
+ */
 function frontmatter(text) {
-  const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? "";
-  return new Map(
-    block
-      .split(/\r?\n/)
-      .map(line => /^([a-z]+):\s*(.*)$/.exec(line))
-      .filter(Boolean)
-      .map(match => [match[1], match[2].trim()])
-  );
+  const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  if (!block) return { problem: "has no frontmatter" };
+  const { value, problem } = parsedYaml(block[1]);
+  if (problem) return { problem };
+  return isMapping(value) ? { fields: value } : { problem: "has frontmatter that is not a mapping" };
 }
 
-/** What in a skill's frontmatter would stop a harness loading it. */
+/** A YAML text's value, or why it does not parse. */
+function parsedYaml(text) {
+  try {
+    return { value: load(text) };
+  } catch (error) {
+    return { problem: `has frontmatter that is not YAML: ${error.reason ?? error.message}` };
+  }
+}
+
+function isMapping(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** A field's text, or "" for anything that is not a string: a number or a list is no name. */
+function textOf(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * The limits the skill format sets, which the harnesses' own skill validators
+ * apply: a name of 1 to 64 lowercase letters, digits and single hyphens, and
+ * a description of at most 1024 characters.
+ */
+const NAME_FORMAT = /^(?=.{1,64}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MAX_DESCRIPTION = 1024;
+
+/** What in a skill's parsed frontmatter would stop a harness loading it. */
 function loadProblems(skill, fields) {
-  const name = fields.get("name");
-  const problems = [];
-  if (!name) problems.push({ skill, problem: "has no name in its frontmatter" });
-  else if (name !== skill) problems.push({ skill, problem: `is named "${name}", not after its folder` });
-  if (!fields.get("description")) problems.push({ skill, problem: "has no description in its frontmatter" });
-  return problems;
+  return [nameProblem(textOf(fields.name), skill), descriptionProblem(textOf(fields.description))]
+    .filter(Boolean)
+    .map(problem => ({ skill, problem }));
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function nameProblem(name, skill) {
+  if (!name) return "has no name in its frontmatter";
+  if (name !== skill) return `is named "${name}", not after its folder`;
+  return NAME_FORMAT.test(name) ? null : "has a name that is not 1 to 64 lowercase letters, digits and single hyphens";
+}
+
+function descriptionProblem(description) {
+  if (!description) return "has no description in its frontmatter";
+  return description.length > MAX_DESCRIPTION ? `has a description of ${description.length} characters, over the ${MAX_DESCRIPTION} a skill may have` : null;
+}
+
+if (isCliEntry(import.meta.url)) {
   if (process.argv[2] === "sync") {
     syncSkillCopy();
     console.log(`agent-skills: ${CLAUDE_COPY} rewritten from ${SKILLS_HOME}`);

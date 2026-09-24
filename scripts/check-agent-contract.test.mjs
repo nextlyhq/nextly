@@ -9,9 +9,11 @@
  * correct prose, which `derived-checks.md` calls the failure that gets an
  * advisory check deleted.
  */
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -36,6 +38,9 @@ import {
   routerDisagreements,
   skillFindings,
 } from "./check-agent-contract.mjs";
+import { syncSkillCopy } from "./agent-skills.mjs";
+
+const CHECK = fileURLToPath(new URL("./check-agent-contract.mjs", import.meta.url));
 
 const names = text => pnpmScriptsIn(text).map(entry => entry.name);
 
@@ -262,6 +267,48 @@ describe("holding the skill router and the skills directory to one set", () => {
     expect(routerDisagreements(new Set(), new Set(["orphan"]))).toEqual([
       { name: "orphan", side: "present in .agents/skills but not routed by AGENTS.md" },
     ]);
+  });
+});
+
+describe("the command, run against another checkout", () => {
+  /*
+   * The findings are asserted through their functions above; this runs the
+   * command itself, as CI does with `--root`, on a checkout whose copy has
+   * drifted, so the wiring from a finding to the exit code and the printed fix
+   * is covered too. The second run is the control: the same checkout, synced.
+   */
+  it("fails on a drifted copy, naming the fix, and passes once it is synced", () => {
+    const base = mkdtempSync(join(tmpdir(), "agent-contract-cli-"));
+    const put = (path, text) => {
+      mkdirSync(dirname(join(base, path)), { recursive: true });
+      writeFileSync(join(base, path), text);
+    };
+    try {
+      put("AGENTS.md", "| `a` | when a applies |\n");
+      put(".claude/rules/whole-file-writes.md", "A rule.\n");
+      put(".claude/rules/integration-tests.md", "A rule.\n");
+      put(".github/review-prompt.md", "Review.\n");
+      put("package.json", "{}\n");
+      put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\n---\n");
+      put(".claude/skills/a/SKILL.md", "---\nname: a\ndescription: edited in the copy by hand\n---\n");
+      execFileSync("git", ["init", "-q"], { cwd: base });
+      execFileSync("git", ["add", "-A"], { cwd: base });
+      const run = () => spawnSync(process.execPath, [CHECK, "--root", base], { encoding: "utf8" });
+
+      const drifted = run();
+      expect(drifted.status).toBe(1);
+      expect(drifted.stderr).toContain(".claude/skills/a/SKILL.md: differs from .agents/skills — run pnpm skills:sync");
+
+      syncSkillCopy(base);
+      const synced = run();
+      expect(synced.stderr).toBe("");
+      expect(synced.status).toBe(0);
+
+      // A flag with no directory is refused, not read as this checkout.
+      expect(spawnSync(process.execPath, [CHECK, "--root"], { encoding: "utf8" }).status).toBe(64);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });
 

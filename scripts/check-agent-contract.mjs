@@ -557,9 +557,9 @@ export function skillFindings(base = root) {
   ];
 }
 
-function main() {
+function main(base = root) {
   const asJson = process.argv.includes("--json");
-  const files = instructionFiles();
+  const files = instructionFiles(base);
 
   const absent = missingAnchors(files);
   if (absent.length > 0) {
@@ -573,20 +573,20 @@ function main() {
   // The real top-level directories, read rather than listed: a hand-kept list
   // is the recomputation this repository has a rule about.
   const topLevel = new Set(
-    readdirSync(root).filter(entry => statSync(join(root, entry)).isDirectory())
+    readdirSync(base).filter(entry => statSync(join(base, entry)).isDirectory())
   );
 
   // Every basename in the repository, so a bare reference can be told from a
   // stale one. Read once rather than per file.
-  const tracked = execFileSync("git", ["ls-files"], { cwd: root, encoding: "utf8" })
+  const tracked = execFileSync("git", ["ls-files"], { cwd: base, encoding: "utf8" })
     .split("\n")
     .filter(Boolean);
   const basenames = new Set(tracked.map(path => path.split("/").pop()));
 
   const scripts = new Set(
-    Object.keys(JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {})
+    Object.keys(JSON.parse(readFileSync(join(base, "package.json"), "utf8")).scripts ?? {})
   );
-  const byWorkspace = workspaceScripts();
+  const byWorkspace = workspaceScripts(base);
 
   const findings = [];
   // Claims this module can see but cannot decide. Kept apart from findings:
@@ -594,7 +594,7 @@ function main() {
   // and must not let its silence imply it checked.
   const unverified = [];
 
-  const skillsDir = join(root, SKILLS_HOME);
+  const skillsDir = join(base, SKILLS_HOME);
   const present = new Set(
     existsSync(skillsDir)
       ? readdirSync(skillsDir).filter(name =>
@@ -602,14 +602,14 @@ function main() {
         )
       : []
   );
-  const routed = routedSkills(readFileSync(join(root, "AGENTS.md"), "utf8"));
+  const routed = routedSkills(readFileSync(join(base, "AGENTS.md"), "utf8"));
   for (const { name, side } of routerDisagreements(routed, present)) {
     findings.push({ file: "AGENTS.md", kind: "router", claim: `${name} — ${side}` });
   }
-  findings.push(...skillFindings(root));
+  findings.push(...skillFindings(base));
 
   for (const file of files) {
-    const text = readFileSync(join(root, file), "utf8");
+    const text = readFileSync(join(base, file), "utf8");
     for (const { filter, name, subcommands } of pnpmScriptsIn(text)) {
       for (const subcommand of subcommands) {
         unverified.push({ file, claim: `pnpm ${filter ? `--filter ${filter} ` : ""}${name} ${subcommand}` });
@@ -635,8 +635,8 @@ function main() {
         findings.push({ file, kind: "script", claim: `pnpm --filter ${filter} ${name}` });
       }
     }
-    const unresolved = unresolvedIn({ file, text, topLevel, basenames });
-    const ignored = gitIgnored(unresolved);
+    const unresolved = unresolvedIn({ file, text, base, topLevel, basenames });
+    const ignored = gitIgnored(unresolved, base);
     for (const path of unresolved) {
       if (ignored.has(path)) continue;
       findings.push({ file, kind: "path", claim: path });
@@ -649,19 +649,19 @@ function main() {
     if (GUIDANCE_SCAN_EXCLUDES.includes(file)) continue;
     let text;
     try {
-      text = readFileSync(join(root, file), "utf8");
+      text = readFileSync(join(base, file), "utf8");
     } catch {
       continue; // binary, or removed since `git ls-files` ran
     }
     for (const reference of guidanceReferences(text)) {
-      if (existsSync(join(root, reference))) continue;
+      if (existsSync(join(base, reference))) continue;
       if (!guidanceMisses.has(reference)) guidanceMisses.set(reference, []);
       guidanceMisses.get(reference).push(file);
     }
   }
   // Asked once for the whole set: a gitignored path is not a claim that a file
   // exists, and `.claude/settings.local.json` is written per worktree.
-  const ignoredGuidance = gitIgnored([...guidanceMisses.keys()]);
+  const ignoredGuidance = gitIgnored([...guidanceMisses.keys()], base);
   for (const [reference, files] of guidanceMisses) {
     if (ignoredGuidance.has(reference)) continue;
     for (const file of files) findings.push({ file, kind: "guidance", claim: reference });
@@ -696,5 +696,14 @@ function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]).endsWith("check-agent-contract.mjs")) {
-  main();
+  // `--root` checks another checkout with this one's code and dependencies,
+  // as CI does with a clone made without symbolic links, which has none
+  // installed. A flag given without a directory is refused rather than read
+  // as this checkout, which would pass while checking the wrong tree.
+  const at = process.argv.indexOf("--root");
+  if (at !== -1 && !process.argv[at + 1]) {
+    console.error("usage: node scripts/check-agent-contract.mjs [--json] [--root <dir>]");
+    process.exit(64);
+  }
+  main(at === -1 ? root : resolve(process.argv[at + 1]));
 }
