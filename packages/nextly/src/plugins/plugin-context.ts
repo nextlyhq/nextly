@@ -42,11 +42,11 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
-import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
 import {
   createPluginDatabase,
   type PluginDatabase,
 } from "./database/plugin-database";
+import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
@@ -1017,19 +1017,18 @@ function buildPluginDatabase(
       // does not.
       ...(active()?.adopted ?? {}),
     }),
-    tableList: () =>
-      [
-        ...(active()?.tables ?? []).map(table => ({
-          name: table.name,
-          authored: table.authored,
-          owner: table.owner,
-        })),
-        ...Object.keys(active()?.adopted ?? {}).map(name => ({
-          name,
-          authored: name,
-          owner: { kind: "app" as const },
-        })),
-      ],
+    tableList: () => [
+      ...(active()?.tables ?? []).map(table => ({
+        name: table.name,
+        authored: table.authored,
+        owner: table.owner,
+      })),
+      ...Object.keys(active()?.adopted ?? {}).map(name => ({
+        name,
+        authored: name,
+        owner: { kind: "app" as const },
+      })),
+    ],
     db: () => rawDb,
     relationalDb: () => relationalDbHandle,
     transaction: fn => fn(rawDb),

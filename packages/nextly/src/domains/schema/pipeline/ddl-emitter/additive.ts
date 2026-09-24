@@ -220,8 +220,6 @@ export function emitAdditiveDdl(
     case "change_column_nullable":
     case "change_column_default":
     case "change_foreign_key_action":
-    // Check DDL alters a live constraint, so it is not additive either; the
-    // apply routes it through the statement templates, not this pass.
     case "add_check":
     case "add_foreign_key":
     case "drop_check":
@@ -230,7 +228,8 @@ export function emitAdditiveDdl(
       // definition) — canEmitWithoutDrizzleKit routes these to drizzle-kit.
       // A referential-action change is not additive either: it drops a live
       // constraint before redeclaring it, so it never belongs in the pass that
-      // only adds things.
+      // only adds things. Check DDL alters a live constraint for the same
+      // reason, and the apply routes it through the statement templates.
       throw NextlyError.internal({
         logContext: {
           reason: "op-not-additive-emittable",

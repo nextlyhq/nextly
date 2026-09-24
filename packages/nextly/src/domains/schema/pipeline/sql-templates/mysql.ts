@@ -103,14 +103,14 @@ function createIndexStatement(tableName: string, index: IndexSpec): string {
   // spec that reaches this point fails loudly instead of silently losing the
   // predicate.
   if (index.where) {
-    throw unsupportedOperation("generateMysqlSQL", {
+    return unsupportedOperation("generateMysqlSQL", {
       type: `add_index (partial, ${index.name})`,
     });
   }
   // A functional key part (8.0.13+): the expression is the key, unquoted.
-  const cols = index.expression ? index.expression : index.columns
-    .map(c => `\`${c}\``)
-    .join(", ");
+  const cols = index.expression
+    ? index.expression
+    : index.columns.map(c => `\`${c}\``).join(", ");
   return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX ${q(index.name)} ON \`${tableName}\` (${cols})`;
 }
 
@@ -128,9 +128,7 @@ function generateDropCheck(op: DropCheckOp): string {
 function generateAddForeignKey(op: AddForeignKeyOp): string {
   const { foreignKey } = op;
   const cols = foreignKey.columns.map(c => `\`${c}\``).join(", ");
-  const refCols = foreignKey.referencesColumns
-    .map(c => `\`${c}\``)
-    .join(", ");
+  const refCols = foreignKey.referencesColumns.map(c => `\`${c}\``).join(", ");
   const actions = ` ON DELETE ${foreignKey.onDelete.toUpperCase()} ON UPDATE ${foreignKey.onUpdate.toUpperCase()}`;
   return `ALTER TABLE \`${op.tableName}\` ADD CONSTRAINT \`${foreignKey.name}\` FOREIGN KEY (${cols}) REFERENCES \`${foreignKey.referencesTable}\` (${refCols})${actions}`;
 }

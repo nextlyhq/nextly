@@ -13,7 +13,7 @@
  * hidden (so no entry API returns it). Neither half alone would be safe."
  * Only the second half was asserted anywhere.
  */
-import { getTableColumns } from "drizzle-orm";
+import { getColumns } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildDesiredTableFromFields } from "../../pipeline/diff/build-from-fields";
@@ -94,9 +94,7 @@ describe("a column contributed to an entity table", () => {
       "postgresql"
     );
 
-    expect(Object.keys(getTableColumns(table as never))).toContain(
-      "search_vector"
-    );
+    expect(Object.keys(getColumns(table as never))).toContain("search_vector");
   });
 
   it("keys the runtime column by its SQL name, as an owned table does", async () => {
@@ -111,7 +109,7 @@ describe("a column contributed to an entity table", () => {
       [] as never,
       "postgresql"
     );
-    const columns = getTableColumns(table as never) as Record<
+    const columns = getColumns(table as never) as Record<
       string,
       { name: string }
     >;

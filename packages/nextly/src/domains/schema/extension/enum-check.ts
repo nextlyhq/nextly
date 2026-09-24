@@ -114,7 +114,7 @@ export function enumChecks(
  * reporting that an opaque expression differs.
  */
 export function enumValuesIn(sql: string): string[] | null {
-  const match = /^\s*(\w+)\s+IN\s*\((.*)\)\s*$/is.exec(sql);
+  const match = /^\s*(\w+)\s+IN\s*\(([\s\S]*)\)\s*$/i.exec(sql);
   if (match === null) return null;
   const body = match[2] ?? "";
   const values: string[] = [];

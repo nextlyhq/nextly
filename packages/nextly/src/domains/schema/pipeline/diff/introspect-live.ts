@@ -56,9 +56,9 @@ const PG_FK_ACTION: Record<string, ForeignKeySpec["onDelete"]> = {
  * no migration could resolve.
  */
 function pgCheckExpression(definition: string): string {
-  const double = /^CHECK\s*\(\((.*)\)\)$/s.exec(definition);
+  const double = /^CHECK\s*\(\(([\s\S]*)\)\)$/.exec(definition);
   if (double) return double[1].trim();
-  const single = /^CHECK\s*\((.*)\)$/s.exec(definition);
+  const single = /^CHECK\s*\(([\s\S]*)\)$/.exec(definition);
   return (single ? single[1] : definition).trim();
 }
 
