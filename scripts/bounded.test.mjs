@@ -83,24 +83,35 @@ beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), "bounded-test-"));
 });
 
+/** Whether a recorded leader is a real run's, rather than this test's own process a fixture named. */
+function isRunLeader(pid) {
+  return Number.isInteger(pid) && pid !== process.pid && pid !== process.ppid;
+}
+
+/** The leader the slot records for a run, or null when there is none to clean up. */
+function recordedLeader() {
+  try {
+    const { leader } = JSON.parse(readFileSync(path.join(dir, "slot-0.json"), "utf8"));
+    return isRunLeader(leader) ? leader : null;
+  } catch {
+    return null;
+  }
+}
+
+function killQuietly(pid) {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // Already gone, which is what the case wanted.
+  }
+}
+
 afterEach(() => {
   // A run's leader is in a session of its own, and one stopped or left by a
   // failed case would outlive the case: it and its group go too.
-  try {
-    const { leader } = JSON.parse(readFileSync(path.join(dir, "slot-0.json"), "utf8"));
-    // Only a real run's leader: fixtures record this test's own process as a
-    // holder, and killing it would end the test run itself.
-    if (Number.isInteger(leader) && leader !== process.pid && leader !== process.ppid) spawned.push(-leader, leader);
-  } catch {
-    // No slot held, or no leader recorded.
-  }
-  for (const pid of spawned.splice(0)) {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // Already gone, which is what the case wanted.
-    }
-  }
+  const leader = recordedLeader();
+  if (leader) spawned.push(-leader, leader);
+  for (const pid of spawned.splice(0)) killQuietly(pid);
   rmSync(dir, { recursive: true, force: true });
 });
 
