@@ -508,43 +508,51 @@ const PLUGIN_BUNDLE_EXTERNALS = [
 const PLUGIN_DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
 /**
- * Compile one plugin's own schema, and say plainly when a hook reaches past it.
+ * Compile this plugin's schema with its declared dependencies present.
  *
- * `migrate:create --plugin` compiles the plugin ALONE, deliberately: the module
- * it writes ships inside the plugin, so it must describe the same schema in
- * every app that installs it. Neither the app's entity tables nor a
- * dependency's tables are therefore in the draft.
+ * `migrate:create --plugin` emits a module that ships INSIDE the plugin, so it
+ * must describe the same schema in every app that installs it. That is why the
+ * app's entity tables are not in the draft, and why the emitted module is
+ * filtered to the tables this plugin owns.
  *
- * A hook calling `extendTable` on one of them consequently fails — and used to
- * fail as a bare `Table "x" does not exist, so it cannot be extended.`, which
- * reads like the plugin named a table wrong. It has not: boot accepted the very
- * same hook, because at boot the entity or the dependency was present. That gap
- * between "works in development" and "cannot generate a migration" is the thing
- * worth naming, so the refusal names it, the table, and what to do instead.
+ * Declared dependencies are the one thing that rule does not exclude. A
+ * `dependsOn` entry pins a version, so a dependency's tables are as fixed a
+ * fact for this plugin as its own — which is why `addColumns` permits a plugin
+ * to contribute to "a declared dependency's tables", and why boot accepts such
+ * a hook. Compiling the plugin alone made that hook die on `Table "x" does not
+ * exist`, so a plugin using a documented feature could run in development and
+ * never generate a production migration.
  *
- * Deliberately a refusal and not a silent omission: generating the module
- * WITHOUT the contributed column would ship a migration that disagrees with the
- * schema the plugin runs on, and the disagreement would only surface in
- * production, which is the one thing migrations exist to prevent.
+ * The dependencies are here so the hook RESOLVES, not so their tables ship:
+ * the caller keeps only this plugin's own tables. The contributed column
+ * travels the same road every cross-owner element travels in this codebase —
+ * the app's migration stream, with a per-element owner row naming the
+ * contributor.
  */
 async function buildPluginDraft(args: {
   dialect: SupportedDialect;
   pluginName: string;
-  prefix: string;
+  pluginPrefixes: ReadonlyMap<string, string>;
   tables: SchemaContribution["tables"];
   extend: SchemaContribution["extend"];
   dependencies: ReadonlyMap<string, ReadonlySet<string>>;
+  dependencyPlugins: readonly PluginDefinition[];
 }) {
   try {
     return await buildExtensionSchema({
       dialect: args.dialect,
       coreTableNames: CORE_TABLE_NAMES,
       entities: [],
-      pluginPrefixes: new Map([[args.pluginName, args.prefix]]),
+      pluginPrefixes: args.pluginPrefixes,
       dependencies: args.dependencies,
       plugins: [
+        ...args.dependencyPlugins.map(dependency => ({
+          owner: { kind: "plugin" as const, id: dependency.name },
+          tables: dependency.contributes?.schema?.tables ?? [],
+          extend: dependency.contributes?.schema?.extend ?? [],
+        })),
         {
-          owner: { kind: "plugin", id: args.pluginName },
+          owner: { kind: "plugin" as const, id: args.pluginName },
           tables: args.tables,
           extend: args.extend,
         },
@@ -557,11 +565,13 @@ async function buildPluginDraft(args: {
       code: "INVALID_INPUT",
       publicMessage:
         `Plugin "${args.pluginName}" has a schema.extend hook that extends "${missing}", ` +
-        `which this command cannot compile: a plugin's migration module must describe the same ` +
-        `schema in every app that installs it, so it is compiled from the plugin alone — without ` +
-        `the app's entity tables and without your dependencies' tables. The hook is valid at boot, ` +
-        `where those tables exist. Move the columns onto a table this plugin declares, or contribute ` +
-        `them from the APP (its migration stream owns elements on tables it does not declare).`,
+        `which is not in the schema this command compiles. A plugin's migration module ships ` +
+        `inside the plugin, so it is compiled from the plugin and its DECLARED DEPENDENCIES ` +
+        `alone — never from the app's entity tables, which differ per installation. ` +
+        `If "${missing}" belongs to a dependency, add that dependency to dependsOn and make sure ` +
+        `it is present in the config this command loads. If it is an entity table, contribute the ` +
+        `columns from the app instead: the app's migration stream owns elements on tables it does ` +
+        `not declare.`,
       statusCode: 400,
     });
   }
@@ -652,31 +662,64 @@ async function runMigrateCreatePlugin(
     // First generation: no barrel to read yet.
   }
 
-  // Declared dependencies, as the draft understands them.
+  // Declared dependencies, compiled ALONGSIDE this plugin.
   //
-  // Passed so a hook that INDEXES a dependency's table is judged by the same
-  // rule boot uses, rather than by an empty map that calls every dependency
-  // foreign. It does not put the dependency's TABLES in the draft — see the
-  // refusal below, which is about that.
-  const dependencies = new Map<string, ReadonlySet<string>>([
-    [
-      definition.name,
-      new Set([
-        ...Object.keys(definition.dependsOn ?? {}),
-        ...Object.keys(definition.optionalDependsOn ?? {}),
-      ]),
-    ],
+  // `extendTable` on a dependency's table is a supported contribution —
+  // `addColumns` permits "a plugin on a declared dependency's tables" — and
+  // boot allows it because every plugin is compiled together there. This
+  // command compiled the plugin alone, so the target was simply absent and the
+  // hook died on `Table "x" does not exist`: valid in development, impossible
+  // to generate a migration for.
+  //
+  // The dependency's tables go into the DRAFT so the hook resolves, and never
+  // into the emitted module — the `owned` filter below keeps this module to
+  // the tables this plugin's stream owns. The contributed COLUMN reaches
+  // production the way every cross-owner element does in this codebase: on the
+  // app's migration stream, with a per-element owner row naming the
+  // contributor (see `recordElementOwners` in migrate.ts). A plugin module
+  // carrying a column on a table it does not own would be a second answer to
+  // a question that already has one.
+  const dependencyNames = new Set([
+    ...Object.keys(definition.dependsOn ?? {}),
+    ...Object.keys(definition.optionalDependsOn ?? {}),
   ]);
+  // The app's config, read ONLY to find the dependency definitions this plugin
+  // declares. Its collections and entity tables are deliberately not compiled
+  // — a plugin's module must not vary with the app that generates it. A repo
+  // with no config loads defaults, which simply yields no dependencies, and
+  // the refusal below then names what is missing.
+  const dependencyPlugins: PluginDefinition[] =
+    dependencyNames.size === 0
+      ? []
+      : (
+          (await loadConfig({ configPath: options.config, cwd })).config
+            .plugins ?? []
+        ).filter(candidate => dependencyNames.has(candidate.name));
+  const dependencies = new Map<string, ReadonlySet<string>>([
+    [definition.name, dependencyNames],
+  ]);
+  const pluginPrefixes = new Map<string, string>([[definition.name, prefix]]);
+  for (const dependency of dependencyPlugins) {
+    pluginPrefixes.set(
+      dependency.name,
+      dependency.contributes?.schema?.prefix ??
+        pluginAdminSlug(dependency.name).replace(/-/g, "_")
+    );
+  }
 
   const tablesByDialect = {} as Record<SupportedDialect, TableSpec[]>;
   for (const dialect of PLUGIN_DIALECTS) {
     const built = await buildPluginDraft({
       dialect,
       pluginName: definition.name,
-      prefix,
+      pluginPrefixes,
       tables,
       extend,
       dependencies,
+      // Dependencies FIRST: `runExtensionHooks` takes the list already
+      // topologically sorted, and a hook cannot extend a table the draft has
+      // not been told about yet.
+      dependencyPlugins,
     });
     // Only this plugin's own tables: a plugin migration carries exactly the
     // tables its stream owns, never an app's or another plugin's.
