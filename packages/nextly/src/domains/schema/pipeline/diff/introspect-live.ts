@@ -101,6 +101,14 @@ async function attachMysqlConstraints(
   db: PgMysqlExecute,
   snapshot: NextlySchemaSnapshot
 ): Promise<void> {
+  // Nothing to attach, and nothing safe to ask: an empty snapshot renders the
+  // predicate below as `TABLE_NAME IN ()`, which MySQL rejects as a syntax
+  // error. The throw came out of introspection, so it took the whole snapshot
+  // with it rather than the constraints it could not read — and a fresh
+  // database, whose snapshot is empty by definition, is exactly when this
+  // runs.
+  if (snapshot.tables.length === 0) return;
+
   const tableNamesIn = sql.join(
     snapshot.tables.map(t => sql`${t.name}`),
     sql`, `
@@ -314,6 +322,9 @@ async function attachPgConstraints(
   // value is passed straight through to a tagged template, which accepts it.
   tableNamesIn: unknown
 ): Promise<void> {
+  // The same empty-snapshot guard MySQL needs: PostgreSQL rejects `IN ()` too.
+  if (snapshot.tables.length === 0) return;
+
   const fkResult = (await db.execute(
     sql`SELECT con.conname AS name, tbl.relname AS table, ref.relname AS ref_table,
                con.confdeltype AS on_delete, con.confupdtype AS on_update,

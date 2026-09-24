@@ -73,6 +73,14 @@ export const schemaFixturePlugin = definePlugin({
           if (posts) {
             schema.extendTable("dc_posts", {
               indexes: [{ columns: ["created_at"] }],
+              // A COLUMN on a table this plugin does not own, which is a
+              // different capability from the index beside it: the column has
+              // to be created, reach the runtime table so `ctx.db` can use
+              // it, and be stripped from every entry the API returns. Nothing
+              // else in the playground exercises all three, and the half that
+              // was missing — creation — made `extendTable({ columns })` on
+              // an entity a silent no-op.
+              columns: { fxIndexedAt: col.timestamp({ nullable: true }) },
             });
           }
         },
