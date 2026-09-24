@@ -767,9 +767,13 @@ async function lead(watch, slot, argv) {
     process.stderr.write(`bounded: could not start '${argv[0]}': ${error.message}\n`);
     process.exit(127);
   });
-  // Whatever the command left running goes with it, in whichever group.
+  // Whatever the command left running goes with it, in whichever group. A
+  // caller stopped when the command ends — a Ctrl-Z in the second before it
+  // ended, or a kill while the job was suspended — is woken first: it gives
+  // the slot back once it sees this leader exit, and until then holds it.
   child.on("exit", (code, signal) => {
     clearInterval(timer);
+    if (!isGone(watch[0])) sendSignal(watch[0].pid, "SIGCONT");
     finish(seen, exitCode(code, signal));
   });
 }

@@ -1008,6 +1008,23 @@ describe.runIf(LINUX)("suspending a run with Ctrl-Z", () => {
   }, 25_000);
 
   /*
+   * 🔴 The wrapper gives the slot back, and a stopped one cannot: a command
+   * that ended while its caller was stopped — a Ctrl-Z in the second before
+   * it ended, or a kill while the job was suspended — left the slot held
+   * until someone resumed the job. The caller is woken to give it back.
+   */
+  it("gives the slot back when the command ends while its caller is stopped", async () => {
+    const child = runBounded(STOPS_IN_ORDER);
+    const command = await grandchildOf(child);
+    process.kill(child.pid, "SIGSTOP");
+
+    process.kill(command, "SIGKILL");
+
+    expect(await waitUntil(() => !existsSync(path.join(dir, "slot-0.json")), 8000)).toBe(true);
+    expect((await child.done).code).toBe(137);
+  }, 15_000);
+
+  /*
    * 🔴 Reacting to each signal let a resume that overtook the stop leave the
    * run stopped under a running caller. The run follows what the caller IS:
    * a stray stop signal to the leader changes nothing while the caller runs,
