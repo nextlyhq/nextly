@@ -159,9 +159,66 @@ describe("row 5 — compound and unique indexes", () => {
 });
 
 describe("row 6 — partial indexes", () => {
-  it.todo(
-    "C: a partial index is expressible, refused on MySQL, and re-diffs clean"
-  );
+  it("C: a partial index is expressible, refused on MySQL, and re-diffs clean", async () => {
+    const { col, defineTable } = await import("../dsl");
+    const searched = defineTable(
+      "psearched",
+      { id: col.id(), status: col.shortText() },
+      {
+        indexes: [
+          {
+            columns: ["status"],
+            where: "status = 'open'",
+            name: "idx_psearched_open",
+          },
+        ],
+      }
+    );
+    const built = await buildExtensionSchema(
+      input({
+        plugins: [
+          {
+            owner: { kind: "plugin" as const, id: "fx" },
+            tables: [searched],
+          },
+        ],
+      })
+    );
+    const spec = built.specs.find(t => t.name === "fx__psearched");
+    expect(spec?.indexes).toEqual([
+      {
+        name: "idx_psearched_open",
+        columns: ["status"],
+        unique: false,
+        where: "status = 'open'",
+      },
+    ]);
+
+    const { generateSQL } = await import("../../pipeline/sql-templates/index");
+    const op = {
+      type: "add_index",
+      tableName: "fx__psearched",
+      index: spec!.indexes![0],
+    } as never;
+    // PostgreSQL and SQLite render the predicate...
+    expect(generateSQL(op, "postgresql")).toBe(
+      `CREATE INDEX IF NOT EXISTS "idx_psearched_open" ON "fx__psearched" ("status") WHERE status = 'open'`
+    );
+    expect(generateSQL(op, "sqlite")).toBe(
+      `CREATE INDEX IF NOT EXISTS "idx_psearched_open" ON "fx__psearched" ("status") WHERE status = 'open'`
+    );
+    // ...MySQL has none and refuses rather than dropping the predicate.
+    expect(() => generateSQL(op, "mysql")).toThrow();
+
+    // Re-diffs clean: a CHANGED predicate re-keys (drop+add, never equal),
+    // and an unchanged one compares equal to itself.
+    const { diffSnapshots } = await import("../../pipeline/diff/diff");
+    const sameAgain = diffSnapshots(
+      { tables: [{ ...spec!, indexes: [...spec!.indexes!] }] },
+      { tables: [{ ...spec!, indexes: [...spec!.indexes!] }] }
+    );
+    expect(sameAgain).toEqual([]);
+  });
 });
 
 describe("row 7 — expression indexes", () => {
@@ -244,9 +301,58 @@ describe("row 8 — foreign keys with onDelete/onUpdate", () => {
 });
 
 describe("row 9 — check constraints", () => {
-  it.todo(
-    "C: a check constraint is expressible, diffed and emitted per dialect"
-  );
+  it("C: a check constraint is expressible, diffed and emitted per dialect", async () => {
+    // The chain: DSL declares the check, the compiler emits it into the
+    // spec, the diff turns a new check into add_check, and each dialect
+    // renders its own ADD CONSTRAINT verb (SQLite refuses in-place DDL by
+    // design — its checks ride CREATE TABLE and the rebuild). Enforcement
+    // on a real database is proven by the migration integration suite.
+    const { col, defineTable } = await import("../dsl");
+    const scored = defineTable(
+      "scored",
+      { id: col.id(), score: col.integer({ nullable: true }) },
+      { checks: [{ name: "score_ok", sql: "score >= 0" }] }
+    );
+    const built = await buildExtensionSchema(
+      input({
+        plugins: [
+          {
+            owner: { kind: "plugin" as const, id: "fx" },
+            tables: [scored],
+          },
+        ],
+      })
+    );
+    const spec = built.specs.find(t => t.name === "fx__scored");
+    expect(spec?.checks).toEqual([
+      { name: "ck_fx__scored_score_ok", sql: "score >= 0" },
+    ]);
+
+    const { diffSnapshots } = await import("../../pipeline/diff/diff");
+    const ops = diffSnapshots(
+      {
+        tables: [
+          { ...spec!, checks: [] },
+        ],
+      },
+      { tables: [{ ...spec!, checks: [...spec!.checks!] }] }
+    );
+    expect(ops).toEqual([
+      {
+        type: "add_check",
+        tableName: "fx__scored",
+        check: { name: "ck_fx__scored_score_ok", sql: "score >= 0" },
+      },
+    ]);
+
+    const { generateSQL } = await import("../../pipeline/sql-templates/index");
+    expect(generateSQL(ops[0] as never, "postgresql")).toBe(
+      `ALTER TABLE "fx__scored" ADD CONSTRAINT "ck_fx__scored_score_ok" CHECK (score >= 0)`
+    );
+    expect(generateSQL(ops[0] as never, "mysql")).toBe(
+      "ALTER TABLE `fx__scored` ADD CONSTRAINT `ck_fx__scored_score_ok` CHECK (score >= 0)"
+    );
+  });
 });
 
 describe("row 10 — enums", () => {
