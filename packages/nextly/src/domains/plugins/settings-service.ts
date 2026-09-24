@@ -16,6 +16,7 @@
 import type { ZodObject, ZodRawShape, ZodType } from "zod";
 
 import { NextlyError } from "../../errors/nextly-error";
+import { getNextlyLogger } from "../../observability/logger";
 import { secretGenerations } from "../../shared/lib/secret-generations";
 import { decrypt, encrypt } from "../../utils/encryption";
 
@@ -398,7 +399,19 @@ export class PluginSettingsService {
     // path (the write path migrates inside its own transaction), and its
     // failure does not fail the read — the value is already in hand, and a
     // broken repair must not take the plugin's settings down with it.
-    await this.repairNewlySecretRows(rows).catch(() => undefined);
+    await this.repairNewlySecretRows(rows).catch((error: unknown) => {
+      // The read still answers — the value is in hand, and a broken repair
+      // must not take the plugin's settings down with it — but the row
+      // stays plaintext at rest, which is exactly the state the manifest
+      // says cannot happen. Said out loud, every read, until it is fixed:
+      // silence here left credentials unencrypted indefinitely with nothing
+      // pointing at them.
+      getNextlyLogger().warn({
+        kind: "plugin-settings-secret-repair-failed",
+        plugin: this.deps.owner,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
     return this.decodeRows(rows);
   }
 

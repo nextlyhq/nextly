@@ -204,12 +204,23 @@ async function loadUsableUser(
  * present an infrastructure failure as a verdict about the person's
  * credentials.
  */
+// The codes that are VERDICTS about the caller rather than the state of
+// the world. Anything typed outside this set — SERVICE_UNAVAILABLE,
+// EXTERNAL_SERVICE_ERROR, a storage timeout — is an operational failure
+// the login could not be judged through, and keeps travelling: answering
+// it as a refusal recorded an outage as a rejection of the person.
+const LOGIN_REFUSAL_CODES = new Set([
+  "AUTH_INVALID_CREDENTIALS",
+  "FORBIDDEN",
+  "RATE_LIMITED",
+  "AUTH_REQUIRED",
+  "VALIDATION_ERROR",
+  "CONFLICT",
+]);
+
 function isSystemFailure(err: unknown): boolean {
-  return (
-    !NextlyError.is(err) ||
-    err.code === "INTERNAL_ERROR" ||
-    err.code === "DATABASE_ERROR"
-  );
+  if (!NextlyError.is(err)) return true;
+  return !LOGIN_REFUSAL_CODES.has(err.code);
 }
 
 /**

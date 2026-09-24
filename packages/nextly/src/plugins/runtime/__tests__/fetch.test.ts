@@ -659,3 +659,52 @@ describe("DNS failover", () => {
     expect((d.send as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(2);
   });
 });
+
+describe("failover safety", () => {
+  it("does NOT retry a POST after a transmission failure", async () => {
+    // A POST that was sent and then reset reads here exactly like one that
+    // never connected; replaying it duplicates whatever it did. Only
+    // idempotent methods fail over.
+    const d = deps({
+      resolve: vi.fn(async () => [
+        { address: "93.184.216.34", family: 4 },
+        { address: "93.184.216.35", family: 4 },
+      ]),
+    });
+    (d.send as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("ECONNRESET")
+    );
+
+    await expect(
+      createPluginFetch(d)("https://api.example.com/t", {
+        method: "POST",
+        body: "x",
+      })
+    ).rejects.toThrow("ECONNRESET");
+    expect((d.send as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
+  it("does not turn a caller cancellation into another send", async () => {
+    const controller = new AbortController();
+    const d = deps({
+      resolve: vi.fn(async () => [
+        { address: "93.184.216.34", family: 4 },
+        { address: "93.184.216.35", family: 4 },
+      ]),
+    });
+    (d.send as ReturnType<typeof vi.fn>).mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          controller.abort();
+          reject(new DOMException("aborted", "AbortError"));
+        })
+    );
+
+    await expect(
+      createPluginFetch(d)("https://api.example.com/t", {
+        signal: controller.signal,
+      })
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect((d.send as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+});

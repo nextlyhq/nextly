@@ -362,28 +362,10 @@ export function createPluginFetch(
       // disconnected would otherwise keep waiting on a stalled resolver
       // until the fixed budget answered for it. The lookup itself cannot
       // be interrupted, but the caller is released the moment it cancels.
-      const addresses = await raceCallerAbort(
-        withDeadline(vetUrl(url, deps), deadlineAt, url),
-        init.signal ?? undefined
-      );
-      // Each vetted answer in turn: a provider publishing several records
-      // for failover expects a client to fall back when one host is
-      // temporarily unreachable, and pinning the first answer turned an
-      // outage of a single host into an outage of the provider. Only a
-      // failure to CONNECT moves to the next answer — a refused connection
-      // is the failover case, while a completed HTTP exchange (any status)
-      // and a policy refusal are answers in themselves.
-      const response = await firstConnectedAddress(addresses, address =>
-        deps.send({
-          url,
-          address,
-          // `manual`, so a redirect comes back here to be checked rather than
-          // being followed by the transport without one.
-          init: { ...hop, redirect: "manual" },
-          deadlineAt,
-          maxBodyBytes: MAX_BODY_BYTES,
-        })
-      );
+      const response = await sendOneHop(url, hop, deps, {
+        deadlineAt,
+        callerSignal: init.signal ?? undefined,
+      });
 
       const location = response.headers.get("location");
       if (!REDIRECT_STATUSES.has(response.status) || !location) {
@@ -449,16 +431,66 @@ function raceCallerAbort<T>(
  * rejection rethrows, so the caller sees the failure it would have seen
  * without the fallback.
  */
+/**
+ * Resolve and send ONE hop: vet the name (inside the deadline, against the
+ * caller's cancellation), then try each vetted address in turn.
+ *
+ * The failover rule lives in `firstConnectedAddress`; this wrapper only
+ * owns the two waits that precede the send, so the redirect loop reads as
+ * the sequence it performs rather than as the detail of each step.
+ */
+async function sendOneHop(
+  url: URL,
+  hop: RequestInit,
+  deps: PluginFetchDeps,
+  bounds: { deadlineAt: number; callerSignal?: AbortSignal }
+): Promise<Response> {
+  const addresses = await raceCallerAbort(
+    withDeadline(vetUrl(url, deps), bounds.deadlineAt, url),
+    bounds.callerSignal
+  );
+  return firstConnectedAddress(
+    (hop.method ?? "GET").toUpperCase(),
+    addresses,
+    address =>
+      deps.send({
+        url,
+        address,
+        // `manual`, so a redirect comes back here to be checked rather
+        // than being followed by the transport without one.
+        init: { ...hop, redirect: "manual" },
+        deadlineAt: bounds.deadlineAt,
+        maxBodyBytes: MAX_BODY_BYTES,
+      })
+  );
+}
+
 async function firstConnectedAddress(
+  method: string,
   addresses: readonly ResolvedAddress[],
   send: (address: ResolvedAddress) => Promise<Response>
 ): Promise<Response> {
+  // Only IDEMPOTENT methods may fail over. A POST that was transmitted and
+  // then reset reads to this loop exactly like one that never connected,
+  // and replaying it against the next address duplicates whatever it did;
+  // a GET re-sent is only ever another read. The method decides, because
+  // the rejection cannot tell us which of the two happened.
+  const idempotent = method === "GET" || method === "HEAD";
   let lastError: unknown;
   for (const address of addresses) {
     try {
       return await send(address);
     } catch (error) {
-      if (NextlyError.is(error)) throw error;
+      // A caller cancellation stops the operation — trying another address
+      // would be work the caller has explicitly abandoned. A policy
+      // refusal likewise has nothing to do with which address was tried.
+      if (
+        NextlyError.is(error) ||
+        (error instanceof DOMException && error.name === "AbortError") ||
+        !idempotent
+      ) {
+        throw error;
+      }
       lastError = error;
     }
   }

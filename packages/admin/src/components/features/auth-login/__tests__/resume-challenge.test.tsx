@@ -313,3 +313,29 @@ describe("a terminal failure exits the challenge UI", () => {
     expect(result.current.challenge?.pendingToken).toBe("pt-2");
   });
 });
+
+describe("a cookie-mode wrong answer", () => {
+  it("KEEPS the challenge when the envelope says one is still live", async () => {
+    // The replacement token arrives as a Set-Cookie script cannot read, so
+    // the body carries only the retry status. Clearing on the missing token
+    // dismissed the second factor after one wrong answer.
+    const { result } = renderHook(() => useChallengeFlow("?resume=1"));
+
+    act(() => {
+      result.current.start({ challengeType: "test-totp", next: null });
+    });
+    expect(result.current.challenge).not.toBeNull();
+
+    post.mockRejectedValueOnce(
+      Object.assign(new Error("wrong"), {
+        data: { status: "challenge", challengeType: "test-totp" },
+      })
+    );
+
+    await act(async () => {
+      await result.current.resolve({ code: "000000" });
+    });
+
+    expect(result.current.challenge).not.toBeNull();
+  });
+});

@@ -119,6 +119,20 @@ function retryTokenIn(error: unknown): string | undefined {
 }
 
 /**
+ * Whether a failed answer still leaves a challenge to answer.
+ *
+ * A cookie-mode client never receives the replacement token — it arrives as
+ * a Set-Cookie the browser applies on its own — so an ordinary wrong answer
+ * carries no body token and must not be mistaken for the flow being over.
+ * The envelope marks it: the retry payload always carries its status beside
+ * whatever token it could hand over, and the terminal refusals carry none.
+ */
+function challengeStillLive(error: unknown): boolean {
+  const data = (error as { data?: { status?: unknown } }).data;
+  return data?.status === "challenge";
+}
+
+/**
  * The forced password change a SUCCESSFUL answer reports, if it reports one.
  *
  * A 200 is not necessarily a session. The forced first-sign-in password
@@ -308,7 +322,7 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
         setChallenge(current =>
           current ? { ...current, pendingToken: advanced } : current
         );
-      } else {
+      } else if (!challengeStillLive(error)) {
         // No replacement token means the failure was TERMINAL — the budget
         // is spent, and the server has cleared or invalidated whatever this
         // flow was carrying. Keeping the challenge rendered hid the password
