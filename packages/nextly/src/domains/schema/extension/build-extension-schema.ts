@@ -39,6 +39,12 @@ export interface ExtensionSchemaInput {
   entities: readonly SeedEntityTable[];
   /** Prefix per plugin id, validated at resolve time. */
   pluginPrefixes: ReadonlyMap<string, string>;
+  /**
+   * Plugin id → the plugin ids it declared a dependency on (hard or
+   * optional). A plugin may contribute indexes to a dependency's tables;
+   * the resolver owns this fact, so the draft only reads it.
+   */
+  dependencies?: ReadonlyMap<string, ReadonlySet<string>>;
   /** Enabled plugins, already topologically sorted. */
   plugins: readonly SchemaContribution[];
   app?: SchemaContribution;
@@ -132,6 +138,7 @@ export async function buildExtensionSchema(
     coreTableNames: input.coreTableNames,
     entities: input.entities,
     pluginPrefixes: input.pluginPrefixes,
+    dependencies: input.dependencies,
   });
 
   await runExtensionHooks(store, input.plugins, input.app);

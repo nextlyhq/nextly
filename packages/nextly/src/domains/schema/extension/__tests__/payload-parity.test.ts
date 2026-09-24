@@ -524,5 +524,47 @@ describe("row 29 — a plugin adding fields to another plugin's collections", ()
 });
 
 describe("row 30 — a plugin adding schema to another plugin's tables", () => {
-  it.todo("C: a plugin adds schema to another plugin's tables");
+  it("C: a plugin adds schema to another plugin's tables", async () => {
+    // With dependsOn named, the extension is deliberate: the resolver orders
+    // the pair, the element rides the contributor's own migration stream,
+    // and the per-element owner row names who added it. Without dependsOn
+    // (tested in build-extension-schema), the refusal fires.
+    const { col, defineTable } = await import("../dsl");
+    const alpha = defineTable("depalpha", {
+      id: col.id(),
+      tag: col.shortText(),
+    });
+    const built = await buildExtensionSchema({
+      dialect: "postgresql" as const,
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map([
+        ["da", "da"],
+        ["db", "db"],
+      ]),
+      dependencies: new Map([["db", new Set(["da"])]]),
+      plugins: [
+        { owner: { kind: "plugin" as const, id: "da" }, tables: [alpha] },
+        {
+          owner: { kind: "plugin" as const, id: "db" },
+          extend: [
+            ({ schema }) => {
+              schema.extendTable("da__depalpha", {
+                indexes: [{ columns: ["tag"], name: "idx_db_tag" }],
+              });
+            },
+          ],
+        },
+      ],
+    });
+    expect(built.elementOwners.get("da__depalpha")).toEqual([
+      {
+        elementKind: "index",
+        elementName: "idx_db_tag",
+        owner: { kind: "plugin", id: "db" },
+      },
+    ]);
+    const spec = built.specs.find(t => t.name === "da__depalpha");
+    expect(spec?.indexes?.map(i => i.name)).toContain("idx_db_tag");
+  });
 });

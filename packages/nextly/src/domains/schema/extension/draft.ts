@@ -109,6 +109,11 @@ export interface SchemaDraftStoreInput {
   entities: readonly SeedEntityTable[];
   /** Prefix per plugin id, so a plugin's own tables can be named and found. */
   pluginPrefixes: ReadonlyMap<string, string>;
+  /**
+   * Plugin id → the ids it declared a dependency on. The resolver owns the
+   * fact; the draft only reads it to decide who may index whose tables.
+   */
+  dependencies?: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 function refuse(path: string, message: string): never {
@@ -241,6 +246,10 @@ export class SchemaDraftStore {
     return this.input.dialect;
   }
 
+  get dependencies(): ReadonlyMap<string, ReadonlySet<string>> | undefined {
+    return this.input.dependencies;
+  }
+
   get coreTableNames(): readonly string[] {
     return this.input.coreTableNames;
   }
@@ -287,6 +296,8 @@ interface ExtendScope {
   ownerPath: string;
   isOwn: boolean;
   isEntity: boolean;
+  /** The plugin ids this owner declared a dependency on, when it is one. */
+  mayIndexForeignTablesOf?: ReadonlySet<string>;
 }
 
 /**
@@ -349,11 +360,21 @@ function addIndexes(
 ): void {
   const appOnPluginTable =
     scope.owner.kind === "app" && table.owner.kind === "plugin";
+  // A plugin may index a DEPENDENCY's table: dependsOn (or
+  // optionalDependsOn) is what makes the extension deliberate — the resolver
+  // orders the two plugins and refuses an incompatible version — and the
+  // element travels in the contributor's own migration stream.
+  const pluginOnDependencyTable =
+    scope.owner.kind === "plugin" &&
+    table.owner.kind === "plugin" &&
+    (scope.mayIndexForeignTablesOf?.has(table.owner.id) ?? false);
+  const contributedForeign =
+    appOnPluginTable || pluginOnDependencyTable;
   for (const index of indexes) {
-    if (!scope.isOwn && !scope.isEntity && !appOnPluginTable) {
+    if (!scope.isOwn && !scope.isEntity && !contributedForeign) {
       refuse(
         `${scope.ownerPath}.extendTable.${table.name}`,
-        `${describeOwner(scope.owner)} may not index "${table.name}", which belongs to ${describeOwner(table.owner)}.`
+        `${describeOwner(scope.owner)} may not index "${table.name}", which belongs to ${describeOwner(table.owner)}. Name the owner in dependsOn (or optionalDependsOn) to extend its tables.`
       );
     }
     const resolved: ExtensionIndex = {
@@ -362,7 +383,7 @@ function addIndexes(
       ...(index.name !== undefined ? { name: index.name } : {}),
       // Who CONTRIBUTED the element — distinct from who owns the table, and
       // what the per-element owner rows are written from.
-      ...(appOnPluginTable
+      ...(contributedForeign
         ? { contributedBy: scope.owner as SchemaOwner }
         : {}),
     };
@@ -467,6 +488,10 @@ export function createOwnerDraft(
         ownerPath,
         isOwn: sameOwner(table.owner, owner),
         isEntity: table.owner.kind === "entity",
+        mayIndexForeignTablesOf:
+          owner.kind === "plugin"
+            ? store.dependencies?.get(owner.id)
+            : undefined,
       };
       addColumns(table, ext.columns, scope);
       addIndexes(table, ext.indexes ?? [], scope);

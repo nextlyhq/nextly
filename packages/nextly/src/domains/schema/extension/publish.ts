@@ -164,6 +164,19 @@ export async function compileAndPublishExtensionSchema(
     coreTableNames: CORE_TABLE_NAMES,
     entities,
     pluginPrefixes: resolvePrefixes(input.plugins),
+    // Who may index whose tables: hard and optional dependencies both count,
+    // because both let the resolver order the pair and refuse an
+    // incompatible version. Derived here from the definitions the resolver
+    // already accepted.
+    dependencies: new Map(
+      input.plugins.map(plugin => [
+        plugin.name,
+        new Set([
+          ...Object.keys(plugin.dependsOn ?? {}),
+          ...Object.keys(plugin.optionalDependsOn ?? {}),
+        ]),
+      ])
+    ),
     plugins,
     afterDrizzle,
     ...(appHooks.length > 0
