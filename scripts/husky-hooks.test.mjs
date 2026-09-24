@@ -118,7 +118,7 @@ describe("the pre-push hook specifically", () => {
   it("still short-circuits in CI before doing any of it", async () => {
     const source = shellCode(await hook("pre-push"));
 
-    const ciGuard = source.search(/if \[ -n "\$CI" \]/);
+    const ciGuard = source.search(/^case "\$\{CI:-\}" in/m);
     const unsetAt = source.search(CLEARS_GIT_DIR);
 
     expect(ciGuard).toBeGreaterThan(-1);
@@ -287,6 +287,20 @@ describe("the pre-push hook before its gates", () => {
   it.runIf(process.platform !== "win32")("does not read an empty or malformed ref list as only deletions", () => {
     expect(push("").status).toBe(99);
     expect(push("refs/heads/feature\n").status).toBe(99);
+  });
+
+  /*
+   * "CI" means what `detectIsCi` in packages/telemetry says: set, and neither
+   * "0" nor "false". A presence test skipped every gate for a developer with
+   * CI=false in their environment.
+   */
+  it.runIf(process.platform !== "win32")("skips in CI, and gates a machine whose CI is set to false or 0", () => {
+    const skipped = push(update("feature"), { CI: "true" });
+    expect(skipped.status).toBe(0);
+    expect(skipped.stdout).toMatch(/skipped in CI/);
+    for (const value of ["false", "0", ""]) {
+      expect(push(update("feature"), { CI: value }).status).toBe(99);
+    }
   });
 
   it.runIf(process.platform !== "win32")("goes straight to the gates in the run the runner started", () => {

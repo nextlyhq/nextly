@@ -314,6 +314,23 @@ export function heavyScriptProblems(scripts) {
   return HEAVY_SCRIPTS.map(name => heavyScriptProblem(name, scripts[name])).filter(Boolean);
 }
 
+/** The runner, as the command itself. */
+const RUNS_BOUNDED = /^node\s+scripts\/bounded\.mjs(\s|$)/;
+
+/**
+ * The runner's worker-cap flag, in the one position the runner reads it: first.
+ * Anywhere else it is handed to turbo, and Vitest runs uncapped.
+ */
+const CAPS_WORKERS = /^node\s+scripts\/bounded\.mjs\s+--vitest-workers(\s|$)/;
+
+/**
+ * Shell syntax that runs a second command. `bounded … && turbo run build`
+ * starts with the runner and then runs the build outside it — no slot and no
+ * bound — so a heavy script is one command, and composes bounded scripts
+ * rather than commands if it needs more.
+ */
+const COMPOSES = /[;&|`\n]|\$\(/;
+
 /** What is wrong with one heavy script, or null. */
 function heavyScriptProblem(name, body) {
   if (body === undefined) {
@@ -321,18 +338,24 @@ function heavyScriptProblem(name, body) {
   }
   // The integration legs set their database URL for the whole run with an
   // assignment in front of the command.
-  const command = body.replace(/^(\s*[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/, "");
-  if (!/^node\s+scripts\/bounded\.mjs(\s|$)/.test(command)) {
+  return commandProblem(name, body.replace(/^(\s*[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/, ""));
+}
+
+function commandProblem(name, command) {
+  if (!RUNS_BOUNDED.test(command)) {
     return `package.json: '${name}' runs heavy work without ${HEAVY_RUNNER}, so it takes no heavy slot and turbo runs its default of 10 package tasks`;
   }
+  if (COMPOSES.test(command)) {
+    return `package.json: '${name}' runs a second command after ${HEAVY_RUNNER}, outside its slot and its bounds`;
+  }
   if (missesWorkerCap(command)) {
-    return `package.json: '${name}' runs tests without --vitest-workers, so each package spawns one Vitest worker per core`;
+    return `package.json: '${name}' runs tests without --vitest-workers straight after ${HEAVY_RUNNER}, so Vitest spawns one worker per core`;
   }
   return null;
 }
 
 function missesWorkerCap(command) {
-  return /\bturbo\s+run\s+test\S*|\bvitest\b/.test(command) && !/--vitest-workers|--maxWorkers/.test(command);
+  return /\bturbo\s+run\s+test\S*|\bvitest\b/.test(command) && !CAPS_WORKERS.test(command);
 }
 
 async function main() {

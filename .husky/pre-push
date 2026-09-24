@@ -7,11 +7,17 @@
 # this hook linted before it built, and on CI's fresh tree lint could not
 # resolve workspace package imports with no dist outputs to resolve to.
 #
-# Local pushes still get the full pre-push validation.
-if [ -n "$CI" ]; then
-  echo "Pre-push hook skipped in CI (validated by .github/workflows/ci.yml)"
-  exit 0
-fi
+# Local pushes still get the full pre-push validation. "CI" means what
+# `detectIsCi` in packages/telemetry says it means — set to anything but empty,
+# "0" or "false" — so a developer with CI=false in their environment is still
+# gated, as scripts/bounded.mjs decides the same question.
+case "${CI:-}" in
+  '' | 0 | false) ;;
+  *)
+    echo "Pre-push hook skipped in CI (validated by .github/workflows/ci.yml)"
+    exit 0
+    ;;
+esac
 
 # Git exports GIT_DIR into every hook, and in a worktree it names that
 # worktree's admin directory (<main>/.git/worktrees/<name>) rather than a

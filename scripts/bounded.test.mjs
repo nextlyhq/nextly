@@ -20,6 +20,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -30,10 +31,16 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  descendantsIn,
   isAlive,
+  isCi,
   isGone,
+  parseProcessTable,
+  processTable,
   release,
+  runMembers,
   slotCount,
+  slotDir,
   tryAcquire,
   waitingChain,
   withWorkerCap,
@@ -49,6 +56,18 @@ const POSIX = process.platform !== "win32";
  * shell without a terminal can do.
  */
 const HAS_PERL = POSIX && spawnSync("perl", ["-e", "1"]).status === 0;
+
+const LINUX = process.platform === "linux";
+
+/** A Linux process's state letter, from /proc; null once it is gone. */
+function stateOf(pid) {
+  try {
+    const text = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return text.slice(text.lastIndexOf(")") + 2).split(" ")[0];
+  } catch {
+    return null;
+  }
+}
 
 /** A Linux process's group, from /proc. */
 function groupOf(pid) {
@@ -141,6 +160,25 @@ const WITH_GRANDCHILD = [
     "setInterval(() => {}, 1000);",
   ].join(" "),
 ];
+
+/**
+ * A process that has exited and that its parent will never collect.
+ *
+ * 🔴 The first version backgrounded a child that exited AT ONCE, and passed
+ * locally but not in CI: the shell collected it before becoming `sleep`, so no
+ * zombie ever existed there. The child now outlives the shell's exec, so its
+ * parent is `sleep` when it exits — and the case waits until /proc says Z.
+ */
+async function zombie() {
+  const parent = spawn("sh", ["-c", "sleep 0.3 & echo $!; exec sleep 8"], { stdio: ["ignore", "pipe", "ignore"] });
+  spawned.push(parent.pid);
+  const out = { out: "" };
+  parent.stdout.on("data", chunk => (out.out += chunk));
+  await waitUntil(() => /^\d+\n/.test(out.out), 5000);
+  const pid = Number(out.out.split("\n")[0]);
+  await waitUntil(() => stateOf(pid) === "Z", 5000);
+  return pid;
+}
 
 async function grandchildOf(child) {
   await waitUntil(() => /^\d+\n/.test(child.out), 5000);
@@ -252,12 +290,138 @@ describe("the machine-wide heavy slot", () => {
     expect(tryAcquire(dir, 1, record(process.pid)).path).toBe(slot);
   });
 
+  /*
+   * 🔴 A record naming only a pid: after a run is killed, a zombie or an
+   * unrelated process given the same number kept the slot "held", and every
+   * heavy command on the machine waited on something that was not a run.
+   */
+  it.runIf(LINUX)("takes over a slot whose recorded process now has another start time", () => {
+    tryAcquire(dir, 1, record(process.pid, { start: "1" }));
+    expect(tryAcquire(dir, 1, record(process.pid)).path).toBeDefined();
+  });
+
+  it.runIf(LINUX)("keeps a slot whose recorded process is still the same one", () => {
+    const [self] = waitingChain();
+    tryAcquire(dir, 1, record(process.pid, { start: self.start }));
+    expect(tryAcquire(dir, 1, record(process.pid)).path).toBeUndefined();
+  });
+
+  it.runIf(LINUX)("takes over a slot whose holder is a zombie", async () => {
+    tryAcquire(dir, 1, record(await zombie()));
+    expect(tryAcquire(dir, 1, record(process.pid)).path).toBeDefined();
+  });
+
+  /*
+   * 🔴 Judging a dead record and removing it are two steps. Two waiters could
+   * both remove it, the second removing the record the first had just written,
+   * and both would run. One reclaims at a time; the other judges again later.
+   */
+  it("leaves a dead slot alone while another waiter is reclaiming it", () => {
+    const slot = path.join(dir, "slot-0.json");
+    tryAcquire(dir, 1, record(deadPid()));
+    writeFileSync(`${slot}.reclaim`, JSON.stringify({ pid: process.pid }));
+
+    expect(tryAcquire(dir, 1, record(process.pid)).path).toBeUndefined();
+    expect(existsSync(slot)).toBe(true);
+  });
+
+  it("clears a reclaim its waiter abandoned, and takes the slot", () => {
+    const slot = path.join(dir, "slot-0.json");
+    tryAcquire(dir, 1, record(deadPid()));
+    writeFileSync(`${slot}.reclaim`, JSON.stringify({ pid: deadPid() }));
+    const minuteAgo = new Date(Date.now() - 60_000);
+    utimesSync(`${slot}.reclaim`, minuteAgo, minuteAgo);
+
+    expect(tryAcquire(dir, 1, record(process.pid)).path).toBe(slot);
+    expect(existsSync(`${slot}.reclaim`)).toBe(false);
+  });
+
+  /*
+   * 🔴 The default lives in the system temp directory, which every local user
+   * can write to. A directory someone else made first could hold a record
+   * naming a live process of theirs and block every heavy command here.
+   */
+  it.runIf(POSIX)("keeps the default slots in a directory named for this user", () => {
+    expect(slotDir({})).toMatch(new RegExp(`nextly-heavy-slots-${process.getuid()}$`));
+  });
+
+  it.runIf(POSIX)("refuses a slot directory other users can write to", () => {
+    const open = path.join(dir, "open");
+    mkdirSync(open);
+    chmodSync(open, 0o777);
+    expect(() => tryAcquire(open, 1, record(process.pid))).toThrow(/is not a private directory/);
+  });
+
+  it.runIf(POSIX)("refuses a slot directory that is a symbolic link", () => {
+    const real = path.join(dir, "real");
+    mkdirSync(real, { mode: 0o700 });
+    const link = path.join(dir, "link");
+    symlinkSync(real, link);
+    expect(() => tryAcquire(link, 1, record(process.pid))).toThrow(/is not a private directory/);
+  });
+
   it("gives back only its own slot", () => {
     const { path: slot } = tryAcquire(dir, 1, record(process.pid));
     release(slot, deadPid());
     expect(existsSync(slot)).toBe(true);
     release(slot, process.pid);
     expect(existsSync(slot)).toBe(false);
+  });
+});
+
+describe("deciding whether this is CI", () => {
+  /*
+   * The telemetry package's rule: set, and neither "0" nor "false". A presence
+   * test made `CI=false` in a developer's environment a pass-through, and the
+   * heavy commands ran unbounded on their machine.
+   */
+  it("reads CI the way the telemetry package does", () => {
+    expect(isCi({ CI: "true" })).toBe(true);
+    expect(isCi({ CI: "1" })).toBe(true);
+    for (const value of ["false", "0", ""]) expect(isCi({ CI: value })).toBe(false);
+    expect(isCi({})).toBe(false);
+  });
+});
+
+/*
+ * Where there is no /proc — macOS — processes are read from one `ps` table.
+ * Linux's `ps` prints the same columns, so the path runs here too.
+ */
+describe.runIf(POSIX)("reading processes from ps", () => {
+  it("reads each row's pid, parent, state and start time", () => {
+    const table = parseProcessTable(
+      "  123     1 Ss   Tue Sep 24 10:00:00 2026\n  456   123 Z    Tue Sep 24 10:01:00 2026\nnot a row\n"
+    );
+    expect(table.get(123)).toEqual({ ppid: 1, state: "S", start: "Tue Sep 24 10:00:00 2026" });
+    expect(table.get(456).state).toBe("Z");
+    expect(table.size).toBe(2);
+  });
+
+  it("reads this machine's own ps output", () => {
+    expect(processTable().get(process.pid)?.ppid).toBe(process.ppid);
+  });
+
+  /*
+   * 🔴 From the tree alone, a task turbo left orphaned is nobody's descendant
+   * by the time the run is stopped, and it survived. The run remembers what it
+   * has seen — and by start time, so a pid given to another process since is
+   * not killed in its place.
+   */
+  it("finds a run's processes, including one orphaned since it was seen", async () => {
+    const parent = spawn(process.execPath, WITH_GRANDCHILD.slice(1), { stdio: ["ignore", "pipe", "ignore"] });
+    spawned.push(parent.pid);
+    const out = { out: "" };
+    parent.stdout.on("data", chunk => (out.out += chunk));
+    const child = await grandchildOf(out);
+    const before = processTable();
+    expect(descendantsIn(before, parent.pid)).toEqual(expect.arrayContaining([parent.pid, child]));
+
+    process.kill(parent.pid, "SIGKILL");
+    await waitUntil(() => processTable().get(child)?.ppid !== parent.pid, 5000);
+    const after = processTable();
+
+    expect(runMembers(parent.pid, new Map([[child, before.get(child).start]]), after)).toContain(child);
+    expect(runMembers(parent.pid, new Map([[child, "another start"]]), after)).not.toContain(child);
   });
 });
 
@@ -276,20 +440,13 @@ describe.runIf(POSIX)("knowing whether anything is still waiting", () => {
   /*
    * A process that has exited but not been collected by its parent still
    * answers `kill 0`, so an exited `git push` whose shell has not reaped it yet
-   * would read as waiting. The shell here backgrounds a child that exits at
-   * once, then becomes `sleep`, which never collects it.
+   * would read as waiting.
    */
-  it.runIf(process.platform === "linux")("reads an exited process its parent has not collected as gone", async () => {
-    const parent = spawn("sh", ["-c", "(exit 0) & echo $!; exec sleep 5"], { stdio: ["ignore", "pipe", "ignore"] });
-    spawned.push(parent.pid);
-    const out = { out: "" };
-    parent.stdout.on("data", chunk => (out.out += chunk));
-    await waitUntil(() => /^\d+\n/.test(out.out), 5000);
-    const zombie = Number(out.out.split("\n")[0]);
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    expect(isAlive(zombie)).toBe(true);
-    expect(isGone({ pid: zombie, start: null })).toBe(true);
+  it.runIf(LINUX)("reads an exited process its parent has not collected as gone", async () => {
+    const pid = await zombie();
+    expect(stateOf(pid)).toBe("Z");
+    expect(isAlive(pid)).toBe(true);
+    expect(isGone({ pid, start: null })).toBe(true);
   });
 
   it.runIf(process.platform === "linux")("reads a pid now used by another process as gone", () => {
@@ -337,6 +494,26 @@ describe.runIf(POSIX)("running a command bounded", () => {
     expect(child.out).toMatch(/^TURBO_CONCURRENCY=$/m);
   });
 
+  it("bounds a run whose CI is set to false", async () => {
+    const child = runBounded(["--vitest-workers", stubTurbo(), "run", "test"], {
+      CI: "false",
+      NEXTLY_LOCAL_CONCURRENCY: "2",
+      NEXTLY_LOCAL_MAX_WORKERS: "3",
+    });
+    expect((await child.done).code).toBe(0);
+    expect(child.out).toMatch(/^--maxWorkers=3$/m);
+    expect(child.out).toMatch(/^TURBO_CONCURRENCY=2$/m);
+  });
+
+  it("says plainly when its slot directory is not private, rather than running", async () => {
+    const open = path.join(dir, "open");
+    mkdirSync(open);
+    chmodSync(open, 0o777);
+    const child = runBounded([process.execPath, "-e", "process.exit(0)"], { NEXTLY_HEAVY_SLOT_DIR: open });
+    expect((await child.done).code).toBe(1);
+    expect(child.err).toMatch(/^bounded: .* is not a private directory/m);
+  });
+
   /*
    * The hook runs `pnpm run build` inside its own bounded run. Waiting for the
    * slot there would wait on the run that is waiting for the build.
@@ -353,10 +530,37 @@ describe.runIf(POSIX)("running a command bounded", () => {
 
     await new Promise(resolve => setTimeout(resolve, 1500));
     expect(child.exitCode).toBeNull();
-    expect(child.err).toMatch(/waiting for the heavy slot — pid \d+ since .*: turbo run lint, in \/checkouts\/nextly-a/);
+    expect(child.err).toMatch(
+      /waiting for the heavy slot — pid \d+ since .*: turbo run lint, in \/checkouts\/nextly-a \(.*slot-0\.json\)/
+    );
 
     release(held, process.pid);
     expect((await child.done).code).toBe(0);
+  });
+
+  /*
+   * 🔴 A push killed while it queued took the slot when it freed and ran every
+   * gate for nobody: the caller was watched only once the command had started.
+   */
+  it("does not start at all when what was waiting for it is killed while it queues", async () => {
+    const { path: held } = tryAcquire(dir, 1, record(process.pid));
+    const marker = path.join(dir, "ran");
+    const write = 'require("fs").writeFileSync(process.argv[1], "ran")';
+    const shell = spawn("sh", ["-c", `"${process.execPath}" "${BOUNDED}" "${process.execPath}" -e '${write}' "${marker}"; true`], {
+      env: cleanEnv(),
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    spawned.push(shell.pid);
+    let err = "";
+    shell.stderr.on("data", chunk => (err += chunk));
+    await waitUntil(() => /waiting for the heavy slot/.test(err), 5000);
+
+    process.kill(shell.pid, "SIGKILL");
+
+    expect(await waitUntil(() => /is gone — not starting/.test(err), 5000)).toBe(true);
+    release(held, process.pid);
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    expect(existsSync(marker)).toBe(false);
   });
 
   /*
@@ -400,6 +604,34 @@ describe.runIf(POSIX)("running a command bounded", () => {
 
       expect(await waitUntil(() => isGone({ pid: task, start: null }), 10_000)).toBe(true);
     }
+  );
+
+  /*
+   * 🔴 The leader signalled its own group first, and it is in that group, so
+   * its SIGKILL ended it before it reached a task turbo had put in a group of
+   * its own. A task that ignored the polite signal survived the kill.
+   */
+  it.runIf(LINUX && HAS_PERL)(
+    "kills a task in a group of its own that ignores the polite signal",
+    async () => {
+      const child = runBounded([
+        process.execPath,
+        "-e",
+        [
+          'const { spawn } = require("node:child_process");',
+          `const c = spawn("perl", ["-e", "$SIG{TERM} = 'IGNORE'; setpgrp(0, 0); sleep 60"], { stdio: "ignore" });`,
+          "console.log(c.pid);",
+          "setInterval(() => {}, 1000);",
+        ].join(" "),
+      ]);
+      const task = await grandchildOf(child);
+      expect(await waitUntil(() => groupOf(task) === task, 5000)).toBe(true);
+
+      process.kill(child.pid, "SIGKILL");
+
+      expect(await waitUntil(() => isGone({ pid: task, start: null }), 12_000)).toBe(true);
+    },
+    20_000
   );
 
   it("stops it when a process further up is killed, as a push two levels above a hook is", async () => {
@@ -452,6 +684,27 @@ describe.runIf(POSIX)("running a command bounded", () => {
     expect((await child.done).code).toBe(0);
     expect(await waitUntil(() => isGone({ pid: leftBehind, start: null }), 5000)).toBe(true);
   });
+
+  /*
+   * A run that ignores Ctrl-C is told to stop after the grace period, and the
+   * leader — the one process that can find all of the run on every platform —
+   * takes it down.
+   */
+  it("stops a run that ignores Ctrl-C once the grace period is over", async () => {
+    const child = runBounded([
+      process.execPath,
+      "-e",
+      'process.on("SIGINT", () => {}); console.log(process.pid); setInterval(() => {}, 1000);',
+    ]);
+    const command = await grandchildOf(child);
+
+    process.kill(child.pid, "SIGINT");
+
+    const started = Date.now();
+    expect(await waitUntil(() => isGone({ pid: command, start: null }), 8000)).toBe(true);
+    expect(Date.now() - started).toBeLessThan(8000);
+    expect((await child.done).code).toBe(143);
+  }, 15_000);
 
   it("passes Ctrl-C on to the run, whose group the terminal does not reach", async () => {
     const child = runBounded(WITH_GRANDCHILD);

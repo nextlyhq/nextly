@@ -365,6 +365,36 @@ describe("holding the heavy root scripts to the bounded runner", () => {
     ).toEqual([expect.stringContaining("'test:scripts' runs tests without --vitest-workers")]);
   });
 
+  /*
+   * Starting with the runner is not the same as running inside it: the shell
+   * runs whatever follows `&&`, `;` or `|` as a second command, outside the
+   * slot and the bounds.
+   */
+  it.each([
+    "node scripts/bounded.mjs turbo run lint && turbo run build",
+    "node scripts/bounded.mjs true; turbo run build",
+    "node scripts/bounded.mjs turbo run lint | tee out.log",
+    "node scripts/bounded.mjs $(echo turbo) run build",
+  ])("rejects a second command composed after the runner: %s", body => {
+    expect(heavyScriptProblems({ ...heavy, build: body })).toEqual([
+      expect.stringContaining("'build' runs a second command after scripts/bounded.mjs"),
+    ]);
+  });
+
+  /*
+   * The runner reads `--vitest-workers` only as its first argument; anywhere
+   * else it is passed to turbo, and a bare `--maxWorkers` before `--` is
+   * turbo's own flag, not Vitest's.
+   */
+  it.each([
+    "node scripts/bounded.mjs turbo run test --vitest-workers",
+    "node scripts/bounded.mjs turbo run test --maxWorkers=2",
+  ])("rejects a worker cap in a position the runner does not read: %s", body => {
+    expect(heavyScriptProblems({ ...heavy, test: body })).toEqual([
+      expect.stringContaining("'test' runs tests without --vitest-workers straight after"),
+    ]);
+  });
+
   it("reads a script that sets its database URL before the command", () => {
     const leg = "TEST_MYSQL_URL=mysql://root:root@localhost:3307/x node scripts/bounded.mjs --vitest-workers turbo run test:integration";
     expect(heavyScriptProblems({ ...heavy, "test:integration:mysql": leg })).toEqual([]);
