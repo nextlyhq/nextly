@@ -105,7 +105,7 @@ async function attachMysqlConstraints(
     snapshot.tables.map(t => sql`${t.name}`),
     sql`, `
   );
-  const fkRaw = (await db.execute(
+  const fkRaw = await db.execute(
     sql`SELECT kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME,
                kcu.ORDINAL_POSITION, kcu.REFERENCED_TABLE_NAME,
                kcu.REFERENCED_COLUMN_NAME, rc.DELETE_RULE, rc.UPDATE_RULE
@@ -118,7 +118,7 @@ async function attachMysqlConstraints(
           AND kcu.TABLE_NAME IN (${tableNamesIn})
           AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
         ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION`
-  ));
+  );
   const fkRows: Array<{
     TABLE_NAME: string;
     CONSTRAINT_NAME: string;
@@ -127,9 +127,11 @@ async function attachMysqlConstraints(
     REFERENCED_COLUMN_NAME: string;
     DELETE_RULE: string;
     UPDATE_RULE: string;
-  }> = (Array.isArray(fkRaw) && Array.isArray((fkRaw as unknown[])[0])
-    ? (fkRaw as [typeof fkRows, unknown])[0]
-    : fkRaw) as typeof fkRows;
+  }> = (
+    Array.isArray(fkRaw) && Array.isArray((fkRaw as unknown[])[0])
+      ? (fkRaw as [typeof fkRows, unknown])[0]
+      : fkRaw
+  ) as typeof fkRows;
 
   const fks = new Map<string, ForeignKeySpec[]>();
   const fkColumns = new Map<string, string[]>();
@@ -137,12 +139,15 @@ async function attachMysqlConstraints(
   for (const row of fkRows ?? []) {
     const key = `${row.TABLE_NAME}\u0000${row.CONSTRAINT_NAME}`;
     fkColumns.set(key, [...(fkColumns.get(key) ?? []), row.COLUMN_NAME]);
-    fkRefColumns.set(
-      key,
-      [...(fkRefColumns.get(key) ?? []), row.REFERENCED_COLUMN_NAME]
-    );
+    fkRefColumns.set(key, [
+      ...(fkRefColumns.get(key) ?? []),
+      row.REFERENCED_COLUMN_NAME,
+    ]);
     const list = fks.get(row.TABLE_NAME);
-    if (list === undefined || !list.some(fk => fk.name === row.CONSTRAINT_NAME)) {
+    if (
+      list === undefined ||
+      !list.some(fk => fk.name === row.CONSTRAINT_NAME)
+    ) {
       const fresh: ForeignKeySpec = {
         name: row.CONSTRAINT_NAME,
         columns: [],
@@ -163,7 +168,7 @@ async function attachMysqlConstraints(
     }
   }
 
-  const checkRaw = (await db.execute(
+  const checkRaw = await db.execute(
     sql`SELECT tc.TABLE_NAME, cc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
         FROM information_schema.TABLE_CONSTRAINTS tc
         JOIN information_schema.CHECK_CONSTRAINTS cc
@@ -172,14 +177,16 @@ async function attachMysqlConstraints(
         WHERE tc.CONSTRAINT_SCHEMA = DATABASE()
           AND tc.CONSTRAINT_TYPE = 'CHECK'
           AND tc.TABLE_NAME IN (${tableNamesIn})`
-  ));
+  );
   const checkRows: Array<{
     TABLE_NAME: string;
     CONSTRAINT_NAME: string;
     CHECK_CLAUSE: string;
-  }> = (Array.isArray(checkRaw) && Array.isArray((checkRaw as unknown[])[0])
-    ? (checkRaw as [typeof checkRows, unknown])[0]
-    : checkRaw) as typeof checkRows;
+  }> = (
+    Array.isArray(checkRaw) && Array.isArray((checkRaw as unknown[])[0])
+      ? (checkRaw as [typeof checkRows, unknown])[0]
+      : checkRaw
+  ) as typeof checkRows;
 
   const checks = new Map<string, CheckSpec[]>();
   for (const row of checkRows ?? []) {
@@ -197,10 +204,66 @@ async function attachMysqlConstraints(
   }
 }
 
+/**
+ * Foreign keys by table, skipping any row this cannot describe.
+ *
+ * A row without its column arrays is not a foreign key, and spreading one
+ * threw where the caller only wanted the columns. The reader is handed
+ * whatever the executor returns — including a test double answering one shape
+ * for every query — so an unreadable row is skipped rather than allowed to
+ * abort the whole introspection.
+ */
+function groupPgForeignKeys(
+  rows: ReadonlyArray<{
+    name: string;
+    table: string;
+    columns: string[];
+    on_delete: string;
+    on_update: string;
+    ref_table: string;
+    ref_columns: string[];
+  }>
+): Map<string, ForeignKeySpec[]> {
+  const fks = new Map<string, ForeignKeySpec[]>();
+  for (const row of rows) {
+    if (!Array.isArray(row.columns) || !Array.isArray(row.ref_columns)) {
+      continue;
+    }
+    const list = fks.get(row.table) ?? [];
+    list.push({
+      name: row.name,
+      columns: [...row.columns],
+      referencesTable: row.ref_table,
+      referencesColumns: [...row.ref_columns],
+      onDelete: PG_FK_ACTION[row.on_delete] ?? "no action",
+      onUpdate: PG_FK_ACTION[row.on_update] ?? "no action",
+    });
+    fks.set(row.table, list);
+  }
+  return fks;
+}
+
+/** Check constraints by table, skipping a row carrying no definition. */
+function groupPgChecks(
+  rows: ReadonlyArray<{ name: string; table: string; definition: string }>
+): Map<string, CheckSpec[]> {
+  const checks = new Map<string, CheckSpec[]>();
+  for (const row of rows) {
+    if (typeof row.definition !== "string") continue;
+    const list = checks.get(row.table) ?? [];
+    list.push({ name: row.name, sql: pgCheckExpression(row.definition) });
+    checks.set(row.table, list);
+  }
+  return checks;
+}
+
 async function attachPgConstraints(
   db: PgMysqlExecute,
   snapshot: NextlySchemaSnapshot,
-  tableNamesIn: ReturnType<typeof sql.join> | unknown
+  // `unknown` alone: the union with `ReturnType<typeof sql.join>` said
+  // nothing, because `unknown` absorbs every member of a union it is in. The
+  // value is passed straight through to a tagged template, which accepts it.
+  tableNamesIn: unknown
 ): Promise<void> {
   const fkResult = (await db.execute(
     sql`SELECT con.conname AS name, tbl.relname AS table, ref.relname AS ref_table,
@@ -238,25 +301,8 @@ async function attachPgConstraints(
     rows: Array<{ name: string; table: string; definition: string }>;
   };
 
-  const fks = new Map<string, ForeignKeySpec[]>();
-  for (const row of fkResult?.rows ?? []) {
-    const list = fks.get(row.table) ?? [];
-    list.push({
-      name: row.name,
-      columns: [...row.columns],
-      referencesTable: row.ref_table,
-      referencesColumns: [...row.ref_columns],
-      onDelete: PG_FK_ACTION[row.on_delete] ?? "no action",
-      onUpdate: PG_FK_ACTION[row.on_update] ?? "no action",
-    });
-    fks.set(row.table, list);
-  }
-  const checks = new Map<string, CheckSpec[]>();
-  for (const row of checkResult?.rows ?? []) {
-    const list = checks.get(row.table) ?? [];
-    list.push({ name: row.name, sql: pgCheckExpression(row.definition) });
-    checks.set(row.table, list);
-  }
+  const fks = groupPgForeignKeys(fkResult?.rows ?? []);
+  const checks = groupPgChecks(checkResult?.rows ?? []);
   for (const table of snapshot.tables) {
     table.foreignKeys = fks.get(table.name) ?? [];
     table.checks = checks.get(table.name) ?? [];
@@ -700,20 +746,23 @@ export async function introspectLiveSnapshot(
 
 /** The PRAGMA's action spellings, as the diff's ReferentialAction spells them. */
 const SQLITE_FK_ACTION: Record<string, ForeignKeySpec["onDelete"]> = {
-  "CASCADE": "cascade",
+  CASCADE: "cascade",
   "SET NULL": "set null",
   "SET DEFAULT": "set default",
-  "RESTRICT": "restrict",
+  RESTRICT: "restrict",
   "NO ACTION": "no action",
 };
 
 async function sqliteForeignKeys(
-  dbAny: { all(query: unknown): Promise<unknown> | unknown },
+  // The return is `unknown` for the same reason the parameter is: a promise of
+  // unknown and a plain unknown collapse to one type, and the caller awaits it
+  // either way.
+  dbAny: { all(query: unknown): unknown },
   table: string
 ): Promise<ForeignKeySpec[] | undefined> {
-  const rows = (await Promise.resolve(dbAny.all(
-    sql`PRAGMA foreign_key_list(${sql.identifier(table)})`
-  ))) as Array<{
+  const rows = (await Promise.resolve(
+    dbAny.all(sql`PRAGMA foreign_key_list(${sql.identifier(table)})`)
+  )) as Array<{
     id: number;
     seq: number;
     table: string;
@@ -756,16 +805,22 @@ async function sqliteForeignKeys(
  * report a drift no migration could resolve.
  */
 async function sqliteChecks(
-  dbAny: { all(query: unknown): Promise<unknown> | unknown },
+  // The return is `unknown` for the same reason the parameter is: a promise of
+  // unknown and a plain unknown collapse to one type, and the caller awaits it
+  // either way.
+  dbAny: { all(query: unknown): unknown },
   table: string
 ): Promise<CheckSpec[] | undefined> {
-  const rows = (await Promise.resolve(dbAny.all(
-    sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${table}`
-  ))) as Array<{ sql: string | null }>;
+  const rows = (await Promise.resolve(
+    dbAny.all(
+      sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${table}`
+    )
+  )) as Array<{ sql: string | null }>;
   const create = (rows ?? [])[0]?.sql;
   if (create === undefined || create === null) return [];
   const checks: CheckSpec[] = [];
-  const pattern = /CONSTRAINT\s+(?:"([^"]+)"|`([^`]+)`|([A-Za-z_][\w]*))\s+CHECK\s*\(/gi;
+  const pattern =
+    /CONSTRAINT\s+(?:"([^"]+)"|`([^`]+)`|([A-Za-z_][\w]*))\s+CHECK\s*\(/gi;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(create)) !== null) {
     const name = match[1] ?? match[2] ?? match[3];

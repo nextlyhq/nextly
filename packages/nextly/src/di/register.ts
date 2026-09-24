@@ -778,19 +778,6 @@ export async function registerServices(
     transformedConfig.db?.postgres?.schema
   );
 
-  // Published once the dialect is known, because the warning depends on it:
-  // MySQL and SQLite have no schema namespace, and a config shared across
-  // dialects must not have to branch. Everything downstream — drizzle-kit's
-  // introspection filter above all — reads this one answer, so the pipeline
-  // cannot compare a namespace the adapter is not writing to.
-  setActivePostgresSchema(
-    resolvePostgresSchema(
-      transformedConfig.db?.postgres?.schema,
-      adapter.getCapabilities().dialect,
-      message => resolvedLogger.warn?.(message)
-    )
-  );
-
   // ----------------------------------------
   // Layer 2: Register Infrastructure
   // ----------------------------------------
@@ -868,6 +855,27 @@ export async function registerServices(
   // defect: a Builder-authored collection has no config entry at all, so one
   // of the framework's two schema modes had no queryable source.
   resetWidgetRegistries(transformedConfig.plugins ?? []);
+
+  // Published once the dialect is known, because the warning depends on it:
+  // MySQL and SQLite have no schema namespace, and a config shared across
+  // dialects must not have to branch. Everything downstream — drizzle-kit's
+  // introspection filter above all — reads this one answer, so the pipeline
+  // cannot compare a namespace the adapter is not writing to.
+  //
+  // HERE rather than beside `resolveAdapter`, though that is where the
+  // adapter first exists. Reading `getCapabilities()` up there made boot fail
+  // one step earlier than it used to, and the widget reset above is wired on
+  // the promise that it runs BEFORE any later boot failure — so a reset that
+  // no longer happened left a previous boot's widgets registered. Nothing
+  // between there and here wants the schema name; the push pipeline, which
+  // does, is layers further down.
+  setActivePostgresSchema(
+    resolvePostgresSchema(
+      transformedConfig.db?.postgres?.schema,
+      adapter.getCapabilities().dialect,
+      message => resolvedLogger.warn?.(message)
+    )
+  );
 
   // Then layer in the registry-stored opt-outs. Builder-authored collections and
   // singles have no code-first config to publish from, so without this read their
