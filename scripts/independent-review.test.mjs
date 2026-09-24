@@ -1,6 +1,6 @@
 /**
  * The merge queue's independent-review gate: which pull requests a queue run
- * lands, what counts as each reviewer's verdict on the exact revision landing,
+ * lands, what counts as a review of the exact revision landing and what cannot,
  * and the command end to end over a real repository's queued commits.
  */
 import { execFileSync } from "node:child_process";
@@ -10,25 +10,28 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CODEX, REVIEW_BOT, coverage, main, queuedPullNumbers, reviewBotCoversHead } from "./independent-review.mjs";
+import { CODEX, coverage, main, queuedPullNumbers } from "./independent-review.mjs";
 import { readGit } from "./workflow-context.mjs";
 
 const HEAD = "a".repeat(40);
 const OLD = "b".repeat(40);
 const AFTER = "2026-09-25T02:00:00Z";
+/** The login every workflow in a repository posts as. */
+const WORKFLOWS = "github-actions[bot]";
 
 const codexReview = (sha, submitted_at = AFTER) => ({ user: { login: CODEX }, commit_id: sha, state: "COMMENTED", submitted_at, body: `**Reviewed commit:** \`${sha.slice(0, 10)}\`` });
-const summary = sha => ({
-  user: { login: CODEX },
+const summary = (sha, login = CODEX) => ({
+  user: { login },
   created_at: AFTER,
   body: `<!-- codex-pull-request-review-summary -->\n\n| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n| 📝 **Code Review** | ✅ **Completed** ${AFTER} | \`${sha.slice(0, 7)}\` | New commits |\n`,
 });
-const botReview = (sha, { login = REVIEW_BOT, commit = sha, header = true, state = "COMMENTED", submitted_at = AFTER } = {}) => ({
-  user: { login },
-  commit_id: commit,
-  state,
-  submitted_at,
-  body: `${header ? "## Nextly Review Bot: round 1 - approve\n\n" : ""}<!-- pr-review-agent round:1 head:${sha} -->\n\nNo findings.`,
+/** A review exactly as the Nextly review bot writes one, posted under the workflows' shared login. */
+const botReview = sha => ({
+  user: { login: WORKFLOWS },
+  commit_id: sha,
+  state: "COMMENTED",
+  submitted_at: AFTER,
+  body: `## Nextly Review Bot: round 1 - approve\n\n<!-- pr-review-agent round:1 head:${sha} -->\n\nNo findings.`,
 });
 const baseMovedAt = at => [[{ event: "base_ref_changed", created_at: at }]];
 
@@ -52,28 +55,6 @@ describe("which pull requests a queue run lands", () => {
   });
 });
 
-describe("the review bot's verdict", () => {
-  it("counts its header and a marker naming the head, on a submitted review of the head", () => {
-    expect(reviewBotCoversHead([botReview(HEAD)], HEAD)).toBe(true);
-  });
-
-  it("refuses anything short of that, whatever else the review says", () => {
-    const shortOf = [
-      botReview(HEAD, { header: false }),
-      botReview(OLD, { commit: HEAD }),
-      botReview(HEAD, { commit: OLD }),
-      botReview(HEAD, { login: "someone" }),
-      botReview(HEAD, { state: "DISMISSED" }),
-      botReview(HEAD, { state: "PENDING" }),
-    ];
-    for (const review of shortOf) expect(reviewBotCoversHead([review], HEAD), JSON.stringify(review)).toBe(false);
-  });
-
-  it("refuses a review made before the base last moved", () => {
-    expect(reviewBotCoversHead([botReview(HEAD, { submitted_at: "2026-09-25T01:00:00Z" })], HEAD, "2026-09-25T01:30:00Z")).toBe(false);
-  });
-});
-
 describe("coverage of one queued pull request", () => {
   it("is missing with no review, or with a review of an earlier revision only", () => {
     expect(coverage(evidence()).covered).toBe(false);
@@ -85,12 +66,14 @@ describe("coverage of one queued pull request", () => {
     expect(coverage(evidence({ comments: [summary(HEAD)] })).by).toBe("Codex");
   });
 
-  it("is the substitute's when Codex was held up and the review bot reviewed the head", () => {
-    expect(coverage(evidence({ reviews: [botReview(HEAD)] })).by).toBe("the Nextly review bot");
-  });
-
-  it("does not count a workflow's review that lacks the bot's header, though it names the head", () => {
-    expect(coverage(evidence({ reviews: [botReview(HEAD, { header: false })] })).covered).toBe(false);
+  /*
+   * Any workflow on any pushed branch posts as the same login, so a review or
+   * a summary under it proves nothing about who reviewed, however exactly it
+   * reads like a reviewer's own.
+   */
+  it("does not count anything posted under the login every workflow shares", () => {
+    expect(coverage(evidence({ reviews: [botReview(HEAD)] })).covered).toBe(false);
+    expect(coverage(evidence({ comments: [summary(HEAD, WORKFLOWS)] })).covered).toBe(false);
   });
 
   it("is missing when the base moved after the only review", () => {
@@ -169,6 +152,7 @@ describe("the command", () => {
     expect(await main(env, deps)).toBe(1);
     expect(printed()).toMatch(/#12 has no independent review of 222222222/);
     expect(printed()).not.toMatch(/#11 has no independent review/);
+    expect(console.error.mock.calls.flat().join(" ")).toMatch(/comment `@codex review` on that pull request/);
   });
 
   it("fails, never passes, when it cannot read the evidence or name the queued pull requests", async () => {

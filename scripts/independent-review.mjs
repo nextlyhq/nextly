@@ -5,24 +5,23 @@
  * independent review of the exact revision it lands.
  *
  * A change is reviewed by a model from a different family than the one that
- * wrote it. The standing reviewer is Codex, a GPT model; when it is held up by
- * a rate or quota limit it is substituted, never skipped, by the Nextly review
- * bot, a GLM model run on request (`@nextly-bot review`). A change from any
- * other family is independent of both; one from either family needs the
- * other. Nothing records which model wrote a change, so this accepts either
- * reviewer and cannot tell those cases apart; it says so here rather than
- * implying it can.
+ * wrote it, because a model judging its own family's work tends to favour it.
+ * The reviewer is Codex, a GPT model, which posts under a GitHub App identity
+ * of its own that no workflow or person here can post as. Nothing records which
+ * model wrote a change, so a change written by a GPT model would pass on a
+ * Codex review as well; this cannot tell that case apart, and says so here
+ * rather than implying it can.
+ *
+ * Only an identity the change cannot use counts. The Nextly review bot, the
+ * standby reviewer, posts as `github-actions[bot]`, the identity every
+ * workflow here shares, and a workflow on any pushed branch can post a review
+ * that reads exactly like one of its own. So its reviews are not counted: a
+ * login that anything can post as says nothing about who reviewed.
  *
  * Coverage means the revision being merged: a review of an earlier head, or
- * one made before the base last moved, read a different diff. The Codex half is
- * `ci-verdict`'s decision, reused, so this gate and the merge-verification gate
- * cannot disagree about whether Codex read a revision.
- *
- * The review bot posts as `github-actions[bot]`, the identity every workflow
- * here shares, so its reviews are known by what they carry: the header and the
- * hidden marker its review protocol writes, the marker naming the exact
- * commit, on a review GitHub records against that commit. That is content, not
- * identity, and weaker than a login of its own would be.
+ * one made before the base last moved, read a different diff. The decision is
+ * `ci-verdict`'s, reused, so this gate and the merge-verification gate cannot
+ * disagree about whether Codex read a revision.
  *
  * It decides in the merge queue, where the queued pull requests are named by the
  * `(#number)` GitHub gives each squash commit. The queue lands those commits,
@@ -30,17 +29,13 @@
  *
  * Usage (in the workflow, on `merge_group`): GH_TOKEN=… node scripts/independent-review.mjs
  */
-import { completeRevisionSet, latestBaseChange, reviewersCovering, SUBMITTED_REVIEW_STATES } from "./ci-verdict.mjs";
+import { completeRevisionSet, latestBaseChange, reviewersCovering } from "./ci-verdict.mjs";
 import { isCliEntry } from "./cli-entry.mjs";
 import { countRewriteEvents } from "./verify-merge.mjs";
 import { commandText, eventPayload, queuedCommitSubjects, readGit } from "./workflow-context.mjs";
 
 export const CODEX = "chatgpt-codex-connector[bot]";
-export const REVIEW_BOT = "github-actions[bot]";
-const REVIEW_BOT_HEADER = /^## Nextly Review Bot: round \d+/;
-const REVIEW_BOT_MARKER = /<!-- pr-review-agent round:\d+ head:([0-9a-f]{40}) -->/;
 const QUEUED_NUMBER = /\(#([1-9]\d*)\)$/;
-const SUBMITTED = new Set(SUBMITTED_REVIEW_STATES);
 const MAX_PAGES = 10;
 
 /**
@@ -55,32 +50,9 @@ export function queuedPullNumbers(subjects) {
   return { numbers: found.map(entry => Number(entry.number)) };
 }
 
-/** What a review must carry to be the review bot's verdict on `head`. */
-const REVIEW_BOT_TESTS = [
-  review => review?.user?.login === REVIEW_BOT,
-  (review, head) => review?.commit_id === head,
-  review => SUBMITTED.has(review?.state),
-  review => REVIEW_BOT_HEADER.test(bodyOf(review)),
-  (review, head) => REVIEW_BOT_MARKER.exec(bodyOf(review))?.[1] === head,
-];
-
-function bodyOf(review) {
-  return typeof review?.body === "string" ? review.body : "";
-}
-
-/** Whether the review bot reviewed `head`, after the base last moved. */
-export function reviewBotCoversHead(reviews, head, since) {
-  return reviews.some(review => REVIEW_BOT_TESTS.every(test => test(review, head)) && inScope(review, since));
-}
-
-/** A review made before the base last moved read a diff that no longer exists. */
-function inScope(review, since) {
-  return since === undefined || (typeof review?.submitted_at === "string" && review.submitted_at > since);
-}
-
 /**
- * The verdict for one queued pull request, from its evidence: which reviewer,
- * if any, independently reviewed the revision it lands.
+ * The verdict for one queued pull request, from its evidence: whether Codex
+ * reviewed the revision it lands, after the base last moved.
  */
 export function coverage({ number, pr, reviews, comments, commits, timeline }) {
   const head = pr.head.sha;
@@ -89,13 +61,8 @@ export function coverage({ number, pr, reviews, comments, commits, timeline }) {
     knownRevisions: completeRevisionSet(commits.map(commit => commit?.sha), pr.commits),
     historyRewritten: countRewriteEvents(timeline) > 0,
   };
-  const by = coveringReviewer(reviews, comments, head, options);
-  return { number, head, covered: by !== null, by };
-}
-
-function coveringReviewer(reviews, comments, head, options) {
-  if (reviewersCovering(reviews, comments, head, options).includes(CODEX)) return "Codex";
-  return reviewBotCoversHead(reviews, head, options.since) ? "the Nextly review bot" : null;
+  const covered = reviewersCovering(reviews, comments, head, options).includes(CODEX);
+  return { number, head, covered, by: covered ? "Codex" : null };
 }
 
 async function getJson(path, { token, fetchImpl }) {
@@ -160,7 +127,7 @@ export async function main(env = process.env, { git = readGit, fetchImpl = fetch
 function report(verdicts) {
   for (const verdict of verdicts) console.log(verdictLine(verdict));
   if (verdicts.every(verdict => verdict.covered)) return 0;
-  console.error("Codex reviews each push; when it is held up by a rate or quota limit, comment `@nextly-bot review` on the pull request for the standby.");
+  console.error("Codex reviews each push. When it has not reviewed the revision named above, comment `@codex review` on that pull request to ask for one, then queue it again.");
   return 1;
 }
 
