@@ -96,5 +96,24 @@ export function createTableBody(
     lines.push(`${indent}PRIMARY KEY (${cols})`);
   }
 
+  // Inline constraints a table declares at creation. Valid in CREATE TABLE on
+  // all three dialects — which is the point: SQLite cannot add one later, and
+  // a plugin's first migration is the one place every dialect can still spell
+  // a check or a foreign key inline. Foreign keys whose target table this
+  // migration does not also create are still emitted: creation order within a
+  // stream is the author's contract (the DSL's dependency rules enforce it).
+  for (const check of table.checks ?? []) {
+    lines.push(`${indent}CONSTRAINT ${q(check.name)} CHECK (${check.sql})`);
+  }
+  for (const fk of table.foreignKeys ?? []) {
+    const cols = fk.columns.map(q).join(", ");
+    const refCols = fk.referencesColumns.map(q).join(", ");
+    lines.push(
+      `${indent}CONSTRAINT ${q(fk.name)} FOREIGN KEY (${cols}) ` +
+        `REFERENCES ${q(fk.referencesTable)} (${refCols}) ` +
+        `ON DELETE ${fk.onDelete.toUpperCase()} ON UPDATE ${fk.onUpdate.toUpperCase()}`
+    );
+  }
+
   return lines.join(",\n");
 }

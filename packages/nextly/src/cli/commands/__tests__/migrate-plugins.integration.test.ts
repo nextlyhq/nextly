@@ -296,3 +296,77 @@ describe("foreign elements never block a plugin's reconcile (C7)", () => {
     expect(rows[0]?.statements_executed).toBe(0);
   });
 });
+
+describe("a plugin's first migration creates its constraints inline (C8)", () => {
+  let sqlite: Database.Database;
+  let db: unknown;
+
+  beforeAll(async () => {
+    sqlite = new Database(":memory:");
+    db = drizzle({ client: sqlite });
+    await reconcileCore({
+      db,
+      dialect: DIALECT,
+      logger: { info: () => {}, warn: () => {} },
+    });
+  });
+  afterAll(() => sqlite.close());
+
+  it("applies a module whose table declares a check, and the check enforces", async () => {
+    const owners = defineTable("c8owners", { id: col.id() });
+    const linked = defineTable(
+      "c8linked",
+      { id: col.id(), ownerId: col.shortText(), score: col.integer({ nullable: true }) },
+      {
+        foreignKeys: [
+          {
+            columns: ["ownerId"],
+            references: { table: "c8g__c8owners", columns: ["id"] },
+            onDelete: "cascade",
+          },
+        ],
+        checks: [{ name: "score_ok", sql: "score >= 0" }],
+      }
+    );
+    const built = buildPluginMigration({
+      pluginName: "c8g",
+      schemaVersion: 1,
+      name: "v1",
+      now: new Date(Date.UTC(2026, 8, 24, 1, 0, 0)),
+      tablesByDialect: await tablesByDialect("c8g", "c8g", [owners, linked]),
+      existing: [],
+    });
+    const g = built!.module;
+    await runPluginPhase({
+      dialect: DIALECT,
+      db,
+      adapter: adapterFor(sqlite),
+      logger: createLogger({ quiet: true }),
+      pluginMigrationSets: [
+        { pluginName: "c8g", pluginVersion: "1.0.0", migrations: [g] },
+      ],
+    } as never);
+    // Both tables exist; the check enforces; the cascade fires.
+    expect(await adapterFor(sqlite).listTables()).toContain("c8g__c8linked");
+    let checkEnforced = false;
+    try {
+      sqlite.exec(
+        `INSERT INTO c8g__c8linked (id, owner_id, score) VALUES ('x1', 'o1', -5)`
+      );
+    } catch {
+      checkEnforced = true;
+    }
+    expect(checkEnforced).toBe(true);
+    sqlite.exec(
+      `INSERT INTO c8g__c8owners (id) VALUES ('o1')`
+    );
+    sqlite.exec(
+      `INSERT INTO c8g__c8linked (id, owner_id, score) VALUES ('l1', 'o1', 3)`
+    );
+    sqlite.exec(`DELETE FROM c8g__c8owners WHERE id = 'o1'`);
+    const remaining = sqlite
+      .prepare(`SELECT COUNT(*) AS n FROM c8g__c8linked`)
+      .all() as Array<{ n: number }>;
+    expect(remaining[0]?.n).toBe(0);
+  });
+});
