@@ -23,9 +23,17 @@
  * 🔴 Killing a push did not kill what its hook started. An agent's harness
  * kills the `git push` it launched; the hook's turbo and Vitest processes were
  * orphaned and ran to completion with nobody waiting, and were found still
- * holding the machine afterwards. So the run gets its own process group and a
- * leader that watches everything above it: when any of those processes is
- * gone, nothing is waiting for the answer, and the whole group is stopped.
+ * holding the machine afterwards. So the run gets a session and a process
+ * group of its own and a leader that watches everything above it: when any of
+ * those processes is gone, nothing is waiting for the answer, and the whole
+ * run is stopped.
+ *
+ * 🔴 "The whole run" is the SESSION, not the group. turbo starts every task in
+ * a process group of its own — measured: `pnpm run test` and the vitest under
+ * it sat in their own group, inside the run's session — so a signal to the
+ * run's group reaches turbo alone. Killed before its graceful shutdown had
+ * finished, turbo left its tasks running: a killed push took fifteen seconds
+ * to stop, most of it a build nothing was waiting for.
  *
  * 🔴 A group of its own escapes the caller's group, which is how a harness
  * normally stops a command tree — so the watch is not optional. Without it,
@@ -48,7 +56,7 @@
  */
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -279,14 +287,14 @@ async function acquire(dir, count, record) {
 // What is waiting for the run
 // ---------------------------------------------------------------------------
 
-/** A Linux process's parent, state and start time, from /proc; null when gone. */
+/** A Linux process's state, parent, session and start time, from /proc; null when gone. */
 function procStat(pid) {
   try {
     const text = readFileSync(`/proc/${pid}/stat`, "utf8");
     // The command name is in parentheses and may itself contain spaces or
     // parentheses, so the fields are read after the LAST closing one.
     const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
-    return { state: fields[0], ppid: Number(fields[1]), start: fields[19] };
+    return { state: fields[0], ppid: Number(fields[1]), session: Number(fields[3]), start: fields[19] };
   } catch {
     return null;
   }
@@ -370,12 +378,59 @@ function exitCode(code, signal) {
   return code ?? 128 + (os.constants.signals[signal] ?? 1);
 }
 
-function signalGroup(pgid, signal) {
+/** Sends a signal to a pid, or to a group as a negative pid, ignoring one already gone. */
+function sendSignal(target, signal) {
   try {
-    process.kill(-pgid, signal);
+    process.kill(target, signal);
   } catch (error) {
     if (error.code !== "ESRCH") throw error;
   }
+}
+
+function signalGroup(pgid, signal) {
+  sendSignal(-pgid, signal);
+}
+
+/** Every process in a session — on Linux, where /proc names each one's session. */
+function sessionMembers(sid) {
+  return readdirSync("/proc")
+    .filter(entry => /^\d+$/.test(entry))
+    .map(Number)
+    .filter(pid => procStat(pid)?.session === sid);
+}
+
+/** Every process's parent, from `ps` — the portable way to read the process tree. */
+function parentTable() {
+  try {
+    const out = execFileSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8" });
+    return out.trim().split("\n").map(line => line.trim().split(/\s+/).map(Number));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * A process and everything below it, as the tree stands now. A task already
+ * orphaned by a killed turbo has left this tree, which is why Linux is asked
+ * by session instead.
+ */
+function descendantsOf(root) {
+  const table = parentTable();
+  const found = [root];
+  for (let i = 0; i < found.length; i += 1) {
+    for (const [pid, ppid] of table) if (ppid === found[i]) found.push(pid);
+  }
+  return found;
+}
+
+/**
+ * Signals every process of a run — its group, and each group turbo made for a
+ * task. The leader started the run's session, so its pid is the session's id.
+ */
+function signalRun(leaderPid, signal) {
+  signalGroup(leaderPid, signal);
+  const members = process.platform === "linux" ? sessionMembers(leaderPid) : descendantsOf(leaderPid);
+  for (const pid of members) sendSignal(pid, signal);
 }
 
 /** Runs a command in this process's group and returns its exit code. */
@@ -394,15 +449,15 @@ function runDirect(argv, env) {
 }
 
 /**
- * Stops the leader's own group: a polite signal, then a kill after the grace
+ * Stops the leader's own run: a polite signal, then a kill after the grace
  * period. The leader ignores the polite one, so it stays to deliver the second.
  */
-function stopGroup(argv, lost) {
+function stopRun(argv, lost) {
   process.stderr.write(
     `\nbounded: pid ${lost.pid}, which was waiting for this run, is gone — stopping '${describe(argv)}'\n`
   );
-  signalGroup(process.pid, "SIGTERM");
-  setTimeout(() => signalGroup(process.pid, "SIGKILL"), GRACE_MS);
+  signalRun(process.pid, "SIGTERM");
+  setTimeout(() => signalRun(process.pid, "SIGKILL"), GRACE_MS);
 }
 
 /**
@@ -423,7 +478,7 @@ function lead(watch, argv) {
     const lost = stopping ? undefined : watch.find(isGone);
     if (!lost) return;
     stopping = true;
-    stopGroup(argv, lost);
+    stopRun(argv, lost);
   }, POLL_MS);
 
   child.on("error", error => {
@@ -434,7 +489,7 @@ function lead(watch, argv) {
     clearInterval(timer);
     // Stopped because nobody is waiting: take anything the command left
     // running with it. This ends the leader too, which is the point.
-    if (stopping) signalGroup(process.pid, "SIGKILL");
+    if (stopping) signalRun(process.pid, "SIGKILL");
     process.exit(exitCode(code, signal));
   });
 }
@@ -455,15 +510,17 @@ function runInGroup(command, env, onLeader) {
   let escalation = null;
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(signal, () => {
+      // To the run's group, as a terminal would: turbo passes it on to its
+      // tasks and shuts down in order.
       signalGroup(leader.pid, signal);
-      escalation ??= setTimeout(() => signalGroup(leader.pid, "SIGKILL"), GRACE_MS);
+      escalation ??= setTimeout(() => signalRun(leader.pid, "SIGKILL"), GRACE_MS);
     });
   }
 
   leader.on("exit", (code, signal) => {
     clearTimeout(escalation);
-    // Whatever the run left behind in its group goes with it.
-    signalGroup(leader.pid, "SIGKILL");
+    // Whatever the run left behind goes with it, in whichever group.
+    signalRun(leader.pid, "SIGKILL");
     process.exit(exitCode(code, signal));
   });
 }

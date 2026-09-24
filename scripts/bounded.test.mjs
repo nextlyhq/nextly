@@ -43,6 +43,19 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BOUNDED = path.join(HERE, "bounded.mjs");
 const POSIX = process.platform !== "win32";
 
+/**
+ * perl can move a process into a group of its own without leaving its
+ * session — what turbo does with every task, and what neither Node nor a
+ * shell without a terminal can do.
+ */
+const HAS_PERL = POSIX && spawnSync("perl", ["-e", "1"]).status === 0;
+
+/** A Linux process's group, from /proc. */
+function groupOf(pid) {
+  const text = readFileSync(`/proc/${pid}/stat`, "utf8");
+  return Number(text.slice(text.lastIndexOf(")") + 2).split(" ")[2]);
+}
+
 let dir;
 const spawned = [];
 
@@ -360,6 +373,34 @@ describe.runIf(POSIX)("running a command bounded", () => {
 
     expect(await waitUntil(() => isGone({ pid: grandchild, start: null }), 10_000)).toBe(true);
   });
+
+  /*
+   * 🔴 turbo starts every task in a process group of its own, inside the run's
+   * session, so a signal to the run's group reaches turbo alone. A killed push
+   * took fifteen seconds to stop that way — most of it a build nobody was
+   * waiting for, running on after turbo died.
+   */
+  it.runIf(process.platform === "linux" && HAS_PERL)(
+    "stops a task that turbo would have put in a group of its own",
+    async () => {
+      const child = runBounded([
+        process.execPath,
+        "-e",
+        [
+          'const { spawn } = require("node:child_process");',
+          'const c = spawn("perl", ["-e", "setpgrp(0, 0); sleep 60"], { stdio: "ignore" });',
+          "console.log(c.pid);",
+          "setInterval(() => {}, 1000);",
+        ].join(" "),
+      ]);
+      const task = await grandchildOf(child);
+      expect(await waitUntil(() => groupOf(task) === task, 5000)).toBe(true);
+
+      process.kill(child.pid, "SIGKILL");
+
+      expect(await waitUntil(() => isGone({ pid: task, start: null }), 10_000)).toBe(true);
+    }
+  );
 
   it("stops it when a process further up is killed, as a push two levels above a hook is", async () => {
     // `; true` keeps the shell as a separate parent rather than letting it
