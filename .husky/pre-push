@@ -8,16 +8,20 @@
 # resolve workspace package imports with no dist outputs to resolve to.
 #
 # Local pushes still get the full pre-push validation. "CI" means what
-# `detectIsCi` in packages/telemetry says it means — set to anything but empty,
-# "0" or "false" — so a developer with CI=false in their environment is still
-# gated, as scripts/bounded.mjs decides the same question.
-case "${CI:-}" in
-  '' | 0 | false) ;;
-  *)
-    echo "Pre-push hook skipped in CI (validated by .github/workflows/ci.yml)"
-    exit 0
-    ;;
-esac
+# `detectIsCi` in packages/telemetry says it means — any of its markers set to
+# anything but empty, "0" or "false" — so a developer with CI=false in their
+# environment is still gated. scripts/bounded.mjs decides the same question
+# with the same list, and a test holds both lists to telemetry's.
+for marker in CI GITHUB_ACTIONS GITLAB_CI CIRCLECI TRAVIS JENKINS_URL BUILDKITE VERCEL NETLIFY RENDER; do
+  eval "value=\${$marker:-}"
+  case "$value" in
+    '' | 0 | false) ;;
+    *)
+      echo "Pre-push hook skipped in CI (validated by .github/workflows/ci.yml)"
+      exit 0
+      ;;
+  esac
+done
 
 # Git exports GIT_DIR into every hook, and in a worktree it names that
 # worktree's admin directory (<main>/.git/worktrees/<name>) rather than a

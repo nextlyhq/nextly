@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  CI_MARKERS,
   descendantsIn,
   isAlive,
   isCi,
@@ -114,13 +115,10 @@ const record = (pid, extra = {}) => ({
  * CI makes every run a pass-through.
  */
 function cleanEnv(extra = {}) {
-  const {
-    CI: _ci,
-    NEXTLY_BOUNDED: _nested,
-    TURBO_CONCURRENCY: _concurrency,
-    TURBO_UI: _ui,
-    ...env
-  } = process.env;
+  const env = { ...process.env };
+  // Every CI marker, not just CI: GitHub Actions sets GITHUB_ACTIONS too, and
+  // any one of them makes a run a pass-through.
+  for (const name of [...CI_MARKERS, "NEXTLY_BOUNDED", "TURBO_CONCURRENCY", "TURBO_UI"]) delete env[name];
   return { ...env, NEXTLY_HEAVY_SLOT_DIR: dir, ...extra };
 }
 
@@ -233,6 +231,23 @@ describe("passing Vitest its worker cap", () => {
     expect(withWorkerCap(chosen, 4)).toBe(chosen);
     const spaced = ["vitest", "run", "--maxWorkers", "1"];
     expect(withWorkerCap(spaced, 4)).toBe(spaced);
+  });
+
+  /*
+   * 🔴 A cap anywhere used to count. `pnpm test:scripts -- --maxWorkers=1`
+   * reaches vitest after `--`, where it is a test-name filter, and the run
+   * went uncapped; before turbo's `--` a cap is turbo's own flag.
+   */
+  it("counts a caller's cap only where the runner that reads it parses it", () => {
+    expect(withWorkerCap(["vitest", "run", "--dir", "scripts", "--", "--maxWorkers=1"], 2)).toEqual([
+      "vitest", "run", "--dir", "scripts", "--maxWorkers=2", "--", "--maxWorkers=1",
+    ]);
+    expect(withWorkerCap(["turbo", "run", "test", "--maxWorkers=1"], 2)).toEqual([
+      "turbo", "run", "test", "--maxWorkers=1", "--", "--maxWorkers=2",
+    ]);
+    expect(withWorkerCap(["turbo", "run", "test", "--maxWorkers=1", "--", "-t", "x"], 2)).toEqual([
+      "turbo", "run", "test", "--maxWorkers=1", "--", "-t", "x", "--maxWorkers=2",
+    ]);
   });
 });
 
@@ -370,6 +385,23 @@ describe("the machine-wide heavy slot", () => {
 });
 
 describe("deciding whether this is CI", () => {
+  /*
+   * One question, one answer: the list is telemetry's, copied because a root
+   * script cannot import a package's TypeScript source — and held to it here,
+   * so the copy cannot drift.
+   */
+  it("knows the same CI markers as the telemetry package", async () => {
+    const source = readFileSync(path.join(HERE, "..", "packages", "telemetry", "src", "environment.ts"), "utf8");
+    const list = /const CI_ENV_VARS = \[([^\]]*)\]/.exec(source)[1];
+    expect(CI_MARKERS).toEqual([...list.matchAll(/"([A-Z_]+)"/g)].map(match => match[1]));
+  });
+
+  it("reads any of those markers as CI, as telemetry does", () => {
+    expect(isCi({ GITHUB_ACTIONS: "true" })).toBe(true);
+    expect(isCi({ JENKINS_URL: "https://ci.example" })).toBe(true);
+    expect(isCi({ GITHUB_ACTIONS: "false", CI: "0" })).toBe(false);
+  });
+
   /*
    * The telemetry package's rule: set, and neither "0" nor "false". A presence
    * test made `CI=false` in a developer's environment a pass-through, and the
@@ -524,6 +556,70 @@ describe.runIf(POSIX)("running a command bounded", () => {
     expect((await child.done).code).toBe(1);
     expect(child.err).toMatch(/^bounded: .* is not a private directory/m);
   });
+
+  /*
+   * 🔴 The caller used to name the leader in the slot's record after spawning
+   * it. Killed in between, it left a record naming only itself, dead, and a
+   * waiting run could take the slot while the leader ran on.
+   */
+  it("names its leader in the slot's record before the command starts", async () => {
+    const read = 'const r = JSON.parse(require("fs").readFileSync(require("path").join(process.env.NEXTLY_HEAVY_SLOT_DIR, "slot-0.json"), "utf8")); console.log(JSON.stringify(r))';
+    const child = runBounded([process.execPath, "-e", read]);
+    expect((await child.done).code).toBe(0);
+    const seen = JSON.parse(child.out.trim().split("\n").pop());
+    expect(seen.leader).toEqual(expect.any(Number));
+    expect(seen.leader).not.toBe(child.pid);
+  });
+
+  it("does not start a command whose slot is no longer its caller's", async () => {
+    const slot = path.join(dir, "slot-0.json");
+    writeFileSync(slot, JSON.stringify(record(deadPid())));
+    const marker = path.join(dir, "ran");
+    const leader = spawn(
+      process.execPath,
+      [BOUNDED, "--lead", JSON.stringify([{ pid: process.pid, start: null }]), slot, "--",
+        process.execPath, "-e", 'require("fs").writeFileSync(process.argv[1], "ran")', marker],
+      { env: cleanEnv(), stdio: ["ignore", "ignore", "pipe"] }
+    );
+    spawned.push(leader.pid);
+    let err = "";
+    leader.stderr.on("data", chunk => (err += chunk));
+    const code = await new Promise(resolve => leader.on("close", resolve));
+
+    expect(code).toBe(143);
+    expect(err).toMatch(/taken over before it started/);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  /*
+   * The `ps` path, end to end: turbo dies and leaves a task it put in a group
+   * of its own. Once seen, the task is still found by start time, though it is
+   * nobody's descendant any more.
+   */
+  it.runIf(LINUX && HAS_PERL)("on the ps path, stops a task left orphaned when the command dies", async () => {
+    const child = runBounded(
+      [
+        process.execPath,
+        "-e",
+        [
+          'const { spawn } = require("node:child_process");',
+          'const c = spawn("perl", ["-e", "setpgrp(0, 0); sleep 60"], { stdio: "ignore" });',
+          'console.log(c.pid + " " + process.pid);',
+          "setInterval(() => {}, 1000);",
+        ].join(" "),
+      ],
+      { NEXTLY_BOUNDED_PS: "1" }
+    );
+    await waitUntil(() => /^\d+ \d+\n/.test(child.out), 5000);
+    const [task, command] = child.out.split("\n")[0].split(" ").map(Number);
+    spawned.push(task, command);
+    expect(await waitUntil(() => groupOf(task) === task, 5000)).toBe(true);
+    await new Promise(resolve => setTimeout(resolve, 2500));
+
+    process.kill(command, "SIGKILL");
+
+    expect(await waitUntil(() => isGone({ pid: task, start: null }), 6000)).toBe(true);
+  }, 20_000);
 
   /*
    * The hook runs `pnpm run build` inside its own bounded run. Waiting for the

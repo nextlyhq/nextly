@@ -100,13 +100,34 @@ const ABANDONED = 143;
 const EXITED = new Set(["Z", "X"]);
 
 /**
- * Whether this is CI, by the rule `detectIsCi` in `packages/telemetry`
- * applies: `CI` set to anything but empty, "0" or "false". A developer with
- * `CI=false` in their environment is on their own machine, and gets the bounds.
+ * The variables that mark a CI run — `CI_ENV_VARS` in
+ * `packages/telemetry/src/environment.ts`. A test holds this list, and the
+ * pre-push hook's, to that one.
+ */
+export const CI_MARKERS = [
+  "CI",
+  "GITHUB_ACTIONS",
+  "GITLAB_CI",
+  "CIRCLECI",
+  "TRAVIS",
+  "JENKINS_URL",
+  "BUILDKITE",
+  "VERCEL",
+  "NETLIFY",
+  "RENDER",
+];
+
+function isSet(value) {
+  return typeof value === "string" && value !== "" && value !== "0" && value !== "false";
+}
+
+/**
+ * Whether this is CI, as `detectIsCi` decides it: any of its markers set to
+ * anything but empty, "0" or "false". A developer with `CI=false` in their
+ * environment is on their own machine, and gets the bounds.
  */
 export function isCi(env = process.env) {
-  const value = env.CI;
-  return typeof value === "string" && value !== "" && value !== "0" && value !== "false";
+  return CI_MARKERS.some(marker => isSet(env[marker]));
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +146,6 @@ export function isCi(env = process.env) {
  * overridden by the derived default.
  */
 export function withWorkerCap(argv, workers) {
-  if (argv.some(arg => /^--maxWorkers(=|$)/.test(arg))) return argv;
   const flag = `--maxWorkers=${workers}`;
   return isTurbo(argv[0]) ? afterSeparator(argv, flag) : beforeSeparator(argv, flag);
 }
@@ -134,12 +154,29 @@ function isTurbo(command) {
   return /(^|[\\/])turbo(\.cmd|\.exe)?$/.test(String(command));
 }
 
-function afterSeparator(argv, flag) {
-  return argv.includes("--") ? [...argv, flag] : [...argv, "--", flag];
+function isWorkerCap(arg) {
+  return /^--maxWorkers(=|$)/.test(arg);
 }
 
+/**
+ * For turbo, a cap counts only after `--`, where turbo forwards it; before the
+ * separator it is turbo's own flag, not Vitest's.
+ */
+function afterSeparator(argv, flag) {
+  const at = argv.indexOf("--");
+  if (at === -1) return [...argv, "--", flag];
+  return argv.slice(at + 1).some(isWorkerCap) ? argv : [...argv, flag];
+}
+
+/**
+ * For vitest itself, a cap counts only before `--`. After it, vitest reads
+ * the cap as a test-name filter — `pnpm test:scripts -- --maxWorkers=1`
+ * arrives that way — so the derived cap still goes in front.
+ */
 function beforeSeparator(argv, flag) {
   const at = argv.indexOf("--");
+  const options = at === -1 ? argv : argv.slice(0, at);
+  if (options.some(isWorkerCap)) return argv;
   return at === -1 ? [...argv, flag] : [...argv.slice(0, at), flag, ...argv.slice(at)];
 }
 
@@ -204,9 +241,17 @@ export function parseProcessTable(out) {
  * time (Linux), a `ps` table (other POSIX systems), or `false` where nothing
  * beyond a process's existence can be known — Windows, or a `ps` that failed.
  */
-export function processView(platform = process.platform) {
+export function processView(platform = viewPlatform()) {
   if (platform === "linux") return null;
   return platform === "win32" ? false : processTable() ?? false;
+}
+
+/**
+ * The platform whose way of reading processes applies. Tests set
+ * NEXTLY_BOUNDED_PS to run the `ps` path — macOS's — on Linux, end to end.
+ */
+function viewPlatform() {
+  return process.env.NEXTLY_BOUNDED_PS ? "ps" : process.platform;
 }
 
 /** A process as the view describes it, or null when it cannot be described. */
@@ -611,8 +656,13 @@ function signalOthers(seen, signal) {
   }
 }
 
-/** Kills every other process of the run, then ends the leader with a status. */
+/**
+ * Kills every other process of the run, then ends the leader with a status.
+ * The run is sampled first: where there is no /proc, a task started since the
+ * last sample would otherwise be missed.
+ */
 function finish(seen, status) {
+  remember(seen, process.pid);
   signalOthers(seen, "SIGKILL");
   process.exit(status);
 }
@@ -621,8 +671,40 @@ function stopRun(argv, lost, seen) {
   process.stderr.write(
     `\nbounded: pid ${lost.pid}, which was waiting for this run, is gone — stopping '${describe(argv)}'\n`
   );
+  remember(seen, process.pid);
   signalOthers(seen, "SIGTERM");
   setTimeout(() => finish(seen, ABANDONED), GRACE_MS);
+}
+
+/**
+ * Names this leader in the slot's record before anything starts.
+ *
+ * 🔴 The caller used to write the leader's pid after spawning it. Killed in
+ * between, it left a record naming only itself — dead — so a waiting run took
+ * the slot while the leader and its command ran on. The leader now writes
+ * itself in, under the same guard a reclaim takes, and only if the record is
+ * still its caller's: a slot already reclaimed means the caller is gone, and
+ * the run must not start.
+ */
+async function publishLeader(slot, callerPid) {
+  const guard = `${slot}.reclaim`;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (create(guard, { pid: process.pid })) return writeLeaderUnder(guard, slot, callerPid);
+    clearAbandonedGuard(guard, Date.now());
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  return false;
+}
+
+function writeLeaderUnder(guard, slot, callerPid) {
+  try {
+    const seen = readRecord(slot);
+    if (seen.missing || seen.record?.pid !== callerPid) return false;
+    writeFileSync(slot, JSON.stringify({ ...seen.record, leader: process.pid, leaderStart: identify(process.pid).start }));
+    return true;
+  } finally {
+    unlinkQuietly(guard);
+  }
 }
 
 /**
@@ -634,8 +716,12 @@ function stopRun(argv, lost, seen) {
  * command's exit status, which is the only answer the caller gets. SIGUSR2 is
  * the caller's "stop now", after a Ctrl-C the run did not answer in time.
  */
-function lead(watch, argv) {
+async function lead(watch, slot, argv) {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {});
+  if (!(await publishLeader(slot, watch[0].pid))) {
+    process.stderr.write("bounded: this run's heavy slot was taken over before it started — not starting\n");
+    process.exit(ABANDONED);
+  }
   const seen = new Map();
   process.on("SIGUSR2", () => finish(seen, ABANDONED));
 
@@ -676,7 +762,7 @@ function escalate(leaderPid) {
 /** Anything a run left after its leader exited: its group, and on Linux its session. */
 function sweep(leaderPid) {
   signalGroup(leaderPid, "SIGKILL");
-  if (process.platform !== "linux") return;
+  if (viewPlatform() !== "linux") return;
   for (const pid of sessionMembers(leaderPid)) sendSignal(pid, "SIGKILL");
 }
 
@@ -685,13 +771,12 @@ function sweep(leaderPid) {
  * terminal delivers here rather than there, escalates a run that does not
  * stop, and exits with the run's status.
  */
-function runInGroup(command, env, watch, onLeader) {
-  const leader = spawn(process.execPath, [SELF, "--lead", JSON.stringify(watch), "--", ...command], {
+function runInGroup(command, env, watch, slot) {
+  const leader = spawn(process.execPath, [SELF, "--lead", JSON.stringify(watch), slot, "--", ...command], {
     stdio: "inherit",
     env,
     detached: true,
   });
-  onLeader(leader.pid);
 
   let escalation = null;
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
@@ -766,14 +851,12 @@ async function runExclusively({ command, env, limits }) {
   // slot and the limits and runs directly.
   if (process.platform === "win32") process.exit(runDirect(command, env));
 
-  runInGroup(command, env, watch, leader =>
-    writeFileSync(slot, JSON.stringify({ ...record, leader, leaderStart: identify(leader).start }))
-  );
+  runInGroup(command, env, watch, slot);
 }
 
 async function main() {
   const argv = process.argv.slice(2);
-  if (argv[0] === "--lead") return lead(JSON.parse(argv[1]), argv.slice(argv.indexOf("--") + 1));
+  if (argv[0] === "--lead") return lead(JSON.parse(argv[1]), argv[2], argv.slice(argv.indexOf("--") + 1));
 
   const request = parseRequest(argv);
   if (isCi()) process.exit(runDirect(request.command, process.env));

@@ -37,6 +37,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { CI_MARKERS } from "./bounded.mjs";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const hook = async name =>
@@ -118,7 +120,7 @@ describe("the pre-push hook specifically", () => {
   it("still short-circuits in CI before doing any of it", async () => {
     const source = shellCode(await hook("pre-push"));
 
-    const ciGuard = source.search(/^case "\$\{CI:-\}" in/m);
+    const ciGuard = source.search(/^for marker in CI\b/m);
     const unsetAt = source.search(CLEARS_GIT_DIR);
 
     expect(ciGuard).toBeGreaterThan(-1);
@@ -253,7 +255,10 @@ describe("the pre-push hook before its gates", () => {
   const update = branch => `refs/heads/${branch} ${SHA} refs/heads/${branch} ${ZERO}\n`;
 
   function push(stdin, extra = {}) {
-    const { CI: _ci, NEXTLY_BOUNDED: _nested, ...env } = process.env;
+    // Every CI marker goes, not just CI: GitHub Actions sets GITHUB_ACTIONS,
+    // and any one of them skips the hook.
+    const env = { ...process.env };
+    for (const name of [...CI_MARKERS, "NEXTLY_BOUNDED"]) delete env[name];
     return spawnSync("sh", ["-e", ".husky/pre-push", "origin", "git@example.com:o/r.git"], {
       cwd: ROOT,
       input: stdin,
@@ -294,6 +299,16 @@ describe("the pre-push hook before its gates", () => {
    * "0" nor "false". A presence test skipped every gate for a developer with
    * CI=false in their environment.
    */
+  it("checks the same CI markers as the runner, which checks telemetry's", async () => {
+    const line = /^for marker in (.+); do$/m.exec(shellCode(await hook("pre-push")));
+    expect(line[1].split(/\s+/)).toEqual(CI_MARKERS);
+  });
+
+  it.runIf(process.platform !== "win32")("skips under any CI marker, as the runner does", () => {
+    expect(push(update("feature"), { GITHUB_ACTIONS: "true" }).status).toBe(0);
+    expect(push(update("feature"), { JENKINS_URL: "https://ci.example" }).status).toBe(0);
+  });
+
   it.runIf(process.platform !== "win32")("skips in CI, and gates a machine whose CI is set to false or 0", () => {
     const skipped = push(update("feature"), { CI: "true" });
     expect(skipped.status).toBe(0);
