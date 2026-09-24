@@ -987,6 +987,7 @@ export const PLUGIN_SERVICE_NAMES = [
 function buildPluginDatabase(
   rawDb: DatabaseInstance,
   relationalDbHandle: DatabaseInstance,
+  adapter: AdapterTransactions,
   plugin: PluginDefinition | undefined
 ): PluginDatabase & { raw: DatabaseInstance } {
   const owner: SchemaOwner = plugin
@@ -1031,7 +1032,20 @@ function buildPluginDatabase(
     ],
     db: () => rawDb,
     relationalDb: () => relationalDbHandle,
-    transaction: fn => fn(rawDb),
+    // The ADAPTER's transaction, not a bare call of the callback.
+    //
+    // `fn(rawDb)` opened no transaction at all: a plugin that wrote twice and
+    // then threw kept the first write, which is the opposite of what
+    // `ctx.db.transaction` promises. Core-owned stores already route through
+    // the adapter for the reason that decides it here too — Drizzle's
+    // better-sqlite3 transaction refuses an async callback, so SQLite needs
+    // the adapter's manual `BEGIN IMMEDIATE` path, and a plugin surface that
+    // works on two dialects out of three is not portable.
+    //
+    // The handle stays `rawDb` because that is what the adapter's transaction
+    // scopes: it brackets the work with BEGIN/COMMIT on the same connection
+    // rather than handing back a separate transaction object.
+    transaction: fn => adapter.transaction(() => fn(rawDb)),
   });
 
   return Object.assign(surface, { raw: rawDb });
@@ -1215,7 +1229,12 @@ export function createPluginContext(
    * replacement, would break every one of them at once.
    */
   const relationalDb = getServiceFn("relationalDb");
-  const db = buildPluginDatabase(rawDb, relationalDb, plugin);
+  const db = buildPluginDatabase(
+    rawDb,
+    relationalDb,
+    getServiceFn("adapter"),
+    plugin
+  );
   const logger = getServiceFn("logger");
   const config = getServiceFn("config");
 

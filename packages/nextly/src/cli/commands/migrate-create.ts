@@ -708,6 +708,11 @@ async function runMigrateCreatePlugin(
   }
 
   const tablesByDialect = {} as Record<SupportedDialect, TableSpec[]>;
+  const contributedByDialect = {} as Record<SupportedDialect, TableSpec[]>;
+  const contributedBaselineByDialect = {} as Record<
+    SupportedDialect,
+    TableSpec[]
+  >;
   for (const dialect of PLUGIN_DIALECTS) {
     const built = await buildPluginDraft({
       dialect,
@@ -721,8 +726,8 @@ async function runMigrateCreatePlugin(
       // not been told about yet.
       dependencyPlugins,
     });
-    // Only this plugin's own tables: a plugin migration carries exactly the
-    // tables its stream owns, never an app's or another plugin's.
+    // The tables this plugin OWNS. Its module creates exactly these — never
+    // an app's table, and never a dependency's.
     const owned = new Set(
       built.tables
         .filter(
@@ -732,9 +737,57 @@ async function runMigrateCreatePlugin(
         .map(table => table.name)
     );
     tablesByDialect[dialect] = built.specs.filter(spec => owned.has(spec.name));
+
+    // Tables somebody else owns that carry an ELEMENT this plugin contributed.
+    //
+    // Filtering by table owner alone dropped these, and with them the column
+    // the plugin added to its dependency's table — so the contribution existed
+    // at boot and could never reach an installation that only applies shipped
+    // modules. A plugin ships its own migrations so installing it does not
+    // require the app to regenerate; a column missing from them is a column
+    // that never arrives.
+    const contributedTables = new Set(
+      [...built.elementOwners.entries()]
+        .filter(
+          ([table, elements]) =>
+            !owned.has(table) &&
+            elements.some(
+              element =>
+                element.owner.kind === "plugin" &&
+                element.owner.id === definition.name
+            )
+        )
+        .map(([table]) => table)
+    );
+    contributedByDialect[dialect] = built.specs.filter(spec =>
+      contributedTables.has(spec.name)
+    );
+
+    // The same tables as their OWN owner declares them, compiled without this
+    // plugin's hooks. This is the baseline the first contributing module
+    // diffs against, so the module emits the added column rather than a
+    // CREATE TABLE for a table it does not own.
+    if (contributedTables.size > 0) {
+      const baseline = await buildPluginDraft({
+        dialect,
+        pluginName: definition.name,
+        pluginPrefixes,
+        tables,
+        extend: [],
+        dependencies,
+        dependencyPlugins,
+      });
+      contributedBaselineByDialect[dialect] = baseline.specs.filter(spec =>
+        contributedTables.has(spec.name)
+      );
+    } else {
+      contributedBaselineByDialect[dialect] = [];
+    }
   }
 
   const result = await generatePluginMigration({
+    contributedByDialect,
+    contributedBaselineByDialect,
     pluginName: definition.name,
     schemaVersion: definition.schemaVersion,
     name: name ?? "migration",

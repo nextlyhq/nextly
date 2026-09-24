@@ -156,6 +156,41 @@ describe("transaction", () => {
     expect(inserted).toHaveLength(1);
   });
 
+  it("runs the work INSIDE the transaction the deps supply", async () => {
+    // `ctx.db.transaction` used to call the callback directly, opening no
+    // transaction at all: a plugin that wrote twice and then threw kept the
+    // first write. The surface has to hand the work to the transaction it was
+    // given, which on SQLite is the adapter's manual BEGIN IMMEDIATE path.
+    const order: string[] = [];
+    const db = {
+      insert: () => ({ values: () => Promise.resolve() }),
+      update: () => ({ set: () => ({ where: () => Promise.resolve({}) }) }),
+      delete: () => ({ where: () => Promise.resolve({}) }),
+    };
+    const surface = createPluginDatabase({
+      dialect: "postgresql",
+      owner: OWNER,
+      dependsOn: new Set(),
+      owners: () => new Map([["fx__notes", OWNER]]),
+      tables: () => ({ fx__notes: { name: "fx__notes" } }),
+      tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
+      db: () => db,
+      relationalDb: () => db,
+      transaction: async fn => {
+        order.push("begin");
+        const result = await fn(db);
+        order.push("commit");
+        return result;
+      },
+    });
+
+    await surface.transaction(async () => {
+      order.push("work");
+    });
+
+    expect(order).toEqual(["begin", "work", "commit"]);
+  });
+
   it("propagates a failure rather than swallowing it", async () => {
     const { surface } = harness();
     const boom = vi.fn().mockRejectedValue(new Error("rolled back"));

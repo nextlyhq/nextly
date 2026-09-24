@@ -34,6 +34,12 @@ function makeCtx(plugin?: unknown) {
         return db;
       case "relationalDb":
         return db;
+      // `ctx.db.transaction` routes through the adapter, so a double that
+      // omits it certifies a context production would reject.
+      case "adapter":
+        return {
+          transaction: <T>(work: () => Promise<T>) => work(),
+        };
       case "logger":
         return logger;
       case "config":

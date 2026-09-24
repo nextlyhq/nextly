@@ -164,11 +164,22 @@ async function applyModule(
     return "skipped";
   }
 
+  // Both sides include the FOREIGN tables this module contributes elements to,
+  // so the reconcile compares against the shape the module's SQL actually
+  // produces. Leaving them out would let it judge a module by a target that
+  // never mentions the table its ALTER touches.
+  const ownedTarget = migration.snapshot[deps.dialect]?.tables ?? [];
   const before: NextlySchemaSnapshot = {
-    tables: migration.before[deps.dialect]?.tables ?? [],
+    tables: [
+      ...(migration.before[deps.dialect]?.tables ?? []),
+      ...(migration.contributedBefore?.[deps.dialect]?.tables ?? []),
+    ],
   };
   const target: NextlySchemaSnapshot = {
-    tables: migration.snapshot[deps.dialect]?.tables ?? [],
+    tables: [
+      ...ownedTarget,
+      ...(migration.contributed?.[deps.dialect]?.tables ?? []),
+    ],
   };
   // The before side names tables an older module created, so both sides scope
   // the live read — a module dropping a table it no longer wants must still
@@ -196,7 +207,11 @@ async function applyModule(
     pluginName: set.pluginName,
     pluginVersion: set.pluginVersion,
     schemaVersion: migration.schemaVersion,
-    tables: target.tables.map(table => table.name),
+    // The tables this plugin OWNS, never the foreign ones it only contributed
+    // an element to. `recordOwner` upserts ownership, so a dependency's table
+    // listed here would hand this plugin the row naming its real owner — and
+    // the drop guard would then let this plugin's DOWN drop it.
+    tables: ownedTarget.map(table => table.name),
     adopted: state === "already_applied",
   });
   return state === "already_applied" ? "adopted" : "applied";

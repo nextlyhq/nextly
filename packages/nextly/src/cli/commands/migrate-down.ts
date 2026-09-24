@@ -16,7 +16,10 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
-import { scopeLedgerRows } from "../../domains/schema/events/ledger-scope";
+import {
+  pluginOfLedgerRow,
+  scopeLedgerRows,
+} from "../../domains/schema/events/ledger-scope";
 import { newestEvent } from "../../domains/schema/events/newest-event";
 import {
   SchemaEventsRepository,
@@ -28,6 +31,8 @@ import { assertNoForeignDrops } from "../../domains/schema/ownership/drop-guard"
 import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { describeError } from "../../errors/index";
+import { NextlyError } from "../../errors/nextly-error";
+import type { PluginDefinition } from "../../plugins/plugin-context";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -240,6 +245,42 @@ export async function migrateDownCore(
 // CLI shell + command registration
 // ============================================================================
 
+/**
+ * One plugin module's DOWN statements, as the SQL text the rollback path reads.
+ *
+ * Joined the way `run-plugin-migrations` joins a module's UP for its reconcile
+ * file, so both directions describe a module the same way. The caller splits it
+ * again before executing, and the guards in between — the irreversible check,
+ * the data-loss check, `assertNoForeignDrops` — all read this text, so a plugin
+ * module is judged by exactly the rules an app file is.
+ */
+function pluginModuleDownSql(
+  plugins: readonly PluginDefinition[],
+  filename: string,
+  pluginName: string,
+  dialect: SupportedDialect
+): string {
+  const moduleName = filename.slice(filename.indexOf("/") + 1);
+  const definition = plugins.find(p => p.name === pluginName);
+  const module = (definition?.contributes?.schema?.migrations ?? []).find(
+    m => m.name === moduleName
+  );
+  if (!module) {
+    // Named rather than "file not found": the row exists, so the module was
+    // shipped once. It is the plugin that is now absent or downgraded, and
+    // those are different fixes.
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage:
+        `${filename} is recorded in the ledger, but plugin "${pluginName}" does not currently ship a module named "${moduleName}". ` +
+        `Reinstall the version that shipped it before rolling it back.`,
+      statusCode: 400,
+      logContext: { filename, plugin: pluginName, module: moduleName },
+    });
+  }
+  return (module.dialects[dialect]?.down ?? []).join(";\n");
+}
+
 interface MigrateDownCommandOptions {
   step?: number;
   allowDataLoss?: boolean;
@@ -296,7 +337,28 @@ export async function runMigrateDown(
       await forceUnlock(db, dialect);
     }
 
+    /**
+     * The DOWN statements for one ledger row, from wherever that row lives.
+     *
+     * `--plugin` selects rows whose filename is qualified — `plugin:<name>/<module>`
+     * — and a plugin's migrations are TypeScript MODULES held in its
+     * definition, not `.sql` files under the app's migrations directory.
+     * Resolving every filename below that directory made
+     * `migrate:down --plugin <name>` fail on a missing file before it could
+     * roll anything back, which is the one thing the flag exists to do.
+     *
+     * The app's own rows keep reading the `.sql` file exactly as before.
+     */
     const readDownSql = async (filename: string): Promise<string> => {
+      const pluginName = pluginOfLedgerRow(filename);
+      if (pluginName !== null) {
+        return pluginModuleDownSql(
+          configResult.config.plugins ?? [],
+          filename,
+          pluginName,
+          dialect
+        );
+      }
       const name = filename.endsWith(".sql") ? filename : `${filename}.sql`;
       const content = await readFile(resolve(migrationsDir, name), "utf-8");
       return parseSqlSections(content).downSql;

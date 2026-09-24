@@ -50,6 +50,24 @@ export interface PluginMigration {
   snapshot: Record<SupportedDialect, PluginMigrationSnapshot>;
   /** The owner's tables BEFORE it — the previous module's snapshot, or empty. */
   before: Record<SupportedDialect, PluginMigrationSnapshot>;
+  /**
+   * Tables this owner does NOT own, carrying elements it contributed.
+   *
+   * A plugin may add a column to a declared dependency's table, and that
+   * column has to travel in this plugin's module: the plugin ships its own
+   * migrations precisely so installing it does not require the app to
+   * regenerate, and a column left out of them never reaches an existing
+   * installation.
+   *
+   * Kept OUT of `snapshot` deliberately. `snapshot` is what the apply path
+   * records ownership from, and a dependency's table listed there would let
+   * this plugin overwrite its owner — the table belongs to the dependency; only
+   * the element is this plugin's. These two sides feed the diff and the
+   * reconcile, never the owner rows.
+   */
+  contributed?: Record<SupportedDialect, PluginMigrationSnapshot>;
+  /** The same foreign tables BEFORE this module, for the same diff. */
+  contributedBefore?: Record<SupportedDialect, PluginMigrationSnapshot>;
 }
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];

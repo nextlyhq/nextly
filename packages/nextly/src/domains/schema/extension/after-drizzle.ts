@@ -229,9 +229,21 @@ export async function runAfterDrizzle(args: {
 }): Promise<Record<string, unknown>> {
   if (args.hooks.length === 0) return args.tables;
 
+  // MERGED over what was compiled, never REPLACING it.
+  //
+  // The contract above — "a table the hook did not produce is left exactly as
+  // compiled" — was the documented intent, but the assignment replaced the
+  // whole map, so a hook returning only the table it cared about silently
+  // dropped every other one. That table then vanished from the runtime Drizzle
+  // registry while every installation still had it, and the caller's migration
+  // model, built from the compiled tables, disagreed with what ran.
   let tables = { ...args.tables };
   for (const hook of args.hooks) {
-    tables = await hook({ dialect: args.dialect, tables: { ...tables } });
+    const returned = await hook({
+      dialect: args.dialect,
+      tables: { ...tables },
+    });
+    tables = { ...tables, ...returned };
   }
 
   for (const [name, value] of Object.entries(tables)) {

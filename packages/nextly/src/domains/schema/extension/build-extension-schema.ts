@@ -16,10 +16,13 @@
  */
 import { createHash } from "node:crypto";
 
+import type { Table } from "drizzle-orm";
+
 import type {
   DynamicRelationEdge,
   SupportedDialect,
 } from "../../../database/schema-registry";
+import { drizzleTableToTableSpec } from "../../../schemas/_internal/drizzle-to-tablespec";
 import type { TableSpec } from "../pipeline/diff/types";
 
 import { getActiveExtensionSchema } from "./active-schema";
@@ -239,7 +242,7 @@ export async function buildExtensionSchema(
     }
   }
 
-  const specs = tables.map(table => toTableSpec(table, input.dialect));
+  const compiledSpecs = tables.map(table => toTableSpec(table, input.dialect));
   const compiled: Record<string, unknown> = {};
   const owners = new Map<string, SchemaOwner>();
   for (const table of tables) {
@@ -281,6 +284,33 @@ export async function buildExtensionSchema(
     owners,
     protectedTables,
   });
+
+  // The migration model follows the hook, rather than describing the shape the
+  // hook was handed.
+  //
+  // `compiledSpecs` was built BEFORE the hooks ran, so a hook widening a column
+  // to `bigint` — the reason this escape hatch exists — changed the table dev
+  // push creates and nothing else: `migrate:create` still read the pre-hook
+  // spec, so the column reached the developer's database and no migration. The
+  // fingerprint was computed from the same stale specs, so nothing downstream
+  // could notice either.
+  //
+  // Re-derived from the VALIDATED output: `runAfterDrizzle` has already refused
+  // anything the model cannot carry, so every shape here is one
+  // `drizzleTableToTableSpec` can express. Every key in the returned map gets a
+  // spec, including one the hook introduced — a table present at runtime and
+  // absent from the migration model is the divergence this exists to close, and
+  // it does not matter whether the hook changed the table or created it.
+  // Tables the hooks left untouched re-derive to the spec they started with.
+  const specs =
+    (input.afterDrizzle ?? []).length === 0
+      ? compiledSpecs
+      : Object.entries(drizzle).map(([name, table]) => {
+          const compiledSpec = compiledSpecs.find(spec => spec.name === name);
+          return table === undefined && compiledSpec !== undefined
+            ? compiledSpec
+            : drizzleTableToTableSpec(table as Table, input.dialect);
+        });
 
   // Adopted tables compile to drizzle ONLY: registered for typed access and
   // queries, absent from specs (so no diff ever proposes DDL for them), from

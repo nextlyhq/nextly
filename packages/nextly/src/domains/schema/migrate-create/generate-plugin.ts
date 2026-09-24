@@ -51,6 +51,24 @@ export interface BuildPluginMigrationArgs {
   now?: Date;
   /** The plugin's own tables per dialect, compiled by `buildExtensionSchema`. */
   tablesByDialect: Record<SupportedDialect, TableSpec[]>;
+  /**
+   * Tables another owner declares, carrying elements THIS plugin contributed
+   * — a column added to a declared dependency's table. Diffed alongside the
+   * owned tables so the contributed element ships in this plugin's module,
+   * and kept out of `snapshot` so the apply path never records this plugin as
+   * the table's owner.
+   */
+  contributedByDialect?: Record<SupportedDialect, TableSpec[]>;
+  /**
+   * The same foreign tables WITHOUT this plugin's contributions — the shape
+   * their own owner declares.
+   *
+   * The baseline for the FIRST module that contributes to them. Without it the
+   * diff would see a table appearing from nothing and emit `CREATE TABLE` for
+   * a table this plugin does not own; later modules take their baseline from
+   * the previous module's `contributed` instead.
+   */
+  contributedBaselineByDialect?: Record<SupportedDialect, TableSpec[]>;
   /** Modules the plugin already ships. */
   existing: readonly PluginMigration[];
 }
@@ -111,20 +129,40 @@ export function buildPluginMigration(
   const dialects = {} as Record<SupportedDialect, DialectStatements>;
   const snapshot = {} as Record<SupportedDialect, { tables: TableSpec[] }>;
   const before = {} as Record<SupportedDialect, { tables: TableSpec[] }>;
+  const contributed = {} as Record<SupportedDialect, { tables: TableSpec[] }>;
+  const contributedBefore = {} as Record<
+    SupportedDialect,
+    { tables: TableSpec[] }
+  >;
   const operationCounts = {} as Record<SupportedDialect, number>;
   let totalOperations = 0;
 
   for (const dialect of ALL_DIALECTS) {
     const previousTables = previous?.snapshot[dialect]?.tables ?? [];
     const desiredTables = args.tablesByDialect[dialect] ?? [];
+    const desiredContributed = args.contributedByDialect?.[dialect] ?? [];
+    // The previous module's view of those foreign tables if there is one, and
+    // their own owner's shape otherwise. Taking the previous module's view is
+    // what makes a regeneration emit nothing when nothing changed: a fresh
+    // baseline every time would re-emit the same ADD COLUMN forever.
+    const previousContributed =
+      previous?.contributed?.[dialect]?.tables ??
+      args.contributedBaselineByDialect?.[dialect] ??
+      [];
+
+    // ONE diff over the union. A foreign table appears on both sides, so only
+    // the elements this plugin added to it come out as operations; its own
+    // columns are identical either side and produce nothing.
     const { statements, operations } = renderDialect(
-      previousTables,
-      desiredTables,
+      [...previousTables, ...previousContributed],
+      [...desiredTables, ...desiredContributed],
       dialect
     );
     dialects[dialect] = statements;
     snapshot[dialect] = { tables: desiredTables };
     before[dialect] = { tables: previousTables };
+    contributed[dialect] = { tables: desiredContributed };
+    contributedBefore[dialect] = { tables: previousContributed };
     operationCounts[dialect] = operations.length;
     totalOperations += operations.length;
   }
@@ -139,6 +177,8 @@ export function buildPluginMigration(
     dialects,
     snapshot,
     before,
+    contributed,
+    contributedBefore,
   };
   return { module, operationCounts };
 }

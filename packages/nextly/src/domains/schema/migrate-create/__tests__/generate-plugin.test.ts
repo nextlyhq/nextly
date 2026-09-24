@@ -233,3 +233,84 @@ describe("generatePluginMigration (file writes)", () => {
     expect(await readdir(dir)).toEqual([]);
   });
 });
+
+/**
+ * A column this plugin contributed to a table another owner declares.
+ *
+ * The module has to carry it. A plugin ships its own migrations so that
+ * installing it does not require the app to regenerate — a contributed column
+ * left out of them exists at boot and never reaches an installation that only
+ * applies shipped modules.
+ */
+describe("elements contributed to another owner's table", () => {
+  /** `dep__orders` as its own owner declares it. */
+  const dependencyTable: TableSpec = {
+    name: "dep__orders",
+    columns: [
+      { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+    ],
+    indexes: [],
+  };
+
+  /** The same table once this plugin has added its column. */
+  const withContribution: TableSpec = {
+    ...dependencyTable,
+    columns: [
+      ...dependencyTable.columns,
+      { name: "fx_ref", type: "varchar(255)", nullable: true },
+    ],
+  };
+
+  const CONTRIBUTING = {
+    ...FIRST,
+    contributedByDialect: tablesByDialect(withContribution),
+    contributedBaselineByDialect: tablesByDialect(dependencyTable),
+  };
+
+  it("emits ADD COLUMN, not CREATE TABLE, for the foreign table", () => {
+    // The whole point of the baseline. Without it the diff sees the table
+    // appearing from nothing and the module claims to create a table this
+    // plugin does not own.
+    const built = buildPluginMigration(CONTRIBUTING);
+
+    const up = built!.module.dialects.postgresql.up.join("\n");
+    expect(up).toMatch(/ALTER TABLE .*dep__orders.* ADD COLUMN/i);
+    expect(up).not.toMatch(/CREATE TABLE .*dep__orders/i);
+  });
+
+  it("keeps the foreign table OUT of the snapshot the apply path owns from", () => {
+    // `recordOwner` upserts ownership from `snapshot`. A dependency's table
+    // listed there would hand this plugin the row naming its real owner, and
+    // the drop guard would then let this plugin's DOWN drop it.
+    const built = buildPluginMigration(CONTRIBUTING);
+
+    expect(built!.module.snapshot.postgresql.tables.map(t => t.name)).toEqual([
+      "fx__notes",
+    ]);
+    expect(
+      built!.module.contributed?.postgresql.tables.map(t => t.name)
+    ).toEqual(["dep__orders"]);
+  });
+
+  it("emits nothing for the foreign table on a regeneration that changed nothing", () => {
+    // The previous module's `contributed` becomes the next one's baseline, so
+    // a column already shipped is not shipped again. A fresh baseline every
+    // time would re-emit the same ADD COLUMN forever.
+    const first = buildPluginMigration(CONTRIBUTING)!;
+    const second = buildPluginMigration({
+      ...CONTRIBUTING,
+      schemaVersion: 2,
+      existing: [first.module],
+    });
+
+    expect(second).toBeNull();
+  });
+
+  it("still emits the plugin's OWN table changes", () => {
+    // The control: a module that reported nothing would satisfy the
+    // regeneration test above while breaking the feature.
+    const built = buildPluginMigration(CONTRIBUTING);
+    const up = built!.module.dialects.postgresql.up.join("\n");
+    expect(up).toMatch(/CREATE TABLE .*fx__notes/i);
+  });
+});
