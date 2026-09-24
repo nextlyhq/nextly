@@ -449,6 +449,17 @@ describe.runIf(POSIX)("knowing whether anything is still waiting", () => {
     expect(isGone({ pid, start: null })).toBe(true);
   });
 
+  /*
+   * 🔴 A failed `ps` once answered with an empty table, and every live process
+   * read as gone: a waiting run could take a slot another run was using, and a
+   * run whose caller was alive could be stopped. Not knowing is not gone.
+   */
+  it("does not read a live process as gone when it cannot be described", () => {
+    expect(isGone({ pid: process.pid, start: "another start" }, new Map())).toBe(false);
+    expect(isGone({ pid: process.pid, start: "another start" }, false)).toBe(false);
+    expect(isGone({ pid: deadPid(), start: null }, new Map())).toBe(true);
+  });
+
   it.runIf(process.platform === "linux")("reads a pid now used by another process as gone", () => {
     const [self] = waitingChain();
     expect(isGone({ ...self, start: `${Number(self.start) + 1}` })).toBe(true);

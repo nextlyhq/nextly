@@ -175,13 +175,18 @@ function procStat(pid) {
  * Every process's parent, state and start time from one `ps` call — the
  * portable way to read them where there is no /proc. `lstart` is a
  * fixed-format date, so it is read as the rest of the line.
+ *
+ * 🔴 A `ps` that fails answers `undefined` — nothing known — never an empty
+ * table. An empty table reads every live process as gone: a waiting run would
+ * take a slot another run is using, and a run whose caller is alive would be
+ * stopped.
  */
 export function processTable() {
   try {
     const out = execFileSync("ps", ["-A", "-o", "pid=,ppid=,state=,lstart="], { encoding: "utf8" });
     return parseProcessTable(out);
   } catch {
-    return new Map();
+    return undefined;
   }
 }
 
@@ -196,21 +201,22 @@ export function parseProcessTable(out) {
 
 /**
  * How this platform describes processes: `null` to read /proc one process at a
- * time (Linux), a `ps` table (other POSIX systems), or `undefined` where
- * nothing beyond a process's existence can be known (Windows).
+ * time (Linux), a `ps` table (other POSIX systems), or `false` where nothing
+ * beyond a process's existence can be known — Windows, or a `ps` that failed.
  */
 export function processView(platform = process.platform) {
   if (platform === "linux") return null;
-  return platform === "win32" ? undefined : processTable();
+  return platform === "win32" ? false : processTable() ?? false;
 }
 
+/** A process as the view describes it, or null when it cannot be described. */
 function describeProcess(pid, view) {
-  return view === null ? procStat(pid) : view.get(pid) ?? null;
+  if (view === null) return procStat(pid);
+  return view instanceof Map ? view.get(pid) ?? null : null;
 }
 
 /** One property of a process, or null when it cannot be read. */
 function fieldOf(pid, view, key) {
-  if (view === undefined) return null;
   return describeProcess(pid, view)?.[key] ?? null;
 }
 
@@ -251,18 +257,20 @@ export function waitingChain(pid = process.pid) {
  * the number now belongs to another process.
  */
 function sameProcess({ start }, now) {
-  if (!now || EXITED.has(now.state)) return false;
+  if (EXITED.has(now.state)) return false;
   return start === null || now.start === start;
 }
 
 /**
  * Whether a watched process has gone: exited, a zombie, or its pid now
- * another process's. Where only existence can be known — Windows — existence
- * decides.
+ * another process's. A process that exists but cannot be described — a
+ * platform that knows only existence, or a lookup that failed — is not
+ * judged gone: not knowing is not the same as knowing it has ended.
  */
 export function isGone(entry, view = processView()) {
   if (!isAlive(entry.pid)) return true;
-  return view !== undefined && !sameProcess(entry, describeProcess(entry.pid, view));
+  const now = describeProcess(entry.pid, view);
+  return now !== null && !sameProcess(entry, now);
 }
 
 /** The first watched process that has gone, read in one pass. */
