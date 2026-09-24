@@ -141,8 +141,8 @@ function cleanEnv(extra = {}) {
   return { ...env, NEXTLY_HEAVY_SLOT_DIR: dir, ...extra };
 }
 
-function runBounded(args, extra = {}) {
-  const child = spawn(process.execPath, [BOUNDED, ...args], {
+function runBounded(args, extra = {}, launcher = [process.execPath]) {
+  const child = spawn(launcher[0], [...launcher.slice(1), BOUNDED, ...args], {
     env: cleanEnv(extra),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -155,6 +155,17 @@ function runBounded(args, extra = {}) {
     child.on("close", (code, signal) => resolve({ code, signal }))
   );
   return child;
+}
+
+/**
+ * Runs the script as a shell runs a job: in a process group of its own, whose
+ * parent is in the same session. That is where a terminal's Ctrl-Z lands. A
+ * case started from inside a bounded run is itself in an orphaned group, for
+ * which the kernel discards Ctrl-Z's SIGTSTP, so without this a Ctrl-Z case
+ * would stop nothing there.
+ */
+function runAsJob(args, extra = {}) {
+  return runBounded(args, extra, ["perl", "-e", "setpgrp(0, 0); exec @ARGV", process.execPath]);
 }
 
 async function waitUntil(condition, timeoutMs) {
@@ -196,6 +207,17 @@ async function zombie() {
   await waitUntil(() => stateOf(pid) === "Z", 5000);
   return pid;
 }
+
+/** A command that prints its pid, and says so when it is asked to stop. */
+const STOPS_IN_ORDER = [
+  process.execPath,
+  "-e",
+  [
+    'process.on("SIGTERM", () => { console.log("stopping in order"); process.exit(0); });',
+    "console.log(process.pid);",
+    "setInterval(() => {}, 1000);",
+  ].join(" "),
+];
 
 async function grandchildOf(child) {
   await waitUntil(() => /^\d+\n/.test(child.out), 5000);
@@ -930,13 +952,29 @@ describe.runIf(POSIX)("running a command bounded", () => {
     expect((await child.done).code).toBe(143);
   }, 15_000);
 
+  it("passes Ctrl-C on to the run, whose group the terminal does not reach", async () => {
+    const child = runBounded(WITH_GRANDCHILD);
+    const grandchild = await grandchildOf(child);
+
+    process.kill(child.pid, "SIGINT");
+
+    expect((await child.done).code).toBe(130);
+    expect(await waitUntil(() => isGone({ pid: grandchild, start: null }), 5000)).toBe(true);
+  });
+});
+
+describe.runIf(LINUX)("suspending a run with Ctrl-Z", () => {
   /*
    * 🔴 Ctrl-Z stopped only the wrapper: the run, in a session of its own, ran
    * on, and one that finished meanwhile left its slot held by a stopped
-   * process. The stop and the resume now reach every process of the run.
+   * process. The stop and the resume now reach every process of the run, on
+   * /proc and on the `ps` path macOS takes.
    */
-  it.runIf(LINUX)("suspends the whole run with Ctrl-Z, and resumes it with the caller", async () => {
-    const child = runBounded(WITH_GRANDCHILD);
+  it.runIf(HAS_PERL).each([
+    ["/proc", {}],
+    ["ps", { NEXTLY_BOUNDED_PS: "1" }],
+  ])("suspends the whole run with Ctrl-Z, and resumes it with the caller (%s)", async (_, env) => {
+    const child = runAsJob(WITH_GRANDCHILD, env);
     const grandchild = await grandchildOf(child);
 
     process.kill(child.pid, "SIGTSTP");
@@ -947,13 +985,48 @@ describe.runIf(POSIX)("running a command bounded", () => {
     expect(await waitUntil(() => !["T", null].includes(stateOf(grandchild)), 5000)).toBe(true);
   });
 
-  it("passes Ctrl-C on to the run, whose group the terminal does not reach", async () => {
+  /*
+   * 🔴 The first Ctrl-Z version stopped the leader too: a stopped job that was
+   * then killed left the leader stopped, unable to notice, and the slot held
+   * for good. The leader never stops now, and a suspended run is woken to act
+   * on its SIGTERM, so it stops in order rather than being killed where it
+   * stands at the end of the grace period.
+   */
+  it.runIf(HAS_PERL)("stops a suspended run in order when its caller is then killed, and frees the slot", async () => {
+    const child = runAsJob(STOPS_IN_ORDER);
+    const command = await grandchildOf(child);
+    process.kill(child.pid, "SIGTSTP");
+    expect(await waitUntil(() => stateOf(command) === "T", 5000)).toBe(true);
+
+    process.kill(child.pid, "SIGKILL");
+
+    expect(await waitUntil(() => child.out.includes("stopping in order"), 4000)).toBe(true);
+    const slot = path.join(dir, "slot-0.json");
+    const { leader } = JSON.parse(readFileSync(slot, "utf8"));
+    expect(await waitUntil(() => isGone({ pid: leader, start: null }), 10_000)).toBe(true);
+    expect(tryAcquire(dir, 1, record(process.pid)).path).toBe(slot);
+  }, 25_000);
+
+  /*
+   * 🔴 Reacting to each signal let a resume that overtook the stop leave the
+   * run stopped under a running caller. The run follows what the caller IS:
+   * a stray stop signal to the leader changes nothing while the caller runs,
+   * and a caller stopped without any signal to the leader still stops the run.
+   */
+  it("follows the caller's state, not the order its signals arrive in", async () => {
     const child = runBounded(WITH_GRANDCHILD);
     const grandchild = await grandchildOf(child);
+    const { leader } = JSON.parse(readFileSync(path.join(dir, "slot-0.json"), "utf8"));
 
-    process.kill(child.pid, "SIGINT");
+    process.kill(leader, "SIGTSTP");
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    expect(stateOf(leader)).not.toBe("T");
+    expect(stateOf(grandchild)).not.toBe("T");
 
-    expect((await child.done).code).toBe(130);
-    expect(await waitUntil(() => isGone({ pid: grandchild, start: null }), 5000)).toBe(true);
-  });
+    process.kill(child.pid, "SIGSTOP");
+    expect(await waitUntil(() => stateOf(grandchild) === "T", 5000)).toBe(true);
+
+    process.kill(child.pid, "SIGCONT");
+    expect(await waitUntil(() => !["T", null].includes(stateOf(grandchild)), 5000)).toBe(true);
+  }, 20_000);
 });

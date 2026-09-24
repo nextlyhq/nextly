@@ -307,8 +307,7 @@ export function isGone(entry, view = processView()) {
 }
 
 /** The first watched process that has gone, read in one pass. */
-function firstGone(watch) {
-  const view = processView();
+function firstGone(watch, view = processView()) {
   return watch.find(entry => isGone(entry, view));
 }
 
@@ -572,8 +571,7 @@ export function descendantsIn(table, root) {
  * still found when the run is stopped. Linux needs no record: it asks by
  * session.
  */
-function remember(seen, leaderPid) {
-  const view = processView();
+function remember(seen, leaderPid, view = processView()) {
   if (!(view instanceof Map)) return;
   for (const pid of descendantsIn(view, leaderPid)) seen.set(pid, view.get(pid)?.start);
 }
@@ -646,11 +644,28 @@ function signalOthers(seen, signal) {
   }
 }
 
-/** Stops every other process of the run, then this one, as a terminal's Ctrl-Z would have. */
-function suspendRun(seen) {
-  remember(seen, process.pid);
-  signalOthers(seen, "SIGSTOP");
-  process.kill(process.pid, "SIGSTOP");
+/** A process stopped by a signal (T) or held by a tracer (t). */
+function isStopped(state) {
+  return state === "T" || state === "t";
+}
+
+/**
+ * Keeps the run stopped while its caller is stopped, and running while it
+ * runs, as read on each tick. A caller whose state cannot be read changes
+ * nothing.
+ *
+ * 🔴 The first version passed Ctrl-Z on as a signal, and stopped the leader
+ * too. A resume that overtook the stop left the run stopped under a running
+ * caller, and a stopped job that was then killed left the leader stopped,
+ * unable to notice, holding the slot for good. No signal is passed on now and
+ * the leader never stops: the run follows what the caller IS, whatever order
+ * signals arrive in.
+ */
+function followCaller(run, caller, view) {
+  const state = fieldOf(caller.pid, view, "state");
+  if (state === null || isStopped(state) === run.suspended) return;
+  run.suspended = isStopped(state);
+  signalOthers(run.seen, run.suspended ? "SIGSTOP" : "SIGCONT");
 }
 
 /**
@@ -670,6 +685,9 @@ function stopRun(argv, lost, seen) {
   );
   remember(seen, process.pid);
   signalOthers(seen, "SIGTERM");
+  // A suspended run is woken to act on it; the kill after the grace period
+  // needs no waking.
+  signalOthers(seen, "SIGCONT");
   setTimeout(() => finish(seen, ABANDONED), GRACE_MS);
 }
 
@@ -712,6 +730,11 @@ function writeLeaderUnder(guard, slot, callerPid) {
  * its group and receives them directly — the leader stays to report the
  * command's exit status, which is the only answer the caller gets. SIGUSR2 is
  * the caller's "stop now", after a Ctrl-C the run did not answer in time.
+ *
+ * It must never stop: a stopped leader notices nothing, not even its caller's
+ * end. SIGTSTP cannot stop it — in a session of its own its process group is
+ * orphaned, and the kernel discards job-control stops for such a group — and
+ * the run's SIGSTOP goes to every process but the leader.
  */
 async function lead(watch, slot, argv) {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {});
@@ -725,19 +748,17 @@ async function lead(watch, slot, argv) {
   abandonIfUnwatched(watch, describe(argv));
   const seen = new Map();
   process.on("SIGUSR2", () => finish(seen, ABANDONED));
-  // Ctrl-Z reaches the caller only; it passes the stop on to this process,
-  // which stops every process of the run and then itself. The caller's
-  // resume arrives as SIGCONT, which resumes this process and is passed on.
-  process.on("SIGTSTP", () => suspendRun(seen));
-  process.on("SIGCONT", () => signalOthers(seen, "SIGCONT"));
+  const run = { seen, suspended: false };
 
   const child = spawn(argv[0], argv.slice(1), { stdio: "inherit" });
   let stopping = false;
 
   const timer = setInterval(() => {
-    remember(seen, process.pid);
-    const lost = stopping ? undefined : firstGone(watch);
-    if (!lost) return;
+    const view = processView();
+    remember(seen, process.pid, view);
+    if (stopping) return;
+    const lost = firstGone(watch, view);
+    if (!lost) return followCaller(run, watch[0], view);
     stopping = true;
     stopRun(argv, lost, seen);
   }, POLL_MS);
@@ -784,16 +805,9 @@ function runInGroup(command, env, watch, slot) {
     detached: true,
   });
 
-  // 🔴 Ctrl-Z stops the caller's group only, and the run is in a session of
-  // its own: the wrapper stopped while turbo and Vitest ran on, and a run that
-  // finished meanwhile left its slot held by a stopped process. The stop and
-  // the resume are passed to the leader, and this process then stops itself,
-  // as the terminal meant.
-  process.on("SIGTSTP", () => {
-    sendSignal(leader.pid, "SIGTSTP");
-    process.kill(process.pid, "SIGSTOP");
-  });
-  process.on("SIGCONT", () => sendSignal(leader.pid, "SIGCONT"));
+  // Ctrl-Z is not passed on. It stops this process, as the terminal meant,
+  // and the leader, which reads this process's state on every tick, stops the
+  // run with it (followCaller); a resume works the same way.
 
   let escalation = null;
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
