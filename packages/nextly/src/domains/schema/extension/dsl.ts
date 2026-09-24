@@ -15,10 +15,11 @@
  * @since 1.0.0
  */
 import { NextlyError } from "../../../errors/nextly-error";
-import type { DeclaredCheck, DeclaredForeignKey } from "./types";
 import { toSnakeCase } from "../services/field-column-descriptor";
 
 import type {
+  DeclaredCheck,
+  DeclaredForeignKey,
   DefaultToken,
   ExtensionColumnKind,
   ExtensionIndex,
@@ -263,6 +264,25 @@ export const col = {
       number,
       NullableOf<O>,
       HasDefaultOf<O>
+    >;
+  },
+
+  /**
+   * A database-assigned, monotonically increasing integer.
+   *
+   * For an EXTENSION table only. A collection's id is a UUID that relations,
+   * the admin and the REST routes all assume; swapping it for a generated
+   * integer is a storage change with a decision of its own still open, which
+   * is why the DSL offers this where no such assumption exists.
+   *
+   * Never nullable and never written: the database assigns it, so a value the
+   * caller supplies is a value the sequence does not know about.
+   */
+  serial(): ColumnBuilder<number, false, true> {
+    return build<number>("serial", { nullable: false }) as ColumnBuilder<
+      number,
+      false,
+      true
     >;
   },
 
@@ -609,7 +629,9 @@ function resolveIndexes(
       unique: index.unique === true,
       ...(index.name !== undefined ? { name: index.name } : {}),
       ...(index.where !== undefined ? { where: index.where } : {}),
-      ...(index.expression !== undefined ? { expression: index.expression } : {}),
+      ...(index.expression !== undefined
+        ? { expression: index.expression }
+        : {}),
     };
   });
 }
@@ -715,11 +737,7 @@ export function defineTable<
   }
   const { resolved, byName } = resolveColumns(name, columns);
   const indexes = resolveIndexes(name, byName, opts?.indexes ?? []);
-  const foreignKeys = resolveForeignKeys(
-    name,
-    byName,
-    opts?.foreignKeys ?? []
-  );
+  const foreignKeys = resolveForeignKeys(name, byName, opts?.foreignKeys ?? []);
   const checks = resolveChecks(name, opts?.checks ?? []);
   const declaredRelations = resolveRelations(
     name,

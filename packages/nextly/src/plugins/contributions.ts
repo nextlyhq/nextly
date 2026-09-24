@@ -21,6 +21,7 @@ import type {
   ComponentPath,
 } from "./admin-contributions";
 import type { PluginAuthContributions } from "./auth-contributions";
+import type { EntityTransform } from "./entity-transforms";
 import type { PluginContext } from "./plugin-context";
 import type { PluginRoute } from "./routes/route-types";
 import type { PluginWidgetSource } from "./widgets/collect-widget-sources";
@@ -521,6 +522,25 @@ export interface PluginContributions {
     target: string | string[];
     fields: AuthorableFieldConfig[];
   }>;
+  /**
+   * @experimental Change entities this plugin does not own.
+   *
+   * The counterpart to `extend`, which can only ADD fields. A transform
+   * receives the whole entity definition and returns a new one, so a plugin
+   * can change an access rule, a hook list or a field's options on another
+   * plugin's collection — the thing a Payload plugin does by receiving the
+   * config and returning a new one.
+   *
+   * `setup(config)` cannot do this: it runs BEFORE plugin schema
+   * contributions are merged, so another plugin's collections are not in the
+   * config it is handed. Transforms run after the merge, which is the first
+   * moment those entities exist to be changed.
+   *
+   * Runs in topological plugin order with the app last, the same order schema
+   * hooks run in: a plugin transforming a dependency's collection sees it as
+   * the dependency left it.
+   */
+  transforms?: EntityTransform[];
   /** @public Custom permissions; CRUD is auto-seeded separately. */
   permissions?: PluginPermission[];
   /** @experimental Role bundles — named sets of permissions, seeded on boot. */

@@ -15,8 +15,9 @@
  * @module domains/schema/extension/types
  * @since 1.0.0
  */
-import type { CheckSpec, ForeignKeySpec } from "../pipeline/diff/types";
+import type { ForeignKeySpec } from "../pipeline/diff/types";
 import type { ColumnKind } from "../services/field-column-descriptor";
+
 import type { TableRelationInput } from "./dsl";
 
 /**

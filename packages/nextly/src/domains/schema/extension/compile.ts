@@ -20,21 +20,20 @@
  * @module domains/schema/extension/compile
  * @since 1.0.0
  */
+import { sql as drizzleSql } from "drizzle-orm";
 import { mysqlTable } from "drizzle-orm/mysql-core";
 import { pgTable } from "drizzle-orm/pg-core";
 import { check, foreignKey, sqliteTable } from "drizzle-orm/sqlite-core";
-import { sql as drizzleSql } from "drizzle-orm";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import { currentTimestampSql } from "../../../lib/system-columns";
 import { isManagedIndexName } from "../pipeline/diff/index-util";
 import type { ColumnSpec, IndexSpec, TableSpec } from "../pipeline/diff/types";
-import type { ColumnDescriptor } from "../services/field-column-descriptor";
-import { renderDialectType } from "../services/field-column-descriptor";
 import { indexNameForColumns } from "../services/index-name";
 import { buildUserDrizzleColumn } from "../services/runtime-schema-generator";
 
+import { toColumnDescriptor } from "./column-descriptor";
 import type { ExtensionColumn, ExtensionIndex, ExtensionTable } from "./types";
 
 function invalid(path: string, message: string): never {
@@ -43,27 +42,9 @@ function invalid(path: string, message: string): never {
   });
 }
 
-/** The descriptor an extension column becomes, so it renders like any other. */
-export function toColumnDescriptor(
-  column: ExtensionColumn,
-  dialect: SupportedDialect
-): ColumnDescriptor {
-  return {
-    name: column.name,
-    dialectType: renderDialectType(column.kind, dialect, {
-      ...(column.length !== undefined ? { length: column.length } : {}),
-      ...(column.precision !== undefined
-        ? { precision: column.precision }
-        : {}),
-      ...(column.scale !== undefined ? { scale: column.scale } : {}),
-    }),
-    nullable: column.nullable,
-    kind: column.kind,
-    ...(column.length !== undefined ? { length: column.length } : {}),
-    ...(column.precision !== undefined ? { precision: column.precision } : {}),
-    ...(column.scale !== undefined ? { scale: column.scale } : {}),
-  };
-}
+// Re-exported so every existing consumer keeps its import; it lives in its
+// own module to keep this file off the runtime generator's import path.
+export { toColumnDescriptor } from "./column-descriptor";
 
 /**
  * The DDL default for a column, or undefined.
@@ -105,21 +86,38 @@ export function resolveIndexName(table: string, index: ExtensionIndex): string {
 }
 
 /** The spec the diff engine compares against a live table. */
+/**
+ * One extension column as the diff engine compares it.
+ *
+ * Extracted from {@link toTableSpec} because a column contributed to a table
+ * this module does NOT own — an entity or an extendable core table — has to
+ * reach that table's desired spec by a different route, and rendering it a
+ * second time is how the two descriptions drift. A contributed column
+ * described even slightly differently from a declared one makes the diff
+ * propose add-and-drop pairs that never converge.
+ */
+export function toColumnSpec(
+  column: ExtensionColumn,
+  dialect: SupportedDialect
+): ColumnSpec {
+  const descriptor = toColumnDescriptor(column, dialect);
+  const rendered = defaultSql(column, dialect);
+  return {
+    name: descriptor.name,
+    type: descriptor.dialectType,
+    nullable: descriptor.nullable,
+    ...(rendered !== undefined ? { default: rendered } : {}),
+    ...(column.primaryKey === true ? { primaryKey: true as const } : {}),
+  };
+}
+
 export function toTableSpec(
   table: ExtensionTable,
   dialect: SupportedDialect
 ): TableSpec {
-  const columns: ColumnSpec[] = table.columns.map(column => {
-    const descriptor = toColumnDescriptor(column, dialect);
-    const rendered = defaultSql(column, dialect);
-    return {
-      name: descriptor.name,
-      type: descriptor.dialectType,
-      nullable: descriptor.nullable,
-      ...(rendered !== undefined ? { default: rendered } : {}),
-      ...(column.primaryKey === true ? { primaryKey: true as const } : {}),
-    };
-  });
+  const columns: ColumnSpec[] = table.columns.map(column =>
+    toColumnSpec(column, dialect)
+  );
 
   const indexes: IndexSpec[] = table.indexes.map(index => ({
     name: resolveIndexName(table.name, index),
@@ -193,15 +191,12 @@ export function toDrizzleTable(
     const referenced =
       resolveReferenceTable === undefined
         ? undefined
-        : (resolveReferenceTable(fk.referencesTable) as Record<
-            string,
-            unknown
-          > | undefined);
+        : (resolveReferenceTable(fk.referencesTable) as
+            | Record<string, unknown>
+            | undefined);
     if (referenced === undefined) continue;
     const localColumns = fk.columns.map(name => columns[name]);
-    const foreignColumns = fk.referencesColumns.map(
-      name => referenced[name]
-    );
+    const foreignColumns = fk.referencesColumns.map(name => referenced[name]);
     if (localColumns.includes(undefined) || foreignColumns.includes(undefined))
       continue;
     // Actions are builder-chained in drizzle rc.4 — the config-object form

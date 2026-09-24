@@ -228,7 +228,11 @@ describe("row 7 — expression indexes", () => {
       { id: col.id(), email: col.shortText() },
       {
         indexes: [
-          { columns: [], expression: "lower(email)", name: "idx_searched_lower" },
+          {
+            columns: [],
+            expression: "lower(email)",
+            name: "idx_searched_lower",
+          },
         ],
       }
     );
@@ -241,13 +245,22 @@ describe("row 7 — expression indexes", () => {
     );
     const spec = schema.specs.find(t => t.name === "fx__searched");
     expect(spec?.indexes).toEqual([
-      { name: "idx_searched_lower", columns: [], unique: false, expression: "lower(email)" },
+      {
+        name: "idx_searched_lower",
+        columns: [],
+        unique: false,
+        expression: "lower(email)",
+      },
     ]);
     // The same op migrate:create renders: the diff's add_index for this spec
     // produces executable SQL on every dialect that supports expressions.
     const { generateSQL } = await import("../../pipeline/sql-templates/index");
     const sqlText = generateSQL(
-      { type: "add_index", tableName: "fx__searched", index: spec!.indexes![0] },
+      {
+        type: "add_index",
+        tableName: "fx__searched",
+        index: spec!.indexes![0],
+      },
       "postgresql"
     );
     expect(sqlText).toBe(
@@ -279,7 +292,10 @@ describe("row 8 — foreign keys with onDelete/onUpdate", () => {
     const schema = await buildExtensionSchema(
       input({
         plugins: [
-          { owner: { kind: "plugin" as const, id: "fx" }, tables: [notes, linked] },
+          {
+            owner: { kind: "plugin" as const, id: "fx" },
+            tables: [notes, linked],
+          },
         ],
       })
     );
@@ -331,9 +347,7 @@ describe("row 9 — check constraints", () => {
     const { diffSnapshots } = await import("../../pipeline/diff/diff");
     const ops = diffSnapshots(
       {
-        tables: [
-          { ...spec!, checks: [] },
-        ],
+        tables: [{ ...spec!, checks: [] }],
       },
       { tables: [{ ...spec!, checks: [...spec!.checks!] }] }
     );
@@ -408,7 +422,34 @@ describe("row 11 — any Drizzle column type", () => {
     }
   });
 
-  it.todo("C2: serial, for extension tables only");
+  it("C2: serial, for extension tables only", () => {
+    // Renders on every dialect from the one renderer, so the desired spec and
+    // the runtime table cannot describe it differently.
+    const table = {
+      name: "fx__counters",
+      authored: "counters",
+      owner: { kind: "plugin" as const, id: "fx" },
+      columns: defineTable("counters", {
+        id: col.id(),
+        seq: col.serial(),
+      }).columns.map(c => ({ ...c })),
+      indexes: [],
+    };
+    for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
+      const spec = toTableSpec(table, dialect);
+      const seq = spec.columns.find(c => c.name === "seq");
+      // The introspected type, not the DDL word: PostgreSQL reports `serial`
+      // as int4, so saying "serial" here would diff as a type change forever.
+      expect(seq?.type).toBe(
+        dialect === "postgresql"
+          ? "int4"
+          : dialect === "mysql"
+            ? "int"
+            : "integer"
+      );
+      expect(seq?.nullable).toBe(false);
+    }
+  });
 });
 
 describe("row 12 — relations for typed relational queries", () => {
@@ -508,7 +549,10 @@ describe("row 16 — the app extending a plugin's tables", () => {
     // per element — the contributor's migration stream carries it, and the
     // table owner's reconcile excludes it (the C7 adoption property).
     const { col, defineTable } = await import("../dsl");
-    const notes = defineTable("r16notes", { id: col.id(), tag: col.shortText() });
+    const notes = defineTable("r16notes", {
+      id: col.id(),
+      tag: col.shortText(),
+    });
     const built = await buildExtensionSchema(
       input({
         app: {
@@ -585,9 +629,9 @@ describe("row 20 — virtual fields", () => {
     // no column in the desired table, therefore no DDL, no insert, no
     // select — the field is computed in afterRead. The spelling group and
     // repeater have always documented keeps working beside it.
-    const {
-      fieldProducesColumn,
-    } = await import("../../services/field-column-descriptor");
+    const { fieldProducesColumn } = await import(
+      "../../services/field-column-descriptor"
+    );
     expect(fieldProducesColumn({ type: "text", virtual: true })).toBe(false);
     expect(fieldProducesColumn({ type: "number", virtual: true })).toBe(false);
     expect(fieldProducesColumn({ type: "email", virtual: true })).toBe(false);
@@ -605,11 +649,47 @@ describe("row 21 — server-only custom config", () => {
 });
 
 describe("row 22 — collection id type", () => {
-  it.todo("C: a collection chooses its id generator without changing storage");
+  it("C: a collection chooses its id generator without changing storage", async () => {
+    const { generateEntryId } = await import(
+      "../../../collections/services/collection-id"
+    );
+
+    // Version 7 in the version nibble, and 36 characters either way — the
+    // point of the option is that storage is untouched, so every relation
+    // pointing at this collection is unaffected and no migration is needed.
+    expect(generateEntryId({ idType: "uuidv7" })).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
+    expect(generateEntryId({}).length).toBe(36);
+    expect(generateEntryId({ idType: "uuidv7" }).length).toBe(36);
+  });
 });
 
 describe("row 23 — client-supplied id on create", () => {
-  it.todo("C: a collection accepts a client-supplied id");
+  it("C: a collection accepts a client-supplied id", async () => {
+    const { resolveEntryId } = await import(
+      "../../../collections/services/collection-id"
+    );
+    const chosen = "018f1f77-bcf8-7c3e-9a1b-2c4d5e6f7a8b";
+
+    // Opted in: the caller's id is kept.
+    expect(
+      resolveEntryId(
+        { db: { allowIdOnCreate: true, idType: "uuidv7" } },
+        chosen
+      )
+    ).toBe(chosen);
+
+    // Not opted in: ignored rather than refused, exactly as every other
+    // client-supplied system column already is.
+    expect(resolveEntryId({}, chosen)).not.toBe(chosen);
+
+    // Opted in and malformed: refused, because the column is the primary key
+    // and every relation resolves through it.
+    expect(() =>
+      resolveEntryId({ db: { allowIdOnCreate: true } }, "not-a-uuid")
+    ).toThrow(NextlyError);
+  });
 });
 
 describe("row 24 — a Postgres schema other than public", () => {
@@ -654,7 +734,41 @@ describe("row 27 — types without codegen, refusing unrepresentable schema", ()
 });
 
 describe("row 28 — a plugin modifying another plugin's entities", () => {
-  it.todo("C: a plugin transforms another plugin's entities");
+  it("C: a plugin transforms another plugin's entities", async () => {
+    // The gap `contributes.extend` could not close: adding fields to another
+    // plugin's collection was always possible, CHANGING one was not, because
+    // `setup(config)` runs before plugin schema contributions are merged and
+    // never sees them.
+    const { runEntityTransforms } = await import(
+      "../../../../plugins/entity-transforms"
+    );
+
+    const out = runEntityTransforms(
+      [
+        {
+          slug: "posts",
+          kind: "collection",
+          definition: { slug: "posts", access: { read: "public" } },
+        },
+      ],
+      [
+        {
+          source: "plugin:fx",
+          transforms: [
+            {
+              target: "posts",
+              transform: entity => ({ ...entity, access: { read: "admin" } }),
+            },
+          ],
+        },
+      ]
+    );
+
+    expect(out[0]?.definition).toEqual({
+      slug: "posts",
+      access: { read: "admin" },
+    });
+  });
 });
 
 describe("row 29 — a plugin adding fields to another plugin's collections", () => {

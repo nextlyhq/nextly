@@ -105,7 +105,7 @@ import {
   hasPasswordField,
   hashPasswordFieldValues,
   stripPasswordFieldValues,
-  stripSystemOwnerField,
+  stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import {
   isWriteIntegrityFailure,
@@ -197,6 +197,7 @@ import type {
   CollectionHookService,
   QueryDatabaseParams,
 } from "./collection-hook-service";
+import { resolveEntryId } from "./collection-id";
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import {
   toCamelCase,
@@ -780,9 +781,28 @@ export class CollectionMutationService extends BaseService {
    * subtrees are not assembled here (the parent columns are the event payload on
    * these paths); the full relational assembly rides the version-capture work.
    */
+  /**
+   * Redact a row on its way into durable history.
+   *
+   * The same pair at four sites, which is four chances for one of them to
+   * learn about a new server-only column and the others not to. A password
+   * hash reaching version history stays recoverable after the password
+   * changes, and the owner column would let a restore overwrite ownership.
+   */
+  private redactSnapshotRow(
+    row: Record<string, unknown>,
+    fields: FieldDefinition[],
+    collectionName: string
+  ): void {
+    stripPasswordFieldValues(row, fields);
+    stripServerOnlyColumns(row, getTableName(collectionName));
+  }
+
   private readShapeEventDocument(
     row: Record<string, unknown>,
-    fields: readonly unknown[]
+    fields: readonly unknown[],
+    /** The SQL table the row came from, for its contributed columns. */
+    tableName: string
   ): Record<string, unknown> {
     const doc = convertTimestampsToCamelCase(
       this.deserializeJsonFieldsForSnapshot(
@@ -794,7 +814,7 @@ export class CollectionMutationService extends BaseService {
       doc,
       fields as Parameters<typeof stripPasswordFieldValues>[1]
     );
-    stripSystemOwnerField(doc);
+    stripServerOnlyColumns(doc, tableName);
     return doc;
   }
 
@@ -1033,7 +1053,11 @@ export class CollectionMutationService extends BaseService {
         collectionName: args.collectionName,
         tableName: args.tableName,
         entryId,
-        parentRow: this.readShapeEventDocument(args.entry, args.fields),
+        parentRow: this.readShapeEventDocument(
+          args.entry,
+          args.fields,
+          args.tableName
+        ),
         fields: args.fields,
         manyToManyFields: args.manyToManyFields,
         needsRelations,
@@ -1189,8 +1213,7 @@ export class CollectionMutationService extends BaseService {
     }
 
     const parentRow = this.deserializeJsonFieldsForSnapshot(merged, fields);
-    stripPasswordFieldValues(parentRow, fields);
-    stripSystemOwnerField(parentRow);
+    this.redactSnapshotRow(parentRow, fields, collectionName);
 
     const { components, manyToMany } = await this.buildFullSnapshotRelations(
       tx,
@@ -2669,7 +2692,7 @@ export class CollectionMutationService extends BaseService {
     // Strip the system owner column so a mutation response (e.g. an admin or
     // role-based updater) does not echo the row creator's user id. Owner-only
     // access reads it from SQL, never from the returned row.
-    stripSystemOwnerField(entry);
+    stripServerOnlyColumns(entry, getTableName(slug));
     await applyFieldReadAccess({
       kind: "collection",
       slug,
@@ -3430,7 +3453,11 @@ export class CollectionMutationService extends BaseService {
 
       const now = new Date();
       const rawEntryData = {
-        id: this.collectionService.generateId(),
+        // The collection's own id decision: which generator, and whether a
+        // client-supplied id is accepted at all. Read BEFORE the strip below,
+        // which removes `id` along with every other client-supplied system
+        // column — that strip is what made `allowIdOnCreate` unexpressible.
+        id: resolveEntryId(collection, finalData.id),
         // Strip client-supplied system columns (id / timestamps / created_by,
         // both snake and camel) so the generated id, stamped owner, and
         // timestamps below are authoritative — a stray `createdBy` alias can't
@@ -3622,8 +3649,7 @@ export class CollectionMutationService extends BaseService {
             fields
           )
         );
-        stripPasswordFieldValues(snapshotParent, fields);
-        stripSystemOwnerField(snapshotParent);
+        this.redactSnapshotRow(snapshotParent, fields, params.collectionName);
         // Components + m2m are read from the transaction: the write above just
         // persisted them, and an empty relationship reads as [] — so the
         // document is complete and read-shaped with no in-memory overlay. These
@@ -4529,8 +4555,7 @@ export class CollectionMutationService extends BaseService {
                   fields
                 )
               );
-              stripPasswordFieldValues(parentRow, fields);
-              stripSystemOwnerField(parentRow);
+              this.redactSnapshotRow(parentRow, fields, params.collectionName);
               const {
                 components: snapshotComponents,
                 manyToMany: snapshotM2M,
@@ -4584,7 +4609,8 @@ export class CollectionMutationService extends BaseService {
               ...(publishedParentRow ?? preImageRow),
               status: direction.nextStatus,
             },
-            fields
+            fields,
+            getTableName(params.collectionName)
           );
           // Overlay the committed publish instant AFTER camelCasing: the source
           // rows carry the pre-publish `updatedAt` (the pooled/pre-read excludes
@@ -4599,7 +4625,8 @@ export class CollectionMutationService extends BaseService {
           // prior status).
           const previousDocument = this.readShapeEventDocument(
             preImageRow as Record<string, unknown>,
-            fields
+            fields,
+            getTableName(params.collectionName)
           );
           const publishEventFields = await this.webhookFieldTreeIfRecording(
             params.collectionName,
@@ -6546,8 +6573,11 @@ export class CollectionMutationService extends BaseService {
               },
               fields
             );
-            stripPasswordFieldValues(previousParent, fields);
-            stripSystemOwnerField(previousParent);
+            this.redactSnapshotRow(
+              previousParent,
+              fields,
+              params.collectionName
+            );
             const { components: previousComponents, manyToMany: previousM2M } =
               await this.buildFullSnapshotRelations(
                 tx,
@@ -7282,7 +7312,10 @@ export class CollectionMutationService extends BaseService {
               );
               stripPasswordFieldValues(parentRow, fields);
               // Strip the system owner column (created_by) — see create path.
-              stripSystemOwnerField(parentRow);
+              stripServerOnlyColumns(
+                parentRow,
+                getTableName(params.collectionName)
+              );
               const {
                 components: snapshotComponents,
                 manyToMany: snapshotM2M,
@@ -8708,7 +8741,11 @@ export class CollectionMutationService extends BaseService {
       // Prepare entry data
       const nowForTxCreate = new Date();
       const entryData = {
-        id: this.collectionService.generateId(),
+        // The collection's own id decision: which generator, and whether a
+        // client-supplied id is accepted at all. Read BEFORE the strip below,
+        // which removes `id` along with every other client-supplied system
+        // column — that strip is what made `allowIdOnCreate` unexpressible.
+        id: resolveEntryId(collection, finalData.id),
         // Strip client-supplied system columns (id / timestamps / created_by,
         // both snake and camel) so the generated id, stamped owner, and
         // timestamps below are authoritative — a stray `createdBy` alias can't
@@ -9617,7 +9654,11 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           tableName,
           entryId,
-          parentRow: this.readShapeEventDocument(previousEntry, fields),
+          parentRow: this.readShapeEventDocument(
+            previousEntry,
+            fields,
+            tableName
+          ),
           fields,
           manyToManyFields,
           // A held edit needs the live relations regardless of what is being
@@ -9648,7 +9689,8 @@ export class CollectionMutationService extends BaseService {
                 ...existingEntry,
                 ...stripImmutableSystemFields(finalData, "collection"),
               },
-              fields
+              fields,
+              tableName
             ),
             snapshotComponents: previousParts.components,
             snapshotM2M: previousParts.manyToMany,
@@ -9713,7 +9755,8 @@ export class CollectionMutationService extends BaseService {
           entryId,
           parentRow: this.readShapeEventDocument(
             updated as Record<string, unknown>,
-            fields
+            fields,
+            tableName
           ),
           fields,
           manyToManyFields,

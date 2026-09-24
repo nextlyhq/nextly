@@ -15,6 +15,7 @@
  */
 
 import { hashPassword } from "../../auth/password";
+import { hiddenColumnNames } from "../../domains/schema/extension/active-schema";
 import { systemColumnNames } from "../../lib/system-columns";
 
 import { toCamelCase, toSnakeCase } from "./case-conversion";
@@ -210,16 +211,36 @@ const RESPONSE_STRIPPED_KEYS: readonly string[] = systemColumnNames(
 );
 
 /**
- * Remove the system owner column (`created_by`) from a response row, in place.
+ * Remove every column that must not leave the server from a response row, in
+ * place: the system owner column, and any column a schema hook contributed to
+ * this table.
  *
  * The owner column holds the creator's stable user id. Owner-only access
  * filters on it in SQL, so its value never needs to leave the server; returning
  * it would leak a stable user id to any caller who can read a collection whose
  * rows were created by other users. Callers strip it on the read/mutation
  * response boundary, the same place password values are cleared.
+ *
+ * Contributed columns are stripped at the same boundary because they arrive
+ * the same way: a column `extendTable` added to an entity is a real column on
+ * a real table, so `db.select()` returns it in every row. It is on the table
+ * deliberately — absent, the next push would propose dropping it — and it is
+ * no field of the entity, so it belongs in no response, no version snapshot
+ * and no webhook payload.
+ *
+ * Takes the TABLE, which is why this is not a list of its own: a contributed
+ * name is not namespaced, and a global set would strip a legitimate field
+ * from a different entity that happened to share the name.
  */
-export function stripSystemOwnerField(entry: Record<string, unknown>): void {
+export function stripServerOnlyColumns(
+  entry: Record<string, unknown>,
+  /** The SQL table this row was read from. */
+  tableName: string
+): void {
   for (const key of RESPONSE_STRIPPED_KEYS) {
+    if (key in entry) delete entry[key];
+  }
+  for (const key of hiddenColumnNames(tableName)) {
     if (key in entry) delete entry[key];
   }
 }

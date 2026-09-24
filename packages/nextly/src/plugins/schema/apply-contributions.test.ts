@@ -706,3 +706,89 @@ describe("finalizeDeferredExtendTargets — runtime existence check", () => {
     ).not.toThrow();
   });
 });
+
+/**
+ * The wiring, not the module.
+ *
+ * `entity-transforms.ts` was written once with no `transforms` key to supply
+ * it and no caller to run it, and was deleted for exactly that reason. A test
+ * that calls `runEntityTransforms` directly would have passed the whole time
+ * it was dead code, so these go through the fold — the one point every
+ * runtime and CLI path reaches.
+ */
+describe("applyPluginSchemaContributions (transforms — C11)", () => {
+  it("runs a plugin's transform over ANOTHER plugin's collection", () => {
+    // The gap `extend` cannot close: adding fields to someone else's
+    // collection was always possible, changing one was not, because
+    // `setup(config)` runs before the merge and never sees it.
+    const config = cfg({ collections: [] });
+    const plugins = [
+      plugin("plugin-a", { collections: [coll("a-forms")] }),
+      plugin("plugin-b", {
+        transforms: [
+          {
+            target: "a-forms",
+            transform: entity => ({ ...entity, internal: true }),
+          },
+        ],
+      }),
+    ];
+
+    const result = applyPluginSchemaContributions(config, plugins);
+
+    expect(result.collections?.[0]).toMatchObject({
+      slug: "a-forms",
+      internal: true,
+    });
+  });
+
+  it("refuses a transform naming an entity nothing declares", () => {
+    // Doing nothing silently means the plugin appears installed and simply
+    // has no effect, which is the hardest kind of "working" to diagnose.
+    const plugins = [
+      plugin("plugin-b", {
+        transforms: [{ target: "nope", transform: e => e }],
+      }),
+    ];
+
+    expect(() =>
+      applyPluginSchemaContributions(cfg({ collections: [] }), plugins)
+    ).toThrow(NextlyError);
+  });
+
+  it("hands each transform a FROZEN definition", () => {
+    // Mutating instead of returning would make the result depend on whether a
+    // later transform read a field before or after an earlier one wrote it —
+    // an ordering invisible in the config, so the bug would present as a
+    // plugin that works until another is installed.
+    let frozen: boolean | undefined;
+    const plugins = [
+      plugin("plugin-a", { collections: [coll("a-forms")] }),
+      plugin("plugin-b", {
+        transforms: [
+          {
+            target: "a-forms",
+            transform: entity => {
+              frozen = Object.isFrozen(entity);
+              return { ...entity };
+            },
+          },
+        ],
+      }),
+    ];
+
+    applyPluginSchemaContributions(cfg({ collections: [] }), plugins);
+
+    expect(frozen).toBe(true);
+  });
+
+  it("leaves the arrays untouched when no plugin declares one", () => {
+    // The control: the fold runs on every path, so a transform step that
+    // rebuilt the entity arrays unconditionally would churn them for every
+    // config that has no transforms at all.
+    const collections = [coll("a-forms")];
+    const result = applyPluginSchemaContributions(cfg({ collections }), []);
+
+    expect(result.collections?.[0]).toBe(collections[0]);
+  });
+});

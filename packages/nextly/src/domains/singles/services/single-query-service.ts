@@ -1934,7 +1934,7 @@ export class SingleQueryService extends BaseService {
             parentRow[name] = value;
           }
         }
-        applyReadShape(parentRow, singleMeta.fields);
+        applyReadShape(parentRow, singleMeta.fields, singleMeta.tableName);
         await captureInTx(tx, this.versionCapture, {
           ref: {
             scopeKind: "single",

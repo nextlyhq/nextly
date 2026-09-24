@@ -45,6 +45,7 @@ import {
   char as pgChar,
   uuid as pgUuid,
   real as pgReal,
+  serial as pgSerial,
 } from "drizzle-orm/pg-core";
 import {
   sqliteTable,
@@ -58,6 +59,9 @@ import {
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type { LocalizedColumnSpec } from "../../i18n/migration/types";
+import { getActiveExtensionSchema } from "../extension/active-schema";
+import { toColumnDescriptor } from "../extension/column-descriptor";
+import type { ExtensionColumn } from "../extension/types";
 
 import {
   type ColumnDescriptor,
@@ -118,6 +122,20 @@ export interface RuntimeSchemaOptions {
    * owner column. Set internally by generateRuntimeSchema from the table name.
    */
   isSingle?: boolean;
+  /**
+   * Columns a schema hook contributed to THIS table.
+   *
+   * Defaulted from the active extension schema rather than required, because
+   * this generator is called from roughly twenty-five places and a
+   * contributed column missing from any one of them is worse than missing
+   * everywhere: the table would then be built without a column the desired
+   * spec has, and the next push would propose it as an add on a column that is
+   * already there.
+   *
+   * An explicit value still wins, so a test can build a table without
+   * reaching process state.
+   */
+  extensionColumns?: readonly ExtensionColumn[];
 }
 
 /**
@@ -140,6 +158,10 @@ export function generateRuntimeSchema(
   const resolvedOptions: RuntimeSchemaOptions = {
     ...options,
     isSingle: options.isSingle ?? tableName.startsWith("single_"),
+    extensionColumns:
+      options.extensionColumns ??
+      getActiveExtensionSchema(dialect)?.entityColumns.get(tableName) ??
+      [],
   };
   let table: unknown;
   switch (dialect) {
@@ -352,6 +374,23 @@ function buildDrizzleColumnRecord(
     out[field.name] = buildUserDrizzleColumn(desc, dialect);
   }
 
+  // Contributed columns, keyed by their SQL name exactly as `toDrizzleTable`
+  // keys an extension table's own — so one column has one key wherever it is
+  // read from, and `ctx.db` sees the same handle on both.
+  //
+  // They must be HERE and not only in the desired spec: absent from the
+  // runtime table, drizzle-kit is handed a table without them and the next
+  // push proposes DROPPING the column it just created. Present but unhidden,
+  // they reach every entry response — which is why `hidden` exists and why
+  // the response boundary strips them.
+  for (const column of options.extensionColumns ?? []) {
+    if (column.name in out) continue;
+    out[column.name] = buildUserDrizzleColumn(
+      toColumnDescriptor(column, dialect),
+      dialect
+    );
+  }
+
   return out;
 }
 
@@ -540,6 +579,11 @@ export function buildPgColumnFromKind(
     }
     case "smallint":
       return withNullability(pgSmallint(name), nullable);
+    case "serial":
+      // The database assigns it, so it is never nullable and never written:
+      // `withNullability` is deliberately not applied, because a generated
+      // key declared nullable would let an insert send an explicit NULL.
+      return pgSerial(name);
     case "char": {
       const col = pgChar(name, { length: desc.length ?? 1 });
       return withNullability(col, nullable);
@@ -602,6 +646,10 @@ export function buildMysqlColumnFromKind(
     }
     case "smallint":
       return withNullability(mysqlSmallint(name), nullable);
+    case "serial":
+      // `.autoincrement()` is what makes it AUTO_INCREMENT; MySQL requires
+      // such a column to be a key, which the DDL declares.
+      return mysqlInt(name).autoincrement().notNull();
     case "char": {
       const col = mysqlChar(name, { length: length ?? 1 });
       return withNullability(col, nullable);
@@ -661,12 +709,39 @@ export function buildSqliteColumnFromKind(
       return withNullability(sqliteText(name), nullable);
     case "fkSingle":
       return sqliteText(name);
+    case "skip":
+      return null;
+    default:
+      return buildSqliteExtensionColumn(kind, name, nullable);
+  }
+}
+
+/**
+ * The kinds only an extension table can declare.
+ *
+ * Split from the field kinds above because they are a different list with a
+ * different author: a field kind comes from a collection's config, these come
+ * from the schema DSL. Kept apart so neither switch grows past the point
+ * where a missing case is easy to see — and a missing case here returns
+ * `undefined`, which Drizzle accepts as a non-column.
+ */
+function buildSqliteExtensionColumn(
+  kind: Exclude<ColumnKind, "skip">,
+  name: string,
+  nullable: boolean
+): unknown {
+  switch (kind) {
     // SQLite has one integer type and one text type, so most of these
     // collapse — the declaration stays portable because what it promises is
     // the value's shape, not the storage word.
     case "bigint":
     case "smallint":
       return withNullability(sqliteInteger(name), nullable);
+    case "serial":
+      // SQLite has no serial type: a plain INTEGER that is the table's
+      // primary key IS the rowid alias and auto-assigns, which is the closest
+      // faithful rendering and the one `renderDialectType` describes.
+      return sqliteInteger(name).notNull();
     case "char":
     case "uuid":
     case "enum":
@@ -675,8 +750,8 @@ export function buildSqliteColumnFromKind(
       return withNullability(sqliteReal(name), nullable);
     case "bytes":
       return withNullability(sqliteBlob(name), nullable);
-    case "skip":
-      return null;
+    default:
+      return undefined;
   }
 }
 

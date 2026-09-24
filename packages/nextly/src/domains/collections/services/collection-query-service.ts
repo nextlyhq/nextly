@@ -104,7 +104,7 @@ import {
   hasPasswordField,
   isPasswordFieldName,
   stripPasswordFieldValues,
-  stripSystemOwnerField,
+  stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import {
   buildPaginatedResponse,
@@ -1961,12 +1961,14 @@ export class CollectionQueryService extends BaseService {
    */
   private redactServerOnlyFields(
     rows: Record<string, unknown>[],
-    fields: FieldDefinition[]
+    fields: FieldDefinition[],
+    /** The SQL table the rows came from, for its contributed columns. */
+    tableName: string
   ): void {
     const clearsPasswords = hasPasswordField(fields);
     for (const row of rows) {
       if (clearsPasswords) stripPasswordFieldValues(row, fields);
-      stripSystemOwnerField(row);
+      stripServerOnlyColumns(row, tableName);
     }
   }
 
@@ -2052,7 +2054,7 @@ export class CollectionQueryService extends BaseService {
     // hook receiving the hash cannot copy it into an allowed property the later
     // redaction does not look at. The final strip below stays as defense in
     // depth.
-    this.redactServerOnlyFields(rows, fields);
+    this.redactServerOnlyFields(rows, fields, getTableName(collectionName));
 
     // (2) On SQLite these columns come back as strings, and a hook is
     // documented against the configured value.
@@ -2161,7 +2163,11 @@ export class CollectionQueryService extends BaseService {
     // path already did both here while the list path did only the password —
     // the stricter of the two is kept, so a field-level hook below cannot
     // observe an owner id on either path.
-    this.redactServerOnlyFields(finalData, fields);
+    this.redactServerOnlyFields(
+      finalData,
+      fields,
+      getTableName(collectionName)
+    );
 
     // A stored hook may likewise have reintroduced a denied related field;
     // sanitize before the field-level hooks read the assembled document.
@@ -2229,7 +2235,8 @@ export class CollectionQueryService extends BaseService {
     // Final owner-column strip at the response boundary — after every afterRead
     // hook, field-level read access and transform — so nothing downstream can
     // re-expose the creator's user id.
-    for (const row of finalData) stripSystemOwnerField(row);
+    for (const row of finalData)
+      stripServerOnlyColumns(row, getTableName(collectionName));
 
     return finalData;
   }

@@ -17,10 +17,8 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
-import type { DeclaredCheck, DeclaredForeignKey } from "./types";
-import type { TableRelationInput } from "./dsl";
 
-import type { ColumnBuilder, TableDefinition } from "./dsl";
+import type { TableRelationInput, ColumnBuilder, TableDefinition } from "./dsl";
 import { defineTable } from "./dsl";
 import {
   assertAddableToExistingRows,
@@ -33,7 +31,13 @@ import {
   pluginTableName,
   PREFIX_SEPARATOR,
 } from "./naming";
-import type { ExtensionColumn, ExtensionIndex, SchemaOwner } from "./types";
+import type {
+  DeclaredCheck,
+  DeclaredForeignKey,
+  ExtensionColumn,
+  ExtensionIndex,
+  SchemaOwner,
+} from "./types";
 
 /** Who owns a table in the draft, including the two kinds nothing may change. */
 export type DraftOwner =
@@ -301,6 +305,31 @@ interface ExtendScope {
 }
 
 /**
+ * The extra rules a column added to someone ELSE's table must satisfy.
+ *
+ * Split out of `addColumns` because they answer a different question from the
+ * ones there: that loop decides what a column IS, and these decide whether a
+ * table this caller does not own can receive it.
+ */
+function assertForeignColumnAllowed(
+  column: ExtensionColumn,
+  tableName: string,
+  scope: ExtendScope
+): void {
+  assertAddableToExistingRows(column, tableName);
+  // A generated key belongs to the table that declares it. Added to a table
+  // someone else owns, it is a second auto-assigning column on a row whose
+  // identity is already decided — and on MySQL a second AUTO_INCREMENT column
+  // is not even legal.
+  if (column.kind === "serial") {
+    refuse(
+      `${scope.ownerPath}.extendTable.${tableName}`,
+      `Column "${column.name}" is serial, which may only be declared on a table its own owner creates.`
+    );
+  }
+}
+
+/**
  * Add columns, which only an owner may do to its own table.
  *
  * An entity table is refused even to the app, because entity reads select the
@@ -349,14 +378,12 @@ function addColumns(
     // caller is declaring right now is empty by construction, so requiring a
     // default there would be a rule with no failure to prevent.
     if (onSomeoneElsesTable) {
-      assertAddableToExistingRows(column, table.name);
+      assertForeignColumnAllowed(column, table.name, scope);
     }
     table.columns.push({
       ...column,
       hidden: onSomeoneElsesTable,
-      ...(contributedForeign
-        ? { contributedBy: scope.owner as SchemaOwner }
-        : {}),
+      ...(contributedForeign ? { contributedBy: scope.owner } : {}),
     });
   }
 }
@@ -389,8 +416,7 @@ function addIndexes(
     scope.owner.kind === "plugin" &&
     table.owner.kind === "plugin" &&
     (scope.mayIndexForeignTablesOf?.has(table.owner.id) ?? false);
-  const contributedForeign =
-    appOnPluginTable || pluginOnDependencyTable;
+  const contributedForeign = appOnPluginTable || pluginOnDependencyTable;
   for (const index of indexes) {
     if (!scope.isOwn && !scope.isEntity && !contributedForeign) {
       refuse(
@@ -404,9 +430,7 @@ function addIndexes(
       ...(index.name !== undefined ? { name: index.name } : {}),
       // Who CONTRIBUTED the element — distinct from who owns the table, and
       // what the per-element owner rows are written from.
-      ...(contributedForeign
-        ? { contributedBy: scope.owner as SchemaOwner }
-        : {}),
+      ...(contributedForeign ? { contributedBy: scope.owner } : {}),
     };
     // A table this layer SEEDS rather than declares carries no authoritative
     // column set: `publish.ts` seeds an entity with none at all, because the
@@ -490,7 +514,9 @@ export function createOwnerDraft(
         owner,
         columns,
         indexes,
-        ...(def.foreignKeys.length > 0 ? { foreignKeys: [...def.foreignKeys] } : {}),
+        ...(def.foreignKeys.length > 0
+          ? { foreignKeys: [...def.foreignKeys] }
+          : {}),
         ...(def.checks.length > 0 ? { checks: [...def.checks] } : {}),
         ...(def.relations.length > 0 ? { relations: [...def.relations] } : {}),
       });

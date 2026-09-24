@@ -21,12 +21,21 @@ function isLocalizableKind(
   kind: ColumnKind
 ): kind is Exclude<
   ColumnKind,
-  "skip" | "bigint" | "smallint" | "char" | "uuid" | "real" | "bytes" | "enum"
+  | "skip"
+  | "bigint"
+  | "smallint"
+  | "serial"
+  | "char"
+  | "uuid"
+  | "real"
+  | "bytes"
+  | "enum"
 > {
   return ![
     "skip",
     "bigint",
     "smallint",
+    "serial",
     "char",
     "uuid",
     "real",

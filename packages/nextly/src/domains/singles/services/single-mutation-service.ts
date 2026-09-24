@@ -69,7 +69,7 @@ import {
 import {
   hashPasswordFieldValues,
   stripPasswordFieldValues,
-  stripSystemOwnerField,
+  stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
@@ -2187,7 +2187,7 @@ export class SingleMutationService extends BaseService {
               // Redact and normalise before the snapshot is durable: a password
               // hash written into version history stays recoverable after the
               // password changes, and an unparsed JSON field restores wrongly.
-              applyReadShape(parentRow, fieldConfigs);
+              applyReadShape(parentRow, fieldConfigs, singleMeta.tableName);
               // Read the component subtrees from the TRANSACTION (read-your-
               // writes, #226): the component save above just persisted them, so
               // the read returns the complete, read-shaped, password-stripped
@@ -2270,7 +2270,7 @@ export class SingleMutationService extends BaseService {
                   prevParentRow.status = previousLocaleStatus;
                 }
                 stripPasswordFieldValues(prevParentRow, fieldConfigs);
-                stripSystemOwnerField(prevParentRow);
+                stripServerOnlyColumns(prevParentRow, singleMeta.tableName);
                 for (const field of fieldConfigs) {
                   if (!("name" in field) || !field.name) continue;
                   const v = prevParentRow[field.name];

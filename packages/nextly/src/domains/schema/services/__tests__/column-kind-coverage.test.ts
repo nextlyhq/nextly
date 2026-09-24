@@ -40,6 +40,7 @@ const ALL_KINDS = [
   "skip",
   "bigint",
   "smallint",
+  "serial",
   "char",
   "uuid",
   "real",

@@ -114,6 +114,20 @@ export interface BuildDesiredTableOptions {
    * no indexes, so a Builder collection cannot declare one in v1.
    */
   indexes?: readonly DeclaredIndex[];
+  /**
+   * Columns a schema hook contributed to this entity, already compiled.
+   *
+   * Kept apart from `fields` for the same reason `columnIndexes` is kept apart
+   * from `indexes`: a field is resolved through the column descriptor, and a
+   * contributed column has already been through it — passing these as fields
+   * would ask the descriptor to resolve a name that is no field of the entity.
+   *
+   * Arriving as `ColumnSpec` rather than as the extension model keeps the
+   * rendering in the one place that owns it: this module never learns what an
+   * extension column is, and the contributed column cannot be described here
+   * differently from how the extension compiler describes its own.
+   */
+  extensionColumns?: readonly ColumnSpec[];
 }
 
 /**
@@ -447,6 +461,26 @@ function declaredIndexColumn<F extends MinimalFieldDef>(
   return column;
 }
 
+/**
+ * Append the columns a schema hook contributed to this table.
+ *
+ * One function for collections, singles and components because it is one
+ * rule: a contributed column is added, and a name the table already has wins.
+ * Written twice, the two copies were a clone group and the second copy was
+ * free to drift into overriding a system column.
+ */
+function appendExtensionColumns(
+  columns: ColumnSpec[],
+  contributed: readonly ColumnSpec[] | undefined
+): void {
+  for (const column of contributed ?? []) {
+    // A duplicate name would be a silent override rather than the refusal the
+    // draft already issues on a table it can see.
+    if (columns.some(existing => existing.name === column.name)) continue;
+    columns.push(column);
+  }
+}
+
 export function buildDesiredTableFromFields(
   tableName: string,
   fields: MinimalFieldDef[],
@@ -528,7 +562,13 @@ export function buildDesiredTableFromFields(
     });
   }
 
+  // LAST, so a hook cannot displace a system column or a field.
+  appendExtensionColumns(columns, options.extensionColumns);
+
   const indexes = collectionIndexSpecs(tableName, fields, {
+    // Built AFTER the contributed columns are in, so an index a hook
+    // contributed over a column the same hook contributed resolves. Built
+    // before, the index was refused as naming a column the table lacks.
     tableColumnNames: new Set(columns.map(c => c.name)),
     ...(options.columnIndexes !== undefined
       ? { columnIndexes: options.columnIndexes }
@@ -594,6 +634,8 @@ export function buildDesiredTableFromComponentFields(
      * table about to be created and for every database that has not migrated.
      */
     typeColumn?: string;
+    /** Contributed columns, as on a collection or single. */
+    extensionColumns?: readonly ColumnSpec[];
   }
 ): TableSpec {
   const typeColumn = options.typeColumn ?? STORAGE_FORMAT.columns.type;
@@ -790,6 +832,8 @@ export function buildDesiredTableFromComponentFields(
       default: undefined,
     });
   }
+
+  appendExtensionColumns(columns, options.extensionColumns);
 
   // Component tables have no slug. They get a composite index on the parent-link
   // columns plus the system created_at index — mirroring field-group-schema-service.ts

@@ -40,6 +40,7 @@ import {
   resolveRegistryNameFromCatalog,
 } from "../../field-groups/storage/resolve-storage-names";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
+import { toColumnSpec } from "../extension/compile";
 import {
   dropsPluginMigratedTable,
   pluginMigratedTableSet,
@@ -739,6 +740,13 @@ export class PushSchemaPipeline {
                   unique: index.unique,
                   ...(index.name !== undefined ? { name: index.name } : {}),
                 })),
+                // Columns a hook contributed to this entity. Without them the
+                // desired spec described a table the contribution is not in,
+                // so the column was never created — and `extendTable` on an
+                // entity did nothing at all, silently.
+                extensionColumns: (
+                  extensions?.entityColumns.get(c.tableName) ?? []
+                ).map(column => toColumnSpec(column, dialect)),
               }
             )
           ),
@@ -753,6 +761,9 @@ export class PushSchemaPipeline {
                 builtBy: builtByFor("single", s.builderOwned),
                 hasStatus: s.status === true,
                 localized: (s as { localized?: boolean }).localized === true,
+                extensionColumns: (
+                  extensions?.entityColumns.get(s.tableName) ?? []
+                ).map(column => toColumnSpec(column, dialect)),
               }
             )
           ),
@@ -767,6 +778,9 @@ export class PushSchemaPipeline {
                 builtBy: builtByFor("fieldGroup", c.builderOwned),
                 localized: (c as { localized?: boolean }).localized === true,
                 typeColumn: fieldGroupTypeColumns.get(c.tableName),
+                extensionColumns: (
+                  extensions?.entityColumns.get(c.tableName) ?? []
+                ).map(column => toColumnSpec(column, dialect)),
               }
             )
           ),

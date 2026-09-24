@@ -116,6 +116,7 @@ export type ColumnKind =
   // already exists.
   | "bigint" // PG/MySQL: bigint; SQLite: integer
   | "smallint" // PG/MySQL: smallint; SQLite: integer
+  | "serial" // PG: serial; MySQL: int AUTO_INCREMENT; SQLite: integer
   | "char" // fixed width (uses `length`); SQLite: text
   | "uuid" // PG: uuid; MySQL: char(36); SQLite: text
   | "real" // PG/SQLite: real; MySQL: float
@@ -655,6 +656,15 @@ export function renderDialectType(
   if (kind === "smallint") {
     if (dialect === "postgresql") return "int2";
     if (dialect === "mysql") return "smallint";
+    return "integer"; // sqlite
+  }
+  if (kind === "serial") {
+    // What each dialect INTROSPECTS a generated integer key as, not what the
+    // DDL word was: PostgreSQL's `serial` is `int4` with a sequence default,
+    // and saying "serial" on the desired side would report a type change on
+    // every diff of a column nobody touched.
+    if (dialect === "postgresql") return "int4";
+    if (dialect === "mysql") return "int";
     return "integer"; // sqlite
   }
   if (kind === "char") {

@@ -51,7 +51,7 @@ import {
 import {
   hasPasswordField,
   stripPasswordFieldValues,
-  stripSystemOwnerField,
+  stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import type { RBACAccessControlService } from "../../auth/services/rbac-access-control-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
@@ -66,7 +66,7 @@ import {
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
-import { decodeJsonFieldValues } from "./collection-utils";
+import { decodeJsonFieldValues, getTableName } from "./collection-utils";
 
 /**
  * System-entity columns that hold secrets and must never ride along a
@@ -3043,6 +3043,33 @@ export class CollectionRelationshipService extends BaseService {
    * either one: it runs against the SOURCE collection's field registry, which
    * never describes a related collection's fields.
    */
+  /**
+   * Redact one row the relationship walk has just populated.
+   *
+   * Both walks do the same three things and did them in two copies; a
+   * redaction written twice is a redaction one copy can be updated without.
+   *
+   * The secret-column strip is unconditional and repeated on every walk: a
+   * system entity (users) has no field registry, so the password strip — which
+   * reads the registry — never sees its secret columns, and a source hook can
+   * reintroduce one onto the populated row after the fetch stripped it.
+   */
+  private redactWalkedRow(
+    collection: string,
+    row: Record<string, unknown>,
+    targetFields: FieldDefinition[]
+  ): void {
+    if (hasPasswordField(targetFields)) {
+      stripPasswordFieldValues(row, targetFields);
+    }
+    if (isSystemEntity(collection)) {
+      for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) {
+        delete row[col];
+      }
+    }
+    stripServerOnlyColumns(row, getTableName(collection));
+  }
+
   private async redactRelatedRows(
     targetCollection: string,
     rows: Record<string, unknown>[],
@@ -3056,7 +3083,7 @@ export class CollectionRelationshipService extends BaseService {
     // a user field) — this runs at each expansion level, so nested relations
     // are covered too.
     for (const row of rows) {
-      stripSystemOwnerField(row);
+      stripServerOnlyColumns(row, getTableName(targetCollection));
     }
     // System entities expose secret columns that are not schema fields, so
     // strip them by name. They carry no user-defined field rules, so there is
@@ -3577,15 +3604,7 @@ export class CollectionRelationshipService extends BaseService {
         resolved.collection,
         state
       );
-      if (hasPasswordField(targetFields)) {
-        stripPasswordFieldValues(resolved.row, targetFields);
-      }
-      if (isSystemEntity(resolved.collection)) {
-        for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) {
-          delete resolved.row[col];
-        }
-      }
-      stripSystemOwnerField(resolved.row);
+      this.redactWalkedRow(resolved.collection, resolved.row, targetFields);
       // Rebuild the label from what survived, as the walk does before returning to a
       // parent: a field hook can mutate an existing child so its label field flips
       // from allowed to denied, and this access pass removes the field but leaves the
@@ -3806,19 +3825,7 @@ export class CollectionRelationshipService extends BaseService {
         resolved.collection,
         state
       );
-      if (hasPasswordField(targetFields)) {
-        stripPasswordFieldValues(resolved.row, targetFields);
-      }
-      // A system entity (users) has no field registry, so the password strip above
-      // — which reads the registry — never sees its secret columns. They are
-      // stripped by name at fetch, but a source hook can reintroduce one onto the
-      // populated row afterward, so re-strip them on every walk, override included.
-      if (isSystemEntity(resolved.collection)) {
-        for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) {
-          delete resolved.row[col];
-        }
-      }
-      stripSystemOwnerField(resolved.row);
+      this.redactWalkedRow(resolved.collection, resolved.row, targetFields);
     }
   }
 

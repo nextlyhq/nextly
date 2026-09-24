@@ -200,6 +200,9 @@ const MYSQL_KEY_BYTES: Record<
   uuid: 36 * UTF8MB4_BYTES_PER_CHAR,
   boolean: 1,
   smallint: 2,
+  // The same four bytes `integer` occupies: what MySQL keys is the int, and
+  // AUTO_INCREMENT is how the value arrives rather than how wide it is.
+  serial: 4,
   integer: 4,
   real: 4,
   bigint: 8,

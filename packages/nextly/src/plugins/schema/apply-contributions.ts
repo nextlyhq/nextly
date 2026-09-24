@@ -25,6 +25,11 @@ import type { AuthorableFieldConfig } from "../../collections/fields/types/plugi
 import type { NextlyServiceConfig } from "../../di/register";
 import { NextlyError } from "../../errors";
 import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
+import {
+  runEntityTransforms,
+  type TransformContribution,
+  type TransformableEntity,
+} from "../entity-transforms";
 import type { PluginDefinition } from "../plugin-context";
 import {
   extendFieldDuplicateError,
@@ -205,6 +210,64 @@ export interface FoldResult {
 }
 
 /** Flatten every plugin's `contributes.extend` into one clause per (target, plugin). */
+/**
+ * Run every plugin's `transforms` over the MERGED entity set.
+ *
+ * After the merge and after `extend`, because that is the first moment another
+ * plugin's collections exist to be changed: `setup(config)` is handed a config
+ * the merge has not happened in yet, which is why adding fields was possible
+ * and changing an entity was not.
+ *
+ * In plugin order with no reordering of its own — `plugins` arrives
+ * topologically sorted, so a plugin transforming a dependency's collection
+ * sees it as the dependency left it.
+ */
+function applyTransforms(
+  entities: Pick<
+    NextlyServiceConfig,
+    "collections" | "singles" | "fieldGroups"
+  >,
+  plugins: PluginDefinition[]
+): Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups"> {
+  const contributions: TransformContribution[] = plugins
+    .filter(plugin => (plugin.contributes?.transforms?.length ?? 0) > 0)
+    .map(plugin => ({
+      source: `plugin:${plugin.name}`,
+      transforms: plugin.contributes?.transforms ?? [],
+    }));
+  // Nothing to do, and nothing to rebuild: the arrays are returned untouched
+  // so a config with no transforms is not re-created on every fold.
+  if (contributions.length === 0) return entities;
+
+  const flat: TransformableEntity[] = [
+    ...(entities.collections ?? []).map(entity => ({
+      slug: (entity as { slug: string }).slug,
+      kind: "collection" as const,
+      definition: entity as unknown as Record<string, unknown>,
+    })),
+    ...(entities.singles ?? []).map(entity => ({
+      slug: (entity as { slug: string }).slug,
+      kind: "single" as const,
+      definition: entity as unknown as Record<string, unknown>,
+    })),
+    ...(entities.fieldGroups ?? []).map(entity => ({
+      slug: (entity as { slug: string }).slug,
+      kind: "component" as const,
+      definition: entity as unknown as Record<string, unknown>,
+    })),
+  ];
+
+  const transformed = runEntityTransforms(flat, contributions);
+  const of = (kind: TransformableEntity["kind"]): unknown[] =>
+    transformed.filter(entity => entity.kind === kind).map(e => e.definition);
+
+  return {
+    collections: of("collection") as NextlyServiceConfig["collections"],
+    singles: of("single") as NextlyServiceConfig["singles"],
+    fieldGroups: of("component") as NextlyServiceConfig["fieldGroups"],
+  };
+}
+
 function flattenExtends(plugins: PluginDefinition[]): DeferredExtend[] {
   const clauses: DeferredExtend[] = [];
   for (const plugin of plugins) {
@@ -565,7 +628,7 @@ export function applyPluginSchemaContributions(
   // renamed slug. (No current plugin extends its own entity.)
   const extended = applyExtends(collections, singles, fieldGroups, plugins);
 
-  return { ...config, ...extended };
+  return { ...config, ...applyTransforms(extended, plugins) };
 }
 
 /**
@@ -595,9 +658,14 @@ export function applyPluginSchemaContributionsDeferred(
   return {
     config: {
       ...config,
-      collections: r.collections,
-      singles: r.singles,
-      fieldGroups: r.fieldGroups,
+      ...applyTransforms(
+        {
+          collections: r.collections,
+          singles: r.singles,
+          fieldGroups: r.fieldGroups,
+        },
+        plugins
+      ),
     },
     deferredExtends: r.deferred,
   };

@@ -22,6 +22,7 @@ import type {
 } from "../../../database/schema-registry";
 import type { TableSpec } from "../pipeline/diff/types";
 
+import { getActiveExtensionSchema } from "./active-schema";
 import { type DrizzleSchemaHook, runAfterDrizzle } from "./after-drizzle";
 import { toDrizzleTable, toTableSpec } from "./compile";
 import { type SeedEntityTable, SchemaDraftStore } from "./draft";
@@ -108,7 +109,8 @@ export interface ExtensionSchema {
  */
 function fingerprintOf(
   specs: readonly TableSpec[],
-  entityIndexes: ReadonlyMap<string, ExtensionIndex[]>
+  entityIndexes: ReadonlyMap<string, ExtensionIndex[]>,
+  entityColumns: ReadonlyMap<string, ExtensionColumn[]>
 ): string {
   // Sorted so the hash describes the CONTENT rather than the order the tables
   // happened to be visited in; two runs that produce the same schema must
@@ -123,9 +125,16 @@ function fingerprintOf(
   const entities = [...entityIndexes.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, indexes]) => [name, indexes] as const);
+  // Contributed COLUMNS belong here for the same reason contributed indexes
+  // do: they are part of what the schema now describes, and a fingerprint
+  // that ignores them reports "nothing changed" for a change dev push has to
+  // act on — so the column would wait for an unrelated edit to be created.
+  const entityCols = [...entityColumns.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, columns]) => [name, columns] as const);
 
   return createHash("sha256")
-    .update(JSON.stringify({ tables, entities }))
+    .update(JSON.stringify({ tables, entities, entityCols }))
     .digest("hex");
 }
 
@@ -149,7 +158,9 @@ export async function buildExtensionSchema(
     owner: table.owner as SchemaOwner,
     columns: table.columns,
     indexes: table.indexes,
-    ...(table.foreignKeys !== undefined ? { foreignKeys: table.foreignKeys } : {}),
+    ...(table.foreignKeys !== undefined
+      ? { foreignKeys: table.foreignKeys }
+      : {}),
     ...(table.checks !== undefined ? { checks: table.checks } : {}),
     ...(table.relations !== undefined ? { relations: table.relations } : {}),
   }));
@@ -173,8 +184,7 @@ export async function buildExtensionSchema(
       list.push({
         elementKind: "index",
         elementName:
-          index.name ??
-          `idx_${table.name}_${index.columns.join("_")}`,
+          index.name ?? `idx_${table.name}_${index.columns.join("_")}`,
         owner: index.contributedBy,
       });
       elementOwners.set(table.name, list);
@@ -280,10 +290,7 @@ export async function buildExtensionSchema(
   const adopted: Record<string, unknown> = {};
   const adoptedRelations = new Map<string, DynamicRelationEdge[]>();
   for (const table of store.adoptedTables()) {
-    adopted[table.name] = toDrizzleTable(
-      table as never as ExtensionTable,
-      input.dialect
-    );
+    adopted[table.name] = toDrizzleTable(table as never, input.dialect);
     // App-owned, so nextly.db reaches the table and a plugin's owner check
     // does not — the access rule the plan gives adopted tables.
     owners.set(table.name, { kind: "app" });
@@ -309,32 +316,20 @@ export async function buildExtensionSchema(
     adopted,
     /** Adopted tables' relation edges, for registry registration. */
     adoptedRelations,
-    fingerprint: fingerprintOf(specs, entityIndexes),
+    fingerprint: fingerprintOf(specs, entityIndexes, entityColumns),
   };
 }
 
 /**
- * The process-level active schema.
- *
- * Set at boot and on HMR reload, read by every consumer. A module-level value
- * rather than a DI registration because the CLI never boots a container and
- * still has to reach the same answer; two paths to one fact is what this
- * whole module exists to avoid.
+ * The active schema lives in its own module, and is re-exported here so every
+ * existing consumer keeps its import. See `active-schema.ts` for why the
+ * split exists.
  */
-const active = new Map<SupportedDialect, ExtensionSchema>();
-
-export function setActiveExtensionSchema(
-  dialect: SupportedDialect,
-  schema: ExtensionSchema
-): void {
-  active.set(dialect, schema);
-}
-
-export function getActiveExtensionSchema(
-  dialect: SupportedDialect
-): ExtensionSchema | null {
-  return active.get(dialect) ?? null;
-}
+export {
+  clearActiveExtensionSchema,
+  setActiveExtensionSchema,
+} from "./active-schema";
+export { getActiveExtensionSchema };
 
 /**
  * Whether a table is one an enabled plugin or the app currently DECLARES.
@@ -357,11 +352,6 @@ export function isRegisteredExtensionTable(
   dialect: SupportedDialect
 ): boolean {
   return getActiveExtensionSchema(dialect)?.owners.has(name) === true;
-}
-
-/** Forget the active schema. For tests and for a reload that failed. */
-export function clearActiveExtensionSchema(): void {
-  active.clear();
 }
 
 /**
