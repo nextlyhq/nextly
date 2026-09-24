@@ -44,8 +44,15 @@ export interface PluginLifecycleDeps {
   dialect: "postgresql" | "mysql" | "sqlite";
   plugins: LifecyclePlugin[];
   logger: CommandContext["logger"];
-  /** Runs the plugin's own `onInstall` / `onUninstall` against a booted context. */
-  runLifecycleHook?: (
+  /**
+   * Runs the plugin's own `onInstall` / `onUninstall` against a booted context.
+   *
+   * REQUIRED, like the two below and for the same reason: while it was
+   * optional the one caller never passed it, so both commands reported the
+   * hook's work done and no hook ran. A plugin whose `onInstall` seeds a row
+   * or registers with an external service was installed without either.
+   */
+  runLifecycleHook: (
     plugin: LifecyclePlugin,
     hook: "onInstall" | "onUninstall",
     opts: { keepData: boolean }
@@ -53,16 +60,16 @@ export interface PluginLifecycleDeps {
   /**
    * Executes DOWN statements for one module, newest first.
    *
-   * REQUIRED for the same reason `applyMigrations` is: optional, it was never
-   * passed, so a confirmed uninstall logged every module as reverted and
-   * recorded the plugin uninstalled while its tables and their data stayed
-   * exactly where they were.
+   * REQUIRED for the same reason: optional, it was never passed, so a
+   * confirmed uninstall logged every module as reverted and recorded the
+   * plugin uninstalled while its tables and their data stayed exactly where
+   * they were.
    */
   runDown: (plugin: LifecyclePlugin, moduleName: string) => Promise<number>;
   /**
    * Applies the plugin's pending migration modules.
    *
-   * REQUIRED, unlike the two above. Install previously recorded a plugin as
+   * REQUIRED, like the two above. Install previously recorded a plugin as
    * installed and reported success without applying anything, so an operator
    * was told the tables were there and every later query disagreed. An
    * optional callback is what allowed that: the one caller simply did not
@@ -114,7 +121,7 @@ export async function runPluginInstallCommand(
   // second thing that can be wrong.
   await deps.applyMigrations(plugin);
 
-  await deps.runLifecycleHook?.(plugin, "onInstall", { keepData: false });
+  await deps.runLifecycleHook(plugin, "onInstall", { keepData: false });
 
   const owned = await registry.listByOwner(plugin.name);
   if (owned.length > 0) {
@@ -183,7 +190,7 @@ export async function runPluginUninstallCommand(
     process.exit(1);
   }
 
-  await deps.runLifecycleHook?.(plugin, "onUninstall", {
+  await deps.runLifecycleHook(plugin, "onUninstall", {
     keepData: opts.keepData,
   });
 

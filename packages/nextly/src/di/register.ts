@@ -3391,6 +3391,26 @@ function clearActiveHookRegistry(): void {
   setInitializedPlugins([]);
 }
 
+/**
+ * The booted context of one initialized plugin, or undefined if it has none.
+ *
+ * `initializePlugins` already builds every plugin's context and keeps it for
+ * reverse-order destroy; this hands the same object out by name. Exported for
+ * `nextly plugins install|uninstall`, which has to run a plugin's `onInstall`
+ * / `onUninstall` against a REAL context — the CLI previously had no way to
+ * obtain one, so it skipped those hooks while reporting the work done.
+ *
+ * Not a second boot path: the caller must have registered services already,
+ * and this reads what that registration produced.
+ */
+export function getInitializedPluginContext(
+  name: string
+): PluginContext | undefined {
+  return globalForReg.__nextly_pluginTeardown?.find(
+    entry => entry.plugin.name === name
+  )?.context;
+}
+
 export async function shutdownServices(): Promise<void> {
   if (!globalForReg.__nextly_isRegistered) {
     return;

@@ -138,6 +138,82 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     });
   };
 
+  /**
+   * Run one plugin's own `onInstall` / `onUninstall` against a real context.
+   *
+   * Supplied rather than left undefined: while the command called this
+   * optionally and nothing passed it, every install reported the hook done
+   * and no hook ran — a plugin that seeds a row or registers with an external
+   * service in `onInstall` got neither.
+   *
+   * The hook takes a `PluginContext`, and the only thing that builds one is
+   * `registerServices` — so running it means booting the runtime, which no
+   * other CLI command does. Two things keep that proportionate:
+   *
+   * - The boot happens ONLY when this plugin actually declares the hook.
+   *   Most do not, and those installs stay exactly as cheap as before.
+   * - It reuses the adapter this command already opened, so the boot does not
+   *   make a second connection, and `shutdownServices` runs in a `finally`:
+   *   an install that fails inside a hook must not leave a registered
+   *   container behind for the next command in the same process.
+   *
+   * Every plugin's `init()` runs during that boot, which is the point — the
+   * hook is documented as running against a booted context, and one booted
+   * without its siblings is not the context the plugin will live in.
+   */
+  const runLifecycleHook = async (
+    plugin: LifecyclePlugin,
+    hook: "onInstall" | "onUninstall",
+    opts: { keepData: boolean }
+  ): Promise<void> => {
+    const definition = definitions.find(d => d.name === plugin.name);
+    if (definition?.[hook] === undefined) return;
+
+    const { registerServices, getInitializedPluginContext, shutdownServices } =
+      await import("../../di/register");
+    const { buildServiceConfig } = await import(
+      "../../init/build-service-config"
+    );
+    const { getImageProcessor } = await import("../../storage/image-processor");
+    const { getHookRegistry } = await import("../../hooks/hook-registry");
+
+    await registerServices(
+      buildServiceConfig({
+        config,
+        adapter: drizzleAdapter,
+        imageProcessor: getImageProcessor(),
+        hookRegistry: getHookRegistry(),
+        logger: context.logger,
+      })
+    );
+    try {
+      const pluginContext = getInitializedPluginContext(plugin.name);
+      if (pluginContext === undefined) {
+        // Registered, but this plugin was not among the initialized ones —
+        // it is disabled in config. Saying so beats running nothing quietly.
+        context.logger.warn(
+          `${plugin.name} is disabled in config, so ${hook} was not run.`
+        );
+        return;
+      }
+      // Branched rather than called through `definition[hook]`: the two hooks
+      // take different arguments, and a union of them accepts neither call.
+      if (hook === "onInstall") {
+        await definition.onInstall?.(pluginContext);
+      } else {
+        await definition.onUninstall?.(pluginContext, opts);
+      }
+    } finally {
+      // `shutdownServices` disconnects the adapter it was handed, and this
+      // command is not done with it — an install still has owner rows to
+      // record, an uninstall still has DOWN statements to run. Reconnecting
+      // beats skipping the shutdown: a registered container left behind would
+      // make the next `registerServices` in this process throw.
+      await shutdownServices();
+      if (!adapter.isConnected()) await adapter.connect();
+    }
+  };
+
   return {
     adapter,
     dialect,
@@ -148,6 +224,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     db: drizzleAdapter.getDrizzle(),
     plugins,
     definitions,
+    runLifecycleHook,
     migrationsDir: config.db?.migrationsDir,
     logger: context.logger,
     runDown,
