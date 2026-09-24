@@ -28,11 +28,14 @@
  *
  * @module husky-hooks.test
  */
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -64,10 +67,19 @@ const shellCode = source =>
 /**
  * The first command either hook spawns. `command -v` counts: it is how
  * pre-commit reaches gitleaks, and a clear placed after it would already be
- * too late for anything that call touched.
+ * too late for anything that call touched. So does `exec`: it is how pre-push
+ * hands itself to `scripts/bounded.mjs`, and turbo runs under what that
+ * inherits.
  */
 const FIRST_TOOL =
-  /^\s*(?:if\s+command\s+-v\s+)?(?:pnpm|npx|node|turbo|gitleaks)\b/m;
+  /^\s*(?:if\s+command\s+-v\s+|if\s+|exec\s+)?(?:pnpm|npx|node|turbo|gitleaks)\b/m;
+
+/**
+ * The first GATE pre-push runs. Not the same as the first tool: the hand-over
+ * to `scripts/bounded.mjs` runs this same hook again, and that second run
+ * reaches the gates.
+ */
+const FIRST_GATE = /^\s*pnpm\b/m;
 const CLEARS_GIT_DIR = /^unset .*\bGIT_DIR\b/m;
 
 describe.each(["pre-push", "pre-commit"])("the %s hook", name => {
@@ -103,14 +115,19 @@ describe.each(["pre-push", "pre-commit"])("the %s hook", name => {
 });
 
 describe("the pre-push hook specifically", () => {
-  it("still short-circuits in CI before doing any of it", async () => {
+  /*
+   * The runner answers whether this is CI, so the hook and the heavy commands
+   * cannot disagree — and the hook asks before it does anything heavy.
+   */
+  it("asks the runner whether this is CI, before the hand-over or any gate", async () => {
     const source = shellCode(await hook("pre-push"));
 
-    const ciGuard = source.search(/if \[ -n "\$CI" \]/);
-    const unsetAt = source.search(CLEARS_GIT_DIR);
+    const ciGuard = source.search(/^if node scripts\/bounded\.mjs --is-ci; then$/m);
+    const handover = source.search(/^\s*exec node scripts\/bounded\.mjs /m);
 
     expect(ciGuard).toBeGreaterThan(-1);
-    expect(ciGuard).toBeLessThan(unsetAt);
+    expect(ciGuard).toBeLessThan(handover);
+    expect(ciGuard).toBeLessThan(source.search(FIRST_GATE));
   });
 
   it("declares a POSIX shell, so dash and Git Bash both accept it", async () => {
@@ -158,6 +175,23 @@ describe("the pre-push hook specifically", () => {
     expect(buildAt).toBeLessThan(typesAt);
   });
 
+  it("lints AFTER the build, which is what lets a fresh checkout pass", async () => {
+    /*
+     * `import-x/no-unresolved` and every type-aware rule resolve a workspace
+     * import through the sibling's `dist`. Linting first refused every push
+     * from a checkout that had never been built — 16 of 23 lint tasks, all on
+     * unresolved imports — and a new worktree is exactly that checkout.
+     */
+    const source = shellCode(await hook("pre-push"));
+
+    const buildAt = source.search(/^\s*pnpm run build\b/m);
+    const lintAt = source.search(/^\s*pnpm turbo lint\b/m);
+
+    expect(buildAt).toBeGreaterThan(-1);
+    expect(lintAt).toBeGreaterThan(-1);
+    expect(buildAt).toBeLessThan(lintAt);
+  });
+
   it("records what is uncommitted BEFORE the first gate runs", async () => {
     /*
      * Every gate here runs against the working tree while Git pushes HEAD, so
@@ -168,10 +202,10 @@ describe("the pre-push hook specifically", () => {
     const source = shellCode(await hook("pre-push"));
 
     const recordAt = source.search(/^DIRTY=/m);
-    const firstTool = source.search(FIRST_TOOL);
+    const firstGate = source.search(FIRST_GATE);
 
     expect(recordAt).toBeGreaterThan(-1);
-    expect(recordAt).toBeLessThan(firstTool);
+    expect(recordAt).toBeLessThan(firstGate);
   });
 
   it("reports it LAST, so it is still on screen when the push proceeds", async () => {
@@ -192,5 +226,107 @@ describe("the pre-push hook specifically", () => {
     expect(shellCode(await hook("pre-push"))).toMatch(
       /^DIRTY=.*\|\| true\)"?$/m
     );
+  });
+});
+
+/*
+ * What pre-push does before any gate, run for real.
+ *
+ * `node` and `pnpm` are replaced on PATH by stubs that print what they were
+ * asked and exit 99. Nothing here can start a gate: the first command that
+ * would is a stub, and its exit status says how far the hook got. Run from the
+ * repository root, as husky runs it, and without CI, which skips the hook.
+ */
+describe("the pre-push hook before its gates", () => {
+  const ROOT = path.join(HERE, "..");
+  let stubs;
+
+  beforeAll(() => {
+    stubs = mkdtempSync(path.join(tmpdir(), "pre-push-stubs-"));
+    for (const name of ["node", "pnpm"]) {
+      const file = path.join(stubs, name);
+      // The one real call let through is the CI question, which the runner
+      // answers and which starts nothing.
+      const passThrough =
+        name === "node"
+          ? `if [ "$1" = "scripts/bounded.mjs" ] && [ "$2" = "--is-ci" ]; then exec ${JSON.stringify(process.execPath)} "$@"; fi\n`
+          : "";
+      writeFileSync(file, `#!/bin/sh\n${passThrough}echo "stub ${name} $*" >&2\nexit 99\n`);
+      chmodSync(file, 0o755);
+    }
+  });
+
+  afterAll(() => rmSync(stubs, { recursive: true, force: true }));
+
+  const ZERO = "0".repeat(40);
+  const SHA = "a".repeat(40);
+  const deletion = branch => `refs/heads/${branch} ${ZERO} refs/heads/${branch} ${SHA}\n`;
+  const update = branch => `refs/heads/${branch} ${SHA} refs/heads/${branch} ${ZERO}\n`;
+
+  function push(stdin, extra = {}) {
+    const env = { ...process.env };
+    for (const name of ["CI", "NEXTLY_BOUNDED"]) delete env[name];
+    return spawnSync("sh", ["-e", ".husky/pre-push", "origin", "git@example.com:o/r.git"], {
+      cwd: ROOT,
+      input: stdin,
+      encoding: "utf8",
+      env: { ...env, PATH: `${stubs}${path.delimiter}${env.PATH}`, ...extra },
+    });
+  }
+
+  it.runIf(process.platform !== "win32")("lets a push that only deletes branches through without a gate", () => {
+    const result = push(deletion("gone") + deletion("also-gone"));
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/only deleting remote branches/);
+    expect(result.stderr).not.toMatch(/stub/);
+  });
+
+  it.runIf(process.platform !== "win32")("hands a push that carries code to the bounded runner", () => {
+    const result = push(update("feature"));
+    expect(result.status).toBe(99);
+    expect(result.stderr).toMatch(/^stub node scripts\/bounded\.mjs sh -e \.husky\/pre-push origin /m);
+  });
+
+  it.runIf(process.platform !== "win32")("gates a push that deletes one branch and updates another", () => {
+    expect(push(deletion("gone") + update("feature")).status).toBe(99);
+  });
+
+  /*
+   * "Every ref is a deletion" is true of no refs at all. Reading that as an
+   * all-clear is the vacuous pass this repository keeps finding, so an empty
+   * list — and a line with no sha to judge — is gated.
+   */
+  it.runIf(process.platform !== "win32")("does not read an empty or malformed ref list as only deletions", () => {
+    expect(push("").status).toBe(99);
+    expect(push("refs/heads/feature\n").status).toBe(99);
+  });
+
+  /*
+   * "CI" means what `detectIsCi` in packages/telemetry says: set, and neither
+   * "0" nor "false". A presence test skipped every gate for a developer with
+   * CI=false in their environment.
+   */
+  /*
+   * 🔴 Read as CI, a deployment platform's variable loaded into a developer's
+   * shell — VERCEL=1 from a pulled `.env` — skipped every gate.
+   */
+  it.runIf(process.platform !== "win32")("gates a push whose shell carries a deployment platform's variable", () => {
+    expect(push(update("feature"), { VERCEL: "1" }).status).toBe(99);
+    expect(push(update("feature"), { NETLIFY: "true" }).status).toBe(99);
+  });
+
+  it.runIf(process.platform !== "win32")("skips in CI, and gates a machine whose CI is set to false or 0", () => {
+    const skipped = push(update("feature"), { CI: "true" });
+    expect(skipped.status).toBe(0);
+    expect(skipped.stdout).toMatch(/skipped in CI/);
+    for (const value of ["false", "0", ""]) {
+      expect(push(update("feature"), { CI: value }).status).toBe(99);
+    }
+  });
+
+  it.runIf(process.platform !== "win32")("goes straight to the gates in the run the runner started", () => {
+    const result = push(deletion("gone"), { NEXTLY_BOUNDED: "1" });
+    expect(result.status).toBe(99);
+    expect(result.stderr).toMatch(/^stub node scripts\/local-limits\.mjs/m);
   });
 });

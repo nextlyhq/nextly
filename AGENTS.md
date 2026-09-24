@@ -302,8 +302,14 @@ every other. Prefer a branch commit to a stash when several sessions are live.
 
 ## How much of the machine a local gate may take
 
-`.husky/pre-push`, `pnpm verify:pr` and `pnpm verify:full` size themselves to
-the machine they run on. `pnpm local-limits` prints what this machine gets.
+Every heavy command — `pnpm build`, `lint`, `check-types`, `test`,
+`test:integration*`, `verify:pr`, `verify:full` — and `.husky/pre-push` run
+through `scripts/bounded.mjs`. It sizes the run to the machine
+(`pnpm local-limits` prints what that is), lets ONE heavy run at a time use it
+across every checkout — a second waits, and says whose run it is waiting for —
+and runs it in a process group of its own that it stops when whatever started
+it is gone, such as a killed `git push`. In CI it is a pass-through.
+`pnpm check:local-gate-bounds` holds each of them to it.
 
 The gates fan out two levels: turbo runs several package tasks at once, and
 each task running Vitest spawns several workers. **The product is what consumes
@@ -362,8 +368,11 @@ else is competing for the machine.
   9p filesystem boundary for every file operation and is far slower than any
   concurrency setting can compensate for.
 
-Run one heavy phase at a time, and never a unit suite while an integration leg
-is in flight.
+One heavy run at a time is enforced for every command above: a second waits
+for the first, and `NEXTLY_HEAVY_SLOTS=2` allows two on a machine with room for
+them. A command run inside one package (`pnpm --filter <pkg> test`) takes no
+slot, so for those the rule is still yours to keep: never a unit suite while an
+integration leg is in flight.
 
 ## Conventions (enforced; violations will be rejected in review)
 
@@ -481,8 +490,8 @@ rather than `compose up`.
 - Do not add "Generated with Claude Code", Co-Authored-By AI trailers, or any
   other AI attribution to commits or PR bodies.
 - Husky runs gitleaks + lint-staged on commit, commitlint on the message, and
-  lint + build on push. Never bypass hooks with `--no-verify`; if a hook
-  fails, fix the cause.
+  lint + build on push; a push that only deletes remote branches runs no gates.
+  Never bypass hooks with `--no-verify`; if a hook fails, fix the cause.
 - Pre-existing lint or type failures may be left alone (mention them in the
   PR); introducing new ones is not acceptable.
 
