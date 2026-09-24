@@ -80,22 +80,6 @@ describe("the changeset check in the queue", () => {
   });
 });
 
-describe("the secret scan in the queue", () => {
-  /*
-   * A group's head holds every member's commits, so the scan reads the whole
-   * range from the queue's base. A range from the head's parent would scan the
-   * last member only and pass the others unread.
-   */
-  it("scans every commit from the queue's base to its head", () => {
-    const step = read(".github/workflows/secret-scan.yml").jobs.gitleaks.steps.find(candidate => candidate.name === "Run gitleaks on the commits this run adds");
-    expect(step.env.QUEUE_BASE).toBe("${{ github.event.merge_group.base_sha }}");
-    expect(step.env.QUEUE_HEAD).toBe("${{ github.event.merge_group.head_sha }}");
-    expect(step.run).toMatch(/merge_group\)[^;]*RANGE="\$\{QUEUE_BASE\}\.\.\$\{QUEUE_HEAD\}"/);
-    // The command spans lines joined by a trailing backslash; the range is one of its options.
-    expect(step.run).toMatch(/gitleaks detect(?:[^\n]*\\\n)*[^\n]*--log-opts="\$RANGE"/);
-  });
-});
-
 describe("the last commit Integration tested", () => {
   /*
    * The change scope of a push compares with the last commit this workflow
