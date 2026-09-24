@@ -24,16 +24,18 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      pull-requests: read
     outputs:
       error_message: ${{ steps.lint_pr_title.outputs.error_message }}
     steps:
-      # The default ref: `main` on `pull_request_target`, never the pull
-      # request's head, and on `merge_group` the queue's own commit, which this
-      # job's read-only token is the right trust for.
+      # The validator runs from code no queued change has touched: `main` on
+      # `pull_request_target`, never a pull request's head, and on `merge_group`
+      # the queue's base, `main` as the queue found it. There, the full history
+      # is fetched too, so the commits the queue would land can be read.
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.event.merge_group.base_sha }}
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '1' }}
           persist-credentials: false
 
       - name: Setup Node.js
@@ -45,7 +47,6 @@ jobs:
         id: lint_pr_title
         uses: ./.github/actions/pr-title
         with:
-          token: ${{ github.token }}
           types: |
             feat
             fix

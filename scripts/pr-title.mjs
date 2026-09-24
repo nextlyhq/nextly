@@ -6,9 +6,12 @@
  *
  * The squash commit that lands on `main` takes its message from the title, so
  * the title is checked where it is written, when a pull request opens or its
- * title changes, and again where it merges. In the merge queue the title is
- * read back from the queued pull request, because a title edited after that
- * pull request joined the queue is the one the commit will carry.
+ * title changes, and again where it merges. The merge queue lands exactly the
+ * commits it tested, so there the check reads those commits: every one between
+ * the queue's base and its head, one squash commit per queued pull request.
+ * That covers each member of a group, not only the one the queue's branch is
+ * named for, and it judges the message that will land even if a title was
+ * edited after it was queued.
  *
  * The rules are inputs of `.github/workflows/pr-title.yml`, passed through
  * `.github/actions/pr-title`, so the scope list stays in the one place AGENTS.md
@@ -22,19 +25,20 @@
  *
  * Usage (from the action):
  *   TYPES=… SCOPES=… [REQUIRE_SCOPE=true] [SUBJECT_PATTERN=…] [SUBJECT_PATTERN_ERROR=…] \
- *   [GH_TOKEN=…] node scripts/pr-title.mjs
+ *   node scripts/pr-title.mjs
  *
- * Reads the event from GITHUB_EVENT_NAME and GITHUB_EVENT_PATH, and writes
- * `error_message` to GITHUB_OUTPUT when the title is refused.
+ * Reads the event from GITHUB_EVENT_NAME and GITHUB_EVENT_PATH, and the queued
+ * commits from the checkout's history, and writes `error_message` to
+ * GITHUB_OUTPUT when a title is refused.
  */
 import { randomUUID } from "node:crypto";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync } from "node:fs";
 
 import { isCliEntry } from "./cli-entry.mjs";
+import { eventPayload, readGit } from "./workflow-context.mjs";
 
 const HEADER = /^(\w*)(?:\((.*)\))?!?: (.*)$/;
 const WIP = /^\[WIP\]\s/;
-const QUEUE_REF = /^refs\/heads\/gh-readonly-queue\/.+\/pr-(\d+)-[0-9a-f]{40}$/;
 
 /** The rules, from the action's inputs: one type or scope per line. */
 export function rulesFrom(env) {
@@ -104,73 +108,76 @@ function matchesWhole(pattern, text) {
 /** In the order a reader fixes them: the prefix, then its type and scopes, then the subject. */
 const CHECKS = [headerProblem, scopeProblem, subjectProblem];
 
-/**
- * Which pull request a merge-queue run is testing, from the branch the queue
- * made for it: `gh-readonly-queue/<base>/pr-<number>-<base sha>`. Null for any
- * other branch, so a name that only resembles one is not read as a number.
- */
-export function queuedPullNumber(headRef) {
-  const match = QUEUE_REF.exec(headRef ?? "");
-  return match ? Number(match[1]) : null;
-}
-
-/** Where each event's title is: in a pull request's own event, or behind the queue's branch. */
+/** Where each event's titles are: in a pull request's own event, or in the commits the queue would land. */
 const TITLE_SOURCES = {
   pull_request: ({ payload = {} }) => eventTitle(payload.pull_request?.title),
   pull_request_target: ({ payload = {} }) => eventTitle(payload.pull_request?.title),
-  merge_group: queuedTitle,
+  merge_group: queuedSubjects,
 };
 
 /**
- * The title to check for this event, or why there is none. On a pull request
- * it is in the event; in the merge queue it is read from GitHub's record of
- * that pull request, so an edit made after it was queued is the title judged.
- * Any other event has no title, and says so rather than passing.
+ * The titles to check for this event, or why there are none. Any event other
+ * than a pull request's or the queue's has no title, and says so rather than
+ * passing.
  *
- * @returns {Promise<{ title: string } | { problem: string }>}
+ * @returns {{ titles: string[] } | { problem: string }}
  */
-export async function titleFor(context, fetchImpl = fetch) {
-  return Object.hasOwn(TITLE_SOURCES, context.event) ? TITLE_SOURCES[context.event](context, fetchImpl) : noTitle(context.event);
+export function titlesFor(context, git = readGit) {
+  return Object.hasOwn(TITLE_SOURCES, context.event) ? TITLE_SOURCES[context.event](context, git) : noTitle(context.event);
 }
 
 function noTitle(event) {
   return { problem: `There is no pull request title to check on a ${event || "missing"} event.` };
 }
 
-async function queuedTitle({ payload = {}, repository, token }, fetchImpl) {
-  const ref = payload.merge_group?.head_ref;
-  const number = queuedPullNumber(ref);
-  return number ? fetchTitle({ repository, number, token }, fetchImpl) : { problem: `Cannot tell which pull request the merge queue is testing from "${ref}".` };
-}
-
 function eventTitle(title) {
-  return typeof title === "string" ? { title } : { problem: "The event carries no pull request title." };
+  return typeof title === "string" ? { titles: [title] } : { problem: "The event carries no pull request title." };
 }
 
-async function fetchTitle({ repository, number, token }, fetchImpl) {
-  const headers = { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" };
-  if (token) headers.authorization = `Bearer ${token}`;
-  try {
-    const response = await fetchImpl(`https://api.github.com/repos/${repository}/pulls/${number}`, { headers });
-    if (!response.ok) return { problem: `Could not read pull request #${number}: HTTP ${response.status}.` };
-    return eventTitle((await response.json()).title);
-  } catch (error) {
-    return { problem: `Could not read pull request #${number}: ${error.message}.` };
-  }
+/**
+ * The subjects of the commits the queue would put on `main`, oldest first.
+ * With squash merging each is one pull request's commit, its subject the title
+ * and `(#number)`; a merge commit's subject is not a Conventional Commits
+ * title, so a queue that merges rather than squashes is refused here too.
+ */
+function queuedSubjects({ payload }, git) {
+  const range = payload?.merge_group ?? {};
+  return bothEnds(range) ? subjectsBetween(range.base_sha, range.head_sha, git) : { problem: "The merge-queue event names no base or no head commit." };
+}
+
+function bothEnds({ base_sha: base, head_sha: head }) {
+  return Boolean(base && head);
+}
+
+function subjectsBetween(base, head, git) {
+  const log = git(["log", "--reverse", "--format=%s%x00", `${base}..${head}`]);
+  if (!log.ok) return { problem: `Could not read the commits between the queue's base ${base} and its head ${head}.` };
+  const titles = log.out.split("\0").map(subject => subject.trim()).filter(Boolean);
+  return titles.length > 0 ? { titles } : { problem: "The merge queue's head adds no commits to its base." };
+}
+
+/** Why any of several titles is refused, each named, or null when all pass. */
+export function titlesProblem(titles, rules) {
+  const refused = titles.map(title => titleProblem(title, rules)).filter(Boolean);
+  return refused.length > 0 ? refused.join("\n\n") : null;
 }
 
 /** Checks the title for the workflow step that invokes this file, and returns the exit code. */
-export async function main(env = process.env, fetchImpl = fetch) {
-  const payload = env.GITHUB_EVENT_PATH ? JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8")) : {};
-  const found = await titleFor({ event: env.GITHUB_EVENT_NAME, payload, repository: env.GITHUB_REPOSITORY, token: env.GH_TOKEN }, fetchImpl);
-  const problem = found.problem ?? titleProblem(found.title, rulesFrom(env));
-  if (problem) {
-    writeOutput(env, problem);
-    console.log(`::error title=PR title::${commandText(problem.split("\n")[0])}`);
-    console.error(problem);
-    return 1;
-  }
-  console.log(`pr-title: "${found.title}" follows Conventional Commits`);
+export function main(env = process.env, git = readGit) {
+  const found = titlesFor({ event: env.GITHUB_EVENT_NAME, payload: eventPayload(env) }, git);
+  const problem = found.problem ?? titlesProblem(found.titles, rulesFrom(env));
+  return problem ? refuse(env, problem) : accept(found.titles);
+}
+
+function refuse(env, problem) {
+  writeOutput(env, problem);
+  console.log(`::error title=PR title::${commandText(problem.split("\n")[0])}`);
+  console.error(problem);
+  return 1;
+}
+
+function accept(titles) {
+  for (const title of titles) console.log(`pr-title: "${title}" follows Conventional Commits`);
   return 0;
 }
 
@@ -186,4 +193,4 @@ function writeOutput(env, message) {
   appendFileSync(env.GITHUB_OUTPUT, `error_message<<${fence}\n${message}\n${fence}\n`);
 }
 
-if (isCliEntry(import.meta.url)) process.exit(await main());
+if (isCliEntry(import.meta.url)) process.exit(main());

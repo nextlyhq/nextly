@@ -22,10 +22,10 @@
  * Reads the event from GITHUB_EVENT_NAME and GITHUB_EVENT_PATH, writes
  * `inert=true|false` to GITHUB_OUTPUT and the evidence to GITHUB_STEP_SUMMARY.
  */
-import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync } from "node:fs";
 
 import { isCliEntry } from "./cli-entry.mjs";
+import { eventPayload, readGit } from "./workflow-context.mjs";
 
 /** A pattern no path matches, for a workflow with nothing it always runs for. */
 const NEVER = /(?!)/;
@@ -62,7 +62,7 @@ export function diffRange({ event, payload = {}, lastTestedSha, sha }) {
  *
  * @returns {{ base: string, head: string, files: string[] } | { reason: string }}
  */
-export function changedFiles(range, git = runGit) {
+export function changedFiles(range, git = readGit) {
   const problem = rangeProblem(range, git);
   if (problem) return { reason: problem };
   const from = comparisonBase(range, git);
@@ -105,7 +105,7 @@ export function filesThatRun(files, { inert, alwaysRun = NEVER }) {
  * reads as inert, since nothing here needs to run; the reason is kept apart,
  * so it is never described as a run that touched only inert paths.
  */
-export function decide({ event, payload, lastTestedSha, sha, superseded, inert, alwaysRun }, git = runGit) {
+export function decide({ event, payload, lastTestedSha, sha, superseded, inert, alwaysRun }, git = readGit) {
   if (superseded === "true") return { inert: true, superseded: true };
   const range = diffRange({ event, payload, lastTestedSha, sha });
   const changes = range.reason ? range : changedFiles(range, git);
@@ -142,25 +142,16 @@ function bullets(files) {
   return files.map(file => `- \`${file}\``);
 }
 
-function runGit(args) {
-  try {
-    return { ok: true, out: execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }) };
-  } catch {
-    return { ok: false, out: "" };
-  }
-}
-
 /** Runs the decision for the workflow step that invokes this file, and returns the exit code. */
-export function main(env = process.env, git = runGit) {
+export function main(env = process.env, git = readGit) {
   if (!env.INERT_PATHS) {
     console.error("change-scope: INERT_PATHS is required — the paths this workflow may skip for");
     return 64;
   }
-  const payload = env.GITHUB_EVENT_PATH ? JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8")) : {};
   const result = decide(
     {
       event: env.GITHUB_EVENT_NAME,
-      payload,
+      payload: eventPayload(env),
       lastTestedSha: env.LAST_TESTED_SHA,
       sha: env.GITHUB_SHA,
       superseded: env.SUPERSEDED,

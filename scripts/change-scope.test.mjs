@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { changedFiles, decide, diffRange, filesThatRun, main, summary } from "./change-scope.mjs";
+import { readGit } from "./workflow-context.mjs";
 
 const SCRIPT = fileURLToPath(new URL("./change-scope.mjs", import.meta.url));
 const INERT = /^(docs\/|[^/]*\.md$)/;
@@ -31,13 +32,7 @@ function run(...args) {
 }
 
 /** Git as the script calls it, pointed at the test repository. */
-function inRepo(args) {
-  try {
-    return { ok: true, out: execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }) };
-  } catch {
-    return { ok: false, out: "" };
-  }
-}
+const inRepo = args => readGit(args, { cwd: repo });
 
 function commit(files, message = "change") {
   for (const [path, text] of Object.entries(files)) {

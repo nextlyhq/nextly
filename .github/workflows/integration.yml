@@ -94,7 +94,10 @@ jobs:
         uses: ./.github/actions/superseded-on-main
         with:
           workflow: integration.yml
-          substantive-job: Integration (postgres)
+          substantive-job: |
+            Integration (postgres)
+            Integration (mysql)
+            Integration (sqlite)
           token: ${{ github.token }}
       - name: Decide
         id: decide

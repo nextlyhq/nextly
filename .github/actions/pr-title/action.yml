@@ -1,8 +1,8 @@
 name: PR title
 description: >
   Holds a pull request's title to Conventional Commits and this repository's
-  types and scopes, on a pull request or in the merge queue, where the title
-  is read back from the pull request being merged.
+  types and scopes, on a pull request or in the merge queue, where every
+  commit the queue would land is held to the same rules.
 
 # The rules arrive as inputs so they stay in the workflow that calls this, the
 # one place AGENTS.md and the measured facts read the scope list from. They are
@@ -28,9 +28,6 @@ inputs:
     description: "The message when it does not; `{subject}` and `{title}` are filled in."
     required: false
     default: ""
-  token:
-    description: A token that can read pull requests, for the title of a queued one.
-    required: true
 
 outputs:
   error_message:
@@ -49,5 +46,4 @@ runs:
         REQUIRE_SCOPE: ${{ inputs.requireScope }}
         SUBJECT_PATTERN: ${{ inputs.subjectPattern }}
         SUBJECT_PATTERN_ERROR: ${{ inputs.subjectPatternError }}
-        GH_TOKEN: ${{ inputs.token }}
       run: node "$GITHUB_WORKSPACE/scripts/pr-title.mjs"

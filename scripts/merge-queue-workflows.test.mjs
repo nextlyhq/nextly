@@ -64,10 +64,26 @@ describe("the change scope, which decides whether required jobs run", () => {
   }
 });
 
+describe("the last commit Integration tested", () => {
+  /*
+   * The change scope of a push compares with the last commit this workflow
+   * tested. A run where one leg judged the commit and another was cancelled
+   * did not test it on the second dialect, so every leg is named as the work.
+   */
+  it("counts a run as tested only when every leg reached a verdict", () => {
+    const workflow = read(".github/workflows/integration.yml");
+    const legs = Object.values(workflow.jobs).map(job => job.name).filter(name => name.startsWith("Integration ("));
+    const ask = workflow.jobs.changes.steps.find(step => step.id === "newer");
+    expect(legs.length).toBe(3);
+    expect(ask.with["substantive-job"].split("\n").map(name => name.trim()).filter(Boolean).sort()).toEqual(legs.sort());
+  });
+});
+
 describe("steps limited to one event", () => {
   /*
-   * A step limited to pull requests is skipped in the queue, and its job still
-   * reports success, so the queue would merge on a check that did less there
+   * A step limited to pull requests is skipped in the queue while its job still
+   * reports success, and a job limited to them reports `skipped`, which the
+   * gate accepts; either way the queue would merge on a check that did less there
    * than on a pull request's own run. Every such condition in a workflow the queue
    * requires has to name the queue's event too.
    */
@@ -78,11 +94,17 @@ describe("steps limited to one event", () => {
   }
 });
 
-/** The steps whose condition names a pull request's event and not the queue's. */
+/** The jobs and steps whose condition names a pull request's event and not the queue's. */
 function pullRequestOnly(workflow) {
-  return Object.entries(workflow.jobs).flatMap(([id, job]) =>
-    (job.steps ?? []).filter(step => limitedToPullRequests(String(step.if ?? ""))).map(step => `${id}: ${step.name}`)
-  );
+  return Object.entries(workflow.jobs).flatMap(([id, job]) => [...guardedJob(id, job), ...guardedSteps(id, job)]);
+}
+
+function guardedJob(id, job) {
+  return limitedToPullRequests(String(job.if ?? "")) ? [id] : [];
+}
+
+function guardedSteps(id, job) {
+  return (job.steps ?? []).filter(step => limitedToPullRequests(String(step.if ?? ""))).map(step => `${id}: ${step.name}`);
 }
 
 function limitedToPullRequests(condition) {
@@ -118,6 +140,17 @@ describe("the title check's permissions", () => {
     }
   });
 
+  /*
+   * In the queue the checked-out tree holds the queued changes, so a queued
+   * change to the validator would judge its own title. The checkout is the
+   * queue's base instead, with the history the queued commits are read from.
+   */
+  it("runs the queue's check from the queue's base, with the queued commits in reach", () => {
+    const checkout = workflow.jobs.lint.steps.find(step => String(step.uses).startsWith("actions/checkout@"));
+    expect(checkout.with.ref).toBe("${{ github.event.merge_group.base_sha }}");
+    expect(checkout.with["fetch-depth"]).toBe("${{ github.event_name == 'merge_group' && '0' || '1' }}");
+  });
+
   it("never checks out the pull request's own head", () => {
     for (const job of Object.values(workflow.jobs)) {
       for (const step of job.steps) expect(JSON.stringify(step.with ?? {})).not.toMatch(/pull_request\.head/);
@@ -127,7 +160,7 @@ describe("the title check's permissions", () => {
   it("hands the script every rule the workflow sets, through the environment", () => {
     const action = read(".github/actions/pr-title/action.yml");
     const env = action.runs.steps[0].env;
-    for (const name of ["TYPES", "SCOPES", "REQUIRE_SCOPE", "SUBJECT_PATTERN", "SUBJECT_PATTERN_ERROR", "GH_TOKEN"]) {
+    for (const name of ["TYPES", "SCOPES", "REQUIRE_SCOPE", "SUBJECT_PATTERN", "SUBJECT_PATTERN_ERROR"]) {
       expect(Object.keys(env)).toContain(name);
     }
     const passed = workflow.jobs.lint.steps.find(step => step.id === "lint_pr_title").with;
