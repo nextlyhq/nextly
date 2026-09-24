@@ -13,6 +13,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { getDialectTables } from "../../database/index";
+import { resolveRelations } from "../../database/resolve-relations";
 import type { NextlyServiceConfig } from "../../di/register";
 import {
   buildAuditLogWriter,
@@ -470,6 +471,24 @@ export function buildAuthRouterDeps(
     if (name === "db") {
       const adapter = getService("adapter") as { getDrizzle: () => unknown };
       return adapter.getDrizzle();
+    }
+    // The relations-enabled handle behind `ctx.db.query`, translated for the
+    // same reason `db` is: neither is a container entry, and `getService`
+    // would throw rather than resolve one.
+    //
+    // It was not translated when `ctx.db` gained relational queries, and only
+    // `di/register.ts` learned the new name. This is the OTHER place a plugin
+    // context is built — the auth router's — so every login through a plugin
+    // strategy threw `Service "relationalDb" is not registered in container`
+    // before reaching the strategy at all.
+    if (name === "relationalDb") {
+      const adapter = getService("adapter") as {
+        getDrizzle: (relations?: unknown) => unknown;
+        getCapabilities: () => { dialect: SupportedDialect };
+      };
+      return adapter.getDrizzle(
+        resolveRelations(adapter.getCapabilities().dialect)
+      );
     }
     // Also not a DI service. The container registers the adapter, and the
     // dialect is something it is asked for; a plugin's settings store picks

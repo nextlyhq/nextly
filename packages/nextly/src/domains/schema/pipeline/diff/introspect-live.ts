@@ -205,13 +205,62 @@ async function attachMysqlConstraints(
 }
 
 /**
+ * The column names in an `array_agg` result.
+ *
+ * The `pg` driver hands back the raw PostgreSQL array LITERAL — the string
+ * `{owner_id}` — rather than a JS array, because the subquery's result type
+ * carries no registered parser. Spreading that string yielded one entry per
+ * CHARACTER, so every introspected foreign key named columns like `{`, `o`,
+ * `w`; the diff then compared those against real names and proposed dropping
+ * and recreating the constraint on every single comparison.
+ *
+ * An array is still accepted, because a driver or a double may hand one over
+ * already parsed, and anything else reads as "no columns" rather than as
+ * characters.
+ *
+ * The literal's own rules: members are comma-separated, and a member is
+ * double-quoted when it contains a comma, a brace, whitespace or a quote,
+ * with backslash escapes inside the quotes. Identifiers rarely need that, but
+ * a quoted column name is legal and this is what reads it back.
+ */
+export function parsePgTextArray(value: unknown): string[] | null {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value !== "string") return null;
+  const body = value.trim();
+  if (!body.startsWith("{") || !body.endsWith("}")) return null;
+  const inner = body.slice(1, -1);
+  if (inner === "") return [];
+
+  const out: string[] = [];
+  let current = "";
+  let quoted = false;
+  let escaped = false;
+  for (const ch of inner) {
+    if (escaped) {
+      current += ch;
+      escaped = false;
+    } else if (ch === "\\") {
+      escaped = true;
+    } else if (ch === '"') {
+      quoted = !quoted;
+    } else if (ch === "," && !quoted) {
+      out.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  out.push(current);
+  return out;
+}
+
+/**
  * Foreign keys by table, skipping any row this cannot describe.
  *
- * A row without its column arrays is not a foreign key, and spreading one
- * threw where the caller only wanted the columns. The reader is handed
- * whatever the executor returns — including a test double answering one shape
- * for every query — so an unreadable row is skipped rather than allowed to
- * abort the whole introspection.
+ * A row whose column lists cannot be read is not a foreign key this can
+ * describe. The reader is handed whatever the executor returns — including a
+ * test double answering one shape for every query — so an unreadable row is
+ * skipped rather than allowed to abort the whole introspection.
  */
 function groupPgForeignKeys(
   rows: ReadonlyArray<{
@@ -226,15 +275,15 @@ function groupPgForeignKeys(
 ): Map<string, ForeignKeySpec[]> {
   const fks = new Map<string, ForeignKeySpec[]>();
   for (const row of rows) {
-    if (!Array.isArray(row.columns) || !Array.isArray(row.ref_columns)) {
-      continue;
-    }
+    const columns = parsePgTextArray(row.columns);
+    const refColumns = parsePgTextArray(row.ref_columns);
+    if (columns === null || refColumns === null) continue;
     const list = fks.get(row.table) ?? [];
     list.push({
       name: row.name,
-      columns: [...row.columns],
+      columns,
       referencesTable: row.ref_table,
-      referencesColumns: [...row.ref_columns],
+      referencesColumns: refColumns,
       onDelete: PG_FK_ACTION[row.on_delete] ?? "no action",
       onUpdate: PG_FK_ACTION[row.on_update] ?? "no action",
     });
