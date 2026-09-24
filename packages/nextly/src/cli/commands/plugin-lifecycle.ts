@@ -114,10 +114,19 @@ export async function runPluginUninstallCommand(
   deps: PluginLifecycleDeps
 ): Promise<void> {
   const plugin = find(deps.plugins, name, deps.logger);
-  const registry = createOwnerRegistry(
-    new SchemaOwnersRepository(deps.db, deps.dialect)
-  );
+  const repository = new SchemaOwnersRepository(deps.db, deps.dialect);
+  const registry = createOwnerRegistry(repository);
   const owned = await registry.listByOwner(plugin.name);
+  // Element rows on this plugin's tables that somebody else owns — they go
+  // with the table on a full uninstall, and the confirmation names them.
+  const foreignElements = (
+    await repository.read(
+      [...new Set(owned.map(row => row.tableName))]
+    )
+  ).filter(
+    row =>
+      (row.elementKind ?? "table") !== "table" && row.ownerId !== plugin.name
+  );
 
   const input: UninstallInput = {
     pluginName: plugin.name,
@@ -125,6 +134,7 @@ export async function runPluginUninstallCommand(
       .filter(p => p.enabled)
       .map(p => ({ name: p.name, dependsOn: p.dependsOn })),
     owned,
+    foreignElements,
     modules: plugin.modules,
     keepData: opts.keepData,
   };
@@ -137,6 +147,14 @@ export async function runPluginUninstallCommand(
       `This will DROP ${String(plan.tablesDropped.length)} table(s) and their data:`
     );
     for (const table of plan.tablesDropped) deps.logger.warn(`  - ${table}`);
+    if (plan.elementsDropped.length > 0) {
+      deps.logger.warn(
+        `...along with ${String(plan.elementsDropped.length)} element(s) other owners added to those tables:`
+      );
+      for (const element of plan.elementsDropped) {
+        deps.logger.warn(`  - ${element}`);
+      }
+    }
     deps.logger.error(
       "Re-run with --yes to confirm, or --keep-data to leave the tables in place."
     );

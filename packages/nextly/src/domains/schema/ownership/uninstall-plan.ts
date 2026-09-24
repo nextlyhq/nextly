@@ -25,6 +25,13 @@ export interface UninstallInput {
   enabled: ReadonlyArray<{ name: string; dependsOn: readonly string[] }>;
   /** This plugin's owner rows. */
   owned: readonly OwnerRecord[];
+  /**
+   * ELEMENT rows on this plugin's tables that somebody else owns — an
+   * app-contributed index, say. A full uninstall drops the table, so the
+   * element goes with it; the plan lists it so the confirmation can say so
+   * instead of discovering it afterwards.
+   */
+  foreignElements?: readonly OwnerRecord[];
   /** Each module's name and whether it has DOWN statements, in apply order. */
   modules: ReadonlyArray<{ name: string; reversible: boolean }>;
   keepData: boolean;
@@ -37,6 +44,11 @@ export interface UninstallPlan {
   downModules: string[];
   /** Tables the operator is about to lose. Empty when keeping data. */
   tablesDropped: string[];
+  /**
+   * Foreign-owned elements that go with those tables, as
+   * `<name> (<kind>, <owner>)`. Empty when keeping data.
+   */
+  elementsDropped: string[];
   /** Ledger rows to supersede. */
   supersedeFilenames: string[];
 }
@@ -57,6 +69,7 @@ export function planUninstall(input: UninstallInput): UninstallPlan {
       finalState: "orphaned",
       downModules: [],
       tablesDropped: [],
+      elementsDropped: [],
       supersedeFilenames: [],
     };
   }
@@ -66,10 +79,20 @@ export function planUninstall(input: UninstallInput): UninstallPlan {
   // Reverse apply order: a later module may depend on what an earlier one
   // created, so undoing forwards would drop a table a later DOWN still needs.
   const reversed = [...input.modules].reverse().map(module => module.name);
+  // Table-level rows only, deduplicated: an element row shares its table's
+  // name, and listing a table once per element would tell the operator they
+  // are losing more tables than they are.
+  const tableRows = input.owned.filter(
+    row => (row.elementKind ?? "table") === "table"
+  );
   return {
     finalState: "uninstalled",
     downModules: reversed,
-    tablesDropped: input.owned.map(row => row.tableName),
+    tablesDropped: [...new Set(tableRows.map(row => row.tableName))],
+    elementsDropped: (input.foreignElements ?? []).map(
+      row =>
+        `${row.elementName ?? ""} (${row.elementKind ?? "element"}, ${row.migratedBy})`
+    ),
     supersedeFilenames: reversed.map(
       name => `plugin:${input.pluginName}/${name}`
     ),

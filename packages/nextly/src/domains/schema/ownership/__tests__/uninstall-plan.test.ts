@@ -83,6 +83,7 @@ describe("--keep-data", () => {
       finalState: "orphaned",
       downModules: [],
       tablesDropped: [],
+      elementsDropped: [],
       supersedeFilenames: [],
     });
   });
@@ -156,5 +157,53 @@ describe("a full uninstall", () => {
       )
     );
     expect(error.code).toBe("PLUGIN_HAS_DEPENDENTS");
+  });
+});
+
+describe("element-aware planning (C7)", () => {
+  it("element rows do not multiply the table list; foreign elements are named", () => {
+    const plan = planUninstall({
+      pluginName: "fx",
+      enabled: [],
+      owned: [
+        {
+          tableName: "fx__notes",
+          ownerKind: "plugin",
+          ownerId: "fx",
+          migratedBy: "plugin:fx",
+          ownerVersion: null,
+          schemaVersion: 1,
+          state: "active",
+        },
+        {
+          tableName: "fx__notes",
+          elementKind: "index",
+          elementName: "idx_fx__notes_label",
+          ownerKind: "plugin",
+          ownerId: "fx",
+          migratedBy: "plugin:fx",
+          ownerVersion: null,
+          schemaVersion: null,
+          state: "active",
+        },
+      ],
+      foreignElements: [
+        {
+          tableName: "fx__notes",
+          elementKind: "index",
+          elementName: "idx_app_label",
+          ownerKind: "app",
+          ownerId: "app",
+          migratedBy: "app",
+          ownerVersion: null,
+          schemaVersion: null,
+          state: "active",
+        },
+      ],
+      modules: [{ name: "001", reversible: true }],
+      keepData: false,
+    });
+    expect(plan.tablesDropped).toEqual(["fx__notes"]);
+    expect(plan.elementsDropped).toEqual(["idx_app_label (index, app)"]);
   });
 });
