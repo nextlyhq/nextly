@@ -6,17 +6,20 @@ name: Integration
 # ships silently. Runs as a sibling of `ci`, so it adds no wall-time to a
 # pull request.
 
+# No path filter here. A workflow skipped by `on.paths-ignore` never creates its
+# checks, so once the three legs are required a documentation pull request
+# would wait for results that never come. The `changes` job below decides the
+# same thing and the legs skip by `if:`, which reports `skipped`, a result the
+# merge gate and the merge queue both accept.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
+  # The merge queue tests each pull request again on the latest `main`, and
+  # merges it only if the required checks pass there too.
+  merge_group:
+    types: [checks_requested]
 
 # Read-only: the job never writes through the GITHUB_TOKEN.
 permissions:
@@ -44,7 +47,7 @@ env:
 # pending run, so a third merge displaces the second while it is still queued.
 #
 # That every commit keeps its own group does not mean every commit does the
-# work. The `supersession` job asks first, and a run a newer push has overtaken
+# work. The `changes` job asks first, and a run a newer push has overtaken
 # skips its legs; queued runs therefore start, ask and stop within seconds, and
 # only the newest tests. The queue stays short without anything being cancelled.
 concurrency:
@@ -52,19 +55,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Whether a newer push to `main` already has a run of this workflow. If so
-  # every leg below is skipped rather than repeated: the newer run's verdict
-  # includes this commit, and a skipped job is how this repository says "this
-  # commit cannot affect me". Nothing is cancelled, so `cancelled` keeps its
+  # Whether this run's legs have anything to do. Two answers skip them.
+  #
+  # A newer push to `main` already has a run of this workflow, whose verdict
+  # includes this commit; a skipped job is how this repository says "this
+  # commit cannot affect me", and nothing is cancelled, so `cancelled` keeps its
   # plain meaning. `.github/actions/superseded-on-main` carries the reasoning.
   #
-  # No change-detection here, unlike CI: this workflow's trigger already
-  # ignores docs and markdown, so a docs push has no run and cannot supersede
-  # anything, and every run that does exist tests everything. So only the
-  # `superseded` answer is used; `last-tested-sha` is for a workflow that
-  # narrows its work by diff.
-  supersession:
-    name: Ask whether a newer push already covers this one
+  # Or every changed file is documentation: under `docs/`, or Markdown
+  # anywhere, the same paths the trigger used to ignore. The comparison is the
+  # one CI makes (`scripts/change-scope.mjs`), including on a push to `main`,
+  # which compares with the last commit a leg actually tested, so a docs push
+  # after a superseded code push still tests that code.
+  changes:
+    name: Decide what this commit can affect
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -72,18 +76,37 @@ jobs:
       actions: read
     outputs:
       superseded: ${{ steps.newer.outputs.superseded }}
+      inert: ${{ steps.decide.outputs.inert }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          # Both ends of the comparison have to be present, or it falls open
+          # and runs everything.
+          fetch-depth: 0
           persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
       - name: Ask
         id: newer
         uses: ./.github/actions/superseded-on-main
         with:
           workflow: integration.yml
-          substantive-job: Integration (postgres)
+          substantive-job: |
+            Integration (postgres)
+            Integration (mysql)
+            Integration (sqlite)
           token: ${{ github.token }}
+      - name: Decide
+        id: decide
+        env:
+          SUPERSEDED: ${{ steps.newer.outputs.superseded }}
+          LAST_TESTED_SHA: ${{ steps.newer.outputs.last-tested-sha }}
+          SCOPE_TITLE: Integration scope
+          INERT_PATHS: '(^docs/|\.md$)'
+        run: node scripts/change-scope.mjs
 
   # One job per dialect, each with a literal name and only its own database.
   #
@@ -102,14 +125,14 @@ jobs:
   # The setup the legs share lives in `.github/actions/integration-setup`.
   integration-postgres:
     name: Integration (postgres)
-    needs: supersession
-    # `!cancelled()` so a supersession job that FAILED (checkout, the
-    # action, its timeout) does not skip this leg: with no `always()`-style
-    # override, GitHub skips every dependent of a failed job, `skipped` passes
-    # the merge gate, and three required checks would read as acceptable
-    # with nothing run. A failed question falls open to running the suite;
-    # only a cancelled workflow stays cancelled.
-    if: ${{ !cancelled() && needs.supersession.outputs.superseded != 'true' }}
+    needs: changes
+    # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
+    # its timeout) does not skip this leg: with no `always()`-style override,
+    # GitHub skips every dependent of a failed job, `skipped` passes the merge
+    # gate, and three required checks would read as acceptable with nothing
+    # run. A failed question has no outputs, so it falls open to running the
+    # suite; only a cancelled workflow stays cancelled.
+    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
     # A BACKSTOP now, not the bound that should ever fire.
     #
@@ -199,14 +222,14 @@ jobs:
 
   integration-mysql:
     name: Integration (mysql)
-    needs: supersession
-    # `!cancelled()` so a supersession job that FAILED (checkout, the
-    # action, its timeout) does not skip this leg: with no `always()`-style
-    # override, GitHub skips every dependent of a failed job, `skipped` passes
-    # the merge gate, and three required checks would read as acceptable
-    # with nothing run. A failed question falls open to running the suite;
-    # only a cancelled workflow stays cancelled.
-    if: ${{ !cancelled() && needs.supersession.outputs.superseded != 'true' }}
+    needs: changes
+    # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
+    # its timeout) does not skip this leg: with no `always()`-style override,
+    # GitHub skips every dependent of a failed job, `skipped` passes the merge
+    # gate, and three required checks would read as acceptable with nothing
+    # run. A failed question has no outputs, so it falls open to running the
+    # suite; only a cancelled workflow stays cancelled.
+    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
     # The same backstop as the postgres leg, for the same reasons.
     timeout-minutes: 75
@@ -270,14 +293,14 @@ jobs:
   # container-registry outage cannot fail a leg that needs no database.
   integration-sqlite:
     name: Integration (sqlite)
-    needs: supersession
-    # `!cancelled()` so a supersession job that FAILED (checkout, the
-    # action, its timeout) does not skip this leg: with no `always()`-style
-    # override, GitHub skips every dependent of a failed job, `skipped` passes
-    # the merge gate, and three required checks would read as acceptable
-    # with nothing run. A failed question falls open to running the suite;
-    # only a cancelled workflow stays cancelled.
-    if: ${{ !cancelled() && needs.supersession.outputs.superseded != 'true' }}
+    needs: changes
+    # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
+    # its timeout) does not skip this leg: with no `always()`-style override,
+    # GitHub skips every dependent of a failed job, `skipped` passes the merge
+    # gate, and three required checks would read as acceptable with nothing
+    # run. A failed question has no outputs, so it falls open to running the
+    # suite; only a cancelled workflow stays cancelled.
+    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
     # A BACKSTOP, for the same reason as the database legs above: the bound that
     # should ever fire is INTEGRATION_SUITE_BUDGET on the step, which reports as

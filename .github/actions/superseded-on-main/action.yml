@@ -28,12 +28,14 @@ inputs:
     required: true
   substantive-job:
     description: >
-      The display name of the job that does this workflow's real work. The last
-      completed run whose job of this name concluded `success` or `failure` is
-      the last commit this workflow actually tested, and is what a
-      change-detection step should diff against. Without it, a docs-only push landing after a superseded
-      code push would diff against the code push alone, read as inert, and
-      leave that code untested.
+      The display names of the jobs that do this workflow's real work, one per
+      line. The last completed run in which EVERY one of them concluded
+      `success` or `failure` is the last commit this workflow actually tested,
+      and is what a change-detection step should diff against. Without it, a
+      docs-only push landing after a superseded code push would diff against
+      the code push alone, read as inert, and leave that code untested. Every
+      job is named, not one standing for the rest: a run where one leg judged
+      the commit and another was cancelled did not test it on the second.
     required: true
   token:
     description: "A token with `actions: read`."
@@ -129,15 +131,20 @@ runs:
         # judged nothing, and a docs-only push diffing against it would read
         # as inert and leave that commit's code untested.
         #
-        # `gh api --jq` takes one filter and no `--arg`, so the job name is
-        # bound by `jq` itself over the raw response.
+        # `gh api --jq` takes one filter and no `--arg`, so the job names are
+        # bound by `jq` itself over the raw response. A run counts only when
+        # every named job reached a verdict; a job absent from the run did not,
+        # and an empty list of names is never a verdict.
         last=""
         for id in $(printf '%s\n' "$runs" | jq -r --argjson me "$THIS_RUN" \
           'select(.n < $me and .status == "completed") | .id'); do
           conclusion=$(gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" 2>/dev/null \
-            | jq -r --arg name "$SUBSTANTIVE_JOB" \
-              '[.jobs[] | select(.name == $name)] | first | .conclusion // "absent"') || conclusion="absent"
-          if [ "$conclusion" = "success" ] || [ "$conclusion" = "failure" ]; then
+            | jq -r --arg names "$SUBSTANTIVE_JOB" '
+                ($names | split("\n") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $wanted
+                | [$wanted[] as $name | [.jobs[] | select(.name == $name)] | first | .conclusion // "absent"] as $verdicts
+                | if ($wanted | length) > 0 and ($verdicts | all(. == "success" or . == "failure")) then "verdict" else "none" end') \
+            || conclusion="absent"
+          if [ "$conclusion" = "verdict" ]; then
             last=$(printf '%s\n' "$runs" | jq -r --argjson id "$id" 'select(.id == $id) | .sha')
             break
           fi
