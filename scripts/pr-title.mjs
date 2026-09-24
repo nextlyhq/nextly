@@ -35,7 +35,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 
 import { isCliEntry } from "./cli-entry.mjs";
-import { eventPayload, readGit } from "./workflow-context.mjs";
+import { commandText, eventPayload, queuedCommitSubjects, readGit } from "./workflow-context.mjs";
 
 const HEADER = /^(\w*)(?:\((.*)\))?!?: (.*)$/;
 const WIP = /^\[WIP\]\s/;
@@ -112,7 +112,7 @@ const CHECKS = [headerProblem, scopeProblem, subjectProblem];
 const TITLE_SOURCES = {
   pull_request: ({ payload = {} }) => eventTitle(payload.pull_request?.title),
   pull_request_target: ({ payload = {} }) => eventTitle(payload.pull_request?.title),
-  merge_group: queuedSubjects,
+  merge_group: queuedTitles,
 };
 
 /**
@@ -126,36 +126,18 @@ export function titlesFor(context, git = readGit) {
   return Object.hasOwn(TITLE_SOURCES, context.event) ? TITLE_SOURCES[context.event](context, git) : noTitle(context.event);
 }
 
+/** In the queue, the titles are the subjects of the commits it would land. */
+function queuedTitles({ payload }, git) {
+  const found = queuedCommitSubjects(payload, git);
+  return found.problem ? found : { titles: found.subjects };
+}
+
 function noTitle(event) {
   return { problem: `There is no pull request title to check on a ${event || "missing"} event.` };
 }
 
 function eventTitle(title) {
   return typeof title === "string" ? { titles: [title] } : { problem: "The event carries no pull request title." };
-}
-
-/**
- * The subjects of the commits the queue would put on `main`, oldest first,
- * following `main`'s own line: the first parent at each step, so a commit
- * reachable only through a merge's second parent is not one that lands there.
- * With squash merging each is one pull request's commit, its subject the title
- * and `(#number)`; a merge commit's subject is not a Conventional Commits
- * title, so a queue that merges rather than squashes is refused here too.
- */
-function queuedSubjects({ payload }, git) {
-  const range = payload?.merge_group ?? {};
-  return bothEnds(range) ? subjectsBetween(range.base_sha, range.head_sha, git) : { problem: "The merge-queue event names no base or no head commit." };
-}
-
-function bothEnds({ base_sha: base, head_sha: head }) {
-  return Boolean(base && head);
-}
-
-function subjectsBetween(base, head, git) {
-  const log = git(["log", "--first-parent", "--reverse", "--format=%s%x00", `${base}..${head}`]);
-  if (!log.ok) return { problem: `Could not read the commits between the queue's base ${base} and its head ${head}.` };
-  const titles = log.out.split("\0").map(subject => subject.trim()).filter(Boolean);
-  return titles.length > 0 ? { titles } : { problem: "The merge queue's head adds no commits to its base." };
 }
 
 /** Why any of several titles is refused, each named, or null when all pass. */
@@ -181,11 +163,6 @@ function refuse(env, problem) {
 function accept(titles) {
   for (const title of titles) console.log(`pr-title: "${title}" follows Conventional Commits`);
   return 0;
-}
-
-/** Text inside a workflow command, where `%`, CR and LF would otherwise be read as syntax. */
-function commandText(text) {
-  return text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 }
 
 /** A multi-line output, fenced by a delimiter no title can contain. Absent when the title passed. */

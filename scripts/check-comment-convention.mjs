@@ -276,6 +276,10 @@ const REVIEW_DOMAIN_PATHS = [
   // it operates on rather than narration about a change.
   "scripts/ci-verdict-evidence",
   "scripts/verify-merge",
+  // The merge queue's independent-review gate. It reads pull requests and
+  // dispatches on reviewer logins, as the verdict gate beside it does, so the
+  // same vocabulary is what it operates on.
+  "scripts/independent-review",
   "scripts/release/",
   ".claude/rules/",
   // This checker and its test. Their SUBJECT is the convention itself: the patterns name the

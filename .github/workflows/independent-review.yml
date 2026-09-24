@@ -1,0 +1,49 @@
+name: Independent review
+
+# The merge queue lands a pull request only when a model from a different
+# family than the one that wrote it has reviewed the exact revision it lands:
+# Codex, or, when Codex is held up by a rate or quota limit, the Nextly review
+# bot. `scripts/independent-review.mjs` carries the rule and the evidence it
+# accepts.
+#
+# It decides in the queue, where the reviews a pull request is going to get
+# have had their chance to arrive. On a pull request the job is skipped, which
+# is a result the queue can be entered with; the queue is where this is held.
+on:
+  pull_request:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+
+permissions: {}
+
+jobs:
+  review:
+    name: Independent review of the revision being merged
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      # The decision runs from the queue's base, `main` as the queue found it,
+      # so no queued change judges its own review. The full history is fetched
+      # so the commits the queue would land can be read.
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.merge_group.base_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/independent-review.mjs

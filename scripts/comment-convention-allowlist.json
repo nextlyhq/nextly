@@ -17,10 +17,6 @@
       "e02630891b827e51"
     ]
   },
-  ".github/workflows/integration.yml": {
-    "count": 2,
-    "digests": ["84381fd424963009", "84381fd424963009"]
-  },
   ".github/workflows/package-smoke.yml": {
     "count": 2,
     "digests": ["4a52eb35ec67f7ec", "c8af348842e7280a"]

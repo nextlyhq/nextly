@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { load } from "js-yaml";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { main, rulesFrom, titleProblem, titlesFor, titlesProblem } from "./pr-title.mjs";
 import { readGit } from "./workflow-context.mjs";
@@ -155,9 +155,14 @@ describe("the command", () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "pr-title-"));
+    // A refused title prints an `::error` line, which a runner reading this
+    // suite's output would raise as an annotation on the run itself.
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(dir, { recursive: true, force: true });
   });
 

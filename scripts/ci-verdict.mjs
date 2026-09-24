@@ -327,7 +327,23 @@ const REVIEWED_COMMIT_MARKER = /reviewed commit:\**\s*`([0-9a-f]{7,40})`/i;
  */
 export function reviewedCommitFrom(body) {
   if (typeof body !== "string") return undefined;
-  return REVIEWED_COMMIT_MARKER.exec(body)?.[1]?.toLowerCase();
+  return (REVIEWED_COMMIT_MARKER.exec(body)?.[1] ?? summaryVerdict(body))?.toLowerCase();
+}
+
+/**
+ * The same verdict as Codex states it now: a clean review opens no review
+ * object and posts no other comment, only this row in the summary comment it
+ * keeps up to date, and a reaction. Without it, a revision Codex read and passed
+ * is exactly as silent as one nobody read. The comment's hidden marker is
+ * required, so the same table pasted into any other comment counts for
+ * nothing, and only a COMPLETED code review names a revision; a running one
+ * has read nothing yet.
+ */
+const SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->";
+const SUMMARY_COMPLETED_ROW = /\*\*Code Review\*\*\s*\|\s*✅\s*\*\*Completed\*\*[^|]*\|\s*`([0-9a-f]{7,40})`/i;
+
+function summaryVerdict(body) {
+  return body.includes(SUMMARY_MARKER) ? SUMMARY_COMPLETED_ROW.exec(body)?.[1] : undefined;
 }
 
 /**

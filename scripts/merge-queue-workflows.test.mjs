@@ -23,6 +23,7 @@ const QUEUE_CHECKS = {
   ".github/workflows/ci.yml": ["CI gate", "Comment convention (describes code, not process)"],
   ".github/workflows/integration.yml": ["Integration (postgres)", "Integration (mysql)", "Integration (sqlite)"],
   ".github/workflows/pr-title.yml": ["Validate PR title follows Conventional Commits"],
+  ".github/workflows/independent-review.yml": ["Independent review of the revision being merged"],
 };
 
 describe("every workflow behind a required check, in the merge queue", () => {
@@ -101,16 +102,47 @@ describe("steps limited to one event", () => {
    * than on a pull request's own run. Every such condition in a workflow the queue
    * requires has to name the queue's event too.
    */
-  for (const path of Object.keys(QUEUE_CHECKS)) {
-    it(`${path} names the queue's event wherever it names the pull request's`, () => {
-      expect(pullRequestOnly(read(path))).toEqual([]);
+  for (const [path, checks] of Object.entries(QUEUE_CHECKS)) {
+    it(`${path} names the queue's event wherever it names a pull request's, in every job its required checks stand on`, () => {
+      const workflow = read(path);
+      expect(pullRequestOnly(workflow, requiredJobs(workflow, checks))).toEqual([]);
     });
   }
+
+  it("reads either pull-request event as a limit, and one that also names the queue's as none", () => {
+    expect(limitedToPullRequests("github.event_name == 'pull_request'")).toBe(true);
+    expect(limitedToPullRequests("${{ always() && github.event_name == 'pull_request_target' }}")).toBe(true);
+    expect(limitedToPullRequests("github.event_name == 'pull_request' || github.event_name == 'merge_group'")).toBe(false);
+    expect(limitedToPullRequests("github.event_name == 'push'")).toBe(false);
+  });
+
+  it("reads a gate's dependencies as part of it, and leaves a job no required check stands on out", () => {
+    const ci = read(".github/workflows/ci.yml");
+    expect(requiredJobs(ci, QUEUE_CHECKS[".github/workflows/ci.yml"])).toEqual(expect.arrayContaining(["gate", "ci", "changes", "comments"]));
+    const title = read(".github/workflows/pr-title.yml");
+    expect(requiredJobs(title, QUEUE_CHECKS[".github/workflows/pr-title.yml"])).toEqual(["lint"]);
+  });
 });
 
-/** The jobs and steps whose condition names a pull request's event and not the queue's. */
-function pullRequestOnly(workflow) {
-  return Object.entries(workflow.jobs).flatMap(([id, job]) => [...guardedJob(id, job), ...guardedSteps(id, job)]);
+/**
+ * The jobs a workflow's required checks stand on: each check's own job, and
+ * every job it `needs`, however deep. A job outside that set, such as one that
+ * only comments on a pull request, may be limited to a pull request's events.
+ */
+function requiredJobs(workflow, checks) {
+  const seen = new Set();
+  const visit = id => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    [workflow.jobs[id]?.needs ?? []].flat().forEach(visit);
+  };
+  Object.entries(workflow.jobs).filter(([, job]) => checks.includes(job.name)).forEach(([id]) => visit(id));
+  return [...seen];
+}
+
+/** The given jobs and their steps whose condition names a pull request's event and not the queue's. */
+function pullRequestOnly(workflow, ids) {
+  return ids.flatMap(id => [...guardedJob(id, workflow.jobs[id]), ...guardedSteps(id, workflow.jobs[id])]);
 }
 
 function guardedJob(id, job) {
@@ -121,9 +153,31 @@ function guardedSteps(id, job) {
   return (job.steps ?? []).filter(step => limitedToPullRequests(String(step.if ?? ""))).map(step => `${id}: ${step.name}`);
 }
 
+/** Either pull-request event, `pull_request` or `pull_request_target`, without the queue's. */
 function limitedToPullRequests(condition) {
-  return /event_name == 'pull_request'/.test(condition) && !/event_name == 'merge_group'/.test(condition);
+  return /event_name == 'pull_request(?:_target)?'/.test(condition) && !/event_name == 'merge_group'/.test(condition);
 }
+
+describe("the independent-review gate", () => {
+  const workflow = read(".github/workflows/independent-review.yml");
+  const job = workflow.jobs.review;
+
+  /*
+   * The queue is where the reviews a pull request will get have had time to
+   * arrive, and where the gate decides. It judges from the queue's base with
+   * read-only access, so no queued change can rewrite what counts as a review
+   * of itself.
+   */
+  it("decides in the queue, from the queue's base, with read access only", () => {
+    expect(job.if).toBe("github.event_name == 'merge_group'");
+    const checkout = job.steps.find(step => String(step.uses).startsWith("actions/checkout@"));
+    expect(checkout.with.ref).toBe("${{ github.event.merge_group.base_sha }}");
+    expect(checkout.with["fetch-depth"]).toBe(0);
+    expect(workflow.permissions).toEqual({});
+    expect(Object.values(job.permissions)).toEqual(["read", "read", "read"]);
+    expect(job.steps.at(-1).run).toBe("node scripts/independent-review.mjs");
+  });
+});
 
 describe("the title check's permissions", () => {
   const workflow = read(".github/workflows/pr-title.yml");
