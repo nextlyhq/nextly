@@ -132,9 +132,11 @@ async function resolvedAbbreviations({ pr, comments, timeline }, context) {
 
 /**
  * GitHub answers 422 for an abbreviation that names no single commit it
- * holds. It reads a branch or a tag's name there as well, though, and anyone
- * who can push can point one at any commit, so an abbreviation that is also a
- * branch's or a tag's name resolves to nothing here.
+ * holds. It reads the name as a ref first, though, wherever git's rules would
+ * find one, and anyone who can push can point a ref at any commit; its only
+ * lookup that takes nothing but an object ID wants all of one. So an
+ * abbreviation that is also a ref's name, in any of those places, resolves to
+ * nothing here.
  */
 async function resolveRevision(abbreviation, context) {
   if (await namesRef(abbreviation, context)) return undefined;
@@ -142,9 +144,12 @@ async function resolveRevision(abbreviation, context) {
   return commit?.sha?.toLowerCase();
 }
 
-/** Whether a branch or a tag has exactly this name. */
+/** Where git's rules look for a ref of a name before reading it as an abbreviation, under `refs/`, as gitrevisions lists them. */
+const refPlaces = name => [name, `tags/${name}`, `heads/${name}`, `remotes/${name}`, `remotes/${name}/HEAD`];
+
+/** Whether a ref git would read this name as exists; GitHub looks each place up exactly. */
 async function namesRef(name, context) {
-  const refs = await Promise.all(["heads", "tags"].map(kind => getJson(`repos/${context.repository}/git/ref/${kind}/${name}`, context, [404])));
+  const refs = await Promise.all(refPlaces(name).map(place => getJson(`repos/${context.repository}/git/ref/${place}`, context, [404])));
   return refs.some(ref => ref !== undefined);
 }
 

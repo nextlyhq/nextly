@@ -129,13 +129,14 @@ const MADE_ADJECTIVE = "(?:generated|assisted|authored|written|created|made)";
 const NAMED_ADJECTIVES = [new RegExp(`\\b(?:${TOOLS.join("|")})-${MADE_ADJECTIVE}\\b`, "gi"), new RegExp(`\\b(?:${PROPER.join("|")})-${MADE_ADJECTIVE}\\b`, "g")];
 const GENERIC_ADJECTIVE = new RegExp(`\\b(?:AI|LLM)-${MADE_ADJECTIVE}\\b`, "gi");
 /**
- * In a file, AI in general credits only where it describes this file or this
- * change itself. A page, a document or anything else a product serves may be
- * AI-made as a feature, so only the change's own artifacts count, and only as
- * this one.
+ * In a file, AI in general credits only where it describes the file or the
+ * change itself. A page, a document or the code a product serves may be
+ * AI-made as a feature, so only the change's own artifacts count: any of them
+ * as this one, and as the one only the file, the change, the patch or the
+ * commit, which product copy has little reason to say.
  */
 const SELF_DESCRIBED = new RegExp(
-  `\\b${gapped("this (?:file|change|patch|commit|code|module|script|function|implementation|test|tests) (?:is|was|has been|are|were)")}${GAP}${DEGREE}(?:AI|LLM)-${MADE_ADJECTIVE}\\b`,
+  `\\b${gapped("(?:this (?:file|change|patch|commit|code|module|script|function|implementation|test|tests)|the (?:file|change|patch|commit)) (?:is|was|has been|are|were)")}${GAP}${DEGREE}(?:AI|LLM)-${MADE_ADJECTIVE}\\b`,
   "gi"
 );
 
@@ -236,7 +237,7 @@ function continuesTrailer(line, last) {
  */
 function creditingSpan({ parts, at }, rules) {
   for (let count = 1; count <= parts.length; count += 1) {
-    const found = trailerCredits(parts.slice(0, count).join(" "), rules);
+    const found = trailerCredits(parts.slice(0, count).join(" "), rules, count === parts.length);
     if (found.length > 0) return found.map(credit => ({ ...credit, from: at, line: at + count - 1 }));
   }
   return [];
@@ -259,20 +260,25 @@ function lineAt(text, offset) {
   return text.slice(0, offset).split("\n").length;
 }
 
-function trailerCredits(text, rules) {
+function trailerCredits(text, rules, whole) {
   const trailer = rules.trailers ? TRAILER.exec(text) : null;
-  return trailer && creditedByTrailer(trailer[2]) ? [{ form: `names it in a ${trailer[1]} trailer`, excerpt: excerpt(text) }] : [];
+  return trailer && creditedByTrailer(trailer[2], whole) ? [{ form: `names it in a ${trailer[1]} trailer`, excerpt: excerpt(text) }] : [];
 }
 
 /**
  * A trailer with an address credits an AI when the identity is an AI's. One
  * without an address names whoever it credits outright, before any note, so
- * there a tool's plain name, or one that begins with a tool's, is enough.
+ * there a tool's plain name, or one that begins with a tool's, is enough. An
+ * ambiguous name alone is judged only on the `whole` value: folded onto the
+ * next line, `Claude` may go on to be `Claude Dupont`.
  */
-function creditedByTrailer(value) {
+function creditedByTrailer(value, whole) {
   if (/<[^>]*>/.test(value)) return isAiIdentity(value);
-  const name = value.split(/\s+(?:[(—]|-\s)|:/)[0].trim();
-  return isAiIdentity(name) || BARE_NAME.test(name) || TOOL_NAMED.test(name);
+  return namesToolOutright(value.split(/\s+(?:[(—]|-\s)|:/)[0].trim(), whole);
+}
+
+function namesToolOutright(name, whole) {
+  return isAiIdentity(name) || TOOL_NAMED.test(name) || (whole && BARE_NAME.test(name));
 }
 
 /** Each crediting phrase followed by a name, with where the phrase starts and where the name it credits does. */
@@ -303,9 +309,16 @@ function adjectiveCredits(text, rules) {
   return cased.flatMap(pattern => [...text.matchAll(pattern)].map(match => ({ form: "calls it AI-made", excerpt: excerpt(text, match.index), start: match.index, at: match.index })));
 }
 
+/**
+ * A tool named as the change's maker, from its name to the end of the phrase,
+ * so that an added line anywhere in the phrase takes part. A full name read as
+ * an ambiguous one and its edition matches both patterns, and counts once.
+ */
 function subjectCredits(text, rules) {
   if (!rules.subject) return [];
-  return SUBJECTS.flatMap(pattern => [...text.matchAll(pattern)].map(match => ({ form: "names it as the change's maker", excerpt: excerpt(text, match.index), start: match.index, at: match.index })));
+  const phrases = new Map();
+  for (const match of SUBJECTS.flatMap(pattern => [...text.matchAll(pattern)])) if (!phrases.has(match.index)) phrases.set(match.index, match);
+  return [...phrases.values()].map(match => ({ form: "names it as the change's maker", excerpt: excerpt(text, match.index), start: match.index, at: match.index + match[0].length }));
 }
 
 function excerpt(text, from = 0) {

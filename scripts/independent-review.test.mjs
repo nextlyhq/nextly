@@ -183,13 +183,15 @@ describe("the command", () => {
     expect(printed()).toMatch(/#12 has no independent review of 222222222/);
   });
 
-  // A branch or a tag named like the abbreviation could point it at any
-  // commit, such as one made to share a reviewed revision's prefix.
-  it("does not count it where a branch or a tag bears the abbreviation's name", async () => {
-    for (const kind of ["heads", "tags"]) {
+  // A ref named like the abbreviation, wherever git's rules would find it,
+  // could point it at any commit, such as one made to share a reviewed
+  // revision's prefix.
+  it("does not count it where a ref bears the abbreviation's name, in any place git reads a name from", async () => {
+    const name = "2".repeat(7);
+    for (const place of [name, `tags/${name}`, `heads/${name}`, `remotes/${name}`, `remotes/${name}/HEAD`]) {
       const shadowed = queueOf(() => [], { commentsFor: cleanPass, timeline: rewritten, resolves });
-      shadowed.routes[`repos/o/r/git/ref/${kind}/${"2".repeat(7)}`] = { ref: `refs/${kind}/${"2".repeat(7)}`, object: { sha: "2".repeat(40) } };
-      expect(await main(shadowed.env, shadowed.deps), kind).toBe(1);
+      shadowed.routes[`repos/o/r/git/ref/${place}`] = { ref: `refs/${place}`, object: { sha: "2".repeat(40) } };
+      expect(await main(shadowed.env, shadowed.deps), place).toBe(1);
       expect(printed()).toMatch(/#11 at 111111111 was reviewed by Codex/);
       expect(printed()).toMatch(/#12 has no independent review of 222222222/);
     }
