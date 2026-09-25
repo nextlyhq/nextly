@@ -55,6 +55,11 @@ import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { generateSQL } from "../pipeline/sql-templates/index";
 
+import {
+  appStreamSnapshots,
+  NO_APP_STREAM_TABLES,
+  type AppStreamTables,
+} from "./app-stream";
 import { buildInverseOperations } from "./down-generator";
 import { formatMigrationFile, formatTimestamp, slugify } from "./format-file";
 import { promptRenames, type RenameDecision } from "./prompt-renames";
@@ -144,18 +149,18 @@ export interface GenerateArgs {
    */
   defaultLocale?: string;
   /**
-   * APP-owned extension tables, compiled from `db.schema.extend`.
+   * The extension schema the APP's stream owns: the tables it declares through
+   * `db.schema.extend`, and the elements it contributes to tables another owner
+   * declares.
    *
-   * Part of the desired snapshot like any other table. Without them the
-   * generator only ever saw collections, singles and components, so a table an
-   * app declared through the documented extend hook was created by development
-   * bootstrap and silently absent from every migration — the one difference
-   * migrations exist to prevent.
-   *
-   * A PLUGIN's extension tables are not these: those ride the plugin's own
-   * module, which `migrate:create --plugin` writes.
+   * Without it the generator only ever saw collections, singles and
+   * components, so a table an app declared through the documented extend hook
+   * was created by development bootstrap and silently absent from every
+   * migration — the one difference migrations exist to prevent. A PLUGIN's own
+   * tables are not here: those ride the plugin's module, which
+   * `migrate:create --plugin` writes.
    */
-  extensionSpecs?: readonly TableSpec[];
+  appStream?: AppStreamTables;
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -202,25 +207,25 @@ export async function generateMigration(
 
   // 1. Load previous state.
   const previous = await loadLatestSnapshot(metaDir);
-  const previousSnapshot = previous?.data.snapshot ?? EMPTY_SNAPSHOT;
 
   // 2. Build desired snapshot from config. Localized collections omit their
   //    translatable columns here (they live in the companion `_locales` table).
-  const desiredSnapshot = buildDesiredSnapshotFromConfig(
-    args.collections,
-    args.singles,
-    args.components,
-    args.dialect
-  );
-  if (args.extensionSpecs && args.extensionSpecs.length > 0) {
-    // Appended rather than merged: an extension table is a table of its own,
-    // and its name cannot collide with an entity's — the draft store refuses
-    // that at compile time, before anything reaches here.
-    desiredSnapshot.tables = [
-      ...desiredSnapshot.tables,
-      ...args.extensionSpecs,
-    ];
-  }
+  //    The app stream's extension tables are folded into BOTH sides, since a
+  //    table the app contributes to is compared over its owner's current
+  //    declaration rather than over the copy the last snapshot froze.
+  const stream = appStreamSnapshots({
+    previous: previous?.data.snapshot ?? EMPTY_SNAPSHOT,
+    previousContributions: previous?.data.contributions ?? {},
+    desired: buildDesiredSnapshotFromConfig(
+      args.collections,
+      args.singles,
+      args.components,
+      args.dialect
+    ),
+    tables: args.appStream ?? NO_APP_STREAM_TABLES,
+  });
+  const previousSnapshot = stream.previous;
+  const desiredSnapshot = stream.desired;
 
   // 2a. Plan companion `_locales` migrations for localized collections, singles, AND
   //     components (i18n Option B: companions are migration-owned, emitted as
@@ -357,8 +362,9 @@ export async function generateMigration(
   const snapshotPath = await writeSnapshot(
     metaDir,
     baseName,
-    desiredSnapshot,
-    sqlContent
+    stream.written,
+    sqlContent,
+    stream.contributions
   );
 
   // 9. Emit the snapshot-less companion `.sql` files around the main migration, ordered by kind:

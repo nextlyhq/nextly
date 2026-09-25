@@ -16,7 +16,6 @@
  * @since 1.0.0
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
-import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../../plugins/plugin-slug";
@@ -146,6 +145,38 @@ function contributionsOf(
 export async function compileAndPublishExtensionSchema(
   input: PublishInput
 ): Promise<ExtensionSchema | undefined> {
+  const schema = await compileExtensionSchema(input);
+  if (schema === undefined) {
+    // Nothing declares a schema. Cleared rather than left alone, so a reload
+    // that REMOVES the last plugin does not leave its tables in the desired
+    // set — which would keep re-creating them.
+    clearActiveExtensionSchema();
+    return undefined;
+  }
+
+  setActiveExtensionSchema(input.dialect, schema);
+  input.logger.debug?.(
+    `[nextly] extension schema: ${String(schema.tables.length)} table(s) from ${String(contributionsOf(input.plugins).length)} plugin(s).`
+  );
+  // RETURNED as well as published, so a caller in the same boot can hand it
+  // to first-run directly. The module-level map is reached through a dynamic
+  // import there, and a bundler may resolve that to a second instance of this
+  // module — whose map is empty. Measured: publish logged two tables and
+  // first-run read none, in one process, microseconds apart.
+  return schema;
+}
+
+/**
+ * Compile the extension schema WITHOUT making it the active one.
+ *
+ * For callers that need the compiled result and serve nothing: the migration
+ * commands compile the app's schema twice — once as configured, once without
+ * the app's hooks — and publishing either would leave the process holding
+ * whichever ran last. `undefined` when nothing declares a schema.
+ */
+export async function compileExtensionSchema(
+  input: PublishInput
+): Promise<ExtensionSchema | undefined> {
   const plugins = contributionsOf(input.plugins);
   const schemaConfig = (
     input.config.db as
@@ -163,10 +194,6 @@ export async function compileAndPublishExtensionSchema(
     appHooks.length === 0 &&
     afterDrizzle.length === 0
   ) {
-    // Nothing declares a schema. Cleared rather than left alone, so a reload
-    // that REMOVES the last plugin does not leave its tables in the desired
-    // set — which would keep re-creating them.
-    clearActiveExtensionSchema();
     return undefined;
   }
 
@@ -237,17 +264,6 @@ export async function compileAndPublishExtensionSchema(
     ),
     plugins,
     afterDrizzle,
-    // Lets a SQLite foreign key that points at a CORE or ENTITY table reach
-    // the `CREATE TABLE` that is its only chance to exist: SQLite cannot add
-    // one afterwards, so a reference outside the extension bundle was being
-    // compiled away and silently never enforced. Resolved lazily and through
-    // the container, so a process without a registry simply resolves nothing.
-    resolveExternalTable: (tableName: string) => {
-      if (!container.has("schemaRegistry")) return undefined;
-      return container
-        .get<{ getTable: (name: string) => unknown }>("schemaRegistry")
-        .getTable(tableName);
-    },
     ...(appHooks.length > 0
       ? {
           app: {
@@ -258,14 +274,5 @@ export async function compileAndPublishExtensionSchema(
       : {}),
   });
 
-  setActiveExtensionSchema(input.dialect, schema);
-  input.logger.debug?.(
-    `[nextly] extension schema: ${String(schema.tables.length)} table(s) from ${String(plugins.length)} plugin(s).`
-  );
-  // RETURNED as well as published, so a caller in the same boot can hand it
-  // to first-run directly. The module-level map is reached through a dynamic
-  // import there, and a bundler may resolve that to a second instance of this
-  // module — whose map is empty. Measured: publish logged two tables and
-  // first-run read none, in one process, microseconds apart.
   return schema;
 }

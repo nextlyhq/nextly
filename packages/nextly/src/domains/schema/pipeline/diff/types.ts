@@ -174,6 +174,20 @@ export interface TableSpec {
   localizedColumns?: string[];
 }
 
+/**
+ * Names of the elements a contributor added to a table another owner declares.
+ *
+ * Recorded beside a stored copy of that table, because the copy alone cannot
+ * say which of its parts were the contributor's: an element the owner has
+ * since removed looks exactly like one the contributor added.
+ */
+export interface ContributedElements {
+  columns: string[];
+  indexes: string[];
+  foreignKeys: string[];
+  checks: string[];
+}
+
 // A snapshot of either the live DB state or the desired state. Only includes
 // MANAGED tables (filtered by MANAGED_TABLE_PREFIXES_REGEX from F3).
 export interface NextlySchemaSnapshot {

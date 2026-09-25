@@ -55,7 +55,7 @@ function harness() {
     tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
     db: () => db,
     relationalDb: () => db,
-    transaction: fn => fn(db),
+    transaction: fn => fn({ db, relationalDb: db }),
   });
 
   return { surface, inserted, updated };
@@ -130,6 +130,115 @@ describe("update", () => {
     // `createdAt` must NOT be rewritten: it records when the row was made.
     expect(values).not.toHaveProperty("createdAt");
     expect(affected).toBe(3);
+  });
+});
+
+/**
+ * A `col.serial()` key is assigned by the database and never written.
+ *
+ * The type already refuses one; these drive the runtime refusal with the type
+ * bypassed, as a plain-JavaScript plugin or a spread of untyped input would.
+ */
+describe("a col.serial() key", () => {
+  const counters = defineTable("counters", {
+    seq: col.serial(),
+    label: col.shortText(),
+  });
+
+  function serialHarness() {
+    const inserted: unknown[] = [];
+    const updated: unknown[] = [];
+    const db = {
+      insert: () => ({
+        values: (rows: unknown) => {
+          inserted.push(rows);
+          return Promise.resolve();
+        },
+      }),
+      update: () => ({
+        set: (values: unknown) => ({
+          where: () => {
+            updated.push(values);
+            return Promise.resolve({ rowCount: 1 });
+          },
+        }),
+      }),
+      delete: () => ({ where: () => Promise.resolve({ rowCount: 0 }) }),
+    };
+    const surface = createPluginDatabase({
+      dialect: "postgresql",
+      owner: OWNER,
+      dependsOn: new Set(),
+      owners: () => new Map([["fx__counters", OWNER]]),
+      tables: () => ({ fx__counters: { name: "fx__counters" } }),
+      tableList: () => [
+        { name: "fx__counters", authored: "counters", owner: OWNER },
+      ],
+      db: () => db,
+      relationalDb: () => db,
+      transaction: fn => fn({ db, relationalDb: db }),
+    });
+    return { surface, inserted, updated };
+  }
+
+  it("refuses an insert that supplies it, and writes nothing", async () => {
+    const { surface, inserted } = serialHarness();
+    await expect(
+      surface.insert(counters, { seq: 7, label: "a" } as never)
+    ).rejects.toSatisfy(
+      error => NextlyError.is(error) && error.code === "VALIDATION_ERROR"
+    );
+    expect(inserted).toEqual([]);
+  });
+
+  it("refuses a batch where any row supplies it, writing none of the batch", async () => {
+    // Every row is mapped before the one insert is issued, so the valid first
+    // row is not written ahead of the refused second.
+    const { surface, inserted } = serialHarness();
+    await expect(
+      surface.insert(counters, [
+        { label: "a" },
+        { seq: 8, label: "b" },
+      ] as never)
+    ).rejects.toSatisfy(error => NextlyError.is(error));
+    expect(inserted).toEqual([]);
+  });
+
+  it("refuses an update that sets it, and writes nothing", async () => {
+    const { surface, updated } = serialHarness();
+    await expect(
+      surface.update(counters, { seq: 9 } as never).where({} as never)
+    ).rejects.toSatisfy(
+      error => NextlyError.is(error) && error.code === "VALIDATION_ERROR"
+    );
+    expect(updated).toEqual([]);
+  });
+
+  it("refuses insertReturning BEFORE writing the row", async () => {
+    // The key is chosen during the insert, so there is nothing to read the
+    // row back by. Refusing after the insert left a row behind that the
+    // caller was told had not been created.
+    const { surface, inserted } = serialHarness();
+    await expect(
+      surface.insertReturning(counters, { label: "a" } as never)
+    ).rejects.toSatisfy(
+      error => NextlyError.is(error) && error.code === "VALIDATION_ERROR"
+    );
+    expect(inserted).toEqual([]);
+  });
+
+  it("treats an undefined value as omitted, on insert and update", async () => {
+    // The control. A refusal keyed on the property being PRESENT would pass
+    // the cases above and break any caller spreading an optional field.
+    const { surface, inserted, updated } = serialHarness();
+    await surface.insert(counters, { seq: undefined, label: "a" } as never);
+    await surface
+      .update(counters, { seq: undefined, label: "b" } as never)
+      .where({} as never);
+
+    const row = (inserted[0] as Record<string, unknown>[])[0];
+    expect(row).toEqual({ label: "a" });
+    expect(updated[0]).toEqual({ label: "b" });
   });
 });
 
@@ -212,7 +321,7 @@ describe("transaction", () => {
       relationalDb: () => db,
       transaction: async fn => {
         order.push("begin");
-        const result = await fn(db);
+        const result = await fn({ db, relationalDb: db });
         order.push("commit");
         return result;
       },
@@ -255,7 +364,7 @@ describe("transaction", () => {
       db: () => pooled,
       relationalDb: () => pooled,
       // What the real adapters do: the work runs against the leased client.
-      transaction: fn => fn(scoped),
+      transaction: fn => fn({ db: scoped, relationalDb: scoped }),
     });
 
     await surface.transaction(async tx => {
@@ -264,6 +373,53 @@ describe("transaction", () => {
 
     // The write went through the transaction's handle, not the pool's.
     expect(wrote).toEqual(["transaction-bound"]);
+  });
+
+  it("routes RELATIONAL reads through the transaction's relational handle", async () => {
+    // The half that was missed twice. Replacing only `db` left the `query`
+    // getter resolving `relationalDb` from the pool, so a relational read
+    // inside the callback ran on a different connection and could not see the
+    // uncommitted writes beside it. Routing it through the transaction's BARE
+    // handle is no better: Drizzle builds that one without a relations config,
+    // so its `query` namespace is empty — which is why this double has none.
+    const read: string[] = [];
+    const builder = () => ({
+      insert: () => ({ values: () => Promise.resolve() }),
+      update: () => ({ set: () => ({ where: () => Promise.resolve({}) }) }),
+      delete: () => ({ where: () => Promise.resolve({}) }),
+      query: {},
+    });
+    const relational = (id: string) => ({
+      ...builder(),
+      query: {
+        fx__notes: {
+          findMany: async () => {
+            read.push(id);
+            return [];
+          },
+        },
+      },
+    });
+    const pooled = relational("pooled");
+
+    const surface = createPluginDatabase({
+      dialect: "postgresql",
+      owner: OWNER,
+      dependsOn: new Set(),
+      owners: () => new Map([["fx__notes", OWNER]]),
+      tables: () => ({ fx__notes: { name: "fx__notes" } }),
+      tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
+      db: () => builder(),
+      relationalDb: () => pooled,
+      transaction: fn =>
+        fn({ db: builder(), relationalDb: relational("transaction-bound") }),
+    });
+
+    await surface.transaction(async tx => {
+      await tx.query.fx__notes.findMany();
+    });
+
+    expect(read).toEqual(["transaction-bound"]);
   });
 
   it("propagates a failure rather than swallowing it", async () => {
@@ -314,7 +470,7 @@ describe("relational queries", () => {
       tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
       db: () => relational,
       relationalDb: () => relational,
-      transaction: fn => fn(relational),
+      transaction: fn => fn({ db: relational, relationalDb: relational }),
     });
 
     return { surface, answered };
@@ -367,7 +523,7 @@ describe("relational queries", () => {
       tableList: () => [],
       db: () => relational,
       relationalDb: () => relational,
-      transaction: fn => fn(relational),
+      transaction: fn => fn({ db: relational, relationalDb: relational }),
     });
 
     const namespace = surface.query;

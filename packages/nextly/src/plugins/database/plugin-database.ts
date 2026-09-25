@@ -75,8 +75,18 @@ export interface PluginDatabaseDeps {
    * current relations, exactly as core services build theirs.
    */
   relationalDb: () => unknown;
-  /** The adapter's transaction, which serialises correctly on SQLite. */
-  transaction: <R>(fn: (tx: unknown) => Promise<R>) => Promise<R>;
+  /**
+   * The adapter's transaction, which serialises correctly on SQLite.
+   *
+   * The callback receives BOTH handles bound to the transaction's connection:
+   * `db` for the builder methods and `relationalDb` for `query`. The pooled
+   * handles above run on a different connection on PostgreSQL and MySQL, so
+   * either one used inside the callback would read and write outside the
+   * transaction.
+   */
+  transaction: <R>(
+    fn: (tx: { db: unknown; relationalDb: unknown }) => Promise<R>
+  ) => Promise<R>;
 }
 
 /**
@@ -243,9 +253,31 @@ function toColumns(
   // made, which is where Drizzle reads it from.
   const out: Record<string, unknown> = {};
   for (const column of definition.columns) {
-    if (values[column.key] !== undefined) {
-      out[column.key] = values[column.key];
+    if (values[column.key] === undefined) continue;
+    // A database-assigned key is never written, however it was supplied.
+    //
+    // `col.serial()` is documented as assigned by the database, and
+    // `InferInsert` types its key `?: never`, so a typed caller cannot set it.
+    // This is the same rule for the callers the type does not reach: plain
+    // JavaScript, a cast, a spread of untyped input. An `undefined` value was
+    // skipped above, so only a value actually supplied is refused.
+    // Forwarding that value leaves PostgreSQL's sequence behind the row —
+    // later generated inserts then collide with keys already taken — and the
+    // three dialects disagree about what an explicit auto-increment value
+    // even means. Refused rather than dropped: silently ignoring a value the
+    // caller passed is how a plugin ends up believing it chose the key.
+    if (column.kind === "serial") {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `${definition.name}.${column.key}`,
+            code: "INVALID",
+            message: `"${column.key}" is a col.serial() key, which the database assigns — it cannot be written. Omit it and read the row back with the value the database chose.`,
+          },
+        ],
+      });
     }
+    out[column.key] = values[column.key];
   }
   return out;
 }
@@ -458,11 +490,10 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
 
     async insertReturning(definition, values) {
       const { table } = resolveTable(definition, deps);
-      const filled = withGeneratedColumns(definition, values);
-      await (deps.db() as AnyDb)
-        .insert(table)
-        .values(toColumns(definition, filled));
-
+      // Both checks below are preconditions, so they run BEFORE the insert: a
+      // method that refuses after writing leaves a row behind that the
+      // caller was told was not created.
+      //
       // Read back by the id just generated, rather than with RETURNING.
       // MySQL has no RETURNING, and "the last inserted row" is a race under
       // any concurrency — so the portable path is the only path, on every
@@ -480,9 +511,8 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
       // A key the DATABASE assigns cannot be read back this way.
       //
       // The read-back is by the id the CALLER now holds, and for `col.serial()`
-      // there is no such id: the value is chosen during the insert. Without
-      // this the insert succeeded and the read-back searched for `undefined`,
-      // so the method failed after writing a row — the worst of both.
+      // there is no such id: the value is chosen during the insert, so the
+      // read-back would search for `undefined` and fail after the write.
       //
       // Refused rather than papered over with `LAST_INSERT_ID()` /
       // `last_insert_rowid()` / `RETURNING`: those are three different
@@ -503,6 +533,11 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           ],
         });
       }
+
+      const filled = withGeneratedColumns(definition, values);
+      await (deps.db() as AnyDb)
+        .insert(table)
+        .values(toColumns(definition, filled));
 
       const handle = table as Record<string, unknown>;
       const row = await surface
@@ -551,10 +586,25 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
 
     async transaction(fn) {
       return deps.transaction(async tx => {
-        // The same surface, reading the transaction's handle. Built rather
+        // The same surface, reading the transaction's handles. Built rather
         // than mutated so a caller holding the outer `ctx.db` cannot
         // accidentally write outside the transaction.
-        const scoped = createPluginDatabase({ ...deps, db: () => tx });
+        //
+        // BOTH handles, not just `db`. Replacing `db` alone left the `query`
+        // getter resolving `relationalDb` from the pool — a different
+        // connection on PostgreSQL and MySQL — so `tx.query.x.findMany()`
+        // could not see the callback's uncommitted writes. The relational
+        // handle cannot simply be `tx.db` either: that instance is built
+        // without a relations config, and its `query` namespace is empty.
+        // `deps.transaction` supplies a relations-enabled instance bound to
+        // the same connection instead. `tx.relationalDb` is read on every
+        // access to `query` rather than captured, so a supplier that resolves
+        // it lazily — plugin-context does — keeps the relations config current.
+        const scoped = createPluginDatabase({
+          ...deps,
+          db: () => tx.db,
+          relationalDb: () => tx.relationalDb,
+        });
         return fn(scoped);
       });
     },

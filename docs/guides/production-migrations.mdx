@@ -584,7 +584,7 @@ applied — the ledger would claim a migration ran that partly did not.
 
 Development push never drops a plugin-migrated table at all, whatever your
 config says. A plugin removed from config is exactly when its data is most at
-risk, and that is a decision for `nextly plugin:uninstall` rather than a side
+risk, and that is a decision for `nextly plugins uninstall` rather than a side
 effect of a reload.
 
 <Callout type="warn">
@@ -618,7 +618,7 @@ reporting an app rollback.
 
 ### Uninstalling
 
-`nextly plugin:uninstall <name>` needs the plugin still in your config — its
+`nextly plugins uninstall <name>` needs the plugin still in your config — its
 DOWN sections are its own code, so a plugin removed from config first cannot
 be uninstalled at all.
 

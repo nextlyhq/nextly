@@ -10,6 +10,7 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import type { AnyRelations } from "drizzle-orm";
 
 import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import type { CollectionConfig } from "../collections/config/define-collection";
@@ -985,7 +986,7 @@ export const PLUGIN_SERVICE_NAMES = [
   "versionsService",
   "singleRegistryService",
   "db",
-  "relationalDb",
+  "relations",
   "dialect",
   "logger",
   "config",
@@ -1001,8 +1002,9 @@ export const PLUGIN_SERVICE_NAMES = [
  */
 function buildPluginDatabase(
   rawDb: DatabaseInstance,
-  relationalDbHandle: DatabaseInstance,
+  relations: () => AnyRelations,
   adapter: AdapterTransactions,
+  dialect: SupportedDialect,
   plugin: PluginDefinition | undefined
 ): PluginDatabase & { raw: DatabaseInstance } {
   const owner: SchemaOwner = plugin
@@ -1013,16 +1015,14 @@ function buildPluginDatabase(
     ...(plugin?.optionalDependsOn ? Object.keys(plugin.optionalDependsOn) : []),
   ]);
 
-  // The dialect is read from the active schema rather than resolved here: the
-  // schema was compiled FOR a dialect, so asking anything else could disagree
-  // with the tables the surface is about to hand out.
-  const active = () =>
-    getActiveExtensionSchema("postgresql") ??
-    getActiveExtensionSchema("mysql") ??
-    getActiveExtensionSchema("sqlite");
+  // The schema compiled for the dialect this process runs, asked for by name.
+  // Taking the first dialect that had one returned whichever was compiled
+  // first — a process that had held another dialect's schema served its
+  // tables and its owner rules, refusing this plugin's own tables.
+  const active = () => getActiveExtensionSchema(dialect);
 
   const surface = createPluginDatabase({
-    dialect: "postgresql",
+    dialect,
     owner,
     dependsOn,
     owners: () => active()?.owners ?? new Map(),
@@ -1046,7 +1046,13 @@ function buildPluginDatabase(
       })),
     ],
     db: () => rawDb,
-    relationalDb: () => relationalDbHandle,
+    // The relations-enabled handle behind `ctx.db.query`, rebuilt from the
+    // CURRENT relations on every access. The registry replaces its relations
+    // object when a table is re-registered, and a handle resolved once at
+    // context construction would keep querying through edges that close over
+    // dropped table objects. The adapter memoizes per relations object, so an
+    // unchanged schema resolves to the same instance each time.
+    relationalDb: () => adapter.getDrizzle(relations()),
     // The ADAPTER's transaction, not a bare call of the callback.
     //
     // `fn(rawDb)` opened no transaction at all: a plugin that wrote twice and
@@ -1057,19 +1063,26 @@ function buildPluginDatabase(
     // the adapter's manual `BEGIN IMMEDIATE` path, and a plugin surface that
     // works on two dialects out of three is not portable.
     //
-    // The handle stays `rawDb` because that is what the adapter's transaction
-    // scopes: it brackets the work with BEGIN/COMMIT on the same connection
-    // rather than handing back a separate transaction object.
-    // The TRANSACTION's handle, not the pooled one.
+    // Both handles come from the TRANSACTION's context, not the pool.
+    // `adapter.transaction` leases a client, and `tx.drizzle()` is bound to
+    // it; `getDrizzle()` wraps the pool and would use a different connection,
+    // so the plugin's writes would commit on their own and a later throw
+    // would roll back an empty transaction while leaving them in place.
     //
-    // `adapter.transaction` leases a client and builds a Drizzle instance
-    // bound to it; `getDrizzle()` wraps the pool and would use a different
-    // connection. Passing `rawDb` here therefore ran the plugin's writes
-    // outside the transaction it had asked for — they committed on their own,
-    // and a later throw rolled back an empty transaction while leaving them
-    // in place. That is worse than having no transaction at all, because the
-    // method promises one.
-    transaction: fn => adapter.transaction(tx => fn(tx.drizzle())),
+    // The relational handle is `tx.drizzle(relations)`: the same leased
+    // client, with the relations config that populates `query` — the bare
+    // instance's `query` namespace is empty. A getter, so the relations are
+    // resolved per access as they are outside the transaction, and a
+    // transaction that never touches `query` never builds the instance.
+    transaction: fn =>
+      adapter.transaction(tx =>
+        fn({
+          db: tx.drizzle(),
+          get relationalDb() {
+            return tx.drizzle(relations());
+          },
+        })
+      ),
   });
 
   return Object.assign(surface, { raw: rawDb });
@@ -1090,11 +1103,21 @@ export interface AdapterTransactions {
   /**
    * The callback receives the transaction's own context, whose `drizzle()` is
    * bound to the leased client. Ignoring it and using the pooled handle runs
-   * the work on a DIFFERENT connection, outside the transaction.
+   * the work on a DIFFERENT connection, outside the transaction. Passing a
+   * relations config returns an instance on that same client with the
+   * relational query API enabled.
    */
   transaction: <T>(
-    work: (tx: { drizzle: <D = unknown>() => D }) => Promise<T>
+    work: (tx: {
+      drizzle: <D = unknown>(relations?: AnyRelations) => D;
+    }) => Promise<T>
   ) => Promise<T>;
+  /**
+   * The pooled Drizzle handle, relations-enabled when given a config. Used
+   * for `ctx.db.query` OUTSIDE a transaction; inside one, the transaction
+   * context's `drizzle(relations)` is the handle to use.
+   */
+  getDrizzle: <D = unknown>(relations?: AnyRelations) => D;
 }
 
 /**
@@ -1136,15 +1159,17 @@ export function createPluginContext(
               ? SingleRegistryService
               : T extends "db"
                 ? DatabaseInstance
-                : T extends "dialect"
-                  ? SupportedDialect
-                  : T extends "logger"
-                    ? Logger
-                    : T extends "config"
-                      ? NextlyServiceConfig
-                      : T extends "adapter"
-                        ? AdapterTransactions
-                        : never,
+                : T extends "relations"
+                  ? AnyRelations
+                  : T extends "dialect"
+                    ? SupportedDialect
+                    : T extends "logger"
+                      ? Logger
+                      : T extends "config"
+                        ? NextlyServiceConfig
+                        : T extends "adapter"
+                          ? AdapterTransactions
+                          : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -1259,11 +1284,14 @@ export function createPluginContext(
    * surface plugins already depend on, in the same change that adds its
    * replacement, would break every one of them at once.
    */
-  const relationalDb = getServiceFn("relationalDb");
+  // The relations config is asked for on every relational access rather than
+  // once here: the registry replaces it when a table is re-registered, and a
+  // context outlives that.
   const db = buildPluginDatabase(
     rawDb,
-    relationalDb,
+    () => getServiceFn("relations"),
     getServiceFn("adapter"),
+    getServiceFn("dialect"),
     plugin
   );
   const logger = getServiceFn("logger");

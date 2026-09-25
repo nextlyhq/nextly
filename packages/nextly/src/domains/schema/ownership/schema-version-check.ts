@@ -80,12 +80,12 @@ export function assertSchemaVersionUsable(
   if (verdict.kind === "uninstalled") {
     throw new NextlyError({
       code: "PLUGIN_SCHEMA_UNINSTALLED",
-      publicMessage: `The plugin "${state.name}" has been uninstalled but is still listed in your config. Run "nextly plugin:install ${state.name}" to reinstate it, or remove it from the config.`,
+      publicMessage: `The plugin "${state.name}" has been uninstalled but is still listed in your config. Run "nextly plugins install ${state.name}" to reinstate it, or remove it from the config.`,
       logContext: { plugin: state.name },
     });
   }
 
-  const message = `The plugin "${state.name}" expects schema version ${String(verdict.declared)}, and the database has ${verdict.applied === null ? "none" : String(verdict.applied)}. Run "nextly migrate" or "nextly plugin:install ${state.name}".`;
+  const message = `The plugin "${state.name}" expects schema version ${String(verdict.declared)}, and the database has ${verdict.applied === null ? "none" : String(verdict.applied)}. Run "nextly migrate" or "nextly plugins install ${state.name}".`;
 
   if (!opts.production) {
     // Development push reconciles from config on every reload, so this

@@ -51,6 +51,13 @@ interface MigrateCoreLike {
     ensureLedger?: () => Promise<void>;
     knownJunctions?: ReadonlySet<string>;
     pluginMigrationSets?: readonly PluginMigrationSet[];
+    /**
+     * Declared here so the value `pluginMigrationArgs` spreads in is checked
+     * against a type. A spread is exempt from excess-property checks, so
+     * leaving it off typechecked cleanly while the parameter the real
+     * `migrateCore` reads was invisible at this boundary.
+     */
+    pluginsWithMigrations?: ReadonlySet<string>;
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
 }
 
@@ -115,6 +122,29 @@ function bootMigrationsNotRun(dialect: string): NextlyError {
       "not match this build. " +
       recovery,
   });
+}
+
+/**
+ * The two arguments `migrateCore` needs about plugin migrations, from one read.
+ *
+ * `pluginsWithMigrations` is not optional: `migrateCore` checks every active
+ * plugin table against it BEFORE `runPluginPhase` can apply anything, so an
+ * empty set makes it reject every such table as having no production migration
+ * path — with the modules sitting right there in `pluginMigrationSets`. Passing
+ * one without the other was the bug; deriving both from a single call is what
+ * stops them drifting apart again.
+ */
+async function pluginMigrationArgs(
+  plugins: readonly PluginDefinition[]
+): Promise<{
+  pluginMigrationSets: Awaited<ReturnType<typeof pluginMigrationSetsFrom>>;
+  pluginsWithMigrations: Set<string>;
+}> {
+  const sets = await pluginMigrationSetsFrom(plugins);
+  return {
+    pluginMigrationSets: sets,
+    pluginsWithMigrations: new Set(sets.map(set => set.pluginName)),
+  };
 }
 
 export async function runProdMigrationsIfEnabled(
@@ -207,9 +237,7 @@ export async function runProdMigrationsIfEnabled(
       // The same sets the CLI applies, from the same config: a boot that
       // skipped them would serve against a schema missing every plugin
       // table while reporting a clean migrate.
-      pluginMigrationSets: await pluginMigrationSetsFrom(
-        args.config.plugins ?? []
-      ),
+      ...(await pluginMigrationArgs(args.config.plugins ?? [])),
       ensureLedger,
     });
     // REFUSES rather than serving. `ran: false` means the migrate lock stayed

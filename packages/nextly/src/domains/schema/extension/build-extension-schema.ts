@@ -27,7 +27,12 @@ import type { TableSpec } from "../pipeline/diff/types";
 
 import { getActiveExtensionSchema } from "./active-schema";
 import { type DrizzleSchemaHook, runAfterDrizzle } from "./after-drizzle";
-import { toDrizzleTable, toTableSpec } from "./compile";
+import {
+  authoredKeyOf,
+  referenceTableStub,
+  toDrizzleTable,
+  toTableSpec,
+} from "./compile";
 import { type SeedEntityTable, SchemaDraftStore } from "./draft";
 import { runExtensionHooks, type SchemaContribution } from "./run-hooks";
 import type {
@@ -49,20 +54,6 @@ export interface ExtensionSchemaInput {
    * the resolver owns this fact, so the draft only reads it.
    */
   dependencies?: ReadonlyMap<string, ReadonlySet<string>>;
-  /**
-   * A Drizzle table this compile did not build — a core or entity one.
-   *
-   * Only SQLite needs it, and only for foreign keys. Every other dialect adds
-   * a constraint with its own statement afterwards; SQLite cannot (the apply
-   * runs in a transaction, and `PRAGMA foreign_keys` cannot be toggled inside
-   * one), so a foreign key that is not part of the `CREATE TABLE` is never
-   * enforced at all. Leaving such a reference "to the statement path" was
-   * therefore leaving it nowhere.
-   *
-   * Optional because a caller with nothing to resolve against — the migration
-   * generator, compiling a plugin alone — is no worse off than before.
-   */
-  resolveExternalTable?: (tableName: string) => unknown;
   /** Enabled plugins, already topologically sorted. */
   plugins: readonly SchemaContribution[];
   app?: SchemaContribution;
@@ -165,6 +156,39 @@ function fingerprintOf(
 }
 
 /** Build the extension schema: seed, run hooks in order, compile. */
+/**
+ * A table's relation edges, in the form the schema registry composes.
+ *
+ * The registry looks each column up on the COMPILED Drizzle table, whose
+ * properties are the authored keys (`ownerId`) while a declaration names SQL
+ * columns (`owner_id`). Passing the SQL name through made every edge on a
+ * column whose two names differ fail at `getRelations` as an unknown column,
+ * which took `ctx.db.query` down for the whole schema. A target outside this
+ * compile keeps the name as declared: a core table's properties are the ones
+ * its bundle defines, and nothing here can translate for it.
+ */
+function relationEdgesOf(
+  table: ExtensionTable,
+  byName: ReadonlyMap<string, ExtensionTable>
+): DynamicRelationEdge[] {
+  return (table.relations ?? []).map(rel => {
+    const target = byName.get(rel.targetTable);
+    return {
+      key: rel.name,
+      fromColumn: authoredKeyOf(table, rel.fromColumn ?? ""),
+      targetTable: rel.targetTable,
+      ...(rel.toColumn !== undefined
+        ? {
+            toColumn:
+              target === undefined
+                ? rel.toColumn
+                : authoredKeyOf(target, rel.toColumn),
+          }
+        : {}),
+    };
+  });
+}
+
 export async function buildExtensionSchema(
   input: ExtensionSchemaInput
 ): Promise<ExtensionSchema> {
@@ -234,13 +258,14 @@ export async function buildExtensionSchema(
   // kept as final table names, so a registration composes straight into the
   // schema-wide relations config that powers db.query.
   const relations = new Map<string, DynamicRelationEdge[]>();
+  const byName = new Map<string, ExtensionTable>(
+    [...tables, ...store.adoptedTables()].map(table => [
+      table.name,
+      table as ExtensionTable,
+    ])
+  );
   for (const table of tables) {
-    const edges: DynamicRelationEdge[] = (table.relations ?? []).map(rel => ({
-      key: rel.name,
-      fromColumn: rel.fromColumn ?? "",
-      targetTable: rel.targetTable,
-      ...(rel.toColumn !== undefined ? { toColumn: rel.toColumn } : {}),
-    }));
+    const edges = relationEdgesOf(table, byName);
     if (edges.length > 0) relations.set(table.name, edges);
   }
 
@@ -272,22 +297,25 @@ export async function buildExtensionSchema(
     compiled[table.name] = toDrizzleTable(table, input.dialect);
     owners.set(table.name, table.owner);
   }
-  // Second pass, SQLite only: tables whose foreign keys reference another
-  // table in this bundle are rebuilt with a resolver over the pass-one
-  // objects, so the kit-bound definition carries the constraint and a
-  // change travels through the rebuild. A reference to a table OUTSIDE the
-  // bundle (core, entity) is skipped on the kit table — the resolver
-  // returns undefined and toDrizzleTable leaves that foreign key to the
-  // statement path.
+  // Second pass, SQLite only: tables with foreign keys are rebuilt with a
+  // resolver, so the kit-bound definition carries every constraint and a
+  // change travels through the rebuild — SQLite has no other way to get one.
+  //
+  // A table in this bundle resolves to its pass-one object. Anything else —
+  // core, entity, adopted — resolves to a stand-in built from the declaration
+  // itself, because the foreign key clause needs only the table's name and
+  // the referenced columns'. Resolving the REAL object instead made the
+  // constraint depend on boot order (this runs before the schema registry
+  // exists) and could never reach an entity table at all, so the constraint
+  // was compiled away and SQLite silently never enforced it.
   if (input.dialect === "sqlite") {
     for (const table of tables) {
       if ((table.foreignKeys ?? []).length === 0) continue;
-      compiled[table.name] = toDrizzleTable(table, input.dialect, name => {
-        // This bundle first, then anything the caller can resolve. A core or
-        // entity table is outside the bundle but its Drizzle object exists in
-        // the registry, and without it SQLite silently drops the constraint.
-        return compiled[name] ?? input.resolveExternalTable?.(name);
-      });
+      compiled[table.name] = toDrizzleTable(
+        table,
+        input.dialect,
+        (name, columns) => compiled[name] ?? referenceTableStub(name, columns)
+      );
     }
   }
 
@@ -374,12 +402,7 @@ export async function buildExtensionSchema(
     // App-owned, so nextly.db reaches the table and a plugin's owner check
     // does not — the access rule the plan gives adopted tables.
     owners.set(table.name, { kind: "app" });
-    const edges: DynamicRelationEdge[] = (table.relations ?? []).map(rel => ({
-      key: rel.name,
-      fromColumn: rel.fromColumn ?? "",
-      targetTable: rel.targetTable,
-      ...(rel.toColumn !== undefined ? { toColumn: rel.toColumn } : {}),
-    }));
+    const edges = relationEdgesOf(table as ExtensionTable, byName);
     if (edges.length > 0) adoptedRelations.set(table.name, edges);
   }
 

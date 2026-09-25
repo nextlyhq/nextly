@@ -47,6 +47,7 @@ import {
   type LocalizationMigrationIntent,
 } from "../../domains/i18n/migration/migration-intent";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
+import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import {
   SchemaEventsRepository,
@@ -629,31 +630,17 @@ export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
   deps.logger.info("Phase 1.5: applying plugin migrations...");
   const dz = deps.adapter as unknown as DrizzleAdapter;
   const eventsRepo = new SchemaEventsRepository(deps.db, deps.dialect);
-  // Applied plugin rows only, keyed by qualified filename. First row wins:
-  // `markApplied`'s uniqueFilename guard makes one applied row per filename
-  // the invariant — but a rolled_back event INSERTED after one (the shape
-  // `migrate:down` records) means the newest state, not the first row, is
-  // what "is this module applied?" asks. Decided by newest startedAt per
-  // filename, the same rule migrate:down's target selection uses.
+  // Applied plugin modules, keyed by qualified filename, with the sha256 that
+  // ran. The NEWEST event per filename decides it — a rolled_back event
+  // INSERTED after an applied one (the shape `migrate:down` records) means the
+  // module is not applied, however many older applied rows exist — through
+  // the one helper every ledger reader shares, so this phase cannot disagree
+  // with `migrate:down` or `plugins uninstall` about the same row set.
   const appliedShas = new Map<string, string | null>();
-  const newestByFilename = new Map<
-    string,
-    { sha256: string | null; status: string; at: number }
-  >();
-  for (const row of await eventsRepo.listFileApplies()) {
-    if (!row.filename || !row.filename.startsWith("plugin:")) continue;
-    const at = row.startedAt.getTime();
-    const existing = newestByFilename.get(row.filename);
-    if (existing === undefined || at >= existing.at) {
-      newestByFilename.set(row.filename, {
-        sha256: row.sha256,
-        status: row.status,
-        at,
-      });
-    }
-  }
-  for (const [filename, newest] of newestByFilename) {
-    if (newest.status === "applied") {
+  for (const [filename, newest] of newestEventsByFilename(
+    await eventsRepo.listFileApplies()
+  )) {
+    if (filename.startsWith("plugin:") && newest.status === "applied") {
       appliedShas.set(filename, newest.sha256);
     }
   }
@@ -1217,6 +1204,7 @@ export async function runFileMigrations(args: {
       statements: splitSqlStatements(m.upSql, dialect),
       stream: "app",
       owners: fileOwners,
+      dialect,
       source: filename,
     });
 

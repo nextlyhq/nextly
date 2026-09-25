@@ -13,6 +13,9 @@
 // NOT Object.keys() — bundle keys are JS export names (e.g. dynamicCollections),
 // not SQL names (dynamic_collections), and include non-table exports.
 
+import type { SupportedDialect } from "../../../database/schema-registry";
+import { dropsPluginMigratedTable } from "../ownership/drop-guard";
+
 import { isCompanionTable, isManagedTable } from "./managed-tables";
 
 const ORPHAN_DROP_PATTERNS: ReadonlyArray<{
@@ -116,32 +119,51 @@ function inferOwnerTableFromObjectName(
  * which fails with PG 2BP01 because `accounts.id` still depends on it). We
  * infer the owner table from the object name; custom-named objects that don't
  * share a prefix with any managed table are blocked + warned (fail-safe).
+ *
+ * Plugin-migrated tables: when the caller passes them, with the dialect the
+ * statements will run on, any statement that drops one is refused, whatever
+ * the desired set says. Dev push reconciles what the CONFIG describes, and a
+ * plugin removed from config is exactly the moment its tables' data is most
+ * at risk — the plugin is being uninstalled, and that is a decision for
+ * `nextly plugins uninstall`, not a side effect of a reload. The question is
+ * answered by `dropsPluginMigratedTable`, the reader the fast path and the
+ * migration guard use, so both push routes give it the same answer: that
+ * includes withholding a statement the reader cannot read. Absent (or empty)
+ * = no stream has claimed anything, which is the pre-registry behaviour
+ * exactly.
  */
 export function filterUnsafeStatements(
   statements: string[],
+  desiredTableNames: string[]
+): string[];
+export function filterUnsafeStatements(
+  statements: string[],
   desiredTableNames: string[],
-  /**
-   * Tables whose owner rows name a plugin migration stream, lower-cased.
-   *
-   * Dev push reconciles what the CONFIG describes, and a plugin removed from
-   * config is exactly the moment its tables' data is most at risk — the
-   * plugin is being uninstalled, and that is a decision for
-   * `plugin:uninstall`, not a side effect of a reload. So an in-desired drop
-   * of one of these is refused: the only new behaviour this adds, and only
-   * in the direction of refusing. Absent (or empty) = no stream has claimed
-   * anything, which is the pre-registry behaviour exactly.
-   */
-  pluginMigratedTables?: ReadonlySet<string>
+  /** Tables whose owner rows name a plugin migration stream, lower-cased. */
+  pluginMigratedTables: ReadonlySet<string> | undefined,
+  dialect: SupportedDialect
+): string[];
+export function filterUnsafeStatements(
+  statements: string[],
+  desiredTableNames: string[],
+  pluginMigratedTables?: ReadonlySet<string>,
+  dialect?: SupportedDialect
 ): string[] {
   const desiredSet = new Set(desiredTableNames.map(t => t.toLowerCase()));
-  // A SQLite rebuild drops a `__new_<table>` twin; the owner is the table it
-  // rebuilds.
-  const pluginOwned = (name: string) =>
-    pluginMigratedTables !== undefined &&
-    (pluginMigratedTables.has(name.toLowerCase()) ||
-      pluginMigratedTables.has(name.toLowerCase().replace(/^__new_/, "")));
 
   return statements.filter(stmt => {
+    // ── Plugin-migrated tables ──────────────────────────────────────
+    if (
+      pluginMigratedTables !== undefined &&
+      dialect !== undefined &&
+      dropsPluginMigratedTable(stmt, pluginMigratedTables, dialect)
+    ) {
+      console.warn(
+        `[Nextly schema] Blocked a statement that drops a table whose owner row names a plugin migration stream, or that the drop reader cannot read: ${stmt}. Plugin tables are removed by \`nextly plugins uninstall\`, never by dev push.`
+      );
+      return false;
+    }
+
     // ── DROP TABLE ──────────────────────────────────────────────────
     const dropMatch = stmt.match(
       /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
@@ -151,12 +173,6 @@ export function filterUnsafeStatements(
       const isInDesired = desiredSet.has(tableName.toLowerCase());
 
       if (isInDesired) {
-        if (pluginOwned(tableName)) {
-          console.warn(
-            `[Nextly schema] Blocked DROP TABLE "${tableName}": its owner row names a plugin migration stream. Plugin tables are removed by \`nextly plugin:uninstall\`, never by dev push.`
-          );
-          return false;
-        }
         // Intentional drop — rebuild pattern, system-table refresh, etc.
         return true;
       }

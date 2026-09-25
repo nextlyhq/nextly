@@ -19,6 +19,7 @@
  * @module cli/commands/plugin-lifecycle
  */
 
+import { assertDependenciesInstalled } from "../../domains/schema/ownership/install-plan";
 import { createOwnerRegistry } from "../../domains/schema/ownership/owner-registry";
 import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
 import {
@@ -33,8 +34,23 @@ export interface LifecyclePlugin {
   name: string;
   version: string;
   enabled: boolean;
+  /** `dependsOn` and `optionalDependsOn` together — what uninstall refuses on. */
   dependsOn: string[];
-  /** Module names in apply order, and whether each can be undone. */
+  /**
+   * The two kinds kept apart, for install: a required dependency must be
+   * configured and installed, an optional one only installed when configured.
+   */
+  requires: string[];
+  optionallyRequires: string[];
+  /**
+   * Every module the plugin DECLARES, in apply order — applied or not. Install
+   * reads a dependency's to tell whether its install has happened.
+   */
+  declaredModules: string[];
+  /**
+   * The modules this database has APPLIED, in apply order, and whether each
+   * can be undone. Uninstall runs DOWN for these and nothing else.
+   */
   modules: { name: string; reversible: boolean }[];
 }
 
@@ -76,6 +92,12 @@ export interface PluginLifecycleDeps {
    * pass it, and nothing said so.
    */
   applyMigrations: (plugin: LifecyclePlugin) => Promise<void>;
+  /**
+   * Ledger filenames whose newest `file_apply` event is `applied` — the same
+   * reading `modules` is built from. Install checks its dependencies against
+   * it before anything runs.
+   */
+  readAppliedModules: () => Promise<ReadonlySet<string>>;
 }
 
 function find(
@@ -113,6 +135,33 @@ export async function runPluginInstallCommand(
   );
 
   deps.logger.info(`Installing ${plugin.name}@${plugin.version}...`);
+
+  // Every dependency installed, or nothing runs.
+  //
+  // Applying this plugin's modules, activating its owner rows and running its
+  // `onInstall` all assume what its dependencies' installs provide — their
+  // tables AND whatever their own `onInstall` set up. Nothing downstream
+  // checks that: this plugin's SQL fails only if it happens to reference a
+  // dependency table, and otherwise the install succeeds without its
+  // prerequisite. So it is refused up front, naming each missing dependency
+  // and the command that installs it — the mirror of uninstall refusing while
+  // an enabled dependent remains.
+  //
+  // Checked before the migrate lock rather than under it, because holding the
+  // lock here would not make the result any more true by the time it matters:
+  // the lock is released after this plugin's modules apply, before its owner
+  // rows and `onInstall`, so a concurrent change could land after the check
+  // either way. The change that would turn a passing check false is a
+  // dependency's uninstall, and that refuses while this plugin is configured,
+  // enabled and depends on it. A disabled plugin gets no such protection;
+  // the opposite race — a dependency finishing its install just after this
+  // read — only produces a refusal that a re-run clears.
+  assertDependenciesInstalled({
+    pluginName: plugin.name,
+    configured: deps.plugins,
+    appliedFilenames: await deps.readAppliedModules(),
+    owners: await new SchemaOwnersRepository(deps.db, deps.dialect).read(),
+  });
 
   // BEFORE the hook, because `onInstall` is documented as running against the
   // plugin's own tables: a hook that seeds a row cannot do it into a table no

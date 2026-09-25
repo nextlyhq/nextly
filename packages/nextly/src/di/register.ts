@@ -27,6 +27,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
+import type { AnyRelations } from "drizzle-orm";
 
 import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
 import type { CollectionConfig } from "../collections/config/define-collection";
@@ -70,6 +71,7 @@ import type { ReleasesService } from "../domains/releases/services/releases-serv
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import { compileAndPublishExtensionSchema } from "../domains/schema/extension/publish";
+import { registerExtensionTables } from "../domains/schema/extension/register-tables";
 import {
   clearFieldTypes,
   registerFieldType,
@@ -1323,7 +1325,14 @@ export async function registerServices(
   );
   if (config.db) {
     await runProdMigrationsIfEnabled({
-      config: { db: config.db, collections: config.collections ?? [] },
+      // `plugins` included: without them `pluginMigrationSetsFrom` sees an
+      // empty list, so boot migrations apply no plugin module and then reject
+      // every active plugin table as having no production migration path.
+      config: {
+        db: config.db,
+        collections: config.collections ?? [],
+        plugins: config.plugins ?? [],
+      },
       adapter,
       logger: resolvedLogger,
     });
@@ -1745,6 +1754,12 @@ async function initializeSchemaRegistry(
         });
       }
     );
+
+    // Step 3.5: Plugin and app extension tables. Without this they reached
+    // the registry only on an HMR reload, so after a plain boot no extension
+    // table was part of the relations config and `ctx.db.query.<table>` was
+    // undefined. The reload re-registers through the same function.
+    registerExtensionTables(registry, extensionSchema);
 
     // Step 4: Dynamic components (comp_* tables). Components have no status
     // column, but a localized component omits its translatable columns from the
@@ -3096,6 +3111,7 @@ async function initializePlugins(
       | VersionsService
       | SingleRegistryService
       | DatabaseInstance
+      | AnyRelations
       | SupportedDialect
       | Logger
       | NextlyServiceConfig
@@ -3115,14 +3131,11 @@ async function initializePlugins(
     // database handle a plugin receives is a restricted wrapper that carries
     // no dialect of its own to infer one from.
     dialect: () => dialect,
-    // The relations-enabled handle for ctx.db.query: resolved per call like
-    // BaseService.db, so a registry invalidation propagates immediately.
-    relationalDb: () => {
-      const adapter = container.get<DrizzleAdapter>("adapter");
-      return adapter.getDrizzle(
-        resolveRelations(adapter.getCapabilities().dialect)
-      );
-    },
+    // The relations config behind ctx.db.query. The context asks for it on
+    // every relational access, like BaseService.db, so a registry
+    // invalidation propagates immediately; it builds the handle itself, from
+    // the pool or from a transaction's client as the call requires.
+    relations: () => resolveRelations(dialect),
     logger: () => logger,
     config: () => transformedConfig,
     // The transaction-capable adapter, for core-owned stores that must run on
@@ -3445,15 +3458,30 @@ export function getInitializedPluginContext(
   )?.context;
 }
 
-export async function shutdownServices(): Promise<void> {
-  if (!globalForReg.__nextly_isRegistered) {
-    return;
-  }
-
-  // Run plugin destroy() in REVERSE init order (mirror of setup→init), each
-  // isolated so one failing teardown can't block the others or the disconnect
-  // (D4/D7). Runs before the adapter disconnects so destroy can still use db.
+/**
+ * Run the registered plugins' `destroy()`, in REVERSE init order (mirror of
+ * setup→init), without touching the connection.
+ *
+ * The one implementation of plugin teardown: `shutdownServices` runs it before
+ * it disconnects, and `nextly plugins install|uninstall` runs it on its own —
+ * that command is still using the adapter and, on MySQL, holding a
+ * connection-bound migrate lock, so the disconnect is exactly what it cannot
+ * have. Without it, whatever `init()` started — a timer, a watcher, a
+ * subscription — kept running in a one-shot process that had finished its
+ * work, and could keep that process alive.
+ *
+ * Each destroy is isolated, so one failing teardown can't block the others or
+ * whatever the caller does next (D4/D7).
+ *
+ * Reads the recorded list rather than the registered flag, so it also covers a
+ * registration that initialized plugins and then failed before completing —
+ * the flag is never set for that one, and its plugins are still running. The
+ * list is cleared first, so a second call, or a `destroy()` that re-enters,
+ * runs nothing twice.
+ */
+export async function destroyRegisteredPlugins(): Promise<void> {
   const teardown = globalForReg.__nextly_pluginTeardown ?? [];
+  globalForReg.__nextly_pluginTeardown = undefined;
   for (let i = teardown.length - 1; i >= 0; i--) {
     const { plugin, context } = teardown[i];
     if (!plugin.destroy) continue;
@@ -3464,7 +3492,15 @@ export async function shutdownServices(): Promise<void> {
       console.error(`Plugin "${plugin.name}" destroy failed: ${message}`);
     }
   }
-  globalForReg.__nextly_pluginTeardown = undefined;
+}
+
+export async function shutdownServices(): Promise<void> {
+  if (!globalForReg.__nextly_isRegistered) {
+    return;
+  }
+
+  // Before the adapter disconnects, so destroy can still use db.
+  await destroyRegisteredPlugins();
 
   try {
     if (container.has("adapter")) {

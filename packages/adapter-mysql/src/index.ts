@@ -780,16 +780,21 @@ export class MySqlAdapter extends DrizzleAdapter {
     // the pool, which would use a different connection. Built lazily and
     // memoized: transactions that use only raw execute/insert never construct
     // it.
-    const buildTxExecutor = () =>
-      drizzle({
-        client: (connection as unknown as { connection: CallbackConnection })
-          .connection,
-      });
-    let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
-    const txDb = () => (txExecutor ??= buildTxExecutor());
+    const txConnection = (
+      connection as unknown as { connection: CallbackConnection }
+    ).connection;
+    const txHandles = this.transactionDrizzleHandles(relations =>
+      relations
+        ? drizzle({ client: txConnection, relations })
+        : drizzle({ client: txConnection })
+    );
+    const txDb = txHandles.bare;
     return {
-      // The same memoized transaction-bound instance the delegated CRUD uses.
-      drizzle: <T = unknown>(): T => txDb() as T,
+      // Bare: the same memoized transaction-bound instance the delegated CRUD
+      // uses. With relations: an instance on the SAME connection whose
+      // `query` namespace is populated, so relational reads stay in the
+      // transaction.
+      drizzle: txHandles.drizzle,
 
       execute: async <T = unknown>(
         sql: string,

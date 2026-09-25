@@ -26,7 +26,8 @@ import { createHash } from "node:crypto";
 
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import { NextlyError } from "../../../../errors/nextly-error";
-import type { TableSpec } from "../../pipeline/diff/types";
+import { normalizeContributions } from "../../pipeline/diff/contributions";
+import type { ContributedElements, TableSpec } from "../../pipeline/diff/types";
 
 /** The statements one dialect runs, in order. */
 export interface DialectStatements {
@@ -68,6 +69,15 @@ export interface PluginMigration {
   contributed?: Record<SupportedDialect, PluginMigrationSnapshot>;
   /** The same foreign tables BEFORE this module, for the same diff. */
   contributedBefore?: Record<SupportedDialect, PluginMigrationSnapshot>;
+  /**
+   * Which elements of the `contributed` tables are this plugin's, by table.
+   *
+   * The next module's generator needs exactly this, and the stored tables
+   * cannot answer it: once a table has been stored with the contribution on
+   * both sides, the contribution is indistinguishable from the owner's own
+   * columns. Names are the same on every dialect, so they are stored once.
+   */
+  contributions?: Record<string, ContributedElements>;
 }
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
@@ -97,16 +107,26 @@ export function canonicalMigrationForm(
     dialects[dialect]?.down ?? [],
   ]);
   if (snapshots === undefined) return JSON.stringify(base);
-  return JSON.stringify([
-    base,
-    DIALECTS.map(dialect => [
-      dialect,
-      snapshots.snapshot?.[dialect]?.tables ?? [],
-      snapshots.before?.[dialect]?.tables ?? [],
-      snapshots.contributed?.[dialect]?.tables ?? [],
-      snapshots.contributedBefore?.[dialect]?.tables ?? [],
-    ]),
+  const sides = DIALECTS.map(dialect => [
+    dialect,
+    snapshots.snapshot?.[dialect]?.tables ?? [],
+    snapshots.before?.[dialect]?.tables ?? [],
+    snapshots.contributed?.[dialect]?.tables ?? [],
+    snapshots.contributedBefore?.[dialect]?.tables ?? [],
   ]);
+  // Appended only when present, so a module without contributions hashes
+  // exactly as it did before they were recorded — and one with them cannot
+  // have them edited without its checksum noticing, since they decide what
+  // the next module emits.
+  return JSON.stringify(
+    snapshots.contributions === undefined
+      ? [base, sides]
+      : [
+          base,
+          sides,
+          Object.entries(normalizeContributions(snapshots.contributions)),
+        ]
+  );
 }
 
 /** The snapshot sides a module carries for the reconcile and for ownership. */
@@ -115,6 +135,7 @@ export interface MigrationSnapshots {
   before?: Record<SupportedDialect, PluginMigrationSnapshot>;
   contributed?: Record<SupportedDialect, PluginMigrationSnapshot>;
   contributedBefore?: Record<SupportedDialect, PluginMigrationSnapshot>;
+  contributions?: Record<string, ContributedElements>;
 }
 
 /** The checksum a generated module carries. */
@@ -145,6 +166,9 @@ function checksumOf(migration: PluginMigration): string {
     ...(migration.contributed ? { contributed: migration.contributed } : {}),
     ...(migration.contributedBefore
       ? { contributedBefore: migration.contributedBefore }
+      : {}),
+    ...(migration.contributions
+      ? { contributions: migration.contributions }
       : {}),
   });
   if (withSnapshots === migration.checksum) return withSnapshots;

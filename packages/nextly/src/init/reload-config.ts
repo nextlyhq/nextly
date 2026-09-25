@@ -37,6 +37,7 @@ import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-stora
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
+import { registerExtensionTables } from "../domains/schema/extension/register-tables";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
@@ -191,15 +192,6 @@ type ComponentDef = {
   description?: string;
   admin?: unknown;
 };
-
-/**
- * Extension tables registered by the previous reload.
- *
- * Kept so a table the new config no longer declares can be RETRACTED. Without
- * it a removed plugin's Drizzle object stays in the registry, and a query
- * against it silently reaches a table nothing maintains any more.
- */
-let previousExtensionTables = new Set<string>();
 
 /**
  * The slugs of one kind whose registry row may now say `applied`.
@@ -2790,46 +2782,11 @@ async function applyReload(opts?: {
       for (const [tableName, table] of companionFreshTables) {
         schemaReg.registerDynamicSchema(tableName, table);
       }
-      // Plugin and app extension tables. Registered here rather than at boot
-      // alone because a reload recompiles them, and a stale Drizzle object
-      // describes a table whose columns have since changed — the adapter
-      // would then write to a shape the database no longer has.
-      const extensionSchema = getActiveExtensionSchema(dialect);
-      for (const [tableName, table] of Object.entries(
-        extensionSchema?.drizzle ?? {}
-      )) {
-        schemaReg.registerDynamicSchema(
-          tableName,
-          table,
-          extensionSchema?.relations.get(tableName)
-        );
-      }
-      // Adopted tables register the same way — typed access and queries —
-      // but never enter the desired set, so nothing downstream manages them.
-      for (const [tableName, table] of Object.entries(
-        extensionSchema?.adopted ?? {}
-      )) {
-        schemaReg.registerDynamicSchema(
-          tableName,
-          table,
-          extensionSchema?.adoptedRelations.get(tableName)
-        );
-      }
-      // A table the new config no longer declares is retracted, so a query
-      // against it fails loudly rather than reaching a table the pipeline has
-      // stopped maintaining. Adopted tables retract on the same rule.
-      for (const tableName of previousExtensionTables) {
-        const stillPresent =
-          extensionSchema?.owners.has(tableName) === true ||
-          extensionSchema?.adopted[tableName] !== undefined;
-        if (!stillPresent) {
-          schemaReg.retractDynamicSchema(tableName);
-        }
-      }
-      previousExtensionTables = new Set([
-        ...Object.keys(extensionSchema?.drizzle ?? {}),
-        ...Object.keys(extensionSchema?.adopted ?? {}),
-      ]);
+      // Plugin and app extension tables, re-registered because a reload
+      // recompiles them: a stale Drizzle object describes a table whose
+      // columns have since changed. The same registration boot performs, and
+      // it retracts what the new config no longer declares.
+      registerExtensionTables(schemaReg, getActiveExtensionSchema(dialect));
     } catch {
       // Non-fatal: next request will still fail with stale schema, but
       // a server restart will recover. Log is intentionally omitted here

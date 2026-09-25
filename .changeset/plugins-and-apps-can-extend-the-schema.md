@@ -63,7 +63,8 @@ Ownership is recorded per table and per element, so no path drops a table — or
 a column — on behalf of an owner that does not own it. A table with no owner
 record is never dropped by anything.
 
-`nextly plugin:install` and `plugin:uninstall` manage a plugin's schema, with
+`nextly plugins install` and `nextly plugins uninstall` manage a plugin's
+schema. Install refuses while a dependency is not installed; uninstall has
 `--keep-data`, a refusal while another plugin depends on it, and a refusal
 when a migration cannot be undone.
 

@@ -1273,7 +1273,7 @@ export class PushSchemaPipeline {
         // find; the destructive scan and the lock filter below still apply to
         // both routes.
         // Plugin-migrated tables are never dropped by dev push, whatever the
-        // desired set says: their removal is `plugin:uninstall`'s decision,
+        // desired set says: their removal is `nextly plugins uninstall`'s decision,
         // not a reload's side effect. The kit route enforces this inside
         // filterUnsafeStatements; the fast path bypasses that filter (its
         // statements come from approved operations), so it gets the same
@@ -1283,13 +1283,14 @@ export class PushSchemaPipeline {
           ? pluginMigrated
             ? emittedStatements.filter(
                 statement =>
-                  !dropsPluginMigratedTable(statement, pluginMigrated)
+                  !dropsPluginMigratedTable(statement, pluginMigrated, dialect)
               )
             : emittedStatements
           : filterUnsafeStatements(
               emittedStatements,
               desiredTableNames,
-              pluginMigrated
+              pluginMigrated,
+              dialect
             );
         // Op-level lock filtering covers what this pipeline decided to do, but
         // drizzle-kit re-derives drift from the full desired schema, so on the

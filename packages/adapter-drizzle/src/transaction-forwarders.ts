@@ -9,6 +9,8 @@
  * @packageDocumentation
  */
 
+import type { AnyRelations } from "drizzle-orm";
+
 import type {
   DeleteOptions,
   SelectOptions,
@@ -130,5 +132,42 @@ export function createTransactionForwarders(
     },
 
     getDrizzle: <T = unknown>(): T => txDb() as T,
+  };
+}
+
+/**
+ * The Drizzle handles one transaction hands out, built once each.
+ *
+ * `bare` is the instance the delegated CRUD runs on. `drizzle(relations)` is
+ * `TransactionContext.drizzle`: without relations the same bare instance, with
+ * them an instance on the SAME connection whose `query` namespace is
+ * populated, so relational reads stay inside the transaction. Both are built
+ * lazily — a transaction using only raw execute never constructs one — and
+ * the relational ones are memoized per relations object, exactly as
+ * `getDrizzle()` memoizes its pooled ones.
+ *
+ * Shared because the three adapters differ only in how they build an
+ * instance on their connection, which is what `build` supplies.
+ */
+export function transactionDrizzleHandles<TBare>(
+  build: (relations?: AnyRelations) => TBare
+): {
+  bare: () => TBare;
+  drizzle: <T = unknown>(relations?: AnyRelations) => T;
+} {
+  let bareInstance: TBare | undefined;
+  const bare = (): TBare => (bareInstance ??= build());
+  const relational = new WeakMap<AnyRelations, TBare>();
+  return {
+    bare,
+    drizzle: <T = unknown>(relations?: AnyRelations): T => {
+      if (!relations) return bare() as unknown as T;
+      let cached = relational.get(relations);
+      if (cached === undefined) {
+        cached = build(relations);
+        relational.set(relations, cached);
+      }
+      return cached as unknown as T;
+    },
   };
 }

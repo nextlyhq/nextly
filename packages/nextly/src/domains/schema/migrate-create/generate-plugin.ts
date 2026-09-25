@@ -30,12 +30,14 @@ import {
 } from "../migrate/plugin/plugin-migration";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type {
+  ContributedElements,
   NextlySchemaSnapshot,
   Operation,
   TableSpec,
 } from "../pipeline/diff/types";
 import { generateSQL } from "../pipeline/sql-templates/index";
 
+import { foreignTableSides, NO_ELEMENTS } from "./app-stream";
 import { buildInverseOperations } from "./down-generator";
 import { formatTimestamp, slugify } from "./format-file";
 
@@ -60,15 +62,21 @@ export interface BuildPluginMigrationArgs {
    */
   contributedByDialect?: Record<SupportedDialect, TableSpec[]>;
   /**
-   * The same foreign tables WITHOUT this plugin's contributions — the shape
-   * their own owner declares.
+   * Every table this plugin does not own, as its own owner declares it —
+   * without this plugin's contributions.
    *
-   * The baseline for the FIRST module that contributes to them. Without it the
-   * diff would see a table appearing from nothing and emit `CREATE TABLE` for
-   * a table this plugin does not own; later modules take their baseline from
-   * the previous module's `contributed` instead.
+   * Both sides of the diff are built on it, so the owner's own changes are
+   * identical either side and only this plugin's elements come out as
+   * operations. Every foreign table rather than only the contributed ones,
+   * because a table this plugin has STOPPED contributing to still needs a
+   * baseline for its elements' removal to be emitted.
    */
   contributedBaselineByDialect?: Record<SupportedDialect, TableSpec[]>;
+  /**
+   * Which elements of `contributedByDialect`'s tables are this plugin's, by
+   * table. Recorded in the module for the next generation to read.
+   */
+  contributions?: Record<string, ContributedElements>;
   /** Modules the plugin already ships. */
   existing: readonly PluginMigration[];
 }
@@ -110,68 +118,6 @@ function renderDialect(
  * takes the version from the LAST module, so an un-bumped regeneration would
  * silently describe a schema the plugin's manifest no longer claims.
  */
-/**
- * A dependency's CURRENT tables, re-carrying this plugin's earlier elements.
- *
- * "This plugin's" is decided structurally rather than from an owner field the
- * spec does not carry: anything present in the previous module's view of the
- * table and absent from the dependency's own current shape was put there by
- * this plugin, because nothing else writes into that stored view.
- */
-function withPriorContributions(
-  current: readonly TableSpec[],
-  previousWith: readonly TableSpec[],
-  previousWithout: readonly TableSpec[]
-): TableSpec[] {
-  const withByName = new Map(previousWith.map(table => [table.name, table]));
-  const withoutByName = new Map(
-    previousWithout.map(table => [table.name, table])
-  );
-
-  return current.map(table => {
-    const before = withByName.get(table.name);
-    if (!before) return table;
-
-    // This plugin's previous elements are the DIFFERENCE between the two
-    // sides the previous module stored: `contributed` is the dependency's
-    // table as it looked with our elements on it, `contributedBefore` is the
-    // same table without them.
-    //
-    // Deriving them by "present then, absent now" instead was wrong in one
-    // direction that matters: when the DEPENDENCY removes or renames a column
-    // of its own, that column is also present-then and absent-now, so it was
-    // carried onto the baseline as ours — and the next module then proposed
-    // dropping an element the dependency had already removed, against a
-    // `before` snapshot matching no live table.
-    const baselineColumns = new Set(
-      (withoutByName.get(table.name)?.columns ?? []).map(c => c.name)
-    );
-    const baselineIndexes = new Set(
-      (withoutByName.get(table.name)?.indexes ?? []).map(i => i.name)
-    );
-    const currentColumns = new Set(table.columns.map(column => column.name));
-    const currentIndexes = new Set(
-      (table.indexes ?? []).map(index => index.name)
-    );
-
-    const mineColumns = before.columns.filter(
-      column =>
-        !baselineColumns.has(column.name) && !currentColumns.has(column.name)
-    );
-    const mineIndexes = (before.indexes ?? []).filter(
-      index =>
-        !baselineIndexes.has(index.name) && !currentIndexes.has(index.name)
-    );
-    if (mineColumns.length === 0 && mineIndexes.length === 0) return table;
-
-    return {
-      ...table,
-      columns: [...table.columns, ...mineColumns],
-      indexes: [...(table.indexes ?? []), ...mineIndexes],
-    };
-  });
-}
-
 export function buildPluginMigration(
   args: BuildPluginMigrationArgs
 ): BuiltPluginMigration | null {
@@ -198,33 +144,42 @@ export function buildPluginMigration(
   >;
   const operationCounts = {} as Record<SupportedDialect, number>;
   let totalOperations = 0;
+  // Element names are the same on every dialect, so whichever dialect is
+  // compiled last states them for all.
+  let contributions: Record<string, ContributedElements> = {};
 
   for (const dialect of ALL_DIALECTS) {
     const previousTables = previous?.snapshot[dialect]?.tables ?? [];
     const desiredTables = args.tablesByDialect[dialect] ?? [];
-    const desiredContributed = args.contributedByDialect?.[dialect] ?? [];
-    // The previous module's view of those foreign tables if there is one, and
-    // their own owner's shape otherwise. Taking the previous module's view is
-    // what makes a regeneration emit nothing when nothing changed: a fresh
-    // baseline every time would re-emit the same ADD COLUMN forever.
-    // The dependency as it is NOW, carrying only the elements THIS plugin
-    // contributed in earlier modules.
-    //
-    // Taking the previous module's `contributed` wholesale was wrong: it is
-    // the dependency's table as it looked THEN, so a column the dependency has
-    // since added to its own table appeared only on the desired side and came
-    // out as this plugin's addition. Worse, the stored before/after snapshots
-    // then described a table that no longer matched the live one either side
-    // of the dependency's own migration, and the upgrade stopped as drift.
-    //
-    // Rebasing keeps both properties: the dependency's own columns are
-    // identical on both sides and produce nothing, while this plugin's earlier
-    // contributions stay on the baseline so they are not proposed twice.
-    const previousContributed = withPriorContributions(
-      args.contributedBaselineByDialect?.[dialect] ?? [],
-      previous?.contributed?.[dialect]?.tables ?? [],
-      previous?.contributedBefore?.[dialect]?.tables ?? []
-    );
+    // The foreign tables, both sides built on each one's CURRENT declaration
+    // and differing only in this plugin's elements — so a column the
+    // dependency added or removed on its own produces nothing here, and one
+    // this plugin withdrew is dropped. The same derivation the app stream
+    // uses; see `foreignTableSides`.
+    const sides = foreignTableSides({
+      previousCopies: new Map(
+        (previous?.contributed?.[dialect]?.tables ?? []).map(table => [
+          table.name,
+          table,
+        ])
+      ),
+      previousContributions: previous?.contributions ?? {},
+      contributed: new Map(
+        (args.contributedByDialect?.[dialect] ?? []).map(spec => [
+          spec.name,
+          { spec, elements: args.contributions?.[spec.name] ?? NO_ELEMENTS },
+        ])
+      ),
+      baselines: new Map(
+        (args.contributedBaselineByDialect?.[dialect] ?? []).map(table => [
+          table.name,
+          table,
+        ])
+      ),
+    });
+    const previousContributed = [...sides.before.values()];
+    const desiredContributed = [...sides.after.values()];
+    contributions = sides.contributions;
 
     // ONE diff over the union. A foreign table appears on both sides, so only
     // the elements this plugin added to it come out as operations; its own
@@ -246,6 +201,10 @@ export function buildPluginMigration(
   if (totalOperations === 0) return null;
 
   const now = args.now ?? new Date();
+  // Present only when there are some, so a module that contributes nothing
+  // stays byte-identical to one generated before contributions were recorded.
+  const recorded =
+    Object.keys(contributions).length > 0 ? { contributions } : {};
   const module: PluginMigration = {
     name: `${formatTimestamp(now)}_${slugify(args.name)}`,
     schemaVersion: args.schemaVersion,
@@ -257,12 +216,14 @@ export function buildPluginMigration(
       before,
       contributed,
       contributedBefore,
+      ...recorded,
     }),
     dialects,
     snapshot,
     before,
     contributed,
     contributedBefore,
+    ...recorded,
   };
   return { module, operationCounts };
 }

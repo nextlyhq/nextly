@@ -191,7 +191,13 @@ export class SchemaRegistry {
 
     const { bundle, prebuilt, buildEdges } = this.dialectRelationsSource();
 
-    if (this.dynamicEdges.size === 0) {
+    // Only with no dynamic TABLES at all. Keying this on edges returned the
+    // static config whenever no dynamic table declared a relation, and
+    // `defineRelations` builds the `db.query` namespace from the tables it is
+    // handed, not from the edges — so every runtime-registered table without
+    // an edge (a plugin's table, a collection) was simply absent from
+    // `db.query`, and `ctx.db.query.<table>` was undefined.
+    if (this.dynamicSchemas.size === 0) {
       this.relationsCache = prebuilt;
       return prebuilt;
     }

@@ -6,6 +6,8 @@
  * database are in Phase 5.
  */
 
+import { defineRelations } from "drizzle-orm";
+import { integer, pgTable } from "drizzle-orm/pg-core";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import {
@@ -647,6 +649,33 @@ describe("PostgresAdapter", () => {
         expect(typeof ctx.upsert).toBe("function");
         expect(typeof ctx.execute).toBe("function");
         expect(typeof ctx.insert).toBe("function");
+      });
+    });
+
+    // `ctx.db.transaction` hands a plugin's `query` reads this handle. The bare
+    // `drizzle()` is built without relations, so its `query` namespace is
+    // empty; the pooled `getDrizzle(relations)` is a different connection and
+    // cannot see the transaction's uncommitted writes.
+    it("drizzle(relations) is a relations-enabled instance on the transaction's client, memoized per relations object", async () => {
+      const notes = pgTable("notes", { id: integer("id").primaryKey() });
+      const first = defineRelations({ notes });
+      const second = defineRelations({ notes });
+      type Handle = { query: Record<string, unknown>; $client: unknown };
+
+      await adapter.transaction(async ctx => {
+        const bare = ctx.drizzle<Handle>();
+        const relational = ctx.drizzle<Handle>(first);
+
+        expect(relational.query.notes).toBeDefined();
+        expect(bare.query?.notes).toBeUndefined();
+        // The leased client, not the pool.
+        expect(relational.$client).toBe(mockClient);
+        expect(relational.$client).toBe(bare.$client);
+
+        expect(ctx.drizzle(first)).toBe(relational);
+        expect(ctx.drizzle(second)).not.toBe(relational);
+        // The bare instance the delegated CRUD uses is unchanged.
+        expect(ctx.drizzle()).toBe(bare);
       });
     });
 

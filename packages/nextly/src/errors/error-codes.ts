@@ -98,6 +98,21 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
+  // Plugin platform (P2) — plugin schema lifecycle. All 409: each is a state
+  // the database and the config disagree about, which retrying cannot change
+  // and an operator command resolves.
+  PLUGIN_DEPENDENCY_NOT_INSTALLED: 409,
+  PLUGIN_HAS_DEPENDENTS: 409,
+  PLUGIN_UNINSTALL_IRREVERSIBLE: 409,
+  PLUGIN_SCHEMA_BEHIND: 409,
+  PLUGIN_SCHEMA_UNINSTALLED: 409,
+  PLUGIN_SCHEMA_VERSION_NOT_ADVANCED: 409,
+  PLUGIN_MIGRATIONS_UNAVAILABLE: 409,
+  // A migration would drop a table another owner holds, or names a drop
+  // target the guard cannot read — refused for the same reason.
+  DROP_OF_FOREIGN_TABLE: 409,
+  // A plugin migration module whose content no longer matches its checksum.
+  MIGRATION_CHECKSUM_MISMATCH: 409,
   // Plugin platform (P4) — contributes.routes collection (D25).
   NEXTLY_ROUTE_COLLISION: 409,
   NEXTLY_ROUTE_INVALID_PATH: 400,

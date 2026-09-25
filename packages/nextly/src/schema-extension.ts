@@ -40,6 +40,10 @@ export type {
   PluginMigration,
   PluginMigrationSnapshot,
 } from "./domains/schema/migrate/plugin/plugin-migration";
+// Named because `PluginMigration.contributions` is typed by it: a generated
+// module is checked with `satisfies PluginMigration`, and a hand-written one
+// needs to be able to spell the same shape.
+export type { ContributedElements } from "./domains/schema/pipeline/diff/types";
 // A value, not a type: a hand-written module computes its checksum rather
 // than pasting one, so it cannot drift into the state the checksum detects.
 export { migrationChecksum } from "./domains/schema/migrate/plugin/plugin-migration";

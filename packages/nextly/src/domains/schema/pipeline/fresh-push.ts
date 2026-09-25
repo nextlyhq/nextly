@@ -152,7 +152,8 @@ async function applyPushResult(
   const safe = filterUnsafeStatements(
     pieces,
     desiredTableNames,
-    await pluginMigratedTableSet(db, dialect)
+    await pluginMigratedTableSet(db, dialect),
+    dialect
   );
 
   // Boot-safety: strip (never execute) destructive statements the kit

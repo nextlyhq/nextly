@@ -162,6 +162,7 @@ async function applyModule(
     statements: migration.dialects[deps.dialect]?.up ?? [],
     stream: `plugin:${set.pluginName}`,
     owners: deps.owners ?? new Map(),
+    dialect: deps.dialect,
     source: filename,
   });
   const recorded = deps.appliedShas.get(filename);

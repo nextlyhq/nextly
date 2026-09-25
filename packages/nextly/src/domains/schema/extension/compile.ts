@@ -23,7 +23,7 @@
 import { sql as drizzleSql } from "drizzle-orm";
 import { mysqlTable } from "drizzle-orm/mysql-core";
 import { pgTable } from "drizzle-orm/pg-core";
-import { check, foreignKey, sqliteTable } from "drizzle-orm/sqlite-core";
+import { check, foreignKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -117,7 +117,7 @@ function referencedColumn(
  * The fallback matters for a reference to a table this function did not
  * compile — a core table, say — whose properties are already SQL-named.
  */
-function authoredKeyOf(table: ExtensionTable, sqlName: string): string {
+export function authoredKeyOf(table: ExtensionTable, sqlName: string): string {
   return table.columns.find(column => column.name === sqlName)?.key ?? sqlName;
 }
 
@@ -217,6 +217,34 @@ export function toTableSpec(
 }
 
 /**
+ * A stand-in for a table this compile did not build, carrying only what a
+ * foreign key needs from it: the table's name and the referenced columns'.
+ *
+ * SQLite takes a foreign key in `CREATE TABLE` or not at all, and Drizzle's
+ * form of one needs the REFERENCED table's column objects. For a table outside
+ * the extension bundle — core, entity, adopted — those objects either live in
+ * a registry that boot has not built yet when the extension schema compiles,
+ * or (for an entity) are built from fields this compile never sees. Resolving
+ * them was therefore order-dependent, and a miss dropped the constraint
+ * silently.
+ *
+ * The declaration already names the table and its columns, and that is all
+ * the DDL reads: `REFERENCES <table>(<columns>)`. The column type is not part
+ * of a foreign key clause, so the stand-in's is arbitrary. Never registered
+ * or queried — it exists only inside the constraint that points at it.
+ */
+export function referenceTableStub(
+  tableName: string,
+  columns: readonly string[]
+): unknown {
+  const stubColumns: Record<string, unknown> = {};
+  for (const name of columns) {
+    stubColumns[name] = text(name);
+  }
+  return sqliteTable(tableName, stubColumns as never);
+}
+
+/**
  * The Drizzle table the runtime queries through.
  *
  * Columns only — see the module note on why indexes must not appear here.
@@ -228,12 +256,14 @@ export function toDrizzleTable(
    * Resolves a referenced table's drizzle object, for foreign keys on the
    * SQLite kit table. A single-table compile cannot build these — the drizzle
    * form of a foreign key needs the REFERENCED table's column objects — so
-   * the bundle assembly passes a resolver over its pass-one tables. Absent,
-   * or naming a table outside the bundle, the foreign key is skipped on the
-   * kit table (it still reaches the statement path, where SQLite refuses
-   * in-place edits).
+   * the bundle assembly passes a resolver: its own pass-one tables, and a
+   * `referenceTableStub` for any table outside the bundle. Absent, foreign
+   * keys are left off the kit table, which is what pass one wants.
    */
-  resolveReferenceTable?: (tableName: string) => unknown
+  resolveReferenceTable?: (
+    tableName: string,
+    columns: readonly string[]
+  ) => unknown
 ): unknown {
   // Keyed by the AUTHORED key, named by the SQL one.
   //
@@ -258,17 +288,21 @@ export function toDrizzleTable(
   if (dialect === "mysql") {
     return mysqlTable(table.name, columns as never);
   }
-  const extras: unknown[] = [];
-  for (const declared of table.checks ?? []) {
-    extras.push(
-      check(`ck_${table.name}_${declared.name}`, drizzleSql.raw(declared.sql))
-    );
-  }
+  const checks = (table.checks ?? []).map(declared =>
+    check(`ck_${table.name}_${declared.name}`, drizzleSql.raw(declared.sql))
+  );
+  const foreignKeys: {
+    name: string;
+    localKeys: string[];
+    foreignColumns: unknown[];
+    onDelete: NonNullable<ExtensionTable["foreignKeys"]>[number]["onDelete"];
+    onUpdate: NonNullable<ExtensionTable["foreignKeys"]>[number]["onUpdate"];
+  }[] = [];
   for (const fk of table.foreignKeys ?? []) {
     const referenced =
       resolveReferenceTable === undefined
         ? undefined
-        : (resolveReferenceTable(fk.referencesTable) as
+        : (resolveReferenceTable(fk.referencesTable, fk.referencesColumns) as
             | Record<string, unknown>
             | undefined);
     if (referenced === undefined) continue;
@@ -276,27 +310,46 @@ export function toDrizzleTable(
     // key — so the name is translated before the lookup. Reading `columns[name]`
     // directly returned undefined and the key was silently skipped, which is
     // worse than failing: the constraint simply would not exist.
-    const localColumns = fk.columns.map(
-      name => columns[authoredKeyOf(table, name)]
-    );
+    const localKeys = fk.columns.map(name => authoredKeyOf(table, name));
     const foreignColumns = fk.referencesColumns.map(name =>
       referencedColumn(referenced, name)
     );
-    if (localColumns.includes(undefined) || foreignColumns.includes(undefined))
+    if (
+      localKeys.some(key => columns[key] === undefined) ||
+      foreignColumns.includes(undefined)
+    )
       continue;
-    // Actions are builder-chained in drizzle rc.4 — the config-object form
-    // accepts only name/columns, which the cast would have hidden.
-    extras.push(
-      foreignKey({
-        name: fk.name ?? `fk_${table.name}_${fk.columns.join("_")}`,
-        columns: localColumns,
-        foreignColumns,
-      } as never)
-        .onDelete(fk.onDelete)
-        .onUpdate(fk.onUpdate)
-    );
+    foreignKeys.push({
+      name: fk.name ?? `fk_${table.name}_${fk.columns.join("_")}`,
+      localKeys,
+      foreignColumns,
+      onDelete: fk.onDelete,
+      onUpdate: fk.onUpdate,
+    });
   }
-  return extras.length > 0
-    ? sqliteTable(table.name, columns as never, (() => extras) as never)
-    : sqliteTable(table.name, columns as never);
+  if (checks.length === 0 && foreignKeys.length === 0) {
+    return sqliteTable(table.name, columns as never);
+  }
+  // The local side of a foreign key is read from the BUILT columns Drizzle
+  // hands this callback, not from the builders in `columns`. A builder has no
+  // `name` until its table is built, so a constraint made from one reported
+  // its own columns as undefined to everything that renders it.
+  return sqliteTable(
+    table.name,
+    columns as never,
+    ((built: Record<string, unknown>) => [
+      ...checks,
+      // Actions are builder-chained in drizzle rc.4 — the config-object form
+      // accepts only name/columns, which the cast would have hidden.
+      ...foreignKeys.map(fk =>
+        foreignKey({
+          name: fk.name,
+          columns: fk.localKeys.map(key => built[key]),
+          foreignColumns: fk.foreignColumns,
+        } as never)
+          .onDelete(fk.onDelete)
+          .onUpdate(fk.onUpdate)
+      ),
+    ]) as never
+  );
 }

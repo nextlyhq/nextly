@@ -109,8 +109,12 @@ table's name is refused.
 
 ## Relations
 
-Tables declared with `ref()` columns carry a one-edge automatically, and any
-table can declare more:
+Tables declared with `ref()` columns carry a one-edge automatically, named for
+what it points at: `ownerId: col.ref("app__owners")` is read with
+`with: { owner: true }`, while the row keeps `ownerId` as the column. A key
+without an `Id` suffix gets `<key>Ref`. A relation and a column share the row's
+keys, so a declared relation may not reuse a column's name. Any table can
+declare more relations:
 
 ```ts
 const linked = defineTable("linked", {

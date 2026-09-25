@@ -56,6 +56,12 @@ import {
   orderedMigrations,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import {
+  compileAppStreamTables,
+  contributedElementsOf,
+  hasAppStreamTables,
+  type AppStreamTables,
+} from "../../domains/schema/migrate-create/app-stream";
 import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
 import {
   formatBlankFile,
@@ -65,7 +71,11 @@ import {
 import { generateMigration } from "../../domains/schema/migrate-create/generate";
 import { generatePluginMigration } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
-import type { TableSpec } from "../../domains/schema/pipeline/diff/types";
+import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
+import type {
+  ContributedElements,
+  TableSpec,
+} from "../../domains/schema/pipeline/diff/types";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import {
   applyDeferredExtendsToManifest,
@@ -150,6 +160,27 @@ interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
 // ============================================================================
 // Command Implementation
 // ============================================================================
+
+/**
+ * Whether the app stream has nothing it could possibly emit.
+ *
+ * Needs BOTH sides empty. A config that has just removed its last entity or
+ * its last contribution still has something to emit — the drop — and only the
+ * latest snapshot says so. Deciding on the config alone skipped exactly that
+ * migration, while `migrate:check`, which compares against the snapshot, kept
+ * reporting it as pending.
+ */
+export function nothingToGenerate(input: {
+  entityCount: number;
+  appStream: AppStreamTables;
+  recordedTableCount: number;
+}): boolean {
+  return (
+    input.entityCount === 0 &&
+    !hasAppStreamTables(input.appStream) &&
+    input.recordedTableCount === 0
+  );
+}
 
 export async function runMigrateCreate(
   nameArg: string | undefined,
@@ -371,12 +402,32 @@ export async function runMigrateCreate(
     });
   }
 
+  // The APP stream's extension schema, compiled the way boot compiles it:
+  // tables the app declares through `db.schema.extend`, and elements it
+  // contributes to a plugin's table. Plugins are compiled alongside because an
+  // app hook may extend a plugin's table and would not resolve without them.
+  //
+  // Computed BEFORE the empty-entities check, because an app can have nothing
+  // but extension schema. Taking that early return first meant an
+  // extension-only configuration wrote no migration at all and production
+  // never received the table.
+  const appStream = await compileAppStreamTables({
+    config: configResult.config,
+    dialect,
+    logger: { warn: m => logger.warn(m) },
+  });
+
+  const latest = await loadLatestSnapshot(resolve(migrationsDir, "meta"));
   if (
-    collections.length === 0 &&
-    singles.length === 0 &&
-    components.length === 0
+    nothingToGenerate({
+      entityCount: collections.length + singles.length + components.length,
+      appStream,
+      recordedTableCount: latest?.data.snapshot.tables.length ?? 0,
+    })
   ) {
-    logger.warn("No collections, singles, or components defined in config.");
+    logger.warn(
+      "No collections, singles, components, or extension tables defined in config."
+    );
     logger.info("Use --blank to create an empty migration for custom SQL.");
     return;
   }
@@ -384,27 +435,13 @@ export async function runMigrateCreate(
   logger.newline();
   logger.info("Comparing config to latest snapshot...");
 
-  // The APP's own extension tables, compiled the way boot compiles them.
-  //
-  // `db.schema.extend` is documented as the way an app declares a table of its
-  // own, and boot creates it — but the generator never saw it, so the table
-  // existed after a development bootstrap and was missing from every
-  // migration. Plugins are compiled alongside because an app hook may extend
-  // a plugin's table and would not resolve without them; only APP-OWNED tables
-  // are kept, since a plugin's ride its own module.
-  const extensionSpecs = await appExtensionSpecs(
-    configResult.config,
-    dialect,
-    logger
-  );
-
   let result;
   try {
     result = await generateMigration({
       name: name!,
       dialect,
       migrationsDir,
-      extensionSpecs,
+      appStream,
       defaultLocale: configResult.config.localization?.defaultLocale,
       collections,
       singles,
@@ -522,40 +559,6 @@ const PLUGIN_BUNDLE_EXTERNALS = [
 ];
 
 const PLUGIN_DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
-
-/**
- * The app's own extension tables, as migration specs.
- *
- * Compiled through the same entry point boot uses, so the migration describes
- * exactly what boot would create. An app that declares nothing here compiles
- * to nothing and the generator is unchanged.
- */
-async function appExtensionSpecs(
-  config: LoadConfigResult["config"],
-  dialect: SupportedDialect,
-  logger: CommandContext["logger"]
-): Promise<TableSpec[]> {
-  const { compileAndPublishExtensionSchema } = await import(
-    "../../domains/schema/extension/publish"
-  );
-  const schema = await compileAndPublishExtensionSchema({
-    dialect,
-    plugins: config.plugins ?? [],
-    config: config,
-    logger: { warn: m => logger.warn(m) },
-  });
-  if (!schema) return [];
-
-  // App-owned only. A plugin's extension table belongs to the module
-  // `migrate:create --plugin` writes; emitting it here as well would have two
-  // streams claiming to create one table.
-  const appOwned = new Set(
-    schema.tables
-      .filter(table => table.owner.kind === "app")
-      .map(table => table.name)
-  );
-  return schema.specs.filter(spec => appOwned.has(spec.name));
-}
 
 /**
  * Compile this plugin's schema with its declared dependencies present.
@@ -782,6 +785,7 @@ async function runMigrateCreatePlugin(
     SupportedDialect,
     TableSpec[]
   >;
+  const contributions: Record<string, ContributedElements> = {};
   for (const dialect of PLUGIN_DIALECTS) {
     const built = await buildPluginDraft({
       dialect,
@@ -815,28 +819,38 @@ async function runMigrateCreatePlugin(
     // modules. A plugin ships its own migrations so installing it does not
     // require the app to regenerate; a column missing from them is a column
     // that never arrives.
-    const contributedTables = new Set(
+    const mine = new Map(
       [...built.elementOwners.entries()]
-        .filter(
+        .filter(([table]) => !owned.has(table))
+        .map(
           ([table, elements]) =>
-            !owned.has(table) &&
-            elements.some(
-              element =>
-                element.owner.kind === "plugin" &&
-                element.owner.id === definition.name
-            )
+            [
+              table,
+              elements.filter(
+                element =>
+                  element.owner.kind === "plugin" &&
+                  element.owner.id === definition.name
+              ),
+            ] as const
         )
-        .map(([table]) => table)
+        .filter(([, elements]) => elements.length > 0)
     );
     contributedByDialect[dialect] = built.specs.filter(spec =>
-      contributedTables.has(spec.name)
+      mine.has(spec.name)
     );
+    // By name, for the module to record: the next generation reads which
+    // elements were this plugin's from here, never from the stored tables.
+    for (const [table, elements] of mine) {
+      contributions[table] = contributedElementsOf(elements);
+    }
 
-    // The same tables as their OWN owner declares them, compiled without this
-    // plugin's hooks. This is the baseline the first contributing module
-    // diffs against, so the module emits the added column rather than a
-    // CREATE TABLE for a table it does not own.
-    if (contributedTables.size > 0) {
+    // Every table this plugin does not own, as its OWN owner declares it —
+    // compiled without this plugin's hooks. Both sides of the foreign-table
+    // diff are built on it, so the module emits the added column rather than a
+    // CREATE TABLE for a table it does not own, and emits the drop when this
+    // plugin stops contributing. Only a plugin with dependencies can have a
+    // foreign table at all.
+    if (dependencyPlugins.length > 0) {
       const baseline = await buildPluginDraft({
         dialect,
         pluginName: definition.name,
@@ -846,8 +860,8 @@ async function runMigrateCreatePlugin(
         dependencies,
         dependencyPlugins,
       });
-      contributedBaselineByDialect[dialect] = baseline.specs.filter(spec =>
-        contributedTables.has(spec.name)
+      contributedBaselineByDialect[dialect] = baseline.specs.filter(
+        spec => !owned.has(spec.name)
       );
     } else {
       contributedBaselineByDialect[dialect] = [];
@@ -857,6 +871,7 @@ async function runMigrateCreatePlugin(
   const result = await generatePluginMigration({
     contributedByDialect,
     contributedBaselineByDialect,
+    contributions,
     pluginName: definition.name,
     schemaVersion: definition.schemaVersion,
     name: name ?? "migration",

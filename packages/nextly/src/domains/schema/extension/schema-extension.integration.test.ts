@@ -10,12 +10,16 @@
  * This is the separating test: a real Nextly, a real plugin, a real server,
  * and the questions asked of the DATABASE rather than of the compiled schema.
  */
-import { afterEach, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { definePlugin } from "../../../plugins/plugin-context";
+import {
+  definePlugin,
+  type PluginContext,
+} from "../../../plugins/plugin-context";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 
@@ -159,5 +163,112 @@ describeEachDialect("a plugin's declared table", dialect => {
        VALUES ('018f2c2e-0000-7000-8000-000000000004', 'keepme', ${dialect === "postgresql" ? "false" : "0"}, 0, ${NOW(dialect)}, ${NOW(dialect)})`
     );
     expect(await adapter.tableExists("e2e__notes")).toBe(true);
+  });
+});
+
+const authors = defineTable("authors", { id: col.id(), name: col.shortText() });
+const links = defineTable(
+  "links",
+  { id: col.id(), userId: col.shortText(), authorId: col.shortText() },
+  {
+    foreignKeys: [
+      // A CORE table, outside the extension bundle.
+      { columns: ["userId"], references: { table: "users", columns: ["id"] } },
+      // A table in the same bundle.
+      {
+        columns: ["authorId"],
+        references: { table: "fk__authors", columns: ["id"] },
+        onDelete: "cascade",
+      },
+    ],
+  }
+);
+const fkFixture = definePlugin({
+  name: "schema-e2e-fk-fixture",
+  version: "0.0.0",
+  nextly: "*",
+  contributes: { schema: { prefix: "fk", tables: [authors, links] } },
+});
+
+// SQLite only: it is the one dialect that takes a foreign key in CREATE TABLE
+// or not at all. The others add each constraint with its own statement, so a
+// reference compiled away on the kit table cost them nothing and cost SQLite
+// the constraint, silently. Asked of the database, because the compiled table
+// looked right while the DDL named no local column.
+(getConfiguredTestDialects().includes("sqlite") ? describe : describe.skip)(
+  "a plugin table's foreign keys (sqlite)",
+  () => {
+    it("creates both, to a core table and to its own", async () => {
+      current = await createTestNextly({
+        dialect: "sqlite",
+        plugins: [fkFixture],
+      });
+      const rows = await current.adapter.executeQuery<Record<string, unknown>>(
+        `PRAGMA foreign_key_list(fk__links)`
+      );
+      const found = rows
+        .map(
+          row => `${String(row.from)}->${String(row.table)}.${String(row.to)}`
+        )
+        .sort();
+      expect(found).toEqual(["author_id->fk__authors.id", "user_id->users.id"]);
+    });
+  }
+);
+
+const txNotes = defineTable("notes", {
+  id: col.id(),
+  title: col.shortText(),
+});
+let txContext: PluginContext | undefined;
+const txFixture = definePlugin({
+  name: "schema-e2e-tx-fixture",
+  version: "0.0.0",
+  nextly: "*",
+  contributes: { schema: { prefix: "txq", tables: [txNotes] } },
+  init: ctx => {
+    txContext = ctx;
+  },
+});
+
+// Every dialect, because the defect this pins is invisible on one: SQLite has
+// a single connection, so a relational read that escaped the transaction
+// still saw its writes there. On PostgreSQL and MySQL it ran on a pooled
+// connection and could not — and the transaction's own handle had no
+// relations config, so `tx.query.<table>` did not exist at all.
+describeEachDialect("ctx.db.transaction's relational reads", dialect => {
+  it("see the transaction's uncommitted writes, and roll back with it", async () => {
+    txContext = undefined;
+    current = await createTestNextly({ dialect, plugins: [txFixture] });
+    // Read through a function: the assignment happens inside `init`, which
+    // control-flow analysis cannot see, so it would narrow to `undefined`.
+    const captured = (): PluginContext | undefined => txContext;
+    const db = captured()?.db;
+    if (!db) throw new Error("the plugin's init never ran");
+
+    const seen = await db
+      .transaction(async tx => {
+        await tx.insert(txNotes, { title: "inside" });
+        const rows = await tx.query["txq__notes"].findMany();
+        throw Object.assign(new Error("roll back"), { rows });
+      })
+      .catch(
+        (error: {
+          rows?: Array<Record<string, unknown>>;
+          cause?: { rows?: Array<Record<string, unknown>> };
+        }) => {
+          // The adapter wraps what the callback threw, keeping it as the
+          // cause. Only the deliberate rollback carries `rows`; anything
+          // else is a real failure and must surface as one.
+          const rows = error.rows ?? error.cause?.rows;
+          if (rows === undefined) throw error;
+          return rows;
+        }
+      );
+
+    // Population first: an empty read would satisfy the rollback check below
+    // for the wrong reason.
+    expect(seen?.map(row => row.title)).toEqual(["inside"]);
+    expect(await db.query["txq__notes"].findMany()).toEqual([]);
   });
 });

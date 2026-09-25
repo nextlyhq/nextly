@@ -105,14 +105,15 @@ describe("extension relations round-trip (sqlite)", () => {
       >;
     }>(registry.getRelations() as never);
     const rows = await rqb.query["fx__linked"].findMany({
-      with: { ownerId: true },
+      with: { owner: true },
     });
     expect(rows).toHaveLength(1);
-    // The nested edge carries the owner row the foreign key points at.
+    // The column keeps its key and the edge is named for what it points at:
+    // the two share the row, so an edge named `ownerId` could not exist.
     expect(rows[0]).toMatchObject({
       id: "l1",
-      owner_id: "o1",
-      ownerId: { id: "o1", label: "Owner One" },
+      ownerId: "o1",
+      owner: { id: "o1", label: "Owner One" },
     });
   });
 });

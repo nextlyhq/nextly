@@ -327,6 +327,41 @@ describe("runProdMigrationsIfEnabled", () => {
     }
   });
 
+  it("hands migrateCore a configured plugin's modules AND names it as having some", async () => {
+    // `migrateCore` rejects every active plugin table whose plugin is missing
+    // from `pluginsWithMigrations` BEFORE its plugin phase applies anything,
+    // so the modules alone are not enough: a boot passing the sets without
+    // the names refused the very tables those sets create.
+    const module = { name: "001_notes" };
+    const a = args();
+    a.config = {
+      ...a.config,
+      plugins: [
+        {
+          name: "fx",
+          version: "1.0.0",
+          contributes: { schema: { migrations: [module] } },
+        },
+        // The control: a plugin with no modules is named in neither.
+        { name: "plain", version: "1.0.0" },
+      ],
+    } as never;
+    await runProdMigrationsIfEnabled(a as never);
+
+    const passed = (a.migrateCore.mock.calls[0] as unknown[])[0] as {
+      pluginMigrationSets?: readonly {
+        pluginName: string;
+        migrations: readonly unknown[];
+      }[];
+      pluginsWithMigrations?: ReadonlySet<string>;
+    };
+    expect(passed.pluginMigrationSets).toEqual([
+      expect.objectContaining({ pluginName: "fx", migrations: [module] }),
+    ]);
+    expect(passed.pluginsWithMigrations).toBeInstanceOf(Set);
+    expect([...(passed.pluginsWithMigrations ?? [])]).toEqual(["fx"]);
+  });
+
   it("logs and returns (does NOT throw) when migrateCore throws", async () => {
     const a = args({
       migrateCore: vi.fn(async () => {

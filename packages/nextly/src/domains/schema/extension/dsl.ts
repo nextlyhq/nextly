@@ -66,6 +66,19 @@ export interface ColumnBuilder<
   readonly __value?: TValue;
 }
 
+/**
+ * The builder `col.serial()` returns: a `ColumnBuilder` whose `kind` is the
+ * literal `"serial"` rather than the whole kind union.
+ *
+ * That literal is the only thing that tells the type level a column is
+ * database-assigned, and `InferInsert` reads it to take the key out of what a
+ * write may supply — so the refusal the runtime makes is a compile error
+ * first, rather than an optional property the caller is invited to fill.
+ */
+export type SerialColumnBuilder = ColumnBuilder<number, false, true> & {
+  readonly kind: "serial";
+};
+
 /** Options every scalar builder accepts. */
 export interface ColOpts<TValue> {
   nullable?: boolean;
@@ -278,7 +291,7 @@ export const col = {
    * Never nullable and never written: the database assigns it, so a value the
    * caller supplies is a value the sequence does not know about.
    */
-  serial(): ColumnBuilder<number, false, true> {
+  serial(): SerialColumnBuilder {
     // The table's PRIMARY KEY, not merely a column. That is not a convenience:
     // it is the only shape the promise of portability survives on all three.
     // MySQL refuses `AUTO_INCREMENT` on a column that is not a key, and SQLite
@@ -291,7 +304,7 @@ export const col = {
       "serial",
       { nullable: false },
       { primaryKey: true }
-    ) as ColumnBuilder<number, false, true>;
+    ) as SerialColumnBuilder;
   },
 
   /** 16-bit integer. */
@@ -708,6 +721,17 @@ function resolveRelations(
   });
 }
 
+/** The name of the one-edge a `ref()` column carries; see `defineTable`. */
+function implicitEdgeName(
+  key: string,
+  columnKeys: ReadonlySet<string>
+): string {
+  const shortened = key.replace(/(?:Id|_id)$/, "");
+  return shortened !== "" && shortened !== key && !columnKeys.has(shortened)
+    ? shortened
+    : `${key}Ref`;
+}
+
 /** Resolve the author's checks to specs under the ck_ naming rule. */
 function resolveChecks(
   tableName: string,
@@ -775,18 +799,33 @@ export function defineTable<
   // relation would be a second place to say the same thing. An explicit
   // relation with the same name wins, so an author can rename or retarget
   // the edge without the column fighting them.
+  //
+  // Named for what it points at, not after the column: a relation and a
+  // column share one namespace on the row, and the column already holds its
+  // own key — Drizzle refuses the pair at boot. So `ownerId` carries the edge
+  // `owner`, read as `with: { owner: true }`. A key with no `Id` suffix, or
+  // one whose shortened name is taken by another column, takes `<key>Ref`.
+  const columnKeys = new Set(resolved.map(column => column.key));
+  for (const [position, rel] of declaredRelations.entries()) {
+    if (columnKeys.has(rel.name)) {
+      invalid(
+        `${name}.relations[${String(position)}]`,
+        `The relation "${rel.name}" has the same name as a column; a row cannot carry both. Name the relation for what it points at.`
+      );
+    }
+  }
   const declaredNames = new Set(declaredRelations.map(rel => rel.name));
   const autoRelations: TableRelationInput[] = resolved
     .filter(column => column.references !== undefined)
-    .filter(column => !declaredNames.has(column.key))
     .map(column => ({
-      name: column.key,
+      name: implicitEdgeName(column.key, columnKeys),
       kind: "one" as const,
       targetTable: column.references as string,
-      // The SQL name: the registry resolves edges against the table's
-      // column properties, which are keyed by SQL name.
+      // The SQL name, like every declared relation's; the compiler
+      // translates it to the column's key on the compiled table.
       fromColumn: column.name,
-    }));
+    }))
+    .filter(rel => !declaredNames.has(rel.name));
   const relations = [...declaredRelations, ...autoRelations];
 
   return Object.freeze({
@@ -820,6 +859,13 @@ type OptionalInsertKeys<TColumns> = {
     : never;
 }[keyof TColumns];
 
+/** The columns the database assigns, which no write may supply. */
+type SerialKeys<TColumns> = {
+  [K in keyof TColumns]: TColumns[K] extends { readonly kind: "serial" }
+    ? K
+    : never;
+}[keyof TColumns];
+
 /**
  * The row a select returns.
  *
@@ -838,15 +884,27 @@ export type InferRow<TDefinition> =
  * Nullable and defaulted columns become optional, because both have an answer
  * when the caller says nothing — which is exactly the distinction
  * `THasDefault` exists to carry.
+ *
+ * A `col.serial()` key is `?: never`: present so the key is known, and typed so
+ * no value can be given. The database assigns it, and `ctx.db` refuses one at
+ * runtime; leaving it an ordinary optional property — as a defaulted column
+ * is — told the caller a value was welcome. `update()`'s `set` is a `Partial`
+ * of this type, so the same key is closed there too. `InferRow` still carries
+ * it, because a read returns the value the database chose.
  */
 export type InferInsert<TDefinition> =
   TDefinition extends TableDefinition<string, infer TColumns>
     ? {
         -readonly [K in Exclude<
           keyof TColumns,
-          OptionalInsertKeys<TColumns>
+          OptionalInsertKeys<TColumns> | SerialKeys<TColumns>
         >]: ValueOf<TColumns[K]>;
       } & {
-        -readonly [K in OptionalInsertKeys<TColumns>]?: ValueOf<TColumns[K]>;
+        -readonly [K in Exclude<
+          OptionalInsertKeys<TColumns>,
+          SerialKeys<TColumns>
+        >]?: ValueOf<TColumns[K]>;
+      } & {
+        -readonly [K in SerialKeys<TColumns>]?: never;
       }
     : never;

@@ -262,8 +262,18 @@ describe("relation edges", () => {
       { id: col.id(), userId: col.shortText() },
       {
         relations: [
-          { name: "user", kind: "one", targetTable: "users", fromColumn: "userId" },
-          { name: "audit", kind: "many", targetTable: "audit_log", toColumn: "noteId" },
+          {
+            name: "user",
+            kind: "one",
+            targetTable: "users",
+            fromColumn: "userId",
+          },
+          {
+            name: "audit",
+            kind: "many",
+            targetTable: "audit_log",
+            toColumn: "noteId",
+          },
         ],
       }
     );
@@ -272,10 +282,13 @@ describe("relation edges", () => {
       coreTableNames: ["users"],
       entities: [],
       pluginPrefixes: new Map([["fx", "fx"]]),
-      plugins: [{ owner: { kind: "plugin" as const, id: "fx" }, tables: [notes] }],
+      plugins: [
+        { owner: { kind: "plugin" as const, id: "fx" }, tables: [notes] },
+      ],
     });
     expect(built.relations.get("fx__notes")).toEqual([
-      { key: "user", fromColumn: "user_id", targetTable: "users" },
+      // The compiled table's key, which is what the registry looks up.
+      { key: "user", fromColumn: "userId", targetTable: "users" },
       {
         key: "audit",
         fromColumn: "",
@@ -293,7 +306,9 @@ describe("relation edges", () => {
       coreTableNames: [],
       entities: [],
       pluginPrefixes: new Map([["fx", "fx"]]),
-      plugins: [{ owner: { kind: "plugin" as const, id: "fx" }, tables: [plain] }],
+      plugins: [
+        { owner: { kind: "plugin" as const, id: "fx" }, tables: [plain] },
+      ],
     });
     expect(built.relations.has("fx__plain")).toBe(false);
   });
@@ -301,9 +316,13 @@ describe("relation edges", () => {
   it("refuses a one-edge without its fromColumn", async () => {
     const { col, defineTable } = await import("../dsl");
     expect(() =>
-      defineTable("bad", { id: col.id() }, {
-        relations: [{ name: "x", kind: "one", targetTable: "users" }],
-      })
+      defineTable(
+        "bad",
+        { id: col.id() },
+        {
+          relations: [{ name: "x", kind: "one", targetTable: "users" }],
+        }
+      )
     ).toThrow(NextlyError);
   });
 });
@@ -325,7 +344,8 @@ describe("ref columns auto-produce one edges", () => {
       ],
     });
     expect(built.relations.get("fx__linked")).toEqual([
-      { key: "userId", fromColumn: "user_id", targetTable: "users" },
+      // Named for its target, not after the column it would collide with.
+      { key: "user", fromColumn: "userId", targetTable: "users" },
     ]);
   });
 
@@ -337,7 +357,7 @@ describe("ref columns auto-produce one edges", () => {
       {
         relations: [
           {
-            name: "userId",
+            name: "user",
             kind: "one",
             targetTable: "admins",
             fromColumn: "userId",
@@ -355,8 +375,50 @@ describe("ref columns auto-produce one edges", () => {
       ],
     });
     expect(built.relations.get("fx__linked")).toEqual([
-      { key: "userId", fromColumn: "user_id", targetTable: "admins" },
+      { key: "user", fromColumn: "userId", targetTable: "admins" },
     ]);
+  });
+
+  it("refuses a declared relation named after a column", async () => {
+    // A row carries its columns and its relations under one set of keys, so
+    // Drizzle refuses the pair when the relations are assembled — at boot,
+    // far from the declaration. Refused here instead.
+    const { col, defineTable } = await import("../dsl");
+    let caught: unknown;
+    try {
+      defineTable(
+        "linked",
+        { id: col.id(), userId: col.ref("users") },
+        {
+          relations: [
+            {
+              name: "userId",
+              kind: "one",
+              targetTable: "admins",
+              fromColumn: "userId",
+            },
+          ],
+        }
+      );
+    } catch (error) {
+      caught = error;
+    }
+    // The detail travels in `publicData.errors`, as every DSL refusal's does.
+    const errors =
+      (caught as { publicData?: { errors?: { message?: string }[] } })
+        ?.publicData?.errors ?? [];
+    expect(errors.map(error => error.message).join(" ")).toMatch(
+      /same name as a column/
+    );
+  });
+
+  it("names the edge <key>Ref when the key has no Id suffix", async () => {
+    const { col, defineTable } = await import("../dsl");
+    const linked = defineTable("linked", {
+      id: col.id(),
+      author: col.ref("users"),
+    });
+    expect(linked.relations.map(rel => rel.name)).toEqual(["authorRef"]);
   });
 });
 
@@ -473,7 +535,11 @@ describe("app-contributed elements on plugin tables (C7)", () => {
       },
     });
     expect(built.elementOwners.get("fx__notes")).toEqual([
-      { elementKind: "index", elementName: "idx_app_label", owner: { kind: "app" } },
+      {
+        elementKind: "index",
+        elementName: "idx_app_label",
+        owner: { kind: "app" },
+      },
     ]);
     // The index still compiles into the table's spec — the APP stream
     // creates it; the element row says whose it is.

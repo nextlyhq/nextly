@@ -281,6 +281,14 @@ describe("elements contributed to another owner's table", () => {
     ...FIRST,
     contributedByDialect: tablesByDialect(withContribution),
     contributedBaselineByDialect: tablesByDialect(dependencyTable),
+    contributions: {
+      dep__orders: {
+        columns: ["fx_ref"],
+        indexes: [],
+        foreignKeys: [],
+        checks: [],
+      },
+    },
   };
 
   it("emits ADD COLUMN, not CREATE TABLE, for the foreign table", () => {
@@ -320,6 +328,67 @@ describe("elements contributed to another owner's table", () => {
     });
 
     expect(second).toBeNull();
+  });
+
+  it("records which elements were its own, by name", () => {
+    const built = buildPluginMigration(CONTRIBUTING)!;
+    expect(built.module.contributions).toEqual(CONTRIBUTING.contributions);
+  });
+
+  it("drops its column when it stops contributing to the table", () => {
+    // The table then leaves the contributed set entirely. Built only from
+    // that set, both sides lost it and the column was never dropped; with a
+    // baseline for every foreign table, the removal is diffed like any other.
+    const first = buildPluginMigration(CONTRIBUTING)!;
+    const second = buildPluginMigration({
+      ...CONTRIBUTING,
+      schemaVersion: 2,
+      name: "withdraw",
+      contributedByDialect: { postgresql: [], mysql: [], sqlite: [] },
+      contributions: {},
+      existing: [first.module],
+    });
+    const up = second!.module.dialects.postgresql.up.join("\n");
+    expect(up).toMatch(/ALTER TABLE .*dep__orders.* DROP COLUMN .*fx_ref/i);
+    expect(up).not.toMatch(/DROP TABLE/i);
+    expect(second!.module.contributions).toBeUndefined();
+  });
+
+  it("does not re-add an earlier contribution two modules later", () => {
+    // The contribution ships in module 1. Module 2 changes only the plugin's
+    // own table, and stores the foreign table on both of its sides — rebased,
+    // so with the contribution already on the "before" side. Module 3 must
+    // still know the column was this plugin's: inferring that from the two
+    // stored sides saw it on both, took it for the dependency's, left it off
+    // the baseline and proposed adding it a second time.
+    const first = buildPluginMigration(CONTRIBUTING)!;
+    const second = buildPluginMigration({
+      ...CONTRIBUTING,
+      schemaVersion: 2,
+      name: "score",
+      tablesByDialect: tablesByDialect(tableSpec(true)),
+      existing: [first.module],
+    })!;
+    const third = buildPluginMigration({
+      ...CONTRIBUTING,
+      schemaVersion: 3,
+      name: "score_index",
+      tablesByDialect: tablesByDialect({
+        ...tableSpec(true),
+        indexes: [
+          {
+            name: "idx_fx_notes_score",
+            columns: ["score"],
+            unique: false,
+          },
+        ],
+      }),
+      existing: [first.module, second.module],
+    })!;
+
+    const up = third.module.dialects.postgresql.up.join("\n");
+    expect(up).toMatch(/idx_fx_notes_score/);
+    expect(up).not.toMatch(/fx_ref/);
   });
 
   it("ignores a column the DEPENDENCY added to its own table", () => {

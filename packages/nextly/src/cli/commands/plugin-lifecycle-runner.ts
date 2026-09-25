@@ -11,6 +11,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { appliedFilenames } from "../../domains/schema/events/newest-event";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
 import { qualifiedFilename } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
@@ -58,6 +59,11 @@ function toLifecyclePlugins(
         ? Object.keys(plugin.optionalDependsOn)
         : []),
     ],
+    requires: Object.keys(plugin.dependsOn ?? {}),
+    optionallyRequires: Object.keys(plugin.optionalDependsOn ?? {}),
+    declaredModules: (plugin.contributes?.schema?.migrations ?? []).map(
+      module => module.name
+    ),
     modules: (plugin.contributes?.schema?.migrations ?? []).map(module => ({
       name: module.name,
       // A module with no DOWN on the live dialect cannot be undone. Checked
@@ -91,27 +97,18 @@ async function connect(options: RunnerOptions, context: CommandContext) {
   //
   // Newest row per filename decides it, not the first: `migrate:down` records
   // a rollback by INSERTING a `rolled_back` event after the `applied` one, so
-  // the latest state is what "is this applied?" asks. The same rule
-  // `runPluginPhase` uses.
+  // the latest state is what "is this applied?" asks. `appliedFilenames` is
+  // that rule, shared with `migrate:down`, so the two cannot drift.
   const readAppliedModules = async (): Promise<Set<string>> => {
-    const applied = new Set<string>();
-    const newest = new Map<string, { status: string; at: number }>();
     const events = new SchemaEventsRepository(
       (adapter as unknown as DrizzleAdapter).getDrizzle(),
       dialect
     );
-    for (const row of await events.listFileApplies()) {
-      if (!row.filename?.startsWith("plugin:")) continue;
-      const at = row.startedAt.getTime();
-      const seen = newest.get(row.filename);
-      if (seen === undefined || at >= seen.at) {
-        newest.set(row.filename, { status: row.status, at });
-      }
-    }
-    for (const [filename, state] of newest) {
-      if (state.status === "applied") applied.add(filename);
-    }
-    return applied;
+    return appliedFilenames(
+      (await events.listFileApplies()).filter(row =>
+        row.filename?.startsWith("plugin:")
+      )
+    );
   };
 
   /**
@@ -189,6 +186,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       statements,
       stream: `plugin:${plugin.name}`,
       owners,
+      dialect,
       source: filename,
     });
 
@@ -259,10 +257,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     // every plugin that declares one. The configured definitions are right
     // here; the set just was not being built from them.
     //
-    // Transitive, because a dependency may declare its own. `runPluginPhase`
-    // is still scoped to the target by `pluginsWithMigrations`, so the
-    // dependencies are present for ordering and validation without their
-    // modules being applied by this install.
+    // Transitive, because a dependency may declare its own.
     const withDependencies = new Map<string, PluginDefinition>();
     const collect = (plugin: PluginDefinition): void => {
       if (withDependencies.has(plugin.name)) return;
@@ -277,9 +272,27 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     };
     collect(definition);
 
-    const pluginMigrationSets = await pluginMigrationSetsFrom([
+    // Sorted WITH the dependencies, applied WITHOUT them.
+    //
+    // The sort needs them or it refuses the target outright. Applying them is
+    // a different matter: `runPluginMigrations` acts on every set it is given,
+    // so passing the dependencies' modules would apply a dependency's schema
+    // while owner rows and `onInstall` run for the target alone — a
+    // dependency half-installed as a side effect of installing something
+    // else. `pluginsWithMigrations` does not prevent that; it gates a
+    // different check.
+    //
+    // Only the target's set is applied. That the dependencies are installed
+    // is not left to this step to discover — the target's SQL fails only when
+    // it happens to touch a dependency's table — but checked explicitly by
+    // `runPluginInstallCommand` before this runs, which refuses and names
+    // each dependency to install first.
+    const sorted = await pluginMigrationSetsFrom([
       ...withDependencies.values(),
     ]);
+    const pluginMigrationSets = sorted.filter(
+      set => set.pluginName === definition.name
+    );
 
     const outcome = await withMigrateLock(
       drizzleAdapter.getDrizzle(),
@@ -333,9 +346,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
    * - The boot happens ONLY when this plugin actually declares the hook.
    *   Most do not, and those installs stay exactly as cheap as before.
    * - It reuses the adapter this command already opened, so the boot does not
-   *   make a second connection, and `shutdownServices` runs in a `finally`:
-   *   an install that fails inside a hook must not leave a registered
-   *   container behind for the next command in the same process.
+   *   make a second connection, and the teardown runs in a `finally`: an
+   *   install that fails inside a hook — or inside the boot itself — must not
+   *   leave running plugins or a registered container behind.
    *
    * Every plugin's `init()` runs during that boot, which is the point — the
    * hook is documented as running against a booted context, and one booted
@@ -349,24 +362,47 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const definition = definitions.find(d => d.name === plugin.name);
     if (definition?.[hook] === undefined) return;
 
-    const { registerServices, getInitializedPluginContext, clearServices } =
-      await import("../../di/register");
+    const {
+      registerServices,
+      getInitializedPluginContext,
+      clearServices,
+      destroyRegisteredPlugins,
+      isServicesRegistered,
+    } = await import("../../di/register");
     const { buildServiceConfig } = await import(
       "../../init/build-service-config"
     );
     const { getImageProcessor } = await import("../../storage/image-processor");
     const { getHookRegistry } = await import("../../hooks/hook-registry");
 
-    await registerServices(
-      buildServiceConfig({
-        config,
-        adapter: drizzleAdapter,
-        imageProcessor: getImageProcessor(),
-        hookRegistry: getHookRegistry(),
-        logger: context.logger,
-      })
-    );
+    // A registration this command did not make is not this command's to tear
+    // down. `registerServices` refuses when one exists, and the cleanup below
+    // would otherwise destroy that owner's plugins and clear its container on
+    // the way out of the refusal.
+    if (isServicesRegistered()) {
+      throw new NextlyError({
+        code: "CONFLICT",
+        publicMessage: `Services are already registered in this process, so ${plugin.name}'s ${hook} was not run.`,
+        statusCode: 409,
+        logContext: { plugin: plugin.name, hook },
+      });
+    }
+
     try {
+      // Inside the `try`, so the cleanup covers a registration that fails
+      // part way. Plugins initialize before registration finishes, so one
+      // that throws after that point leaves their `init()` work running with
+      // the registered flag never set — and a `registerServices` outside the
+      // `try` skipped the cleanup exactly then.
+      await registerServices(
+        buildServiceConfig({
+          config,
+          adapter: drizzleAdapter,
+          imageProcessor: getImageProcessor(),
+          hookRegistry: getHookRegistry(),
+          logger: context.logger,
+        })
+      );
       const pluginContext = getInitializedPluginContext(plugin.name);
       if (pluginContext === undefined) {
         // Registered, but this plugin was not among the initialized ones —
@@ -384,7 +420,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         await definition.onUninstall?.(pluginContext, opts);
       }
     } finally {
-      // `clearServices`, NOT `shutdownServices`.
+      // `destroyRegisteredPlugins` + `clearServices`, NOT `shutdownServices`.
       //
       // Both leave the container unregistered, which is all this needs — a
       // registered one would make the next `registerServices` in the process
@@ -397,10 +433,14 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // bound migrate lock this command is holding, letting another migration
       // in while the DOWNs run.
       //
-      // The cost is that plugin `destroy()` hooks do not run. They are for
-      // shutdown and HMR, and this process boots the runtime only to call one
-      // lifecycle hook, so skipping them is a smaller price than dropping the
-      // lock and the connection mid-uninstall.
+      // `destroy()` still runs, through the same helper `shutdownServices`
+      // uses. Skipping it left whatever `init()` started running in a process
+      // that has finished its work, which can keep a one-shot CLI alive. Both
+      // calls are safe after a registration that failed part way: the helper
+      // destroys only the plugins that registration recorded (none, if it
+      // failed before initializing them), and `clearServices` resets whatever
+      // was registered, however much that was.
+      await destroyRegisteredPlugins();
       clearServices();
     }
   };
@@ -420,6 +460,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     plugins,
     definitions,
     refreshPlan,
+    readAppliedModules,
     runLifecycleHook,
     migrationsDir: config.db?.migrationsDir,
     logger: context.logger,

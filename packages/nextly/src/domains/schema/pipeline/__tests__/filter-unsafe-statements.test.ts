@@ -176,10 +176,12 @@ describe("filterUnsafeStatements: plugin-migrated tables", () => {
   const pluginSet = new Set(["auth__identities", "billing__x"]);
 
   it("blocks an in-desired drop of a plugin-migrated table", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const kept = filterUnsafeStatements(
       ['DROP TABLE "auth__identities"', "CREATE TABLE t (id INT)"],
       ["auth__identities", "t"],
-      pluginSet
+      pluginSet,
+      "postgresql"
     );
     expect(kept).toEqual(["CREATE TABLE t (id INT)"]);
   });
@@ -188,18 +190,46 @@ describe("filterUnsafeStatements: plugin-migrated tables", () => {
     const kept = filterUnsafeStatements(
       ["DROP TABLE dc_posts", "DROP TABLE __new_dc_posts"],
       ["dc_posts", "__new_dc_posts"],
-      pluginSet
+      pluginSet,
+      "sqlite"
     );
     expect(kept).toEqual(["DROP TABLE dc_posts", "DROP TABLE __new_dc_posts"]);
   });
 
   it("resolves a SQLite rebuild twin to the table it rebuilds", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const kept = filterUnsafeStatements(
       ["DROP TABLE __new_billing__x"],
       ["__new_billing__x"],
-      pluginSet
+      pluginSet,
+      "sqlite"
     );
     expect(kept).toEqual([]);
+  });
+
+  it("gives the fast path's answer for drops its own pattern cannot see", () => {
+    // The question is answered by `dropsPluginMigratedTable`, the reader the
+    // fast path uses. The filter's own leading-DROP pattern read only the
+    // first name, and nothing behind a comment.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const kept = filterUnsafeStatements(
+      [
+        "DROP TABLE t, auth__identities",
+        '/* rebuild */ DROP TABLE "billing__x"',
+      ],
+      ["t", "auth__identities", "billing__x"],
+      pluginSet,
+      "postgresql"
+    );
+    expect(kept).toEqual([]);
+  });
+
+  it("keeps a statement that only mentions a plugin table's drop in a string", () => {
+    const insert =
+      "INSERT INTO t VALUES ('how to drop table auth__identities')";
+    expect(
+      filterUnsafeStatements([insert], ["t"], pluginSet, "postgresql")
+    ).toEqual([insert]);
   });
 
   it("without the set, keeps today's behaviour exactly", () => {

@@ -23,6 +23,7 @@ import { buildDrizzleOrderBy } from "./drizzle-order";
 import { buildDrizzleWhere } from "./drizzle-where";
 import {
   createTransactionForwarders,
+  transactionDrizzleHandles,
   type TransactionCrudForwarders,
 } from "./transaction-forwarders";
 import type {
@@ -2284,6 +2285,22 @@ export abstract class DrizzleAdapter {
     txDb: () => unknown
   ): TransactionCrudForwarders {
     return createTransactionForwarders(this, txDb);
+  }
+
+  /**
+   * The Drizzle handles one transaction hands out; see
+   * `transactionDrizzleHandles`. `build` makes an instance on the
+   * transaction's own connection, with the relations config when given one.
+   *
+   * @protected
+   */
+  protected transactionDrizzleHandles<TBare>(
+    build: (relations?: AnyRelations) => TBare
+  ): {
+    bare: () => TBare;
+    drizzle: <T = unknown>(relations?: AnyRelations) => T;
+  } {
+    return transactionDrizzleHandles(build);
   }
 
   /**

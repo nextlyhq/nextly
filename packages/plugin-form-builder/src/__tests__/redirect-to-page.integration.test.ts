@@ -21,7 +21,7 @@ import { submitForm } from "../handlers/submit-form";
 import { formBuilder } from "../plugin";
 
 /**
- * The raw-database handles the harness does not register.
+ * The database services the harness does not register.
  *
  * They are plugin-service RESOLVERS on the container's side rather than
  * container entries, so asking this Nextly instance for one throws. The
@@ -29,11 +29,12 @@ import { formBuilder } from "../plugin";
  * collections service — so stubbing them keeps the rest of the context real
  * rather than mocking the part being tested.
  *
- * `relationalDb` joined `db` when `ctx.db` gained relational queries; the
- * stub named only `db`, so building a plugin context threw here and nowhere
- * else, because nothing else builds one outside the real container.
+ * `relations` (the config behind `ctx.db.query`) is asked for only when a
+ * relational query runs, but it is stubbed with `db` all the same: an earlier
+ * relational service was resolved at construction, the stub named only `db`,
+ * and building a plugin context threw here and nowhere else.
  */
-const RAW_DB_HANDLES = new Set(["db", "relationalDb"]);
+const RAW_DB_HANDLES = new Set(["db", "relations"]);
 
 /**
  * Asserts the write was refused BY THE REDIRECT RULE.

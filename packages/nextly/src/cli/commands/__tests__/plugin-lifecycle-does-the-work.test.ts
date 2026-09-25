@@ -27,6 +27,9 @@ const plugin: LifecyclePlugin = {
   version: "1.0.0",
   enabled: true,
   dependsOn: [],
+  requires: [],
+  optionallyRequires: [],
+  declaredModules: ["0001_init", "0002_more"],
   modules: [
     { name: "0001_init", reversible: true },
     { name: "0002_more", reversible: true },
@@ -59,6 +62,7 @@ function deps(over: Partial<PluginLifecycleDeps> = {}): PluginLifecycleDeps {
     applyMigrations: vi.fn(async () => {}),
     runDown: vi.fn(async () => 2),
     runLifecycleHook: vi.fn(async () => {}),
+    readAppliedModules: vi.fn(async () => new Set<string>()),
     ...over,
   };
 }
@@ -97,6 +101,98 @@ describe("plugins install", () => {
     expect(runLifecycleHook).toHaveBeenCalledWith(plugin, "onInstall", {
       keepData: false,
     });
+  });
+});
+
+describe("plugins install over a dependency that is not installed", () => {
+  // `@acme/fx` requires `@acme/core`, which declares a module the ledger does
+  // not show applied: its install never happened on this database.
+  const dependent: LifecyclePlugin = { ...plugin, requires: ["@acme/core"] };
+  const dependency: LifecyclePlugin = {
+    name: "@acme/core",
+    version: "1.0.0",
+    enabled: true,
+    dependsOn: [],
+    requires: [],
+    optionallyRequires: [],
+    declaredModules: ["0001_core"],
+    modules: [],
+  };
+
+  it("refuses before running migrations, owner activation or onInstall", async () => {
+    // One EXISTING owner row for the dependent, so an owner activation that
+    // slipped past the refusal would show up as a write.
+    const writes: string[] = [];
+    const row = {
+      tableName: "fx__notes",
+      elementKind: "table",
+      elementName: "",
+      ownerKind: "plugin",
+      ownerId: "@acme/fx",
+      migratedBy: "plugin:@acme/fx",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "uninstalled",
+    };
+    const registryDb = {
+      select: () => ({
+        from: () => Object.assign([row], { where: () => [row] }),
+      }),
+      update: () => ({
+        set: (values: { state?: string }) => ({
+          where: () => {
+            writes.push(`state:${values.state ?? "?"}`);
+            return Promise.resolve();
+          },
+        }),
+      }),
+      insert: () => ({
+        values: () => {
+          writes.push("insert");
+          return Promise.resolve();
+        },
+      }),
+    };
+    const applyMigrations = vi.fn(async () => {});
+    const runLifecycleHook = vi.fn(async () => {});
+
+    await expect(
+      runPluginInstallCommand(
+        "@acme/fx",
+        deps({
+          db: registryDb as never,
+          plugins: [dependent, dependency],
+          applyMigrations,
+          runLifecycleHook,
+        })
+      )
+    ).rejects.toMatchObject({
+      code: "PLUGIN_DEPENDENCY_NOT_INSTALLED",
+      publicMessage: expect.stringContaining(
+        "nextly plugins install @acme/core"
+      ),
+    });
+
+    expect(applyMigrations).not.toHaveBeenCalled();
+    expect(writes).toEqual([]);
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+  });
+
+  it("proceeds once the dependency's modules are applied", async () => {
+    // The control: the same fixture with the ledger showing the dependency
+    // installed, so the refusal above is about the dependency and nothing else.
+    const applyMigrations = vi.fn(async () => {});
+    await runPluginInstallCommand(
+      "@acme/fx",
+      deps({
+        plugins: [dependent, dependency],
+        applyMigrations,
+        readAppliedModules: vi.fn(
+          async () => new Set(["plugin:@acme/core/0001_core"])
+        ),
+      })
+    );
+    expect(applyMigrations).toHaveBeenCalledWith(dependent);
   });
 });
 

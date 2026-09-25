@@ -17,6 +17,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, it, expect } from "vitest";
 
+import { PLUGIN_SERVICE_NAMES } from "../../../plugins/plugin-context";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const REPO_NEXTLY_SRC = join(__dirname, "..", "..", "..");
@@ -86,6 +88,32 @@ describe("deps-bridge DI registration coverage", () => {
     expect(
       missing,
       `services referenced in deps-bridge but missing registration and/or ServiceMap entry:\n  ${missing.join("\n  ")}`
+    ).toEqual([]);
+  });
+
+  it("answers every plugin-context service name, by translation or by container registration", () => {
+    // The auth router builds a plugin context of its own, so its resolver
+    // has to answer every name `createPluginContext` may ask for — the same
+    // list `di/register.ts` is compiled against. It reaches the context
+    // through a cast, so a missing name is not a compile error here; it
+    // surfaces as `Service "x" is not registered in container` on the first
+    // login through a plugin strategy. A name must either be translated by
+    // an explicit `name === "x"` branch or be a real container entry that
+    // the fall-through `getService(name)` can resolve.
+    const bridgeSource = stripComments(readFileSync(DEPS_BRIDGE, "utf-8"));
+    const diSource = readAllRecursive(DI_DIR);
+
+    const unanswered = PLUGIN_SERVICE_NAMES.filter(name => {
+      const translated = bridgeSource.includes(`name === "${name}"`);
+      const registered = new RegExp(
+        `container\\.(registerSingleton|registerTransient|register|registerFactory)(<[^>]+>)?\\(\\s*"${name}"`
+      ).test(diSource);
+      return !translated && !registered;
+    });
+
+    expect(
+      unanswered,
+      `plugin-context service names the auth bridge cannot resolve:\n  ${unanswered.join("\n  ")}`
     ).toEqual([]);
   });
 });

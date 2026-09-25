@@ -47,12 +47,24 @@ describe("SchemaRegistry.getRelations", () => {
     expect(registry.getRelations()).toBe(registry.getRelations());
   });
 
-  it("stays on the static fast path when dynamic tables register WITHOUT edges", () => {
+  it("stays on the static fast path while no dynamic table is registered", () => {
+    // Both hand back the dialect's prebuilt config itself, so the adapters'
+    // per-relations Drizzle instance is shared rather than rebuilt.
+    expect(makeRegistry().getRelations()).toBe(makeRegistry().getRelations());
+  });
+
+  it("puts a dynamic table WITHOUT edges in the query namespace", () => {
+    // `db.query` is built from the tables handed to defineRelations. Returning
+    // the static config because no dynamic table had an edge left every such
+    // table — a plugin's, a collection's — out of `db.query` entirely.
     const registry = makeRegistry();
-    const staticRelations = registry.getRelations();
     registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"));
-    // Cache invalidated but re-assembly lands back on the prebuilt object.
-    expect(registry.getRelations()).toBe(staticRelations);
+    const relations = registry.getRelations() as unknown as RelationsShape;
+    expect(Object.keys(relations)).toContain("dc_posts");
+    // Static edges survive the re-assembly.
+    expect(Object.keys(relations.users?.relations ?? {})).toContain(
+      "refreshTokens"
+    );
   });
 
   it("composes dynamic edges over the merged namespace", () => {

@@ -124,7 +124,6 @@ async function resolveApplied(
     status: "applied",
     source: "cli-migrate",
     filename,
-    startedAt: new Date(),
     endedAt: new Date(),
     statementsExecuted: 0,
     note: NOTE,
@@ -170,7 +169,6 @@ async function resolveRolledBack(
     status: "rolled_back",
     source: "cli-migrate",
     filename,
-    startedAt: new Date(),
     endedAt: new Date(),
     note: NOTE,
   });

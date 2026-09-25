@@ -20,12 +20,16 @@ import {
   pluginOfLedgerRow,
   scopeLedgerRows,
 } from "../../domains/schema/events/ledger-scope";
-import { newestEvent } from "../../domains/schema/events/newest-event";
+import {
+  appliedFilenames,
+  newestEventsByFilename,
+} from "../../domains/schema/events/newest-event";
 import {
   SchemaEventsRepository,
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
 import { truncateErrorMessage } from "../../domains/schema/events/schema-events-repository";
+import { qualifiedFilename } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import { assertNoForeignDrops } from "../../domains/schema/ownership/drop-guard";
 import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
@@ -64,18 +68,9 @@ export function selectAppliedTargets(
   rows: SchemaEventRow[],
   step: number
 ): string[] {
-  const byFile = new Map<string, SchemaEventRow[]>();
-  for (const r of rows) {
-    if (!r.filename) continue;
-    const list = byFile.get(r.filename) ?? [];
-    list.push(r);
-    byFile.set(r.filename, list);
-  }
-
   const applied: { filename: string; at: number }[] = [];
-  for (const [filename, list] of byFile) {
-    const newest = newestEvent(list);
-    if (newest?.status === "applied") {
+  for (const [filename, newest] of newestEventsByFilename(rows)) {
+    if (newest.status === "applied") {
       applied.push({ filename, at: newest.startedAt.getTime() });
     }
   }
@@ -207,6 +202,7 @@ export async function migrateDownCore(
       statements: splitSqlStatements(p.downSql, deps.dialect),
       stream: deps.options.plugin ? `plugin:${deps.options.plugin}` : "app",
       owners: deps.owners ?? new Map(),
+      dialect: deps.dialect,
       source: p.filename,
     });
   }
@@ -259,6 +255,64 @@ export async function migrateDownCore(
   );
 
   return { rolledBack };
+}
+
+/**
+ * The highest `schemaVersion` among a plugin's modules that are STILL applied,
+ * or null when none is.
+ *
+ * Read from the ledger rather than stepped down by one: a rollback can take
+ * several modules, and modules can be reverted out of order, so counting would
+ * describe something the ledger does not.
+ *
+ * "Still applied" is `appliedFilenames` — the newest event per filename. A
+ * rollback is recorded by INSERTING a `rolled_back` event after the `applied`
+ * one, so a filter for `applied` rows kept the module this command had just
+ * reverted, and the owner rows then held the version of a module whose tables
+ * were gone.
+ */
+export function pluginSchemaVersionFromLedger(
+  rows: SchemaEventRow[],
+  plugin: string,
+  migrations: ReadonlyArray<{ name: string; schemaVersion: number }>
+): number | null {
+  const applied = appliedFilenames(scopeLedgerRows(rows, plugin));
+  let version: number | null = null;
+  for (const module of migrations) {
+    if (!applied.has(qualifiedFilename(plugin, module.name))) continue;
+    version = Math.max(version ?? 0, module.schemaVersion);
+  }
+  return version;
+}
+
+/**
+ * Write `pluginSchemaVersionFromLedger` onto every owner row of the plugin.
+ *
+ * Takes the ledger reader and the owner store rather than a connection so the
+ * rollback path can be exercised end to end without a database: the ledger it
+ * reads is the one `recordRolledBack` has just written to.
+ */
+export async function recordPluginSchemaVersionFromLedger(deps: {
+  plugin: string;
+  migrations: ReadonlyArray<{ name: string; schemaVersion: number }>;
+  listFileApplies: () => Promise<SchemaEventRow[]>;
+  owners: {
+    read(): Promise<OwnerRecord[]>;
+    upsert(rows: readonly OwnerRecord[]): Promise<void>;
+  };
+}): Promise<void> {
+  const mine = (await deps.owners.read()).filter(
+    row => row.ownerId === deps.plugin
+  );
+  if (mine.length === 0) return;
+  const version = pluginSchemaVersionFromLedger(
+    await deps.listFileApplies(),
+    deps.plugin,
+    deps.migrations
+  );
+  await deps.owners.upsert(
+    mine.map(row => ({ ...row, schemaVersion: version }))
+  );
 }
 
 // ============================================================================
@@ -417,7 +471,6 @@ export async function runMigrateDown(
         status: "failed",
         source: "cli-migrate",
         filename: filename.endsWith(".sql") ? filename : `${filename}.sql`,
-        startedAt: new Date(),
         endedAt: new Date(),
         note: `migrate:down failed: ${message}`,
       });
@@ -454,35 +507,15 @@ export async function runMigrateDown(
         const { SchemaOwnersRepository } = await import(
           "../../domains/schema/ownership/schema-owners-repository"
         );
-        const ownersRepo = new SchemaOwnersRepository(db, dialect);
-        const mine = (await ownersRepo.read()).filter(
-          row => row.ownerId === plugin
-        );
-        if (mine.length === 0) return;
-
-        // The highest schemaVersion among this plugin's modules that are STILL
-        // applied. Read from the ledger rather than stepped down by one: a
-        // rollback can take several modules, and modules can be reverted out
-        // of order, so counting would describe something the ledger does not.
-        const applied = new Set(
-          scopeLedgerRows(await repo.listFileApplies(), plugin)
-            .filter(row => row.status === "applied")
-            .map(row => row.filename ?? "")
-        );
         const definition = (configResult.config.plugins ?? []).find(
           p => p.name === plugin
         );
-        let version: number | null = null;
-        for (const module of definition?.contributes?.schema?.migrations ??
-          []) {
-          const filename = `plugin:${plugin}/${module.name}`;
-          if (!applied.has(filename)) continue;
-          version = Math.max(version ?? 0, module.schemaVersion);
-        }
-
-        await ownersRepo.upsert(
-          mine.map(row => ({ ...row, schemaVersion: version }))
-        );
+        await recordPluginSchemaVersionFromLedger({
+          plugin,
+          migrations: definition?.contributes?.schema?.migrations ?? [],
+          listFileApplies: () => repo.listFileApplies(),
+          owners: new SchemaOwnersRepository(db, dialect),
+        });
       },
       recordFailed,
       withLock: withMigrateLock,

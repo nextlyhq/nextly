@@ -327,41 +327,60 @@ describe("kit-table foreign keys on sqlite (bundle pass two)", () => {
         },
       ],
     });
-    const config = getTableConfig(
-      built.drizzle["fx__linked"] as never
-    );
+    const config = getTableConfig(built.drizzle["fx__linked"] as never);
     // drizzle rc.4 exposes the actions and arity, not the name, on the
     // config object; the name is carried by the builder into DDL.
     expect(config.foreignKeys).toHaveLength(1);
     expect(config.foreignKeys[0]?.onDelete).toBe("cascade");
   });
 
-  it("skips a foreign key whose referenced table is outside the bundle", async () => {
-    const { getTableConfig } = await import("drizzle-orm/sqlite-core");
-    const linked = defineTable(
-      "linked",
-      { id: col.id(), userId: col.shortText() },
-      {
-        foreignKeys: [
-          {
-            columns: ["userId"],
-            references: { table: "users", columns: ["id"] },
-          },
+  // Outside the bundle used to mean "skipped": the resolver looked the table
+  // up in a registry boot had not built yet, found nothing, and SQLite — which
+  // takes a foreign key in CREATE TABLE or never — silently enforced nothing.
+  it.each([
+    ["a core table", "users", ["users"], []],
+    ["an entity table", "dc_orders", [], [{ name: "dc_orders" }]],
+  ])(
+    "carries a foreign key to %s outside the bundle",
+    async (_label, target, coreTableNames, entities) => {
+      const { getTableName } = await import("drizzle-orm");
+      const { getTableConfig } = await import("drizzle-orm/sqlite-core");
+      const linked = defineTable(
+        "linked",
+        { id: col.id(), refId: col.shortText() },
+        {
+          foreignKeys: [
+            {
+              columns: ["refId"],
+              references: { table: target, columns: ["id"] },
+              onDelete: "cascade",
+            },
+          ],
+        }
+      );
+      const built = await buildExtensionSchema({
+        dialect: "sqlite" as const,
+        coreTableNames,
+        entities: entities.map(entity => ({
+          ...entity,
+          slug: "orders",
+          entityKind: "collection" as const,
+          columns: [],
+        })),
+        pluginPrefixes: new Map([["fx", "fx"]]),
+        plugins: [
+          { owner: { kind: "plugin" as const, id: "fx" }, tables: [linked] },
         ],
-      }
-    );
-    const built = await buildExtensionSchema({
-      dialect: "sqlite" as const,
-      coreTableNames: ["users"],
-      entities: [],
-      pluginPrefixes: new Map([["fx", "fx"]]),
-      plugins: [
-        { owner: { kind: "plugin" as const, id: "fx" }, tables: [linked] },
-      ],
-    });
-    const config = getTableConfig(
-      built.drizzle["fx__linked"] as never
-    );
-    expect(config.foreignKeys).toEqual([]);
-  });
+      });
+      const config = getTableConfig(built.drizzle["fx__linked"] as never);
+      expect(config.foreignKeys).toHaveLength(1);
+      const reference = config.foreignKeys[0]!.reference();
+      expect(getTableName(reference.foreignTable)).toBe(target);
+      expect(reference.foreignColumns.map(column => column.name)).toEqual([
+        "id",
+      ]);
+      expect(reference.columns.map(column => column.name)).toEqual(["ref_id"]);
+      expect(config.foreignKeys[0]?.onDelete).toBe("cascade");
+    }
+  );
 });

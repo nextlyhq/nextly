@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { migrateDownCore, selectAppliedTargets } from "../migrate-down";
+import {
+  migrateDownCore,
+  recordPluginSchemaVersionFromLedger,
+  selectAppliedTargets,
+} from "../migrate-down";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
+import type { OwnerRecord } from "../../../domains/schema/ownership/owner-registry";
 import { createLogger } from "../../utils/logger";
 
 function row(
@@ -239,5 +244,86 @@ describe("migrateDownCore", () => {
       expect(res.rolledBack).toEqual([]);
       expect(executed).toEqual([]);
     });
+  });
+});
+
+describe("plugin schema version after a rollback", () => {
+  // `auth` shipped two modules; both are applied and its owner rows say 2.
+  const migrations = [
+    { name: "001_init", schemaVersion: 1 },
+    { name: "002_more", schemaVersion: 2 },
+  ];
+  const ownerRow: OwnerRecord = {
+    tableName: "auth__identities",
+    ownerKind: "plugin",
+    ownerId: "auth",
+    migratedBy: "plugin:auth",
+    ownerVersion: "1.0.0",
+    schemaVersion: 2,
+    state: "active",
+  };
+
+  it("recomputes the version from the modules still applied", async () => {
+    // One ledger shared by the rollback and the recompute, the way the real
+    // command shares the repository: `recordRolledBack` INSERTS a
+    // `rolled_back` event after the `applied` one, and the recompute reads it
+    // back. A recompute that filtered for `applied` rows would still see
+    // `002_more` and leave the rows claiming version 2.
+    const ledger: SchemaEventRow[] = [
+      row("plugin:auth/001_init", "applied", 1000),
+      row("plugin:auth/002_more", "applied", 2000),
+    ];
+    let clock = 3000;
+    let owners: OwnerRecord[] = [ownerRow];
+
+    const { deps } = baseDeps({
+      options: {
+        step: 1,
+        allowDataLoss: true,
+        yes: false,
+        dryRun: false,
+        plugin: "auth",
+      },
+      listFileApplies: async () => [...ledger],
+      recordRolledBack: async (filename: string) => {
+        ledger.push(row(filename, "rolled_back", clock++));
+      },
+      recordPluginSchemaVersion: () =>
+        recordPluginSchemaVersionFromLedger({
+          plugin: "auth",
+          migrations,
+          listFileApplies: async () => [...ledger],
+          owners: {
+            read: async () => owners,
+            upsert: async rows => {
+              owners = [...rows];
+            },
+          },
+        }),
+    });
+
+    const result = await migrateDownCore(deps);
+
+    expect(result.rolledBack).toEqual(["plugin:auth/002_more"]);
+    expect(owners.map(o => o.schemaVersion)).toEqual([1]);
+  });
+
+  it("records null once no module of the plugin remains applied", async () => {
+    let owners: OwnerRecord[] = [ownerRow];
+    await recordPluginSchemaVersionFromLedger({
+      plugin: "auth",
+      migrations,
+      listFileApplies: async () => [
+        row("plugin:auth/001_init", "applied", 1000),
+        row("plugin:auth/001_init", "rolled_back", 2000),
+      ],
+      owners: {
+        read: async () => owners,
+        upsert: async rows => {
+          owners = [...rows];
+        },
+      },
+    });
+    expect(owners.map(o => o.schemaVersion)).toEqual([null]);
   });
 });

@@ -472,23 +472,22 @@ export function buildAuthRouterDeps(
       const adapter = getService("adapter") as { getDrizzle: () => unknown };
       return adapter.getDrizzle();
     }
-    // The relations-enabled handle behind `ctx.db.query`, translated for the
-    // same reason `db` is: neither is a container entry, and `getService`
-    // would throw rather than resolve one.
+    // The relations config behind `ctx.db.query`, translated for the same
+    // reason `db` is: neither is a container entry, and `getService` would
+    // throw rather than resolve one. Asked for per relational access, so it is
+    // resolved here per call rather than captured.
     //
-    // It was not translated when `ctx.db` gained relational queries, and only
-    // `di/register.ts` learned the new name. This is the OTHER place a plugin
-    // context is built — the auth router's — so every login through a plugin
-    // strategy threw `Service "relationalDb" is not registered in container`
-    // before reaching the strategy at all.
-    if (name === "relationalDb") {
+    // This is the OTHER place a plugin context is built — the auth router's.
+    // When `ctx.db` gained relational queries only `di/register.ts` learned
+    // the new name, so every login through a plugin strategy threw
+    // `Service "relationalDb" is not registered in container` before reaching
+    // the strategy at all. A name added to the plugin service list has to be
+    // answered here too.
+    if (name === "relations") {
       const adapter = getService("adapter") as {
-        getDrizzle: (relations?: unknown) => unknown;
         getCapabilities: () => { dialect: SupportedDialect };
       };
-      return adapter.getDrizzle(
-        resolveRelations(adapter.getCapabilities().dialect)
-      );
+      return resolveRelations(adapter.getCapabilities().dialect);
     }
     // Also not a DI service. The container registers the adapter, and the
     // dialect is something it is asked for; a plugin's settings store picks

@@ -4,6 +4,8 @@
  * Comprehensive tests for MySQL adapter functionality.
  */
 
+import { defineRelations } from "drizzle-orm";
+import { int, mysqlTable } from "drizzle-orm/mysql-core";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import {
@@ -21,6 +23,9 @@ import {
 const mockConnection = {
   query: vi.fn(),
   release: vi.fn(),
+  // The callback connection the mysql2/promise wrapper exposes, which is what
+  // Drizzle's mysql2 driver binds to (and whose `config` it writes to).
+  connection: { config: {} },
 };
 
 // Mock pool with internal structure
@@ -745,6 +750,37 @@ describe("@nextly/adapter-mysql", () => {
         expect(typeof tx.upsert).toBe("function");
         expect(typeof tx.execute).toBe("function");
         expect(typeof tx.insert).toBe("function");
+      });
+    });
+
+    // `ctx.db.transaction` hands a plugin's `query` reads this handle. The bare
+    // `drizzle()` is built without relations, so its `query` namespace is
+    // empty; a pooled `getDrizzle(relations)` would read outside the
+    // transaction.
+    it("drizzle(relations) is a relations-enabled instance on the transaction's connection, memoized per relations object", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      const notes = mysqlTable("notes", { id: int("id").primaryKey() });
+      const first = defineRelations({ notes });
+      const second = defineRelations({ notes });
+      type Handle = { query: Record<string, unknown>; $client: unknown };
+
+      await adapter.transaction(async tx => {
+        const bare = tx.drizzle<Handle>();
+        const relational = tx.drizzle<Handle>(first);
+
+        expect(relational.query.notes).toBeDefined();
+        expect(bare.query?.notes).toBeUndefined();
+        // The transaction's own connection, which the bare instance is bound to too.
+        expect(relational.$client).toBe(mockConnection.connection);
+        expect(relational.$client).toBe(bare.$client);
+
+        expect(tx.drizzle(first)).toBe(relational);
+        expect(tx.drizzle(second)).not.toBe(relational);
+        // The bare instance the delegated CRUD uses is unchanged.
+        expect(tx.drizzle()).toBe(bare);
       });
     });
 
