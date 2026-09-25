@@ -23,18 +23,33 @@ Work through these in order; each layer has tests nearby to extend.
    - Add the literal to `FieldType` in
      `packages/nextly/src/collections/fields/types/base.ts`.
    - Create `packages/nextly/src/collections/fields/types/<type>.ts` with the
-     config interface; export it from `types/index.ts` (this also feeds
-     `ALL_FIELD_TYPES`).
+     config interface. In `types/index.ts`, re-export it and add it to the
+     `DataFieldConfig` union.
 2. **Factory**: add the helper in
    `packages/nextly/src/collections/fields/helpers.ts` following the existing
    `(config) => ({ ...config, type: "<type>" })` shape with a JSDoc example.
 3. **Type guard**: add it in `collections/fields/guards.ts` via
    `createTypeGuard`, and decide membership in `isDataField` /
    `isRelationalField` / `hasNestedFields`.
-4. **Accepted-type lists (two of them, both hand-maintained)**:
+4. **Accepted-type lists (three of them, all hand-maintained, and nothing
+   compares them with `FieldType`)**:
+   - `DataFieldType` and `DATA_FIELD_TYPES` in
+     `packages/nextly/src/collections/fields/types/index.ts`.
+     `ALL_FIELD_TYPES` copies `DATA_FIELD_TYPES`, and the boot gate
+     (`shared/lib/assert-plugin-field-declarations.ts`) reads it. Miss this
+     and boot refuses the field with `FIELD_TYPE_INVALID`, although
+     `defineCollection` accepted it.
    - `VALID_FIELD_TYPES` in `packages/nextly/src/shared/base-validator.ts` —
-     the config gate. Miss this and `defineCollection` throws
-     `FIELD_TYPE_INVALID` at boot even though every other layer is wired.
+     the config gate for `defineCollection`, `defineSingle` and
+     `defineFieldGroup`. Miss this and nothing fails. An unknown type looks
+     like a plugin type that has not registered yet, so
+     `validateFieldTypeShared` returns false without an error, and the
+     validator skips the field's type-specific checks. Put those checks in
+     the per-type `switch` of `collections/config/validate-config.ts`,
+     `singles/config/validate-single.ts` and
+     `field-groups/config/validate-field-group.ts`, and test that
+     `defineCollection` rejects a config that breaks one. That test is what
+     fails when this entry is missing.
    - `DynamicFieldType` in
      `packages/nextly/src/schemas/dynamic-collections/legacy-types.ts` — the
      shape of a Schema-Builder-stored field definition.

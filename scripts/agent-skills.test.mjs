@@ -4,7 +4,7 @@
  * temporary directory, so the property is judged on files, not on mocks.
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,6 +40,8 @@ describe("the Claude Code copy of the skills", () => {
 
     expect(skillCopyDrift(base)).toEqual([]);
     expect(readFileSync(join(base, CLAUDE_COPY, "a/SKILL.md"))).toEqual(readFileSync(join(base, SKILLS_HOME, "a/SKILL.md")));
+    // Neither the staged copy nor the old one it replaced is left beside it.
+    expect(readdirSync(join(base, ".claude"))).toEqual(["skills"]);
   });
 
   it("names a skill missing from the copy", () => {
@@ -104,6 +106,41 @@ describe("the Claude Code copy of the skills", () => {
     expect(() => syncSkillCopy(base)).toThrow();
     expect(readFileSync(join(base, CLAUDE_COPY, "a/SKILL.md"), "utf8")).toContain("name: a");
     expect(readdirSync(join(base, ".claude"))).toEqual(["skills"]);
+  });
+
+  it("keeps the old copy exactly as it was when the new one cannot be put in place, leaving nothing behind", () => {
+    skill(SKILLS_HOME, "a", "---\nname: a\ndescription: the new text\n---\n");
+    skill(CLAUDE_COPY, "a", "---\nname: a\ndescription: the old text\n---\n");
+    // The swap itself is refused: the new copy cannot be moved in, while every other move goes through.
+    const rename = (from, to) => {
+      if (to === join(base, CLAUDE_COPY) && !from.endsWith("-old")) throw new Error("the swap was refused");
+      renameSync(from, to);
+    };
+    expect(() => syncSkillCopy(base, { rename })).toThrow("the swap was refused");
+    expect(readFileSync(join(base, CLAUDE_COPY, "a/SKILL.md"), "utf8")).toContain("the old text");
+    expect(readdirSync(join(base, ".claude"))).toEqual(["skills"]);
+  });
+
+  /*
+   * Git records whether a file is executable, and a script a skill runs needs
+   * it; a copy that differs there only is still out of step.
+   */
+  it.runIf(POSIX)("names a copied file that differs from its skill only in whether it is executable", () => {
+    skill(SKILLS_HOME, "a");
+    skill(CLAUDE_COPY, "a");
+    writeFileSync(join(base, SKILLS_HOME, "a/run.sh"), "#!/bin/sh\n");
+    writeFileSync(join(base, CLAUDE_COPY, "a/run.sh"), "#!/bin/sh\n");
+    chmodSync(join(base, SKILLS_HOME, "a/run.sh"), 0o755);
+    chmodSync(join(base, CLAUDE_COPY, "a/run.sh"), 0o644);
+    expect(skillCopyDrift(base)).toEqual([{ path: `${CLAUDE_COPY}/a/run.sh`, problem: `differs from ${SKILLS_HOME} in whether it is executable` }]);
+  });
+
+  it.runIf(POSIX)("keeps an executable skill file executable in the copy it syncs", () => {
+    skill(SKILLS_HOME, "a");
+    writeFileSync(join(base, SKILLS_HOME, "a/run.sh"), "#!/bin/sh\n");
+    chmodSync(join(base, SKILLS_HOME, "a/run.sh"), 0o755);
+    syncSkillCopy(base);
+    expect(skillCopyDrift(base)).toEqual([]);
   });
 
   it("refuses a copy that is a file, as a link becomes on a checkout without links", () => {

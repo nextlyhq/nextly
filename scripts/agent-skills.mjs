@@ -13,7 +13,7 @@
  * `scripts/check-agent-contract.mjs` holds the two identical (`skillCopyDrift`)
  * and every skill loadable by every harness (`skillFrontmatterProblems`).
  */
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -86,15 +86,32 @@ function rootProblem(stat, rule) {
 /** How one skill file's copy falls short of it, or null when it is exact. */
 function fileDrift(file, twin, home, copy) {
   if (file.link) return { path: `${SKILLS_HOME}/${file.path}`, problem: "is a symbolic link — skills are real files" };
-  const problem = copyProblem(twin, () => readFileSync(join(home, file.path)).equals(readFileSync(join(copy, file.path))));
+  const problem = copyProblem(twin, () => difference(join(home, file.path), join(copy, file.path)));
   return problem && { path: `${CLAUDE_COPY}/${file.path}`, problem };
 }
 
-/** What is wrong with one copied file, or null when it matches its skill; the bytes are read only when there is a real file to compare. */
-function copyProblem(twin, matches) {
+/** What is wrong with one copied file, or null when it matches its skill; the file is read only when there is a real one to compare. */
+function copyProblem(twin, differs) {
   if (!twin) return "is missing from the Claude Code copy";
   if (twin.link) return "is a symbolic link — it must be a real copy";
-  return matches() ? null : `differs from ${SKILLS_HOME}`;
+  return differs();
+}
+
+const POSIX = process.platform !== "win32";
+
+/**
+ * How a copied file differs from its skill, or null when it does not: in its
+ * bytes, or on POSIX in whether it is executable, which git records with the
+ * file and a script a skill runs depends on.
+ */
+function difference(source, copied) {
+  if (!readFileSync(source).equals(readFileSync(copied))) return `differs from ${SKILLS_HOME}`;
+  return POSIX && executable(source) !== executable(copied) ? `differs from ${SKILLS_HOME} in whether it is executable` : null;
+}
+
+/** Whether a file is executable as git records it: by its owner's execute bit. */
+function executable(path) {
+  return (statSync(path).mode & 0o100) !== 0;
 }
 
 /** What is at a path, without following a link; null when nothing is, a dangling link included. */
@@ -107,23 +124,42 @@ function entryAt(path) {
 }
 
 /**
- * Rewrites the Claude Code copy from the skills: every file copied, anything
- * else removed. The new copy is built beside the old one and swapped in, so a
- * sync that fails part-way — the skills missing or unreadable — leaves the
- * copy Claude Code reads as it was.
+ * Rewrites the Claude Code copy from the skills: every file copied, with its
+ * mode, and anything else removed. The new copy is built beside the old one
+ * and swapped in, so a sync that fails part-way — the skills missing or
+ * unreadable, or the swap itself refused — leaves the copy Claude Code reads
+ * as it was, and nothing beside it.
+ *
+ * `rename` is the move the swap makes, replaceable so a test can refuse it.
  */
-export function syncSkillCopy(base = root) {
+export function syncSkillCopy(base = root, { rename = renameSync } = {}) {
   const copy = join(base, CLAUDE_COPY);
   mkdirSync(dirname(copy), { recursive: true });
   const staging = mkdtempSync(join(dirname(copy), ".skills-sync-"));
   try {
     cpSync(join(base, SKILLS_HOME), staging, { recursive: true, dereference: true });
-  } catch (error) {
+    swapIn(staging, copy, rename);
+  } finally {
     rmSync(staging, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Puts the new copy where the old one is. The old one is moved aside first
+ * and removed only once the new one is in place; if the new one cannot be
+ * moved in, the old one is moved back.
+ */
+function swapIn(staging, copy, rename) {
+  if (!entryAt(copy)) return rename(staging, copy);
+  const aside = `${staging}-old`;
+  rename(copy, aside);
+  try {
+    rename(staging, copy);
+  } catch (error) {
+    rename(aside, copy);
     throw error;
   }
-  rmSync(copy, { recursive: true, force: true });
-  renameSync(staging, copy);
+  rmSync(aside, { recursive: true, force: true });
 }
 
 /**
