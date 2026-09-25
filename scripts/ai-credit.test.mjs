@@ -192,6 +192,23 @@ describe("a line a change adds", () => {
   it("unfolds a trailer written as a list item onto the lines indented under its bullet", () => {
     expect(creditsIn(lines(spell("* Co-authored", "-by:"), `  ${CODE_TOOL}`), "message")).toEqual([expect.objectContaining({ from: 1, line: 2 })]);
     expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("* ", CHAT_TOOL, " loads skills")), "message")).toEqual([]);
+    // Under an item an indented line continues the trailer only as what its
+    // value still needs, another co-author or the address that completes one;
+    // an explanation of the item is a line of its own.
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("  ", CODE_TOOL, " reads the project files")), "message")).toEqual([]);
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Clau", "de"), "  Dupont <claude.dupont@example.com>"), "message")).toEqual([]);
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("  and ", CODE_TOOL)), "message")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
+    // A name alone goes on with the value, as a tool's name or a surname does, and so does a note.
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), `  ${CODE_TOOL}`), "message")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Clau", "de"), "  Dupont"), "message")).toEqual([]);
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), "  (context)", `  ${CODE_TOOL}`), "message")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
+    // An explanation credits no one, however it opens, and a co-author after it still belongs to the trailer.
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("  ", CODE_TOOL, ": reads the project files")), "message")).toEqual([]);
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), "  with a note", spell("  and ", CODE_TOOL)), "message")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
+    // An ambiguous name in lower case is a name alone, as the trailer reads it in any case.
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("  clau", "de")), "message")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
+    // An address goes on with the name before it, which a vendor's address makes a tool's; the name credited on its own line already.
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Clau", "de"), spell("  <claude@", "anthro", "pic.com>")), "message")).toEqual([expect.objectContaining({ from: 1, line: 1 })]);
   });
 
   it("unfolds a trailer across a repeated comment prefix, and not onto the next comment", () => {
@@ -222,6 +239,32 @@ describe("a line a change adds", () => {
     }
     // A note that mentions a tool names no co-author.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  (checked against the ", CODE_TOOL, " docs)")), "line")).toEqual([]);
+    // A later co-author folded across lines is judged whole, as the first is: a person's surname and address, or a tool's edition.
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  and Clau", "de"), "  Dupont <claude.dupont@example.com>"), "line")).toEqual([]);
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  and Clau", "de"), "  Opus 5"), "line")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
+    // A joining word is a word of its own: a surname that starts with one goes on with the co-author before it.
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  and Clau", "de"), "  Andrews <claude.andrews@example.com>"), "line")).toEqual([]);
+    // A closed note completes what it follows, so the line after it is a co-author of its own; a note still open goes on.
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  (context)", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  (checked against the", spell("  ", CODE_TOOL, " docs)")), "line")).toEqual([]);
+    // An address inside a note still open does not end it.
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  (reviewed by Alice <alice@example.com>", spell("  ", CODE_TOOL, " docs)")), "line")).toEqual([]);
+    // A tool named after a note under a vendor's name is that line's credit, not the vendor's line's.
+    expect(creditsIn(lines(trailer("Co-authored", spell("Anthro", "pic")), "  (a note)", spell("  and ", CODE_TOOL)), "line")).toEqual([expect.objectContaining({ line: 3 })]);
+    // An identity complete with its address, or closed by a separator, leaves the next line an identity of its own.
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  and Alice Smith <alice@example.com>", `  ${MODEL} <${VENDOR_ADDRESS}>`), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  and Alice Smith,", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
+  });
+
+  // An identity is read across a few lines at most, so a long run of folded lines takes time in proportion to its length.
+  it("reads a long run of folded lines in time that grows with its length", () => {
+    const run = Array.from({ length: 12000 }, (_, n) => `  line ${n}`);
+    expect(creditsIn(lines(trailer("Co-authored", CODE_TOOL), ...run), "line")).toEqual([expect.objectContaining({ from: 1, line: 1 })]);
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), ...run), "line")).toEqual([]);
+  }, 5000);
+
+  it("keeps a trailer's multi-line human name whole under a list item", () => {
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Clau", "de"), "  Dupont", "  <claude.dupont@example.com>"), "message")).toEqual([]);
   });
 
   it("reports the line of a multi-line text that carries the credit", () => {
@@ -505,6 +548,24 @@ describe("the command in CI", () => {
     expect(decide(eventFor("pull_request", { pull_request: { title: "docs: add a note", body: "", head: { ref: "docs/note", sha: head }, base: { sha: base } } }))).toBe(0);
   });
 
+  // A vendor's name alone waits for the whole value, which may make a person of it; a note that does not leaves the credit on the vendor's line.
+  it("keeps a vendor's credit on its own line when an added note makes no person of it", () => {
+    const vendor = trailer("Co-authored", spell("Anthro", "pic"));
+    expect(decide(change(lines(vendor, ""), lines(vendor, "  with a note", "")))).toBe(0);
+  });
+
+  it("refuses a tool an added line names under a vendor's name that was already there", () => {
+    const vendor = trailer("Co-authored", spell("Anthro", "pic"));
+    expect(decide(change(lines(vendor, ""), lines(vendor, `  ${MODEL} <${VENDOR_ADDRESS}>`, "")))).toBe(1);
+    expect(printed()).toMatch(/file=notes\.md,line=2,title=AI credit::notes\.md:2 names it in a Co-authored-by trailer/);
+  });
+
+  it("refuses a tool added after a note under a vendor's name that was already there", () => {
+    const vendor = trailer("Co-authored", spell("Anthro", "pic"));
+    expect(decide(change(lines(vendor, ""), lines(vendor, "  (a note)", spell("  and ", CODE_TOOL), "")))).toBe(1);
+    expect(printed()).toMatch(/file=notes\.md,line=3,title=AI credit::notes\.md:3 names it in a Co-authored-by trailer/);
+  });
+
   it("reads a file as text even where a changed attribute calls it binary", () => {
     const base = commit("chore: the base", { file: "base.md" });
     run("checkout", "-q", "-b", "topic");
@@ -670,6 +731,16 @@ describe("the command as the commit-msg hook", () => {
     const made = said(MADE, "with", CODE_TOOL);
     expect(hook(lines("fix: a change", scissors, ...verboseDiff(`-${made}`)))).toBe(0);
     expect(hook(lines("fix: a change", scissors, ...verboseDiff(`+${made}`)))).toBe(1);
+  });
+
+  // Git's diff is known by the header git writes after `diff --git`, not by that line alone.
+  it("reads a line of a message's own that begins as git's diff does as its message, and knows git's diff by its headers", () => {
+    const scissors = "# ------------------------ >8 ------------------------";
+    const made = said(MADE, "with", CODE_TOOL);
+    expect(hook(lines("fix: a change", scissors, "diff --git behavior notes", ` ${made}`))).toBe(1);
+    // A renamed file's diff opens with its similarity, and a line it removes credits nothing.
+    const renamed = ["diff --git a/old.md b/new.md", "similarity index 50%", "rename from old.md", "rename to new.md", "index 3367afd..df082d3 100644", "--- a/old.md", "+++ b/new.md", "@@ -1,2 +1,2 @@", " kept", `-${made}`, "+clean"];
+    expect(hook(lines("fix: a change", scissors, ...renamed))).toBe(0);
   });
 
   it("accepts a clean message, and refuses when it cannot read who is committing", () => {
