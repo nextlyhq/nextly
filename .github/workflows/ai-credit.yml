@@ -1,0 +1,43 @@
+name: AI credit
+
+# A commit, a pull request or an added line that credits an AI tool is
+# refused. `scripts/ai-credit.mjs` holds the rule, which the commit-msg hook
+# applies before a commit exists; this enforces it for a commit made past the
+# hook, and for the squash commit the queue builds from a pull request's title
+# and description.
+#
+# A title and a description are published the moment they are written, so an
+# edit to either runs it again. In the queue it reads exactly what the queue
+# would land.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened]
+  merge_group:
+    types: [checks_requested]
+
+permissions: {}
+
+jobs:
+  credit:
+    name: No AI credit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # The whole history, so both ends of the range are present.
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      # The script loads only Node's own modules, so nothing is installed.
+      - name: Refuse AI credit
+        run: node scripts/ai-credit.mjs

@@ -29,7 +29,7 @@
  * @module husky-hooks.test
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -82,7 +82,7 @@ const FIRST_TOOL =
 const FIRST_GATE = /^\s*pnpm\b/m;
 const CLEARS_GIT_DIR = /^unset .*\bGIT_DIR\b/m;
 
-describe.each(["pre-push", "pre-commit"])("the %s hook", name => {
+describe.each(["pre-push", "pre-commit", "commit-msg"])("the %s hook", name => {
   it("clears GIT_DIR", async () => {
     expect(shellCode(await hook(name))).toMatch(CLEARS_GIT_DIR);
   });
@@ -328,5 +328,58 @@ describe("the pre-push hook before its gates", () => {
     const result = push(deletion("gone"), { NEXTLY_BOUNDED: "1" });
     expect(result.status).toBe(99);
     expect(result.stderr).toMatch(/^stub node scripts\/local-limits\.mjs/m);
+  });
+});
+
+/*
+ * The commit-msg hook, run for real: its credit check refuses before
+ * commitlint runs, and a clean message reaches commitlint.
+ *
+ * `npx` is replaced on PATH by a stub that records its arguments, so
+ * commitlint itself never runs; `node` is the real one, running the real
+ * check. The author and committer come from the environment, as git hands a
+ * hook the identities a commit is about to carry. Every crediting example is
+ * assembled at run time, so no line of this file spells one.
+ */
+describe("the commit-msg hook's credit check", () => {
+  const ROOT = path.join(HERE, "..");
+  const spell = (...parts) => parts.join("");
+  const PERSON = { GIT_AUTHOR_NAME: "Jane Doe", GIT_AUTHOR_EMAIL: "jane@example.com", GIT_COMMITTER_NAME: "Jane Doe", GIT_COMMITTER_EMAIL: "jane@example.com" };
+  let dir;
+
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "commit-msg-"));
+    writeFileSync(path.join(dir, "npx"), `#!/bin/sh\necho "$*" > ${JSON.stringify(path.join(dir, "npx-called"))}\n`);
+    chmodSync(path.join(dir, "npx"), 0o755);
+  });
+
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  function commitMsg(message, identity = {}) {
+    rmSync(path.join(dir, "npx-called"), { force: true });
+    const file = path.join(dir, "COMMIT_EDITMSG");
+    writeFileSync(file, message);
+    const env = { ...process.env, ...PERSON, ...identity, PATH: `${dir}${path.delimiter}${process.env.PATH}` };
+    const result = spawnSync("sh", ["-e", ".husky/commit-msg", file], { cwd: ROOT, encoding: "utf8", env });
+    return { ...result, commitlint: existsSync(path.join(dir, "npx-called")) ? readFileSync(path.join(dir, "npx-called"), "utf8").trim() : null };
+  }
+
+  it.runIf(process.platform !== "win32")("refuses a crediting message before commitlint runs", () => {
+    const result = commitMsg(["fix: a change", "", spell("Co-authored-by: Clau", "de Opus 5 <noreply@", "anthro", "pic.com>")].join("\n"));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/This commit credits an AI tool/);
+    expect(result.commitlint).toBeNull();
+  });
+
+  it.runIf(process.platform !== "win32")("refuses an AI tool as the commit's author", () => {
+    const result = commitMsg("fix: a change", { GIT_AUTHOR_NAME: spell("Clau", "de"), GIT_AUTHOR_EMAIL: spell("noreply@", "anthro", "pic.com") });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/the author, .+, is an AI tool's identity/);
+  });
+
+  it.runIf(process.platform !== "win32")("hands a clean message to commitlint", () => {
+    const result = commitMsg("fix: change how Claude Code loads skills");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.commitlint).toMatch(/^--no-install commitlint --edit \S+COMMIT_EDITMSG$/);
   });
 });
