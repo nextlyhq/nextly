@@ -120,9 +120,14 @@ const LEADS = [
 const MADE_ADJECTIVE = "(?:generated|assisted|authored|written|created|made)";
 const NAMED_ADJECTIVES = [new RegExp(`\\b(?:${TOOLS.join("|")})-${MADE_ADJECTIVE}\\b`, "gi"), new RegExp(`\\b(?:${PROPER.join("|")})-${MADE_ADJECTIVE}\\b`, "g")];
 const GENERIC_ADJECTIVE = new RegExp(`\\b(?:AI|LLM)-${MADE_ADJECTIVE}\\b`, "gi");
-/** In a file, AI in general credits only where it describes the file or the change itself, not what a product does. */
+/**
+ * In a file, AI in general credits only where it describes this file or this
+ * change itself. A page, a document or anything else a product serves may be
+ * AI-made as a feature, so only the change's own artifacts count, and only as
+ * this one.
+ */
 const SELF_DESCRIBED = new RegExp(
-  `\\b${gapped("(?:this|the) (?:file|change|patch|code|commit|module|script|function|implementation|test|tests|document|page) (?:is|was|has been|are|were)")}${GAP}${DEGREE}(?:AI|LLM)-${MADE_ADJECTIVE}\\b`,
+  `\\b${gapped("this (?:file|change|patch|commit|code|module|script|function|implementation|test|tests) (?:is|was|has been|are|were)")}${GAP}${DEGREE}(?:AI|LLM)-${MADE_ADJECTIVE}\\b`,
   "gi"
 );
 
@@ -179,24 +184,38 @@ function identityParts(identity) {
 /** Every credit a piece of text carries, each with the line it is on. */
 export function creditsIn(text, place = "message") {
   const rules = PLACES[place];
-  const lines = String(text ?? "")
-    .split(/\r?\n/)
-    .map(raw => plain(rules.words(raw)));
+  const lines = readLines(text, rules);
   const joined = lines.join("\n");
   const trailers = unfolded(lines).flatMap(trailer => creditingSpan(trailer, rules));
   const phrases = [...leadCredits(joined, rules), ...adjectiveCredits(joined, rules), ...subjectCredits(joined, rules)].map(({ start, at, ...found }) => ({ ...found, from: lineAt(joined, start), line: lineAt(joined, at) }));
   return [...trailers, ...phrases];
 }
 
-/** The lines, with a trailer's folded continuation lines gathered onto it, as git unfolds them. */
+/** A text's lines as a place reads them. */
+function readLines(text, rules) {
+  return String(text ?? "")
+    .split(/\r?\n/)
+    .map(raw => plain(rules.words(raw)));
+}
+
+/**
+ * The lines, with a trailer's folded continuation lines gathered onto it: an
+ * indented line continues the trailer above it, as git reads one. In a
+ * comment block every line is indented, so a line that is a trailer itself
+ * always starts its own.
+ */
 function unfolded(lines) {
   const logical = [];
   lines.forEach((line, index) => {
     const last = logical.at(-1);
-    if (last && /^[ \t]+\S/.test(line) && TRAILER.test(last.parts[0])) last.parts.push(line.trim());
+    if (continuesTrailer(line, last)) last.parts.push(line.trim());
     else logical.push({ parts: [line], at: index + 1 });
   });
   return logical;
+}
+
+function continuesTrailer(line, last) {
+  return Boolean(last) && /^[ \t]+\S/.test(line) && !TRAILER.test(line) && TRAILER.test(last.parts[0]);
 }
 
 /**
@@ -386,26 +405,38 @@ function rangeEvidence({ base, head }, git) {
 /**
  * Blocks whose first line continues a folded trailer, extended back through
  * the final file to the trailer's first line, however far above the diff's
- * context it sits. The lines added this way are unchanged ones.
+ * context it sits. The lines added this way are unchanged ones. Most code
+ * begins indented, so a block is extended only where `unfolded` gathers its
+ * first line onto a trailer, and a file is read once, however many of its
+ * blocks begin indented.
  */
-function withTrailerStarts(blocks, head, git) {
-  return blocks.map(block => (/^[ \t]+\S/.test(block.texts[0]) ? extendedToTrailer(block, head, git) : block));
+export function withTrailerStarts(blocks, head, git) {
+  const files = new Map();
+  const foldsOf = path => {
+    if (!files.has(path)) files.set(path, trailerFolds(path, head, git));
+    return files.get(path);
+  };
+  return blocks.map(block => (/^[ \t]+\S/.test(readLines(block.texts[0], PLACES.line)[0]) ? extendedToTrailer(block, foldsOf(block.path)) : block));
 }
 
-function extendedToTrailer(block, head, git) {
-  const file = git(["show", `${head}:${block.path}`], { maxBuffer: MAX_OUTPUT });
-  if (!file.ok) return block;
-  const lines = file.out.split("\n");
-  const first = trailerStart(lines, block.start - 2);
-  const before = lines.slice(first, block.start - 1);
-  return { ...block, start: first + 1, texts: [...before, ...block.texts], added: [...before.map(() => false), ...block.added] };
+/**
+ * A file's final lines, and for each line `unfolded` gathers onto a trailer
+ * above it, the 1-based line that trailer starts on; null when the file
+ * cannot be read.
+ */
+function trailerFolds(path, head, git) {
+  const file = git(["show", `${head}:${path}`], { maxBuffer: MAX_OUTPUT });
+  if (!file.ok) return null;
+  const onto = new Map();
+  for (const { parts, at } of unfolded(readLines(file.out, PLACES.line))) parts.slice(1).forEach((_, offset) => onto.set(at + offset + 1, at));
+  return { lines: file.out.split("\n"), onto };
 }
 
-/** The 0-based index of the line a run of continuation lines ending at `index` continues. */
-function trailerStart(lines, index) {
-  let at = index;
-  while (at > 0 && /^[ \t]+\S/.test(lines[at])) at -= 1;
-  return Math.max(at, 0);
+function extendedToTrailer(block, folds) {
+  const first = folds?.onto.get(block.start);
+  if (first === undefined) return block;
+  const before = folds.lines.slice(first - 1, block.start - 1);
+  return { ...block, start: first, texts: [...before, ...block.texts], added: [...before.map(() => false), ...block.added] };
 }
 
 /** The commits in a range, each read from its own object, or undefined when any cannot be read. */
