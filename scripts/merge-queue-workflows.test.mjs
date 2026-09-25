@@ -9,9 +9,13 @@
  * reports a pass it did not earn. Neither shows up until the queue is switched
  * on, so the shape is checked here, before it is.
  */
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { posix } from "node:path";
 
 import { load } from "js-yaml";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 const read = path => load(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
@@ -25,6 +29,7 @@ const QUEUE_CHECKS = {
   ".github/workflows/pr-title.yml": ["Validate PR title follows Conventional Commits"],
   ".github/workflows/independent-review.yml": ["Independent review of the revision being merged"],
   ".github/workflows/secret-scan.yml": ["gitleaks"],
+  ".github/workflows/ai-credit.yml": ["No AI credit"],
 };
 
 describe("every workflow behind a required check, in the merge queue", () => {
@@ -438,3 +443,189 @@ describe("the title check's permissions", () => {
     }
   });
 });
+
+describe("who owns what the required checks run", () => {
+  /*
+   * A pull request runs its own copy of every workflow, action, script and
+   * configuration a required check uses, so a change to any of them can change
+   * what the check decides. `main`'s ruleset requires a code owner's review,
+   * and it applies only to a path CODEOWNERS names, so each of them has to
+   * have an owner there.
+   */
+  const rules = codeOwners(readFileSync(new URL("../.github/CODEOWNERS", import.meta.url), "utf8"));
+
+  // An owner GitHub cannot resolve, or none at all, leaves a path unowned
+  // however well the pattern matches, so each entry names an approved owner.
+  it("names only approved owners, on every entry", () => {
+    for (const rule of rules) expect(rule.owners.length > 0 && rule.owners.every(owner => APPROVED_OWNERS.includes(owner)), `${rule.pattern} ${rule.owners.join(" ")}`).toBe(true);
+  });
+
+  it("owns itself, the hooks, the package scripts and the configuration the checks read", () => {
+    for (const path of [".github/CODEOWNERS", ".husky/pre-commit", ".husky/commit-msg", ".husky/pre-push", "package.json", ...CHECK_CONFIGURATION]) {
+      expect(ownersOf(rules, path), path).not.toEqual([]);
+    }
+  });
+
+  for (const [path, checks] of Object.entries(QUEUE_CHECKS)) {
+    it(`owns ${path}, and every action and script its required jobs run`, () => {
+      const workflow = read(path);
+      for (const used of [path, ...pathsRunBy(workflow, requiredJobs(workflow, checks))]) expect(ownersOf(rules, used), used).not.toEqual([]);
+    });
+  }
+
+  // A lane runs the test script a manifest names, with the configuration
+  // beside it, over the task graph Turbo reads, so each of those is a check
+  // definition too, wherever it sits.
+  it("owns every manifest, task graph, and test, compiler, lint and build configuration in the repository", () => {
+    const definitions = trackedFiles().filter(path => LANE_DEFINITIONS.test(path));
+    // The control: the walk finds the repository's manifests and configurations, not nothing.
+    expect(definitions.length).toBeGreaterThan(50);
+    for (const path of definitions) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // A configuration runs with whatever it extends or imports, so that is a
+  // check definition too; each is found from the configurations themselves.
+  it("owns every shared configuration a compiler or lint configuration extends or imports", () => {
+    const files = trackedFiles();
+    const packages = workspacePackages(files);
+    const shared = files.filter(path => SHARING_CONFIGURATION.test(path)).flatMap(path => sharedConfigurationOf(path, packages));
+    // The control: the walk reaches the shared packages, not nothing.
+    expect(shared.some(path => path.startsWith("packages/tsconfig/"))).toBe(true);
+    expect(shared.some(path => path.startsWith("packages/eslint-config/"))).toBe(true);
+    // And a relative import, as the nextly package's lint configuration makes of its own rule.
+    expect(shared.some(path => path.startsWith("packages/nextly/"))).toBe(true);
+    for (const path of new Set(shared)) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // The control: the walk reaches the scripts a required job runs, named
+  // directly and through a package script, so an owned list is not an empty one.
+  it("finds the scripts the CI gate's jobs run, directly and through a package script", () => {
+    const ci = read(".github/workflows/ci.yml");
+    const paths = pathsRunBy(ci, requiredJobs(ci, QUEUE_CHECKS[".github/workflows/ci.yml"]));
+    expect(paths).toEqual(expect.arrayContaining(["scripts/change-scope.mjs", "scripts/check-comment-convention.mjs", "package.json"]));
+  });
+
+  it("reads only the patterns it understands, and refuses any other rather than guess", () => {
+    for (const unread of ["**/x.mjs @a", "docs/x.md @a", "x?.md @a", "[ab].md @a", "!x.md @a"]) expect(() => codeOwners(unread), unread).toThrow(/reads only anchored paths and directories, and file names at any depth/);
+    expect(ownersOf(codeOwners("/scripts/ @a\n/scripts/x.mjs @b"), "scripts/x.mjs")).toEqual(["@b"]);
+    expect(ownersOf(codeOwners("/scripts/ @a\n/scripts/x.mjs"), "scripts/x.mjs")).toEqual([]);
+    // A file name matches at any depth; an anchored path only where it is; a star never crosses a slash.
+    expect(ownersOf(codeOwners("package.json @a"), "packages/nextly/package.json")).toEqual(["@a"]);
+    expect(ownersOf(codeOwners("/package.json @a"), "packages/nextly/package.json")).toEqual([]);
+    expect(ownersOf(codeOwners("vitest*.config.* @a"), "packages/ui/vitest.integration.config.ts")).toEqual(["@a"]);
+    expect(ownersOf(codeOwners("/packages/*.json @a"), "packages/nextly/package.json")).toEqual([]);
+  });
+});
+
+/** Who may approve a change to the checks. Adding an owner is a decision about that, made here and in CODEOWNERS together. */
+const APPROVED_OWNERS = ["@mobeenabdullah"];
+
+/** Configuration a required check reads, where a change alters what it decides. */
+const CHECK_CONFIGURATION = [
+  "pnpm-workspace.yaml",
+  "pnpm-lock.yaml",
+  ".nvmrc",
+  "turbo.jsonc",
+  ".changeset/config.json",
+  ".commitlintrc.json",
+  ".fallowrc.jsonc",
+  ".gitleaks.toml",
+  "eslint.config.mjs",
+  "eslint.scripts.config.mjs",
+  "fallow-health-baseline.json",
+  "lint-staged.config.mjs",
+  "tsconfig.base.json",
+  "vitest.config.ts",
+];
+
+/**
+ * CODEOWNERS rules, in order. Two forms are read: an anchored path or
+ * directory, whose segments may hold a `*` that stays within one segment, and
+ * a bare file name, which matches at any depth. Any other pattern is refused
+ * rather than guessed at, since a guess at what a glob matches is exactly the
+ * reading that would pass an unowned path.
+ */
+function codeOwners(text) {
+  return text
+    .split("\n")
+    .map(line => line.replace(/#.*$/, "").trim())
+    .filter(Boolean)
+    .map(line => {
+      const [pattern, ...owners] = line.split(/\s+/);
+      return { pattern, owners, matches: matcherFor(readablePattern(pattern)) };
+    });
+}
+
+const ANCHORED = /^\/[\w.*-]+(?:\/[\w.*-]+)*\/?$/;
+const FILE_NAME = /^[\w.*-]+$/;
+
+function readablePattern(pattern) {
+  if (pattern.includes("**") || !(ANCHORED.test(pattern) || FILE_NAME.test(pattern))) {
+    throw new Error(`this test reads only anchored paths and directories, and file names at any depth, not ${pattern}`);
+  }
+  return pattern;
+}
+
+function matcherFor(pattern) {
+  const glob = part => part.split("*").map(text => text.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*");
+  if (FILE_NAME.test(pattern)) return new RegExp(`(?:^|/)${glob(pattern)}$`);
+  return new RegExp(`^${glob(pattern.slice(1))}${pattern.endsWith("/") ? "" : "$"}`);
+}
+
+/** A path's owners: the last rule that matches it decides, and a rule with no owners leaves it unowned. */
+function ownersOf(rules, path) {
+  return rules.filter(rule => rule.matches.test(path)).at(-1)?.owners ?? [];
+}
+
+/** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|(?:vitest|playwright|eslint|tsup)[^/]*\.config\.[^/]+)$/;
+
+/** Compiler and lint configuration, which may extend or import shared configuration. */
+const SHARING_CONFIGURATION = /(?:^|\/)(?:tsconfig[^/]*\.json|eslint[^/]*\.config\.[^/]+)$/;
+const EXTENDS = /"extends"\s*:\s*(\[[^\]]*\]|"[^"]*")/;
+const CONFIGURATION_IMPORT = /(?:\bfrom\s+|\brequire\(\s*|\bimport\(\s*)["']([^"']+)["']/g;
+
+function readRepositoryFile(path) {
+  return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+}
+
+/** The workspace's packages by name, so a specifier naming one resolves to its directory. */
+function workspacePackages(files) {
+  const manifests = files.filter(path => /^packages\/[^/]+\/package\.json$/.test(path));
+  return new Map(manifests.map(path => [JSON.parse(readRepositoryFile(path)).name, posix.dirname(path)]));
+}
+
+/** The repository files a configuration extends or imports: a relative path, or a workspace package by name. */
+function sharedConfigurationOf(path, packages) {
+  const text = readRepositoryFile(path);
+  const extended = EXTENDS.exec(text)?.[1] ?? "";
+  const specifiers = [...extended.matchAll(/"([^"]+)"/g), ...text.matchAll(CONFIGURATION_IMPORT)].map(match => match[1]);
+  return specifiers.map(specifier => repositoryPathOf(specifier, path, packages)).filter(Boolean);
+}
+
+function repositoryPathOf(specifier, from, packages) {
+  if (specifier.startsWith(".")) return posix.normalize(posix.join(posix.dirname(from), specifier));
+  const [scope, name, ...rest] = specifier.split("/");
+  const directory = packages.get(`${scope}/${name}`);
+  return directory ? `${directory}/${rest.join("/") || "package.json"}` : null;
+}
+
+function trackedFiles() {
+  return execFileSync("git", ["ls-files", "-z"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8" }).split("\0").filter(Boolean);
+}
+
+const PACKAGE_SCRIPTS = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts;
+const SCRIPT_PATH = /\bscripts\/[\w./-]+\.(?:mjs|cjs|js|sh)\b/g;
+
+/** The local actions a set of jobs uses, and the scripts their steps name, directly or through a package script. */
+function pathsRunBy(workflow, ids) {
+  const steps = ids.flatMap(id => workflow.jobs[id].steps ?? []);
+  const actions = steps.map(step => String(step.uses ?? "")).filter(uses => uses.startsWith("./")).map(uses => `${uses.slice(2)}/action.yml`);
+  const texts = [...steps.map(step => String(step.run ?? "")), ...actions.map(action => readFileSync(new URL(`../${action}`, import.meta.url), "utf8"))];
+  return [...new Set([...actions, ...texts.flatMap(scriptsNamedIn)])];
+}
+
+function scriptsNamedIn(text) {
+  const viaPackage = [...text.matchAll(/\bpnpm (?:run )?([\w:-]+)/g)].map(match => PACKAGE_SCRIPTS[match[1]]).filter(Boolean);
+  return [...[text, ...viaPackage].flatMap(source => [...source.matchAll(SCRIPT_PATH)].map(match => match[0])), ...(viaPackage.length > 0 ? ["package.json"] : [])];
+}
