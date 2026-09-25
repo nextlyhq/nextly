@@ -1069,7 +1069,7 @@ function buildPluginDatabase(
     // so the plugin's writes would commit on their own and a later throw
     // would roll back an empty transaction while leaving them in place.
     //
-    // The relational handle is `tx.drizzle(relations)`: the same leased
+    // The relational handle is `tx.drizzleWithRelations(relations)`: the same leased
     // client, with the relations config that populates `query` — the bare
     // instance's `query` namespace is empty. A getter, so the relations are
     // resolved per access as they are outside the transaction, and a
@@ -1079,7 +1079,7 @@ function buildPluginDatabase(
         fn({
           db: tx.drizzle(),
           get relationalDb() {
-            return tx.drizzle(relations());
+            return tx.drizzleWithRelations(relations());
           },
         })
       ),
@@ -1109,13 +1109,14 @@ export interface AdapterTransactions {
    */
   transaction: <T>(
     work: (tx: {
-      drizzle: <D = unknown>(relations?: AnyRelations) => D;
+      drizzle: <D = unknown>() => D;
+      drizzleWithRelations: <D = unknown>(relations: AnyRelations) => D;
     }) => Promise<T>
   ) => Promise<T>;
   /**
    * The pooled Drizzle handle, relations-enabled when given a config. Used
    * for `ctx.db.query` OUTSIDE a transaction; inside one, the transaction
-   * context's `drizzle(relations)` is the handle to use.
+   * context's `drizzleWithRelations(relations)` is the handle to use.
    */
   getDrizzle: <D = unknown>(relations?: AnyRelations) => D;
 }

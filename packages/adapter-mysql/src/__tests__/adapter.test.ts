@@ -757,7 +757,7 @@ describe("@nextly/adapter-mysql", () => {
     // `drizzle()` is built without relations, so its `query` namespace is
     // empty; a pooled `getDrizzle(relations)` would read outside the
     // transaction.
-    it("drizzle(relations) is a relations-enabled instance on the transaction's connection, memoized per relations object", async () => {
+    it("drizzleWithRelations is a relations-enabled instance on the transaction's connection, memoized per relations object", async () => {
       const adapter = createMySqlAdapter({
         url: "mysql://localhost:3306/test",
       });
@@ -769,7 +769,7 @@ describe("@nextly/adapter-mysql", () => {
 
       await adapter.transaction(async tx => {
         const bare = tx.drizzle<Handle>();
-        const relational = tx.drizzle<Handle>(first);
+        const relational = tx.drizzleWithRelations<Handle>(first);
 
         expect(relational.query.notes).toBeDefined();
         expect(bare.query?.notes).toBeUndefined();
@@ -777,8 +777,8 @@ describe("@nextly/adapter-mysql", () => {
         expect(relational.$client).toBe(mockConnection.connection);
         expect(relational.$client).toBe(bare.$client);
 
-        expect(tx.drizzle(first)).toBe(relational);
-        expect(tx.drizzle(second)).not.toBe(relational);
+        expect(tx.drizzleWithRelations(first)).toBe(relational);
+        expect(tx.drizzleWithRelations(second)).not.toBe(relational);
         // The bare instance the delegated CRUD uses is unchanged.
         expect(tx.drizzle()).toBe(bare);
       });

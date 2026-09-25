@@ -169,6 +169,26 @@ export class SchemaOwnersRepository {
     }
   }
 
+  /**
+   * Remove one element row — never a table-level one, which is keyed with an
+   * empty element name and removed only with its owner.
+   */
+  async deleteElement(
+    tableName: string,
+    elementKind: "column" | "index" | "fk" | "check",
+    elementName: string
+  ): Promise<void> {
+    await this.db
+      .delete(this.table)
+      .where(
+        and(
+          eq(this.table.tableName, tableName),
+          eq(this.table.elementKind, elementKind),
+          eq(this.table.elementName, elementName)
+        )
+      );
+  }
+
   /** Remove every row an owner holds. Used by uninstall. */
   async deleteByOwner(ownerId: string): Promise<void> {
     await this.db.delete(this.table).where(eq(this.table.ownerId, ownerId));

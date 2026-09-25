@@ -388,7 +388,19 @@ async function applyPendingMigrations(label: string): Promise<void> {
       config: configResult.config,
       deferredExtends: configResult.deferredExtends,
     });
+    // Compiled from the same config the CLI compiles from; see
+    // `MigrateCoreDeps.extensionSchema` for why it is passed, not read.
+    const { compileExtensionSchema } = await import(
+      "../domains/schema/extension/publish"
+    );
+    const extensionSchema = await compileExtensionSchema({
+      dialect: adapterDialect,
+      plugins: configResult.config.plugins ?? [],
+      config: configResult.config,
+      logger: { warn: m => console.warn(m) },
+    });
     const result = await migrateCore({
+      extensionSchema,
       dialect: adapterDialect,
       db,
       adapter: cliAdapter,

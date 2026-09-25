@@ -735,11 +735,7 @@ export class SqliteAdapter extends DrizzleAdapter {
     );
     const txDb = txHandles.bare;
     return {
-      // Bare: the same memoized transaction-bound instance the delegated CRUD
-      // uses. With relations: an instance on the SAME connection whose
-      // `query` namespace is populated, so relational reads stay in the
-      // transaction.
-      drizzle: txHandles.drizzle,
+      ...txHandles.context,
 
       // SQLite has no row-level locking and needs none here: `withTransaction`
       // opens SQLite transactions with BEGIN IMMEDIATE, which takes the write

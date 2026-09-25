@@ -294,11 +294,22 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       set => set.pluginName === definition.name
     );
 
+    const { compileExtensionSchema } = await import(
+      "../../domains/schema/extension/publish"
+    );
+    const extensionSchema = await compileExtensionSchema({
+      dialect,
+      plugins: definitions,
+      config,
+      logger: { warn: m => context.logger.warn(m) },
+    });
+
     const outcome = await withMigrateLock(
       drizzleAdapter.getDrizzle(),
       dialect,
       () =>
         runPluginPhase({
+          extensionSchema,
           dialect,
           db: drizzleAdapter.getDrizzle(),
           adapter,

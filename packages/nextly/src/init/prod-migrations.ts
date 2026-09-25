@@ -10,6 +10,7 @@
 import { resolve } from "node:path";
 
 import { shutdownServices } from "../di";
+import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import {
   pluginMigrationSetsFrom,
   type PluginMigrationSet,
@@ -40,6 +41,8 @@ interface LoggerLike {
 
 interface MigrateCoreLike {
   (deps: {
+    /** See `MigrateCoreDeps.extensionSchema`. */
+    extensionSchema: ExtensionSchema | undefined;
     dialect: AdapterLike["dialect"];
     db: unknown;
     adapter: AdapterLike;
@@ -225,7 +228,19 @@ export async function runProdMigrationsIfEnabled(
       config: args.config,
       deferredExtends: args.deferredExtends,
     });
+    // Compiled from this call's config, as every migrate entry point
+    // compiles it; see `MigrateCoreDeps.extensionSchema`.
+    const { compileExtensionSchema } = await import(
+      "../domains/schema/extension/publish"
+    );
+    const extensionSchema = await compileExtensionSchema({
+      dialect: adapter.dialect,
+      plugins: args.config.plugins ?? [],
+      config: args.config,
+      logger: { warn: m => logger.warn(m) },
+    });
     const { applied, ran } = await core({
+      extensionSchema,
       dialect: adapter.dialect,
       db: adapter.getDrizzle(),
       adapter,

@@ -790,11 +790,7 @@ export class MySqlAdapter extends DrizzleAdapter {
     );
     const txDb = txHandles.bare;
     return {
-      // Bare: the same memoized transaction-bound instance the delegated CRUD
-      // uses. With relations: an instance on the SAME connection whose
-      // `query` namespace is populated, so relational reads stay in the
-      // transaction.
-      drizzle: txHandles.drizzle,
+      ...txHandles.context,
 
       execute: async <T = unknown>(
         sql: string,

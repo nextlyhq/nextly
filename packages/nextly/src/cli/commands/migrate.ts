@@ -53,7 +53,8 @@ import {
   SchemaEventsRepository,
   truncateErrorMessage,
 } from "../../domains/schema/events/schema-events-repository";
-import { getActiveExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
+import type { ExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
+import { compileExtensionSchema } from "../../domains/schema/extension/publish";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
 import {
@@ -64,16 +65,24 @@ import {
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
+  mergeContributions,
+  narrowToContributions,
+} from "../../domains/schema/migrate-create/app-stream";
+import {
   ENTITY_HEADER_GUIDANCE,
   parseEntityHeaders,
 } from "../../domains/schema/migrate-create/format-file";
 import {
   EMPTY_SNAPSHOT,
   parseSnapshotFile,
+  type SnapshotFile,
 } from "../../domains/schema/migrate-create/snapshot-io";
 import { assertNoForeignDrops } from "../../domains/schema/ownership/drop-guard";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
-import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
+import type {
+  ContributedElements,
+  NextlySchemaSnapshot,
+} from "../../domains/schema/pipeline/diff/types";
 import {
   forceUnlock,
   withMigrateLock,
@@ -322,7 +331,14 @@ export async function runMigrate(
       const pluginMigrationSets = await pluginMigrationSetsFrom(
         configResult.config.plugins ?? []
       );
+      const extensionSchema = await compileExtensionSchema({
+        dialect,
+        plugins: configResult.config.plugins ?? [],
+        config: configResult.config,
+        logger: { warn: m => logger.warn(m) },
+      });
       const { applied, metadata } = await migrateCore({
+        extensionSchema,
         dialect,
         db,
         adapter,
@@ -442,6 +458,18 @@ export async function runMigrate(
  */
 export interface MigrateCoreDeps {
   /**
+   * The extension schema compiled from the caller's config, or `undefined`
+   * when nothing declares one.
+   *
+   * REQUIRED, and passed rather than read from the process-wide active
+   * schema: only a server boot publishes that, so the CLI saw none. The
+   * plugin-table refusal then passed a plugin that ships no migrations, and
+   * no element ownership was recorded — a run that reported success while
+   * skipping exactly what those checks protect. Required so a new entry point
+   * cannot forget it; compile with `compileExtensionSchema`.
+   */
+  extensionSchema: ExtensionSchema | undefined;
+  /**
    * Plugin ids that ship migration modules.
    *
    * A plugin here is applied by the plugin phase; one declaring tables and
@@ -480,6 +508,11 @@ export interface MigrateCoreDeps {
   withLock?: typeof withMigrateLock;
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
+  /**
+   * Seam for tests; defaults to recording and retiring element owner rows
+   * against the database.
+   */
+  syncElementOwnersFn?: (deps: MigrateCoreDeps) => Promise<void>;
 }
 
 export interface MigrateCoreResult {
@@ -578,20 +611,13 @@ function buildSqlExecutor(
 }
 
 /**
- * Phase 1.5 — plugin migration modules, between core and the app's files,
- * under the caller's lock. Plugins run first because an app migration may
- * index an entity table a plugin contributes. The first failure propagates
- * and stops Phase 2: later migrations assume a database state that was never
- * reached.
- */
-/**
  * Per-element owner rows for elements the APP contributed to tables a
  * plugin owns (its indexes riding the app migration stream). Table-level
  * rows are written by the streams that carry the tables; these say who
  * owns the ELEMENT, so a plugin's reconcile can exclude it.
  */
 async function recordElementOwners(deps: MigrateCoreDeps): Promise<void> {
-  const elementOwners = getActiveExtensionSchema(deps.dialect)?.elementOwners;
+  const elementOwners = deps.extensionSchema?.elementOwners;
   if (elementOwners === undefined || elementOwners.size === 0) return;
   const { SchemaOwnersRepository: OwnersRepo } = await import(
     "../../domains/schema/ownership/schema-owners-repository"
@@ -623,6 +649,51 @@ async function recordElementOwners(deps: MigrateCoreDeps): Promise<void> {
   }
 }
 
+/** Record the current element owner rows, then retire the stale ones. */
+async function syncElementOwners(deps: MigrateCoreDeps): Promise<void> {
+  await recordElementOwners(deps);
+  await retireElementOwners(deps);
+}
+
+/**
+ * Delete element owner rows whose element is gone from the config AND the
+ * database; see `retiredElementRows` for why both must hold.
+ */
+async function retireElementOwners(deps: MigrateCoreDeps): Promise<void> {
+  const { SchemaOwnersRepository: OwnersRepo } = await import(
+    "../../domains/schema/ownership/schema-owners-repository"
+  );
+  const { retiredElementRows } = await import(
+    "../../domains/schema/ownership/retired-elements"
+  );
+  const owners = new OwnersRepo(deps.db, deps.dialect);
+  const elementRows = (await owners.read()).filter(
+    row => (row.elementKind ?? "table") !== "table"
+  );
+  if (elementRows.length === 0) return;
+  const tables = [...new Set(elementRows.map(row => row.tableName))];
+  const live = await introspectLiveSnapshot(deps.db, deps.dialect, tables);
+  const retired = retiredElementRows({
+    rows: elementRows,
+    declared: deps.extensionSchema?.elementOwners ?? new Map(),
+    live,
+  });
+  for (const row of retired) {
+    await owners.deleteElement(
+      row.tableName,
+      row.elementKind,
+      row.elementName ?? ""
+    );
+  }
+}
+
+/**
+ * Phase 1.5 — plugin migration modules, between core and the app's files,
+ * under the caller's lock. Plugins run first because an app migration may
+ * index an entity table a plugin contributes. The first failure propagates
+ * and stops Phase 2: later migrations assume a database state that was never
+ * reached.
+ */
 export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
   if (!deps.pluginMigrationSets || deps.pluginMigrationSets.length === 0) {
     return;
@@ -785,10 +856,10 @@ export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
  * could ship migrations at all, and became wrong the moment one could.
  */
 function assertPluginTablesAreMigratable(
-  dialect: SupportedDialect,
+  extensionSchema: ExtensionSchema | undefined,
   pluginsWithMigrations: ReadonlySet<string>
 ): void {
-  const owners = getActiveExtensionSchema(dialect)?.owners;
+  const owners = extensionSchema?.owners;
   if (!owners) return;
 
   const unmigratable = [...owners.entries()]
@@ -892,7 +963,7 @@ export async function migrateCore(
   // skip every plugin-owned table, and the first failure would be a query
   // against a table nothing created.
   assertPluginTablesAreMigratable(
-    deps.dialect,
+    deps.extensionSchema,
     new Set(deps.pluginsWithMigrations ?? [])
   );
 
@@ -985,12 +1056,6 @@ export async function migrateCore(
 
       await runPluginPhase(deps);
 
-      // Element rows for app-contributed elements on plugin tables: written
-      // AFTER the app's files apply, so a row exists exactly when the element
-      // does. The plugin's own reconcile ignores elements its stream does not
-      // own, which is what these rows say.
-      await recordElementOwners(deps);
-
       deps.logger.info("Phase 2: applying user migrations...");
       applied = await runFiles({
         adapter: deps.adapter,
@@ -1001,6 +1066,14 @@ export async function migrateCore(
         logger: deps.logger,
         knownJunctions: deps.knownJunctions,
       });
+
+      // Element rows for contributed elements: written AFTER every stream has
+      // applied, so a row exists exactly when the element does — then rows
+      // whose element is gone from both the config and the database are
+      // retired, so a reused name is never attributed to a stream that no
+      // longer holds it. Each stream's reconcile ignores elements it does not
+      // own, which is what these rows say.
+      await (deps.syncElementOwnersFn ?? syncElementOwners)(deps);
 
       /*
        * Phase 3 — make the registry agree with the tables Phase 2 just created.
@@ -1098,7 +1171,7 @@ async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
 async function loadTargetSnapshot(
   metaDir: string,
   name: string
-): Promise<NextlySchemaSnapshot | null> {
+): Promise<SnapshotFile | null> {
   const file = `${name}.snapshot.json`;
   const filePath = resolve(metaDir, file);
 
@@ -1133,8 +1206,10 @@ async function loadTargetSnapshot(
     return null;
   }
 
-  // Otherwise, parse as a drift snapshot
-  return parseSnapshotFile(content, file).snapshot;
+  // Otherwise, parse as a drift snapshot. The whole file, because its
+  // `contributions` say which parts of a foreign table the drift check may
+  // judge.
+  return parseSnapshotFile(content, file);
 }
 
 /**
@@ -1184,16 +1259,22 @@ export async function runFileMigrations(args: {
   );
 
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;
+  let beforeContributions: Record<string, ContributedElements> = {};
   let applied = 0;
   let remaining =
     args.step && args.step > 0 ? args.step : Number.POSITIVE_INFINITY;
 
   for (const m of all) {
     const filename = `${m.name}.sql`;
-    const target = await loadTargetSnapshot(metaDir, m.name);
+    const targetFile = await loadTargetSnapshot(metaDir, m.name);
+    const target = targetFile?.snapshot ?? null;
 
     if (await repo.isFileApplied(filename)) {
-      if (target) before = target; // advance baseline past applied files
+      // Advance the baseline past applied files.
+      if (targetFile) {
+        before = targetFile.snapshot;
+        beforeContributions = targetFile.contributions ?? {};
+      }
       continue;
     }
     if (remaining <= 0) break;
@@ -1277,16 +1358,27 @@ export async function runFileMigrations(args: {
       declared,
       args.knownJunctions
     );
-    const live = await introspectLiveSnapshot(db, dialect, managed);
-    await reconcileFile({
-      file: { filename, sql: m.upSql, path: m.filePath, sha256: m.checksum },
+    // Tables the app only contributes to are judged on the app's elements
+    // alone; see `narrowToContributions`.
+    const sides = narrowToContributions({
       before,
       target,
-      live,
+      live: await introspectLiveSnapshot(db, dialect, managed),
+      contributions: mergeContributions(
+        beforeContributions,
+        targetFile?.contributions ?? {}
+      ),
+    });
+    await reconcileFile({
+      file: { filename, sql: m.upSql, path: m.filePath, sha256: m.checksum },
+      before: sides.before,
+      target: sides.target,
+      live: sides.live,
       repo,
       executeSql,
     });
     before = target;
+    beforeContributions = targetFile?.contributions ?? {};
     applied++;
     remaining--;
     logger.success(`Applied ${filename}`);

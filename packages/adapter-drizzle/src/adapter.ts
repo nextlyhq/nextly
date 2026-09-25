@@ -2298,7 +2298,8 @@ export abstract class DrizzleAdapter {
     build: (relations?: AnyRelations) => TBare
   ): {
     bare: () => TBare;
-    drizzle: <T = unknown>(relations?: AnyRelations) => T;
+    withRelations: <T = unknown>(relations: AnyRelations) => T;
+    context: Pick<TransactionContext, "drizzle" | "drizzleWithRelations">;
   } {
     return transactionDrizzleHandles(build);
   }

@@ -656,7 +656,7 @@ describe("PostgresAdapter", () => {
     // `drizzle()` is built without relations, so its `query` namespace is
     // empty; the pooled `getDrizzle(relations)` is a different connection and
     // cannot see the transaction's uncommitted writes.
-    it("drizzle(relations) is a relations-enabled instance on the transaction's client, memoized per relations object", async () => {
+    it("drizzleWithRelations is a relations-enabled instance on the transaction's client, memoized per relations object", async () => {
       const notes = pgTable("notes", { id: integer("id").primaryKey() });
       const first = defineRelations({ notes });
       const second = defineRelations({ notes });
@@ -664,7 +664,7 @@ describe("PostgresAdapter", () => {
 
       await adapter.transaction(async ctx => {
         const bare = ctx.drizzle<Handle>();
-        const relational = ctx.drizzle<Handle>(first);
+        const relational = ctx.drizzleWithRelations<Handle>(first);
 
         expect(relational.query.notes).toBeDefined();
         expect(bare.query?.notes).toBeUndefined();
@@ -672,8 +672,8 @@ describe("PostgresAdapter", () => {
         expect(relational.$client).toBe(mockClient);
         expect(relational.$client).toBe(bare.$client);
 
-        expect(ctx.drizzle(first)).toBe(relational);
-        expect(ctx.drizzle(second)).not.toBe(relational);
+        expect(ctx.drizzleWithRelations(first)).toBe(relational);
+        expect(ctx.drizzleWithRelations(second)).not.toBe(relational);
         // The bare instance the delegated CRUD uses is unchanged.
         expect(ctx.drizzle()).toBe(bare);
       });

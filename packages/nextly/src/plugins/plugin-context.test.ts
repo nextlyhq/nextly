@@ -57,13 +57,15 @@ function makeCtx(
           // Hands back a transaction context like the real adapters do: the
           // surface must use ITS handles, not the pooled ones.
           transaction: <T>(
-            work: (tx: { drizzle: (rel?: unknown) => unknown }) => Promise<T>
+            work: (tx: {
+              drizzle: () => unknown;
+              drizzleWithRelations: (rel: unknown) => unknown;
+            }) => Promise<T>
           ) =>
             work({
-              drizzle: (rel?: unknown) =>
-                rel === undefined
-                  ? { ...db, query: {} }
-                  : relationalHandle("tx", rel),
+              drizzle: () => ({ ...db, query: {} }),
+              drizzleWithRelations: (rel: unknown) =>
+                relationalHandle("tx", rel),
             }),
           getDrizzle: (rel?: unknown) =>
             rel === undefined ? db : relationalHandle("pool", rel),
@@ -224,7 +226,7 @@ describe("ctx.db relational queries", () => {
     // The transaction context's bare `drizzle()` has an empty `query`
     // namespace, and the pooled relational handle runs on a different
     // connection on PostgreSQL and MySQL. Inside `ctx.db.transaction`, `query`
-    // must come from `tx.drizzle(relations)`: the leased client, with the
+    // must come from `tx.drizzleWithRelations(relations)`: the leased client, with the
     // relations config that populates the namespace.
     const { ctx, built } = makeCtx(undefined, () => ({ id: "r1" }));
 

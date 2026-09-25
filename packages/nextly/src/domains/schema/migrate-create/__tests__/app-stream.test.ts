@@ -19,7 +19,13 @@ import { definePlugin } from "../../../../plugins/plugin-context";
 import { clearActiveExtensionSchema } from "../../extension/active-schema";
 import { getActiveExtensionSchema } from "../../extension/build-extension-schema";
 import { col, defineTable } from "../../extension/dsl";
-import { compileAppStreamTables, NO_APP_STREAM_TABLES } from "../app-stream";
+import { diffSnapshots } from "../../pipeline/diff/diff";
+import {
+  compileAppStreamTables,
+  mergeContributions,
+  narrowToContributions,
+  NO_APP_STREAM_TABLES,
+} from "../app-stream";
 import { generateMigration } from "../generate";
 import { loadLatestSnapshot } from "../snapshot-io";
 
@@ -324,5 +330,75 @@ describe("migrate:create's nothing-to-do check", () => {
         recordedTableCount: 0,
       })
     ).toBe(true);
+  });
+});
+
+describe("applying an app migration on a table a plugin has changed since", () => {
+  /** The app's hook, plus an index on its column when `indexed`. */
+  const contributes =
+    (indexed: boolean) =>
+    ({
+      schema,
+    }: {
+      schema: {
+        extendTable(name: string, input: Record<string, unknown>): void;
+      };
+    }) => {
+      schema.extendTable("fx__notes", {
+        columns: { appRef: col.shortText({ nullable: true }) },
+        ...(indexed
+          ? {
+              indexes: [{ columns: ["app_ref"], name: "idx_fx_notes_app_ref" }],
+            }
+          : {}),
+      });
+    };
+
+  it("runs the migration rather than refusing it as drift", async () => {
+    // Migration 1: the app adds `app_ref`. Then the plugin's own module adds
+    // `pinned`. Migration 2: the app indexes `app_ref`. At apply time the live
+    // table has `pinned` — which neither snapshot of migration 2's pair
+    // describes as the app's — so compared whole it matched neither side.
+    await generate(
+      migrationsDir,
+      config({ extend: [contributes(false)] }),
+      "contribute",
+      new Date("2026-09-25T10:00:00.000Z")
+    );
+    const first = await loadLatestSnapshot(join(migrationsDir, "meta"));
+    await generate(
+      migrationsDir,
+      config({ pluginHasExtra: true, extend: [contributes(true)] }),
+      "index_it",
+      new Date("2026-09-25T11:00:00.000Z")
+    );
+    const second = await loadLatestSnapshot(join(migrationsDir, "meta"));
+
+    // Live: the plugin's `pinned` applied, migration 1 applied, no index yet.
+    const target = second!.data.snapshot;
+    const live = {
+      tables: target.tables.map(table =>
+        table.name === "fx__notes" ? { ...table, indexes: [] } : table
+      ),
+    };
+
+    // The raw sides are the defect: live matches neither.
+    expect(diffSnapshots(live, first!.data.snapshot).length).toBeGreaterThan(0);
+    expect(diffSnapshots(live, target).length).toBeGreaterThan(0);
+
+    const sides = narrowToContributions({
+      before: first!.data.snapshot,
+      target,
+      live,
+      contributions: mergeContributions(
+        first!.data.contributions ?? {},
+        second!.data.contributions ?? {}
+      ),
+    });
+    // Live matches the baseline, so the file runs...
+    expect(diffSnapshots(sides.live, sides.before)).toEqual([]);
+    // ...and what it runs is the app's index, nothing of the plugin's.
+    const ops = diffSnapshots(sides.before, sides.target);
+    expect(ops.map(op => op.type)).toEqual(["add_index"]);
   });
 });

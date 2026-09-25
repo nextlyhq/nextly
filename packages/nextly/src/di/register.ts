@@ -1328,9 +1328,13 @@ export async function registerServices(
       // `plugins` included: without them `pluginMigrationSetsFrom` sees an
       // empty list, so boot migrations apply no plugin module and then reject
       // every active plugin table as having no production migration path.
+      // Singles and field groups too: the extension schema is compiled from
+      // this config, and a schema hook may target either.
       config: {
         db: config.db,
         collections: config.collections ?? [],
+        singles: config.singles ?? [],
+        fieldGroups: config.fieldGroups ?? [],
         plugins: config.plugins ?? [],
       },
       adapter,

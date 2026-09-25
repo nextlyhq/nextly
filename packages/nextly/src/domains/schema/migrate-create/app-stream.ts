@@ -397,3 +397,93 @@ function withElements(
     ...(checks !== undefined ? { checks } : {}),
   };
 }
+
+/**
+ * The before, target and live sides of an app migration's drift check, each
+ * narrowed to the app's own elements on the tables it only contributes to.
+ *
+ * The same idea as `foreignTableSides`, at apply time. A migration's paired
+ * snapshots hold such a table whole, as it looked when the migration was
+ * generated; by the time it applies, the owner's own module may have changed
+ * the table, so the live table matches neither snapshot and a valid migration
+ * was refused as drift. Only the app's elements are the app stream's to
+ * judge, so on those tables all three sides are compared on exactly those.
+ *
+ * `contributions` is the union of what the two snapshot files record. A side
+ * holding no copy of the table — the app's first contribution, or one it has
+ * withdrawn — is the table with none of the app's elements. A table the
+ * database no longer has is left out of all three: its owner removed it, and
+ * the app's elements went with it.
+ */
+export function narrowToContributions(input: {
+  before: NextlySchemaSnapshot;
+  target: NextlySchemaSnapshot;
+  live: NextlySchemaSnapshot;
+  contributions: Readonly<Record<string, ContributedElements>>;
+}): {
+  before: NextlySchemaSnapshot;
+  target: NextlySchemaSnapshot;
+  live: NextlySchemaSnapshot;
+} {
+  const names = Object.keys(input.contributions);
+  if (names.length === 0) return input;
+  const liveNames = new Set(input.live.tables.map(table => table.name));
+
+  const narrow = (snapshot: NextlySchemaSnapshot): NextlySchemaSnapshot => {
+    const byName = new Map(snapshot.tables.map(table => [table.name, table]));
+    for (const name of names) {
+      if (!liveNames.has(name)) {
+        byName.delete(name);
+        continue;
+      }
+      byName.set(
+        name,
+        onlyElements(
+          byName.get(name) ?? { name, columns: [] },
+          input.contributions[name]
+        )
+      );
+    }
+    return { ...snapshot, tables: [...byName.values()] };
+  };
+
+  return {
+    before: narrow(input.before),
+    target: narrow(input.target),
+    live: narrow(input.live),
+  };
+}
+
+/** `table` with only the named elements, every dimension tracked. */
+function onlyElements(table: TableSpec, names: ContributedElements): TableSpec {
+  const keep = <T extends { name: string }>(
+    elements: readonly T[] | undefined,
+    wanted: readonly string[]
+  ): T[] => (elements ?? []).filter(element => wanted.includes(element.name));
+  return {
+    name: table.name,
+    columns: keep(table.columns, names.columns),
+    indexes: keep(table.indexes, names.indexes),
+    foreignKeys: keep(table.foreignKeys, names.foreignKeys),
+    checks: keep(table.checks, names.checks),
+  };
+}
+
+/** Two contributions records as one, element names merged per table. */
+export function mergeContributions(
+  a: Readonly<Record<string, ContributedElements>>,
+  b: Readonly<Record<string, ContributedElements>>
+): Record<string, ContributedElements> {
+  const out: Record<string, ContributedElements> = {};
+  for (const table of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    const left = a[table] ?? NO_ELEMENTS;
+    const right = b[table] ?? NO_ELEMENTS;
+    out[table] = {
+      columns: [...new Set([...left.columns, ...right.columns])],
+      indexes: [...new Set([...left.indexes, ...right.indexes])],
+      foreignKeys: [...new Set([...left.foreignKeys, ...right.foreignKeys])],
+      checks: [...new Set([...left.checks, ...right.checks])],
+    };
+  }
+  return out;
+}
