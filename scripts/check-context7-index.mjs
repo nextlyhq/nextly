@@ -437,14 +437,27 @@ async function keptControls({ corpus, api, get }) {
  * only sees the status.
  */
 async function exclusionFindings({ corpus, api, get, config }) {
-  const findings = [];
+  const probes = [];
   for (const witness of witnesses(corpus, config)) {
     const elsewhere = holdersElsewhere(corpus, config, witness);
     const answer = await retrievable(get, api, witness.marker, witness.name);
-    const leak = leakOf(answer, witness.name, elsewhere);
-    if (leak) findings.push(leakFinding(leak, witness, elsewhere));
+    probes.push({ witness, elsewhere, answer, leak: leakOf(answer, witness.name, elsewhere) });
   }
-  return findings;
+  const leaks = probes.filter(probe => probe.leak);
+  return [...leaks.map(probe => leakFinding(probe.leak, probe.witness, probe.elsewhere)), ...citedExclusions(probes, config, leaks)];
+}
+
+/**
+ * The excluded files the probes' answers cite, each once, reported as the
+ * citation sample reports one. A citation is direct evidence that the rule
+ * excluding the file did not take, whichever set was probed, and the file need
+ * not be its own set's witness, whose probe may come back empty. A witness
+ * already reported as retrievable is not reported again.
+ */
+function citedExclusions(probes, config, leaks) {
+  const reported = new Set(leaks.filter(probe => probe.leak === "witness").map(probe => probe.witness.name));
+  const cited = new Set(probes.flatMap(probe => [...probe.answer.cites]));
+  return [...cited].filter(path => !reported.has(path)).map(path => citationFinding(path, config)).filter(Boolean);
 }
 
 /**
@@ -497,9 +510,12 @@ async function indexFindings({ corpus, api, get, config, cited }) {
   ) {
     return findings;
   }
+  // A file the sample and a probe both cite is one finding, not two.
   return [
-    ...findings,
-    ...(await exclusionFindings({ corpus, api, get, config })),
+    ...new Set([
+      ...findings,
+      ...(await exclusionFindings({ corpus, api, get, config })),
+    ]),
   ];
 }
 
