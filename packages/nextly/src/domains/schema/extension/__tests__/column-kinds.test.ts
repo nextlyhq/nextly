@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import { ENUM_STORAGE_LENGTH } from "../../services/field-column-descriptor";
 import { toTableSpec } from "../compile";
 import { col, defineTable, type InferRow } from "../dsl";
 import type { ExtensionTable } from "../types";
@@ -122,6 +123,26 @@ describe("enum", () => {
     // A duplicate is a typo every time, and the database would accept the
     // type while the second entry did nothing.
     expect(() => col.enum(["open", "open"] as const)).toThrow(NextlyError);
+  });
+
+  it("refuses a value wider than the column MySQL stores it in", () => {
+    // MySQL stores an enum in a varchar of ENUM_STORAGE_LENGTH, so a longer
+    // value would satisfy the CHECK and still be refused by the column. The
+    // boundary value itself is accepted, so this is the width, not a smaller
+    // arbitrary cap.
+    const atLimit = "x".repeat(ENUM_STORAGE_LENGTH);
+    expect(() => col.enum([atLimit] as const)).not.toThrow();
+    expect(() => col.enum([`${atLimit}x`] as const)).toThrow(NextlyError);
+  });
+
+  it("renders as an indexable varchar of that width on MySQL", () => {
+    const spec = toTableSpec(
+      tableOf({ id: col.id(), state: col.enum(["open"] as const) }),
+      "mysql"
+    );
+    expect(spec.columns.find(c => c.name === "state")?.type).toBe(
+      `varchar(${String(ENUM_STORAGE_LENGTH)})`
+    );
   });
 
   it("carries an explicit type name for a native PostgreSQL enum", () => {

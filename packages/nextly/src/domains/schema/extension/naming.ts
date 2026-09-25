@@ -22,7 +22,10 @@
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import { MANAGED_TABLE_PREFIXES_REGEX } from "../pipeline/managed-tables";
-import { renderDialectType } from "../services/field-column-descriptor";
+import {
+  ENUM_STORAGE_LENGTH,
+  renderDialectType,
+} from "../services/field-column-descriptor";
 import {
   columnTypeIsIndexable,
   uniquenessCanBeAnIndex,
@@ -194,7 +197,9 @@ const MYSQL_KEY_BYTES: Record<
   // varchar(255) columns reaches the cap long before it looks like it should.
   text: SHORT_TEXT_LENGTH * UTF8MB4_BYTES_PER_CHAR,
   shortText: SHORT_TEXT_LENGTH * UTF8MB4_BYTES_PER_CHAR,
-  enum: SHORT_TEXT_LENGTH * UTF8MB4_BYTES_PER_CHAR,
+  // The varchar width an enum renders at on MySQL, read from the constant
+  // the renderer uses so the key width tracks the declared column.
+  enum: ENUM_STORAGE_LENGTH * UTF8MB4_BYTES_PER_CHAR,
   varchar: c => (c.length ?? SHORT_TEXT_LENGTH) * UTF8MB4_BYTES_PER_CHAR,
   char: c => (c.length ?? 1) * UTF8MB4_BYTES_PER_CHAR,
   uuid: 36 * UTF8MB4_BYTES_PER_CHAR,

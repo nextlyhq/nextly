@@ -20,6 +20,7 @@ import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-
 import {
   createTestNextly,
   getConfiguredTestDialects,
+  type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 
@@ -30,7 +31,20 @@ import {
 import { canEmitWithoutDrizzleKit, emitDdl } from "../pipeline/ddl-emitter";
 import { stripKitDropsOfDeclaredConstraints } from "../pipeline/filter-unsafe-statements";
 
+import { DrizzleStatementExecutor } from "../services/drizzle-statement-executor";
+import { RealClassifier } from "../pipeline/classifier/classifier";
 import { applyDesiredSchema } from "../pipeline/index";
+import { RealPreCleanupExecutor } from "../pipeline/pre-cleanup/executor";
+import {
+  PushSchemaPipeline,
+  type PipelineResult,
+} from "../pipeline/pushschema-pipeline";
+import {
+  noopMigrationJournal,
+  noopNotifier,
+  noopPreRenameExecutor,
+} from "../pipeline/pushschema-pipeline-stubs";
+import { RegexRenameDetector } from "../pipeline/rename-detector";
 
 import { getActiveExtensionSchema } from "./build-extension-schema";
 import { col, defineTable } from "./dsl";
@@ -499,6 +513,189 @@ describeEachDialect(
     });
   }
 );
+
+// Releases that change a column a foreign key names, in the same apply as the
+// key itself. On MySQL a key blocks both retyping and dropping its column, so
+// the order the apply runs its statements in is the whole question.
+const bins = defineTable("bins", { id: col.id() });
+const partsV1 = defineTable(
+  "parts",
+  {
+    id: col.id(),
+    binId: col.varchar(36),
+    legacyBinId: col.varchar(36, { nullable: true }),
+  },
+  {
+    foreignKeys: [
+      {
+        columns: ["legacyBinId"],
+        references: { table: "fq__bins", columns: ["id"] },
+      },
+    ],
+  }
+);
+// binId widens and gains a key; legacyBinId and its key go; note arrives. Widening, and a
+// dropped column holding no values, are changes the apply makes without asking.
+const partsV2 = defineTable(
+  "parts",
+  {
+    id: col.id(),
+    binId: col.varchar(64),
+    note: col.shortText({ nullable: true }),
+  },
+  {
+    foreignKeys: [
+      {
+        columns: ["binId"],
+        references: { table: "fq__bins", columns: ["id"] },
+      },
+    ],
+  }
+);
+const fkRelease = (tables: ReturnType<typeof defineTable>[]) =>
+  definePlugin({
+    name: "schema-e2e-fk-change",
+    version: "0.0.0",
+    nextly: "*",
+    contributes: { schema: { prefix: "fq", tables } },
+  });
+
+/**
+ * The schema apply a reload runs, with a column drop confirmed as a developer
+ * confirms it at the prompt — the pipeline asks before dropping any column.
+ */
+async function applyConfirmingDrops(
+  adapter: TestNextly["adapter"],
+  dialect: TestDialect
+): Promise<PipelineResult> {
+  const db = adapter.getDrizzle();
+  const pipeline = new PushSchemaPipeline({
+    executor: new DrizzleStatementExecutor(dialect, db),
+    renameDetector: new RegexRenameDetector(),
+    classifier: new RealClassifier(),
+    promptDispatcher: {
+      dispatch: ({ events }) =>
+        Promise.resolve({
+          confirmedRenames: [],
+          resolutions: events.map(event => ({
+            kind: "confirm_drop" as const,
+            eventId: event.id,
+          })),
+          proceed: true,
+        }),
+    },
+    preRenameExecutor: noopPreRenameExecutor,
+    preCleanupExecutor: new RealPreCleanupExecutor(),
+    migrationJournal: noopMigrationJournal,
+    notifier: noopNotifier,
+  });
+  const databaseName =
+    dialect === "mysql"
+      ? String(
+          (
+            await adapter.executeQuery<Record<string, unknown>>(
+              "SELECT DATABASE() AS name"
+            )
+          )[0]?.name
+        )
+      : undefined;
+  return pipeline.apply({
+    desired: { collections: {}, singles: {}, components: {} },
+    db,
+    dialect,
+    source: "code",
+    promptChannel: "terminal",
+    ...(databaseName !== undefined ? { databaseName } : {}),
+  });
+}
+
+describeEachDialect(
+  "a foreign key changed with the column it names",
+  dialect => {
+    it("is applied by the next schema apply", async () => {
+      current = await createTestNextly({
+        dialect,
+        plugins: [fkRelease([bins, partsV1])],
+      });
+      const adapter = current.adapter;
+      const BIN = "018f2c2e-0000-7000-8000-00000000e001";
+      await adapter.executeQuery(`INSERT INTO fq__bins (id) VALUES ('${BIN}')`);
+      await compileAndPublishExtensionSchema({
+        dialect,
+        plugins: [fkRelease([bins, partsV2])],
+        config: {},
+        logger: { warn: () => {} },
+      });
+      const result = await applyConfirmingDrops(adapter, dialect);
+      expect(result.success, JSON.stringify(result)).toBe(true);
+
+      // The widened column takes a row, the dropped column is gone, and the
+      // new key holds.
+      await adapter.executeQuery(
+        `INSERT INTO fq__parts (id, bin_id) VALUES ('018f2c2e-0000-7000-8000-00000000e101', '${BIN}')`
+      );
+      await expect(
+        adapter.executeQuery(`SELECT legacy_bin_id FROM fq__parts`)
+      ).rejects.toThrow();
+      await expect(
+        adapter.executeQuery(
+          `INSERT INTO fq__parts (id, bin_id) VALUES ('018f2c2e-0000-7000-8000-00000000e102', '018f2c2e-0000-7000-8000-00000000dead')`
+        )
+      ).rejects.toThrow();
+    });
+  }
+);
+
+// A save that only changes columns — one dropped, one added, one made
+// required — with no constraint involved. Its drop runs ahead of the kit, so
+// the kit never sees the table both lose and gain a column.
+const logsV1 = defineTable("logs", {
+  id: col.id(),
+  level: col.shortText({ nullable: true }),
+  legacy: col.shortText({ nullable: true }),
+});
+const logsV2 = defineTable("logs", {
+  id: col.id(),
+  level: col.shortText(),
+  message: col.shortText({ nullable: true }),
+});
+const logRelease = (tables: ReturnType<typeof defineTable>[]) =>
+  definePlugin({
+    name: "schema-e2e-column-change",
+    version: "0.0.0",
+    nextly: "*",
+    contributes: { schema: { prefix: "lg", tables } },
+  });
+
+describeEachDialect("a plugin table's columns changed together", dialect => {
+  it("are applied by the next schema apply", async () => {
+    current = await createTestNextly({
+      dialect,
+      plugins: [logRelease([logsV1])],
+    });
+    const adapter = current.adapter;
+    await compileAndPublishExtensionSchema({
+      dialect,
+      plugins: [logRelease([logsV2])],
+      config: {},
+      logger: { warn: () => {} },
+    });
+    const result = await applyConfirmingDrops(adapter, dialect);
+    expect(result.success, JSON.stringify(result)).toBe(true);
+
+    await adapter.executeQuery(
+      `INSERT INTO lg__logs (id, level, message) VALUES ('018f2c2e-0000-7000-8000-00000000f101', 'info', 'm')`
+    );
+    await expect(
+      adapter.executeQuery(`SELECT legacy FROM lg__logs`)
+    ).rejects.toThrow();
+    await expect(
+      adapter.executeQuery(
+        `INSERT INTO lg__logs (id, message) VALUES ('018f2c2e-0000-7000-8000-00000000f102', 'm')`
+      )
+    ).rejects.toThrow();
+  });
+});
 
 const txNotes = defineTable("notes", {
   id: col.id(),

@@ -5,6 +5,8 @@
  * `reconcileFile` state machine — so the three-way decision tested here is
  * the same one the app's files get, not a plugin-only copy of it.
  */
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import type { NextlySchemaSnapshot } from "../../../pipeline/diff/types";
@@ -35,11 +37,7 @@ function module(args: {
     mysql: { up: args.up ?? ["-- up"], down: [] },
     sqlite: { up: args.up ?? ["-- up"], down: [] },
   };
-  return {
-    name: args.name,
-    schemaVersion: args.schemaVersion,
-    checksum: migrationChecksum(dialects),
-    dialects,
+  const sides = {
     snapshot: {
       postgresql: { tables: args.target },
       mysql: { tables: args.target },
@@ -51,6 +49,30 @@ function module(args: {
       sqlite: { tables: args.before },
     },
   };
+  const content = {
+    name: args.name,
+    schemaVersion: args.schemaVersion,
+    dialects,
+    ...sides,
+  };
+  return { ...content, checksum: migrationChecksum(content) };
+}
+
+/**
+ * A checksum over the SQL alone, with no snapshot side in it.
+ *
+ * Built by hand from the statements in the canonical dialect order, because
+ * no production path produces this form: it is what a module would carry if
+ * its snapshots had been left out of the checksum, and the runner must treat
+ * it as not matching.
+ */
+function sqlOnlyChecksum(migration: PluginMigration): string {
+  const base = (["postgresql", "mysql", "sqlite"] as const).map(dialect => [
+    dialect,
+    migration.dialects[dialect].up,
+    migration.dialects[dialect].down,
+  ]);
+  return createHash("sha256").update(JSON.stringify(base)).digest("hex");
 }
 
 function fakeRepo() {
@@ -225,6 +247,146 @@ describe("runPluginMigrations", () => {
         h.deps
       )
     ).rejects.toThrow(/changed since it was generated/i);
+  });
+
+  it("refuses a module whose target snapshot was edited, even though its SQL was not", async () => {
+    // The target is what decides adoption: edited to match the live table,
+    // it would have the runner record the module as applied without running
+    // a statement. The checksum covers it, so the edit is caught first.
+    const m = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec("fx__a", false)],
+    });
+    m.snapshot.postgresql = { tables: [created] };
+    const h = deps();
+    h.live.set("fx__a", [created]);
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        h.deps
+      )
+    ).rejects.toMatchObject({ code: "MIGRATION_CHECKSUM_MISMATCH" });
+    expect(h.executed).toEqual([]);
+    expect(h.started).toEqual([]);
+    expect(h.owners).toEqual([]);
+  });
+
+  it("refuses a snapshot-bearing module whose checksum covers only its SQL, after its snapshot was edited", async () => {
+    // A checksum over the SQL alone says nothing about the snapshots, so the
+    // module below — target edited to match the live table, checksum still
+    // valid for its untouched SQL — would otherwise be adopted and its
+    // ownership recorded without the reviewed SQL ever running.
+    const m = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec("fx__a", false)],
+    });
+    m.snapshot = {
+      postgresql: { tables: [created] },
+      mysql: { tables: [created] },
+      sqlite: { tables: [created] },
+    };
+    m.checksum = sqlOnlyChecksum(m);
+    const h = deps();
+    h.live.set("fx__a", [created]);
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        h.deps
+      )
+    ).rejects.toMatchObject({ code: "MIGRATION_CHECKSUM_MISMATCH" });
+    expect(h.executed).toEqual([]);
+    expect(h.started).toEqual([]);
+    expect(h.owners).toEqual([]);
+  });
+
+  it("refuses a SQL-only checksum even on an unedited module, so there is no second accepted form", async () => {
+    // Nothing distinguishes an unedited module with a SQL-only checksum from
+    // an edited one, so neither is accepted: the one checksum form covers the
+    // snapshots.
+    const m = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [created],
+    });
+    m.checksum = sqlOnlyChecksum(m);
+    const h = deps();
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        h.deps
+      )
+    ).rejects.toMatchObject({ code: "MIGRATION_CHECKSUM_MISMATCH" });
+    expect(h.started).toEqual([]);
+  });
+
+  it("refuses a module whose schemaVersion was edited after sealing", async () => {
+    // The version is written to the owner rows the version gate reads, so a
+    // bumped one would claim a schema the module's SQL never produced.
+    const m = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [created],
+    });
+    m.schemaVersion = 2;
+    const h = deps();
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        h.deps
+      )
+    ).rejects.toMatchObject({ code: "MIGRATION_CHECKSUM_MISMATCH" });
+    expect(h.started).toEqual([]);
+    expect(h.owners).toEqual([]);
+  });
+
+  it("refuses an applied module renamed after sealing, instead of judging it afresh", async () => {
+    // The name is the ledger key. Renamed, an applied module is no longer
+    // found there, so without the seal it would be reconciled as new —
+    // adopted here, since its target is live — under a key nobody reviewed.
+    const m = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [created],
+    });
+    const h = deps({
+      appliedShas: new Map([["plugin:a/001", m.checksum]]),
+    });
+    h.live.set("fx__a", [created]);
+    m.name = "002";
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        h.deps
+      )
+    ).rejects.toMatchObject({ code: "MIGRATION_CHECKSUM_MISMATCH" });
+    expect(h.started).toEqual([]);
+    expect(h.owners).toEqual([]);
+  });
+
+  it("applies a module whose checksum covers its SQL and snapshots", async () => {
+    // The control for the refusals above: the same shape, correctly sealed,
+    // runs its SQL.
+    const m = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [created],
+      up: ["CREATE TABLE fx__a (id varchar(36))"],
+    });
+    const h = deps();
+    const result = await runPluginMigrations(
+      [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+      h.deps
+    );
+    expect(result).toEqual({ applied: 1, adopted: 0, skipped: 0 });
+    expect(h.executed.join("\n")).toContain("CREATE TABLE fx__a");
   });
 
   it("refuses an applied module that no longer matches what ran", async () => {

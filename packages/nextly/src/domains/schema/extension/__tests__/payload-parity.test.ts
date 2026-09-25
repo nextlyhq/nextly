@@ -622,7 +622,12 @@ describe("row 12 — relations for typed relational queries", () => {
       })
     );
     expect(built.relations.get("fx__linked")).toEqual([
-      { key: "owner", fromColumn: "ownerId", targetTable: "fx__owners" },
+      {
+        key: "owner",
+        kind: "one",
+        fromColumn: "ownerId",
+        targetTable: "fx__owners",
+      },
     ]);
   });
 });

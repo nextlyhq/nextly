@@ -45,9 +45,17 @@ export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
  * `fromColumn`/`toColumn` are the builder property names (camelCase);
  * `targetTable` is the key the target is registered under (a static
  * bundle export name like "users", or another dynamic SQL table name).
+ *
+ * `kind` decides the edge's cardinality, and with it which end holds the
+ * reference. A `one` edge (the default, which is what every edge a
+ * collection contributes is) joins this table's `fromColumn` to the
+ * target's `toColumn`, `id` when omitted. A `many` edge joins this table's
+ * `fromColumn` to the target rows whose `toColumn` holds it, so `toColumn`
+ * is required: the target's `id` is never the column pointing back.
  */
 export interface DynamicRelationEdge {
   key: string;
+  kind?: "one" | "many";
   fromColumn: string;
   targetTable: string;
   toColumn?: string;
@@ -63,7 +71,28 @@ interface DynamicEdgeBuilder {
     string,
     (config?: { from?: unknown; to?: unknown; alias?: string }) => unknown
   >;
+  many: DynamicEdgeBuilder["one"];
   [tableKey: string]: Record<string, unknown> | DynamicEdgeBuilder["one"];
+}
+
+/**
+ * The dialect bundle the registry composes relations over: static tables
+ * keyed by their EXPORT names, which is how a relation edge names a core
+ * target. Exported so a compiler checking an edge against a core table reads
+ * the same namespace this registry will resolve the edge in, rather than a
+ * second list of core tables that could disagree with it.
+ */
+export function staticRelationTables(
+  dialect: SupportedDialect
+): Record<string, unknown> {
+  switch (dialect) {
+    case "postgresql":
+      return postgresBundle;
+    case "mysql":
+      return mysqlBundle;
+    case "sqlite":
+      return sqliteBundle;
+  }
 }
 
 export class SchemaRegistry {
@@ -231,13 +260,14 @@ export class SchemaRegistry {
         for (const edge of edges) {
           const fromCols = r[tableKey];
           const toCols = r[edge.targetTable];
-          const oneFn = r.one[edge.targetTable];
+          const many = edge.kind === "many";
+          const edgeFn = (many ? r.many : r.one)[edge.targetTable];
           // Fail FAST on malformed registration metadata: the assembled
           // relations are cached, so a silently-skipped edge (or an edge
           // built from an undefined column, which drizzle would treat as a
           // bare inference hint joining on the wrong column) surfaces far
           // away at query time. Registration is the right place to blow up.
-          if (!fromCols || !toCols || typeof oneFn !== "function") {
+          if (!fromCols || !toCols || typeof edgeFn !== "function") {
             throw NextlyError.internal({
               logContext: {
                 reason:
@@ -248,19 +278,33 @@ export class SchemaRegistry {
               },
             });
           }
+          // Only a one-edge may default its target column to `id`: that is
+          // the column a reference points AT. A many-edge's target column is
+          // the one pointing back, which has no default, and substituting
+          // `id` would join the target's key to this table's key.
+          if (many && edge.toColumn === undefined) {
+            throw NextlyError.internal({
+              logContext: {
+                reason:
+                  `SchemaRegistry: dynamic many-edge "${edge.key}" on ` +
+                  `"${tableKey}" names no target column`,
+              },
+            });
+          }
+          const toColumn = edge.toColumn ?? "id";
           const fromCol = fromCols[edge.fromColumn];
-          const toCol = toCols[edge.toColumn ?? "id"];
+          const toCol = toCols[toColumn];
           if (fromCol === undefined || toCol === undefined) {
             throw NextlyError.internal({
               logContext: {
                 reason:
                   `SchemaRegistry: dynamic relation edge "${edge.key}" on ` +
                   `"${tableKey}" references unknown column ` +
-                  `"${fromCol === undefined ? edge.fromColumn : (edge.toColumn ?? "id")}"`,
+                  `"${fromCol === undefined ? edge.fromColumn : toColumn}"`,
               },
             });
           }
-          tableEdges[edge.key] = oneFn({ from: fromCol, to: toCol });
+          tableEdges[edge.key] = edgeFn({ from: fromCol, to: toCol });
         }
         if (Object.keys(tableEdges).length > 0) {
           dynamicConfig[tableKey] = tableEdges;
@@ -284,7 +328,7 @@ export class SchemaRegistry {
     switch (this.dialect) {
       case "postgresql":
         return {
-          bundle: postgresBundle,
+          bundle: staticRelationTables(this.dialect),
           prebuilt: postgresRelations,
           buildEdges: helper =>
             buildPostgresEdges(
@@ -293,14 +337,14 @@ export class SchemaRegistry {
         };
       case "mysql":
         return {
-          bundle: mysqlBundle,
+          bundle: staticRelationTables(this.dialect),
           prebuilt: mysqlRelations,
           buildEdges: helper =>
             buildMysqlEdges(helper as Parameters<typeof buildMysqlEdges>[0]),
         };
       case "sqlite":
         return {
-          bundle: sqliteBundle,
+          bundle: staticRelationTables(this.dialect),
           prebuilt: sqliteRelations,
           buildEdges: helper =>
             buildSqliteEdges(helper as Parameters<typeof buildSqliteEdges>[0]),

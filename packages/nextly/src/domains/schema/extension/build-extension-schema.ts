@@ -16,12 +16,14 @@
  */
 import { createHash } from "node:crypto";
 
-import type { Table } from "drizzle-orm";
+import { getColumns, isTable, type Table } from "drizzle-orm";
 
-import type {
-  DynamicRelationEdge,
-  SupportedDialect,
+import {
+  type DynamicRelationEdge,
+  staticRelationTables,
+  type SupportedDialect,
 } from "../../../database/schema-registry";
+import { NextlyError } from "../../../errors/nextly-error";
 import { drizzleTableToTableSpec } from "../../../schemas/_internal/drizzle-to-tablespec";
 import type { TableSpec } from "../pipeline/diff/types";
 
@@ -159,34 +161,114 @@ function fingerprintOf(
 /**
  * A table's relation edges, in the form the schema registry composes.
  *
- * The registry looks each column up on the COMPILED Drizzle table, whose
- * properties are the authored keys (`ownerId`) while a declaration names SQL
- * columns (`owner_id`). Passing the SQL name through made every edge on a
- * column whose two names differ fail at `getRelations` as an unknown column,
- * which took `ctx.db.query` down for the whole schema. A target outside this
- * compile keeps the name as declared: a core table's properties are the ones
- * its bundle defines, and nothing here can translate for it.
+ * The registry looks each column up on the target's Drizzle table by PROPERTY
+ * — the authored key (`ownerId`) on a compiled table, the bundle's key on a
+ * core one — while a declaration may name the SQL column (`owner_id`).
+ * Passing the SQL name through made every such edge fail at `getRelations`
+ * as an unknown column, which took `ctx.db.query` down for the whole schema.
+ *
+ * The kind travels with the edge, because it decides which end holds the
+ * reference: dropping it built every `many` edge as a `one`. Both ends are
+ * known by now — `defineTable` fills a many-edge's own end with the primary
+ * key — so a missing one is a declaration that bypassed it, not something to
+ * default here a second time.
+ *
+ * A declared `toColumn` is translated and checked here, naming its
+ * declaration — see `targetColumnKey`.
  */
 function relationEdgesOf(
   table: ExtensionTable,
-  byName: ReadonlyMap<string, ExtensionTable>
+  byName: ReadonlyMap<string, ExtensionTable>,
+  coreTables: Readonly<Record<string, unknown>>
 ): DynamicRelationEdge[] {
-  return (table.relations ?? []).map(rel => {
-    const target = byName.get(rel.targetTable);
+  return (table.relations ?? []).map((rel, position) => {
+    const path = `${table.name}.relations[${String(position)}]`;
+    if (rel.fromColumn === undefined) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "relation edge reached the compiler without its own column",
+          path,
+          relation: rel.name,
+        },
+      });
+    }
     return {
       key: rel.name,
-      fromColumn: authoredKeyOf(table, rel.fromColumn ?? ""),
+      kind: rel.kind,
+      fromColumn: authoredKeyOf(table, rel.fromColumn),
       targetTable: rel.targetTable,
       ...(rel.toColumn !== undefined
         ? {
-            toColumn:
-              target === undefined
-                ? rel.toColumn
-                : authoredKeyOf(target, rel.toColumn),
+            toColumn: targetColumnKey(
+              rel.targetTable,
+              rel.toColumn,
+              byName,
+              coreTables,
+              path
+            ),
           }
         : {}),
     };
   });
+}
+
+function invalidTargetColumn(path: string, message: string): never {
+  throw NextlyError.validation({
+    errors: [{ path, code: "INVALID", message }],
+  });
+}
+
+/**
+ * The property the registry will look a relation's target column up by, or
+ * a refusal.
+ *
+ * The registry assembles every table's relations in ONE `defineRelations`
+ * call, lazily, the first time anything reads `db.query` — so a target column
+ * it cannot find takes relational queries down for the whole schema, far
+ * from the declaration that named it. It is checked here instead, against
+ * the same table the registry will resolve it on:
+ *
+ * - a table compiled in this build, by its SQL name or authored key;
+ * - a core table, in the dialect bundle the registry composes over, by its
+ *   SQL name or the bundle's key.
+ *
+ * Any other target — a collection or single, registered at runtime from
+ * fields this compiler never sees — cannot be checked, so a column named on
+ * it is refused rather than left to fail later. Such an edge can still join
+ * the target's `id`, the one column every such table has, by omitting
+ * `toColumn`.
+ */
+function targetColumnKey(
+  targetTable: string,
+  column: string,
+  byName: ReadonlyMap<string, ExtensionTable>,
+  coreTables: Readonly<Record<string, unknown>>,
+  path: string
+): string {
+  const compiled = byName.get(targetTable);
+  const core = coreTables[targetTable];
+  let found: string | undefined;
+  if (compiled !== undefined) {
+    found = compiled.columns.find(
+      candidate => candidate.name === column || candidate.key === column
+    )?.key;
+  } else if (isTable(core)) {
+    found = Object.entries(getColumns(core)).find(
+      ([key, candidate]) => key === column || candidate.name === column
+    )?.[0];
+  } else {
+    invalidTargetColumn(
+      path,
+      `The relation names the column ${column} on "${targetTable}", which is neither a table in this schema nor one of Nextly's core tables, so the column cannot be checked. A relation to a collection or single joins its id: omit toColumn.`
+    );
+  }
+  if (found === undefined) {
+    invalidTargetColumn(
+      path,
+      `The relation names the column ${column} on "${targetTable}", which that table does not declare.`
+    );
+  }
+  return found;
 }
 
 export async function buildExtensionSchema(
@@ -264,8 +346,10 @@ export async function buildExtensionSchema(
       table as ExtensionTable,
     ])
   );
+  // The core tables a relation may target, as the registry will resolve them.
+  const coreTables = staticRelationTables(input.dialect);
   for (const table of tables) {
-    const edges = relationEdgesOf(table, byName);
+    const edges = relationEdgesOf(table, byName, coreTables);
     if (edges.length > 0) relations.set(table.name, edges);
   }
 
@@ -324,9 +408,17 @@ export async function buildExtensionSchema(
   // rather than from the compiled tables: `compiled` holds only extension
   // tables, so deriving the protected set from it would be empty and the
   // refusal would never fire.
+  //
+  // Adopted tables are protected for the opposite reason: nobody here
+  // maintains them. A hook returning one would otherwise be taken as a table
+  // the hook INTRODUCED — owned by the app and given a spec below — and the
+  // app's migrations would then create or alter a table Nextly promised never
+  // to touch. Read from the store, which already holds them: the adoption
+  // loop further down runs after the hooks.
   const protectedTables = new Set<string>([
     ...input.coreTableNames,
     ...input.entities.map(entity => entity.name),
+    ...store.adoptedTables().map(table => table.name),
   ]);
 
   const drizzle = await runAfterDrizzle({
@@ -401,7 +493,7 @@ export async function buildExtensionSchema(
     // App-owned, so nextly.db reaches the table and a plugin's owner check
     // does not — the access rule the plan gives adopted tables.
     owners.set(table.name, { kind: "app" });
-    const edges = relationEdgesOf(table as ExtensionTable, byName);
+    const edges = relationEdgesOf(table as ExtensionTable, byName, coreTables);
     if (edges.length > 0) adoptedRelations.set(table.name, edges);
   }
 

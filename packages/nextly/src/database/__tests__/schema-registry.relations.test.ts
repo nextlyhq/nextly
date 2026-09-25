@@ -10,6 +10,7 @@
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 import { describe, it, expect } from "vitest";
 
+import { NextlyError } from "../../errors/nextly-error";
 import { getDialectTables } from "../index";
 import { SchemaRegistry } from "../schema-registry";
 
@@ -123,6 +124,50 @@ describe("SchemaRegistry.getRelations", () => {
       { key: "author", fromColumn: "no_such_column", targetTable: "users" },
     ]);
     expect(() => registry.getRelations()).toThrow();
+  });
+
+  it("builds a many edge as a many relation, joined on the target's column", () => {
+    // The reference lives on the TARGET for a many-edge. Built as a one, the
+    // same two columns would read a single row object instead of a list.
+    const registry = makeRegistry();
+    registry.registerDynamicSchema("dc_authors", makeDcTable("dc_authors"), [
+      {
+        key: "posts",
+        kind: "many",
+        fromColumn: "id",
+        targetTable: "dc_posts",
+        toColumn: "authorId",
+      },
+    ]);
+    registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"));
+
+    const edge = registry.getRelations().dc_authors?.relations.posts;
+    expect(edge?.relationType).toBe("many");
+    expect(edge?.targetTableName).toBe("dc_posts");
+    expect(edge?.sourceColumns.map(column => column.name)).toEqual(["id"]);
+    expect(edge?.targetColumns.map(column => column.name)).toEqual([
+      "author_id",
+    ]);
+  });
+
+  it("keeps an edge with no kind a one relation", () => {
+    // Collections contribute edges without a kind; they are all one-edges.
+    const registry = makeRegistry();
+    registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"), [
+      { key: "author", fromColumn: "authorId", targetTable: "users" },
+    ]);
+    expect(
+      registry.getRelations().dc_posts?.relations.author?.relationType
+    ).toBe("one");
+  });
+
+  it("fails FAST on a many edge that names no target column, rather than joining on id", () => {
+    const registry = makeRegistry();
+    registry.registerDynamicSchema("dc_authors", makeDcTable("dc_authors"), [
+      { key: "posts", kind: "many", fromColumn: "id", targetTable: "dc_posts" },
+    ]);
+    registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"));
+    expect(() => registry.getRelations()).toThrow(NextlyError);
   });
 
   it("clear() drops dynamic edges and returns to the static fast path", () => {

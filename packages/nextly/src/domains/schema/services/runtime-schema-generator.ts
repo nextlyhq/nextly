@@ -28,7 +28,7 @@ import {
   smallint as mysqlSmallint,
   char as mysqlChar,
   float as mysqlFloat,
-  binary as mysqlBinary,
+  longblob as mysqlLongblob,
 } from "drizzle-orm/mysql-core";
 import {
   pgTable,
@@ -46,6 +46,7 @@ import {
   uuid as pgUuid,
   real as pgReal,
   serial as pgSerial,
+  bytea as pgBytea,
 } from "drizzle-orm/pg-core";
 import {
   sqliteTable,
@@ -70,6 +71,7 @@ import {
   type SupportedDialect as DescriptorDialect,
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
+  ENUM_STORAGE_LENGTH,
   getColumnDescriptor,
   getSystemColumnDescriptors,
   toSnakeCase,
@@ -623,9 +625,10 @@ export function buildPgColumnFromKind(
     case "real":
       return withNullability(pgReal(name), nullable);
     case "bytes":
-      // No first-class `bytea` builder; `text` keeps the ORM readable while
-      // the DDL declares the real type.
-      return withNullability(pgText(name), nullable);
+      // `bytea`, the type the descriptor renders and the migration creates,
+      // so a table pushed from this builder and one built by the migration
+      // are the same physical column. Reads and writes are Buffers.
+      return withNullability(pgBytea(name), nullable);
     case "enum":
       // A native PostgreSQL enum needs its TYPE, which this builder has no
       // handle on. Text keeps reads and writes working; the constraint is
@@ -690,12 +693,14 @@ export function buildMysqlColumnFromKind(
     }
     case "real":
       return withNullability(mysqlFloat(name), nullable);
-    case "bytes": {
-      const col = mysqlBinary(name, { length: length ?? 255 });
-      return withNullability(col, nullable);
-    }
+    case "bytes":
+      // `longblob`, as the descriptor renders it: variable length and
+      // unbounded, where a fixed `binary(n)` would pad every value to n bytes
+      // and refuse a longer one. Buffer mode, so values round-trip as bytes.
+      return withNullability(mysqlLongblob(name), nullable);
     case "enum": {
-      const col = mysqlVarchar(name, { length: 255 });
+      // The width the descriptor renders, from the one constant both read.
+      const col = mysqlVarchar(name, { length: ENUM_STORAGE_LENGTH });
       return withNullability(col, nullable);
     }
     case "skip":
@@ -779,7 +784,10 @@ function buildSqliteExtensionColumn(
     case "real":
       return withNullability(sqliteReal(name), nullable);
     case "bytes":
-      return withNullability(sqliteBlob(name), nullable);
+      // Buffer mode: without it Drizzle's SQLite blob is its JSON mode, which
+      // stores `JSON.stringify(value)` and reads back a parsed object, so the
+      // bytes written would not be the bytes read.
+      return withNullability(sqliteBlob(name, { mode: "buffer" }), nullable);
     default:
       return undefined;
   }

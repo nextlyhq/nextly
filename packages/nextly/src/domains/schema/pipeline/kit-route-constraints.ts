@@ -35,10 +35,11 @@ export interface KitRouteConstraintStatements {
 /**
  * Split so each statement runs where it can succeed.
  *
- * Before the kit: every drop the diff planned, since the constraint already
- * exists and the kit's changes may depend on it being gone. On MySQL also any
- * foreign key covering a column whose type the kit is about to change — MySQL
- * refuses that change while the key exists — to be added back afterwards.
+ * Before the kit — and before the pre-resolution drops of columns and tables,
+ * which a constraint still in place would block: every drop the diff planned.
+ * On MySQL also any foreign key that EXISTS and covers a column whose type the
+ * kit is about to change — MySQL refuses that change while the key is there —
+ * to be added back afterwards.
  *
  * After the kit: every add and action change, once the tables and columns
  * they name exist; and on PostgreSQL the constraints of each table the kit
@@ -47,7 +48,7 @@ export interface KitRouteConstraintStatements {
  */
 export function kitRouteConstraintStatements(
   ops: readonly Operation[],
-  desiredTables: readonly TableSpec[],
+  liveTables: readonly TableSpec[],
   dialect: SupportedDialect
 ): KitRouteConstraintStatements {
   if (dialect === "sqlite") return { before: [], after: [] };
@@ -74,7 +75,7 @@ export function kitRouteConstraintStatements(
     }
   }
   if (dialect === "mysql") {
-    const suspended = foreignKeysBlockingTypeChanges(ops, desiredTables);
+    const suspended = foreignKeysBlockingTypeChanges(ops, liveTables);
     before.push(...suspended);
     after.push(
       ...suspended.map(op => ({
@@ -91,38 +92,74 @@ export function kitRouteConstraintStatements(
 }
 
 /**
- * The declared foreign keys a MySQL column-type change must lift for its
- * duration: those whose own columns or referenced columns include a changed
- * column. A key the diff already drops is left to that drop.
+ * The foreign keys a MySQL column-type change must lift for its duration:
+ * those in the LIVE schema whose own columns or referenced columns include a
+ * changed column. Read from what exists, because only an existing key can be
+ * dropped — one this apply adds is created afterwards by its own operation.
+ * A key the diff already drops is left to that drop, and to the add that
+ * replaces it when it is being re-keyed. So is a key that will not survive the
+ * apply at all — on a table it drops, or over a column it drops — since there
+ * would be nothing to add it back to.
  */
 function foreignKeysBlockingTypeChanges(
   ops: readonly Operation[],
-  desiredTables: readonly TableSpec[]
+  liveTables: readonly TableSpec[]
 ): DropForeignKeyOp[] {
-  const changed = new Set(
-    ops
-      .filter(op => op.type === "change_column_type")
-      .map(op => columnKey(op.tableName, op.columnName))
+  const changed = keysOf(ops, "change_column_type", op =>
+    columnKey(op.tableName, op.columnName)
   );
   if (changed.size === 0) return [];
-  const alreadyDropped = new Set(
-    ops
-      .filter(op => op.type === "drop_foreign_key")
-      .map(op => columnKey(op.tableName, op.foreignKey.name))
-  );
-  const blocking: DropForeignKeyOp[] = [];
-  for (const table of desiredTables) {
-    for (const foreignKey of table.foreignKeys ?? []) {
-      if (alreadyDropped.has(columnKey(table.name, foreignKey.name))) continue;
-      if (!touchesChangedColumn(table.name, foreignKey, changed)) continue;
-      blocking.push({
-        type: "drop_foreign_key",
+  const survives = survivalCheck(ops);
+  return liveTables.flatMap(table =>
+    (table.foreignKeys ?? [])
+      .filter(
+        foreignKey =>
+          survives(table.name, foreignKey) &&
+          touchesChangedColumn(table.name, foreignKey, changed)
+      )
+      .map(foreignKey => ({
+        type: "drop_foreign_key" as const,
         tableName: table.name,
         foreignKey,
-      });
-    }
-  }
-  return blocking;
+      }))
+  );
+}
+
+/**
+ * Whether a live key outlasts the apply untouched: not dropped (or re-keyed)
+ * by the diff itself, and not on a table or over a column the apply drops.
+ */
+function survivalCheck(
+  ops: readonly Operation[]
+): (tableName: string, foreignKey: ForeignKeySpec) => boolean {
+  const dropped = keysOf(ops, "drop_foreign_key", op =>
+    columnKey(op.tableName, op.foreignKey.name)
+  );
+  const droppedTables = keysOf(ops, "drop_table", op =>
+    op.tableName.toLowerCase()
+  );
+  const droppedColumns = keysOf(ops, "drop_column", op =>
+    columnKey(op.tableName, op.columnName)
+  );
+  return (tableName, foreignKey) =>
+    !droppedTables.has(tableName.toLowerCase()) &&
+    !dropped.has(columnKey(tableName, foreignKey.name)) &&
+    !foreignKey.columns.some(column =>
+      droppedColumns.has(columnKey(tableName, column))
+    );
+}
+
+/** The keys `keyOf` gives for every operation of one type. */
+function keysOf<T extends Operation["type"]>(
+  ops: readonly Operation[],
+  type: T,
+  keyOf: (op: Extract<Operation, { type: T }>) => string
+): Set<string> {
+  return new Set(
+    ops
+      .filter((op): op is Extract<Operation, { type: T }> => op.type === type)
+      .map(keyOf)
+  );
 }
 
 function touchesChangedColumn(

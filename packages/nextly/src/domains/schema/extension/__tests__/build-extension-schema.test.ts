@@ -14,7 +14,7 @@ import {
   buildExtensionSchema,
   type ExtensionSchemaInput,
 } from "../build-extension-schema";
-import { col, defineTable } from "../dsl";
+import { col, defineTable, type TableRelationInput } from "../dsl";
 import type { SchemaContribution } from "../run-hooks";
 
 const base = (
@@ -271,28 +271,39 @@ describe("relation edges", () => {
           {
             name: "audit",
             kind: "many",
-            targetTable: "audit_log",
-            toColumn: "noteId",
+            targetTable: "fx__audit_log",
+            toColumn: "note_id",
           },
         ],
       }
     );
+    const auditLog = defineTable("audit_log", {
+      id: col.id(),
+      noteId: col.shortText(),
+    });
     const built = await buildExtensionSchema({
       dialect: "postgresql" as const,
       coreTableNames: ["users"],
       entities: [],
       pluginPrefixes: new Map([["fx", "fx"]]),
       plugins: [
-        { owner: { kind: "plugin" as const, id: "fx" }, tables: [notes] },
+        {
+          owner: { kind: "plugin" as const, id: "fx" },
+          tables: [notes, auditLog],
+        },
       ],
     });
     expect(built.relations.get("fx__notes")).toEqual([
       // The compiled table's key, which is what the registry looks up.
-      { key: "user", fromColumn: "userId", targetTable: "users" },
+      { key: "user", kind: "one", fromColumn: "userId", targetTable: "users" },
+      // A many-edge keeps its kind, and its own end is the primary key
+      // `defineTable` filled in: the target's `noteId` points back at it,
+      // named by the SQL spelling and handed on as the compiled key.
       {
         key: "audit",
-        fromColumn: "",
-        targetTable: "audit_log",
+        kind: "many",
+        fromColumn: "id",
+        targetTable: "fx__audit_log",
         toColumn: "noteId",
       },
     ]);
@@ -327,6 +338,236 @@ describe("relation edges", () => {
   });
 });
 
+describe("many edges", () => {
+  /**
+   * An author and the posts pointing back at it: the shape a many-edge
+   * exists for, where the reference lives on the TARGET.
+   */
+  const manySchema = async (relation: Record<string, unknown> = {}) => {
+    const { col, defineTable } = await import("../dsl");
+    const authors = defineTable(
+      "authors",
+      { id: col.id(), label: col.shortText() },
+      {
+        relations: [
+          {
+            name: "posts",
+            kind: "many",
+            targetTable: "fx__posts",
+            toColumn: "authorId",
+            ...relation,
+          },
+        ],
+      }
+    );
+    const posts = defineTable("posts", {
+      id: col.id(),
+      authorId: col.shortText(),
+    });
+    return buildExtensionSchema({
+      dialect: "sqlite" as const,
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [
+        {
+          owner: { kind: "plugin" as const, id: "fx" },
+          tables: [authors, posts],
+        },
+      ],
+    });
+  };
+
+  it("compiles to a many edge joined from the primary key to the target's column", async () => {
+    const built = await manySchema();
+    expect(built.relations.get("fx__authors")).toEqual([
+      {
+        key: "posts",
+        kind: "many",
+        fromColumn: "id",
+        targetTable: "fx__posts",
+        toColumn: "authorId",
+      },
+    ]);
+  });
+
+  it("is assembled by the registry as a many relation, and queried as one", async () => {
+    // The whole chain short of a database: compile, register the way reload
+    // does, assemble, and build the relational query. The emitted SQL is the
+    // evidence — an edge built as a one would select a single row object,
+    // and an edge joined on the wrong column would name it.
+    const { SchemaRegistry } = await import(
+      "../../../../database/schema-registry"
+    );
+    const { getDialectTables } = await import("../../../../database/index");
+    const { drizzle } = await import("drizzle-orm/better-sqlite3");
+
+    const built = await manySchema();
+    const registry = new SchemaRegistry("sqlite");
+    registry.registerStaticSchemas(getDialectTables("sqlite"));
+    for (const [name, table] of Object.entries(built.drizzle)) {
+      registry.registerDynamicSchema(name, table, built.relations.get(name));
+    }
+
+    const relations = registry.getRelations();
+    const edge = relations.fx__authors?.relations.posts;
+    expect(edge?.relationType).toBe("many");
+    expect(edge?.targetTableName).toBe("fx__posts");
+    expect(edge?.sourceColumns.map(column => column.name)).toEqual(["id"]);
+    expect(edge?.targetColumns.map(column => column.name)).toEqual([
+      "author_id",
+    ]);
+
+    const db = drizzle.mock({ relations });
+    const query = (
+      db.query as unknown as Record<
+        string,
+        {
+          findMany: (config: unknown) => { toSQL: () => { sql: string } };
+        }
+      >
+    ).fx__authors.findMany({ with: { posts: true } });
+    const { sql } = query.toSQL();
+    expect(sql).toMatch(/json_group_array/);
+    expect(sql).toContain('where "d0"."id" = "d1"."author_id"');
+  });
+
+  it("joins from a named fromColumn instead of the primary key", async () => {
+    const built = await manySchema({ fromColumn: "label" });
+    expect(built.relations.get("fx__authors")?.[0]).toMatchObject({
+      kind: "many",
+      fromColumn: "label",
+    });
+  });
+
+  it("refuses a toColumn the compiled target does not declare", async () => {
+    await expect(manySchema({ toColumn: "writerId" })).rejects.toSatisfy(
+      NextlyError.isValidation
+    );
+  });
+
+  /** One plugin table carrying a single declared edge, built for sqlite. */
+  const edgeTo = async (relation: Record<string, unknown>) => {
+    const { col, defineTable } = await import("../dsl");
+    const accounts = defineTable(
+      "accounts",
+      { id: col.id() },
+      {
+        relations: [
+          {
+            name: "linked",
+            kind: "many",
+            ...relation,
+          } as TableRelationInput,
+        ],
+      }
+    );
+    return buildExtensionSchema({
+      dialect: "sqlite" as const,
+      coreTableNames: ["users", "refresh_tokens"],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [
+        { owner: { kind: "plugin" as const, id: "fx" }, tables: [accounts] },
+      ],
+    });
+  };
+
+  it("translates a core target's SQL column to the key the registry resolves", async () => {
+    // `user_id` is the SQL spelling; the registry looks the column up on the
+    // core bundle's table by its key, `userId`. Passed through unchanged, it
+    // failed only once `getRelations` assembled every table's relations.
+    const { SchemaRegistry } = await import(
+      "../../../../database/schema-registry"
+    );
+    const { getDialectTables } = await import("../../../../database/index");
+    const built = await edgeTo({
+      targetTable: "refreshTokens",
+      toColumn: "user_id",
+    });
+    expect(built.relations.get("fx__accounts")?.[0]).toMatchObject({
+      targetTable: "refreshTokens",
+      toColumn: "userId",
+    });
+
+    const registry = new SchemaRegistry("sqlite");
+    registry.registerStaticSchemas(getDialectTables("sqlite"));
+    for (const [name, table] of Object.entries(built.drizzle)) {
+      registry.registerDynamicSchema(name, table, built.relations.get(name));
+    }
+    expect(
+      registry.getRelations().fx__accounts?.relations.linked?.relationType
+    ).toBe("many");
+  });
+
+  it("refuses a core target column the core table does not declare", async () => {
+    await expect(
+      edgeTo({ targetTable: "refreshTokens", toColumn: "owner_id" })
+    ).rejects.toSatisfy(NextlyError.isValidation);
+  });
+
+  it("refuses a target column on a table it cannot check, and accepts that table's id", async () => {
+    // A collection's table is registered at runtime from fields the compiler
+    // never sees, so a column named on it could only fail later, for every
+    // relational query at once.
+    await expect(
+      edgeTo({ targetTable: "dc_posts", toColumn: "author_id" })
+    ).rejects.toSatisfy(NextlyError.isValidation);
+    // Joining its id needs no column named, and still compiles.
+    const built = await edgeTo({
+      kind: "one",
+      targetTable: "dc_posts",
+      fromColumn: "id",
+    });
+    expect(built.relations.get("fx__accounts")?.[0]).toEqual({
+      key: "linked",
+      kind: "one",
+      fromColumn: "id",
+      targetTable: "dc_posts",
+    });
+  });
+
+  it("refuses a many-edge without its toColumn, at defineTable", async () => {
+    const { col, defineTable } = await import("../dsl");
+    expect(() =>
+      defineTable(
+        "bad",
+        { id: col.id() },
+        {
+          relations: [{ name: "x", kind: "many", targetTable: "fx__posts" }],
+        }
+      )
+    ).toThrow(/Validation failed/);
+  });
+
+  it("refuses a many-edge with no fromColumn on a table with no primary key", async () => {
+    const { col, defineTable } = await import("../dsl");
+    let caught: unknown;
+    try {
+      defineTable(
+        "keyless",
+        { label: col.shortText() },
+        {
+          relations: [
+            {
+              name: "x",
+              kind: "many",
+              targetTable: "fx__posts",
+              toColumn: "authorId",
+            },
+          ],
+        }
+      );
+    } catch (error) {
+      caught = error;
+    }
+    const errors =
+      (caught as { publicData?: { errors?: { message?: string }[] } })
+        ?.publicData?.errors ?? [];
+    expect(errors.map(error => error.message).join(" ")).toMatch(/primary key/);
+  });
+});
+
 describe("ref columns auto-produce one edges", () => {
   it("a ref() column carries its one-edge without an explicit relation", async () => {
     const { col, defineTable } = await import("../dsl");
@@ -345,7 +586,7 @@ describe("ref columns auto-produce one edges", () => {
     });
     expect(built.relations.get("fx__linked")).toEqual([
       // Named for its target, not after the column it would collide with.
-      { key: "user", fromColumn: "userId", targetTable: "users" },
+      { key: "user", kind: "one", fromColumn: "userId", targetTable: "users" },
     ]);
   });
 
@@ -375,7 +616,7 @@ describe("ref columns auto-produce one edges", () => {
       ],
     });
     expect(built.relations.get("fx__linked")).toEqual([
-      { key: "user", fromColumn: "userId", targetTable: "admins" },
+      { key: "user", kind: "one", fromColumn: "userId", targetTable: "admins" },
     ]);
   });
 
@@ -456,6 +697,54 @@ describe("adoptTable", () => {
     // and the adopted table is in neither).
     expect(built.specs.find(t => t.name === "legacy_orders")).toBeUndefined();
     expect(built.drizzle["legacy_orders"]).toBeUndefined();
+  });
+
+  it("refuses an afterDrizzle hook that returns an adopted table", async () => {
+    // Otherwise the returned table reads as one the hook introduced: owned by
+    // the app and given a spec, so the app's migrations would create or alter
+    // a table adoption promises never to touch.
+    const { pgTable, text } = await import("drizzle-orm/pg-core");
+    const def = await legacy();
+    const build = (returned: string) =>
+      buildExtensionSchema({
+        dialect: "postgresql" as const,
+        coreTableNames: [],
+        entities: [],
+        pluginPrefixes: new Map(),
+        plugins: [],
+        app: {
+          owner: { kind: "app" as const },
+          extend: [
+            ({ schema }) => {
+              schema.adoptTable(def);
+            },
+          ],
+        },
+        afterDrizzle: [
+          () => ({
+            [returned]: pgTable(returned, { id: text("id").primaryKey() }),
+          }),
+        ],
+      });
+
+    // The control: a table the hook genuinely introduces is still the app's.
+    const introduced = await build("app_extra");
+    expect(introduced.owners.get("app_extra")).toEqual({ kind: "app" });
+    expect(introduced.specs.map(spec => spec.name)).toContain("app_extra");
+
+    let caught: unknown;
+    try {
+      await build("legacy_orders");
+    } catch (error) {
+      caught = error;
+    }
+    expect(NextlyError.isValidation(caught)).toBe(true);
+    const errors =
+      (caught as { publicData?: { errors?: { message?: string }[] } })
+        ?.publicData?.errors ?? [];
+    expect(errors.map(error => error.message).join(" ")).toMatch(
+      /adopted table/
+    );
   });
 
   it("refuses to adopt a managed table's name", async () => {

@@ -11,6 +11,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { pgTable, text as pgText } from "drizzle-orm/pg-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runChecks } from "../../../../cli/commands/migrate-check";
@@ -306,6 +307,81 @@ describe("a table the app declares itself", () => {
       exit.mockRestore();
     }
     expect(errors).toEqual([]);
+  });
+});
+
+describe("a table an afterDrizzle hook introduces", () => {
+  // Such a table is compiled into `specs` and recorded in `owners` as the
+  // app's, and appears in no DSL declaration. The stream has to find it
+  // through the compiled ownership, or it reaches dev push and never a
+  // migration. The plugin table in the same config is the control: owned by
+  // the plugin, it must stay out of the app's stream.
+  const introducesTable = () => ({
+    app_hook_log: pgTable("app_hook_log", {
+      id: pgText("id").primaryKey(),
+      note: pgText("note"),
+    }),
+  });
+  const cfg = {
+    plugins: [plugin(false)],
+    db: { schema: { afterDrizzle: [introducesTable] } },
+  };
+
+  it("is owned by the app stream, while the plugin's table is not", async () => {
+    const tables = await compileAppStreamTables({
+      config: cfg as never,
+      dialect: "postgresql",
+      logger,
+    });
+
+    const owned = tables.owned.map(spec => spec.name);
+    expect(owned).toContain("app_hook_log");
+    expect(owned).not.toContain("fx__notes");
+  });
+
+  it("is created by the app's migration", async () => {
+    const result = await generate(
+      migrationsDir,
+      cfg,
+      "hook_table",
+      new Date("2026-09-25T10:00:00.000Z")
+    );
+
+    // A generated file at all is part of the claim: with the table left out,
+    // an app whose only schema is this hook has nothing to generate.
+    expect(result).not.toBeNull();
+    const up = (await readFile(result!.sqlPath, "utf-8")).split("-- DOWN")[0];
+    expect(up).toMatch(/CREATE TABLE "app_hook_log"/);
+    expect(up).not.toMatch(/CREATE TABLE "fx__notes"/);
+  });
+
+  it("is reported as pending by migrate:check before a migration creates it", async () => {
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    const errors: string[] = [];
+    try {
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: { tables: [] },
+        appStream: await compileAppStreamTables({
+          config: cfg as never,
+          dialect: "postgresql",
+          logger,
+        }),
+        logger: {
+          error: (m: string) => errors.push(m),
+          success: () => {},
+          info: () => {},
+          warn: () => {},
+          debug: () => {},
+        } as never,
+      });
+    } finally {
+      exit.mockRestore();
+    }
+    expect(errors.join("\n")).toMatch(/SCHEMA_DRIFT/);
+    expect(errors.join("\n")).toContain("app_hook_log");
   });
 });
 

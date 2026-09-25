@@ -224,7 +224,10 @@ export async function runAfterDrizzle(args: {
   tables: Record<string, unknown>;
   hooks: readonly DrizzleSchemaHook[];
   owners: ReadonlyMap<string, SchemaOwner>;
-  /** Core and entity table names, which a hook may not touch. */
+  /**
+   * Core, entity and adopted table names, which a hook may not touch: the
+   * first two Nextly maintains, and an adopted one nothing here maintains.
+   */
   protectedTables: ReadonlySet<string>;
 }): Promise<Record<string, unknown>> {
   if (args.hooks.length === 0) return args.tables;
@@ -262,8 +265,8 @@ export async function runAfterDrizzle(args: {
     if (args.protectedTables.has(name)) {
       refuse(
         name,
-        "a change to a core or entity table",
-        "Those are maintained by Nextly; use contributes.extend for entity fields."
+        "a change to a core, entity or adopted table",
+        "Nextly maintains core and entity tables (use contributes.extend for entity fields), and an adopted table is never migrated at all."
       );
     }
     const owner = args.owners.get(name);

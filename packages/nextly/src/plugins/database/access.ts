@@ -90,13 +90,22 @@ function denial(
  * The message names the reason rather than merely refusing, because the two
  * fixes are different: a missing `dependsOn` entry is a one-line manifest
  * change, and a core table is a redirection to `ctx.services`.
+ *
+ * `via` says how the table was reached when it was not named directly — a
+ * relation followed from another table — and is logged beside the reason, so
+ * a refusal raised deep inside a relational query names the edge that led
+ * there rather than only a table the caller never wrote down. It cannot
+ * change the decision: the reason is computed before it is merged in.
  */
 export function assertTableAccess(
   tableName: string,
-  rules: TableAccessRules
+  rules: TableAccessRules,
+  via?: Record<string, string>
 ): void {
   const refusal = denial(tableName, rules);
-  if (refusal) throw NextlyError.forbidden({ logContext: refusal });
+  if (refusal) {
+    throw NextlyError.forbidden({ logContext: { ...via, ...refusal } });
+  }
 }
 
 /** The same rule, answered rather than thrown. */

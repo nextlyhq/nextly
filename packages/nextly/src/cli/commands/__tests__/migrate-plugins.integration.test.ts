@@ -566,18 +566,8 @@ describe("ownership within and after one migrate run (sqlite)", () => {
         up: [...built.dialects.sqlite.up, ...extraUp],
       },
     };
-    return {
-      ...built,
-      dialects,
-      checksum: migrationChecksum(dialects, {
-        snapshot: built.snapshot,
-        before: built.before,
-        ...(built.contributed ? { contributed: built.contributed } : {}),
-        ...(built.contributedBefore
-          ? { contributedBefore: built.contributedBefore }
-          : {}),
-      }),
-    };
+    const content = { ...built, dialects };
+    return { ...content, checksum: migrationChecksum(content) };
   }
 
   it("refuses a later module dropping a table an earlier one created in the same run", async () => {

@@ -205,7 +205,8 @@ import {
   isRelationshipField,
   normalizeNestedRelationships,
   normalizeUploadFields,
-  getTableName,
+  collectionFields,
+  collectionTableName,
   generateSlug,
 } from "./collection-utils";
 
@@ -589,6 +590,38 @@ export class CollectionMutationService extends BaseService {
   private readonly versionCapture = new VersionCaptureService();
 
   /**
+   * What every hook-running operation derives from its collection record and
+   * request before its first hook: its field definitions, the stored hooks,
+   * the physical table (which honours `dbName`), a context shared by all of
+   * this request's hooks, and the caller's request facts — resolved once, so
+   * every hook phase is told the same thing and none re-reads a header.
+   */
+  private operationSetup(
+    collection: unknown,
+    params: {
+      collectionName: string;
+      context?: Record<string, unknown>;
+      request?: Parameters<typeof resolveRequestFacts>[0];
+    }
+  ): {
+    fields: FieldDefinition[];
+    storedHooks: ReturnType<CollectionHookService["getStoredHooks"]>;
+    tableName: string;
+    sharedContext: Record<string, unknown>;
+    requestFacts: ReturnType<typeof resolveRequestFacts>;
+  } {
+    return {
+      fields: collectionFields(collection),
+      storedHooks: this.hookService.getStoredHooks(
+        collection as Record<string, unknown>
+      ),
+      tableName: collectionTableName(collection, params.collectionName),
+      sharedContext: { ...params.context },
+      requestFacts: resolveRequestFacts(params.request),
+    };
+  }
+
+  /**
    * Emit the document-level status events for one transition (post-commit).
    *
    * Fires the general `statusTransition` event (the seam workflows/item 9 build
@@ -792,10 +825,16 @@ export class CollectionMutationService extends BaseService {
   private redactSnapshotRow(
     row: Record<string, unknown>,
     fields: FieldDefinition[],
-    collectionName: string
+    /**
+     * The physical table the row was written to, as the write resolved it.
+     * Taken rather than rebuilt from the slug, because contributed hidden
+     * columns are keyed by the physical name and a `dbName` collection's
+     * differs from `dc_<slug>`.
+     */
+    tableName: string
   ): void {
     stripPasswordFieldValues(row, fields);
-    stripServerOnlyColumns(row, getTableName(collectionName));
+    stripServerOnlyColumns(row, tableName);
   }
 
   private readShapeEventDocument(
@@ -1213,7 +1252,7 @@ export class CollectionMutationService extends BaseService {
     }
 
     const parentRow = this.deserializeJsonFieldsForSnapshot(merged, fields);
-    this.redactSnapshotRow(parentRow, fields, collectionName);
+    this.redactSnapshotRow(parentRow, fields, tableName);
 
     const { components, manyToMany } = await this.buildFullSnapshotRelations(
       tx,
@@ -1975,7 +2014,7 @@ export class CollectionMutationService extends BaseService {
     const collection = await this.collectionService.getCollection(
       params.collectionName
     );
-    const tableName = this.resolveTableName(collection, params.collectionName);
+    const tableName = collectionTableName(collection, params.collectionName);
     await this.adapter.transaction(async tx => {
       // Serialize with concurrent draft-save upserts, which lock this same parent
       // row before writing the sidecar.
@@ -2667,7 +2706,13 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       routeAuthorized?: boolean;
     },
-    slug: string
+    slug: string,
+    /**
+     * The physical table the entry was written to. Separate from `slug`
+     * because a `dbName` collection's table is not `dc_<slug>`, and the
+     * hidden columns contributed to it are keyed by the physical name.
+     */
+    tableName: string
   ): Promise<void> {
     // Deserialize JSON-stored containers (group/repeater/json/chips/hasMany)
     // before redaction so the read-access walker descends into them — SQLite
@@ -2692,7 +2737,7 @@ export class CollectionMutationService extends BaseService {
     // Strip the system owner column so a mutation response (e.g. an admin or
     // role-based updater) does not echo the row creator's user id. Owner-only
     // access reads it from SQL, never from the returned row.
-    stripServerOnlyColumns(entry, getTableName(slug));
+    stripServerOnlyColumns(entry, tableName);
     await applyFieldReadAccess({
       kind: "collection",
       slug,
@@ -2741,16 +2786,8 @@ export class CollectionMutationService extends BaseService {
       storedHooks: this.hookService.getStoredHooks(
         collection as Record<string, unknown>
       ),
-      tableName: this.resolveTableName(collection, collectionName),
+      tableName: collectionTableName(collection, collectionName),
     };
-  }
-
-  /** Resolve the physical table for a collection, honoring `dbName` overrides. */
-  private resolveTableName(collection: unknown, slug: string): string {
-    return (
-      ((collection as Record<string, unknown>)?.tableName as string) ||
-      getTableName(slug)
-    );
   }
 
   /**
@@ -3091,28 +3128,8 @@ export class CollectionMutationService extends BaseService {
       const collection = await this.collectionService.getCollection(
         params.collectionName
       );
-      const fields =
-        ((
-          (collection as Record<string, unknown>).schemaDefinition as
-            | Record<string, unknown>
-            | undefined
-        )?.fields as FieldDefinition[]) ||
-        ((collection as Record<string, unknown>).fields as FieldDefinition[]) ||
-        [];
-      const storedHooks = this.hookService.getStoredHooks(
-        collection as Record<string, unknown>
-      );
-
-      const tableName = this.resolveTableName(
-        collection,
-        params.collectionName
-      );
-
-      // Shared context between all hooks in this request
-      const sharedContext: Record<string, unknown> = { ...params.context };
-      // Resolved once for the whole operation, so every hook phase is told the
-      // same thing about the caller and none of them re-reads a header.
-      const requestFacts = resolveRequestFacts(params.request);
+      const { fields, storedHooks, tableName, sharedContext, requestFacts } =
+        this.operationSetup(collection, params);
 
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments or throw to abort
@@ -3650,7 +3667,7 @@ export class CollectionMutationService extends BaseService {
             fields
           )
         );
-        this.redactSnapshotRow(snapshotParent, fields, params.collectionName);
+        this.redactSnapshotRow(snapshotParent, fields, tableName);
         // Components + m2m are read from the transaction: the write above just
         // persisted them, and an empty relationship reads as [] — so the
         // document is complete and read-shaped with no in-memory overlay. These
@@ -3937,7 +3954,8 @@ export class CollectionMutationService extends BaseService {
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
         },
-        params.collectionName
+        params.collectionName,
+        tableName
       );
 
       return {
@@ -4304,7 +4322,7 @@ export class CollectionMutationService extends BaseService {
       // custom tableName/dbName override, matching every other mutation;
       // getTableName would hardcode the default dc_<slug> and target the wrong
       // table for a renamed collection.
-      const tableName = this.resolveTableName(
+      const tableName = collectionTableName(
         publishCollection,
         params.collectionName
       );
@@ -4556,7 +4574,7 @@ export class CollectionMutationService extends BaseService {
                   fields
                 )
               );
-              this.redactSnapshotRow(parentRow, fields, params.collectionName);
+              this.redactSnapshotRow(parentRow, fields, tableName);
               const {
                 components: snapshotComponents,
                 manyToMany: snapshotM2M,
@@ -4611,7 +4629,7 @@ export class CollectionMutationService extends BaseService {
               status: direction.nextStatus,
             },
             fields,
-            getTableName(params.collectionName)
+            tableName
           );
           // Overlay the committed publish instant AFTER camelCasing: the source
           // rows carry the pre-publish `updatedAt` (the pooled/pre-read excludes
@@ -4627,7 +4645,7 @@ export class CollectionMutationService extends BaseService {
           const previousDocument = this.readShapeEventDocument(
             preImageRow as Record<string, unknown>,
             fields,
-            getTableName(params.collectionName)
+            tableName
           );
           const publishEventFields = await this.webhookFieldTreeIfRecording(
             params.collectionName,
@@ -5754,14 +5772,7 @@ export class CollectionMutationService extends BaseService {
       const collection = await this.collectionService.getCollection(
         params.collectionName
       );
-      const fields =
-        ((
-          (collection as Record<string, unknown>).schemaDefinition as
-            | Record<string, unknown>
-            | undefined
-        )?.fields as FieldDefinition[]) ||
-        ((collection as Record<string, unknown>).fields as FieldDefinition[]) ||
-        [];
+      const fields = collectionFields(collection);
       const storedHooks = this.hookService.getStoredHooks(
         collection as Record<string, unknown>
       );
@@ -5798,10 +5809,7 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      const tableName = this.resolveTableName(
-        collection,
-        params.collectionName
-      );
+      const tableName = collectionTableName(collection, params.collectionName);
 
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = { ...params.context };
@@ -6574,11 +6582,7 @@ export class CollectionMutationService extends BaseService {
               },
               fields
             );
-            this.redactSnapshotRow(
-              previousParent,
-              fields,
-              params.collectionName
-            );
+            this.redactSnapshotRow(previousParent, fields, tableName);
             const { components: previousComponents, manyToMany: previousM2M } =
               await this.buildFullSnapshotRelations(
                 tx,
@@ -7317,10 +7321,7 @@ export class CollectionMutationService extends BaseService {
               );
               stripPasswordFieldValues(parentRow, fields);
               // Strip the system owner column (created_by) — see create path.
-              stripServerOnlyColumns(
-                parentRow,
-                getTableName(params.collectionName)
-              );
+              stripServerOnlyColumns(parentRow, tableName);
               const {
                 components: snapshotComponents,
                 manyToMany: snapshotM2M,
@@ -7996,7 +7997,8 @@ export class CollectionMutationService extends BaseService {
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
         },
-        params.collectionName
+        params.collectionName,
+        tableName
       );
 
       // Signal that this save stored a pending working draft rather than writing
@@ -8130,20 +8132,8 @@ export class CollectionMutationService extends BaseService {
       const collection = await this.collectionService.getCollection(
         params.collectionName
       );
-      const storedHooks = this.hookService.getStoredHooks(
-        collection as Record<string, unknown>
-      );
-
-      const tableName = this.resolveTableName(
-        collection,
-        params.collectionName
-      );
-
-      // Shared context between all hooks in this request
-      const sharedContext: Record<string, unknown> = { ...params.context };
-      // Resolved once for the whole operation, so every hook phase is told the
-      // same thing about the caller and none of them re-reads a header.
-      const requestFacts = resolveRequestFacts(params.request);
+      const { storedHooks, tableName, sharedContext, requestFacts } =
+        this.operationSetup(collection, params);
 
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments (id) or throw to abort
@@ -8958,7 +8948,8 @@ export class CollectionMutationService extends BaseService {
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
         },
-        params.collectionName
+        params.collectionName,
+        tableName
       );
 
       return {
@@ -9963,7 +9954,8 @@ export class CollectionMutationService extends BaseService {
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
         },
-        params.collectionName
+        params.collectionName,
+        tableName
       );
 
       return {
@@ -10072,10 +10064,7 @@ export class CollectionMutationService extends BaseService {
         tx.getDrizzle()
       );
 
-      const tableName = this.resolveTableName(
-        collection,
-        params.collectionName
-      );
+      const tableName = collectionTableName(collection, params.collectionName);
 
       // No owner predicate: delete access is decided for the collection rather
       // than per row, so the fetch is by id alone.

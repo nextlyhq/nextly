@@ -188,7 +188,7 @@ describe("refused: tables that are not the app's to shape", () => {
   it("refuses touching a core table", async () => {
     expect(
       await refusal(() => ({ users: pgTable("users", { id: pgText("id") }) }))
-    ).toMatch(/core or entity table/);
+    ).toMatch(/core, entity or adopted table/);
   });
 
   it("refuses touching an entity table", async () => {
@@ -196,7 +196,7 @@ describe("refused: tables that are not the app's to shape", () => {
       await refusal(() => ({
         dc_posts: pgTable("dc_posts", { id: pgText("id") }),
       }))
-    ).toMatch(/core or entity table/);
+    ).toMatch(/core, entity or adopted table/);
   });
 
   it("refuses touching a plugin's table, naming the plugin", async () => {

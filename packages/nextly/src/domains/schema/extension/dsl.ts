@@ -15,7 +15,10 @@
  * @since 1.0.0
  */
 import { NextlyError } from "../../../errors/nextly-error";
-import { toSnakeCase } from "../services/field-column-descriptor";
+import {
+  ENUM_STORAGE_LENGTH,
+  toSnakeCase,
+} from "../services/field-column-descriptor";
 
 import type {
   DeclaredCheck,
@@ -379,9 +382,9 @@ export const col = {
    * One of a fixed set of strings.
    *
    * `InferRow` gives the literal union, so a value outside the set is a
-   * compile error rather than a row the database refuses. The storage differs
-   * by dialect — a native type on PostgreSQL, `ENUM(...)` on MySQL, text with
-   * a CHECK on SQLite — and the declaration is the same everywhere.
+   * compile error rather than a row the database refuses. The storage is a
+   * text column with a CHECK on every dialect — `varchar` on MySQL, so it can
+   * be indexed — and the declaration is the same everywhere.
    */
   enum<const TValues extends readonly string[]>(
     values: TValues,
@@ -392,6 +395,15 @@ export const col = {
     }
     if (new Set(values).size !== values.length) {
       invalid("enum.values", "An enum may not list a value twice.");
+    }
+    // MySQL stores an enum in a varchar of this width, so a longer value
+    // would pass the CHECK and still be refused by the column — refused here
+    // instead, at declaration, on every dialect alike.
+    if (values.some(value => value.length > ENUM_STORAGE_LENGTH)) {
+      invalid(
+        "enum.values",
+        `An enum value may be at most ${String(ENUM_STORAGE_LENGTH)} characters.`
+      );
     }
     return {
       kind: "enum",
@@ -496,9 +508,17 @@ export interface TableRelationInput {
   name: string;
   kind: "one" | "many";
   targetTable: string;
-  /** This table column key, for a one-edge. */
+  /**
+   * This table's column. Required for a one-edge. For a many-edge it is the
+   * column the target's `toColumn` holds, and defaults to this table's
+   * primary key.
+   */
   fromColumn?: string;
-  /** The target column key, for a many-edge. */
+  /**
+   * The target's column. For a one-edge, the column `fromColumn` refers to
+   * (the target's `id` when omitted). Required for a many-edge: it is the
+   * target's column that points back at this table.
+   */
   toColumn?: string;
 }
 
@@ -696,14 +716,35 @@ function resolveForeignKeys(
   });
 }
 
-/** Resolve the author's relation edges: keys snake-cased against THIS table's columns, targets kept as final table names. */
+/**
+ * Resolve the author's relation edges: keys snake-cased against THIS table's
+ * columns, targets kept as final table names.
+ *
+ * Each edge leaves here with both ends of its join known, because that is
+ * what the registry builds it from. A one-edge names its own column and
+ * joins it to the target's `toColumn` (the target's `id` by default). A
+ * many-edge is the reverse — the TARGET holds the column that points back —
+ * so it must name that `toColumn`, and its own end is the column the target
+ * points at: `fromColumn` when given, else this table's primary key, filled
+ * in here so no later stage has to guess it. A many-edge missing either end
+ * used to compile to an edge with an empty source column, which the registry
+ * could only refuse when the relations were assembled — for the whole schema,
+ * far from the declaration.
+ */
 function resolveRelations(
   tableName: string,
+  columns: readonly ResolvedColumn[],
   byName: ReadonlyMap<string, string>,
   inputs: readonly TableRelationInput[]
 ): TableRelationInput[] {
   return inputs.map((input, position) => {
     const path = `${tableName}.relations[${String(position)}]`;
+    if (input.kind === "many" && input.toColumn === undefined) {
+      invalid(
+        path,
+        "A many-edge must name its toColumn: the target's column that points back at this table."
+      );
+    }
     if (input.fromColumn !== undefined) {
       const sqlName = toSnakeCase(input.fromColumn);
       if (!byName.has(sqlName)) {
@@ -717,7 +758,14 @@ function resolveRelations(
     if (input.kind === "one") {
       invalid(path, "A one-edge must name its fromColumn.");
     }
-    return input;
+    const primaryKey = columns.find(column => column.primaryKey === true);
+    if (primaryKey === undefined) {
+      invalid(
+        path,
+        "A many-edge without a fromColumn joins on this table's primary key, and the table declares none. Name the fromColumn the target's toColumn refers to."
+      );
+    }
+    return { ...input, fromColumn: primaryKey.name };
   });
 }
 
@@ -791,6 +839,7 @@ export function defineTable<
   const checks = resolveChecks(name, opts?.checks ?? []);
   const declaredRelations = resolveRelations(
     name,
+    resolved,
     byName,
     opts?.relations ?? []
   );

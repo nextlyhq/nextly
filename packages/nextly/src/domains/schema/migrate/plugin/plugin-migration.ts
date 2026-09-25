@@ -9,9 +9,10 @@
  *
  * ## The checksum, and why there are two of them
  *
- * The module carries a checksum over its own SQL, which catches a module
- * edited after generation — the author's mistake. The LEDGER separately stores
- * the sha256 of what actually ran, which catches a module changed after it was
+ * The module carries a checksum over its whole content — name, schema
+ * version, SQL and the snapshot sides the apply reads — which catches a
+ * module edited after generation, the author's mistake. The LEDGER separately
+ * stores the sha256 of what actually ran, which catches a module changed after it was
  * applied — everyone else's problem, because the database no longer matches
  * the file that claims to describe it.
  *
@@ -44,7 +45,11 @@ export interface PluginMigration {
   name: string;
   /** The plugin's declared schema version after this migration. */
   schemaVersion: number;
-  /** sha256 over the canonical form of `dialects`. */
+  /**
+   * sha256 over the canonical form of everything else in the module — its
+   * name, schema version, SQL and every snapshot side. See
+   * `canonicalMigrationForm`.
+   */
   checksum: string;
   dialects: Record<SupportedDialect, DialectStatements>;
   /** The owner's tables AFTER this migration, per dialect. */
@@ -90,105 +95,80 @@ export type ContributionsByDialect = Partial<
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
+/** Everything a module carries except the checksum sealed over it. */
+export type MigrationContent = Omit<PluginMigration, "checksum">;
+
 /**
  * The canonical form a checksum is taken over.
  *
  * Keys are emitted in a fixed order rather than whatever `JSON.stringify`
  * happens to produce, so a module regenerated on a different day hashes the
- * same when its SQL is the same. A checksum that moves without the SQL moving
- * would refuse a module nobody touched.
+ * same when its content is the same. A checksum that moves without the content
+ * moving would refuse a module nobody touched.
+ *
+ * Every field the runner acts on is part of the form, unconditionally:
+ *
+ * - `name` is the module's ledger key (`plugin:<plugin>/<name>`) and decides
+ *   its order. Renamed after sealing, an applied module would no longer be
+ *   found in the ledger and would be judged afresh, and a pending one could
+ *   move ahead of a module it depends on.
+ * - `schemaVersion` is recorded on the owner rows and read by the version
+ *   gate, so an edited one claims a schema the SQL never produced.
+ * - The snapshot sides are handed to the reconcile, which adopts a live
+ *   schema that already matches the target and records it as applied WITHOUT
+ *   running the SQL — so an unverified snapshot is as dangerous as
+ *   unverified SQL.
+ *
+ * There is one form and no narrower alternative: a module whose checksum
+ * omits any of these fails verification like any other edited module.
  */
-export function canonicalMigrationForm(
-  dialects: Record<SupportedDialect, DialectStatements>,
-  /**
-   * The snapshots the APPLY reads, when the caller has them.
-   *
-   * Optional so existing modules keep verifying: a module generated before
-   * these were covered hashes the same as it always did, and only modules
-   * generated from now on carry them.
-   */
-  snapshots?: MigrationSnapshots
-): string {
+export function canonicalMigrationForm(content: MigrationContent): string {
+  const identity = [content.name, content.schemaVersion];
   const base = DIALECTS.map(dialect => [
     dialect,
-    dialects[dialect]?.up ?? [],
-    dialects[dialect]?.down ?? [],
+    content.dialects[dialect]?.up ?? [],
+    content.dialects[dialect]?.down ?? [],
   ]);
-  if (snapshots === undefined) return JSON.stringify(base);
   const sides = DIALECTS.map(dialect => [
     dialect,
-    snapshots.snapshot?.[dialect]?.tables ?? [],
-    snapshots.before?.[dialect]?.tables ?? [],
-    snapshots.contributed?.[dialect]?.tables ?? [],
-    snapshots.contributedBefore?.[dialect]?.tables ?? [],
+    content.snapshot[dialect]?.tables ?? [],
+    content.before[dialect]?.tables ?? [],
+    content.contributed?.[dialect]?.tables ?? [],
+    content.contributedBefore?.[dialect]?.tables ?? [],
   ]);
   // Appended only when present, so a module without contributions hashes
-  // exactly as it did before they were recorded — and one with them cannot
-  // have them edited without its checksum noticing, since they decide what
-  // the next module emits.
+  // exactly as a module generated before they were recorded — and one with
+  // them cannot have them edited without its checksum noticing, since they
+  // decide what the next module emits.
   return JSON.stringify(
-    snapshots.contributions === undefined
-      ? [base, sides]
+    content.contributions === undefined
+      ? [identity, base, sides]
       : [
+          identity,
           base,
           sides,
           DIALECTS.map(dialect => [
             dialect,
             Object.entries(
-              normalizeContributions(snapshots.contributions?.[dialect] ?? {})
+              normalizeContributions(content.contributions?.[dialect] ?? {})
             ),
           ]),
         ]
   );
 }
 
-/** The snapshot sides a module carries for the reconcile and for ownership. */
-export interface MigrationSnapshots {
-  snapshot?: Record<SupportedDialect, PluginMigrationSnapshot>;
-  before?: Record<SupportedDialect, PluginMigrationSnapshot>;
-  contributed?: Record<SupportedDialect, PluginMigrationSnapshot>;
-  contributedBefore?: Record<SupportedDialect, PluginMigrationSnapshot>;
-  contributions?: ContributionsByDialect;
-}
-
-/** The checksum a generated module carries. */
-export function migrationChecksum(
-  dialects: Record<SupportedDialect, DialectStatements>,
-  snapshots?: MigrationSnapshots
-): string {
-  return createHash("sha256")
-    .update(canonicalMigrationForm(dialects, snapshots))
-    .digest("hex");
-}
-
 /**
- * A module's checksum as the module itself claims it should be computed.
+ * The checksum a module carries, sealed over its whole content.
  *
- * Modules written before the snapshots were covered carry a checksum over the
- * SQL alone, so verifying them with the snapshots included would refuse every
- * one. Recomputing BOTH ways and accepting either keeps them valid while
- * making a newly generated module's snapshots load-bearing: the apply reads
- * `snapshot`, `before` and the contributed sides to decide whether a module is
- * already applied, and an edited target matching the live schema was being
- * recorded as adopted without its SQL ever running.
+ * Takes the module itself rather than a hand-picked subset of its fields, so
+ * the generator, a hand-written module and the runner's verification all hash
+ * the same thing and none can leave a field out. A `checksum` already on the
+ * object is ignored: the canonical form reads only the fields it names.
  */
-function checksumOf(migration: PluginMigration): string {
-  const withSnapshots = migrationChecksum(migration.dialects, {
-    snapshot: migration.snapshot,
-    before: migration.before,
-    ...(migration.contributed ? { contributed: migration.contributed } : {}),
-    ...(migration.contributedBefore
-      ? { contributedBefore: migration.contributedBefore }
-      : {}),
-    ...(migration.contributions
-      ? { contributions: migration.contributions }
-      : {}),
-  });
-  if (withSnapshots === migration.checksum) return withSnapshots;
-  // Fall back to the legacy form so an older module still verifies; if it
-  // matches neither, the caller reports the mismatch as it always did.
-  const sqlOnly = migrationChecksum(migration.dialects);
-  return sqlOnly === migration.checksum ? sqlOnly : withSnapshots;
+export function migrationChecksum(content: MigrationContent): string {
+  return createHash("sha256")
+    .update(canonicalMigrationForm(content))
+    .digest("hex");
 }
 
 /** The ledger filename a plugin's migration is recorded under. */
@@ -203,7 +183,7 @@ export function qualifiedFilename(
 }
 
 /**
- * Refuse a module whose SQL no longer matches its checksum.
+ * Refuse a module whose content no longer matches its checksum.
  *
  * An edited module is refused rather than re-hashed. Re-hashing would accept
  * whatever is on disk, which is precisely the state this exists to detect:
@@ -213,7 +193,7 @@ export function assertModuleIntact(
   pluginName: string,
   migration: PluginMigration
 ): void {
-  const actual = checksumOf(migration);
+  const actual = migrationChecksum(migration);
   if (actual === migration.checksum) return;
 
   throw new NextlyError({
@@ -243,7 +223,7 @@ export function assertAppliedUnchanged(
   recordedSha256: string | null
 ): void {
   if (recordedSha256 === null) return;
-  const actual = checksumOf(migration);
+  const actual = migrationChecksum(migration);
   if (actual === recordedSha256) return;
 
   throw new NextlyError({

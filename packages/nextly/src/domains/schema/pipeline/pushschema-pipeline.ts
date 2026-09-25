@@ -276,6 +276,65 @@ function rebuildApprovedBy(op: Operation, dialect: SupportedDialect): string[] {
   }
 }
 
+/**
+ * The SQLite tables whose checks or foreign keys this apply changes. SQLite
+ * changes either only by rebuilding the table, which the kit does from the
+ * desired definition.
+ */
+function sqliteConstraintRebuilds(
+  ops: readonly Operation[],
+  dialect: SupportedDialect
+): Set<string> {
+  if (dialect !== "sqlite") return new Set();
+  return new Set(
+    ops.filter(isConstraintOp).map(op => op.tableName.toLowerCase())
+  );
+}
+
+/**
+ * The operations the pre-resolution phase runs, less the column drops SQLite
+ * must leave to a table rebuild.
+ *
+ * SQLite refuses `ALTER TABLE ... DROP COLUMN` on a column a foreign key or a
+ * check names. When this apply changes a table's constraints the kit rebuilds
+ * that table from the desired definition — which no longer has the column —
+ * so the drop happens there, approved by `rebuildApprovedBy`, rather than
+ * failing up front. Only those tables: a column change alone keeps its drop
+ * here, where the kit never sees it.
+ */
+function withoutDropsLeftToRebuild(
+  ops: Operation[],
+  dialect: SupportedDialect
+): Operation[] {
+  const rebuilt = sqliteConstraintRebuilds(ops, dialect);
+  if (rebuilt.size === 0) return ops;
+  return ops.filter(
+    op =>
+      !(op.type === "drop_column" && rebuilt.has(op.tableName.toLowerCase()))
+  );
+}
+
+/** Whether an operation adds, drops or changes a check or a foreign key. */
+function isConstraintOp(op: Operation): op is Extract<
+  Operation,
+  {
+    type:
+      | "add_check"
+      | "drop_check"
+      | "add_foreign_key"
+      | "drop_foreign_key"
+      | "change_foreign_key_action";
+  }
+> {
+  return (
+    op.type === "add_check" ||
+    op.type === "drop_check" ||
+    op.type === "add_foreign_key" ||
+    op.type === "drop_foreign_key" ||
+    op.type === "change_foreign_key_action"
+  );
+}
+
 // Gated debug log for which route (`useFastPath`) the apply took. Operators
 // set DEBUG_SCHEMA=1 to enable both this and drizzle-kit's chatter inside
 // withCapturedStdout. The non-additive enumeration on the fallback path
@@ -338,7 +397,8 @@ export interface PushSchemaPipelineTestHooks {
   _executePreResolutionOverride?: (
     txOrDb: unknown,
     ops: Operation[],
-    dialect: SupportedDialect
+    dialect: SupportedDialect,
+    leadingStatements?: readonly string[]
   ) => Promise<number>;
   // Test seam: inject a pre-built resolvedOps array to bypass the diff +
   // resolution pipeline. Lets unit tests exercise the scope-reduction and
@@ -1010,12 +1070,45 @@ export class PushSchemaPipeline {
       const isSqlite = dialect === "sqlite";
 
       const runApply = async (tx: unknown): Promise<number> => {
-        // Phase C: pre-resolution executor runs renames + drops.
+        // Route: fast in-memory DDL emission for the common Builder op set
+        // on PostgreSQL (skips drizzle-kit's ~10s catalog re-introspection),
+        // or fall back to drizzle-kit's pushSchema for anything outside
+        // that set. Decided here, from the resolved operations alone, because
+        // the kit route's constraint drops run ahead of every other statement.
+        const useFastPath = canEmitWithoutDrizzleKit(resolvedOps, dialect);
+        logApplyRoute(useFastPath, resolvedOps);
+        // The kit route's checks and foreign keys, which the kit never
+        // applies on PostgreSQL and MySQL. The fast path plans none — its op
+        // set excludes them, and a new table's own come from the emitter.
+        const constraints = useFastPath
+          ? { before: [], after: [] }
+          : kitRouteConstraintStatements(
+              resolvedOps,
+              liveSnapshot.tables,
+              dialect
+            );
+        // Resolved BEFORE anything below writes. The import carries MySQL's
+        // `databaseName` precondition, and a refusal after the first DDL would
+        // leave that DDL behind on a dialect that commits it as it runs. The
+        // fast path never needs the kit, so a kit-free apply still never
+        // evaluates the precondition at all.
+        const kit = useFastPath ? undefined : await getKit();
+
+        // Phase C: pre-resolution executor runs renames + drops, led by the
+        // kit route's check and foreign-key drops: a constraint still in
+        // place blocks dropping, or on MySQL retyping, a column it names. The
+        // executor runs them after its own refusals, so a refused apply has
+        // changed nothing.
         const preResExecutor =
           this.testHooks._executePreResolutionOverride ??
           executePreResolutionOps;
         try {
-          await preResExecutor(tx, resolvedOps, dialect);
+          await preResExecutor(
+            tx,
+            withoutDropsLeftToRebuild(resolvedOps, dialect),
+            dialect,
+            constraints.before
+          );
         } catch (err) {
           // A refusal is not a failed statement. The pre-resolution phase can decline to start —
           // when the stored values would not survive a conversion, for instance — and that answer
@@ -1098,14 +1191,9 @@ export class PushSchemaPipeline {
         //
         const desiredTableNames = Object.keys(effectiveDrizzleSchema);
 
-        // Route: fast in-memory DDL emission for the common Builder op set
-        // on PostgreSQL (skips drizzle-kit's ~10s catalog re-introspection),
-        // or fall back to drizzle-kit's pushSchema for anything outside
-        // that set. Stations 1-7 (diff, rename detect, classifier, prompt,
-        // pre-resolution) are upstream and unaffected either way;
+        // Stations 1-7 (diff, rename detect, classifier, prompt,
+        // pre-resolution) are upstream of the route and unaffected by it;
         // filterUnsafeStatements still runs on the result.
-        const useFastPath = canEmitWithoutDrizzleKit(resolvedOps, dialect);
-        logApplyRoute(useFastPath, resolvedOps);
 
         let emittedStatements: string[];
         let pushResult: PushSchemaPassResult | undefined;
@@ -1113,17 +1201,9 @@ export class PushSchemaPipeline {
         // add_table pre-creation below) — counted into the journal's
         // executed total alongside the post-filter batch.
         let preCreatedStatements = 0;
-        if (useFastPath) {
+        if (kit === undefined) {
           emittedStatements = emitDdl(resolvedOps, dialect);
         } else {
-          // Resolved BEFORE the pre-creation below writes anything. The
-          // import carries MySQL's `databaseName` precondition, and running
-          // it after the CREATEs would leave those tables behind on a
-          // dialect whose DDL auto-commits when the precondition then
-          // fails. The fast path never reaches this branch, so a kit-free
-          // apply still never evaluates the precondition at all.
-          const kit = await getKit();
-
           // v1 kit crash guard (SQLite/MySQL only — PG scopes the kit's
           // introspection with a tables filter): drizzle-kit v1's differ
           // sees the WHOLE live DB on these dialects, so any live table
@@ -1148,10 +1228,22 @@ export class PushSchemaPipeline {
           // apply without these statements in `statements_executed`, which
           // counts only a successful pass.
           if (dialect !== "postgresql") {
-            const addTableOps = resolvedOps.filter(
-              op => op.type === "add_table"
+            // A SQLite table rebuilt for a constraint change keeps its dropped
+            // columns for the kit to remove, so its added columns are created
+            // here too: a table the kit sees both lose and gain a column sends
+            // its rename resolver down the same crash as a lost-and-gained
+            // table.
+            const rebuiltForConstraints = sqliteConstraintRebuilds(
+              resolvedOps,
+              dialect
             );
-            if (addTableOps.length > 0) {
+            const preCreateOps = resolvedOps.filter(
+              op =>
+                op.type === "add_table" ||
+                (op.type === "add_column" &&
+                  rebuiltForConstraints.has(op.tableName.toLowerCase()))
+            );
+            if (preCreateOps.length > 0) {
               // This branch runs for tables the routing decision may have
               // REJECTED, so it cannot emit them verbatim: a MySQL UNIQUE
               // index over a TEXT/BLOB column is exactly what sent such an
@@ -1160,7 +1252,7 @@ export class PushSchemaPipeline {
               // still pre-created (that is the crash guard); drizzle-kit adds
               // the stripped index from its own introspection.
               const createStatements = emitDdl(
-                addTableOps.map(op => withoutUnemittableIndexes(op, dialect)),
+                preCreateOps.map(op => withoutUnemittableIndexes(op, dialect)),
                 dialect
               );
               try {
@@ -1378,20 +1470,8 @@ export class PushSchemaPipeline {
           safe,
           useFastPath ? [] : resolvedOps
         );
-        // The kit route's checks and foreign keys, which the kit never
-        // applies on PostgreSQL and MySQL. The fast path plans none — its op
-        // set excludes them, and a new table's own come from the emitter.
-        const constraints = useFastPath
-          ? { before: [], after: [] }
-          : kitRouteConstraintStatements(
-              resolvedOps,
-              desiredSnapshot.tables,
-              dialect
-            );
-
         try {
           await this.deps.executor.executeStatements(tx, [
-            ...constraints.before,
             ...safe,
             ...restore,
             ...constraints.after,

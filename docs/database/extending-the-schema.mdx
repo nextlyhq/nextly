@@ -125,8 +125,24 @@ const linked = defineTable("linked", {
 });
 ```
 
+A `one` edge joins its `fromColumn` to the target's `toColumn` (its `id` when
+omitted). A `many` edge is the reverse — the target holds the column pointing
+back — so it names that `toColumn`, and joins it to its own `fromColumn` or,
+when that is omitted, its primary key. A `toColumn` may be written as the SQL
+column or the key, and must name a column of a table in this schema or of a
+core table; a relation to a collection or single joins its `id` and names no
+`toColumn`.
+
 Edges register with the schema registry, so `db.query.<table>.findMany({ with })`
-traverses them like any core relation.
+follows them between tables you may reach. An include and a relation filter
+in `where` obey the same rule as `db.query.<table>` itself, at every depth: the
+app reaches its own tables, and a plugin its own and those of the plugins in
+its `dependsOn`. An edge to a core table or a collection — the one
+`col.ref("users")` carries included — is declared and typed, but following it
+is refused like `db.query.users` is; read those rows through the
+[Direct API](/docs/api-reference/direct-api) (or `ctx.services` in a plugin),
+where access control, validation and hooks apply, and join on the id the
+column holds.
 
 ## Indexes on your collections
 
@@ -207,7 +223,7 @@ them because the DSL is the one path that keeps them in migrations and drift.
 | A client-supplied `id` on create | `db.allowIdOnCreate` per collection |
 | `.where()` partial index | `indexes: [{ columns, where }]` (PostgreSQL/SQLite) |
 | `relations()` | `relations` on `defineTable` + `ref()` auto-edges |
-| `pgEnum` | `col.enum([...])` — stored as text, values enforced by a CHECK on every dialect |
+| `pgEnum` | `col.enum([...])` — stored as text (`varchar(255)` on MySQL), values enforced by a CHECK on every dialect |
 | `schemaName` | not yet — `db.postgres.schema` accepts only `"public"` |
 | `generate:db-schema` | not needed — types come from the declaration |
 
@@ -279,8 +295,10 @@ defineTable("orders", {
 });
 ```
 
-The column is text and the values are enforced by a CHECK constraint, on all
-three dialects. That is a deliberate trade: a native PostgreSQL enum is a
+The column is text — `varchar(255)` on MySQL, so it can be indexed, which
+also caps each value at 255 characters on every dialect — and the values are
+enforced by a CHECK constraint, on all three dialects. That is a deliberate
+trade: a native PostgreSQL enum is a
 schema object with its own lifecycle — created before the table, altered by
 `ALTER TYPE ... ADD VALUE`, dropped after its last column — while MySQL spells
 it inline and SQLite has nothing. A CHECK is one mechanism this pipeline

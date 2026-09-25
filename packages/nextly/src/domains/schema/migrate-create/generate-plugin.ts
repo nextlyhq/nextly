@@ -27,6 +27,7 @@ import {
   orderedMigrations,
   type ContributionsByDialect,
   type DialectStatements,
+  type MigrationContent,
   type PluginMigration,
 } from "../migrate/plugin/plugin-migration";
 import { diffSnapshots } from "../pipeline/diff/diff";
@@ -209,25 +210,27 @@ export function buildPluginMigration(
   // stays byte-identical to one generated before contributions were recorded.
   const recorded =
     Object.keys(contributions).length > 0 ? { contributions } : {};
-  const module: PluginMigration = {
+  const content: MigrationContent = {
     name: `${formatTimestamp(now)}_${slugify(args.name)}`,
     schemaVersion: args.schemaVersion,
-    // Over the snapshots as well as the SQL: the apply reads them to decide
-    // whether a module is already applied, so leaving them unverified let an
-    // edited target be recorded as adopted without its SQL ever running.
-    checksum: migrationChecksum(dialects, {
-      snapshot,
-      before,
-      contributed,
-      contributedBefore,
-      ...recorded,
-    }),
     dialects,
     snapshot,
     before,
     contributed,
     contributedBefore,
     ...recorded,
+  };
+  // Sealed over the whole content — name, schema version, SQL and every
+  // snapshot side — because the runner acts on all of them: the name is the
+  // ledger key, the version is recorded on the owner rows, and the snapshots
+  // decide whether the module is adopted without its SQL running. Name and
+  // version are listed first so the emitted module reads in that order.
+  const { name, schemaVersion, ...body } = content;
+  const module: PluginMigration = {
+    name,
+    schemaVersion,
+    checksum: migrationChecksum(content),
+    ...body,
   };
   return { module, operationCounts };
 }

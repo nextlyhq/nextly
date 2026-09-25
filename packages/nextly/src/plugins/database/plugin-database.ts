@@ -19,7 +19,7 @@
  * @module plugins/database/plugin-database
  * @since 1.0.0
  */
-import type { AnyColumn, SQL } from "drizzle-orm";
+import type { AnyColumn, AnyRelations, SQL } from "drizzle-orm";
 import { eq } from "drizzle-orm";
 
 import type { SupportedDialect } from "../../database/schema-registry";
@@ -422,6 +422,306 @@ export type RelationalQueries = Record<string, RelationalQuery>;
 
 export type PluginTransaction = Omit<PluginDatabase, "transaction">;
 
+/** One table's entry in a relations config: its edges, keyed by relation name. */
+type TableRelations = AnyRelations[string];
+type RelationEdge = TableRelations["relations"][string];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * The relations config and one table's entry in it, or a refusal.
+ *
+ * Needed whenever a query names something that might be a relation, because
+ * only the config can say which table a relation reaches. A handle whose
+ * config is missing cannot be judged, so it is refused rather than let
+ * through: this is the check, and a check that passes whatever it cannot read
+ * is not one.
+ */
+function tableRelationsOf(
+  relations: AnyRelations | undefined,
+  tableKey: string
+): { all: AnyRelations; table: TableRelations } {
+  const table = relations?.[tableKey];
+  if (relations === undefined || table === undefined) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "relational query has no relations config for its table",
+        table: tableKey,
+      },
+    });
+  }
+  return { all: relations, table };
+}
+
+/**
+ * Refuse a relation whose rows this caller may not reach.
+ *
+ * Judged by the TARGET's namespace key — the same key, and the same
+ * `assertTableAccess`, the root of `ctx.db.query` is judged by — so a table a
+ * plugin cannot open directly cannot be joined in either. A many-to-many edge
+ * also reads its junction table, which is judged the same way. The junction is
+ * recorded as a table object, so its key is looked up in the config; Drizzle
+ * requires a junction to be part of the schema, and one the config does not
+ * name cannot be judged, so it is refused.
+ *
+ * The refusal is the root's refusal — the same reason, core and collection
+ * tables included, for a plugin and for the app alike — carrying the edge
+ * that led to the table: which relation, on which table, followed from
+ * `with` or from a `where` filter. A core or collection table is refused
+ * here exactly as `ctx.db.query.users` is at the root; its rows are read
+ * through `ctx.services`, and following an edge to it is not a second door.
+ */
+function assertRelationAccess(
+  relation: RelationEdge,
+  from: string,
+  followedIn: "with" | "where",
+  relations: AnyRelations,
+  rules: TableAccessRules
+): void {
+  const via = {
+    via: followedIn,
+    relation: relation.fieldName,
+    from,
+    hint:
+      `The relation "${relation.fieldName}" on "${from}" reaches "${relation.targetTableName}", ` +
+      "which this caller may not reach: another plugin's table needs a dependsOn entry, " +
+      "and a core or collection table is read through ctx.services.",
+  };
+  assertTableAccess(relation.targetTableName, rules, via);
+  const through = relation.throughTable;
+  if (through === undefined) return;
+  const throughKey = Object.entries(relations).find(
+    ([, config]) => config.table === through
+  )?.[0];
+  if (throughKey === undefined) {
+    throw NextlyError.forbidden({
+      logContext: {
+        ...via,
+        reason: "relation-junction-not-in-relations-config",
+        table: relation.targetTableName,
+      },
+    });
+  }
+  assertTableAccess(throughKey, rules, via);
+}
+
+/**
+ * The relation a query names, if the table declares one by that name.
+ *
+ * An OWN property only. The edges are a plain object, so a bare lookup
+ * resolves `toString` or `constructor` through the prototype to a function
+ * that is no relation at all, and the name would be judged as an edge with
+ * no target.
+ */
+function ownRelation(
+  table: TableRelations,
+  name: string
+): RelationEdge | undefined {
+  return Object.hasOwn(table.relations, name)
+    ? table.relations[name]
+    : undefined;
+}
+
+/**
+ * A relational-query config, checked and COPIED.
+ *
+ * The root check covers only the table the query starts from, and Drizzle
+ * follows `with` and relation filters in `where` to other tables without
+ * asking anyone. So every table the config reaches is judged here, before
+ * the query is built, at any depth.
+ *
+ * Copied rather than checked in place: Drizzle reads the config when the query
+ * EXECUTES, not when `findMany` is called, so a caller still holding the
+ * object it passed could add a forbidden `with` between the check and the
+ * run. Every container this walk reads — the config, its `with`, each filter
+ * object — is rebuilt, and the copy is what Drizzle receives, so nothing the
+ * caller holds can change what was judged. Leaves are kept by reference:
+ * column selections, orderings and column filter values name columns of a
+ * table already judged, and SQL (`RAW`, `extras`) is an escape this surface
+ * accepts everywhere, `select().where(sql)` included.
+ */
+function checkedQueryConfig(
+  config: unknown,
+  tableKey: string,
+  relations: AnyRelations | undefined,
+  rules: TableAccessRules
+): unknown {
+  // `undefined` and `true` select everything and reach no other table.
+  if (!isRecord(config)) return config;
+  const copy: Record<string, unknown> = { ...config };
+  if (copy.with !== undefined && copy.with !== null) {
+    copy.with = checkedWith(copy.with, tableKey, relations, rules);
+  }
+  if (copy.where !== undefined && copy.where !== null) {
+    copy.where = checkedWhere(copy.where, tableKey, relations, rules);
+  }
+  return copy;
+}
+
+/** The `with` of a relational query: every included relation judged, then recursed into. */
+function checkedWith(
+  joins: unknown,
+  tableKey: string,
+  relations: AnyRelations | undefined,
+  rules: TableAccessRules
+): Record<string, unknown> {
+  const copy: Record<string, unknown> = {};
+  // `Object.entries` over whatever arrived, exactly as Drizzle iterates it,
+  // so no shape of `with` reaches Drizzle carrying a key this walk skipped.
+  for (const [name, join] of Object.entries(joins as object)) {
+    // Drizzle drops a falsy include without resolving it, so it reaches
+    // nothing and needs no judgement.
+    if (!join) {
+      copy[name] = join;
+      continue;
+    }
+    const { all, table } = tableRelationsOf(relations, tableKey);
+    const relation = ownRelation(table, name);
+    if (relation === undefined) {
+      throw NextlyError.invalidInput({
+        message: `"${name}" is not a relation of "${tableKey}", so it cannot be included with "with".`,
+        logContext: {
+          reason: "unknown-relation-in-with",
+          table: tableKey,
+          relation: name,
+        },
+      });
+    }
+    assertRelationAccess(relation, tableKey, "with", all, rules);
+    copy[name] = checkedQueryConfig(join, relation.targetTableName, all, rules);
+  }
+  return copy;
+}
+
+/**
+ * A relational `where`: every relation filter judged, then recursed into.
+ *
+ * A relation filter (`where: { author: { name: "x" } }`) compiles to an
+ * EXISTS over the target table, so it reads rows the caller may not be
+ * allowed to see even though none are returned — whether they exist is
+ * itself what is leaked. `AND`/`OR`/`NOT` recurse on the same table, as
+ * Drizzle does; `RAW` is SQL and kept as written.
+ */
+function checkedWhere(
+  filter: unknown,
+  tableKey: string,
+  relations: AnyRelations | undefined,
+  rules: TableAccessRules
+): unknown {
+  if (!isRecord(filter)) return filter;
+  const copy: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(filter)) {
+    const checked = checkedWhereEntry(key, value, tableKey, relations, rules);
+    if (checked !== LEFT_OUT) copy[key] = checked;
+  }
+  return copy;
+}
+
+/** A `where` entry the copy leaves out because Drizzle would ignore it. */
+const LEFT_OUT = Symbol("left-out");
+
+/** One `where` entry, checked: a logical group, `NOT`, a column or a relation. */
+function checkedWhereEntry(
+  key: string,
+  value: unknown,
+  tableKey: string,
+  relations: AnyRelations | undefined,
+  rules: TableAccessRules
+): unknown {
+  if (value === undefined || key === "RAW") return value;
+  if (key === "AND" || key === "OR") {
+    return checkedLogicalGroup(key, value, tableKey, relations, rules);
+  }
+  if (key === "NOT") return checkedWhere(value, tableKey, relations, rules);
+  return checkedFieldFilter(key, value, tableKey, relations, rules);
+}
+
+/** An `AND` / `OR` group, each of its filters checked on the same table. */
+function checkedLogicalGroup(
+  key: "AND" | "OR",
+  value: unknown,
+  tableKey: string,
+  relations: AnyRelations | undefined,
+  rules: TableAccessRules
+): unknown {
+  // Drizzle skips a group with no length — an empty array, or anything
+  // without one — so it reaches nothing. It is left out of the copy rather
+  // than handed through, because the object the caller still holds could
+  // gain a length after this check. `Object(value)` reads a primitive's
+  // length the way Drizzle's `value?.length` does.
+  if (!Reflect.get(Object(value), "length")) return LEFT_OUT;
+  // Otherwise Drizzle maps over it, so anything but a real array could
+  // produce filters this walk never saw.
+  if (!Array.isArray(value)) {
+    throw NextlyError.invalidInput({
+      message: `"${key}" in a relational "where" must be an array of filters.`,
+      logContext: { reason: "non-array-logical-filter", table: tableKey },
+    });
+  }
+  return value.map((sub: unknown) =>
+    checkedWhere(sub, tableKey, relations, rules)
+  );
+}
+
+/**
+ * A column or relation filter. A column and a relation cannot share a name —
+ * Drizzle refuses the pair when the relations are assembled — so a key the
+ * config names as a relation is one, and its target is checked before the
+ * filter under it is.
+ */
+function checkedFieldFilter(
+  key: string,
+  value: unknown,
+  tableKey: string,
+  relations: AnyRelations | undefined,
+  rules: TableAccessRules
+): unknown {
+  const { all, table } = tableRelationsOf(relations, tableKey);
+  const relation = ownRelation(table, key);
+  if (relation === undefined) {
+    // A name only the prototype answers for is neither a column nor a
+    // relation, and Drizzle would resolve it the way a bare lookup does.
+    if (key in table.relations) {
+      throw NextlyError.invalidInput({
+        message: `"${key}" is not a column or relation of "${tableKey}", so it cannot filter a relational "where".`,
+        logContext: { reason: "unknown-field-in-where", table: tableKey },
+      });
+    }
+    return value;
+  }
+  assertRelationAccess(relation, tableKey, "where", all, rules);
+  return typeof value === "boolean"
+    ? value
+    : checkedWhere(value, relation.targetTableName, all, rules);
+}
+
+/**
+ * One table's entry point, with its config judged before Drizzle sees it.
+ *
+ * A plain object carrying only the two methods, rather than Drizzle's builder:
+ * the builder also exposes the schema and session it was built from, which
+ * are enough to assemble a query over any table without passing through here.
+ */
+function checkedEntry(
+  entry: RelationalQuery,
+  tableKey: string,
+  relations: AnyRelations | undefined,
+  deps: PluginDatabaseDeps
+): RelationalQuery {
+  return {
+    findMany: config =>
+      entry.findMany(
+        checkedQueryConfig(config, tableKey, relations, rulesOf(deps))
+      ),
+    findFirst: config =>
+      entry.findFirst(
+        checkedQueryConfig(config, tableKey, relations, rulesOf(deps))
+      ),
+  };
+}
+
 /**
  * The relational-query namespace, behind the same check as every other method.
  *
@@ -443,9 +743,16 @@ export type PluginTransaction = Omit<PluginDatabase, "transaction">;
  * non-configurable, which a Proxy may not hide. Drizzle builds these as plain
  * assignments, so that branch is a guard against a future shape, not a hole
  * in the current one.
+ *
+ * The root check alone would judge only the table a query STARTS from, so the
+ * entry handed back judges every table its config reaches as well — see
+ * `checkedQueryConfig`. `relations` is the config the namespace itself was
+ * built from, read off the same handle, so the edges judged are the edges
+ * Drizzle will follow.
  */
 function ownedQueries(
   namespace: RelationalQueries,
+  relations: AnyRelations | undefined,
   deps: PluginDatabaseDeps
 ): RelationalQueries {
   const hideable = (target: RelationalQueries, key: string): boolean => {
@@ -458,6 +765,8 @@ function ownedQueries(
     get(target, property, receiver) {
       if (typeof property === "string" && Object.hasOwn(target, property)) {
         assertTableAccess(property, rulesOf(deps));
+        const entry = Reflect.get(target, property, receiver);
+        return checkedEntry(entry, property, relations, deps);
       }
       return Reflect.get(target, property, receiver);
     },
@@ -697,8 +1006,15 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
     // propagates if consumers re-resolve — the same rule core services
     // follow through BaseService.db.
     get query() {
-      const db = deps.relationalDb() as { query: RelationalQueries };
-      return ownedQueries(db.query, deps);
+      // `_.relations` is Drizzle's own record of the config this handle was
+      // built with, on all three dialects' database classes. Read from the
+      // SAME handle as `query` rather than asked of the registry again, so
+      // the edges judged cannot be a different build from the edges run.
+      const db = deps.relationalDb() as {
+        query: RelationalQueries;
+        _?: { relations?: AnyRelations };
+      };
+      return ownedQueries(db.query, db._?.relations, deps);
     },
   };
 

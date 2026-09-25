@@ -89,26 +89,24 @@ describe("buildPluginMigration", () => {
       expect(built!.module.dialects[dialect].up[0]).toMatch(/CREATE TABLE/i);
     }
 
-    // The checksum covers the statements AND the snapshots the apply reads.
-    //
-    // It used to be over the SQL alone, which meant `snapshot`, `before` and
-    // the contributed sides could be edited while the module still verified —
-    // and the runner hands those straight to `reconcileFile`, so an edited
-    // target matching the live schema was recorded as adopted without the SQL
-    // ever running.
-    expect(built!.module.checksum).toBe(
-      migrationChecksum(built!.module.dialects, {
-        snapshot: built!.module.snapshot,
-        before: built!.module.before,
-        contributed: built!.module.contributed,
-        contributedBefore: built!.module.contributedBefore,
-      })
-    );
-    // And it is NOT the SQL-only hash any more, which is what makes the
-    // snapshots load-bearing rather than merely present.
-    expect(built!.module.checksum).not.toBe(
-      migrationChecksum(built!.module.dialects)
-    );
+    // The checksum covers the whole module — name, version, statements and
+    // the snapshots the apply reads — because the runner acts on all of it.
+    const { checksum, ...content } = built!.module;
+    expect(checksum).toBe(migrationChecksum(content));
+    // And each of those is load-bearing rather than merely present: changing
+    // any one of them moves the hash.
+    const emptied = {
+      postgresql: { tables: [] },
+      mysql: { tables: [] },
+      sqlite: { tables: [] },
+    };
+    for (const edited of [
+      { ...content, snapshot: emptied },
+      { ...content, schemaVersion: content.schemaVersion + 1 },
+      { ...content, name: `${content.name}_renamed` },
+    ]) {
+      expect(migrationChecksum(edited)).not.toBe(checksum);
+    }
     expect(built!.module.name).toBe("20260923_104500_000_init");
     expect(built!.module.schemaVersion).toBe(1);
     expect(built!.module.before.postgresql).toEqual({ tables: [] });

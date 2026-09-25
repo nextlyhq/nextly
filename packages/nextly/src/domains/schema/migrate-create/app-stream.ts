@@ -107,12 +107,20 @@ export async function compileAppStreamTables(input: {
   });
   if (!schema) return NO_APP_STREAM_TABLES;
 
-  const appOwned = new Set(
-    schema.tables
-      .filter(table => table.owner.kind === "app")
-      .map(table => table.name)
-  );
   const specByName = new Map(schema.specs.map(spec => [spec.name, spec]));
+  // Read off the compiled ownership map, not off `schema.tables`: that list
+  // holds only the tables the DSL declared, while a table a
+  // `db.schema.afterDrizzle` hook introduces is added to `owners` (as the
+  // app's) and to `specs`, and nowhere else. Deriving from `tables` left such a
+  // table out of this stream, so it reached dev push and no migration, and
+  // `migrate:check` saw nothing pending. `owners` also names adopted tables as
+  // the app's; they stay out because everything below reads `specs`, which
+  // never carries an adopted table.
+  const appOwned = new Set(
+    [...schema.owners]
+      .filter(([, owner]) => owner.kind === "app")
+      .map(([name]) => name)
+  );
 
   const contributed = new Map<
     string,

@@ -17,20 +17,27 @@
 //     (drizzle-kit pushSchema handles those after pre-resolution).
 //
 // Output ordering (deterministic for testability):
-//   1. add_table operations, sorted by table name.
-//   2. drop_table operations, sorted by table name.
-//   3. drop_index operations (tables alphabetical) — BEFORE column ops, so
-//      a dropped column's index is gone before the column drop (SQLite
-//      cannot drop an indexed column), and so reversed inverse ops create
-//      columns before the indexes that cover them.
-//   4. Per-table column ops (tables alphabetical):
+//   1. drop_check / drop_foreign_key operations — ahead of everything, since
+//      a constraint still in place blocks dropping the table it points at
+//      and dropping or retyping a column it names; reversed for the down
+//      migration, their re-adds then follow the tables and columns they need.
+//   2. drop_table operations, a table before the tables it referenced.
+//   3. add_table operations, a table after the tables it references (ties
+//      and cycles by name, see `byForeignKeyDependency`).
+//   4. drop_index operations that cover a dropped column (tables
+//      alphabetical) — BEFORE column ops, so the index is gone before the
+//      column drop (SQLite cannot drop an indexed column), and so reversed
+//      inverse ops create columns before the indexes that cover them.
+//   5. Per-table column ops (tables alphabetical):
 //      a. drop_column (alphabetical by columnName)
 //      b. add_column (alphabetical by columnName)
 //      c. change_column_type (alphabetical)
 //      d. change_column_nullable (alphabetical)
 //      e. change_column_default (alphabetical)
-//   5. add_index operations (tables alphabetical) — AFTER column ops, so a
+//   6. add_index operations (tables alphabetical) — AFTER column ops, so a
 //      new column exists before its index is created.
+//   7. The remaining index drops, and every constraint add, in the order
+//      their diff produced them.
 
 import { renderedType } from "../sql-templates/create-table-body";
 
@@ -68,7 +75,8 @@ export function diffSnapshots(
   const curByName = new Map<string, TableSpec>();
   for (const t of cur.tables) curByName.set(t.name, t);
 
-  const tableOps: Operation[] = [];
+  const addedTables: TableSpec[] = [];
+  const droppedTables: TableSpec[] = [];
   const columnOps: Operation[] = [];
   const dropIndexOps: Operation[] = [];
   const addIndexOps: Operation[] = [];
@@ -85,14 +93,11 @@ export function diffSnapshots(
     const curT = curByName.get(name);
 
     if (!prevT && curT) {
-      tableOps.push({ type: "add_table", table: curT } satisfies AddTableOp);
+      addedTables.push(curT);
       continue;
     }
     if (prevT && !curT) {
-      tableOps.push({
-        type: "drop_table",
-        tableName: name,
-      } satisfies DropTableOp);
+      droppedTables.push(prevT);
       continue;
     }
     if (prevT && curT) {
@@ -174,17 +179,87 @@ export function diffSnapshots(
       op.index.columns.some(column =>
         droppedColumnKeys.has(`${op.tableName}\u0000${column}`)
       );
-    if (coversDroppedColumn) dropIndexBeforeColumns.push(op);
+    // A check or foreign key goes ahead of every column change as well: while
+    // it exists it blocks dropping — on MySQL even retyping — a column it
+    // names, and a check's columns cannot be read from its SQL. Its add, when
+    // it is being re-keyed, stays behind the columns, so the pair still runs
+    // drop-then-add and the inverse still re-adds after re-creating columns.
+    const isConstraintDrop =
+      op.type === "drop_check" || op.type === "drop_foreign_key";
+    if (coversDroppedColumn || isConstraintDrop)
+      dropIndexBeforeColumns.push(op);
     else dropIndexAfterAdds.push(op);
   }
 
+  // Tables in foreign-key order: a new table after the tables it references,
+  // a dropped one before the tables that referenced it. PostgreSQL and MySQL
+  // refuse a key to a table that does not exist yet, and refuse to drop a
+  // table another still references; name order made both depend on spelling.
+  const tableOps: Operation[] = [
+    ...byForeignKeyDependency(droppedTables)
+      .reverse()
+      .map(
+        table =>
+          ({ type: "drop_table", tableName: table.name }) satisfies DropTableOp
+      ),
+    ...byForeignKeyDependency(addedTables).map(
+      table => ({ type: "add_table", table }) satisfies AddTableOp
+    ),
+  ];
+
+  // Constraint drops lead even the table ops: the diff plans them only for a
+  // table present on both sides, so one can point at a table dropped here.
+  const constraintDrops = dropIndexBeforeColumns.filter(
+    op => op.type === "drop_check" || op.type === "drop_foreign_key"
+  );
+  const indexDropsBeforeColumns = dropIndexBeforeColumns.filter(
+    op => op.type === "drop_index"
+  );
+
   return [
+    ...constraintDrops,
     ...tableOps,
-    ...dropIndexBeforeColumns,
+    ...indexDropsBeforeColumns,
     ...columnOps,
     ...addIndexOps,
     ...dropIndexAfterAdds,
   ];
+}
+
+/**
+ * `tables` ordered so each comes after every other table in the list that it
+ * references, ties broken by name. A reference to a table outside the list —
+ * one that already exists — constrains nothing.
+ *
+ * A cycle cannot be ordered. The walk starts from the first table by name and
+ * places each table after the ones it references that are not already being
+ * placed, so for `a` ↔ `b` it yields `b` then `a`, with `b`'s key pointing
+ * forward. SQLite accepts that; on PostgreSQL and MySQL one key of the cycle
+ * has to be added after both tables exist, which a later migration can do.
+ */
+function byForeignKeyDependency(tables: readonly TableSpec[]): TableSpec[] {
+  const byName = new Map(tables.map(table => [table.name, table]));
+  const ordered: TableSpec[] = [];
+  const state = new Map<string, "visiting" | "done">();
+  const visit = (table: TableSpec): void => {
+    if (state.has(table.name)) return;
+    state.set(table.name, "visiting");
+    const targets = [
+      ...new Set((table.foreignKeys ?? []).map(fk => fk.referencesTable)),
+    ].sort();
+    for (const target of targets) {
+      const referenced = byName.get(target);
+      if (referenced !== undefined && target !== table.name) visit(referenced);
+    }
+    state.set(table.name, "done");
+    ordered.push(table);
+  };
+  for (const table of [...tables].sort((a, b) =>
+    a.name.localeCompare(b.name)
+  )) {
+    visit(table);
+  }
+  return ordered;
 }
 
 /**

@@ -106,6 +106,71 @@ describe("kitRouteConstraintStatements", () => {
       ]);
     });
 
+    it("never drops a key this apply adds, and adds it once", () => {
+      // The key is new: absent from the live schema, planned as an add.
+      const liveWithoutKey: TableSpec = { ...items, foreignKeys: [] };
+      const { before, after } = kitRouteConstraintStatements(
+        [
+          retype("cx__items", "shelf_id"),
+          {
+            type: "add_foreign_key",
+            tableName: "cx__items",
+            foreignKey: shelfKey,
+          },
+        ],
+        [liveWithoutKey, shelves],
+        "mysql"
+      );
+      expect(before).toEqual([]);
+      expect(after).toEqual([
+        expect.stringContaining("ADD CONSTRAINT `fk_cx__items_shelf_id`"),
+      ]);
+    });
+
+    it("leaves a re-keyed key to its own drop and add", () => {
+      const rekeyed: ForeignKeySpec = { ...shelfKey, onDelete: "cascade" };
+      const { before, after } = kitRouteConstraintStatements(
+        [
+          retype("cx__items", "shelf_id"),
+          {
+            type: "drop_foreign_key",
+            tableName: "cx__items",
+            foreignKey: shelfKey,
+          },
+          {
+            type: "add_foreign_key",
+            tableName: "cx__items",
+            foreignKey: rekeyed,
+          },
+        ],
+        [items, shelves],
+        "mysql"
+      );
+      expect(before).toHaveLength(1);
+      expect(after).toEqual([expect.stringContaining("ON DELETE CASCADE")]);
+    });
+
+    it("does not lift a key that will not survive the apply", () => {
+      // Its table is dropped, or the column it covers is.
+      for (const gone of [
+        { type: "drop_table", tableName: "cx__items" } as const,
+        {
+          type: "drop_column",
+          tableName: "cx__items",
+          columnName: "shelf_id",
+          columnType: "varchar(36)",
+        } as const,
+      ]) {
+        expect(
+          kitRouteConstraintStatements(
+            [retype("cx__shelves", "id"), gone],
+            [items, shelves],
+            "mysql"
+          )
+        ).toEqual({ before: [], after: [] });
+      }
+    });
+
     it("leaves a key alone when the change is to another column", () => {
       expect(
         kitRouteConstraintStatements(

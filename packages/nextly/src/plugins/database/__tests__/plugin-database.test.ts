@@ -7,6 +7,8 @@
  * those decisions harder to observe. The three-dialect behaviour is the
  * integration suite's job.
  */
+import { defineRelations } from "drizzle-orm";
+import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { describe, expect, it, vi } from "vitest";
 
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
@@ -731,5 +733,336 @@ describe("relational queries", () => {
     expect(Object.keys(surface.query)).toEqual(["fx__notes"]);
     expect("users" in surface.query).toBe(false);
     expect("fx__notes" in surface.query).toBe(true);
+  });
+});
+
+describe("relational queries that reach other tables", () => {
+  /**
+   * A REAL relations config, built by Drizzle's own `defineRelations`, so the
+   * walk is judged against the objects Drizzle will actually follow — the
+   * edge's target key and its junction table — rather than a hand-made shape
+   * that agrees with the implementation by construction.
+   *
+   * `fx` owns notes, authors and tags; `other` owns invoices, customers and
+   * the junction linking notes to tags; `users` is a core table nobody owns.
+   */
+  const fxNotes = sqliteTable("fx__notes", {
+    id: text("id").primaryKey(),
+    authorId: text("author_id"),
+    invoiceId: text("invoice_id"),
+    userId: text("user_id"),
+  });
+  const fxAuthors = sqliteTable("fx__authors", { id: text("id").primaryKey() });
+  const fxTags = sqliteTable("fx__tags", { id: text("id").primaryKey() });
+  const otherInvoices = sqliteTable("other__invoices", {
+    id: text("id").primaryKey(),
+    customerId: text("customer_id"),
+  });
+  const otherCustomers = sqliteTable("other__customers", {
+    id: text("id").primaryKey(),
+  });
+  const otherTagLinks = sqliteTable("other__tag_links", {
+    noteId: text("note_id"),
+    tagId: text("tag_id"),
+  });
+  const users = sqliteTable("users", { id: text("id").primaryKey() });
+
+  const relations = defineRelations(
+    {
+      fx__notes: fxNotes,
+      fx__authors: fxAuthors,
+      fx__tags: fxTags,
+      other__invoices: otherInvoices,
+      other__customers: otherCustomers,
+      other__tag_links: otherTagLinks,
+      users,
+    },
+    r => ({
+      fx__notes: {
+        author: r.one.fx__authors({
+          from: r.fx__notes.authorId,
+          to: r.fx__authors.id,
+        }),
+        invoice: r.one.other__invoices({
+          from: r.fx__notes.invoiceId,
+          to: r.other__invoices.id,
+        }),
+        user: r.one.users({ from: r.fx__notes.userId, to: r.users.id }),
+        tags: r.many.fx__tags({
+          from: r.fx__notes.id.through(r.other__tag_links.noteId),
+          to: r.fx__tags.id.through(r.other__tag_links.tagId),
+        }),
+      },
+      fx__authors: {
+        notes: r.many.fx__notes({
+          from: r.fx__authors.id,
+          to: r.fx__notes.authorId,
+        }),
+      },
+      other__invoices: {
+        customer: r.one.other__customers({
+          from: r.other__invoices.customerId,
+          to: r.other__customers.id,
+        }),
+      },
+    })
+  );
+
+  const OTHER: SchemaOwner = { kind: "plugin", id: "other" };
+
+  function reachHarness(
+    dependsOn: string[] = [],
+    handleRelations: unknown = relations,
+    // Who owns the `fx__` tables AND asks: the app surface is the same
+    // surface with an app owner, so one harness serves both.
+    caller: SchemaOwner = OWNER
+  ) {
+    // What the namespace was handed, recorded by reference: Drizzle reads its
+    // config when the query runs, so the object received is what runs.
+    const received: unknown[] = [];
+    const entry = {
+      findMany: async (config?: unknown) => {
+        received.push(config);
+        return [];
+      },
+      findFirst: async (config?: unknown) => {
+        received.push(config);
+        return null;
+      },
+    };
+    const handle = () => ({
+      query: { fx__notes: entry, fx__authors: entry, other__invoices: entry },
+      _: { relations: handleRelations },
+    });
+
+    const surface = createPluginDatabase({
+      dialect: "sqlite",
+      owner: caller,
+      dependsOn: new Set(dependsOn),
+      owners: () =>
+        new Map<string, SchemaOwner>([
+          ["fx__notes", caller],
+          ["fx__authors", caller],
+          ["fx__tags", caller],
+          ["other__invoices", OTHER],
+          ["other__customers", OTHER],
+          ["other__tag_links", OTHER],
+        ]),
+      tables: () => ({}),
+      tableList: () => [],
+      db: () => handle(),
+      relationalDb: () => handle(),
+      transaction: fn => fn({ db: handle(), relationalDb: handle() }),
+    });
+    return { surface, received };
+  }
+
+  /** The refusal `assertTableAccess` throws, by its reason — not any throw. */
+  function refusalReason(run: () => unknown): unknown {
+    try {
+      run();
+    } catch (error) {
+      if (NextlyError.isForbidden(error)) {
+        return (error.logContext as { reason?: unknown } | undefined)?.reason;
+      }
+      throw error;
+    }
+    return "not refused";
+  }
+
+  it("includes the caller's own related table", async () => {
+    // The must-differ control: a walk that refused every `with` would pass
+    // every refusal below and break relational reads entirely.
+    const { surface, received } = reachHarness();
+    const config = { with: { author: { with: { notes: true } } } };
+    await surface.query.fx__notes.findMany(config);
+    expect(received).toEqual([config]);
+  });
+
+  it("includes a declared dependency's table, at depth", async () => {
+    const { surface, received } = reachHarness(["other"]);
+    const config = { with: { invoice: { with: { customer: true } } } };
+    await surface.query.fx__notes.findFirst(config);
+    expect(received).toEqual([config]);
+  });
+
+  it("refuses to include a plugin's table that dependsOn does not declare", () => {
+    const { surface, received } = reachHarness();
+    expect(
+      refusalReason(() =>
+        surface.query.fx__notes.findMany({ with: { invoice: true } })
+      )
+    ).toBe("table-owner-not-a-declared-dependency");
+    expect(received).toEqual([]);
+  });
+
+  it("refuses an undeclared table reached two relations deep", () => {
+    // Every hop but the last is the caller's own, so a check of only the
+    // first level of `with` lets this through.
+    const { surface, received } = reachHarness();
+    expect(
+      refusalReason(() =>
+        surface.query.fx__notes.findMany({
+          with: { author: { with: { notes: { with: { invoice: true } } } } },
+        })
+      )
+    ).toBe("table-owner-not-a-declared-dependency");
+    expect(received).toEqual([]);
+  });
+
+  it("refuses to include a core table", () => {
+    const { surface } = reachHarness(["other"]);
+    expect(
+      refusalReason(() =>
+        surface.query.fx__notes.findMany({ with: { user: true } })
+      )
+    ).toBe("table-not-declared");
+  });
+
+  it("refuses a relation filter in where, which reads the target through EXISTS", () => {
+    const { surface, received } = reachHarness();
+    expect(
+      refusalReason(() =>
+        surface.query.fx__notes.findMany({
+          where: { OR: [{ id: "a" }, { invoice: { id: "b" } }] },
+        })
+      )
+    ).toBe("table-owner-not-a-declared-dependency");
+    expect(
+      refusalReason(() =>
+        surface.query.fx__notes.findMany({
+          with: { author: { where: { NOT: { notes: { invoice: true } } } } },
+        })
+      )
+    ).toBe("table-owner-not-a-declared-dependency");
+    expect(received).toEqual([]);
+  });
+
+  it("refuses a many-to-many edge whose JUNCTION the caller cannot reach", () => {
+    // Both ends are the caller's own; only the junction is not. Judging the
+    // target alone lets the junction's rows be read.
+    const { surface } = reachHarness();
+    expect(
+      refusalReason(() =>
+        surface.query.fx__notes.findMany({ with: { tags: true } })
+      )
+    ).toBe("table-owner-not-a-declared-dependency");
+    const allowed = reachHarness(["other"]);
+    expect(() =>
+      allowed.surface.query.fx__notes.findMany({ with: { tags: true } })
+    ).not.toThrow();
+  });
+
+  it("judges the config as passed, not as later mutated", async () => {
+    // Drizzle reads the config when the query executes. Were the caller's
+    // object handed through, an include added after the check would run.
+    const { surface, received } = reachHarness();
+    const config: { with: Record<string, unknown> } = {
+      with: { author: true },
+    };
+    const pending = surface.query.fx__notes.findMany(config);
+    config.with.invoice = true;
+    await pending;
+    expect(received).toEqual([{ with: { author: true } }]);
+  });
+
+  it("refuses an include it cannot judge", () => {
+    const unknown = reachHarness();
+    expect(() =>
+      unknown.surface.query.fx__notes.findMany({ with: { ghost: true } })
+    ).toThrow(NextlyError);
+    // A handle carrying no relations config: nothing can say where `author`
+    // leads, so it is refused rather than let through.
+    const blind = reachHarness([], null);
+    expect(() =>
+      blind.surface.query.fx__notes.findMany({ with: { author: true } })
+    ).toThrow(NextlyError);
+    expect(unknown.received).toEqual([]);
+    expect(blind.received).toEqual([]);
+  });
+
+  it("refuses a core table for the APP as well, as its root does", async () => {
+    // The app surface refuses `query.users` at the root, so an include
+    // reaching `users` must answer the same; its own tables still join.
+    const APP: SchemaOwner = { kind: "app" };
+    const { surface, received } = reachHarness([], relations, APP);
+    const config = { with: { author: { with: { notes: true } } } };
+    await surface.query.fx__notes.findMany(config);
+    expect(received).toEqual([config]);
+    expect(
+      refusalReason(() =>
+        surface.query.fx__notes.findMany({ with: { user: true } })
+      )
+    ).toBe("table-not-declared");
+  });
+
+  it("names the edge that led to a refused table", () => {
+    const { surface } = reachHarness();
+    let caught: unknown;
+    try {
+      surface.query.fx__notes.findMany({
+        with: { author: { where: { notes: { invoice: true } } } },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(NextlyError.isForbidden(caught)).toBe(true);
+    // The refused hop is `invoice` on `fx__notes`, reached from a filter —
+    // not the `author` include the query starts with.
+    expect((caught as NextlyError).logContext).toMatchObject({
+      reason: "table-owner-not-a-declared-dependency",
+      table: "other__invoices",
+      via: "where",
+      relation: "invoice",
+      from: "fx__notes",
+    });
+  });
+
+  it("treats a name only the prototype answers for as no relation", () => {
+    // A bare lookup finds `toString` on every object, which judged it as an
+    // edge with no target and answered with a refusal instead of naming the
+    // mistake.
+    const { surface, received } = reachHarness();
+    for (const run of [
+      () => surface.query.fx__notes.findMany({ with: { toString: true } }),
+      () => surface.query.fx__notes.findMany({ where: { constructor: true } }),
+    ]) {
+      let caught: unknown;
+      try {
+        run();
+      } catch (error) {
+        caught = error;
+      }
+      expect(NextlyError.isCode(caught, "INVALID_INPUT")).toBe(true);
+    }
+    expect(received).toEqual([]);
+  });
+
+  it("drops a logical group Drizzle would skip, and refuses one it would map", async () => {
+    // Drizzle skips `AND`/`OR` with no length; the copy leaves such a group
+    // out rather than handing on an object the caller could still fill.
+    const { surface, received } = reachHarness();
+    await surface.query.fx__notes.findMany({
+      where: { id: "a", AND: [], OR: {} },
+    });
+    expect(received).toEqual([{ where: { id: "a" } }]);
+    expect(() =>
+      surface.query.fx__notes.findMany({
+        where: { OR: { length: 1, 0: { invoice: true } } },
+      })
+    ).toThrow(NextlyError);
+  });
+
+  it("applies the same judgement inside a transaction", async () => {
+    const { surface, received } = reachHarness();
+    await expect(
+      surface.transaction(async tx =>
+        tx.query.fx__notes.findMany({ with: { invoice: true } })
+      )
+    ).rejects.toSatisfy(NextlyError.isForbidden);
+    await surface.transaction(async tx =>
+      tx.query.fx__notes.findMany({ with: { author: true } })
+    );
+    expect(received).toEqual([{ with: { author: true } }]);
   });
 });

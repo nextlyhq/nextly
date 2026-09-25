@@ -84,6 +84,17 @@ export interface ColumnDescriptor {
   kind: ColumnKind;
 }
 
+/**
+ * The widest value an `enum` column stores.
+ *
+ * MySQL renders an enum as `varchar` of this width rather than `text`: a TEXT
+ * column cannot be keyed without a prefix length, and an enum is exactly the
+ * kind of column an index is declared on. One constant so the rendered type,
+ * the Drizzle column, the MySQL key-width check and the DSL's refusal of a
+ * longer value cannot disagree about the width.
+ */
+export const ENUM_STORAGE_LENGTH = 255;
+
 /** Default DECIMAL(precision, scale) when a decimal number field omits them. */
 export const DEFAULT_DECIMAL_PRECISION = 10;
 export const DEFAULT_DECIMAL_SCALE = 2;
@@ -121,7 +132,7 @@ export type ColumnKind =
   | "uuid" // PG: uuid; MySQL: char(36); SQLite: text
   | "real" // PG/SQLite: real; MySQL: float
   | "bytes" // PG: bytea; MySQL: longblob; SQLite: blob
-  | "enum"; // PG: a native type; MySQL: ENUM(...); SQLite: text + CHECK
+  | "enum"; // PG/SQLite: text; MySQL: varchar(ENUM_STORAGE_LENGTH) — plus a CHECK on every dialect
 
 /**
  * The columns a row of this table could plausibly have left empty.
@@ -690,10 +701,13 @@ export function renderDialectType(
     return "blob"; // sqlite
   }
   if (kind === "enum") {
-    // Text on every dialect here. A PostgreSQL native enum introspects as its
-    // own TYPE NAME, which this function cannot know — the name lives on the
-    // column — so rendering it would produce a token that matches nothing.
-    if (dialect === "mysql") return "text";
+    // Text-family storage plus a CHECK, never a native enum type: a
+    // PostgreSQL native enum introspects as its own TYPE NAME, which this
+    // function cannot know — the name lives on the column — so rendering it
+    // would produce a token that matches nothing. MySQL gets a bounded
+    // varchar, as the `text` kind does, so the column can be indexed and the
+    // Drizzle column built for it declares the same type.
+    if (dialect === "mysql") return `varchar(${ENUM_STORAGE_LENGTH})`;
     return "text";
   }
   // Unreachable: skip is filtered out before this is called.

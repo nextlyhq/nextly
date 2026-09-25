@@ -304,8 +304,10 @@ for documentation and validation; a constraint comes from the `foreignKeys`
 option.
 
 Drizzle relational queries (`ctx.db.query.<table>.findMany({ with })`) work
-over extension tables: a `ref()` column carries its one-edge automatically,
-and more can be declared through the `relations` option.
+over extension tables you may reach: a `ref()` column carries its one-edge
+automatically, and more can be declared through the `relations` option. The
+edge a `ref()` to a core table carries (`userId: col.ref("users")` above) is
+declared but not followed — see [Access rules](#access-rules).
 
 ## Access rules
 
@@ -315,7 +317,12 @@ control, validation and hooks apply.
 
 The rule covers `ctx.db.query` as well as the other methods: the relational
 namespace only names tables you may reach, and `ctx.db.query.users` throws the
-same refusal `ctx.db.select` would.
+same refusal `ctx.db.select` would. It covers every table a relational query
+REACHES, too, not only the one it starts from: an include in `with` and a
+relation filter in `where` are refused, at any depth, when their target — or a
+many-to-many junction — is a table you may not reach. The refusal names the
+relation and the table it was followed from. Read a core table's rows through
+`ctx.services` and join on the id your column holds.
 
 `dependsOn` is what makes a cross-plugin read legitimate rather than
 incidental: it lets the resolver order the two plugins and refuse an

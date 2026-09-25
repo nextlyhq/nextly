@@ -3,8 +3,8 @@
  *
  * Hand-written rather than generated, because the generator is not in place
  * yet and the runner needs something real to run. They are otherwise exactly
- * what `migrate:create --plugin` will emit: per-dialect SQL, a checksum over
- * it, and the owner's tables either side of each module.
+ * what `migrate:create --plugin` will emit: per-dialect SQL, the owner's
+ * tables either side of each module, and a checksum over the whole module.
  *
  * The checksums are computed at module load rather than pasted, so this file
  * cannot drift into the state the checksum exists to detect. A GENERATED
@@ -53,10 +53,9 @@ const createNotes = {
 const empty = { tables: [] };
 const withNotes = { tables: [NOTES] };
 
-const initial: PluginMigration = {
+const initialContent = {
   name: "20260101_000000_create_notes",
   schemaVersion: 1,
-  checksum: migrationChecksum(createNotes),
   dialects: createNotes,
   before: { postgresql: empty, mysql: empty, sqlite: empty },
   snapshot: {
@@ -64,6 +63,14 @@ const initial: PluginMigration = {
     mysql: withNotes,
     sqlite: withNotes,
   },
+};
+
+// Sealed over the whole module — name, version, SQL and snapshots — exactly
+// as a generated module is: the runner verifies all of it and refuses a
+// checksum over less.
+const initial: PluginMigration = {
+  ...initialContent,
+  checksum: migrationChecksum(initialContent),
 };
 
 const addPinned = {
@@ -93,10 +100,9 @@ const withPinned = {
   ],
 };
 
-const pinned: PluginMigration = {
+const pinnedContent = {
   name: "20260201_000000_add_pinned",
   schemaVersion: 2,
-  checksum: migrationChecksum(addPinned),
   dialects: addPinned,
   before: {
     postgresql: withNotes,
@@ -108,6 +114,12 @@ const pinned: PluginMigration = {
     mysql: withPinned,
     sqlite: withPinned,
   },
+};
+
+// Sealed over the whole module, for the same reason as `initial`.
+const pinned: PluginMigration = {
+  ...pinnedContent,
+  checksum: migrationChecksum(pinnedContent),
 };
 
 // Order matters and is asserted by the runner, which sorts by name — but the

@@ -562,14 +562,24 @@ was never reached.
 
 ### Two checksums
 
-A plugin migration carries a checksum over its own SQL, and the ledger
-separately stores the sha256 of what actually ran.
+A plugin migration carries a checksum over its whole content — its name,
+schema version, SQL and table snapshots — and the ledger separately stores the
+sha256 of what actually ran.
 
 Neither covers the other. The first catches a module edited after generation —
-the SQL that will run is not the SQL that was reviewed. The second catches a
-module changed after it was applied, where the database no longer matches the
-file claiming to describe it. A regenerated module with a rewritten checksum
-passes the first and fails the second, which is exactly right.
+the SQL that will run is not the SQL that was reviewed. It covers more than
+the SQL because the runner acts on the rest too: the name is the module's
+ledger key and decides its order, the schema version is recorded against the
+plugin's tables, and the snapshots decide whether a module is already applied —
+a module whose target matches the live schema is recorded as adopted without
+its SQL running. Editing any of them is refused exactly like editing the SQL.
+A hand-written module computes its checksum with `migrationChecksum` from
+`nextly/schema-extension`, passing the module itself without its `checksum`.
+
+The second catches a module changed after it was applied, where the database
+no longer matches the file claiming to describe it. A regenerated module with a
+rewritten checksum passes the first and fails the second, which is exactly
+right.
 
 ### Nothing drops a table it does not own
 
