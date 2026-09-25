@@ -66,22 +66,30 @@ const BOT_ACCOUNTS = [
 const BRANCH_OWNERS = ["claude", "copilot", "codex", "cursor", "devin", "jules", "gemini", "openhands", "aider", "windsurf", "sweep"];
 
 const VENDOR = `(?:(?:${VENDORS.join("|")})(?:'s)?${GAP})?`;
+/** Words a vendor puts after a tool's name for an edition or a size, which no surname is taken to be. */
+const EDITIONS = ["Large", "Medium", "Small", "Nano", "Mini", "Micro", "Pro", "Flash", "Ultra", "Max", "Plus", "Lite", "Turbo", "Instant", "Code", "Coder", "Agent", "Assistant", "Chat", "Beta", "Preview", "Thinking", "Instruct", "Nemo"];
+const EDITION = `[^\\S\\n]+(?:${EDITIONS.join("|")})(?![\\w-])`;
+/**
+ * Every edition word after a name, so that what follows the name is read after
+ * its edition: a role after `Mistral Large` makes people of it as surely as one
+ * after `Mistral` does, and the words are not given back to let a shorter name
+ * match.
+ */
+const EDITION_RUN = `(?:${EDITION})*(?!${EDITION})`;
 /**
  * A name ends at a word's end. Followed by an API, SDK, key or the like it is a
  * component a product uses, and followed by a person's role it is people, as a
  * vendor's researcher or team is; neither is the tool.
  */
 const ENDS = "(?![\\w-])(?!(?:'s)?\\s+(?:api|sdk|client|library|package|embeddings?|endpoint|integration|provider|plugin|key|account|platform|console|researcher|engineer|employee|team|staff|scientist|intern|founder|developer|designer|manager|lead|colleague|folks|people|member|contractor)s?\\b)";
-const TOOL_AT = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})${ENDS}`, "i");
-/** Words a vendor puts after a tool's name for an edition or a size, which no surname is taken to be. */
-const EDITIONS = ["Large", "Medium", "Small", "Nano", "Mini", "Micro", "Pro", "Flash", "Ultra", "Max", "Plus", "Lite", "Turbo", "Instant", "Code", "Coder", "Agent", "Assistant", "Chat", "Beta", "Preview", "Thinking", "Instruct", "Nemo"];
+const TOOL_AT = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})${EDITION_RUN}${ENDS}`, "i");
 /**
  * In prose, an ambiguous name followed by a capitalised surname is a person,
  * as `Claude Dupont` is; a tool's full name matches first, and an edition
  * word after the name is not a surname, as in `Mistral Large`.
  */
-const PROPER_AT = new RegExp(`^${VENDOR}(?:${PROPER.join("|")})${ENDS}(?![^\\S\\n]+(?!(?:${EDITIONS.join("|")})\\b)[A-Z][a-z])`);
-const PROPER_AT_ANY_CASE = new RegExp(`^${VENDOR}(?:${PROPER.join("|")})${ENDS}`, "i");
+const PROPER_AT = new RegExp(`^${VENDOR}(?:${PROPER.join("|")})${EDITION_RUN}${ENDS}(?![^\\S\\n]+(?!(?:${EDITIONS.join("|")})\\b)[A-Z][a-z])`);
+const PROPER_AT_ANY_CASE = new RegExp(`^${VENDOR}(?:${PROPER.join("|")})${EDITION_RUN}${ENDS}`, "i");
 const GENERIC_AT = new RegExp(`^(?:${GENERIC.join("|")})${ENDS}`, "i");
 const BOT = `(?:${BOT_ACCOUNTS.join("|")})\\[bot\\]`;
 /** A name that is AI in general, or one of a tool's GitHub App accounts. No person is named either. */
@@ -131,15 +139,17 @@ const SELF_DESCRIBED = new RegExp(
   "gi"
 );
 
-/** A tool as the subject of a maker verb whose object is the change itself, as a tool that wrote this file is. */
+/** A tool as the subject of a maker verb whose object is the change itself, as a tool that wrote this file is, whatever its edition. */
 const SUBJECT_VERB = "(?:generated|wrote|created|authored|made|built|drafted|produced|implemented|refactored|co-?authored)";
 const CHANGE_ITSELF = gapped("(?:this|the|these) (?:change|changes|commit|commits|file|files|code|patch|pull request|pr|implementation|fix|feature|test|tests|docs|documentation|function|module|script|refactor)");
 const SUBJECTS = [
-  new RegExp(`\\b${VENDOR}(?:${[...TOOLS, ...GENERIC].join("|")})${GAP}${SUBJECT_VERB}${GAP}${CHANGE_ITSELF}\\b`, "gi"),
-  new RegExp(`\\b${VENDOR}(?:${PROPER.join("|")})${GAP}${SUBJECT_VERB}${GAP}${CHANGE_ITSELF}\\b`, "g"),
+  new RegExp(`\\b${VENDOR}(?:${[...TOOLS, ...GENERIC].join("|")})(?:${EDITION})*${GAP}${SUBJECT_VERB}${GAP}${CHANGE_ITSELF}\\b`, "gi"),
+  new RegExp(`\\b${VENDOR}(?:${PROPER.join("|")})(?:${EDITION})*${GAP}${SUBJECT_VERB}${GAP}${CHANGE_ITSELF}\\b`, "g"),
 ];
 /** A trailer, on a line of its own or in a comment: `//`, `#`, `*`, `--`, `;` or an HTML comment. */
 const TRAILER = /^\s*(?:(?:\/\/|#|\*|--|;|<!--)\s*)?([A-Za-z][A-Za-z0-9-]*-(?:by|with))\s*:\s*(.+?)\s*(?:-->)?\s*$/i;
+/** A trailer's first line, whether or not its value starts there. */
+const TRAILER_HEAD = /^\s*(?:(?:\/\/|#|\*|--|;|<!--)\s*)?[A-Za-z][A-Za-z0-9-]*-(?:by|with)\s*:/i;
 /** What may stand between a crediting phrase and the name it credits: quotes, emphasis, a bracket, and one line break at most. */
 const LEADING_MARKS = /^(?:[^\S\n]|["'`*_([<@“‘])*(?:\n(?:[^\S\n]|["'`*_([<@“‘])*)?/;
 const ARTICLE = new RegExp(`^(?:the|an?)${GAP}`, "i");
@@ -215,7 +225,7 @@ function unfolded(lines) {
 }
 
 function continuesTrailer(line, last) {
-  return Boolean(last) && /^[ \t]+\S/.test(line) && !TRAILER.test(line) && TRAILER.test(last.parts[0]);
+  return Boolean(last) && /^[ \t]+\S/.test(line) && !TRAILER_HEAD.test(line) && TRAILER_HEAD.test(last.parts[0]);
 }
 
 /**
@@ -563,12 +573,12 @@ function refuse(problem) {
 /** Decides for the commit-msg hook: the message about to be committed, and who is committing it. */
 function checkCommit(file, git) {
   if (!file) return refuseCommit(["no message file was given"]);
-  const { above, below } = committedParts(readFileSync(file, "utf8"));
+  const { message, diff } = committedParts(readFileSync(file, "utf8"));
   const identities = ["author", "committer"].map(role => [role, git(["var", `GIT_${role.toUpperCase()}_IDENT`])]);
   const reasons = [
     ...identities.filter(([, read]) => !read.ok).map(([role]) => `the commit's ${role} could not be read`),
-    ...creditsIn(above, "message").map(found => `the message, line ${found.line}, ${found.form}: ${found.excerpt}`),
-    ...creditsIn(below, "line").map(found => `the message below its scissors line, line ${found.line}, ${found.form}: ${found.excerpt}`),
+    ...creditsIn(message, "message").map(found => `the message, line ${found.line}, ${found.form}: ${found.excerpt}`),
+    ...creditsIn(diff, "line").map(found => `the diff below the message's scissors line ${found.form}: ${found.excerpt}`),
     ...identities.filter(([, read]) => read.ok && isAiIdentity(withoutDate(read.out))).map(([role, read]) => `the ${role}, ${withoutDate(read.out)}, is an AI tool's identity`),
   ];
   return reasons.length > 0 ? refuseCommit(reasons) : 0;
@@ -578,22 +588,24 @@ function withoutDate(ident) {
   return ident.trim().replace(/\s+\d+\s+[-+]\d{4}$/, "");
 }
 
-/** Git's own words above a scissors line in the editor it opens; a message given with `-m` or `-F` carries none. */
-const EDITOR_TEMPLATE = /^# Please enter the commit message for your changes/m;
+/** A scissors line, in whatever comment prefix git writes it with. */
+const SCISSORS = /^(\S+) -{8,} >8 -{8,}\r?$/m;
 
 /**
- * A message, split at a scissors line. Comment lines are read, since a message
- * given with `-m` or `-F` keeps them. What is below a scissors line is read
- * whole there too, since git keeps it; only under the editor's template, where
- * git drops it, is it read as the diff the editor shows: its added lines and
- * any plain text, but not the lines it removes or leaves unchanged, since
- * removing an old credit credits nothing.
+ * What of a message git records, and the diff its editor shows. Comment lines
+ * are read, since a message given with `-m` or `-F` keeps them, and so is what
+ * a scissors line there has below it. In the editor it opens, git follows its
+ * own scissors line with comment lines in the same prefix, in any language and
+ * with any comment character, and drops everything from that line on. There
+ * the part below is read as the diff the editor shows: its added lines and any
+ * plain text, but not the lines it removes or leaves unchanged, since removing
+ * an old credit credits nothing.
  */
 function committedParts(message) {
-  const [above, ...rest] = message.split(/^\S -{8,} >8 -{8,}$/m);
-  const lines = rest.join("\n").split("\n");
-  const below = EDITOR_TEMPLATE.test(above) ? diffAdditions(lines) : lines;
-  return { above, below: below.join("\n") };
+  const cut = SCISSORS.exec(message);
+  if (!cut) return { message, diff: "" };
+  const below = message.slice(cut.index + cut[0].length + 1).split("\n");
+  return below[0].startsWith(cut[1]) ? { message: message.slice(0, cut.index), diff: diffAdditions(below).join("\n") } : { message, diff: "" };
 }
 
 function diffAdditions(lines) {

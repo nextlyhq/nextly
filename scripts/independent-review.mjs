@@ -130,10 +130,22 @@ async function resolvedAbbreviations({ pr, comments, timeline }, context) {
   return Object.fromEntries(resolved.filter(([, revision]) => revision !== undefined));
 }
 
-/** GitHub answers 422 for an abbreviation that names no single commit it holds. */
+/**
+ * GitHub answers 422 for an abbreviation that names no single commit it
+ * holds. It reads a branch or a tag's name there as well, though, and anyone
+ * who can push can point one at any commit, so an abbreviation that is also a
+ * branch's or a tag's name resolves to nothing here.
+ */
 async function resolveRevision(abbreviation, context) {
+  if (await namesRef(abbreviation, context)) return undefined;
   const commit = await getJson(`repos/${context.repository}/commits/${abbreviation}`, context, [422]);
   return commit?.sha?.toLowerCase();
+}
+
+/** Whether a branch or a tag has exactly this name. */
+async function namesRef(name, context) {
+  const refs = await Promise.all(["heads", "tags"].map(kind => getJson(`repos/${context.repository}/git/ref/${kind}/${name}`, context, [404])));
+  return refs.some(ref => ref !== undefined);
 }
 
 /** The queued pull requests' numbers for this run, or why there are none. */

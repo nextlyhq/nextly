@@ -55,12 +55,12 @@ function respond(routes, path) {
 
 const SCRIPTS = fileURLToPath(new URL(".", import.meta.url));
 
-/** Runs the command's queue path from an isolated copy, answering the API from the routes it is given. */
+/** Runs the command's queue path from an isolated copy, answering the API from the routes it is given, as `respond` does. */
 const DRIVER = [
   'import { main } from "./scripts/independent-review.mjs";',
   "const routes = JSON.parse(process.env.ROUTES);",
-  "const answer = path => (Object.hasOwn(routes, path) ? { ok: true, status: 200, json: async () => routes[path] } : { ok: false, status: 404 });",
-  'process.exitCode = await main(process.env, { fetchImpl: async url => answer(url.replace("https://api.github.com/", "")) });',
+  respond.toString(),
+  'process.exitCode = await main(process.env, { fetchImpl: async url => respond(routes, url.replace("https://api.github.com/", "")) });',
 ].join("\n");
 
 describe("which pull requests a queue run lands", () => {
@@ -164,8 +164,9 @@ describe("the command", () => {
 
   // After a rewrite a clean pass is known only by its abbreviation, which the
   // repository itself resolves: to one commit, or with 422 to none.
+  const resolves = { [`1`.repeat(7)]: { sha: "1".repeat(40) }, [`2`.repeat(7)]: { sha: "2".repeat(40) } };
+
   it("counts a clean pass after a force-push where GitHub resolves its abbreviation to the head", async () => {
-    const resolves = { [`1`.repeat(7)]: { sha: "1".repeat(40) }, [`2`.repeat(7)]: { sha: "2".repeat(40) } };
     const { env, deps } = queueOf(() => [], { commentsFor: cleanPass, timeline: rewritten, resolves });
     expect(await main(env, deps)).toBe(0);
     expect(printed()).toMatch(/#12 at 222222222 was reviewed by Codex/);
@@ -182,24 +183,52 @@ describe("the command", () => {
     expect(printed()).toMatch(/#12 has no independent review of 222222222/);
   });
 
-  /*
-   * The job installs no packages, so the script has to run with none anywhere
-   * above it. Run from a copy of the scripts outside the repository, by a
-   * plain Node process over the whole queue path, any load of a package fails,
-   * whatever form the load takes.
-   */
-  it("runs from a copy of the scripts with no packages anywhere above it", async () => {
-    const { env, routes } = queueOf((number, head) => [codexReview(head)]);
+  // A branch or a tag named like the abbreviation could point it at any
+  // commit, such as one made to share a reviewed revision's prefix.
+  it("does not count it where a branch or a tag bears the abbreviation's name", async () => {
+    for (const kind of ["heads", "tags"]) {
+      const shadowed = queueOf(() => [], { commentsFor: cleanPass, timeline: rewritten, resolves });
+      shadowed.routes[`repos/o/r/git/ref/${kind}/${"2".repeat(7)}`] = { ref: `refs/${kind}/${"2".repeat(7)}`, object: { sha: "2".repeat(40) } };
+      expect(await main(shadowed.env, shadowed.deps), kind).toBe(1);
+      expect(printed()).toMatch(/#11 at 111111111 was reviewed by Codex/);
+      expect(printed()).toMatch(/#12 has no independent review of 222222222/);
+    }
+  });
+
+  /** The queue path run by a plain Node process from a copy of the scripts outside the repository. */
+  function runIsolated({ env, routes }) {
     const isolated = mkdtempSync(join(tmpdir(), "independent-review-isolated-"));
     try {
       mkdirSync(join(isolated, "scripts"));
       for (const file of readdirSync(SCRIPTS).filter(name => name.endsWith(".mjs") && !name.includes(".test."))) copyFileSync(join(SCRIPTS, file), join(isolated, "scripts", file));
       writeFileSync(join(isolated, "run.mjs"), DRIVER);
-      const result = spawnSync(process.execPath, [join(isolated, "run.mjs")], { cwd: repo, encoding: "utf8", env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env, ROUTES: JSON.stringify(routes) } });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toMatch(/#12 at 222222222 was reviewed by Codex/);
+      return spawnSync(process.execPath, [join(isolated, "run.mjs")], { cwd: repo, encoding: "utf8", env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env, ROUTES: JSON.stringify(routes) } });
     } finally {
       rmSync(isolated, { recursive: true, force: true });
+    }
+  }
+
+  /*
+   * The job installs no packages, so the script has to run with none anywhere
+   * above it. Run from a copy of the scripts with no packages anywhere above
+   * it, any load of a package on the path taken fails, whatever form the load
+   * takes. So each path a queue run can take is run: a review of the head, a
+   * clean pass after a rewrite with GitHub's answers to its abbreviation, a
+   * missing review, an unreadable API, and an event that is not a queue's.
+   */
+  it("runs every queue path from a copy of the scripts with no packages anywhere above it", () => {
+    const reviewed = queueOf((number, head) => [codexReview(head)]);
+    const runs = [
+      [reviewed, 0, /#12 at 222222222 was reviewed by Codex/],
+      [queueOf(() => [], { commentsFor: cleanPass, timeline: rewritten, resolves }), 0, /#12 at 222222222 was reviewed by Codex/],
+      [queueOf(() => [], { commentsFor: cleanPass, timeline: rewritten, resolves: { [`1`.repeat(7)]: 422, [`2`.repeat(7)]: 422 } }), 1, /#12 has no independent review of 222222222/],
+      [{ env: reviewed.env, routes: {} }, 1, /Could not read the queued pull requests' reviews/],
+      [{ env: { ...reviewed.env, GITHUB_EVENT_NAME: "pull_request" }, routes: reviewed.routes }, 1, /decides in the merge queue/],
+    ];
+    for (const [queue, status, says] of runs) {
+      const result = runIsolated(queue);
+      expect(result.status, result.stderr).toBe(status);
+      expect(`${result.stdout}${result.stderr}`).toMatch(says);
     }
   });
 

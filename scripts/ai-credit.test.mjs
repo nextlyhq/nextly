@@ -41,6 +41,8 @@ describe("a message's credit, in each form", () => {
       trailer("Co-authored", spell('"Clau', 'de Code" <bot@example.com>')),
       // Folded onto a continuation line, which git unfolds into one value.
       lines(trailer("Co-authored", spell("Git", "Hub")), spell("  Co", "pilot <bot@example.com>")),
+      // Its whole value on the next line.
+      lines(spell("Co-authored", "-by:"), `  ${MODEL} <${VENDOR_ADDRESS}>`),
     ];
     for (const line of trailers) expect(credited(lines("fix: a change", "", line), "message"), line).toBe(true);
   });
@@ -57,6 +59,8 @@ describe("a message's credit, in each form", () => {
       spell(CHAT_TOOL, " generated this change"),
       spell(CODE_TOOL, " wrote this file"),
       said(spell("A", "I"), "wrote", "this", "code"),
+      spell("Mis", "tral Large wrote this file"),
+      spell(PILOT_TOOL, " Chat generated this change"),
     ];
     for (const line of statements) expect(credited(line, "message"), line).toBe(true);
   });
@@ -101,6 +105,10 @@ describe("a message's credit, in each form", () => {
       "Signed-off-by: Jane Doe <jane@example.com>",
       "Written by Claude Dupont, with thanks to Cody Banks",
       "Written by OpenAI researcher Jane Doe, with thanks to the Anthropic team",
+      "Written by Claude Code researcher Jane Doe",
+      "Thanks to the Mistral Large team",
+      "Written by Mistral Large researcher Jane",
+      "Built with the Copilot Chat SDK",
       "Claude Code reads this file on start",
       "ChatGPT generated suggestions for the form",
     ];
@@ -133,6 +141,8 @@ describe("a line a change adds", () => {
     const signed = trailer("Signed-off", "Jane Doe <jane@example.com>");
     expect(creditsIn(lines("/**", ` * ${signed}`, ` * ${credit}`, " */"), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
     expect(creditsIn(lines(`  # ${signed}`, `  # ${credit}`), "line")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
+    expect(creditsIn(lines("/**", spell(" * Co-authored", "-by:"), ` *   ${MODEL} <${VENDOR_ADDRESS}>`, " */"), "line")).toEqual([expect.objectContaining({ from: 2, line: 3 })]);
+    expect(creditsIn(lines("/**", ` * ${signed}`, spell(" * Co-authored", "-by:"), ` *   ${MODEL} <${VENDOR_ADDRESS}>`, " */"), "line")).toEqual([expect.objectContaining({ from: 3, line: 4 })]);
   });
 
   it("reports the line of a multi-line text that carries the credit", () => {
@@ -468,19 +478,30 @@ describe("the command as the commit-msg hook", () => {
   });
 
   // A message given with `-m` or `-F` keeps its comment lines, and everything
-  // below a scissors line, so all of it is read. Under the editor's template,
-  // where git drops what is below, that part is read as the diff the editor
-  // shows: its added lines count, and the lines it removes or keeps do not.
+  // below a scissors line, so all of it is read as the message. In the editor
+  // git opens, its scissors line is followed by its own comment lines, and it
+  // drops what is below; there that part is read as the diff the editor shows:
+  // its added lines count, and the lines it removes or keeps do not.
   it("reads comment lines, and below the scissors all a message keeps, but never what an editor's diff removes", () => {
     const credit = trailer("Co-authored", `${MODEL} <${VENDOR_ADDRESS}>`);
     const scissors = "# ------------------------ >8 ------------------------";
-    const template = "# Please enter the commit message for your changes. Lines starting";
+    const editor = [scissors, "# Do not modify or remove the line above."];
     expect(hook(lines("fix: a change", spell("# ", credit)))).toBe(1);
     expect(hook(lines("fix: a change", scissors, credit))).toBe(1);
     expect(hook(lines("fix: a change", scissors, spell(" ", credit)))).toBe(1);
-    expect(hook(lines("fix: a change", template, scissors, spell("+", credit)))).toBe(1);
-    expect(hook(lines("fix: a change", template, scissors, spell("-", credit)))).toBe(0);
-    expect(hook(lines("fix: a change", template, scissors, spell(" ", credit)))).toBe(0);
+    expect(hook(lines("fix: a change", ...editor, spell("+", credit)))).toBe(1);
+    expect(hook(lines("fix: a change", ...editor, spell("-", credit)))).toBe(0);
+    expect(hook(lines("fix: a change", ...editor, spell(" ", credit)))).toBe(0);
+  });
+
+  it("knows the editor's diff by git's own lines, in any comment prefix or language, and reads a message's own text below the scissors as its message", () => {
+    const credit = trailer("Co-authored", `${MODEL} <${VENDOR_ADDRESS}>`);
+    for (const prefix of [";", "//"]) {
+      const editor = [`${prefix} ------------------------ >8 ------------------------`, `${prefix} Ne modifiez pas et ne supprimez pas la ligne ci-dessus.`];
+      expect(hook(lines("fix: a change", ...editor, spell(" ", credit))), prefix).toBe(0);
+      expect(hook(lines("fix: a change", ...editor, spell("+", credit))), prefix).toBe(1);
+    }
+    expect(hook(lines("fix: a change", "# ------------------------ >8 ------------------------", spell("Entirely A", "I-generated.")))).toBe(1);
   });
 
   it("accepts a clean message, and refuses when it cannot read who is committing", () => {
