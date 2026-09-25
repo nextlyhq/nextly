@@ -21,6 +21,12 @@ them, and reports a second reviewer that never ran as distinct from one that
 found nothing. A gate typed out again by hand is a second implementation of the
 same question, which this repository has a rule about.
 
+**It needs gh 2.48 or later**, the release that added `gh api --slurp`, which
+it pages with. Older ones stop at the first paged request with
+`unknown flag: --slurp` and exit 2, which is no verdict: `gh --version` says
+which one is on PATH. A distribution's package can lag well behind; gh 2.46.0
+from Ubuntu's archive is one that stops.
+
 **It answers a different question before and after the merge**, because the two
 questions have different subjects. Open, it judges the branch tip — the thing
 being proposed. Merged, it judges `merge_commit_sha`: a squash commit is `main`

@@ -37,12 +37,35 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SYNC = "run pnpm instructions:sync";
 
 /**
- * A digest of a copy's words, blind to whitespace and to the marks the
- * formatter rewrites — table padding and rules, list and emphasis markers,
- * escapes. The formatter that runs on every commit rewrites a copy exactly as
- * it rewrites its source, and that is no edit; a word added is one.
+ * What the formatter that runs on every commit rewrites in Markdown without
+ * changing what it says, each brought to one spelling, in this order: a
+ * backslash escaping punctuation, a thematic break, the dashes of a table's
+ * delimiter row, a table row's outer pipes, a bullet's marker, which of `*`
+ * and `_` marks emphasis, the padding around a table's pipes, and whitespace,
+ * so that rewrapping and re-indenting are no edit either. Every other
+ * character counts, so `--no-verify` edited to `noverify` is an edit.
  */
-const digest = text => createHash("sha256").update(text.replace(/[\s*_\-+|:\\]+/g, "")).digest("hex").slice(0, 16);
+const FORMATTER_OWNED = [
+  [/\\(?=[!-/:-@[-`{-~])/g, ""],
+  [/^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/gm, "-"],
+  [/^(?=[^\n]*-)[ \t|:-]+$/gm, row => row.replace(/-+/g, "-")],
+  [/^[ \t]*\||\|[ \t]*$/gm, ""],
+  [/^([ \t]*)[*+-](?=[ \t])/gm, "$1-"],
+  [/(?<![\p{L}\p{N}\\])[*_]+(?=[^\s*_])|(?<=[^\s*_\\])[*_]+(?![\p{L}\p{N}])/gu, run => "*".repeat(run.length)],
+  [/[ \t]*\|[ \t]*/g, "|"],
+  [/\s+/g, " "],
+];
+
+/**
+ * A digest of a copy's text, blind to what the formatter rewrites and to
+ * nothing else. The formatter rewrites a copy exactly as it rewrites its
+ * source, and that is no edit; any other change is one.
+ */
+const digest = text =>
+  createHash("sha256")
+    .update(FORMATTER_OWNED.reduce((out, [pattern, to]) => out.replace(pattern, to), text).trim())
+    .digest("hex")
+    .slice(0, 16);
 
 /** What a copy begins with: the file it copies, a digest of the text it copied, and that it is not to be edited. */
 export function header(source, body) {
@@ -73,8 +96,8 @@ function entryAt(path) {
 
 /**
  * How the copies fall short: a CLAUDE.md missing beside an instruction file,
- * one that is a symbolic link, one that differs from its source, and one that
- * has no instruction file to copy.
+ * one that is a symbolic link, one that is out of date or holds text of its
+ * own, and one that has no instruction file to copy.
  *
  * @returns {{ path: string, problem: string, fix: string }[]}
  */
@@ -93,7 +116,19 @@ function driftOf(base, source, copy) {
   const entry = entryAt(join(base, copy));
   if (entry === null) return [{ path: copy, problem: `is missing, so Claude Code never reads ${source}`, fix: SYNC }];
   if (entry.isSymbolicLink()) return [{ path: copy, problem: "is a symbolic link — it must be a real copy", fix: "replace it with a real file, then run pnpm instructions:sync" }];
-  return readFileSync(join(base, copy), "utf8") === copyText(base, source) ? [] : [{ path: copy, problem: `differs from ${source}`, fix: SYNC }];
+  return textDrift(readFileSync(join(base, copy), "utf8"), source, readFileSync(join(base, source), "utf8"), copy);
+}
+
+/**
+ * How a copy's text falls short of its source, judged by the test the sync
+ * applies before it overwrites one: a copy nobody has edited is only out of
+ * date, and the sync fixes it; one holding text of its own is refused by the
+ * sync, so the fix is to move that text into the source first.
+ */
+function textDrift(text, source, body, copy) {
+  if (text === header(source, body) + body) return [];
+  if (replaceable(text, source, body)) return [{ path: copy, problem: `differs from ${source}`, fix: SYNC }];
+  return [{ path: copy, problem: `holds text of its own that ${source} does not`, fix: `move that text into ${source}, then run pnpm instructions:sync` }];
 }
 
 /**
@@ -118,7 +153,7 @@ function refusal(base, source, copy) {
 }
 
 /** The files to copy from: tracked ones, and new ones git does not ignore, so a new AGENTS.md is copied before it is staged. */
-function repositoryFiles(base) {
+export function repositoryFiles(base) {
   return execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: base, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
     .split("\0")
     .filter(path => path && entryAt(join(base, path)) !== null);

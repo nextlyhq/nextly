@@ -1094,11 +1094,15 @@ export function main(argv) {
     return 2;
   }
 
+  // gh evaluates `--jq` with its own built-in jq, not the jq on PATH, and
+  // some versions of it reject a comparison written bare as an object value:
+  // gh 2.46.0 fails with `unexpected token "!="`, where gh 2.101.0 and jq 1.8
+  // accept it. Parenthesized, it parses in every version.
   const meta = ghJson([
     "api",
     `repos/${REPO}/pulls/${pr}`,
     "--jq",
-    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha,state:.state,draft:.draft,changedFiles:.changed_files,baseRepo:.base.repo.full_name,baseRef:.base.ref,commits:.commits}",
+    "{cross:(.head.repo.full_name!=.base.repo.full_name),repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha,state:.state,draft:.draft,changedFiles:.changed_files,baseRepo:.base.repo.full_name,baseRef:.base.ref,commits:.commits}",
   ]);
   const remotes = configuredRemotes();
   REMOTE_FOR_FETCH = remoteForRepo(meta.repo, remotes);

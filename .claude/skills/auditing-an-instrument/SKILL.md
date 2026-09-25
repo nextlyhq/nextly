@@ -251,15 +251,23 @@ is in, not after the merge:
 ```sh
 git status --porcelain                                    # must print nothing
 git rev-parse HEAD                                        # must equal the next line
-gh pr view <N> --json headRefOid --jq .headRefOid
+git ls-remote <remote> refs/heads/<branch>                # the pull request's branch
 gh pr diff <N> | grep -F -e '<a line only the fix adds>'  # must find it
 ```
 
 The first catches an edit that was never committed, staged or not, and a new
-file that was never added. The second compares with GitHub's own record of the
-pull request head, so it catches a commit that was never pushed, one pushed to
-another branch, and a branch someone else has since moved. The third reads the
-pull request's diff, so it also catches a fix made in another checkout.
+file that was never added. The second reads the pull request's branch in the
+repository it lives in — for a pull request from a fork, the fork, since the
+branch need not exist on `origin` at all; `gh pr view <N> --json
+headRepositoryOwner,headRepository,headRefName` names both — so it catches a
+commit that was never pushed, one pushed to another branch, and a branch someone
+else has since moved. It reads the branch's own ref, not GitHub's record of the
+pull request head (`gh pr view <N> --json headRefOid`), because that record lags
+a push: `scripts/ci-verdict-evidence.mjs` measured it a full commit behind while
+the ref was already current. The third reads the pull request's diff, so it also
+catches a fix made in another checkout. That diff is drawn from the same record
+of the head, so right after a push it can lag the same way: ask again after a
+short wait before concluding the fix did not reach the pull request.
 `git log origin/<branch>..HEAD` cannot do this job: it lists commits, so a fix
 that was never committed leaves it EMPTY, the same answer a fix that landed
 gives. A cheap precondition that catches nothing is what one looks like when it

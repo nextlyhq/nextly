@@ -36,6 +36,7 @@ import {
   pathsIn,
   gitIgnored,
   pnpmScriptsIn,
+  rootInstructions,
   routedSkills,
   routerDisagreements,
   skillFindings,
@@ -46,6 +47,9 @@ import { syncSkillCopy } from "./agent-skills.mjs";
 const CHECK = fileURLToPath(new URL("./check-agent-contract.mjs", import.meta.url));
 
 const names = text => pnpmScriptsIn(text).map(entry => entry.name);
+
+/** The required section with the forms it prescribes, as a fixture's AGENTS.md carries it. */
+const WHOLE_FILE_SECTION = '## A whole-file write is a delete plus a create\n\nRefuse the write: `set -o noclobber`, or `{ flag: "wx" }`.\n';
 
 describe("reading claims out of a document", () => {
   it("reads an inline code span", () => {
@@ -287,7 +291,7 @@ describe("the command, run against another checkout", () => {
       writeFileSync(join(base, path), text);
     };
     try {
-      const agents = "| `a` | when a applies |\n\n`.claude/rules/integration-tests.md` is read by path.\n\n## A whole-file write is a delete plus a create\n";
+      const agents = `| \`a\` | when a applies |\n\n\`.claude/rules/integration-tests.md\` is read by path.\n\n${WHOLE_FILE_SECTION}`;
       put("AGENTS.md", agents);
       put("CLAUDE.md", header("AGENTS.md", agents) + agents);
       put(".claude/rules/integration-tests.md", '---\npaths:\n  - "**/*.integration.test.ts"\n---\n\nA rule.\n');
@@ -310,6 +314,93 @@ describe("the command, run against another checkout", () => {
 
       // A flag with no directory is refused, not read as this checkout.
       expect(spawnSync(process.execPath, [CHECK, "--root"], { encoding: "utf8" }).status).toBe(64);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * A checkout that meets the contract through AGENTS.md alone, with git
+   * initialised; each test below adds a root override its own way. `put`
+   * writes a file, `copy` makes CLAUDE.md the sync's copy of one, and `check`
+   * runs the command, staging everything first unless told not to.
+   */
+  function overrideCheckout() {
+    const base = mkdtempSync(join(tmpdir(), "agent-contract-override-"));
+    const put = (path, text) => {
+      mkdirSync(dirname(join(base, path)), { recursive: true });
+      writeFileSync(join(base, path), text);
+    };
+    const copy = (source, text) => put("CLAUDE.md", header(source, text) + text);
+    const check = ({ stage = true } = {}) => {
+      if (stage) execFileSync("git", ["add", "-A"], { cwd: base });
+      return spawnSync(process.execPath, [CHECK, "--root", base], { encoding: "utf8" });
+    };
+    const rules = "| `a` | when a applies |\n\n`.claude/rules/integration-tests.md` is read by path.\n\n";
+    put("AGENTS.md", `${rules}${WHOLE_FILE_SECTION}`);
+    copy("AGENTS.md", `${rules}${WHOLE_FILE_SECTION}`);
+    put(".claude/rules/integration-tests.md", '---\npaths:\n  - "**/*.integration.test.ts"\n---\n\nA rule.\n');
+    put(".github/review-prompt.md", "Review.\n");
+    put("package.json", "{}\n");
+    put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\n---\n");
+    syncSkillCopy(base);
+    execFileSync("git", ["init", "-q"], { cwd: base });
+    return { base, put, copy, check, rules };
+  }
+
+  /*
+   * With a root override, the AGENTS.md harness reads it and never the
+   * AGENTS.md beside it, and the root CLAUDE.md copies it, so the sections both
+   * tools load are the override's. An override without the section fails the
+   * check although AGENTS.md still has it; the control puts it back.
+   */
+  it("holds the root override, not the AGENTS.md beside it, to the required sections", () => {
+    const { base, put, copy, check, rules } = overrideCheckout();
+    try {
+      put("AGENTS.override.md", rules);
+      copy("AGENTS.override.md", rules);
+      const lost = check();
+      expect(lost.status).toBe(1);
+      expect(lost.stderr).toContain('AGENTS.override.md: no longer has the section "A whole-file write is a delete plus a create"');
+
+      put("AGENTS.override.md", `${rules}${WHOLE_FILE_SECTION}`);
+      copy("AGENTS.override.md", `${rules}${WHOLE_FILE_SECTION}`);
+      const kept = check();
+      expect(kept.stderr).toBe("");
+      expect(kept.status).toBe(0);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("checks the paths the root override names, since agents read it and not the AGENTS.md beside it", () => {
+    const { base, put, copy, check, rules } = overrideCheckout();
+    try {
+      const override = `${rules}Runs \`.github/workflows/gone.yml\`.\n\n${WHOLE_FILE_SECTION}`;
+      put("AGENTS.override.md", override);
+      copy("AGENTS.override.md", override);
+      const run = check();
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain("AGENTS.override.md: path '.github/workflows/gone.yml' does not resolve");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  /*
+   * The sync copies an override git does not track yet, so the check reads
+   * the same files: judged from tracked files alone, it would check the
+   * AGENTS.md beside the override and call the copy of the override drift.
+   */
+  it("checks an override the sync would copy before it is staged", () => {
+    const { base, put, copy, check, rules } = overrideCheckout();
+    try {
+      execFileSync("git", ["add", "-A"], { cwd: base });
+      put("AGENTS.override.md", rules);
+      copy("AGENTS.override.md", rules);
+      const run = check({ stage: false });
+      expect(run.stderr).toContain('AGENTS.override.md: no longer has the section "A whole-file write is a delete plus a create"');
+      expect(run.stderr).not.toContain("CLAUDE.md:");
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
@@ -374,7 +465,7 @@ describe("reaching Claude Code", () => {
     try {
       mkdirSync(join(base, "packages/p"), { recursive: true });
       writeFileSync(join(base, "AGENTS.md"), "root\n");
-      writeFileSync(join(base, "CLAUDE.md"), `${header("AGENTS.md", "root\n")}root, edited\n`);
+      writeFileSync(join(base, "CLAUDE.md"), `${header("AGENTS.md", "root, before\n")}root, before\n`);
       writeFileSync(join(base, "packages/p/AGENTS.md"), "p\n");
       expect(instructionCopyFindings(base, ["AGENTS.md", "CLAUDE.md", "packages/p/AGENTS.md"])).toEqual([
         { file: "CLAUDE.md", kind: "instructions", claim: "differs from AGENTS.md", fix: "run pnpm instructions:sync" },
@@ -395,7 +486,7 @@ describe("reaching Claude Code", () => {
       put(".claude/rules/always.md", "Always.\n");
       put(".claude/rules/named.md", '---\npaths: ["**/*.y"]\n---\n\nNamed.\n');
       put(".claude/rules/unnamed.md", '---\npaths:\n  - "**/*.x"\n---\n\nUnnamed.\n');
-      const agents = "`.claude/rules/named.md` reaches Codex as the `y` skill.\n\n## A whole-file write is a delete plus a create\n";
+      const agents = `\`.claude/rules/named.md\` reaches Codex as the \`y\` skill.\n\n${WHOLE_FILE_SECTION}`;
       expect(ruleFindings(base, agents)).toEqual([
         { file: ".claude/rules/always.md", kind: "instructions", claim: "has no paths, so Claude Code loads it in every session and Codex never does", fix: "move it into AGENTS.md, which both load" },
         { file: ".claude/rules/unnamed.md", kind: "instructions", claim: "is not named in AGENTS.md, so Codex is never told where it applies", fix: "name it in AGENTS.md with the skill that carries it to Codex" },
@@ -409,6 +500,37 @@ describe("reaching Claude Code", () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+
+  /*
+   * A heading kept over a body that has lost the rule passes a check of
+   * headings alone. The forms are looked for under the heading only, up to the
+   * next section, so text elsewhere cannot stand in for them, and a `#` in a
+   * code block is a comment that does not end the section.
+   */
+  it("holds the whole-file section to the forms it prescribes, not only to its heading", () => {
+    const base = mkdtempSync(join(tmpdir(), "agent-contract-sections-"));
+    const heading = "## A whole-file write is a delete plus a create";
+    const claim = missing => `has the section "A whole-file write is a delete plus a create" without ${missing}, the forms it prescribes`;
+    try {
+      const emptied = `${heading}\n\nNothing here now.\n\n## Next\n\nUse \`set -o noclobber\` or \`{ flag: "wx" }\` elsewhere.\n`;
+      expect(ruleFindings(base, emptied)).toEqual([{ file: "AGENTS.md", kind: "instructions", claim: claim('`set -o noclobber` or `{ flag: "wx" }`'), fix: "put them back" }]);
+      expect(ruleFindings(base, `${heading}\n\nOnly \`set -o noclobber\`.\n`).map(finding => finding.claim)).toEqual([claim('`{ flag: "wx" }`')]);
+      const fenced = `${heading}\n\n\`\`\`sh\n# a comment, not a heading\nset -o noclobber\n\`\`\`\n\nOr \`{ flag: "wx" }\`.\n\n## Next\n`;
+      expect(ruleFindings(base, fenced)).toEqual([]);
+      // A fence closes only on its own character: the other fence shown inside it, and a heading there, stay code.
+      const nested = `${heading}\n\n\`\`\`md\n~~~\n## Not a heading\n~~~\n\`\`\`\n\nUse \`set -o noclobber\` or \`{ flag: "wx" }\`.\n\n## Next\n`;
+      expect(ruleFindings(base, nested)).toEqual([]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("takes the root override as the file both tools load, where there is one", () => {
+    expect(rootInstructions(["AGENTS.md", "CLAUDE.md"])).toBe("AGENTS.md");
+    expect(rootInstructions(["AGENTS.md", "AGENTS.override.md", "CLAUDE.md"])).toBe("AGENTS.override.md");
+    // An override in a package is that package's, not the root's.
+    expect(rootInstructions(["packages/p/AGENTS.override.md", "AGENTS.md"])).toBe("AGENTS.md");
   });
 
   it("finds this repository's rules reachable by both tools", () => {

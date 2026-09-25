@@ -254,15 +254,26 @@ does not find it: with `linkdir -> real`, `test -L linkdir/file.txt` is FALSE
 because the file itself is regular, while the write still lands in
 `real/file.txt`.
 
-**The exclusive create above already answers this, which is why no path
-canonicalisation is prescribed here.** Measured: with `link.txt -> real.txt`
-holding content, both `set -o noclobber` and Node's `wx` flag refuse the write
-and leave `real.txt` untouched; with a DANGLING `link.txt -> ghost.txt`, both
-refuse as well and no `ghost.txt` is created. The refusal follows the link
-without needing to be told about it, which a resolver written here cannot claim
-— a leaf that exists, a leaf that is a link, a leaf that is a dangling link and
-a leaf that is absent are four behaviours, and a routine short by one hands back
-the wrong path silently.
+**The exclusive create above already answers this for the harm this rule is
+about, destroying a file that exists, which is why no path canonicalisation is
+prescribed here.** Measured with bash 5.3.9 and Node 24: with
+`link.txt -> real.txt` holding content, both `set -o noclobber` and Node's `wx`
+flag refuse the write and leave `real.txt` untouched; with a DANGLING
+`link.txt -> ghost.txt`, both refuse as well and no `ghost.txt` is created; and
+with `linkdir -> real` and an existing `real/existing.txt`, both refuse
+`linkdir/existing.txt`, which keeps its content. An exclusive create refuses to
+destroy an existing file wherever the links in its path lead. The refusal
+follows the link without needing to be told about it, which a resolver written
+here cannot claim — a leaf that exists, a leaf that is a link, a leaf that is a
+dangling link and a leaf that is absent are four behaviours, and a routine short
+by one hands back the wrong path silently.
+
+Two limits. The `wx` flag's refusal of a dangling link is POSIX's rule for an
+exclusive create, which fails on any link at the path; `noclobber`'s is bash's,
+and POSIX lets another shell follow a dangling link and create its target. And an exclusive create does not keep a NEW file inside the tree:
+through a linked directory above the path, an absent `linkdir/new.txt` is
+created as `real/new.txt` by both. That is containment, which neither form
+provides; where writing outside the tree matters, resolve the directory first.
 
 That conservatism has one cost worth stating: a deliberate write through a
 dangling symlink is refused too, because the link entry exists. Take that with

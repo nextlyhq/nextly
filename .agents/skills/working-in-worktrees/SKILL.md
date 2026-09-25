@@ -29,10 +29,12 @@ opts into losing both. It matches the target by EXACT branch or path, never by
 prefix, because a near-miss there removes somebody else's checkout.
 
 **Remove it when you are finished.** Slots are small integers and an abandoned
-checkout holds its ports and its databases indefinitely. `remove` drops the
-slot's databases before it removes the checkout, so a later `new` cannot take
-the slot while the old databases still hold another run's tables. It never
-touches slot 0, which is the shared default.
+checkout holds its ports and its databases indefinitely. `remove` removes the
+Git worktree first and drops the slot's databases after it, so a checkout Git
+refuses to remove — one holding uncommitted work — keeps its databases as well.
+The slot is marked for cleanup before either step, so a later `new` cannot
+take it in between, and it stays RESERVED when its databases could not all be
+dropped. It never touches slot 0, which is the shared default.
 
 A slot owns a contiguous BLOCK of ports and one database. Slot 0 is the
 documented defaults — `PORT` 3000, `E2E_PORT` 3100, `E2E_PROD_PORT` 3101 — and

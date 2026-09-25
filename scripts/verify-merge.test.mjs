@@ -1551,3 +1551,36 @@ describe("advisory review threads do not block the merge gate", () => {
     expect(verdict.blockers.some(b => b.kind === "threads-unknown")).toBe(true);
   });
 });
+
+describe("a filter gh's own jq cannot parse", () => {
+  /*
+   * gh evaluates `--jq` with its built-in jq, not the jq on PATH, and some
+   * versions of it reject a comparison written bare as an object value: under
+   * gh 2.46.0, `{cross:.a!=.b}` failed every run with `unexpected token "!="`
+   * before anything was checked, where gh 2.101.0 and jq 1.8 accept it. No jq
+   * here parses as every gh does, so the object filters in this script are
+   * held to the form they all parse: each comparison inside one in parentheses.
+   */
+  const bareComparison = filter => {
+    let flat = filter;
+    while (/\([^()]*\)/.test(flat)) flat = flat.replace(/\([^()]*\)/g, "_");
+    return /!=|==|<=|>=|[<>]|\band\b|\bor\b/.test(flat);
+  };
+
+  it("finds no comparison left bare in an object filter the script passes to gh", () => {
+    const source = readFileSync(fileURLToPath(new URL("./verify-merge.mjs", import.meta.url)), "utf8");
+    const filters = [...source.matchAll(/"(\{[^"]*\})"/g)].map(match => match[1]);
+    // The pull request's fields, the review threads' page, and the fields re-read at the end.
+    for (const field of ["cross:", "nodes:", "base:.base.ref"]) {
+      expect(filters.some(filter => filter.includes(field))).toBe(true);
+    }
+    expect(filters.filter(bareComparison)).toEqual([]);
+  });
+
+  it("tells a bare comparison from one in parentheses", () => {
+    expect(bareComparison("{cross:.a!=.b,repo:.x}")).toBe(true);
+    expect(bareComparison("{open:.state==\"open\"}")).toBe(true);
+    expect(bareComparison("{cross:(.a!=.b),repo:.x}")).toBe(false);
+    expect(bareComparison("{nested:((.a|length)>1)}")).toBe(false);
+  });
+});
