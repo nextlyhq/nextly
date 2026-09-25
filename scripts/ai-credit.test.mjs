@@ -202,6 +202,13 @@ describe("a line a change adds", () => {
     expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), `  ${CODE_TOOL}`), "message")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
     expect(creditsIn(lines(spell("* Co-authored", "-by: Clau", "de"), "  Dupont"), "message")).toEqual([]);
     expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), "  (context)", `  ${CODE_TOOL}`), "message")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
+    // An explanation credits no one, however it opens, and a co-author after it still belongs to the trailer.
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("  ", CODE_TOOL, ": reads the project files")), "message")).toEqual([]);
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), "  with a note", spell("  and ", CODE_TOOL)), "message")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
+    // An ambiguous name in lower case is a name alone, as the trailer reads it in any case.
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("  clau", "de")), "message")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
+    // An address goes on with the name before it, which a vendor's address makes a tool's; the name credited on its own line already.
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Clau", "de"), spell("  <claude@", "anthro", "pic.com>")), "message")).toEqual([expect.objectContaining({ from: 1, line: 1 })]);
   });
 
   it("unfolds a trailer across a repeated comment prefix, and not onto the next comment", () => {
@@ -234,11 +241,14 @@ describe("a line a change adds", () => {
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  (checked against the ", CODE_TOOL, " docs)")), "line")).toEqual([]);
     // A later co-author folded across lines is judged whole, as the first is: a person's surname and address, or a tool's edition.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  and Clau", "de"), "  Dupont <claude.dupont@example.com>"), "line")).toEqual([]);
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  and Clau", "de"), "  Opus 5"), "line")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
     // A joining word is a word of its own: a surname that starts with one goes on with the co-author before it.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  and Clau", "de"), "  Andrews <claude.andrews@example.com>"), "line")).toEqual([]);
     // A closed note completes what it follows, so the line after it is a co-author of its own; a note still open goes on.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  (context)", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  (checked against the", spell("  ", CODE_TOOL, " docs)")), "line")).toEqual([]);
+    // An address inside a note still open does not end it.
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  (reviewed by Alice <alice@example.com>", spell("  ", CODE_TOOL, " docs)")), "line")).toEqual([]);
     // A tool named after a note under a vendor's name is that line's credit, not the vendor's line's.
     expect(creditsIn(lines(trailer("Co-authored", spell("Anthro", "pic")), "  (a note)", spell("  and ", CODE_TOOL)), "line")).toEqual([expect.objectContaining({ line: 3 })]);
     // An identity complete with its address, or closed by a separator, leaves the next line an identity of its own.
@@ -255,7 +265,6 @@ describe("a line a change adds", () => {
 
   it("keeps a trailer's multi-line human name whole under a list item", () => {
     expect(creditsIn(lines(spell("* Co-authored", "-by: Clau", "de"), "  Dupont", "  <claude.dupont@example.com>"), "message")).toEqual([]);
-    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  and Clau", "de"), "  Opus 5"), "line")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
   });
 
   it("reports the line of a multi-line text that carries the credit", () => {

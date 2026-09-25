@@ -249,31 +249,43 @@ function continuation(line, plainLine, last) {
   if (!continuable(plainLine, last)) return null;
   const prefix = commentPrefix(last.head);
   if (line.startsWith(prefix)) return continuingText(line.slice(prefix.length), last.head.slice(prefix.length));
-  return underListItem(line, last, prefix) ? plain(line).trim() : null;
+  return indentedUnderItem(line, last.head, prefix) ? listItemPart(line, last) : null;
 }
 
 /**
- * Whether a line continues a trailer written as a `*` list item. Markdown
- * indents an item's continuation to its text, without repeating the bullet,
- * where a comment block repeats its prefix. Under an item an indented line may
- * as well explain it, so it continues the trailer only as what the value still
- * needs: the value itself, while it is empty, or what goes on with a value.
+ * Whether a line is indented under a trailer written as a `*` list item:
+ * Markdown indents an item's continuation to its text, without repeating the
+ * bullet, where a comment block repeats its prefix.
  */
-const underListItem = (line, last, prefix) => indentedUnderItem(line, last.head, prefix) && continuesItem(plain(line).trim(), itemValue(last));
-
 const indentedUnderItem = (line, head, prefix) => /^[ \t]*\*$/.test(prefix) && /\S/.test(line) && !LIST_ITEM.test(line) && indentOf(line) >= prefix.length + indentOf(head.slice(prefix.length));
 
-const continuesItem = (text, value) => value === "" || continuesValue(text);
+/**
+ * What a line indented under a list item adds to its trailer. Every such line
+ * goes on with the item, so a co-author after an explanation still belongs to
+ * the trailer; but an explanation credits no one. What goes on with the value
+ * (the value itself while it is empty, another co-author after a joining word,
+ * an address, or a name alone) is read as it is, and anything else, a note
+ * among them, as a closed note, which names no co-author and ends the one
+ * before it.
+ */
+function listItemPart(line, last) {
+  const text = plain(line).trim();
+  return itemValue(last) === "" || continuesValue(text) ? text : `(${text.replace(/[()]/g, "")})`;
+}
 
-/** Whether a line goes on with a trailer's value: another co-author after a joining word, a note, an address, or a name alone. */
-const continuesValue = text => JOINER.test(text) || /^[(—]/.test(text) || ADDRESS.test(text) || nameAlone(namePart(text));
+/** Whether a line goes on with a trailer's value: another co-author after a joining word, an address, or a name alone. */
+const continuesValue = text => JOINER.test(text) || ADDRESS.test(text) || nameAlone(beforeNote(text));
 
 /**
  * A name and nothing more, as a surname or a tool's name folded onto the next
- * line is: each word capitalised or a number, or a tool's name or identity in
- * full. An explanation reads on in lower case.
+ * line is: each word capitalised or a number, a tool's name or identity in
+ * full, or an ambiguous name in any case. An explanation reads on in lower
+ * case, or after a colon.
  */
-const nameAlone = text => /^[A-Z0-9][\w.'-]*(?:\s+[A-Z0-9][\w.'-]*)*$/.test(text) || isAiIdentity(text);
+const nameAlone = text => /^[A-Z0-9][\w.'-]*(?:\s+[A-Z0-9][\w.'-]*)*$/.test(text) || isAiIdentity(text) || BARE_NAME.test(text);
+
+/** A line's text before a note in brackets or after a dash; a colon is kept, since what follows one explains. */
+const beforeNote = text => text.split(/\s+(?:[(—]|-\s)/)[0].trim();
 
 /** A trailer's value so far: its first line after the key, and the lines folded onto it. */
 const itemValue = last => [last.parts[0].replace(TRAILER_HEAD, ""), ...last.parts.slice(1)].join(" ").trim();
@@ -382,7 +394,8 @@ function coAuthors(parts, from) {
  */
 const startsCoAuthor = (part, last) => !last || JOINER.test(part) || last.group.length >= IDENTITY_LINES || complete(last.group.join(" "));
 
-const complete = text => ADDRESS.test(text) || /[,;]\s*$/.test(text) || (NOTE.test(text) && balanced(text));
+/** Whether a co-author's lines are complete: no note left open, and an address, a closing separator or a note. */
+const complete = text => balanced(text) && (ADDRESS.test(text) || /[,;]\s*$/.test(text) || NOTE.test(text));
 
 /**
  * The most lines one identity is read across: a name, a surname, an address,
