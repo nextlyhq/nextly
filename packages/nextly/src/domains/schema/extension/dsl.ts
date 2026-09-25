@@ -279,11 +279,19 @@ export const col = {
    * caller supplies is a value the sequence does not know about.
    */
   serial(): ColumnBuilder<number, false, true> {
-    return build<number>("serial", { nullable: false }) as ColumnBuilder<
-      number,
-      false,
-      true
-    >;
+    // The table's PRIMARY KEY, not merely a column. That is not a convenience:
+    // it is the only shape the promise of portability survives on all three.
+    // MySQL refuses `AUTO_INCREMENT` on a column that is not a key, and SQLite
+    // has no serial type at all — only an `INTEGER PRIMARY KEY`, the rowid
+    // alias, assigns a value. Rendered as an ordinary column it produced DDL
+    // MySQL would not accept and a SQLite table whose NOT NULL column nothing
+    // ever filled, so a table declaring `col.serial()` beside `col.id()` was
+    // broken on two of the three dialects it claimed to support.
+    return build<number>(
+      "serial",
+      { nullable: false },
+      { primaryKey: true }
+    ) as ColumnBuilder<number, false, true>;
   },
 
   /** 16-bit integer. */
@@ -736,6 +744,24 @@ export function defineTable<
     invalid("table.name", "A table must be named.");
   }
   const { resolved, byName } = resolveColumns(name, columns);
+
+  // One primary key per table, and a named refusal when there are two.
+  //
+  // `col.serial()` IS the key — no dialect assigns a value to a serial column
+  // that is not one — so declaring it beside `col.id()` asks for two, which
+  // no dialect accepts either. Left unchecked the two keys reached the
+  // renderers and each produced its own broken DDL, so the author learned
+  // about it from MySQL's parser rather than from the declaration.
+  const keys = resolved.filter(column => column.primaryKey === true);
+  if (keys.length > 1) {
+    invalid(
+      `${name}.columns`,
+      `A table has one primary key, and this declares ${String(keys.length)}: ${keys
+        .map(column => column.key)
+        .join(", ")}. ` +
+        `col.serial() is itself the key — no dialect assigns a value to a serial column that is not one — so use it INSTEAD of col.id(), not beside it.`
+    );
+  }
   const indexes = resolveIndexes(name, byName, opts?.indexes ?? []);
   const foreignKeys = resolveForeignKeys(name, byName, opts?.foreignKeys ?? []);
   const checks = resolveChecks(name, opts?.checks ?? []);

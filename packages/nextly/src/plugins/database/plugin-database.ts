@@ -132,6 +132,7 @@ function resolveTable(
   definition: TableDefinition,
   deps: PluginDatabaseDeps
 ): { name: string; table: unknown } {
+  assertTableDefinition(definition);
   const name = sqlNameOf(definition, deps);
   assertTableAccess(name, rulesOf(deps));
 
@@ -145,6 +146,45 @@ function resolveTable(
     });
   }
   return { name, table };
+}
+
+/**
+ * Refuse a call written against the surface `ctx.db` USED to be, by name.
+ *
+ * `ctx.db` was the Drizzle instance itself, so a plugin wrote
+ * `ctx.db.select().from(table)`. It is now the owner-checked surface, whose
+ * `select` takes the table DEFINITION — the same four verbs, different
+ * arguments. A plugin written against the old shape therefore reached
+ * `sqlNameOf(undefined)` and died on a missing property, which says nothing
+ * about what changed or where the old handle went.
+ *
+ * The old handle is still there, at `ctx.db.raw`, and this says so. Both
+ * shapes cannot live on one object — the four names collide — so the decision
+ * is a break, and the least a break can do is explain itself at the call site
+ * that hit it.
+ */
+function assertTableDefinition(definition: TableDefinition): void {
+  if (
+    definition !== null &&
+    typeof definition === "object" &&
+    typeof definition.name === "string" &&
+    Array.isArray(definition.columns)
+  ) {
+    return;
+  }
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "ctx.db",
+        code: "INVALID",
+        message:
+          "ctx.db now takes the table DEFINITION rather than being the Drizzle instance: " +
+          "`ctx.db.select(myTable)` where you wrote `ctx.db.select().from(...)`. " +
+          "The unchanged Drizzle handle is still available as `ctx.db.raw`, so " +
+          "`ctx.db.raw.select().from(...)` keeps existing code working unchanged.",
+      },
+    ],
+  });
 }
 
 /**

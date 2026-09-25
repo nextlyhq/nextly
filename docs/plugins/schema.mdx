@@ -231,8 +231,24 @@ update. Insert and read back in one step with `insertReturning`, which works
 the same on all three dialects — MySQL has no `RETURNING`, so the portable
 path is the only path.
 
-Use `isUniqueViolation(err)` to tell "this row already exists" from "the
-database is broken". Both arrive as the same thrown object.
+Use `isUniqueViolation(ctx.dialect, err)` to tell "this row already exists"
+from "the database is broken". Both arrive as the same thrown object.
+
+```ts
+try {
+  await ctx.db.insert(identities, { provider: "github", externalId: id });
+} catch (err) {
+  if (isUniqueViolation(ctx.dialect, err)) return existingIdentity();
+  throw err;
+}
+```
+
+The dialect is a parameter rather than something the helper works out: the
+classification falls back to matching driver messages for MySQL and SQLite,
+and those patterns are only meaningful for the dialect that produced the
+error. A helper guessing across all three would report a MySQL phrase found
+in a PostgreSQL message as a duplicate key. `ctx.dialect` is the answer, and
+the plugin already has it.
 
 ## Hooks, when a declaration is not enough
 

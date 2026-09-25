@@ -301,7 +301,7 @@ describe("pluginMigrationSetsFrom", () => {
     };
   }
 
-  it("keeps only enabled plugins that ship migrations, in resolver order", async () => {
+  it("keeps every plugin that SHIPS migrations, in resolver order", async () => {
     const { pluginMigrationSetsFrom } = await import(
       "../run-plugin-migrations"
     );
@@ -313,9 +313,51 @@ describe("pluginMigrationSetsFrom", () => {
       def("a"),
     ]);
     // b depends on a, so resolver order puts a first even though b was listed first.
-    expect(sets.map(s => s.pluginName)).toEqual(["a", "b"]);
+    // `disabled` keeps its listed position: it has no dependency edges, so the
+    // resolver leaves it where it was.
+    expect(sets.map(s => s.pluginName)).toEqual(["disabled", "a", "b"]);
     expect(sets[0].migrations).toHaveLength(1);
     expect(sets[0].pluginVersion).toBe("1.0.0");
+  });
+
+  it("includes a DISABLED plugin, because its tables still exist", async () => {
+    // This reverses what this suite asserted before, deliberately.
+    //
+    // `enabled: false` is a behaviour switch, not a storage one, and the rest
+    // of the runtime already reads it that way — `registerServices` keeps a
+    // disabled plugin's collections and fields folded into the config "so the
+    // schema is deterministic" and skips only its runtime hooks.
+    //
+    // Excluding its migrations made the two halves disagree: the compile side
+    // describes its tables, so dev push creates them, while production skipped
+    // the modules that create them. Disabling a plugin quietly changed the
+    // database instead of quietly stopping its code, and its retained
+    // collections could reference tables nothing had built.
+    //
+    // The old assertion recorded the behaviour without giving a reason for it;
+    // this one records the decision.
+    const { pluginMigrationSetsFrom } = await import(
+      "../run-plugin-migrations"
+    );
+    const sets = await pluginMigrationSetsFrom([
+      { ...def("off"), enabled: false },
+    ]);
+
+    expect(sets.map(s => s.pluginName)).toEqual(["off"]);
+    expect(sets[0].migrations).toHaveLength(1);
+  });
+
+  it("still excludes a plugin that ships NO migrations", async () => {
+    // The control. A filter that kept everything would satisfy the case above
+    // while quietly feeding the runner sets with nothing in them.
+    const { pluginMigrationSetsFrom } = await import(
+      "../run-plugin-migrations"
+    );
+    const sets = await pluginMigrationSetsFrom([
+      def("none-shipped", { contributes: {} }),
+      def("a"),
+    ]);
+    expect(sets.map(s => s.pluginName)).toEqual(["a"]);
   });
 });
 

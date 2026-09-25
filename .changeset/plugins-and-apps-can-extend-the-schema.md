@@ -93,3 +93,26 @@ time-ordered UUIDs, and accept a client-supplied id with
 
 Full details: `docs/plugins/schema.mdx`, `docs/database/extending-the-schema.mdx`
 and `docs/guides/production-migrations.mdx`.
+**BREAKING — `ctx.db` is no longer the Drizzle instance.** It is now the
+owner-checked surface, and the four verbs it shares with Drizzle take
+different arguments: `ctx.db.select(myTable)` where you wrote
+`ctx.db.select().from(myTable)`. Both shapes cannot live on one object,
+because the names collide, so this is a break rather than an addition.
+
+The unchanged Drizzle handle is still there, as `ctx.db.raw`. The smallest
+migration is mechanical:
+
+```ts
+// before
+await ctx.db.select().from(rows).where(eq(rows.id, id));
+// after — unchanged behaviour, one property deeper
+await ctx.db.raw.select().from(rows).where(eq(rows.id, id));
+// or, owner-checked and portable across all three dialects
+await ctx.db
+  .select(rows)
+  .where(eq(ctx.db.table(rows).id, id))
+  .first();
+```
+
+A call written against the old shape does not fail obscurely: it is refused
+by name, saying what changed and where the old handle went.

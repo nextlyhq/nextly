@@ -19,6 +19,7 @@ import {
   SchemaOwnersRepository,
   tableOwnersByName,
 } from "../../domains/schema/ownership/schema-owners-repository";
+import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import type { CommandContext } from "../program";
 import { createCliAdapter } from "../utils/adapter";
@@ -180,15 +181,63 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const { pluginMigrationSetsFrom } = await import(
       "../../domains/schema/migrate/plugin/run-plugin-migrations"
     );
-    await runPluginPhase({
+    const { withMigrateLock } = await import(
+      "../../domains/schema/pipeline/locks"
+    );
+
+    // Under the SAME lock `migrate` takes, for the same reason.
+    //
+    // `runPluginPhase` is normally reached from inside `migrateCore`'s
+    // `withMigrateLock`; calling it directly took none, so an install racing a
+    // `migrate` run — or a second install — could have both processes read the
+    // module as unapplied and execute its DDL. The loser then fails on objects
+    // that already exist, and on MySQL, where DDL is not transactional, the
+    // earlier statements of its module are already committed and cannot be
+    // rolled back.
+    //
+    // `mode: "wait"` rather than fail-fast: an operator running `plugins
+    // install` while boot migrations happen to be running wants it to proceed
+    // once they finish, not to be told to try again.
+    // Read from the definition, so it is computed before the lock rather than
+    // inside it: holding a database lock over work that touches no database
+    // just makes every other process wait longer.
+    const pluginMigrationSets = await pluginMigrationSetsFrom([definition]);
+
+    const outcome = await withMigrateLock(
+      drizzleAdapter.getDrizzle(),
       dialect,
-      db: drizzleAdapter.getDrizzle(),
-      adapter,
-      migrationsDir: config.db?.migrationsDir ?? "./src/db/migrations",
-      logger: context.logger,
-      pluginsWithMigrations: new Set([plugin.name]),
-      pluginMigrationSets: await pluginMigrationSetsFrom([definition]),
-    });
+      () =>
+        runPluginPhase({
+          dialect,
+          db: drizzleAdapter.getDrizzle(),
+          adapter,
+          migrationsDir: config.db?.migrationsDir ?? "./src/db/migrations",
+          logger: context.logger,
+          pluginsWithMigrations: new Set([plugin.name]),
+          pluginMigrationSets,
+        }),
+      {
+        mode: "wait",
+        logger: {
+          warn: m => context.logger.warn(m),
+          info: m => context.logger.info(m),
+        },
+      }
+    );
+
+    if (!outcome.ran) {
+      // Reported rather than swallowed: the command goes on to record the
+      // plugin active, and doing that over migrations that never ran is the
+      // "reports work it did not do" failure this whole path was fixed for.
+      throw new NextlyError({
+        code: "CONFLICT",
+        publicMessage:
+          `Another migration is holding the migrate lock, so ${plugin.name}'s migrations were not applied. ` +
+          `Nothing was changed — re-run once it finishes.`,
+        statusCode: 409,
+        logContext: { plugin: plugin.name, reason: outcome.reason },
+      });
+    }
   };
 
   /**

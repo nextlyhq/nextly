@@ -100,17 +100,23 @@ export async function pluginMigrationSetsFrom(
   // Dynamic for the same cycle reason the CLI command loads it: the module
   // sits on a cycle that closes through the commands.
   const { topoSortPlugins } = await import("../../../../plugins/topo-sort");
-  return topoSortPlugins([...plugins])
-    .filter(
-      plugin =>
-        plugin.enabled !== false &&
-        (plugin.contributes?.schema?.migrations?.length ?? 0) > 0
-    )
-    .map(plugin => ({
-      pluginName: plugin.name,
-      pluginVersion: plugin.version,
-      migrations: plugin.contributes!.schema!.migrations!,
-    }));
+  return (
+    topoSortPlugins([...plugins])
+      // DISABLED plugins included, matching the compile side. `enabled: false`
+      // stops a plugin running, not its tables existing: its schema stays in the
+      // compiled model, so its modules have to be applied or production would
+      // hold a shape the model says is there and the database does not. The
+      // asymmetry was the bug — dev push created the tables from the model while
+      // production skipped the modules that create them.
+      .filter(
+        plugin => (plugin.contributes?.schema?.migrations?.length ?? 0) > 0
+      )
+      .map(plugin => ({
+        pluginName: plugin.name,
+        pluginVersion: plugin.version,
+        migrations: plugin.contributes!.schema!.migrations!,
+      }))
+  );
 }
 
 /**

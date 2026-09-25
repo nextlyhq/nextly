@@ -32,6 +32,7 @@ import { isManagedIndexName } from "../pipeline/diff/index-util";
 import type { ColumnSpec, IndexSpec, TableSpec } from "../pipeline/diff/types";
 import { indexNameForColumns } from "../services/index-name";
 import { buildUserDrizzleColumn } from "../services/runtime-schema-generator";
+import { quoteJsonSqlDefault, quoteSqlLiteral } from "../utils/sql-literal";
 
 import { toColumnDescriptor } from "./column-descriptor";
 import { enumChecks } from "./enum-check";
@@ -64,7 +65,17 @@ function defaultSql(
   // The tagged token, which is why it is tagged: a text column may hold the
   // literal string "now", and that must render as a quoted value.
   if (typeof value === "object") return currentTimestampSql(dialect);
-  if (typeof value === "string") return `'${value}'`;
+  if (typeof value === "string") {
+    // Through the shared quoter, never `'${value}'`. DDL is assembled as text
+    // before it reaches the driver, so an apostrophe — `O'Reilly` — closed the
+    // quote early and produced a migration that could not parse on any dialect.
+    // The helper also doubles backslashes for MySQL, which reads one as an
+    // escape introducer where the others store it verbatim; a JSON default
+    // would otherwise come back with a real newline in it and stop being JSON.
+    return column.kind === "json"
+      ? quoteJsonSqlDefault(value, dialect)
+      : quoteSqlLiteral(value, dialect);
+  }
   if (typeof value === "boolean") return value ? "true" : "false";
   return String(value);
 }

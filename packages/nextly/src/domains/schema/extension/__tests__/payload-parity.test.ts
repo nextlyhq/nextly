@@ -459,9 +459,13 @@ describe("row 11 — any Drizzle column type", () => {
       name: "fx__counters",
       authored: "counters",
       owner: { kind: "plugin" as const, id: "fx" },
+      // `serial` IS the key. MySQL refuses AUTO_INCREMENT on a column that is
+      // not one, and SQLite assigns a value only to an INTEGER PRIMARY KEY, so
+      // declaring it beside `col.id()` produced DDL two of the three dialects
+      // could not run. It replaces the id rather than joining it.
       columns: defineTable("counters", {
-        id: col.id(),
         seq: col.serial(),
+        label: col.shortText(),
       }).columns.map(c => ({ ...c })),
       indexes: [],
     };
@@ -478,7 +482,33 @@ describe("row 11 — any Drizzle column type", () => {
             : "integer"
       );
       expect(seq?.nullable).toBe(false);
+      // The half that makes it work: keyed on every dialect.
+      expect(seq?.primaryKey).toBe(true);
     }
+  });
+
+  it("C2b: refuses serial DECLARED BESIDE another key, by name", () => {
+    // The shape this test used to assert. No dialect takes two primary keys,
+    // and the author used to find out from MySQL's parser rather than from
+    // the declaration.
+    let message = "";
+    try {
+      defineTable("counters", { id: col.id(), seq: col.serial() });
+    } catch (error) {
+      // A validation refusal carries its detail in `publicData.errors`; the
+      // top-level message is the generic "Validation failed."
+      const data = (
+        error as { publicData?: { errors?: { message: string }[] } }
+      ).publicData;
+      message = data?.errors?.[0]?.message ?? "";
+    }
+
+    // Names both columns and says which one to drop, so the fix does not
+    // require reading the renderer to work out why two keys are a problem.
+    expect(message).toMatch(/primary key/i);
+    expect(message).toContain("id");
+    expect(message).toContain("seq");
+    expect(message).toMatch(/INSTEAD of col\.id\(\)/);
   });
 });
 

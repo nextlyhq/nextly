@@ -70,7 +70,9 @@ function resolvePrefixes(
   const claimed = new Map<string, string>();
 
   for (const plugin of plugins) {
-    if (plugin.enabled === false) continue;
+    // Disabled plugins included, deliberately — see `contributionsOf` below.
+    // Prefixes must be resolved for them too, or their tables would be named
+    // by a different rule than the one that checks for collisions.
     if (!plugin.contributes?.schema) continue;
 
     const prefix = pluginTablePrefix(
@@ -98,13 +100,29 @@ function resolvePrefixes(
   return prefixes;
 }
 
-/** What each enabled plugin contributes, in the order the resolver placed it. */
+/**
+ * What each plugin contributes, in the order the resolver placed it.
+ *
+ * DISABLED plugins included. `enabled: false` is a behaviour switch, not a
+ * storage one, and the rest of the runtime already treats it that way: a
+ * disabled plugin's collections and fields stay folded into the config so the
+ * schema is deterministic, and `registerServices` skips only its runtime hooks.
+ *
+ * Filtering its tables out here broke that contract in both directions. In
+ * development the retained collections were still built, so an entity could
+ * reference an extension table the pipeline had just been told not to compile;
+ * in production the same filter in `pluginMigrationSetsFrom` meant its shipped
+ * modules never ran, so disabling a plugin quietly changed the database rather
+ * than quietly stopping its code.
+ *
+ * Turning a plugin off should stop it DOING things, not make its tables and
+ * their data disappear from the schema that describes them.
+ */
 function contributionsOf(
   plugins: readonly PluginDefinition[]
 ): SchemaContribution[] {
   const out: SchemaContribution[] = [];
   for (const plugin of plugins) {
-    if (plugin.enabled === false) continue;
     const schema = plugin.contributes?.schema;
     if (!schema) continue;
 

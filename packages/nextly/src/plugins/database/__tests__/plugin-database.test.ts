@@ -147,6 +147,37 @@ describe("access", () => {
   });
 });
 
+describe("the surface ctx.db used to be", () => {
+  it("refuses an old-style call by name, pointing at ctx.db.raw", async () => {
+    // `ctx.db` was the Drizzle instance, so plugins wrote
+    // `ctx.db.select().from(table)`. The four verbs now take the table
+    // DEFINITION, and a call written the old way reached `sqlNameOf(undefined)`
+    // and died on a missing property — saying nothing about what changed.
+    const { surface } = harness();
+
+    let message = "";
+    try {
+      (surface.select as unknown as () => void)();
+    } catch (error) {
+      const data = (
+        error as { publicData?: { errors?: { message: string }[] } }
+      ).publicData;
+      message = data?.errors?.[0]?.message ?? "";
+    }
+
+    expect(message).toContain("ctx.db.raw");
+    expect(message).toContain("ctx.db.select(myTable)");
+  });
+
+  it("still accepts a real definition", async () => {
+    // The control: a guard that refused everything would satisfy the test
+    // above and break the surface.
+    const { surface, inserted } = harness();
+    await surface.insert(notes, { bodyText: "ok" } as never);
+    expect(inserted).toHaveLength(1);
+  });
+});
+
 describe("transaction", () => {
   it("runs the callback against a surface bound to the transaction handle", async () => {
     const { surface, inserted } = harness();

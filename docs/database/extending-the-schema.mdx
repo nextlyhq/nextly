@@ -241,10 +241,15 @@ dialects does not have to branch.
 
 ## Generated integer keys
 
+`col.serial()` IS the table's key — it replaces `col.id()` rather than
+joining it. No dialect assigns a value to a serial column that is not a key:
+MySQL refuses `AUTO_INCREMENT` on one, and SQLite assigns only to an
+`INTEGER PRIMARY KEY`. Declaring both is refused, naming the two columns.
+
 ```ts
 defineTable("counters", {
-  id: col.id(),
   seq: col.serial(),
+  label: col.shortText(),
 });
 ```
 
