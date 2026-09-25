@@ -127,6 +127,10 @@ describe("conditions that skip the queue's run", () => {
       "GITHUB.EVENT_NAME == 'Pull_Request'",
       // False in the queue whatever the unknown side is.
       "needs.changes.outputs.inert != 'true' && github.event_name == 'pull_request'",
+      // Runs for a pull request whatever the output is, and in the queue only for some of its values.
+      "needs.changes.outputs.inert != 'true' || github.event_name == 'pull_request'",
+      "!cancelled() || github.event_name == 'pull_request'",
+      "github.event.pull_request.head.repo.fork == false || startsWith(github.event_name, 'pull_request')",
     ];
     const runs = [
       "",
@@ -134,11 +138,13 @@ describe("conditions that skip the queue's run", () => {
       "github.event_name == 'merge_group'",
       // Runs on neither, so it does no less in the queue.
       "github.event_name == 'push'",
-      // Undecided by the event's name alone.
+      // Turns on an output alone, which reads the same for both events.
       "!cancelled()",
       "needs.changes.outputs.inert != 'true'",
       "github.event.pull_request.head.repo.fork == false",
-      "needs.changes.outputs.inert != 'true' || github.event_name == 'pull_request'",
+      // Runs in the queue whenever it runs for a pull request, whatever the output is.
+      "needs.changes.outputs.inert != 'true' || github.event_name == 'merge_group'",
+      "needs.changes.outputs.inert == 'false' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')",
     ];
     for (const condition of skips) expect(skipsTheQueue(condition), condition).toBe(true);
     for (const condition of runs) expect(skipsTheQueue(condition), condition).toBe(false);
@@ -189,15 +195,54 @@ function skippingSteps(id, job) {
 
 /**
  * Whether a condition can run for a pull request's event, `pull_request` or
- * `pull_request_target`, and cannot for the queue's. It is evaluated, not
- * matched by its spelling. The event's name is the one value known; any other
- * value is unknown, and a condition the name alone does not decide is left
- * undecided, which is not a skip.
+ * `pull_request_target`, and not for the queue's, the rest being the same. It
+ * is evaluated, not matched by its spelling. The event's name is known; every
+ * other name and call the condition reads is given, in turn, each value that
+ * could change its outcome, and it skips the queue if any one assignment runs
+ * it for a pull request and not in the queue. So a condition that turns on an
+ * output alone reads alike for both events and is no skip, while one that runs
+ * for a pull request whatever the output is, and in the queue only for some of
+ * its values, is.
  */
 function skipsTheQueue(condition) {
-  const outcome = event => truth(evaluate(condition, { "github.event_name": event }));
-  return ["pull_request", "pull_request_target"].some(event => outcome(event) !== false) && outcome("merge_group") === false;
+  return assignments(condition).some(values => {
+    const outcome = event => truth(evaluate(condition, { ...values, "github.event_name": event }));
+    return ["pull_request", "pull_request_target"].some(event => outcome(event) !== false) && outcome("merge_group") === false;
+  });
 }
+
+/** A value equal to no literal a condition could compare it with, as a number or as text. */
+const NONE_OF_THEM = "none of the condition's values";
+
+/**
+ * Every assignment of values to what a condition reads but does not know: a
+ * name takes each literal the condition holds, `true`, `false` and a value equal
+ * to none of them, which between them are every outcome its comparisons can
+ * have; a call takes `true` and `false`.
+ */
+function assignments(condition) {
+  const { names, calls, literals } = unknownsIn(condition);
+  const values = [...new Set([...literals, true, false, NONE_OF_THEM])];
+  return [...names.map(name => [name, values]), ...calls.map(call => [`${call}()`, [true, false]])].reduce(
+    (all, [key, choices]) => all.flatMap(assignment => choices.map(value => ({ ...assignment, [key]: value }))),
+    [{}]
+  );
+}
+
+/** The names, calls and literals a condition holds, other than the event's name and the calls it can decide. */
+function unknownsIn(condition) {
+  const text = condition.trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1").trim();
+  const tokens = text === "" ? [] : tokenize(text, condition);
+  const named = tokens.map((token, at) => ({ token, called: tokens[at + 1] === "(" })).filter(({ token }) => typeof token === "object" && "name" in token);
+  const unknown = named.filter(({ token }) => !isKnown(token.name.toLowerCase()));
+  return {
+    names: [...new Set(unknown.filter(({ called }) => !called).map(({ token }) => token.name.toLowerCase()))],
+    calls: [...new Set(unknown.filter(({ called }) => called).map(({ token }) => token.name.toLowerCase()))],
+    literals: tokens.filter(token => typeof token === "object" && "value" in token).map(token => token.value),
+  };
+}
+
+const isKnown = key => key === "github.event_name" || Object.hasOwn(LITERALS, key) || Object.hasOwn(FUNCTIONS, key);
 
 const UNKNOWN = Symbol("unknown");
 const TOKEN = /\s*(?:('(?:[^']|'')*')|(\d+(?:\.\d+)?)|(==|!=|<=|>=|&&|\|\||[!<>(),])|([A-Za-z_][\w-]*(?:\.[\w*-]+)*))/y;
@@ -283,7 +328,7 @@ function parsePrimary(parser) {
   if (take(parser, "(")) return closed(parser, parseOr(parser));
   const token = nextOperand(parser);
   if ("value" in token) return token.value;
-  return take(parser, "(") ? call(token.name, parseArguments(parser)) : lookUp(token.name, parser.known);
+  return take(parser, "(") ? call(token.name, parseArguments(parser), parser.known) : lookUp(token.name, parser.known);
 }
 
 /** A literal or a name; an operator, or nothing, where one belongs cannot be read. */
@@ -323,9 +368,11 @@ function lookUp(name, known) {
   return Object.hasOwn(known, key) ? known[key] : UNKNOWN;
 }
 
-function call(name, values) {
+/** A call's value: one the evaluator can decide, one an assignment gave it, or unknown. */
+function call(name, values, known) {
   const key = name.toLowerCase();
-  return Object.hasOwn(FUNCTIONS, key) && !values.includes(UNKNOWN) ? FUNCTIONS[key](...values) : UNKNOWN;
+  if (!Object.hasOwn(FUNCTIONS, key)) return Object.hasOwn(known, `${key}()`) ? known[`${key}()`] : UNKNOWN;
+  return values.includes(UNKNOWN) ? UNKNOWN : FUNCTIONS[key](...values);
 }
 
 /** `&&` with an unknown side: false when the other side is, since either way the result is. */
