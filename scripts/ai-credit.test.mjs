@@ -203,8 +203,9 @@ describe("a line a change adds", () => {
     // A name alone goes on with the value, as a tool's name or a surname does, and so does a note.
     expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), `  ${CODE_TOOL}`), "message")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
     expect(creditsIn(lines(spell("* Co-authored", "-by: Clau", "de"), "  Dupont"), "message")).toEqual([]);
-    // A surname in any script is a name alone.
+    // A surname in any script with capitals is a name alone, and so is one that starts with a lowercase particle.
     expect(creditsIn(lines(spell("* Co-authored", "-by: Clau", "de"), "  José"), "message")).toEqual([]);
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Clau", "de"), "  de Silva"), "message")).toEqual([]);
     expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), "  (context)", `  ${CODE_TOOL}`), "message")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
     // An explanation credits no one, however it opens, and a co-author after it still belongs to the trailer.
     expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("  ", CODE_TOOL, ": reads the project files")), "message")).toEqual([]);
@@ -254,13 +255,17 @@ describe("a line a change adds", () => {
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  and Clau", "de"), "  Opus 5"), "line")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
     // A joining word is a word of its own: a surname that starts with one goes on with the co-author before it.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  and Clau", "de"), "  Andrews <claude.andrews@example.com>"), "line")).toEqual([]);
-    // A name folded across lines goes on in any script, so a surname a tool shares is still a person's.
+    // A name folded across lines goes on in any script with capitals, and past a lowercase particle, so a surname a tool shares is still a person's.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  and José", spell("  Clau", "de")), "line")).toEqual([]);
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  and José", "  de", spell("  Clau", "de")), "line")).toEqual([]);
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  and José de", spell("  Clau", "de")), "line")).toEqual([]);
     // A closed note completes what it follows, so the line after it is a co-author of its own; a note still open goes on.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  (context)", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
     // So do plain words that are no name, however many lines they take: a tool named after them is a co-author of its own.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  with a note", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
     expect(creditsIn(lines(trailer("Co-authored", spell("Anthro", "pic")), "  some", "  context", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ line: 1 }), expect.objectContaining({ from: 4, line: 4 })]);
+    // A script without capitals cannot show a name apart from prose, so its words end a co-author too.
+    expect(creditsIn(lines(trailer("Co-authored", spell("Anthro", "pic")), "  بعض السياق", spell("  Clau", "de")), "line")).toEqual([expect.objectContaining({ line: 1 }), expect.objectContaining({ from: 3, line: 3 })]);
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  (checked against the", spell("  ", CODE_TOOL, " docs)")), "line")).toEqual([]);
     // An address inside a note still open does not end it.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  (reviewed by Alice <alice@example.com>", spell("  ", CODE_TOOL, " docs)")), "line")).toEqual([]);

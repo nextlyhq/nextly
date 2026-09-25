@@ -133,7 +133,7 @@ describe("conditions that skip the queue's run", () => {
       // An output between two numbers, and two calls of one function that may differ.
       "needs.x.outputs.n > 5 && needs.x.outputs.n < 10 && github.event_name == 'pull_request'",
       "hashFiles('a') != hashFiles('b') && github.event_name == 'pull_request'",
-      // A call may return text, and what it returns for the event its arguments read.
+      // A call may return text, and what it returns for the event its arguments read; run on the values tried for an unknown, it skips where one of them does.
       "format('{0}', needs.changes.outputs.flag) == 'ready' && github.event_name == 'pull_request'",
       "format('{0}', github.event_name) == 'pull_request'",
       // An output holding neither text, both at once, or the event's name.
@@ -153,11 +153,6 @@ describe("conditions that skip the queue's run", () => {
       "format('{{{0}}}', github.event_name) == '{pull_request}'",
       // A function GitHub runs is run here from its arguments, the event's name among them.
       "toJSON(github.event_name) == '\"pull_request\"'",
-      // Run on an unknown, it may make the literal it is compared with, though no value tried is the one it makes it from.
-      "format('x{0}', needs.x.outputs.v) != 'xa' || github.event_name == 'pull_request'",
-      "fromJSON(needs.x.outputs.v) != 'xa' || github.event_name == 'pull_request'",
-      "toJSON(needs.x.outputs.v) != '\"a\"' || github.event_name == 'pull_request'",
-      "join(fromJSON('[\"a\", \"b\"]'), needs.x.outputs.separator) != 'a+b' || github.event_name == 'pull_request'",
     ];
     const runs = [
       "",
@@ -212,6 +207,20 @@ describe("conditions that skip the queue's run", () => {
     expect(() => skipsTheQueue("hashFiles(github.event_name) != ''")).toThrow(/cannot decide the condition.*reads the event/);
     // So could a function run on a name that differs between the runs, whose value there is no value tried.
     expect(() => skipsTheQueue("format('x{0}', github.event.action) == 'xopened'")).toThrow(/cannot decide the condition.*reads the event/);
+    // Run on an unknown, a function may make the literal it is compared with from a value no value tried is, as these do,
+    // or never make it, as the last does; which of the two cannot be told, so both are refused, neither passed nor failed.
+    const transformed = [
+      "format('x{0}', needs.x.outputs.v) != 'xa' || github.event_name == 'pull_request'",
+      "fromJSON(needs.x.outputs.v) != 'xa' || github.event_name == 'pull_request'",
+      "toJSON(needs.x.outputs.v) != '\"a\"' || github.event_name == 'pull_request'",
+      "join(fromJSON('[\"a\", \"b\"]'), needs.x.outputs.separator) != 'a+b' || github.event_name == 'pull_request'",
+      "format('x{0}', needs.x.outputs.v) == 'y' && github.event_name == 'pull_request'",
+      // Nor where the call's value is tied to its argument's, which the call read as a value of its own is not:
+      // both of these run in the queue whatever the output is, and neither is failed as a skip.
+      "format('{0}', needs.x.outputs.v) != 'a' || needs.x.outputs.v != 'b' || github.event_name == 'pull_request'",
+      "format('x{0}', needs.x.outputs.v) != 'xa' || needs.x.outputs.v == 'a' || github.event_name == 'pull_request'",
+    ];
+    for (const condition of transformed) expect(() => skipsTheQueue(condition), condition).toThrow(/cannot decide the condition.*makes a value no value tried/);
     // Three text tests of one value may need a value no two literals make.
     const threeTests = "startsWith(needs.x.outputs.v, 'a') && contains(needs.x.outputs.v, 'b') && endsWith(needs.x.outputs.v, 'c') && github.event_name == 'pull_request'";
     expect(() => skipsTheQueue(threeTests)).toThrow(/cannot decide the condition.*3 text tests/);
@@ -266,16 +275,39 @@ function skippingSteps(id, job) {
  * not (`readingOf`), and a condition that reads none of them, nor the event's
  * name, reads alike in both runs under any one assignment, so it needs none
  * tried. Every condition is read once first, so one that cannot be read is
- * refused whatever it reads.
+ * refused whatever it reads. A function this evaluator runs is run on the
+ * values tried for its arguments, so a skip found that way is one; where an
+ * argument is unknown, `skipsThroughATransform` decides what that search could
+ * not reach.
  */
 function skipsTheQueue(condition) {
   const tokens = conditionTokens(condition);
   evaluate(tokens, condition, {});
   if (!tokens.some(readsTheEvent)) return false;
   textTestsDecidable(tokens, condition);
-  const readings = readingsIn(tokens, condition);
+  return skipFound(tokens, condition, readingsIn(tokens, condition, unknownName)) || skipsThroughATransform(tokens, condition);
+}
+
+/** Whether any assignment of the given readings runs the condition for a pull request and not in the queue. */
+function skipFound(tokens, condition, readings) {
   for (const values of assignments(condition, readings, candidateValues(literalsIn(tokens)))) if (skipsUnder(tokens, condition, readings, values)) return true;
   return false;
+}
+
+/**
+ * A condition that calls one of `TRANSFORMS` on an unknown, when no value
+ * tried for the unknown skips the queue. The call may still make a value no
+ * value tried makes it make, as `format('x{0}', v)` makes `xa` only from `a`,
+ * so it is tried again with each call's result as an unknown of its own, which
+ * over-reaches: every value the call can make is among those tried, and so are
+ * some it cannot, since `format('x{0}', v)` never makes `y`. No skip then is
+ * none; a skip then may need a value the call cannot make, so the condition
+ * is refused as undecidable rather than passed or failed on a guess.
+ */
+function skipsThroughATransform(tokens, condition) {
+  const calls = tokens.flatMap((token, at) => (transformsAnUnknown(tokens, at) ? [callKey(token.name, argumentsOf(tokens, at))] : []));
+  if (calls.length === 0 || !skipFound(tokens, condition, readingsIn(tokens, condition, readsAnUnknown))) return false;
+  throw new Error(`cannot decide the condition ${JSON.stringify(condition)}: it skips the queue only if ${calls.join(" or ")} makes a value no value tried for its arguments makes it make`);
 }
 
 const PULL_REQUEST_EVENTS = ["pull_request", "pull_request_target"];
@@ -369,8 +401,8 @@ const MOST_ASSIGNMENTS = 20_000;
  * Every assignment of candidate values to the choices the readings make, made
  * one at a time so the first that skips the queue ends the search. A name both
  * runs share is one choice, and a name each run reads for itself is one in
- * each. A call read as an unknown (`readsAnUnknown`) is a choice too, and may
- * return any of the values, text as well as `true` and `false`.
+ * each. A call read as an unknown is a choice too, and may return any of the
+ * values, text as well as `true` and `false`.
  */
 function* assignments(condition, readings, values) {
   const choices = [...new Set(readings.flatMap(({ runs }) => Object.values(runs).flatMap(run => ("choice" in run ? [run.choice] : []))))];
@@ -403,19 +435,22 @@ function candidateValues(literals) {
   return [...new Set([...literals, ...PULL_REQUEST_EVENTS, QUEUE_EVENT, ...between, ...around, true, false, "", NONE_OF_THEM, ...pairs])];
 }
 
-/** Each name and call a condition reads but does not know, with how the two runs read it; a call is keyed by its arguments. */
-function readingsIn(tokens, condition) {
+/** Each name and call a condition reads that `readsAsUnknown` reads as unknown, with how the two runs read it; a call is keyed by its arguments. */
+function readingsIn(tokens, condition, readsAsUnknown) {
   const readings = new Map();
   tokens.forEach((token, at) => {
-    if (!readsAnUnknown(tokens, at)) return;
+    if (!readsAsUnknown(tokens, at)) return;
     const [key, runs] = tokens[at + 1] === "(" ? callReading(tokens, at, condition) : [nameOf(token), readingOf(nameOf(token))];
     readings.set(key, runs);
   });
   return [...readings].map(([key, runs]) => ({ key, runs }));
 }
 
-/** Whether the token at `at` is read as an unknown: a name this evaluator does not know, or a call that makes something of one. */
-const readsAnUnknown = (tokens, at) => isUnknownName(tokens[at]) || transformsAnUnknown(tokens, at);
+/** Whether the token at `at` is a name or a call this evaluator does not know. */
+const unknownName = (tokens, at) => isUnknownName(tokens[at]);
+
+/** Whether the token at `at` is read as an unknown where a call's result may be any value: an unknown name, or a call that makes something of one. */
+const readsAnUnknown = (tokens, at) => unknownName(tokens, at) || transformsAnUnknown(tokens, at);
 
 /** The functions this evaluator runs that make text or a value of their arguments, where the others test them. */
 const TRANSFORMS = new Set(["format", "join", "tojson", "fromjson"]);
@@ -425,9 +460,8 @@ const TRANSFORMS = new Set(["format", "join", "tojson", "fromjson"]);
  * holds an unknown. The values an unknown is tried with give every comparison
  * of that unknown each outcome it can have, but not every comparison of what a
  * function makes of it: `format('x{0}', v) == 'xa'` holds only where `v` is
- * `a`, and no value tried is. So the call is an unknown of its own, tried with
- * every value, as a call to a function this evaluator does not run is. On
- * arguments it knows, such as the event's name, it is run.
+ * `a`, and no value tried is (`skipsThroughATransform`). On arguments it
+ * knows, such as the event's name, the call is only ever run.
  */
 const transformsAnUnknown = (tokens, at) => TRANSFORMS.has(nameOf(tokens[at])) && tokens[at + 1] === "(" && argumentsOf(tokens, at).some(isUnknownName);
 
