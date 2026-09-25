@@ -74,7 +74,15 @@ describe("a message's credit, in each form", () => {
   });
 
   it("refuses thanks and credit given to a tool", () => {
-    const thanks = [spell("Thanks, ", CODE_TOOL, "!"), said("Tests pass, and", "thanks to", CHAT_TOOL), said("Credit", "goes to", PILOT_TOOL), said("Kudos", "to", MODEL)];
+    const thanks = [
+      spell("Thanks, ", CODE_TOOL, "!"),
+      said("Tests pass, and", "thanks to", CHAT_TOOL),
+      said("Credit", "goes to", PILOT_TOOL),
+      said("Kudos", "to", MODEL),
+      // A role word in the next paragraph is not the name's.
+      lines(said("Thanks to", spell("Mis", "tral")), "Large", "", "team notes"),
+      lines(said("Thanks to", CHAT_TOOL), "", "team notes"),
+    ];
     for (const line of thanks) expect(credited(line, "message"), line).toBe(true);
   });
 
@@ -118,6 +126,7 @@ describe("a message's credit, in each form", () => {
       lines(said("Thanks to the", spell("Mis", "tral")), "Large team"),
       // A vendor's name continued onto a person's, with the person's address, is the person.
       lines(trailer("Co-authored", spell("Anthro", "pic")), spell("  Researcher Jane Doe <jane@", "anthro", "pic.com>")),
+      lines(trailer("Co-authored", spell("Anthro", "pic")), spell("  Jane Doe <jane@", "anthro", "pic.com>")),
       said("Written by", spell("Mis", "tral"), "Large researcher Jane"),
       said("Built with the", PILOT_TOOL, "Chat SDK"),
       lines(spell("Co-authored-by: Clau", "de"), "  Dupont <claude.dupont@example.com>"),
@@ -170,6 +179,10 @@ describe("a line a change adds", () => {
    * own text. A line with the prefix and the trailer's indent is a comment of
    * its own, not the trailer's value.
    */
+  it("completes a trailer indented in a block with an address level with it", () => {
+    expect(creditsIn(lines(spell("  Co-authored", "-by: Alice"), spell("  <noreply@", "open", "ai.com>")), "line")).toEqual([expect.objectContaining({ from: 1, line: 2 })]);
+  });
+
   it("unfolds a trailer across a repeated comment prefix, and not onto the next comment", () => {
     for (const prefix of ["//", "#", ";", "--", " *"]) {
       expect(creditsIn(lines(spell(prefix, " Co-authored", "-by:"), `${prefix}   ${CHAT_TOOL}`), "line"), prefix).toEqual([expect.objectContaining({ from: 1, line: 2 })]);
@@ -186,10 +199,16 @@ describe("a line a change adds", () => {
   it("credits a continuation that names another tool on its own line, and nothing for one that does not", () => {
     const credit = trailer("Co-authored", CODE_TOOL);
     expect(creditsIn(lines(credit, spell("  and Git", "Hub Co", "pilot")), "line")).toEqual([expect.objectContaining({ from: 1, line: 1 }), expect.objectContaining({ from: 2, line: 2 })]);
-    // With an address the value is judged whole, as one identity, completing on the line that ends the address.
-    expect(creditsIn(lines(credit, `  ${CHAT_TOOL} <${spell("noreply@", "open", "ai.com")}>`), "line")).toEqual([expect.objectContaining({ from: 1, line: 2 })]);
+    expect(creditsIn(lines(credit, `  ${CHAT_TOOL} <${spell("noreply@", "open", "ai.com")}>`), "line")).toEqual([expect.objectContaining({ from: 1, line: 1 }), expect.objectContaining({ from: 2, line: 2 })]);
+    // A tool's full name is a credit once complete: a person's name and address continued after it do not undo it.
+    expect(creditsIn(lines(credit, "  and Jane Doe <jane@example.com>"), "line")).toEqual([expect.objectContaining({ from: 1, line: 1 })]);
+    expect(creditsIn(lines(credit, "  Jane Doe <jane@example.com>"), "line")).toEqual([expect.objectContaining({ from: 1, line: 1 })]);
     expect(creditsIn(lines(credit, "  with a note"), "line")).toEqual([expect.objectContaining({ from: 1, line: 1 })]);
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  and friends"), "line")).toEqual([]);
+    // A list item after a trailer is its own line, whatever its bullet or indent.
+    for (const item of [spell("* ", CHAT_TOOL, " loads skills differently"), spell("  * ", CHAT_TOOL, " loads skills"), spell("- ", CHAT_TOOL, " loads skills")]) {
+      expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), item), "line"), item).toEqual([]);
+    }
     // A note that mentions a tool names no co-author.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  (checked against the ", CODE_TOOL, " docs)")), "line")).toEqual([]);
   });
@@ -329,6 +348,20 @@ describe("reading a diff", () => {
     expect(withTrailerStarts([plainBlock], "HEAD", unreadable)).toEqual({ blocks: [plainBlock] });
   });
 
+  // A block's first line is worth reading its file for only when indented like a continuation.
+  it("reads a file for a block that may continue a trailer, and not for an ordinary comment", () => {
+    const reads = [];
+    const git = args => {
+      reads.push(args.at(-1));
+      return { ok: true, out: "x\n" };
+    };
+    const blockOf = text => ({ path: "a.md", start: 2, texts: [text], added: [true] });
+    withTrailerStarts([blockOf("// an ordinary comment"), blockOf("# A heading"), blockOf("* a list item")], "HEAD", git);
+    expect(reads).toEqual([]);
+    withTrailerStarts([blockOf("//   a continuation")], "HEAD", git);
+    expect(reads).toEqual(["HEAD:a.md"]);
+  });
+
   it("names the paths a change adds, renames or copies, and not the ones it only edits", () => {
     expect(addedOrRenamed(["A", "new.md", "M", "edited.md", "R096", "old.md", "moved.md", "C100", "src.md", "copy.md", "D", "gone.md", ""])).toEqual(["new.md", "moved.md", "copy.md"]);
   });
@@ -464,6 +497,14 @@ describe("the command in CI", () => {
   it("names a file whose path holds a space as the path it is", () => {
     expect(decide(change("a line\n", lines("a line", spell(MADE, " with ", CODE_TOOL), ""), { file: "sp ace.md" }))).toBe(1);
     expect(printed()).toMatch(/file=sp ace\.md,line=2,title=AI credit::sp ace\.md:2 states that it made the change/);
+  });
+
+  // A line break decoded from a quoted path would end the annotation and start a command of its own.
+  it.runIf(process.platform !== "win32")("keeps a path with a line break inside its annotation", () => {
+    expect(decide(change("a line\n", lines("a line", spell(MADE, " with ", CODE_TOOL), ""), { file: "line\n::notice title=Injected::oops.md" }))).toBe(1);
+    const out = printed();
+    expect(out.split("\n").filter(entry => entry.startsWith("::notice"))).toEqual([]);
+    expect(out).toContain("file=line%0A%3A%3Anotice title=Injected%3A%3Aoops.md,line=2,");
   });
 
   it("does not refuse a harmless continuation added to a credit that was already there", () => {

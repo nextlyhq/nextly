@@ -82,7 +82,7 @@ const EDITION_RUN = `(?:${EDITION})*(?!${EDITION})`;
  * component a product uses, and followed by a person's role it is people, as a
  * vendor's researcher or team is; neither is the tool.
  */
-const ENDS = "(?![\\w-])(?!(?:'s)?\\s+(?:api|sdk|client|library|package|embeddings?|endpoint|integration|provider|plugin|key|account|platform|console|researcher|engineer|employee|team|staff|scientist|intern|founder|developer|designer|manager|lead|colleague|folks|people|member|contractor)s?\\b)";
+const ENDS = `(?![\\w-])(?!(?:'s)?${GAP}(?:api|sdk|client|library|package|embeddings?|endpoint|integration|provider|plugin|key|account|platform|console|researcher|engineer|employee|team|staff|scientist|intern|founder|developer|designer|manager|lead|colleague|folks|people|member|contractor)s?\\b)`;
 const TOOL_AT = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})${EDITION_RUN}${ENDS}`, "i");
 /**
  * In prose, an ambiguous name followed by a capitalised surname is a person,
@@ -105,6 +105,8 @@ const AI_EMAIL = new RegExp(`^(?:noreply@(?:anthropic|openai)\\.com|cursoragent@
 /** A vendor's own domain: people work there too, so an address there is a tool's only under a tool's name. */
 const VENDOR_EMAIL = /@(?:anthropic|openai)\.com$/i;
 const BRANCH_OWNER = new RegExp(`^(?:${BRANCH_OWNERS.join("|")})/`, "i");
+/** A vendor's name and nothing more, which may go on to be part of a person's, as `Anthropic Researcher Jane Doe` does. */
+const VENDOR_ALONE = new RegExp(`^(?:${VENDORS.join("|")})$`, "i");
 
 const MADE = "(?:generated|created|written|authored|co-?\\s?authored|co-?\\s?written|produced|drafted|made|built|coded|developed|implemented|refactored|assisted|pair-?\\s?programmed|vibe-?\\s?coded)";
 const HOW = gapped("(?:with|by|using|via|through|in collaboration with|with (?:the )?(?:help|assistance) (?:of|from))");
@@ -197,18 +199,23 @@ function identityParts(identity) {
 /** Every credit a piece of text carries, each with the line it is on. */
 export function creditsIn(text, place = "message") {
   const rules = PLACES[place];
-  const lines = readLines(text, rules);
-  const joined = lines.join("\n");
-  const trailers = unfolded(lines).flatMap(trailer => creditingSpan(trailer, rules));
+  const read = readLines(text, rules);
+  const joined = read.lines.join("\n");
+  const trailers = unfolded(read).flatMap(trailer => creditingSpan(trailer, rules));
   const phrases = [...leadCredits(joined, rules), ...adjectiveCredits(joined, rules), ...subjectCredits(joined, rules)].map(({ start, at, ...found }) => ({ ...found, from: lineAt(joined, start), line: lineAt(joined, at) }));
   return [...trailers, ...phrases];
 }
 
-/** A text's lines as a place reads them. */
+/**
+ * A text's lines as a place reads them: `raw`, with the marks that give a line
+ * its structure (a comment's `*`, a list item's bullet), and `lines`, read
+ * plain for the words they say.
+ */
 function readLines(text, rules) {
-  return String(text ?? "")
+  const raw = String(text ?? "")
     .split(/\r?\n/)
-    .map(raw => plain(rules.words(raw)));
+    .map(line => rules.words(line));
+  return { raw, lines: raw.map(plain) };
 }
 
 /**
@@ -218,28 +225,30 @@ function readLines(text, rules) {
  * the text after that prefix that must be indented further than the trailer's
  * own. A line that is a trailer itself always starts its own.
  */
-function unfolded(lines) {
+function unfolded({ raw, lines }) {
   const logical = [];
-  lines.forEach((line, index) => {
+  raw.forEach((line, index) => {
     const last = logical.at(-1);
-    const part = continuation(line, last);
-    if (part === null) logical.push({ parts: [line], at: index + 1 });
+    const part = continuation(line, lines[index], last);
+    if (part === null) logical.push({ parts: [lines[index]], head: line, at: index + 1 });
     else last.parts.push(part);
   });
   return logical;
 }
 
 /**
- * What a line adds to the trailer above it, or null when it starts a line of
- * its own: the line repeats the trailer's comment prefix, if it has one, and
- * its text after that is indented further than the trailer's own. A comment
- * block indents every line, so a line merely level with the trailer is a
- * comment of its own.
+ * What a line adds to the trailer above it, read plain, or null when it starts
+ * a line of its own. Its structure is read from the raw line, before `plain`
+ * drops a comment's `*` or a list item's bullet: it repeats the trailer's
+ * comment prefix, if it has one, and its text after that is indented further
+ * than the trailer's own, or is an address level with it. A comment block
+ * indents every line, so a line merely level with the trailer is a comment of
+ * its own, and a list item is always its own.
  */
-function continuation(line, last) {
-  if (!continuable(line, last)) return null;
-  const prefix = commentPrefix(last.parts[0]);
-  return line.startsWith(prefix) ? deeperText(line.slice(prefix.length), last.parts[0].slice(prefix.length)) : null;
+function continuation(line, plainLine, last) {
+  if (!continuable(plainLine, last)) return null;
+  const prefix = commentPrefix(last.head);
+  return line.startsWith(prefix) ? continuingText(line.slice(prefix.length), last.head.slice(prefix.length)) : null;
 }
 
 /** Whether a line may continue the one above it: that one is a trailer, and this one is not. */
@@ -248,8 +257,16 @@ const continuable = (line, last) => Boolean(last) && TRAILER_HEAD.test(last.part
 /** A comment's opening mark, with what indents it — `//`, `#`, `*`, `--` or `;` — or "" for a line that is not one. */
 const commentPrefix = line => /^[ \t]*(?:\/\/|#|\*|--|;)/.exec(line)?.[0] ?? "";
 
-/** A line's text, trimmed, when it holds something and is indented further than the trailer's text; null otherwise. */
-const deeperText = (text, trailerText) => (/\S/.test(text) && indentOf(text) > indentOf(trailerText) ? text.trim() : null);
+/** A line's words, read plain, when its text continues the trailer's; null otherwise. */
+const continuingText = (text, trailerText) => (carriesOn(text, trailerText) ? plain(text).trim() : null);
+
+const carriesOn = (text, trailerText) => /\S/.test(text) && !LIST_ITEM.test(text) && (indentOf(text) > indentOf(trailerText) || levelAddress(text, trailerText));
+
+/** An address on a line of its own, level with the trailer it completes, as a trailer indented in a block may have. */
+const levelAddress = (text, trailerText) => indentOf(text) === indentOf(trailerText) && /^\s*</.test(text);
+
+/** A Markdown list item: a line of its own, whatever its indent. */
+const LIST_ITEM = /^\s*[*+-]\s/;
 
 const indentOf = text => /^[ \t]*/.exec(text)[0].length;
 
@@ -262,26 +279,18 @@ const indentOf = text => /^[ \t]*/.exec(text)[0].length;
  * cannot hide behind an old one.
  */
 function creditingSpan({ parts, at }, rules) {
-  const first = firstCredit(parts, rules);
+  const first = growingCredit(parts, rules);
   const credits = first ? first.credits.map(credit => ({ ...credit, from: at, line: at + first.index })) : [];
   return [...credits, ...continuationCredits(parts, at, rules, first ? first.index + 1 : 1)];
 }
 
 /**
- * The first credit a trailer's value carries, and the index of the part that
- * completes it, or null. A value with an address is judged whole, as the
- * identity it names, so a vendor's name continued onto a person's is the
- * person; its credit completes on the part that ends the address. One without
- * is judged as it grows.
+ * The first credit a trailer's value makes as its parts are read in, and the
+ * index of the part that completes it, or null. An ambiguous name, and a
+ * vendor's name standing alone, are judged only on the whole value, so a
+ * vendor's name continued onto a person's name and address is that person,
+ * while a tool's full name is a credit as soon as it is complete.
  */
-function firstCredit(parts, rules) {
-  const address = parts.findIndex((_, index) => /<[^>]*>/.test(parts.slice(0, index + 1).join(" ")));
-  if (address === -1) return growingCredit(parts, rules);
-  const credits = trailerCredits(parts.join(" "), rules, true);
-  return credits.length > 0 ? { credits, index: address } : null;
-}
-
-/** The first credit a value's parts make as they are read in, with an ambiguous name judged only on the whole value. */
 function growingCredit(parts, rules) {
   for (let count = 1; count <= parts.length; count += 1) {
     const credits = trailerCredits(parts.slice(0, count).join(" "), rules, count === parts.length);
@@ -339,8 +348,10 @@ function creditedByTrailer(value, whole) {
 }
 
 function namesToolOutright(name, whole) {
-  return isAiIdentity(name) || TOOL_NAMED.test(name) || (whole && BARE_NAME.test(name));
+  return (whole || !VENDOR_ALONE.test(name)) && namesATool(name, whole);
 }
+
+const namesATool = (name, whole) => isAiIdentity(name) || TOOL_NAMED.test(name) || (whole && BARE_NAME.test(name));
 
 /** Each crediting phrase followed by a name, with where the phrase starts and where the name it credits does. */
 function leadCredits(text, rules) {
@@ -540,13 +551,17 @@ export function withTrailerStarts(blocks, head, git) {
     if (!files.has(path)) files.set(path, trailerFolds(path, head, git));
     return files.get(path);
   };
-  const extended = blocks.map(block => (mayContinue(readLines(block.texts[0], PLACES.line)[0]) ? extendedToTrailer(block, foldsOf(block.path)) : block));
+  const extended = blocks.map(block => (mayContinue(readLines(block.texts[0], PLACES.line).raw[0]) ? extendedToTrailer(block, foldsOf(block.path)) : block));
   const unreadable = [...files].filter(([, folds]) => folds === null).map(([path]) => path);
   return unreadable.length > 0 ? { problem: `could not read ${unreadable.join(", ")} at ${head}, where a folded trailer may start above the change` } : { blocks: extended };
 }
 
-/** Whether a line could continue a trailer above it: indented, or behind a comment prefix. */
-const mayContinue = line => /^[ \t]+\S/.test(line) || commentPrefix(line) !== "";
+/**
+ * Whether a line could continue a trailer above it, and so is worth reading
+ * its file for: indented, or indented behind a comment prefix. An ordinary
+ * comment, one space after its prefix, is not, so it costs no read.
+ */
+const mayContinue = line => /^[ \t]+\S/.test(line) || /^[ \t]*(?:\/\/|#|\*|--|;)[ \t]{2,}\S/.test(line);
 
 /**
  * A file's final lines, and for each line `unfolded` gathers onto a trailer
@@ -672,10 +687,17 @@ function reportFindings(findings) {
   return 1;
 }
 
+/**
+ * One finding as a workflow command. A decoded path may hold a line break, a
+ * `:` or a `,`, so the file is escaped as a command's property is; the message
+ * is escaped as its data.
+ */
 function annotation({ file, line, where, form, excerpt: text }) {
-  const at = file ? ` file=${file},line=${line},` : " ";
+  const at = file ? ` file=${commandProperty(file)},line=${line},` : " ";
   return `::error${at}title=AI credit::${commandText(`${where} ${form}: ${text}`)}`;
 }
+
+const commandProperty = text => commandText(text).replaceAll(":", "%3A").replaceAll(",", "%2C");
 
 function reportClean({ commits, paths, lines }, event) {
   const published = event === "pull_request" ? "the title, description and branch, " : "";
