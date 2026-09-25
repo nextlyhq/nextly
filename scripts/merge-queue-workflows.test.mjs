@@ -153,6 +153,11 @@ describe("conditions that skip the queue's run", () => {
       "format('{{{0}}}', github.event_name) == '{pull_request}'",
       // A function GitHub runs is run here from its arguments, the event's name among them.
       "toJSON(github.event_name) == '\"pull_request\"'",
+      // Run on an unknown, it may make the literal it is compared with, though no value tried is the one it makes it from.
+      "format('x{0}', needs.x.outputs.v) != 'xa' || github.event_name == 'pull_request'",
+      "fromJSON(needs.x.outputs.v) != 'xa' || github.event_name == 'pull_request'",
+      "toJSON(needs.x.outputs.v) != '\"a\"' || github.event_name == 'pull_request'",
+      "join(fromJSON('[\"a\", \"b\"]'), needs.x.outputs.separator) != 'a+b' || github.event_name == 'pull_request'",
     ];
     const runs = [
       "",
@@ -184,6 +189,8 @@ describe("conditions that skip the queue's run", () => {
       // `join` and `toJSON` run from their arguments too, so these hold in both runs; an unknown result would not.
       "join(fromJSON('[\"a\", \"b\"]'), '-') == 'a-b' || github.event_name == 'pull_request'",
       "toJSON('a') == '\"a\"' || github.event_name == 'pull_request'",
+      // Whatever a function makes of an unknown, this runs in the queue.
+      "format('x{0}', needs.x.outputs.v) != 'xa' || github.event_name == 'merge_group'",
     ];
     for (const condition of skips) expect(skipsTheQueue(condition), condition).toBe(true);
     for (const condition of runs) expect(skipsTheQueue(condition), condition).toBe(false);
@@ -203,6 +210,8 @@ describe("conditions that skip the queue's run", () => {
     expect(() => skipsTheQueue(many)).toThrow(/cannot decide the condition/);
     // A call this evaluator does not run, reading the event, could return anything in each run.
     expect(() => skipsTheQueue("hashFiles(github.event_name) != ''")).toThrow(/cannot decide the condition.*reads the event/);
+    // So could a function run on a name that differs between the runs, whose value there is no value tried.
+    expect(() => skipsTheQueue("format('x{0}', github.event.action) == 'xopened'")).toThrow(/cannot decide the condition.*reads the event/);
     // Three text tests of one value may need a value no two literals make.
     const threeTests = "startsWith(needs.x.outputs.v, 'a') && contains(needs.x.outputs.v, 'b') && endsWith(needs.x.outputs.v, 'c') && github.event_name == 'pull_request'";
     expect(() => skipsTheQueue(threeTests)).toThrow(/cannot decide the condition.*3 text tests/);
@@ -294,7 +303,7 @@ function textTestsDecidable(tokens, condition) {
 }
 
 /** Each unknown a text test reads, once for every test that reads it. */
-const textTestOperands = tokens => tokens.flatMap((token, at) => (isTextTest(tokens, at) ? [...new Set(tokens.slice(at + 2, closingParen(tokens, at + 1)).filter(isUnknownName).map(nameOf))] : []));
+const textTestOperands = tokens => tokens.flatMap((token, at) => (isTextTest(tokens, at) ? [...new Set(argumentsOf(tokens, at).filter(isUnknownName).map(nameOf))] : []));
 
 const isTextTest = (tokens, at) => TEXT_TESTS.has(nameOf(tokens[at])) && tokens[at + 1] === "(";
 
@@ -360,8 +369,8 @@ const MOST_ASSIGNMENTS = 20_000;
  * Every assignment of candidate values to the choices the readings make, made
  * one at a time so the first that skips the queue ends the search. A name both
  * runs share is one choice, and a name each run reads for itself is one in
- * each. A call to a function this evaluator does not run is a choice too, and
- * may return any of the values, text as well as `true` and `false`.
+ * each. A call read as an unknown (`readsAnUnknown`) is a choice too, and may
+ * return any of the values, text as well as `true` and `false`.
  */
 function* assignments(condition, readings, values) {
   const choices = [...new Set(readings.flatMap(({ runs }) => Object.values(runs).flatMap(run => ("choice" in run ? [run.choice] : []))))];
@@ -398,21 +407,38 @@ function candidateValues(literals) {
 function readingsIn(tokens, condition) {
   const readings = new Map();
   tokens.forEach((token, at) => {
-    if (!isUnknownName(token)) return;
+    if (!readsAnUnknown(tokens, at)) return;
     const [key, runs] = tokens[at + 1] === "(" ? callReading(tokens, at, condition) : [nameOf(token), readingOf(nameOf(token))];
     readings.set(key, runs);
   });
   return [...readings].map(([key, runs]) => ({ key, runs }));
 }
 
+/** Whether the token at `at` is read as an unknown: a name this evaluator does not know, or a call that makes something of one. */
+const readsAnUnknown = (tokens, at) => isUnknownName(tokens[at]) || transformsAnUnknown(tokens, at);
+
+/** The functions this evaluator runs that make text or a value of their arguments, where the others test them. */
+const TRANSFORMS = new Set(["format", "join", "tojson", "fromjson"]);
+
 /**
- * A call's key and reading, for a function this evaluator does not run. Its
- * result is read alike in both runs; one whose arguments read the event could
- * return something different in each, which no value given here would stand
- * for, so the condition is refused rather than decided on an invented result.
+ * Whether the token at `at` calls one of `TRANSFORMS` on an argument that
+ * holds an unknown. The values an unknown is tried with give every comparison
+ * of that unknown each outcome it can have, but not every comparison of what a
+ * function makes of it: `format('x{0}', v) == 'xa'` holds only where `v` is
+ * `a`, and no value tried is. So the call is an unknown of its own, tried with
+ * every value, as a call to a function this evaluator does not run is. On
+ * arguments it knows, such as the event's name, it is run.
+ */
+const transformsAnUnknown = (tokens, at) => TRANSFORMS.has(nameOf(tokens[at])) && tokens[at + 1] === "(" && argumentsOf(tokens, at).some(isUnknownName);
+
+/**
+ * A call's key and reading, for a call read as an unknown. Its result is read
+ * alike in both runs; one whose arguments read the event could return
+ * something different in each, which no value given here would stand for, so
+ * the condition is refused rather than decided on an invented result.
  */
 function callReading(tokens, at, condition) {
-  const argumentTokens = tokens.slice(at + 2, closingParen(tokens, at + 1));
+  const argumentTokens = argumentsOf(tokens, at);
   const key = callKey(tokens[at].name, argumentTokens);
   if (argumentTokens.some(readsTheEvent)) throw new Error(`cannot decide the condition ${JSON.stringify(condition)}: ${key} reads the event, and what it returns is not known`);
   return [key, sharedBy(key)];
@@ -436,6 +462,9 @@ const callKey = (name, argumentTokens) => `${name.toLowerCase()}(${argumentToken
 
 const tokenText = token => (typeof token === "string" ? token : (nameOf(token) ?? JSON.stringify(token.value)));
 
+/** The tokens between the parentheses of the call whose name is at `at`. */
+const argumentsOf = (tokens, at) => tokens.slice(at + 2, closingParen(tokens, at + 1));
+
 /** The index of the parenthesis that closes the one at `open`. */
 function closingParen(tokens, open) {
   let depth = 0;
@@ -453,7 +482,7 @@ const TOKEN = /\s*(?:('(?:[^']|'')*')|(\d+(?:\.\d+)?)|(==|!=|<=|>=|&&|\|\||[!<>(
 const LITERALS = { true: true, false: false, null: null };
 const RELATIONS = { "<": (a, b) => a < b, "<=": (a, b) => a <= b, ">": (a, b) => a > b, ">=": (a, b) => a >= b };
 
-/** The expression functions a condition can be decided by; any other, such as `success()`, is unknown. */
+/** The expression functions a condition can be decided by; any other, such as `success()`, is unknown, and so is one of `TRANSFORMS` on an unknown. */
 const FUNCTIONS = {
   always: () => true,
   contains: (within, item) => (Array.isArray(within) ? within.some(entry => looseEqual(entry, item)) : lower(within).includes(lower(item))),
@@ -597,11 +626,11 @@ function lookUp(name, known) {
   return Object.hasOwn(known, key) ? known[key] : UNKNOWN;
 }
 
-/** A call's value: one the evaluator can decide, one an assignment gave that call, or unknown. */
+/** A call's value: one an assignment gave that call (`readsAnUnknown`), one the evaluator can decide, or unknown. */
 function call(name, values, known, key) {
+  if (Object.hasOwn(known, key)) return known[key];
   const fn = name.toLowerCase();
-  if (!Object.hasOwn(FUNCTIONS, fn)) return Object.hasOwn(known, key) ? known[key] : UNKNOWN;
-  return values.includes(UNKNOWN) ? UNKNOWN : FUNCTIONS[fn](...values);
+  return Object.hasOwn(FUNCTIONS, fn) && !values.includes(UNKNOWN) ? FUNCTIONS[fn](...values) : UNKNOWN;
 }
 
 /** `&&` with an unknown side: false when the other side is, since either way the result is. */

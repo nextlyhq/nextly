@@ -282,11 +282,14 @@ const continuesValue = text => JOINER.test(text) || ADDRESS.test(text) || nameAl
 
 /**
  * A name and nothing more, as a surname or a tool's name folded onto the next
- * line is: each word capitalised or a number, a tool's name or identity in
- * full, or an ambiguous name in any case. An explanation reads on in lower
- * case, or after a colon.
+ * line is: each word capitalised, in any script, or a number, a tool's name or
+ * identity in full, or an ambiguous name in any case. An explanation reads on
+ * in lower case, or after a colon.
  */
-const nameAlone = text => /^[A-Z0-9][\w.'-]*(?:\s+[A-Z0-9][\w.'-]*)*$/.test(text) || isAiIdentity(text) || BARE_NAME.test(text);
+const nameAlone = text => NAME_WORDS.test(text) || isAiIdentity(text) || BARE_NAME.test(text);
+
+/** Words that each begin as a name does: with a capital, a letter of a script without case, or a number. */
+const NAME_WORDS = /^[\p{Lu}\p{Lt}\p{Lo}\p{N}][\p{L}\p{M}\p{N}_.'’-]*(?:\s+[\p{Lu}\p{Lt}\p{Lo}\p{N}][\p{L}\p{M}\p{N}_.'’-]*)*$/u;
 
 /** A line's text before a note in brackets or after a dash; a colon is kept, since what follows one explains. */
 const beforeNote = text => text.split(/\s+(?:[(—]|-\s)/)[0].trim();
@@ -396,12 +399,17 @@ function coAuthors(parts, from) {
  * joining word, or one after a co-author already complete, with an address, a
  * closing separator or a closed note, or as long as an identity gets. A name
  * in progress goes on onto the next line, as a first name does onto a surname
- * and address, and so does a note still open.
+ * and address, and so does a note still open; plain words that are no name,
+ * as an explanation's are, go on no further, so a tool named after them is
+ * read on its own.
  */
 const startsCoAuthor = (part, last) => !last || JOINER.test(part) || last.group.length >= IDENTITY_LINES || complete(last.group.join(" "));
 
-/** Whether a co-author's lines are complete: no note left open, and an address, a closing separator or a note. */
-const complete = text => balanced(text) && (ADDRESS.test(text) || /[,;]\s*$/.test(text) || NOTE.test(text));
+/** Whether a co-author's lines are complete: no note left open, and an address, a closing separator, a note, or words that are no name. */
+const complete = text => balanced(text) && (closed(text) || !nameAlone(withoutJoiner(text)));
+
+/** Whether a co-author's lines end as an identity does: with an address, a closing separator or a note. */
+const closed = text => ADDRESS.test(text) || /[,;]\s*$/.test(text) || NOTE.test(text);
 
 /**
  * The most lines one identity is read across: a name, a surname, an address,
