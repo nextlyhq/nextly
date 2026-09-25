@@ -248,8 +248,16 @@ function unfolded({ raw, lines }) {
 function continuation(line, plainLine, last) {
   if (!continuable(plainLine, last)) return null;
   const prefix = commentPrefix(last.head);
-  return line.startsWith(prefix) ? continuingText(line.slice(prefix.length), last.head.slice(prefix.length)) : null;
+  if (line.startsWith(prefix)) return continuingText(line.slice(prefix.length), last.head.slice(prefix.length));
+  return underListItem(line, last.head, prefix) ? plain(line).trim() : null;
 }
+
+/**
+ * Whether a line continues a trailer written as a `*` list item: Markdown
+ * indents an item's continuation to its text, without repeating the bullet,
+ * where a comment block repeats its prefix.
+ */
+const underListItem = (line, head, prefix) => /^[ \t]*\*$/.test(prefix) && /\S/.test(line) && !LIST_ITEM.test(line) && indentOf(line) >= prefix.length + indentOf(head.slice(prefix.length));
 
 /** Whether a line may continue the one above it: that one is a trailer, and this one is not. */
 const continuable = (line, last) => Boolean(last) && TRAILER_HEAD.test(last.parts[0]) && !TRAILER_HEAD.test(line);
@@ -262,8 +270,12 @@ const continuingText = (text, trailerText) => (carriesOn(text, trailerText) ? pl
 
 const carriesOn = (text, trailerText) => /\S/.test(text) && !LIST_ITEM.test(text) && (indentOf(text) > indentOf(trailerText) || levelAddress(text, trailerText));
 
-/** An address on a line of its own, level with the trailer it completes, as a trailer indented in a block may have. */
-const levelAddress = (text, trailerText) => indentOf(text) === indentOf(trailerText) && /^\s*</.test(text);
+/**
+ * An address on a line of its own, level with the trailer it completes, as a
+ * trailer indented in a block may have. At the margin a line is its own, as git
+ * reads one, so only an indented address continues.
+ */
+const levelAddress = (text, trailerText) => indentOf(text) > 0 && indentOf(text) === indentOf(trailerText) && /^\s*</.test(text);
 
 /** A Markdown list item: a line of its own, whatever its indent. */
 const LIST_ITEM = /^\s*[*+-]\s/;
@@ -483,25 +495,6 @@ function hunkHeader(line) {
   return { next: Number(start), oldLeft: Number(oldCount), newLeft: Number(newCount) };
 }
 
-/** Consecutive lines of one file as one block, so a phrase wrapped across them reads whole. */
-export function diffBlocks(lines) {
-  const blocks = [];
-  for (const entry of lines) {
-    if (continues(blocks.at(-1), entry)) extend(blocks.at(-1), entry);
-    else blocks.push({ path: entry.path, start: entry.line, texts: [entry.text], added: [entry.added] });
-  }
-  return blocks;
-}
-
-function continues(block, entry) {
-  return Boolean(block) && block.path === entry.path && block.start + block.texts.length === entry.line;
-}
-
-function extend(block, entry) {
-  block.texts.push(entry.text);
-  block.added.push(entry.added);
-}
-
 /** The paths `git diff --name-status -z` reports added, renamed or copied: a rename or copy carries two paths, anything else one. */
 export function addedOrRenamed(fields) {
   const entries = [];
@@ -518,8 +511,8 @@ function rangeEvidence(range, git) {
   const read = rangeReads(range, git);
   if (read.problem) return read;
   const lines = diffLines(read.diff);
-  const extended = withTrailerStarts(diffBlocks(lines), range.head, git);
-  return extended.problem ? extended : { commits: read.commits, paths: read.paths, lines, blocks: extended.blocks };
+  const paragraphs = paragraphBlocks(lines, range.head, git);
+  return paragraphs.problem ? paragraphs : { commits: read.commits, paths: read.paths, lines, blocks: paragraphs.blocks };
 }
 
 /** A range's commits, its added or renamed paths and its diff, as git reports them, or why they cannot be read. */
@@ -527,61 +520,75 @@ function rangeReads({ base, head }, git) {
   const commits = commitsIn({ base, head }, git);
   const names = git(["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", base, head], { maxBuffer: MAX_OUTPUT });
   // Text, whatever a changed attribute says: a path marked binary would
-  // otherwise show no lines at all, and its credit none.
-  const diff = git(["-c", "core.quotePath=false", "diff", "--unified=1", "--text", "--no-textconv", "--no-color", "--no-ext-diff", "-M", base, head], { maxBuffer: MAX_OUTPUT });
+  // otherwise show no lines at all, and its credit none. No context lines:
+  // the diff says which lines were added, and each is read in its paragraph
+  // of the final file.
+  const diff = git(["-c", "core.quotePath=false", "diff", "--unified=0", "--text", "--no-textconv", "--no-color", "--no-ext-diff", "-M", base, head], { maxBuffer: MAX_OUTPUT });
   if (!commits || !names.ok || !diff.ok) return { problem: `could not read the commits and changes in ${base}..${head}` };
   return { commits, paths: addedOrRenamed(names.out.split("\0")), diff: diff.out };
 }
 
 /**
- * Blocks whose first line continues a folded trailer, extended back through
- * the final file to the trailer's first line, however far above the diff's
- * context it sits. The lines added this way are unchanged ones. Most code
- * begins indented, so a block is extended only where `unfolded` gathers its
- * first line onto a trailer, and a file is read once, however many of its
- * blocks may continue one. A file that cannot be read makes the whole answer
- * a problem: a trailer may start in it, and a block left unextended would
- * clear a credit nobody read.
+ * The final file's paragraphs that hold an added line, a block each, with
+ * which of their lines the change added. A phrase may wrap, but never across a
+ * blank line, and a folded trailer never holds one either, so a credit an added
+ * line takes part in lies whole inside these, however far above or below the
+ * added line it starts or ends. Each file is read once. One that cannot be read
+ * makes the whole answer a problem: a credit could start in it, and nobody
+ * would have read it.
  *
- * @returns {{ blocks: object[] } | { problem: string }}
+ * @returns {{ blocks: { path: string, start: number, texts: string[], added: boolean[] }[] } | { problem: string }}
  */
-export function withTrailerStarts(blocks, head, git) {
-  const files = new Map();
-  const foldsOf = path => {
-    if (!files.has(path)) files.set(path, trailerFolds(path, head, git));
-    return files.get(path);
-  };
-  const extended = blocks.map(block => (mayContinue(readLines(block.texts[0], PLACES.line).raw[0]) ? extendedToTrailer(block, foldsOf(block.path)) : block));
-  const unreadable = [...files].filter(([, folds]) => folds === null).map(([path]) => path);
-  return unreadable.length > 0 ? { problem: `could not read ${unreadable.join(", ")} at ${head}, where a folded trailer may start above the change` } : { blocks: extended };
+export function paragraphBlocks(lines, head, git) {
+  const read = [...addedLinesByPath(lines)].map(([path, added]) => ({ path, added, file: git(["show", `${head}:${path}`], { maxBuffer: MAX_OUTPUT }) }));
+  const unreadable = read.filter(({ file }) => !file.ok).map(({ path }) => path);
+  if (unreadable.length > 0) return { problem: `could not read ${unreadable.join(", ")} at ${head}, whose paragraphs hold the added lines` };
+  return { blocks: read.flatMap(({ path, added, file }) => paragraphsOf(path, file.out.split("\n"), added)) };
 }
 
-/**
- * Whether a line could continue a trailer above it, and so is worth reading
- * its file for: indented, or indented behind a comment prefix. An ordinary
- * comment, one space after its prefix, is not, so it costs no read.
- */
-const mayContinue = line => /^[ \t]+\S/.test(line) || /^[ \t]*(?:\/\/|#|\*|--|;)[ \t]{2,}\S/.test(line);
-
-/**
- * A file's final lines, and for each line `unfolded` gathers onto a trailer
- * above it, the 1-based line that trailer starts on; null when the file
- * cannot be read.
- */
-function trailerFolds(path, head, git) {
-  const file = git(["show", `${head}:${path}`], { maxBuffer: MAX_OUTPUT });
-  if (!file.ok) return null;
-  const onto = new Map();
-  for (const { parts, at } of unfolded(readLines(file.out, PLACES.line))) parts.slice(1).forEach((_, offset) => onto.set(at + offset + 1, at));
-  return { lines: file.out.split("\n"), onto };
+/** Each file's added lines, by the line each has in the final file. A blank one takes part in no phrase. */
+function addedLinesByPath(lines) {
+  const byPath = new Map();
+  for (const entry of lines.filter(line => line.added && !blank(line.text))) {
+    if (!byPath.has(entry.path)) byPath.set(entry.path, new Set());
+    byPath.get(entry.path).add(entry.line);
+  }
+  return byPath;
 }
 
-function extendedToTrailer(block, folds) {
-  const first = folds?.onto.get(block.start);
-  if (first === undefined) return block;
-  const before = folds.lines.slice(first - 1, block.start - 1);
-  return { ...block, start: first, texts: [...before, ...block.texts], added: [...before.map(() => false), ...block.added] };
+/** The paragraphs of a file's final lines that hold an added line, each once, in order. */
+function paragraphsOf(path, fileLines, added) {
+  const spans = [];
+  let covered = 0;
+  for (const line of [...added].sort((a, b) => a - b)) {
+    if (line <= covered) continue;
+    const span = { start: paragraphStart(fileLines, line), end: paragraphEnd(fileLines, line) };
+    spans.push(span);
+    covered = span.end;
+  }
+  return spans.map(span => blockOf(path, fileLines, added, span));
 }
+
+function blockOf(path, fileLines, added, { start, end }) {
+  const texts = fileLines.slice(start - 1, end);
+  return { path, start, texts, added: texts.map((_, offset) => added.has(start + offset)) };
+}
+
+/** The 1-based first line of the paragraph holding a line: back to, not across, a blank line. */
+function paragraphStart(fileLines, line) {
+  let start = line;
+  while (start > 1 && !blank(fileLines[start - 2])) start -= 1;
+  return start;
+}
+
+/** The 1-based last line of the paragraph holding a line: on to, not across, a blank line. */
+function paragraphEnd(fileLines, line) {
+  let end = line;
+  while (end < fileLines.length && !blank(fileLines[end])) end += 1;
+  return end;
+}
+
+const blank = text => /^\s*$/.test(text);
 
 /** The commits in a range, each read from its own object, or undefined when any cannot be read. */
 function commitsIn({ base, head }, git) {

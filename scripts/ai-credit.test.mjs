@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { load } from "js-yaml";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { addedOrRenamed, branchCredits, creditsIn, diffBlocks, diffLines, isAiIdentity, main, withTrailerStarts } from "./ai-credit.mjs";
+import { addedOrRenamed, branchCredits, creditsIn, diffLines, isAiIdentity, main, paragraphBlocks } from "./ai-credit.mjs";
 import { readGit } from "./workflow-context.mjs";
 
 /** Joined at run time, so that no line here reads as a credit. */
@@ -183,6 +183,17 @@ describe("a line a change adds", () => {
     expect(creditsIn(lines(spell("  Co-authored", "-by: Alice"), spell("  <noreply@", "open", "ai.com>")), "line")).toEqual([expect.objectContaining({ from: 1, line: 2 })]);
   });
 
+  // At the margin a line is its own, as git reads one: only an indented address continues a trailer.
+  it("leaves an address at the margin as a line of its own", () => {
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("<noreply@", "open", "ai.com>")), "line")).toEqual([]);
+  });
+
+  // Markdown indents a list item's continuation to its text, without repeating the bullet.
+  it("unfolds a trailer written as a list item onto the lines indented under its bullet", () => {
+    expect(creditsIn(lines(spell("* Co-authored", "-by:"), `  ${CODE_TOOL}`), "message")).toEqual([expect.objectContaining({ from: 1, line: 2 })]);
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("* ", CHAT_TOOL, " loads skills")), "message")).toEqual([]);
+  });
+
   it("unfolds a trailer across a repeated comment prefix, and not onto the next comment", () => {
     for (const prefix of ["//", "#", ";", "--", " *"]) {
       expect(creditsIn(lines(spell(prefix, " Co-authored", "-by:"), `${prefix}   ${CHAT_TOOL}`), "line"), prefix).toEqual([expect.objectContaining({ from: 1, line: 2 })]);
@@ -293,73 +304,39 @@ describe("reading a diff", () => {
     expect(pathOf("b/plain.md")).toBe("plain.md");
   });
 
-  it("reads consecutive lines of a file as one text, and a gap or another file as a new one", () => {
-    const shown = [
-      { path: "a.md", line: 3, text: "x", added: false },
-      { path: "a.md", line: 4, text: "y", added: true },
-      { path: "a.md", line: 9, text: "z", added: true },
-      { path: "b.md", line: 10, text: "w", added: true },
-    ];
-    expect(diffBlocks(shown)).toEqual([
-      { path: "a.md", start: 3, texts: ["x", "y"], added: [false, true] },
-      { path: "a.md", start: 9, texts: ["z"], added: [true] },
-      { path: "b.md", start: 10, texts: ["w"], added: [true] },
-    ]);
-  });
-
   /*
-   * Most code begins indented, as a folded trailer's continuation does. A
-   * block reaches back only to a trailer it continues, read as a line is read,
-   * and each file is read once however many of its blocks begin indented.
+   * A phrase wraps but never crosses a blank line, and neither does a folded
+   * trailer, so each added line is read in its whole paragraph of the final
+   * file, however far above or below the added line the credit starts or
+   * ends. Added lines in one paragraph make one block; a blank line parts two.
    */
-  it("extends a block back to the trailer it continues, and code to nothing, reading each file once", () => {
-    const credit = trailer("Co-authored", "Build Team");
-    const text = lines("function one() {", "  const a = 1;", "  const b = 2;", "}", credit, "  and friends", "  more", "", `* ${credit}`, "*   and friends", "*   more");
-    const shown = [];
-    const git = args => {
-      shown.push(args.at(-1));
-      return { ok: true, out: text };
-    };
-    const code = { path: "a.md", start: 3, texts: ["  const b = 2;"], added: [true] };
-    const folded = { path: "a.md", start: 7, texts: ["  more"], added: [true] };
-    const starred = { path: "a.md", start: 11, texts: ["*   more"], added: [true] };
-    expect(withTrailerStarts([code, folded, starred], "HEAD", git)).toEqual({
-      blocks: [
-        code,
-        { path: "a.md", start: 5, texts: [credit, "  and friends", "  more"], added: [false, false, true] },
-        { path: "a.md", start: 9, texts: [`* ${credit}`, "*   and friends", "*   more"], added: [false, false, true] },
-      ],
-    });
-    expect(shown).toEqual(["HEAD:a.md"]);
-  });
-
-  /*
-   * A block that may continue a trailer is judged from the trailer's start,
-   * which only the final file holds. Unread, the block would be judged from
-   * its own lines and a credit completed there could pass; so the answer is
-   * that the range cannot be read.
-   */
-  it("reports a final file it could not read, rather than leaving a block that may continue a trailer unextended", () => {
-    const unreadable = () => ({ ok: false, out: "" });
-    const indentedBlock = { path: "big.md", start: 7, texts: ["  more"], added: [true] };
-    expect(withTrailerStarts([indentedBlock], "HEAD", unreadable)).toEqual({ problem: expect.stringContaining("could not read big.md at HEAD") });
-    // A block that could not continue a trailer needs no file, so none is read.
-    const plainBlock = { path: "big.md", start: 7, texts: ["more"], added: [true] };
-    expect(withTrailerStarts([plainBlock], "HEAD", unreadable)).toEqual({ blocks: [plainBlock] });
-  });
-
-  // A block's first line is worth reading its file for only when indented like a continuation.
-  it("reads a file for a block that may continue a trailer, and not for an ordinary comment", () => {
+  it("reads each added line in its paragraph of the final file, once per paragraph and once per file", () => {
+    const text = lines("intro", "", "one", "two", "three", "", "four", "");
     const reads = [];
     const git = args => {
       reads.push(args.at(-1));
-      return { ok: true, out: "x\n" };
+      return { ok: true, out: text };
     };
-    const blockOf = text => ({ path: "a.md", start: 2, texts: [text], added: [true] });
-    withTrailerStarts([blockOf("// an ordinary comment"), blockOf("# A heading"), blockOf("* a list item")], "HEAD", git);
-    expect(reads).toEqual([]);
-    withTrailerStarts([blockOf("//   a continuation")], "HEAD", git);
+    const entry = (line, added = true) => ({ path: "a.md", line, text: text.split("\n")[line - 1], added });
+    expect(paragraphBlocks([entry(3), entry(5), entry(7), entry(6)], "HEAD", git)).toEqual({
+      blocks: [
+        { path: "a.md", start: 3, texts: ["one", "two", "three"], added: [true, false, true] },
+        { path: "a.md", start: 7, texts: ["four"], added: [true] },
+      ],
+    });
     expect(reads).toEqual(["HEAD:a.md"]);
+  });
+
+  /*
+   * A credit an added line takes part in may start in the file above the
+   * change, so a file that cannot be read leaves the range unread rather than
+   * judged from the added lines alone.
+   */
+  it("reports a final file it could not read, rather than judging its added lines alone", () => {
+    const unreadable = () => ({ ok: false, out: "" });
+    expect(paragraphBlocks([{ path: "big.md", line: 7, text: "more", added: true }], "HEAD", unreadable)).toEqual({ problem: expect.stringContaining("could not read big.md at HEAD") });
+    // A file with no added line, or only a blank one, needs no read.
+    expect(paragraphBlocks([{ path: "big.md", line: 7, text: "  ", added: true }, { path: "big.md", line: 8, text: "kept", added: false }], "HEAD", unreadable)).toEqual({ blocks: [] });
   });
 
   it("names the paths a change adds, renames or copies, and not the ones it only edits", () => {
@@ -477,6 +454,19 @@ describe("the command in CI", () => {
   it("refuses a self-description an added line completes, though its first line was already there", () => {
     expect(decide(change(lines("This file is", ""), lines("This file is", spell("A", "I-generated."), "")))).toBe(1);
     expect(printed()).toMatch(/file=notes\.md,line=2,title=AI credit::notes\.md:2 calls it AI-made/);
+  });
+
+  // The diff shows no context; the paragraph holds the rest of a phrase however many lines it wraps over.
+  it("refuses a phrase an added line completes after several wrapped lines already there", () => {
+    const before = lines(spell("Mis", "tral"), "Large wrote", "");
+    expect(decide(change(before, lines(spell("Mis", "tral"), "Large wrote", "this file", "")))).toBe(1);
+    expect(printed()).toMatch(/file=notes\.md,line=3,title=AI credit::notes\.md:3 names it as the change's maker/);
+  });
+
+  it("refuses an address added to a trailer folded behind a comment prefix with no space after it", () => {
+    const before = lines(spell("//Co-authored", "-by:"), "// Alice", "");
+    expect(decide(change(before, lines(spell("//Co-authored", "-by:"), "// Alice", spell("// <noreply@", "open", "ai.com>"), "")))).toBe(1);
+    expect(printed()).toMatch(/file=notes\.md,line=3,title=AI credit::notes\.md:3 names it in a Co-authored-by trailer/);
   });
 
   it("refuses another tool an added continuation names, behind a credit that was already there", () => {
