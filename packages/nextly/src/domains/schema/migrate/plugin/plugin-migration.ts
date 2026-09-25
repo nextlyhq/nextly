@@ -81,24 +81,77 @@ const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
  * would refuse a module nobody touched.
  */
 export function canonicalMigrationForm(
-  dialects: Record<SupportedDialect, DialectStatements>
+  dialects: Record<SupportedDialect, DialectStatements>,
+  /**
+   * The snapshots the APPLY reads, when the caller has them.
+   *
+   * Optional so existing modules keep verifying: a module generated before
+   * these were covered hashes the same as it always did, and only modules
+   * generated from now on carry them.
+   */
+  snapshots?: MigrationSnapshots
 ): string {
-  return JSON.stringify(
+  const base = DIALECTS.map(dialect => [
+    dialect,
+    dialects[dialect]?.up ?? [],
+    dialects[dialect]?.down ?? [],
+  ]);
+  if (snapshots === undefined) return JSON.stringify(base);
+  return JSON.stringify([
+    base,
     DIALECTS.map(dialect => [
       dialect,
-      dialects[dialect]?.up ?? [],
-      dialects[dialect]?.down ?? [],
-    ])
-  );
+      snapshots.snapshot?.[dialect]?.tables ?? [],
+      snapshots.before?.[dialect]?.tables ?? [],
+      snapshots.contributed?.[dialect]?.tables ?? [],
+      snapshots.contributedBefore?.[dialect]?.tables ?? [],
+    ]),
+  ]);
+}
+
+/** The snapshot sides a module carries for the reconcile and for ownership. */
+export interface MigrationSnapshots {
+  snapshot?: Record<SupportedDialect, PluginMigrationSnapshot>;
+  before?: Record<SupportedDialect, PluginMigrationSnapshot>;
+  contributed?: Record<SupportedDialect, PluginMigrationSnapshot>;
+  contributedBefore?: Record<SupportedDialect, PluginMigrationSnapshot>;
 }
 
 /** The checksum a generated module carries. */
 export function migrationChecksum(
-  dialects: Record<SupportedDialect, DialectStatements>
+  dialects: Record<SupportedDialect, DialectStatements>,
+  snapshots?: MigrationSnapshots
 ): string {
   return createHash("sha256")
-    .update(canonicalMigrationForm(dialects))
+    .update(canonicalMigrationForm(dialects, snapshots))
     .digest("hex");
+}
+
+/**
+ * A module's checksum as the module itself claims it should be computed.
+ *
+ * Modules written before the snapshots were covered carry a checksum over the
+ * SQL alone, so verifying them with the snapshots included would refuse every
+ * one. Recomputing BOTH ways and accepting either keeps them valid while
+ * making a newly generated module's snapshots load-bearing: the apply reads
+ * `snapshot`, `before` and the contributed sides to decide whether a module is
+ * already applied, and an edited target matching the live schema was being
+ * recorded as adopted without its SQL ever running.
+ */
+function checksumOf(migration: PluginMigration): string {
+  const withSnapshots = migrationChecksum(migration.dialects, {
+    snapshot: migration.snapshot,
+    before: migration.before,
+    ...(migration.contributed ? { contributed: migration.contributed } : {}),
+    ...(migration.contributedBefore
+      ? { contributedBefore: migration.contributedBefore }
+      : {}),
+  });
+  if (withSnapshots === migration.checksum) return withSnapshots;
+  // Fall back to the legacy form so an older module still verifies; if it
+  // matches neither, the caller reports the mismatch as it always did.
+  const sqlOnly = migrationChecksum(migration.dialects);
+  return sqlOnly === migration.checksum ? sqlOnly : withSnapshots;
 }
 
 /** The ledger filename a plugin's migration is recorded under. */
@@ -123,7 +176,7 @@ export function assertModuleIntact(
   pluginName: string,
   migration: PluginMigration
 ): void {
-  const actual = migrationChecksum(migration.dialects);
+  const actual = checksumOf(migration);
   if (actual === migration.checksum) return;
 
   throw new NextlyError({
@@ -153,7 +206,7 @@ export function assertAppliedUnchanged(
   recordedSha256: string | null
 ): void {
   if (recordedSha256 === null) return;
-  const actual = migrationChecksum(migration.dialects);
+  const actual = checksumOf(migration);
   if (actual === recordedSha256) return;
 
   throw new NextlyError({

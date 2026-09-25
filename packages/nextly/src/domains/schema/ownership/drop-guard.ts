@@ -34,7 +34,10 @@ import { SchemaOwnersRepository } from "./schema-owners-repository";
  * that is legitimate.
  */
 const DROP_TABLE =
-  /^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?[\w-]+["`]?\.)?["`]?([\w-]+)["`]?/i;
+  /^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([\s\S]+?)(?:\s+(?:CASCADE|RESTRICT))?\s*;?\s*$/i;
+
+/** One name in a DROP list, with its optional schema qualifier and quotes off. */
+const DROP_TARGET = /^(?:["`]?[\w-]+["`]?\.)?["`]?([\w-]+)["`]?$/;
 
 /**
  * SQLite rebuilds a table through a `__new_<table>` twin.
@@ -53,7 +56,23 @@ export function tablesDroppedBy(statements: readonly string[]): string[] {
   const dropped: string[] = [];
   for (const statement of statements) {
     const match = DROP_TABLE.exec(statement);
-    if (match) dropped.push(canonicalTableName(match[1]));
+    if (!match) continue;
+
+    // EVERY name, not just the first.
+    //
+    // `DROP TABLE a, b` is one statement naming two tables, and reading only
+    // `a` let a module drop `b` — a table belonging to another stream — with
+    // the guard approving it, because the name it checked was the one the
+    // module was entitled to. The repository's own integration setup writes
+    // comma-separated drops, so the single-name assumption was not safe even
+    // in this codebase.
+    for (const raw of match[1].split(",")) {
+      const target = DROP_TARGET.exec(raw.trim());
+      // A name this cannot parse is NOT skipped: skipping is what made the
+      // first hole. Anything unrecognised is carried through as written, so
+      // the owner lookup decides rather than the parser.
+      dropped.push(canonicalTableName(target ? target[1] : raw.trim()));
+    }
   }
   return dropped;
 }

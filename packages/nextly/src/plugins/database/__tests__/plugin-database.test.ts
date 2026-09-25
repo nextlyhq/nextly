@@ -225,6 +225,47 @@ describe("transaction", () => {
     expect(order).toEqual(["begin", "work", "commit"]);
   });
 
+  it("gives the callback the TRANSACTION's handle, not the pooled one", async () => {
+    // The distinction this method exists for. `adapter.transaction` leases a
+    // client and binds a Drizzle instance to it; the pooled handle is a
+    // different connection, so work done on it commits on its own and a later
+    // throw rolls back an empty transaction. A surface that promises a
+    // transaction and delivers that is worse than one that promises nothing.
+    const wrote: string[] = [];
+    const handle = (id: string) => ({
+      insert: () => ({
+        values: () => {
+          wrote.push(id);
+          return Promise.resolve();
+        },
+      }),
+      update: () => ({ set: () => ({ where: () => Promise.resolve({}) }) }),
+      delete: () => ({ where: () => Promise.resolve({}) }),
+    });
+    const pooled = handle("pooled");
+    const scoped = handle("transaction-bound");
+
+    const surface = createPluginDatabase({
+      dialect: "postgresql",
+      owner: OWNER,
+      dependsOn: new Set(),
+      owners: () => new Map([["fx__notes", OWNER]]),
+      tables: () => ({ fx__notes: { name: "fx__notes" } }),
+      tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
+      db: () => pooled,
+      relationalDb: () => pooled,
+      // What the real adapters do: the work runs against the leased client.
+      transaction: fn => fn(scoped),
+    });
+
+    await surface.transaction(async tx => {
+      await tx.insert(notes, { bodyText: "inside" } as never);
+    });
+
+    // The write went through the transaction's handle, not the pool's.
+    expect(wrote).toEqual(["transaction-bound"]);
+  });
+
   it("propagates a failure rather than swallowing it", async () => {
     const { surface } = harness();
     const boom = vi.fn().mockRejectedValue(new Error("rolled back"));

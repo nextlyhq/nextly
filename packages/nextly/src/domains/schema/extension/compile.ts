@@ -81,6 +81,37 @@ function defaultSql(
 }
 
 /**
+ * A column on a table this function did not compile, found by SQL name.
+ *
+ * The referenced table may be keyed either way: a core table's properties are
+ * SQL-named, while an extension table's are the authored keys. Reading
+ * `referenced[sqlName]` therefore returned undefined whenever the target was
+ * an extension table with a camelCase column — and the caller SKIPS a foreign
+ * key whose columns do not resolve, so the constraint silently did not exist.
+ *
+ * The direct hit is tried first because it is the common case; the scan asks
+ * each column what it is actually called, which is the question that has one
+ * answer regardless of how the record was keyed.
+ */
+function referencedColumn(
+  referenced: Record<string, unknown>,
+  sqlName: string
+): unknown {
+  const direct = referenced[sqlName];
+  if (direct !== undefined) return direct;
+  for (const value of Object.values(referenced)) {
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      (value as { name?: unknown }).name === sqlName
+    ) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+/**
  * The authored key a SQL column name belongs to, or the name itself.
  *
  * The fallback matters for a reference to a table this function did not
@@ -248,7 +279,9 @@ export function toDrizzleTable(
     const localColumns = fk.columns.map(
       name => columns[authoredKeyOf(table, name)]
     );
-    const foreignColumns = fk.referencesColumns.map(name => referenced[name]);
+    const foreignColumns = fk.referencesColumns.map(name =>
+      referencedColumn(referenced, name)
+    );
     if (localColumns.includes(undefined) || foreignColumns.includes(undefined))
       continue;
     // Actions are builder-chained in drizzle rc.4 — the config-object form

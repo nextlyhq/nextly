@@ -29,10 +29,18 @@ export function isPluginLedgerRow(filename: string | null): boolean {
 export function pluginOfLedgerRow(filename: string | null): string | null {
   if (!isPluginLedgerRow(filename)) return null;
   const withoutPrefix = (filename as string).slice(PLUGIN_PREFIX.length);
-  const slash = withoutPrefix.indexOf("/");
-  // A qualified name is `plugin:<name>/<file>`. Without the separator the row
-  // is malformed rather than the app's, and treating it as the app's would
-  // hand it to `migrate:down`.
+  // The LAST slash, not the first.
+  //
+  // A qualified name is `plugin:<name>/<module>`, and an npm plugin name
+  // contains a slash of its own: `@acme/nextly-plugin-auth`. Splitting on the
+  // first one returned `@acme`, so `scopeLedgerRows(rows, "@acme/...")`
+  // matched nothing and both `migrate:status --plugin` and
+  // `migrate:down --plugin` silently reported no migrations for every scoped
+  // plugin. A module name cannot contain a slash — `slugify` produces none —
+  // so the last one is the separator, whatever the plugin is called.
+  const slash = withoutPrefix.lastIndexOf("/");
+  // Without any separator the row is malformed rather than the app's, and
+  // treating it as the app's would hand it to `migrate:down`.
   return slash === -1 ? withoutPrefix : withoutPrefix.slice(0, slash);
 }
 

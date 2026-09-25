@@ -93,8 +93,8 @@ async function connect(options: RunnerOptions, context: CommandContext) {
   // a rollback by INSERTING a `rolled_back` event after the `applied` one, so
   // the latest state is what "is this applied?" asks. The same rule
   // `runPluginPhase` uses.
-  const appliedModules = new Set<string>();
-  {
+  const readAppliedModules = async (): Promise<Set<string>> => {
+    const applied = new Set<string>();
     const newest = new Map<string, { status: string; at: number }>();
     const events = new SchemaEventsRepository(
       (adapter as unknown as DrizzleAdapter).getDrizzle(),
@@ -109,20 +109,35 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       }
     }
     for (const [filename, state] of newest) {
-      if (state.status === "applied") appliedModules.add(filename);
+      if (state.status === "applied") applied.add(filename);
     }
-  }
+    return applied;
+  };
 
-  for (const plugin of plugins) {
-    const source = definitions.find(d => d.name === plugin.name);
-    const modules = (source?.contributes?.schema?.migrations ?? []).filter(
-      module => appliedModules.has(qualifiedFilename(plugin.name, module.name))
-    );
-    plugin.modules = modules.map(module => ({
-      name: module.name,
-      reversible: (module.dialects[dialect]?.down ?? []).length > 0,
-    }));
-  }
+  /**
+   * Re-derive every plugin's module list from the ledger.
+   *
+   * A function rather than a value because the answer can change: this reads
+   * the ledger, and the uninstall does not hold the migrate lock until later.
+   * A list taken at connect time could omit a module another migration applied
+   * in between, and the uninstall would then mark the plugin uninstalled while
+   * leaving that module's schema and its applied row behind.
+   */
+  const refreshPlan = async (): Promise<void> => {
+    const applied = await readAppliedModules();
+    for (const plugin of plugins) {
+      const source = definitions.find(d => d.name === plugin.name);
+      const modules = (source?.contributes?.schema?.migrations ?? []).filter(
+        module => applied.has(qualifiedFilename(plugin.name, module.name))
+      );
+      plugin.modules = modules.map(module => ({
+        name: module.name,
+        reversible: (module.dialects[dialect]?.down ?? []).length > 0,
+      }));
+    }
+  };
+
+  await refreshPlan();
 
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
 
@@ -236,7 +251,35 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     // Read from the definition, so it is computed before the lock rather than
     // inside it: holding a database lock over work that touches no database
     // just makes every other process wait longer.
-    const pluginMigrationSets = await pluginMigrationSetsFrom([definition]);
+    // The plugin AND the dependencies it declares.
+    //
+    // `pluginMigrationSetsFrom` topologically sorts what it is given and
+    // refuses a plugin whose required `dependsOn` is absent from that input —
+    // so passing the target alone made `plugins install` fail outright for
+    // every plugin that declares one. The configured definitions are right
+    // here; the set just was not being built from them.
+    //
+    // Transitive, because a dependency may declare its own. `runPluginPhase`
+    // is still scoped to the target by `pluginsWithMigrations`, so the
+    // dependencies are present for ordering and validation without their
+    // modules being applied by this install.
+    const withDependencies = new Map<string, PluginDefinition>();
+    const collect = (plugin: PluginDefinition): void => {
+      if (withDependencies.has(plugin.name)) return;
+      withDependencies.set(plugin.name, plugin);
+      for (const dependency of [
+        ...Object.keys(plugin.dependsOn ?? {}),
+        ...Object.keys(plugin.optionalDependsOn ?? {}),
+      ]) {
+        const found = definitions.find(d => d.name === dependency);
+        if (found) collect(found);
+      }
+    };
+    collect(definition);
+
+    const pluginMigrationSets = await pluginMigrationSetsFrom([
+      ...withDependencies.values(),
+    ]);
 
     const outcome = await withMigrateLock(
       drizzleAdapter.getDrizzle(),
@@ -306,7 +349,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const definition = definitions.find(d => d.name === plugin.name);
     if (definition?.[hook] === undefined) return;
 
-    const { registerServices, getInitializedPluginContext, shutdownServices } =
+    const { registerServices, getInitializedPluginContext, clearServices } =
       await import("../../di/register");
     const { buildServiceConfig } = await import(
       "../../init/build-service-config"
@@ -341,13 +384,24 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         await definition.onUninstall?.(pluginContext, opts);
       }
     } finally {
-      // `shutdownServices` disconnects the adapter it was handed, and this
-      // command is not done with it — an install still has owner rows to
-      // record, an uninstall still has DOWN statements to run. Reconnecting
-      // beats skipping the shutdown: a registered container left behind would
-      // make the next `registerServices` in this process throw.
-      await shutdownServices();
-      if (!adapter.isConnected()) await adapter.connect();
+      // `clearServices`, NOT `shutdownServices`.
+      //
+      // Both leave the container unregistered, which is all this needs — a
+      // registered one would make the next `registerServices` in the process
+      // throw. The difference is that `shutdownServices` also DISCONNECTS the
+      // adapter, and this command is not finished with it: an install still
+      // has owner rows to record and an uninstall still has DOWN statements to
+      // run, both through a Drizzle handle bound to that pool. Reconnecting
+      // afterwards did not save it — the handle still pointed at the closed
+      // pool — and on MySQL closing the pool also releases the connection-
+      // bound migrate lock this command is holding, letting another migration
+      // in while the DOWNs run.
+      //
+      // The cost is that plugin `destroy()` hooks do not run. They are for
+      // shutdown and HMR, and this process boots the runtime only to call one
+      // lifecycle hook, so skipping them is a smaller price than dropping the
+      // lock and the connection mid-uninstall.
+      clearServices();
     }
   };
 
@@ -355,12 +409,17 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     adapter,
     dialect,
     applyMigrations,
-    // The same cast `migrate` makes: `CLIDatabaseAdapter` is deliberately
-    // connect/disconnect/dialect, and the Drizzle handle underneath it is
-    // what any command touching data needs.
-    db: drizzleAdapter.getDrizzle(),
+    // Read PER ACCESS, never captured. The same cast `migrate` makes —
+    // `CLIDatabaseAdapter` is deliberately connect/disconnect/dialect, and the
+    // Drizzle handle underneath it is what any command touching data needs —
+    // but a handle taken once wraps the pool that existed then, and the
+    // lifecycle hook path tears the container down between uses.
+    get db() {
+      return drizzleAdapter.getDrizzle();
+    },
     plugins,
     definitions,
+    refreshPlan,
     runLifecycleHook,
     migrationsDir: config.db?.migrationsDir,
     logger: context.logger,
@@ -407,12 +466,18 @@ export async function runPluginUninstall(
     const outcome = await withMigrateLock(
       (deps.adapter as unknown as DrizzleAdapter).getDrizzle(),
       deps.dialect,
-      () =>
-        runPluginUninstallCommand(
+      async () => {
+        // Re-read the ledger now that the lock is held. The plan taken at
+        // connect time predates it, so a module applied in between would be
+        // missing from it — and this command would then record the plugin
+        // uninstalled with that module's schema still in the database.
+        await deps.refreshPlan();
+        return runPluginUninstallCommand(
           name,
           { keepData: options.keepData, yes: options.yes },
           deps
-        ),
+        );
+      },
       {
         mode: "wait",
         logger: {

@@ -1368,7 +1368,18 @@ export async function registerServices(
           adapterDrizzleDb,
           adapter.dialect
         ).read();
-      } catch {
+      } catch (error) {
+        // A registry that is not there yet is an unapplied upgrade; a registry
+        // that is there and unreadable is not, and the two must not be
+        // conflated. Treating both as "no rows" meant a failed read silently
+        // dropped the `uninstalled` state those rows carry — the boot refusal
+        // that state exists to trigger became a behind-version warning, and a
+        // development push could then recreate tables a full uninstall had
+        // deliberately removed.
+        const { SCHEMA_OWNERS_TABLE } = await import(
+          "../schemas/schema-owners"
+        );
+        if (await adapter.tableExists(SCHEMA_OWNERS_TABLE)) throw error;
         resolvedLogger.warn?.(
           "Schema ownership registry not found — plugin schema versions cannot be checked yet. " +
             "Run `nextly migrate` to create it."

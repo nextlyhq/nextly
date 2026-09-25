@@ -49,6 +49,20 @@ export interface ExtensionSchemaInput {
    * the resolver owns this fact, so the draft only reads it.
    */
   dependencies?: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * A Drizzle table this compile did not build — a core or entity one.
+   *
+   * Only SQLite needs it, and only for foreign keys. Every other dialect adds
+   * a constraint with its own statement afterwards; SQLite cannot (the apply
+   * runs in a transaction, and `PRAGMA foreign_keys` cannot be toggled inside
+   * one), so a foreign key that is not part of the `CREATE TABLE` is never
+   * enforced at all. Leaving such a reference "to the statement path" was
+   * therefore leaving it nowhere.
+   *
+   * Optional because a caller with nothing to resolve against — the migration
+   * generator, compiling a plugin alone — is no worse off than before.
+   */
+  resolveExternalTable?: (tableName: string) => unknown;
   /** Enabled plugins, already topologically sorted. */
   plugins: readonly SchemaContribution[];
   app?: SchemaContribution;
@@ -124,6 +138,15 @@ function fingerprintOf(
       name: spec.name,
       columns: spec.columns,
       indexes: spec.indexes ?? [],
+      // Constraints belong here by the same argument the contributed columns
+      // below are included for: they are part of what the schema now
+      // describes, and a hash that ignores them reports "nothing changed" for
+      // a change dev push has to act on. A check-only or foreign-key-only
+      // edit — and every `col.enum()` change, which compiles to a check —
+      // therefore left this hash identical, the push was skipped, and the new
+      // constraint waited for an unrelated edit to force another run.
+      checks: spec.checks ?? [],
+      foreignKeys: spec.foreignKeys ?? [],
     }));
   const entities = [...entityIndexes.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
@@ -259,11 +282,12 @@ export async function buildExtensionSchema(
   if (input.dialect === "sqlite") {
     for (const table of tables) {
       if ((table.foreignKeys ?? []).length === 0) continue;
-      compiled[table.name] = toDrizzleTable(
-        table,
-        input.dialect,
-        name => compiled[name]
-      );
+      compiled[table.name] = toDrizzleTable(table, input.dialect, name => {
+        // This bundle first, then anything the caller can resolve. A core or
+        // entity table is outside the bundle but its Drizzle object exists in
+        // the registry, and without it SQLite silently drops the constraint.
+        return compiled[name] ?? input.resolveExternalTable?.(name);
+      });
     }
   }
 

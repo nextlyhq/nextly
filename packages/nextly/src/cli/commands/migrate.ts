@@ -740,6 +740,32 @@ export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
       schemaVersion,
       tables,
     }) => {
+      // A module that leaves this plugin owning NOTHING still moved its
+      // schema version.
+      //
+      // `upsert([])` returns early, so a migration removing a plugin's last
+      // table left its existing rows at the old version — and the production
+      // boot gate then reads that stale number and rejects the configured
+      // plugin as behind, permanently, over a migration that applied
+      // correctly. The rows are carried forward rather than deleted: they are
+      // what records that the tables were this plugin's, which the drop guard
+      // and a later uninstall both still need.
+      if (tables.length === 0) {
+        const existing = (await owners.read()).filter(
+          row => row.ownerId === pluginName
+        );
+        if (existing.length > 0) {
+          await owners.upsert(
+            existing.map(row => ({
+              ...row,
+              ownerVersion: pluginVersion,
+              schemaVersion,
+            }))
+          );
+        }
+        return;
+      }
+
       await owners.upsert(
         tables.map(tableName => ({
           tableName,

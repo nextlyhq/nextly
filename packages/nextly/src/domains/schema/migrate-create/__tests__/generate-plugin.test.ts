@@ -89,8 +89,24 @@ describe("buildPluginMigration", () => {
       expect(built!.module.dialects[dialect].up[0]).toMatch(/CREATE TABLE/i);
     }
 
-    // The checksum is over exactly the statements shipped.
+    // The checksum covers the statements AND the snapshots the apply reads.
+    //
+    // It used to be over the SQL alone, which meant `snapshot`, `before` and
+    // the contributed sides could be edited while the module still verified —
+    // and the runner hands those straight to `reconcileFile`, so an edited
+    // target matching the live schema was recorded as adopted without the SQL
+    // ever running.
     expect(built!.module.checksum).toBe(
+      migrationChecksum(built!.module.dialects, {
+        snapshot: built!.module.snapshot,
+        before: built!.module.before,
+        contributed: built!.module.contributed,
+        contributedBefore: built!.module.contributedBefore,
+      })
+    );
+    // And it is NOT the SQL-only hash any more, which is what makes the
+    // snapshots load-bearing rather than merely present.
+    expect(built!.module.checksum).not.toBe(
       migrationChecksum(built!.module.dialects)
     );
     expect(built!.module.name).toBe("20260923_104500_000_init");
@@ -338,6 +354,40 @@ describe("elements contributed to another owner's table", () => {
 
     // Nothing of ours changed, so there is nothing to emit — and in
     // particular no ADD COLUMN for the dependency's own `note`.
+    expect(second).toBeNull();
+  });
+
+  it("does not re-add a column the DEPENDENCY removed", () => {
+    // "Present in the previous view, absent now" is true of two very
+    // different things: a column this plugin added, and one the dependency
+    // has since dropped from its own table. Treating the second as ours put
+    // it back on the baseline, so the next module proposed dropping an
+    // element that was already gone — against a `before` snapshot matching no
+    // live table.
+    const first = buildPluginMigration(CONTRIBUTING)!;
+
+    // The dependency drops its own `id` column and adds nothing.
+    const dependencyShrank: TableSpec = {
+      name: "dep__orders",
+      columns: [{ name: "ref", type: "varchar(36)", nullable: false }],
+      indexes: [],
+    };
+    const second = buildPluginMigration({
+      ...CONTRIBUTING,
+      schemaVersion: 2,
+      existing: [first.module],
+      contributedBaselineByDialect: tablesByDialect(dependencyShrank),
+      contributedByDialect: tablesByDialect({
+        ...dependencyShrank,
+        columns: [
+          ...dependencyShrank.columns,
+          { name: "fx_ref", type: "varchar(255)", nullable: true },
+        ],
+      }),
+    });
+
+    // Our contribution is unchanged and the dependency's removal is not ours
+    // to carry, so this module has nothing to say.
     expect(second).toBeNull();
   });
 

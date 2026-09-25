@@ -183,6 +183,30 @@ export async function runPluginUninstallCommand(
   // Throws on a dependent or an irreversible module. Nothing has run yet.
   const plan = planUninstall(input);
 
+  // Tables to drop, and nothing that would drop them.
+  //
+  // Development push creates a plugin's tables from the compiled model and
+  // records their ownership, without any migration module being applied — so
+  // the owner rows name tables to drop while the module list, which is built
+  // from the ledger's applied rows, is empty. The command then ran no DOWN
+  // statements, reported the tables dropped and marked the plugin
+  // `uninstalled`, leaving the tables and their data exactly where they were.
+  //
+  // Refused rather than improvised: the honest answer is that this database
+  // has no recorded statement that undoes those tables, and inventing DROPs
+  // here would be a destructive path nothing generated and nothing reviewed.
+  if (plan.tablesDropped.length > 0 && plan.downModules.length === 0) {
+    deps.logger.error(
+      `${plugin.name} owns ${String(plan.tablesDropped.length)} table(s), but this database has no applied migration module to undo them — ` +
+        `they were created by a development push rather than by a migration.`
+    );
+    for (const table of plan.tablesDropped) deps.logger.error(`  - ${table}`);
+    deps.logger.error(
+      "Nothing was changed. Drop them with a migration, or remove the plugin from config and reset the development database."
+    );
+    process.exit(1);
+  }
+
   if (plan.tablesDropped.length > 0 && !opts.yes) {
     deps.logger.warn(
       `This will DROP ${String(plan.tablesDropped.length)} table(s) and their data:`

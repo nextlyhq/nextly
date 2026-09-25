@@ -734,6 +734,9 @@ export class SqliteAdapter extends DrizzleAdapter {
     let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
     const txDb = () => (txExecutor ??= buildTxExecutor());
     return {
+      // The same memoized transaction-bound instance the delegated CRUD uses.
+      drizzle: <T = unknown>(): T => txDb() as T,
+
       // SQLite has no row-level locking and needs none here: `withTransaction`
       // opens SQLite transactions with BEGIN IMMEDIATE, which takes the write
       // lock up front and serializes writers for the whole transaction.

@@ -354,6 +354,21 @@ export interface PluginContext {
    */
   db: PluginDatabase & { raw: DatabaseInstance };
 
+  /**
+   * Which database this installation runs on.
+   *
+   * Exposed because a plugin cannot always be dialect-blind and had no way to
+   * ask. `isUniqueViolation(dialect, error)` is the case that forced it: the
+   * classification falls back to matching driver MESSAGES for MySQL and
+   * SQLite, so it needs to be told which dialect produced the error, and a
+   * helper guessing across all three would read a MySQL phrase in a
+   * PostgreSQL message as a duplicate key.
+   *
+   * The container has resolved this for the plugin surface all along; only the
+   * context was missing it.
+   */
+  dialect: SupportedDialect;
+
   /** @experimental Logger for plugin diagnostics. */
   logger: Logger;
 
@@ -1045,7 +1060,16 @@ function buildPluginDatabase(
     // The handle stays `rawDb` because that is what the adapter's transaction
     // scopes: it brackets the work with BEGIN/COMMIT on the same connection
     // rather than handing back a separate transaction object.
-    transaction: fn => adapter.transaction(() => fn(rawDb)),
+    // The TRANSACTION's handle, not the pooled one.
+    //
+    // `adapter.transaction` leases a client and builds a Drizzle instance
+    // bound to it; `getDrizzle()` wraps the pool and would use a different
+    // connection. Passing `rawDb` here therefore ran the plugin's writes
+    // outside the transaction it had asked for — they committed on their own,
+    // and a later throw rolled back an empty transaction while leaving them
+    // in place. That is worse than having no transaction at all, because the
+    // method promises one.
+    transaction: fn => adapter.transaction(tx => fn(tx.drizzle())),
   });
 
   return Object.assign(surface, { raw: rawDb });
@@ -1063,7 +1087,14 @@ export type PluginServiceName = (typeof PLUGIN_SERVICE_NAMES)[number];
  * reachable without binding plugin-context to an adapter class.
  */
 export interface AdapterTransactions {
-  transaction: <T>(work: () => Promise<T>) => Promise<T>;
+  /**
+   * The callback receives the transaction's own context, whose `drizzle()` is
+   * bound to the leased client. Ignoring it and using the pooled handle runs
+   * the work on a DIFFERENT connection, outside the transaction.
+   */
+  transaction: <T>(
+    work: (tx: { drizzle: <D = unknown>() => D }) => Promise<T>
+  ) => Promise<T>;
 }
 
 /**
@@ -1331,6 +1362,7 @@ export function createPluginContext(
       plugins: buildPluginServicesNamespace(),
     },
     db,
+    dialect: getServiceFn("dialect"),
     logger,
     events,
     nextlyVersion: getCoreVersion(),

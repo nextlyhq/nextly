@@ -65,3 +65,33 @@ describe("scoping", () => {
     expect(scopeLedgerRows(rows, "nobody")).toEqual([]);
   });
 });
+
+describe("a scoped npm plugin name", () => {
+  it("is read whole, not truncated at its own slash", () => {
+    // `@acme/nextly-plugin-auth` contains a slash, and the qualified filename
+    // is `plugin:<name>/<module>` — so splitting on the FIRST slash returned
+    // `@acme`. Every scoped plugin therefore matched no ledger rows, and
+    // `migrate:status --plugin` and `migrate:down --plugin` silently reported
+    // nothing for it.
+    expect(pluginOfLedgerRow("plugin:@acme/nextly-plugin-auth/001_init")).toBe(
+      "@acme/nextly-plugin-auth"
+    );
+  });
+
+  it("selects that plugin's rows and no others", () => {
+    const rows = [
+      { filename: "plugin:@acme/nextly-plugin-auth/001_init" },
+      { filename: "plugin:@acme/nextly-plugin-seo/001_init" },
+      { filename: "0001_app.sql" },
+    ];
+
+    expect(
+      scopeLedgerRows(rows, "@acme/nextly-plugin-auth").map(r => r.filename)
+    ).toEqual(["plugin:@acme/nextly-plugin-auth/001_init"]);
+  });
+
+  it("still reads an unscoped name", () => {
+    // The control: the simple shape must keep working.
+    expect(pluginOfLedgerRow("plugin:fx/001_init")).toBe("fx");
+  });
+});

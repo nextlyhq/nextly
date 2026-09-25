@@ -120,22 +120,47 @@ function renderDialect(
  */
 function withPriorContributions(
   current: readonly TableSpec[],
-  previous: readonly TableSpec[]
+  previousWith: readonly TableSpec[],
+  previousWithout: readonly TableSpec[]
 ): TableSpec[] {
-  const previousByName = new Map(previous.map(table => [table.name, table]));
+  const withByName = new Map(previousWith.map(table => [table.name, table]));
+  const withoutByName = new Map(
+    previousWithout.map(table => [table.name, table])
+  );
+
   return current.map(table => {
-    const before = previousByName.get(table.name);
+    const before = withByName.get(table.name);
     if (!before) return table;
 
-    const currentColumns = new Set(table.columns.map(column => column.name));
-    const mineColumns = before.columns.filter(
-      column => !currentColumns.has(column.name)
+    // This plugin's previous elements are the DIFFERENCE between the two
+    // sides the previous module stored: `contributed` is the dependency's
+    // table as it looked with our elements on it, `contributedBefore` is the
+    // same table without them.
+    //
+    // Deriving them by "present then, absent now" instead was wrong in one
+    // direction that matters: when the DEPENDENCY removes or renames a column
+    // of its own, that column is also present-then and absent-now, so it was
+    // carried onto the baseline as ours — and the next module then proposed
+    // dropping an element the dependency had already removed, against a
+    // `before` snapshot matching no live table.
+    const baselineColumns = new Set(
+      (withoutByName.get(table.name)?.columns ?? []).map(c => c.name)
     );
+    const baselineIndexes = new Set(
+      (withoutByName.get(table.name)?.indexes ?? []).map(i => i.name)
+    );
+    const currentColumns = new Set(table.columns.map(column => column.name));
     const currentIndexes = new Set(
       (table.indexes ?? []).map(index => index.name)
     );
+
+    const mineColumns = before.columns.filter(
+      column =>
+        !baselineColumns.has(column.name) && !currentColumns.has(column.name)
+    );
     const mineIndexes = (before.indexes ?? []).filter(
-      index => !currentIndexes.has(index.name)
+      index =>
+        !baselineIndexes.has(index.name) && !currentIndexes.has(index.name)
     );
     if (mineColumns.length === 0 && mineIndexes.length === 0) return table;
 
@@ -197,7 +222,8 @@ export function buildPluginMigration(
     // contributions stay on the baseline so they are not proposed twice.
     const previousContributed = withPriorContributions(
       args.contributedBaselineByDialect?.[dialect] ?? [],
-      previous?.contributed?.[dialect]?.tables ?? []
+      previous?.contributed?.[dialect]?.tables ?? [],
+      previous?.contributedBefore?.[dialect]?.tables ?? []
     );
 
     // ONE diff over the union. A foreign table appears on both sides, so only
@@ -223,7 +249,15 @@ export function buildPluginMigration(
   const module: PluginMigration = {
     name: `${formatTimestamp(now)}_${slugify(args.name)}`,
     schemaVersion: args.schemaVersion,
-    checksum: migrationChecksum(dialects),
+    // Over the snapshots as well as the SQL: the apply reads them to decide
+    // whether a module is already applied, so leaving them unverified let an
+    // edited target be recorded as adopted without its SQL ever running.
+    checksum: migrationChecksum(dialects, {
+      snapshot,
+      before,
+      contributed,
+      contributedBefore,
+    }),
     dialects,
     snapshot,
     before,

@@ -104,6 +104,14 @@ export interface MigrateDownCoreDeps {
   execDown: (sql: string) => Promise<number>;
   /** Records a `rolled_back` event (retires the applied row). */
   recordRolledBack: (filename: string) => Promise<void>;
+  /**
+   * Re-derive the plugin's applied schema version from the ledger rows that
+   * survive the rollback, and write it onto its owner rows.
+   *
+   * Optional so the app path, which has no plugin owner rows to maintain,
+   * supplies nothing.
+   */
+  recordPluginSchemaVersion?: () => Promise<void>;
   /** Records a `failed` event for an errored DOWN. */
   recordFailed: (filename: string, message: string) => Promise<void>;
   /**
@@ -228,6 +236,18 @@ export async function migrateDownCore(
         rolledBack.push(p.filename);
         deps.logger.success(`Rolled back ${p.filename}`);
       }
+
+      // A plugin rollback moves that plugin's APPLIED schema version back.
+      //
+      // Only the ledger was being rewritten, so rolling a plugin from schema
+      // version 2 to 1 left its owner rows still claiming 2 — and the
+      // production boot gate then accepted plugin code declaring version 2
+      // whose v2 tables and columns had just been removed.
+      //
+      // The new version is read from what REMAINS applied rather than
+      // computed by subtraction: modules can be rolled back out of order and
+      // a step count would drift from the ledger it is meant to describe.
+      if (deps.options.plugin) await deps.recordPluginSchemaVersion?.();
     },
     {
       mode: "fail-fast",
@@ -260,7 +280,9 @@ function pluginModuleDownSql(
   pluginName: string,
   dialect: SupportedDialect
 ): string {
-  const moduleName = filename.slice(filename.indexOf("/") + 1);
+  // The last slash for the same reason `pluginOfLedgerRow` uses it: a scoped
+  // plugin name carries a slash, and the first one is inside the NAME.
+  const moduleName = filename.slice(filename.lastIndexOf("/") + 1);
   const definition = plugins.find(p => p.name === pluginName);
   const module = (definition?.contributes?.schema?.migrations ?? []).find(
     m => m.name === moduleName
@@ -426,6 +448,42 @@ export async function runMigrateDown(
       readDownSql,
       execDown,
       recordRolledBack,
+      recordPluginSchemaVersion: async () => {
+        const plugin = options.plugin;
+        if (!plugin) return;
+        const { SchemaOwnersRepository } = await import(
+          "../../domains/schema/ownership/schema-owners-repository"
+        );
+        const ownersRepo = new SchemaOwnersRepository(db, dialect);
+        const mine = (await ownersRepo.read()).filter(
+          row => row.ownerId === plugin
+        );
+        if (mine.length === 0) return;
+
+        // The highest schemaVersion among this plugin's modules that are STILL
+        // applied. Read from the ledger rather than stepped down by one: a
+        // rollback can take several modules, and modules can be reverted out
+        // of order, so counting would describe something the ledger does not.
+        const applied = new Set(
+          scopeLedgerRows(await repo.listFileApplies(), plugin)
+            .filter(row => row.status === "applied")
+            .map(row => row.filename ?? "")
+        );
+        const definition = (configResult.config.plugins ?? []).find(
+          p => p.name === plugin
+        );
+        let version: number | null = null;
+        for (const module of definition?.contributes?.schema?.migrations ??
+          []) {
+          const filename = `plugin:${plugin}/${module.name}`;
+          if (!applied.has(filename)) continue;
+          version = Math.max(version ?? 0, module.schemaVersion);
+        }
+
+        await ownersRepo.upsert(
+          mine.map(row => ({ ...row, schemaVersion: version }))
+        );
+      },
       recordFailed,
       withLock: withMigrateLock,
     });

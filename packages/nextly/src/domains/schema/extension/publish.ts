@@ -16,6 +16,7 @@
  * @since 1.0.0
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
+import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../../plugins/plugin-slug";
@@ -236,6 +237,17 @@ export async function compileAndPublishExtensionSchema(
     ),
     plugins,
     afterDrizzle,
+    // Lets a SQLite foreign key that points at a CORE or ENTITY table reach
+    // the `CREATE TABLE` that is its only chance to exist: SQLite cannot add
+    // one afterwards, so a reference outside the extension bundle was being
+    // compiled away and silently never enforced. Resolved lazily and through
+    // the container, so a process without a registry simply resolves nothing.
+    resolveExternalTable: (tableName: string) => {
+      if (!container.has("schemaRegistry")) return undefined;
+      return container
+        .get<{ getTable: (name: string) => unknown }>("schemaRegistry")
+        .getTable(tableName);
+    },
     ...(appHooks.length > 0
       ? {
           app: {

@@ -44,6 +44,7 @@
  * docs/guides/production-migrations.mdx.
  */
 
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 
@@ -697,18 +698,37 @@ async function runMigrateCreatePlugin(
     pluginAdminSlug(definition.name).replace(/-/g, "_");
 
   // Modules the plugin already ships; absent on first generation.
+  //
+  // "Absent" is decided by asking whether the barrel EXISTS, not by catching
+  // whatever loading it throws. Treating every failure as a first generation
+  // meant a barrel with a syntax error, a bad import or a throwing module read
+  // as "no history" — and generation then rewrote `index.ts` to export only
+  // the new module, orphaning every migration the plugin had shipped. The next
+  // deployment either skips modules it needs or reconciles against a snapshot
+  // that no longer describes anything.
+  const barrelPath = resolve(migrationsDir, "index.ts");
   let existing: PluginMigration[] = [];
-  try {
-    const loaded = await bundleAndRequire({
-      filepath: resolve(migrationsDir, "index.ts"),
-      cwd: migrationsDir,
-      external: PLUGIN_BUNDLE_EXTERNALS,
-    });
+  if (existsSync(barrelPath)) {
+    let loaded;
+    try {
+      loaded = await bundleAndRequire({
+        filepath: barrelPath,
+        cwd: migrationsDir,
+        external: PLUGIN_BUNDLE_EXTERNALS,
+      });
+    } catch (error) {
+      throw new NextlyError({
+        code: "INVALID_INPUT",
+        publicMessage:
+          `The plugin's existing migrations barrel at ${relative(cwd, barrelPath)} could not be loaded: ${describeError(error)}. ` +
+          `Generation stops here rather than treating it as a first generation — doing that would rewrite the barrel and orphan the modules it lists. ` +
+          `Fix the barrel (or the module it imports) and run this again.`,
+        statusCode: 400,
+      });
+    }
     const shipped = (loaded.mod as { migrations?: PluginMigration[] })
       .migrations;
     existing = orderedMigrations(shipped ?? []);
-  } catch {
-    // First generation: no barrel to read yet.
   }
 
   // Declared dependencies, compiled ALONGSIDE this plugin.

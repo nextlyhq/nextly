@@ -240,11 +240,13 @@ import { isUniqueViolation } from "nextly/schema-extension";
 try {
   await ctx.db.insert(identities, {
     provider: "github",
-    providerAccountId: accountId,
+    userId: "usr_1",
+    providerAccountId: "12345",
   });
 } catch (err) {
-  if (isUniqueViolation(ctx.dialect, err)) return existingIdentity();
-  throw err;
+  // Anything else is a real failure and must not be swallowed.
+  if (!isUniqueViolation(ctx.dialect, err)) throw err;
+  ctx.logger.info("identity already linked");
 }
 ```
 

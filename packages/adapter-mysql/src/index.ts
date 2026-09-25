@@ -788,6 +788,9 @@ export class MySqlAdapter extends DrizzleAdapter {
     let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
     const txDb = () => (txExecutor ??= buildTxExecutor());
     return {
+      // The same memoized transaction-bound instance the delegated CRUD uses.
+      drizzle: <T = unknown>(): T => txDb() as T,
+
       execute: async <T = unknown>(
         sql: string,
         params: SqlParam[] = []

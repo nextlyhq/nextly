@@ -36,9 +36,15 @@ function makeCtx(plugin?: unknown) {
         return db;
       // `ctx.db.transaction` routes through the adapter, so a double that
       // omits it certifies a context production would reject.
+      case "dialect":
+        return "postgresql";
       case "adapter":
         return {
-          transaction: <T>(work: () => Promise<T>) => work(),
+          // Hands back a transaction context like the real adapters do: the
+          // surface must use ITS handle, not the pooled one.
+          transaction: <T>(
+            work: (tx: { drizzle: () => unknown }) => Promise<T>
+          ) => work({ drizzle: () => db }),
         };
       case "logger":
         return logger;

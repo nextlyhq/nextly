@@ -116,10 +116,7 @@ export function diffSnapshots(
       for (const op of indexOps) {
         if (op.type === "drop_index") {
           dropIndexOps.push(op);
-        } else if (
-          op.type === "add_index" &&
-          rekeyedNames.has(op.index.name)
-        ) {
+        } else if (op.type === "add_index" && rekeyedNames.has(op.index.name)) {
           rekeyAdds.push(op);
         } else {
           addIndexOps.push(op);
@@ -429,10 +426,21 @@ function diffColumns(
       // comparison cannot catch because serial and integer share a storage
       // type, so suppressing it would leave the column drawing from the
       // sequence forever.
+      // "Still declared serial" is asked two ways, because the desired side
+      // can say it two ways. A snapshot written from a Drizzle table spells
+      // the type `serial`; one compiled from the extension model spells it
+      // `int4` — deliberately, so the type comparison matches introspection —
+      // and carries the fact in `autoIncrement` instead. Reading only the
+      // spelling meant an extension table's generated key was seen as a plain
+      // integer whose live `nextval` default must be dropped, and applying
+      // that stops the database assigning keys at all.
+      const stillGenerated =
+        SERIAL_TYPES.has((curC.type ?? "").trim().toLowerCase()) ||
+        curC.autoIncrement === true;
       const sequenceDefaultUnchanged =
         curC.default === undefined &&
         prevC.ownedSequenceDefault === true &&
-        SERIAL_TYPES.has((curC.type ?? "").trim().toLowerCase());
+        stillGenerated;
 
       if (
         !sequenceDefaultUnchanged &&

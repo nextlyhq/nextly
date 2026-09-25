@@ -84,6 +84,21 @@ export interface TransactionContext {
   execute<T = unknown>(sql: string, params?: SqlParam[]): Promise<T[]>;
 
   /**
+   * The Drizzle handle BOUND TO THIS TRANSACTION.
+   *
+   * `getDrizzle()` wraps the pool and would run on a different connection, so
+   * a caller that builds its own queries needs this one or its writes are not
+   * part of the transaction at all — they commit on their own and a later
+   * rollback leaves them behind.
+   *
+   * Exposed because `ctx.db.transaction()` hands plugins a query surface, and
+   * that surface has to be built over the transaction's handle. The adapters
+   * already construct it for their own delegated CRUD; this returns the same
+   * memoized instance rather than a second one.
+   */
+  drizzle<T = unknown>(): T;
+
+  /**
    * Run a Drizzle-built statement within the transaction, for its effect.
    *
    * @remarks
