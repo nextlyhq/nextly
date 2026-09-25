@@ -441,7 +441,7 @@ async function exclusionFindings({ corpus, api, get, config }) {
   for (const witness of witnesses(corpus, config)) {
     const elsewhere = holdersElsewhere(corpus, config, witness);
     const answer = await retrievable(get, api, witness.marker, witness.name);
-    probes.push({ witness, elsewhere, answer, leak: leakOf(answer, witness.name, elsewhere) });
+    probes.push({ witness, elsewhere, answer, leak: leakOf(answer, witness.name, elsewhere, citesAnotherHolder(corpus, config, witness, answer)) });
   }
   const leaks = probes.filter(probe => probe.leak);
   return [...leaks.map(probe => leakFinding(probe.leak, probe.witness, probe.elsewhere)), ...citedExclusions(probes, config, leaks)];
@@ -476,22 +476,23 @@ function holdersElsewhere(corpus, config, { set, name, marker }) {
  * What a probe's answer says about a set: `"witness"` when its witness came
  * back, `"shared"` when its sentence came back from a file no answer names
  * among those that hold it, or null. The witness cited is always its set's.
- * The sentence alone is its set's only when no file outside the set holds it;
- * otherwise the citation says which file the index held, and a sentence that
- * came back naming none of them is reported against every set that holds it
- * rather than cleared.
+ * An answer that cites another excluded file holding the sentence, of this set
+ * or another, says which file the index held, and that citation is the
+ * finding. Otherwise the sentence alone is its set's only when no file outside
+ * the set holds it, and one that came back naming none of its holders is
+ * reported against every set that holds it rather than cleared.
  */
-function leakOf(answer, name, elsewhere) {
+function leakOf(answer, name, elsewhere, heldElsewhere) {
   if (answer.cites.has(name)) return "witness";
-  if (!answer.found) return null;
-  return attributed(answer, elsewhere);
+  return answer.found && !heldElsewhere ? unattributed(elsewhere) : null;
 }
 
-/** A sentence that came back, attributed: to its own set, to another set a citation names, or to all that hold it. */
-function attributed(answer, elsewhere) {
-  if (elsewhere.length === 0) return "witness";
-  return elsewhere.some(other => answer.cites.has(other)) ? null : "shared";
-}
+/** A sentence that came back with no excluded holder cited: its own set's, or every set's that holds it. */
+const unattributed = elsewhere => (elsewhere.length === 0 ? "witness" : "shared");
+
+/** Whether a probe's answer cites an excluded file, other than the witness, that holds the sentence asked for. */
+const citesAnotherHolder = (corpus, config, { name, marker }, answer) =>
+  [...answer.cites].some(path => path !== name && citationFinding(path, config) !== null && Boolean(corpus.get(path)?.includes(marker)));
 
 function leakFinding(leak, { set, name, marker }, elsewhere) {
   return leak === "witness"
