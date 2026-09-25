@@ -33,6 +33,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems } from "./agent-skills.mjs";
+import { copyDrift } from "./agent-instructions.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -50,14 +51,14 @@ export const REVIEW_PROMPT = ".github/review-prompt.md";
 export const ANCHORS = ["AGENTS.md", ".claude/rules", SKILLS_HOME, REVIEW_PROMPT];
 
 /**
- * Rules AGENTS.md promises are loaded in EVERY session, named individually.
+ * The rule AGENTS.md names in `.claude/rules`, by name.
  *
- * 🔴 The anchor above accepts any file under `.claude/rules`, so either of
- * these could be deleted while the other kept the directory non-empty and the
- * check stayed green. AGENTS.md names them because their loading behaviour is
- * the point — one prevents a failure that arrives before any file is read, the
- * other is path-scoped — so membership of the directory is not what has to
- * hold. Their exact presence is.
+ * 🔴 The anchor above accepts any file under `.claude/rules`, so this one could
+ * be deleted while another kept the directory non-empty and the check stayed
+ * green. AGENTS.md names it because its loading is the point: Claude Code
+ * loads it by path, and Codex reads the same rules as a skill. A rule every
+ * session needs is not kept in that directory at all, since Codex never reads
+ * it; it is a section of AGENTS.md, held by REQUIRED_SECTIONS.
  */
 /**
  * The one file the guidance scan does not read: its own test.
@@ -75,10 +76,10 @@ export const ANCHORS = ["AGENTS.md", ".claude/rules", SKILLS_HOME, REVIEW_PROMPT
  */
 export const GUIDANCE_SCAN_EXCLUDES = ["scripts/check-agent-contract.test.mjs"];
 
-export const REQUIRED_RULES = [
-  ".claude/rules/whole-file-writes.md",
-  ".claude/rules/integration-tests.md",
-];
+export const REQUIRED_RULES = [".claude/rules/integration-tests.md"];
+
+/** Sections AGENTS.md holds, by heading, because both tools must load them in every session. */
+export const REQUIRED_SECTIONS = ["## A whole-file write is a delete plus a create"];
 
 /**
  * `pnpm <word>` that is not a script: pnpm's own verbs, and the binaries the
@@ -418,10 +419,10 @@ function markdownUnder(dir) {
 
 /** The instruction files this repository ships, as repo-relative paths. */
 export function instructionFiles(base = root) {
+  // CLAUDE.md is not read: it is a generated copy of AGENTS.md, held
+  // identical separately, so reading it too would report each finding twice.
   const files = [];
-  for (const name of ["AGENTS.md", "CLAUDE.md"]) {
-    if (existsSync(join(base, name))) files.push(name);
-  }
+  if (existsSync(join(base, "AGENTS.md"))) files.push("AGENTS.md");
   // Executable guidance for the CI review agent, and the same kind of subject
   // as the rest: it names `.github/scripts/review-bot-gh.sh` with five
   // subcommands, two skills and a workflow file. Omitting it meant renaming
@@ -557,6 +558,50 @@ export function skillFindings(base = root) {
   ];
 }
 
+/**
+ * The file Codex takes in each directory must reach Claude Code too, as the
+ * CLAUDE.md beside it: a copy `pnpm instructions:sync` writes, since an import
+ * does not reach a session started below the importing file. The reasoning
+ * and the measurements are in `scripts/agent-instructions.mjs`.
+ *
+ * @returns {{ file: string, kind: "instructions", claim: string, fix: string }[]}
+ */
+export function instructionCopyFindings(base, tracked) {
+  return copyDrift(base, tracked).map(({ path, problem, fix }) => ({ file: path, kind: "instructions", claim: problem, fix }));
+}
+
+/**
+ * `.claude/rules` reaches Claude Code alone, so it holds only rules loaded by
+ * path, each named in AGENTS.md so Codex is told where it applies and which
+ * skill carries it. A rule loaded in every session belongs in AGENTS.md, which
+ * both tools load; kept there, it would be held by Claude Code alone.
+ *
+ * @returns {{ file: string, kind: "instructions", claim: string, fix: string }[]}
+ */
+export function ruleFindings(base, agents) {
+  const dir = join(base, ".claude/rules");
+  const rules = existsSync(dir) ? readdirSync(dir).filter(name => name.endsWith(".md")).sort() : [];
+  return [...rules.flatMap(name => ruleFinding(`.claude/rules/${name}`, readFileSync(join(dir, name), "utf8"), agents)), ...sectionFindings(agents)];
+}
+
+function ruleFinding(rule, text, agents) {
+  if (!loadsByPath(text)) return [{ file: rule, kind: "instructions", claim: "has no paths, so Claude Code loads it in every session and Codex never does", fix: "move it into AGENTS.md, which both load" }];
+  return agents.includes(rule) ? [] : [{ file: rule, kind: "instructions", claim: "is not named in AGENTS.md, so Codex is never told where it applies", fix: "name it in AGENTS.md with the skill that carries it to Codex" }];
+}
+
+/** Whether a rule's frontmatter scopes it by path. */
+const loadsByPath = text => /^paths\s*:/m.test(/^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? "");
+
+function sectionFindings(agents) {
+  const headings = new Set(agents.split(/\r?\n/));
+  return REQUIRED_SECTIONS.filter(heading => !headings.has(heading)).map(heading => ({
+    file: "AGENTS.md",
+    kind: "instructions",
+    claim: `no longer has the section "${heading.replace(/^#+ /, "")}", which both tools must load in every session`,
+    fix: "put it back",
+  }));
+}
+
 function main(base = root) {
   const asJson = process.argv.includes("--json");
   const files = instructionFiles(base);
@@ -602,11 +647,14 @@ function main(base = root) {
         )
       : []
   );
-  const routed = routedSkills(readFileSync(join(base, "AGENTS.md"), "utf8"));
+  const agents = readFileSync(join(base, "AGENTS.md"), "utf8");
+  const routed = routedSkills(agents);
   for (const { name, side } of routerDisagreements(routed, present)) {
     findings.push({ file: "AGENTS.md", kind: "router", claim: `${name} — ${side}` });
   }
   findings.push(...skillFindings(base));
+  findings.push(...instructionCopyFindings(base, tracked));
+  findings.push(...ruleFindings(base, agents));
 
   for (const file of files) {
     const text = readFileSync(join(base, file), "utf8");
@@ -679,6 +727,7 @@ function main(base = root) {
     console.error(`agent-contract: FAIL — ${findings.length} finding(s)`);
     for (const { file, kind, claim, fix } of findings) {
       if (kind === "skills copy" || kind === "skill") console.error(`  ${file}: ${claim}${fix ? ` — run ${fix}` : ""}`);
+      else if (kind === "instructions") console.error(`  ${file}: ${claim} — ${fix}`);
       else console.error(`  ${file}: ${kind} '${claim}' does not resolve`);
     }
     console.error(`\nread ${files.length} instruction file(s)`);

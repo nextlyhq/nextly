@@ -239,6 +239,15 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:agent-contract
 
+      # Codex reads one AGENTS.md per directory, from the root down to where it
+      # works, and joins them up to 32 KiB, cutting from the end: past the
+      # limit, the file for the directory being worked in is the first to go.
+      # Measured when this landed, the root file alone was past it, so no
+      # package's own AGENTS.md reached Codex at all.
+      - name: Agent instructions fit what Codex reads
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:instruction-size
+
       # Claude Code reads a copy of the skills, and Git for Windows checks
       # symbolic links out as small text files by default. The copy is real
       # files for that reason, and this is where a link slipped in instead

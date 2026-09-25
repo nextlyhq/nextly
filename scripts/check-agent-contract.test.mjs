@@ -10,7 +10,7 @@
  * advisory check deleted.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -24,7 +24,9 @@ import {
   REQUIRED_RULES,
   claimsBareFile,
   claimsFilePath,
+  instructionCopyFindings,
   guidanceReferences,
+  ruleFindings,
   instructionFiles,
   unresolvedIn,
   claimsRepoRoot,
@@ -38,6 +40,7 @@ import {
   routerDisagreements,
   skillFindings,
 } from "./check-agent-contract.mjs";
+import { header } from "./agent-instructions.mjs";
 import { syncSkillCopy } from "./agent-skills.mjs";
 
 const CHECK = fileURLToPath(new URL("./check-agent-contract.mjs", import.meta.url));
@@ -207,7 +210,7 @@ describe("refusing a file set that cannot have found anything", () => {
    * them either — a collector that dropped AGENTS.md while picking up three
    * skills matches any total. Membership is what gets asserted.
    */
-  const COMPLETE = ["AGENTS.md", ...REQUIRED_RULES, ".agents/skills/y/SKILL.md", REVIEW_PROMPT];
+  const COMPLETE = ["AGENTS.md", ...REQUIRED_RULES, ".claude/rules/another-rule.md", ".agents/skills/y/SKILL.md", REVIEW_PROMPT];
 
   it("names every anchor missing from an empty set", () => {
     expect(missingAnchors([])).toEqual([...ANCHORS, ...REQUIRED_RULES]);
@@ -223,9 +226,9 @@ describe("refusing a file set that cannot have found anything", () => {
 
   /*
    * 🔴 The anchor for `.claude/rules` accepts ANY file under it, so deleting
-   * one of the two rules AGENTS.md promises are always loaded left the other
-   * keeping the directory non-empty and the check green. Their exact presence
-   * is the property, not membership of the directory.
+   * the rule AGENTS.md names while another file kept the directory non-empty
+   * left the check green. Its exact presence is the property, not membership
+   * of the directory.
    */
   it.each(REQUIRED_RULES)("refuses when %s is gone, even though other rules remain", rule => {
     expect(missingAnchors(COMPLETE.filter(f => f !== rule))).toEqual([rule]);
@@ -284,9 +287,10 @@ describe("the command, run against another checkout", () => {
       writeFileSync(join(base, path), text);
     };
     try {
-      put("AGENTS.md", "| `a` | when a applies |\n");
-      put(".claude/rules/whole-file-writes.md", "A rule.\n");
-      put(".claude/rules/integration-tests.md", "A rule.\n");
+      const agents = "| `a` | when a applies |\n\n`.claude/rules/integration-tests.md` is read by path.\n\n## A whole-file write is a delete plus a create\n";
+      put("AGENTS.md", agents);
+      put("CLAUDE.md", header("AGENTS.md") + agents);
+      put(".claude/rules/integration-tests.md", '---\npaths:\n  - "**/*.integration.test.ts"\n---\n\nA rule.\n');
       put(".github/review-prompt.md", "Review.\n");
       put("package.json", "{}\n");
       put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\n---\n");
@@ -334,6 +338,67 @@ describe("reporting the skills themselves", () => {
 
   it("reports nothing for this repository's own skills", () => {
     expect(skillFindings()).toEqual([]);
+  });
+});
+
+describe("reaching Claude Code", () => {
+  /*
+   * Claude Code reads the CLAUDE.md beside each file Codex takes, a copy of
+   * it, since an import does not reach a session started below the importing
+   * file. The copies themselves are tested beside `agent-instructions.mjs`;
+   * here, that the check reports them as its own findings.
+   */
+  it("reports a copy that is missing or out of step, naming the sync as the fix", () => {
+    const base = mkdtempSync(join(tmpdir(), "agent-contract-claude-"));
+    try {
+      mkdirSync(join(base, "packages/p"), { recursive: true });
+      writeFileSync(join(base, "AGENTS.md"), "root\n");
+      writeFileSync(join(base, "CLAUDE.md"), `${header("AGENTS.md")}root, edited\n`);
+      writeFileSync(join(base, "packages/p/AGENTS.md"), "p\n");
+      expect(instructionCopyFindings(base, ["AGENTS.md", "CLAUDE.md", "packages/p/AGENTS.md"])).toEqual([
+        { file: "CLAUDE.md", kind: "instructions", claim: "differs from AGENTS.md", fix: "run pnpm instructions:sync" },
+        { file: "packages/p/CLAUDE.md", kind: "instructions", claim: "is missing, so Claude Code never reads packages/p/AGENTS.md", fix: "run pnpm instructions:sync" },
+      ]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a rule every session would load, and one loaded by path that AGENTS.md does not name", () => {
+    const base = mkdtempSync(join(tmpdir(), "agent-contract-rules-"));
+    const put = (path, text) => {
+      mkdirSync(dirname(join(base, path)), { recursive: true });
+      writeFileSync(join(base, path), text);
+    };
+    try {
+      put(".claude/rules/always.md", "Always.\n");
+      put(".claude/rules/named.md", '---\npaths: ["**/*.y"]\n---\n\nNamed.\n');
+      put(".claude/rules/unnamed.md", '---\npaths:\n  - "**/*.x"\n---\n\nUnnamed.\n');
+      const agents = "`.claude/rules/named.md` reaches Codex as the `y` skill.\n\n## A whole-file write is a delete plus a create\n";
+      expect(ruleFindings(base, agents)).toEqual([
+        { file: ".claude/rules/always.md", kind: "instructions", claim: "has no paths, so Claude Code loads it in every session and Codex never does", fix: "move it into AGENTS.md, which both load" },
+        { file: ".claude/rules/unnamed.md", kind: "instructions", claim: "is not named in AGENTS.md, so Codex is never told where it applies", fix: "name it in AGENTS.md with the skill that carries it to Codex" },
+      ]);
+      expect(ruleFindings(base, agents.replace("## A whole-file write", "## A whole-file edit")).at(-1)).toEqual({
+        file: "AGENTS.md",
+        kind: "instructions",
+        claim: 'no longer has the section "A whole-file write is a delete plus a create", which both tools must load in every session',
+        fix: "put it back",
+      });
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("finds this repository's rules reachable by both tools", () => {
+    const repo = fileURLToPath(new URL("..", import.meta.url));
+    expect(ruleFindings(repo, readFileSync(join(repo, "AGENTS.md"), "utf8"))).toEqual([]);
+  });
+
+  it("finds a copy of every instruction file in this repository where Claude Code reads it", () => {
+    const repo = fileURLToPath(new URL("..", import.meta.url));
+    const tracked = execFileSync("git", ["ls-files"], { cwd: repo, encoding: "utf8" }).split("\n").filter(Boolean);
+    expect(instructionCopyFindings(repo, tracked)).toEqual([]);
   });
 });
 
