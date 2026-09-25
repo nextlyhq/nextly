@@ -207,12 +207,19 @@ git log --format='%H %P' -1 <mergeCommit>               # two parents = a merge
 ```
 
 `git merge-base --is-ancestor <head> origin/main` is the tempting one-liner and
-it answers a DIFFERENT question — whether one commit is reachable from another,
-which says nothing about strategy on its own. It also depends on a ref that
-moves: unfetched, a genuine merge reports non-ancestor; later, unrelated
-commits can make ancestry true. the `verifying-merged-work` skill already requires
-fetching both objects and probing the merge commit rather than `origin/main`,
-and that requirement is exactly this failure seen from the other side.
+it answers a DIFFERENT question. It exits 0 when `<head>` can be reached from
+`origin/main` by following parent links, second parents of merges included,
+and a commit counts as its own ancestor. It exits 1 when it cannot, and with
+another status when an object is missing, which a shell `if` reads as a plain
+no. None of that is about strategy: a two-parent merge and a fast-forward both
+answer yes, and a squash and a cherry-pick both answer no, even though the
+squash carries the branch's content. It also depends on a ref that moves.
+Unfetched, a genuine merge reports non-ancestor. Later, a two-parent merge of
+any branch built on `<head>` makes ancestry true for a pull request that was
+squashed; unrelated commits never do. The `verifying-merged-work` skill already
+requires fetching both objects and probing the merge commit rather than
+`origin/main`, and that requirement is exactly this failure seen from the other
+side.
 
 **A result implausible in the ALARMING direction is the trigger to control the
 instrument — but the trigger is not the test.** Measured today: a scan of icon
@@ -238,10 +245,25 @@ transcript looks identical whether it ran or not. Measured here: a fix was
 written, tested, break-verified in both directions, reported as done and its
 thread resolved, and never committed; the pull request merged without it and the
 defect went live while every visible signal said complete. So make that step's
-absence visible mechanically rather than remembering it —
-`git log origin/<branch>..HEAD --oneline` returning EMPTY before you claim a fix
-is in, not after the merge. A cheap precondition that catches nothing is what
-one looks like when it is working.
+absence visible mechanically rather than remembering it, before you claim a fix
+is in, not after the merge:
+
+```sh
+git status --porcelain                                    # must print nothing
+git rev-parse HEAD                                        # must equal the next line
+gh pr view <N> --json headRefOid --jq .headRefOid
+gh pr diff <N> | grep -F -e '<a line only the fix adds>'  # must find it
+```
+
+The first catches an edit that was never committed, staged or not, and a new
+file that was never added. The second compares with GitHub's own record of the
+pull request head, so it catches a commit that was never pushed, one pushed to
+another branch, and a branch someone else has since moved. The third reads the
+pull request's diff, so it also catches a fix made in another checkout.
+`git log origin/<branch>..HEAD` cannot do this job: it lists commits, so a fix
+that was never committed leaves it EMPTY, the same answer a fix that landed
+gives. A cheap precondition that catches nothing is what one looks like when it
+is working.
 
 **Assert what the instrument CONSUMED, not the verdict it emitted** — the
 substitutions made, the files read, the rows fetched.

@@ -10,7 +10,7 @@
  * advisory check deleted.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -328,9 +328,30 @@ describe("reporting the skills themselves", () => {
       mkdirSync(join(base, ".agents/skills/a"), { recursive: true });
       writeFileSync(join(base, ".agents/skills/a/SKILL.md"), "---\ndescription: nameless\n---\n");
       expect(skillFindings(base)).toEqual([
-        { file: ".claude/skills/a/SKILL.md", kind: "skills copy", claim: "is missing from the Claude Code copy", fix: "pnpm skills:sync" },
+        { file: ".claude/skills/a/SKILL.md", kind: "skills copy", claim: "is missing from the Claude Code copy", fix: "run pnpm skills:sync" },
         { file: ".agents/skills/a/SKILL.md", kind: "skill", claim: "has no name in its frontmatter" },
       ]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  // A sync copies what a link points at and leaves the link, so a finding on
+  // the skills' own side names real files there as its fix, not the sync.
+  it.runIf(process.platform !== "win32")("names real files as the fix for a link on the skills' own side", () => {
+    const base = mkdtempSync(join(tmpdir(), "agent-contract-skills-"));
+    try {
+      mkdirSync(join(base, "elsewhere"), { recursive: true });
+      writeFileSync(join(base, "elsewhere/SKILL.md"), "---\nname: a\ndescription: linked in\n---\n");
+      mkdirSync(join(base, ".agents/skills/a"), { recursive: true });
+      symlinkSync(join(base, "elsewhere/SKILL.md"), join(base, ".agents/skills/a/SKILL.md"));
+      syncSkillCopy(base);
+      expect(skillFindings(base)).toEqual([
+        { file: ".agents/skills/a/SKILL.md", kind: "skills copy", claim: "is a symbolic link — skills are real files", fix: "replace .agents/skills/a/SKILL.md with real files, then run pnpm skills:sync" },
+      ]);
+      rmSync(join(base, ".agents/skills"), { recursive: true });
+      symlinkSync(join(base, "elsewhere"), join(base, ".agents/skills"));
+      expect(skillFindings(base)[0]).toEqual({ file: ".agents/skills", kind: "skills copy", claim: "is a symbolic link — skills are real files", fix: "replace .agents/skills with real files, then run pnpm skills:sync" });
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
