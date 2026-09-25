@@ -52,6 +52,7 @@ describe("a message's credit, in each form", () => {
       said("Implemented", "using", "an", "LLM"),
       said("With", "help from", MODEL),
       said(MADE, "with", `<strong>${CHAT_TOOL}</strong>`),
+      said(MADE, "with", spell("Mis", "tral Large")),
     ];
     for (const line of statements) expect(credited(line, "message"), line).toBe(true);
   });
@@ -272,6 +273,14 @@ describe("the command in CI", () => {
     const head = commit("docs: finish the line", { text: lines(trailer("Co-authored", spell("Git", "Hub")), spell("  Co", "pilot Agent"), "") });
     expect(decide(eventFor("pull_request", { pull_request: { title: "docs: finish the line", body: "", head: { ref: "docs/line", sha: head }, base: { sha: base } } }))).toBe(1);
     expect(printed()).toMatch(/file=notes\.md,line=2,title=AI credit::notes\.md:2 names it in a Co-authored-by trailer/);
+  });
+
+  it("does not refuse a harmless continuation added to a credit that was already there", () => {
+    const credit = trailer("Co-authored", CODE_TOOL);
+    const base = commit("chore: the base", { text: lines(credit, "") });
+    run("checkout", "-q", "-b", "topic");
+    const head = commit("docs: add a note", { text: lines(credit, "  with a note", "") });
+    expect(decide(eventFor("pull_request", { pull_request: { title: "docs: add a note", body: "", head: { ref: "docs/note", sha: head }, base: { sha: base } } }))).toBe(0);
   });
 
   it("reads a file as text even where a changed attribute calls it binary", () => {

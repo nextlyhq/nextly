@@ -69,8 +69,14 @@ const VENDOR = `(?:(?:${VENDORS.join("|")})(?:'s)?${GAP})?`;
 /** A name ends at a word's end, and is only a component when an API, SDK, key or the like follows it. */
 const ENDS = "(?![\\w-])(?!(?:'s)?\\s+(?:api|sdk|client|library|package|embeddings?|endpoint|integration|provider|plugin|key|account|platform|console)s?\\b)";
 const TOOL_AT = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})${ENDS}`, "i");
-/** In prose, an ambiguous name followed by a capitalised surname is a person, as `Claude Dupont` is; a tool's full name matches first. */
-const PROPER_AT = new RegExp(`^${VENDOR}(?:${PROPER.join("|")})${ENDS}(?![^\\S\\n]+[A-Z][a-z])`);
+/** Words a vendor puts after a tool's name for an edition or a size, which no surname is taken to be. */
+const EDITIONS = ["Large", "Medium", "Small", "Nano", "Mini", "Micro", "Pro", "Flash", "Ultra", "Max", "Plus", "Lite", "Turbo", "Instant", "Code", "Coder", "Agent", "Assistant", "Chat", "Beta", "Preview", "Thinking", "Instruct", "Nemo"];
+/**
+ * In prose, an ambiguous name followed by a capitalised surname is a person,
+ * as `Claude Dupont` is; a tool's full name matches first, and an edition
+ * word after the name is not a surname, as in `Mistral Large`.
+ */
+const PROPER_AT = new RegExp(`^${VENDOR}(?:${PROPER.join("|")})${ENDS}(?![^\\S\\n]+(?!(?:${EDITIONS.join("|")})\\b)[A-Z][a-z])`);
 const PROPER_AT_ANY_CASE = new RegExp(`^${VENDOR}(?:${PROPER.join("|")})${ENDS}`, "i");
 const GENERIC_AT = new RegExp(`^(?:${GENERIC.join("|")})${ENDS}`, "i");
 const BOT = `(?:${BOT_ACCOUNTS.join("|")})\\[bot\\]`;
@@ -160,24 +166,34 @@ export function creditsIn(text, place = "message") {
     .split(/\r?\n/)
     .map(raw => plain(rules.words(raw)));
   const joined = lines.join("\n");
-  const trailers = unfolded(lines).flatMap(({ text: line, at, end }) => trailerCredits(line, rules).map(found => ({ ...found, from: at, line: end })));
+  const trailers = unfolded(lines).flatMap(trailer => creditingSpan(trailer, rules));
   const phrases = [...leadCredits(joined, rules), ...adjectiveCredits(joined, rules)].map(({ start, at, ...found }) => ({ ...found, from: lineAt(joined, start), line: lineAt(joined, at) }));
   return [...trailers, ...phrases];
 }
 
-/**
- * The lines, with a trailer's folded continuation lines joined to it as git
- * unfolds them. Each keeps the lines it spans, so a credit completed by an
- * added continuation line counts as the added line's.
- */
+/** The lines, with a trailer's folded continuation lines gathered onto it, as git unfolds them. */
 function unfolded(lines) {
   const logical = [];
   lines.forEach((line, index) => {
     const last = logical.at(-1);
-    if (last && /^[ \t]+\S/.test(line) && TRAILER.test(last.text)) Object.assign(last, { text: `${last.text} ${line.trim()}`, end: index + 1 });
-    else logical.push({ text: line, at: index + 1, end: index + 1 });
+    if (last && /^[ \t]+\S/.test(line) && TRAILER.test(last.parts[0])) last.parts.push(line.trim());
+    else logical.push({ parts: [line], at: index + 1 });
   });
   return logical;
+}
+
+/**
+ * A trailer's credit, spanning its lines up to the one that completes it. A
+ * credit already whole on its first line stays that line's, so an added
+ * continuation that says nothing more does not make it new; one an added
+ * continuation completes counts as that line's.
+ */
+function creditingSpan({ parts, at }, rules) {
+  for (let count = 1; count <= parts.length; count += 1) {
+    const found = trailerCredits(parts.slice(0, count).join(" "), rules);
+    if (found.length > 0) return found.map(credit => ({ ...credit, from: at, line: at + count - 1 }));
+  }
+  return [];
 }
 
 /**
