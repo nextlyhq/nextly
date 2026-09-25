@@ -14,7 +14,7 @@
  * and every skill loadable by every harness (`skillFrontmatterProblems`).
  */
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { load } from "js-yaml";
@@ -130,15 +130,23 @@ function entryAt(path) {
  * unreadable, or the swap itself refused — leaves the copy Claude Code reads
  * as it was, and nothing beside it.
  *
- * `rename` is the move the swap makes, replaceable so a test can refuse it.
+ * Once the new copy is in place the sync has done its work, and failing to
+ * remove the old copy it set aside does not undo that. So that failure is
+ * returned as `leftover`, naming what is left and why, for the caller to
+ * report, rather than thrown as if the swap had failed.
+ *
+ * `rename` and `remove` are the moves the swap makes, replaceable so a test
+ * can refuse either.
+ *
+ * @returns {{ leftover: null | { path: string, error: Error } }}
  */
-export function syncSkillCopy(base = root, { rename = renameSync } = {}) {
+export function syncSkillCopy(base = root, { rename = renameSync, remove = rmSync } = {}) {
   const copy = join(base, CLAUDE_COPY);
   mkdirSync(dirname(copy), { recursive: true });
   const staging = mkdtempSync(join(dirname(copy), ".skills-sync-"));
   try {
     cpSync(join(base, SKILLS_HOME), staging, { recursive: true, dereference: true });
-    swapIn(staging, copy, rename);
+    return { leftover: swapIn(staging, copy, { rename, remove }) };
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
@@ -147,10 +155,14 @@ export function syncSkillCopy(base = root, { rename = renameSync } = {}) {
 /**
  * Puts the new copy where the old one is. The old one is moved aside first
  * and removed only once the new one is in place; if the new one cannot be
- * moved in, the old one is moved back.
+ * moved in, the old one is moved back. Returns the old copy when it could not
+ * be removed, and null otherwise.
  */
-function swapIn(staging, copy, rename) {
-  if (!entryAt(copy)) return rename(staging, copy);
+function swapIn(staging, copy, { rename, remove }) {
+  if (!entryAt(copy)) {
+    rename(staging, copy);
+    return null;
+  }
   const aside = `${staging}-old`;
   rename(copy, aside);
   try {
@@ -159,7 +171,17 @@ function swapIn(staging, copy, rename) {
     rename(aside, copy);
     throw error;
   }
-  rmSync(aside, { recursive: true, force: true });
+  return removed(aside, remove);
+}
+
+/** Removes the old copy once the new one is in place: null when it is gone, or what is left and why. */
+function removed(aside, remove) {
+  try {
+    remove(aside, { recursive: true, force: true });
+    return null;
+  } catch (error) {
+    return { path: aside, error };
+  }
 }
 
 /**
@@ -247,8 +269,10 @@ function descriptionProblem(description) {
 
 if (isCliEntry(import.meta.url)) {
   if (process.argv[2] === "sync") {
-    syncSkillCopy();
+    const { leftover } = syncSkillCopy();
     console.log(`agent-skills: ${CLAUDE_COPY} rewritten from ${SKILLS_HOME}`);
+    // The copy is right, so the command succeeds; what it left behind is named for removal by hand.
+    if (leftover) console.error(`agent-skills: the old copy set aside at ${relative(root, leftover.path)} could not be removed (${leftover.error.message}); delete it by hand`);
   } else {
     console.error("usage: node scripts/agent-skills.mjs sync");
     process.exit(64);
