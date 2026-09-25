@@ -68,7 +68,8 @@ const BRANCH_OWNERS = ["claude", "copilot", "codex", "cursor", "devin", "jules",
 const VENDOR = `(?:(?:${VENDORS.join("|")})(?:'s)?${GAP})?`;
 /** Words a vendor puts after a tool's name for an edition or a size, which no surname is taken to be. */
 const EDITIONS = ["Large", "Medium", "Small", "Nano", "Mini", "Micro", "Pro", "Flash", "Ultra", "Max", "Plus", "Lite", "Turbo", "Instant", "Code", "Coder", "Agent", "Assistant", "Chat", "Beta", "Preview", "Thinking", "Instruct", "Nemo"];
-const EDITION = `[^\\S\\n]+(?:${EDITIONS.join("|")})(?![\\w-])`;
+/** An edition word after a name, on its line or wrapped onto the next, as a phrase's words may be. */
+const EDITION = `${GAP}(?:${EDITIONS.join("|")})(?![\\w-])`;
 /**
  * Every edition word after a name, so that what follows the name is read after
  * its edition: a role after `Mistral Large` makes people of it as surely as one
@@ -81,7 +82,7 @@ const EDITION_RUN = `(?:${EDITION})*(?!${EDITION})`;
  * component a product uses, and followed by a person's role it is people, as a
  * vendor's researcher or team is; neither is the tool.
  */
-const ENDS = "(?![\\w-])(?!(?:'s)?\\s+(?:api|sdk|client|library|package|embeddings?|endpoint|integration|provider|plugin|key|account|platform|console|researcher|engineer|employee|team|staff|scientist|intern|founder|developer|designer|manager|lead|colleague|folks|people|member|contractor)s?\\b)";
+const ENDS = `(?![\\w-])(?!(?:'s)?${GAP}(?:api|sdk|client|library|package|embeddings?|endpoint|integration|provider|plugin|key|account|platform|console|researcher|engineer|employee|team|staff|scientist|intern|founder|developer|designer|manager|lead|colleague|folks|people|member|contractor)s?\\b)`;
 const TOOL_AT = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})${EDITION_RUN}${ENDS}`, "i");
 /**
  * In prose, an ambiguous name followed by a capitalised surname is a person,
@@ -98,11 +99,14 @@ const AI_NAME = new RegExp(`^(?:${GENERIC.join("|")}|${BOT})$`, "i");
 const TOOL_NAME = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})$`, "i");
 /** A name that begins with an unambiguous tool's, such as a product and its edition; read only where no address says who it is. */
 const TOOL_NAMED = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})(?![\\w-])`, "i");
-const BARE_NAME = new RegExp(`^(?:${PROPER.join("|")})$`, "i");
+/** An ambiguous name alone, or with its edition, as `Mistral Large` names a tool in prose and in a trailer alike. */
+const BARE_NAME = new RegExp(`^(?:${PROPER.join("|")})${EDITION_RUN}$`, "i");
 const AI_EMAIL = new RegExp(`^(?:noreply@(?:anthropic|openai)\\.com|cursoragent@cursor\\.com|\\d+\\+(?:copilot|${BOT})@users\\.noreply\\.github\\.com)$`, "i");
 /** A vendor's own domain: people work there too, so an address there is a tool's only under a tool's name. */
 const VENDOR_EMAIL = /@(?:anthropic|openai)\.com$/i;
 const BRANCH_OWNER = new RegExp(`^(?:${BRANCH_OWNERS.join("|")})/`, "i");
+/** A vendor's name and nothing more, which may go on to be part of a person's, as `Anthropic Researcher Jane Doe` does. */
+const VENDOR_ALONE = new RegExp(`^(?:${VENDORS.join("|")})$`, "i");
 
 const MADE = "(?:generated|created|written|authored|co-?\\s?authored|co-?\\s?written|produced|drafted|made|built|coded|developed|implemented|refactored|assisted|pair-?\\s?programmed|vibe-?\\s?coded)";
 const HOW = gapped("(?:with|by|using|via|through|in collaboration with|with (?:the )?(?:help|assistance) (?:of|from))");
@@ -149,8 +153,8 @@ const SUBJECTS = [
 ];
 /** A trailer, on a line of its own or in a comment: `//`, `#`, `*`, `--`, `;` or an HTML comment. */
 const TRAILER = /^\s*(?:(?:\/\/|#|\*|--|;|<!--)\s*)?([A-Za-z][A-Za-z0-9-]*-(?:by|with))\s*:\s*(.+?)\s*(?:-->)?\s*$/i;
-/** A trailer's first line, whether or not its value starts there. */
-const TRAILER_HEAD = /^\s*(?:(?:\/\/|#|\*|--|;|<!--)\s*)?[A-Za-z][A-Za-z0-9-]*-(?:by|with)\s*:/i;
+/** A trailer's first line, whether or not its value starts there, and its key. */
+const TRAILER_HEAD = /^\s*(?:(?:\/\/|#|\*|--|;|<!--)\s*)?([A-Za-z][A-Za-z0-9-]*-(?:by|with))\s*:/i;
 /** What may stand between a crediting phrase and the name it credits: quotes, emphasis, a bracket, and one line break at most. */
 const LEADING_MARKS = /^(?:[^\S\n]|["'`*_([<@“‘])*(?:\n(?:[^\S\n]|["'`*_([<@“‘])*)?/;
 const ARTICLE = new RegExp(`^(?:the|an?)${GAP}`, "i");
@@ -195,53 +199,131 @@ function identityParts(identity) {
 /** Every credit a piece of text carries, each with the line it is on. */
 export function creditsIn(text, place = "message") {
   const rules = PLACES[place];
-  const lines = readLines(text, rules);
-  const joined = lines.join("\n");
-  const trailers = unfolded(lines).flatMap(trailer => creditingSpan(trailer, rules));
+  const read = readLines(text, rules);
+  const joined = read.lines.join("\n");
+  const trailers = unfolded(read).flatMap(trailer => creditingSpan(trailer, rules));
   const phrases = [...leadCredits(joined, rules), ...adjectiveCredits(joined, rules), ...subjectCredits(joined, rules)].map(({ start, at, ...found }) => ({ ...found, from: lineAt(joined, start), line: lineAt(joined, at) }));
   return [...trailers, ...phrases];
 }
 
-/** A text's lines as a place reads them. */
+/**
+ * A text's lines as a place reads them: `raw`, with the marks that give a line
+ * its structure (a comment's `*`, a list item's bullet), and `lines`, read
+ * plain for the words they say.
+ */
 function readLines(text, rules) {
-  return String(text ?? "")
+  const raw = String(text ?? "")
     .split(/\r?\n/)
-    .map(raw => plain(rules.words(raw)));
+    .map(line => rules.words(line));
+  return { raw, lines: raw.map(plain) };
 }
 
 /**
  * The lines, with a trailer's folded continuation lines gathered onto it: an
- * indented line continues the trailer above it, as git reads one. In a
- * comment block every line is indented, so a line that is a trailer itself
- * always starts its own.
+ * indented line continues the trailer above it, as git reads one. In a comment
+ * block the continuation repeats the trailer's comment prefix first, so it is
+ * the text after that prefix that must be indented further than the trailer's
+ * own. A line that is a trailer itself always starts its own.
  */
-function unfolded(lines) {
+function unfolded({ raw, lines }) {
   const logical = [];
-  lines.forEach((line, index) => {
+  raw.forEach((line, index) => {
     const last = logical.at(-1);
-    if (continuesTrailer(line, last)) last.parts.push(line.trim());
-    else logical.push({ parts: [line], at: index + 1 });
+    const part = continuation(line, lines[index], last);
+    if (part === null) logical.push({ parts: [lines[index]], head: line, at: index + 1 });
+    else last.parts.push(part);
   });
   return logical;
 }
 
-function continuesTrailer(line, last) {
-  return Boolean(last) && /^[ \t]+\S/.test(line) && !TRAILER_HEAD.test(line) && TRAILER_HEAD.test(last.parts[0]);
+/**
+ * What a line adds to the trailer above it, read plain, or null when it starts
+ * a line of its own. Its structure is read from the raw line, before `plain`
+ * drops a comment's `*` or a list item's bullet: it repeats the trailer's
+ * comment prefix, if it has one, and its text after that is indented further
+ * than the trailer's own, or is an address level with it. A comment block
+ * indents every line, so a line merely level with the trailer is a comment of
+ * its own, and a list item is always its own.
+ */
+function continuation(line, plainLine, last) {
+  if (!continuable(plainLine, last)) return null;
+  const prefix = commentPrefix(last.head);
+  if (line.startsWith(prefix)) return continuingText(line.slice(prefix.length), last.head.slice(prefix.length));
+  return underListItem(line, last.head, prefix) ? plain(line).trim() : null;
 }
 
 /**
- * A trailer's credit, spanning its lines up to the one that completes it. A
- * credit already whole on its first line stays that line's, so an added
+ * Whether a line continues a trailer written as a `*` list item: Markdown
+ * indents an item's continuation to its text, without repeating the bullet,
+ * where a comment block repeats its prefix.
+ */
+const underListItem = (line, head, prefix) => /^[ \t]*\*$/.test(prefix) && /\S/.test(line) && !LIST_ITEM.test(line) && indentOf(line) >= prefix.length + indentOf(head.slice(prefix.length));
+
+/** Whether a line may continue the one above it: that one is a trailer, and this one is not. */
+const continuable = (line, last) => Boolean(last) && TRAILER_HEAD.test(last.parts[0]) && !TRAILER_HEAD.test(line);
+
+/** A comment's opening mark, with what indents it — `//`, `#`, `*`, `--` or `;` — or "" for a line that is not one. */
+const commentPrefix = line => /^[ \t]*(?:\/\/|#|\*|--|;)/.exec(line)?.[0] ?? "";
+
+/** A line's words, read plain, when its text continues the trailer's; null otherwise. */
+const continuingText = (text, trailerText) => (carriesOn(text, trailerText) ? plain(text).trim() : null);
+
+const carriesOn = (text, trailerText) => /\S/.test(text) && !LIST_ITEM.test(text) && (indentOf(text) > indentOf(trailerText) || levelAddress(text, trailerText));
+
+/**
+ * An address on a line of its own, level with the trailer it completes, as a
+ * trailer indented in a block may have. At the margin a line is its own, as git
+ * reads one, so only an indented address continues.
+ */
+const levelAddress = (text, trailerText) => indentOf(text) > 0 && indentOf(text) === indentOf(trailerText) && /^\s*</.test(text);
+
+/** A Markdown list item: a line of its own, whatever its indent. */
+const LIST_ITEM = /^\s*[*+-]\s/;
+
+const indentOf = text => /^[ \t]*/.exec(text)[0].length;
+
+/**
+ * A trailer's credits, each spanning its lines up to the one that completes
+ * it. A credit already whole on its first line stays that line's, so an added
  * continuation that says nothing more does not make it new; one an added
- * continuation completes counts as that line's.
+ * continuation completes counts as that line's. A continuation after that
+ * which names a tool of its own credits it on its own line, so a new credit
+ * cannot hide behind an old one.
  */
 function creditingSpan({ parts, at }, rules) {
-  for (let count = 1; count <= parts.length; count += 1) {
-    const found = trailerCredits(parts.slice(0, count).join(" "), rules, count === parts.length);
-    if (found.length > 0) return found.map(credit => ({ ...credit, from: at, line: at + count - 1 }));
-  }
-  return [];
+  const first = growingCredit(parts, rules);
+  const credits = first ? first.credits.map(credit => ({ ...credit, from: at, line: at + first.index })) : [];
+  return [...credits, ...continuationCredits(parts, at, rules, first ? first.index + 1 : 1)];
 }
+
+/**
+ * The first credit a trailer's value makes as its parts are read in, and the
+ * index of the part that completes it, or null. An ambiguous name, and a
+ * vendor's name standing alone, are judged only on the whole value, so a
+ * vendor's name continued onto a person's name and address is that person,
+ * while a tool's full name is a credit as soon as it is complete.
+ */
+function growingCredit(parts, rules) {
+  for (let count = 1; count <= parts.length; count += 1) {
+    const credits = trailerCredits(parts.slice(0, count).join(" "), rules, count === parts.length);
+    if (credits.length > 0) return { credits, index: count - 1 };
+  }
+  return null;
+}
+
+/** The credits a trailer's continuations make of their own, from the part at `from` on, each on its own line. */
+function continuationCredits(parts, at, rules, from) {
+  const key = rules.trailers ? TRAILER_HEAD.exec(parts[0])?.[1] : undefined;
+  if (key === undefined) return [];
+  return parts.slice(from).flatMap((part, offset) => (namesAnotherTool(part) ? [{ form: `names it in a ${key} trailer`, excerpt: excerpt(part), from: at + from + offset, line: at + from + offset }] : []));
+}
+
+/**
+ * Whether a continuation names a tool of its own, as another co-author does:
+ * a tool's name or identity at its start, once a joining word is set aside. A
+ * note opens with a bracket or a dash, so the name it may mention is not read.
+ */
+const namesAnotherTool = part => creditedByTrailer(part.replace(/^(?:and|&|plus|,)\s*/i, ""), true);
 
 /**
  * Markdown links read as their text, and emphasis marks and inline HTML tags
@@ -278,8 +360,10 @@ function creditedByTrailer(value, whole) {
 }
 
 function namesToolOutright(name, whole) {
-  return isAiIdentity(name) || TOOL_NAMED.test(name) || (whole && BARE_NAME.test(name));
+  return (whole || !VENDOR_ALONE.test(name)) && namesATool(name, whole);
 }
+
+const namesATool = (name, whole) => isAiIdentity(name) || TOOL_NAMED.test(name) || (whole && BARE_NAME.test(name));
 
 /** Each crediting phrase followed by a name, with where the phrase starts and where the name it credits does. */
 function leadCredits(text, rules) {
@@ -303,10 +387,15 @@ function names(text, rules) {
   return TOOL_AT.test(text) || GENERIC_AT.test(text) || (rules.anyCase ? PROPER_AT_ANY_CASE : PROPER_AT).test(text);
 }
 
+/**
+ * A name or AI in general called the change's maker, from where the phrase
+ * starts to where it ends: a self-description may wrap, and a line that
+ * completes one takes part in it, as a line completing a maker's phrase does.
+ */
 function adjectiveCredits(text, rules) {
   const patterns = [...NAMED_ADJECTIVES, rules.generic ? GENERIC_ADJECTIVE : SELF_DESCRIBED];
   const cased = rules.anyCase ? patterns.map(pattern => new RegExp(pattern.source, "gi")) : patterns;
-  return cased.flatMap(pattern => [...text.matchAll(pattern)].map(match => ({ form: "calls it AI-made", excerpt: excerpt(text, match.index), start: match.index, at: match.index })));
+  return cased.flatMap(pattern => [...text.matchAll(pattern)].map(match => ({ form: "calls it AI-made", excerpt: excerpt(text, match.index), start: match.index, at: match.index + match[0].length })));
 }
 
 /**
@@ -369,9 +458,32 @@ function keepLine(line, state, lines) {
   state.next += 1;
 }
 
+/**
+ * The path a `+++` line names. Git C-quotes a path that holds a `"`, a `\` or a
+ * control character, escapes and all, and ends one that holds a space with a
+ * tab, so the path is read back from either form before its file is read.
+ */
 function targetPath(line) {
-  const target = line.slice(4).replace(/^"|"$/g, "");
+  const target = unquoted(line.slice(4).replace(/\t$/, ""));
   return target === "/dev/null" ? null : target.replace(/^b\//, "");
+}
+
+/** The C escapes git writes in a quoted path, each with the byte it stands for. */
+const ESCAPES = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+
+/** A path as git printed it, read back: as it is unless quoted, and then with its escapes, octal bytes among them, decoded. */
+function unquoted(text) {
+  const quoted = /^"(.*)"$/s.exec(text);
+  if (!quoted) return text;
+  const bytes = [];
+  for (const [, octal, escape, plain] of quoted[1].matchAll(/\\([0-7]{3})|\\(.)|([^\\]+)/gs)) bytes.push(...pathBytes(octal, escape, plain));
+  return Buffer.from(bytes).toString("utf8");
+}
+
+function pathBytes(octal, escape, plain) {
+  if (octal !== undefined) return [parseInt(octal, 8)];
+  if (escape !== undefined) return [ESCAPES[escape] ?? escape.charCodeAt(0)];
+  return [...Buffer.from(plain, "utf8")];
 }
 
 const HUNK = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
@@ -381,25 +493,6 @@ function hunkHeader(line) {
   if (!match) throw new Error(`cannot read the hunk header ${JSON.stringify(line)}`);
   const [, oldCount = "1", start, newCount = "1"] = match;
   return { next: Number(start), oldLeft: Number(oldCount), newLeft: Number(newCount) };
-}
-
-/** Consecutive lines of one file as one block, so a phrase wrapped across them reads whole. */
-export function diffBlocks(lines) {
-  const blocks = [];
-  for (const entry of lines) {
-    if (continues(blocks.at(-1), entry)) extend(blocks.at(-1), entry);
-    else blocks.push({ path: entry.path, start: entry.line, texts: [entry.text], added: [entry.added] });
-  }
-  return blocks;
-}
-
-function continues(block, entry) {
-  return Boolean(block) && block.path === entry.path && block.start + block.texts.length === entry.line;
-}
-
-function extend(block, entry) {
-  block.texts.push(entry.text);
-  block.added.push(entry.added);
 }
 
 /** The paths `git diff --name-status -z` reports added, renamed or copied: a rename or copy carries two paths, anything else one. */
@@ -414,53 +507,88 @@ function entryWidth(status) {
 }
 
 /** Everything a range carries: its commits, its added or renamed paths, and its added lines, or why they cannot be read. */
-function rangeEvidence({ base, head }, git) {
+function rangeEvidence(range, git) {
+  const read = rangeReads(range, git);
+  if (read.problem) return read;
+  const lines = diffLines(read.diff);
+  const paragraphs = paragraphBlocks(lines, range.head, git);
+  return paragraphs.problem ? paragraphs : { commits: read.commits, paths: read.paths, lines, blocks: paragraphs.blocks };
+}
+
+/** A range's commits, its added or renamed paths and its diff, as git reports them, or why they cannot be read. */
+function rangeReads({ base, head }, git) {
   const commits = commitsIn({ base, head }, git);
   const names = git(["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", base, head], { maxBuffer: MAX_OUTPUT });
   // Text, whatever a changed attribute says: a path marked binary would
-  // otherwise show no lines at all, and its credit none.
-  const diff = git(["-c", "core.quotePath=false", "diff", "--unified=1", "--text", "--no-textconv", "--no-color", "--no-ext-diff", "-M", base, head], { maxBuffer: MAX_OUTPUT });
+  // otherwise show no lines at all, and its credit none. No context lines:
+  // the diff says which lines were added, and each is read in its paragraph
+  // of the final file.
+  const diff = git(["-c", "core.quotePath=false", "diff", "--unified=0", "--text", "--no-textconv", "--no-color", "--no-ext-diff", "-M", base, head], { maxBuffer: MAX_OUTPUT });
   if (!commits || !names.ok || !diff.ok) return { problem: `could not read the commits and changes in ${base}..${head}` };
-  const lines = diffLines(diff.out);
-  return { commits, paths: addedOrRenamed(names.out.split("\0")), lines, blocks: withTrailerStarts(diffBlocks(lines), head, git) };
+  return { commits, paths: addedOrRenamed(names.out.split("\0")), diff: diff.out };
 }
 
 /**
- * Blocks whose first line continues a folded trailer, extended back through
- * the final file to the trailer's first line, however far above the diff's
- * context it sits. The lines added this way are unchanged ones. Most code
- * begins indented, so a block is extended only where `unfolded` gathers its
- * first line onto a trailer, and a file is read once, however many of its
- * blocks begin indented.
+ * The final file's paragraphs that hold an added line, a block each, with
+ * which of their lines the change added. A phrase may wrap, but never across a
+ * blank line, and a folded trailer never holds one either, so a credit an added
+ * line takes part in lies whole inside these, however far above or below the
+ * added line it starts or ends. Each file is read once. One that cannot be read
+ * makes the whole answer a problem: a credit could start in it, and nobody
+ * would have read it.
+ *
+ * @returns {{ blocks: { path: string, start: number, texts: string[], added: boolean[] }[] } | { problem: string }}
  */
-export function withTrailerStarts(blocks, head, git) {
-  const files = new Map();
-  const foldsOf = path => {
-    if (!files.has(path)) files.set(path, trailerFolds(path, head, git));
-    return files.get(path);
-  };
-  return blocks.map(block => (/^[ \t]+\S/.test(readLines(block.texts[0], PLACES.line)[0]) ? extendedToTrailer(block, foldsOf(block.path)) : block));
+export function paragraphBlocks(lines, head, git) {
+  const read = [...addedLinesByPath(lines)].map(([path, added]) => ({ path, added, file: git(["show", `${head}:${path}`], { maxBuffer: MAX_OUTPUT }) }));
+  const unreadable = read.filter(({ file }) => !file.ok).map(({ path }) => path);
+  if (unreadable.length > 0) return { problem: `could not read ${unreadable.join(", ")} at ${head}, whose paragraphs hold the added lines` };
+  return { blocks: read.flatMap(({ path, added, file }) => paragraphsOf(path, file.out.split("\n"), added)) };
 }
 
-/**
- * A file's final lines, and for each line `unfolded` gathers onto a trailer
- * above it, the 1-based line that trailer starts on; null when the file
- * cannot be read.
- */
-function trailerFolds(path, head, git) {
-  const file = git(["show", `${head}:${path}`], { maxBuffer: MAX_OUTPUT });
-  if (!file.ok) return null;
-  const onto = new Map();
-  for (const { parts, at } of unfolded(readLines(file.out, PLACES.line))) parts.slice(1).forEach((_, offset) => onto.set(at + offset + 1, at));
-  return { lines: file.out.split("\n"), onto };
+/** Each file's added lines, by the line each has in the final file. A blank one takes part in no phrase. */
+function addedLinesByPath(lines) {
+  const byPath = new Map();
+  for (const entry of lines.filter(line => line.added && !blank(line.text))) {
+    if (!byPath.has(entry.path)) byPath.set(entry.path, new Set());
+    byPath.get(entry.path).add(entry.line);
+  }
+  return byPath;
 }
 
-function extendedToTrailer(block, folds) {
-  const first = folds?.onto.get(block.start);
-  if (first === undefined) return block;
-  const before = folds.lines.slice(first - 1, block.start - 1);
-  return { ...block, start: first, texts: [...before, ...block.texts], added: [...before.map(() => false), ...block.added] };
+/** The paragraphs of a file's final lines that hold an added line, each once, in order. */
+function paragraphsOf(path, fileLines, added) {
+  const spans = [];
+  let covered = 0;
+  for (const line of [...added].sort((a, b) => a - b)) {
+    if (line <= covered) continue;
+    const span = { start: paragraphStart(fileLines, line), end: paragraphEnd(fileLines, line) };
+    spans.push(span);
+    covered = span.end;
+  }
+  return spans.map(span => blockOf(path, fileLines, added, span));
 }
+
+function blockOf(path, fileLines, added, { start, end }) {
+  const texts = fileLines.slice(start - 1, end);
+  return { path, start, texts, added: texts.map((_, offset) => added.has(start + offset)) };
+}
+
+/** The 1-based first line of the paragraph holding a line: back to, not across, a blank line. */
+function paragraphStart(fileLines, line) {
+  let start = line;
+  while (start > 1 && !blank(fileLines[start - 2])) start -= 1;
+  return start;
+}
+
+/** The 1-based last line of the paragraph holding a line: on to, not across, a blank line. */
+function paragraphEnd(fileLines, line) {
+  let end = line;
+  while (end < fileLines.length && !blank(fileLines[end])) end += 1;
+  return end;
+}
+
+const blank = text => /^\s*$/.test(text);
 
 /** The commits in a range, each read from its own object, or undefined when any cannot be read. */
 function commitsIn({ base, head }, git) {
@@ -566,10 +694,17 @@ function reportFindings(findings) {
   return 1;
 }
 
+/**
+ * One finding as a workflow command. A decoded path may hold a line break, a
+ * `:` or a `,`, so the file is escaped as a command's property is; the message
+ * is escaped as its data.
+ */
 function annotation({ file, line, where, form, excerpt: text }) {
-  const at = file ? ` file=${file},line=${line},` : " ";
+  const at = file ? ` file=${commandProperty(file)},line=${line},` : " ";
   return `::error${at}title=AI credit::${commandText(`${where} ${form}: ${text}`)}`;
 }
+
+const commandProperty = text => commandText(text).replaceAll(":", "%3A").replaceAll(",", "%2C");
 
 function reportClean({ commits, paths, lines }, event) {
   const published = event === "pull_request" ? "the title, description and branch, " : "";
@@ -609,16 +744,30 @@ const SCISSORS = /^(\S+) -{8,} >8 -{8,}\r?$/m;
  * are read, since a message given with `-m` or `-F` keeps them, and so is what
  * a scissors line there has below it. In the editor it opens, git follows its
  * own scissors line with comment lines in the same prefix, in any language and
- * with any comment character, and drops everything from that line on. There
- * the part below is read as the diff the editor shows: its added lines and any
- * plain text, but not the lines it removes or leaves unchanged, since removing
- * an old credit credits nothing.
+ * with any comment character, and then with nothing or with the diff
+ * `--verbose` shows, and drops everything from that line on. There the part
+ * below is read as that diff: its added lines and any plain text, but not the
+ * lines it removes or leaves unchanged, since removing an old credit credits
+ * nothing.
  */
 function committedParts(message) {
   const cut = SCISSORS.exec(message);
   if (!cut) return { message, diff: "" };
   const below = message.slice(cut.index + cut[0].length + 1).split("\n");
-  return below[0].startsWith(cut[1]) ? { message: message.slice(0, cut.index), diff: diffAdditions(below).join("\n") } : { message, diff: "" };
+  return isEditorBuffer(below, cut[1]) ? { message: message.slice(0, cut.index), diff: diffAdditions(below).join("\n") } : { message, diff: "" };
+}
+
+/**
+ * Whether what follows a scissors line is git's own: comment lines in its
+ * prefix, then nothing, or a diff, which git starts with `diff --git`. A
+ * message's own text below a scissors line goes on otherwise, even after a
+ * comment line of its own.
+ */
+function isEditorBuffer(below, prefix) {
+  const first = below.findIndex(line => !line.startsWith(prefix));
+  if (first === -1) return true;
+  const rest = below.slice(first);
+  return rest[0].startsWith("diff --git ") || rest.every(line => line.trim() === "");
 }
 
 function diffAdditions(lines) {

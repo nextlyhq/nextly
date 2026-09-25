@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { load } from "js-yaml";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { addedOrRenamed, branchCredits, creditsIn, diffBlocks, diffLines, isAiIdentity, main, withTrailerStarts } from "./ai-credit.mjs";
+import { addedOrRenamed, branchCredits, creditsIn, diffLines, isAiIdentity, main, paragraphBlocks } from "./ai-credit.mjs";
 import { readGit } from "./workflow-context.mjs";
 
 /** Joined at run time, so that no line here reads as a credit. */
@@ -46,6 +46,8 @@ describe("a message's credit, in each form", () => {
       // An ambiguous name alone, whole on its line, and completed by an address folded below it.
       spell("Co-authored-by: Clau", "de"),
       lines(spell("Co-authored-by: Clau", "de"), `  <${VENDOR_ADDRESS}>`),
+      // An ambiguous name with its edition, as prose and a maker's phrase read it.
+      trailer("Co-authored", spell("Mis", "tral Large")),
     ];
     for (const line of trailers) expect(credited(lines("fix: a change", "", line), "message"), line).toBe(true);
   });
@@ -64,12 +66,23 @@ describe("a message's credit, in each form", () => {
       said(spell("A", "I"), "wrote", "this", "code"),
       spell("Mis", "tral Large wrote this file"),
       spell(PILOT_TOOL, " Chat generated this change"),
+      // The edition wrapped onto the next line is still the name's.
+      lines(spell("Mis", "tral"), "Large wrote this file"),
+      lines(PILOT_TOOL, "Chat generated this change"),
     ];
     for (const line of statements) expect(credited(line, "message"), line).toBe(true);
   });
 
   it("refuses thanks and credit given to a tool", () => {
-    const thanks = [spell("Thanks, ", CODE_TOOL, "!"), said("Tests pass, and", "thanks to", CHAT_TOOL), said("Credit", "goes to", PILOT_TOOL), said("Kudos", "to", MODEL)];
+    const thanks = [
+      spell("Thanks, ", CODE_TOOL, "!"),
+      said("Tests pass, and", "thanks to", CHAT_TOOL),
+      said("Credit", "goes to", PILOT_TOOL),
+      said("Kudos", "to", MODEL),
+      // A role word in the next paragraph is not the name's.
+      lines(said("Thanks to", spell("Mis", "tral")), "Large", "", "team notes"),
+      lines(said("Thanks to", CHAT_TOOL), "", "team notes"),
+    ];
     for (const line of thanks) expect(credited(line, "message"), line).toBe(true);
   });
 
@@ -110,6 +123,10 @@ describe("a message's credit, in each form", () => {
       said("Written by", spell("Open", "AI"), "researcher Jane Doe, with thanks to the", spell("Anthro", "pic"), "team"),
       said("Written by", CODE_TOOL, "researcher Jane Doe"),
       said("Thanks to the", spell("Mis", "tral"), "Large team"),
+      lines(said("Thanks to the", spell("Mis", "tral")), "Large team"),
+      // A vendor's name continued onto a person's, with the person's address, is the person.
+      lines(trailer("Co-authored", spell("Anthro", "pic")), spell("  Researcher Jane Doe <jane@", "anthro", "pic.com>")),
+      lines(trailer("Co-authored", spell("Anthro", "pic")), spell("  Jane Doe <jane@", "anthro", "pic.com>")),
       said("Written by", spell("Mis", "tral"), "Large researcher Jane"),
       said("Built with the", PILOT_TOOL, "Chat SDK"),
       lines(spell("Co-authored-by: Clau", "de"), "  Dupont <claude.dupont@example.com>"),
@@ -149,6 +166,62 @@ describe("a line a change adds", () => {
     expect(creditsIn(lines(`  # ${signed}`, `  # ${credit}`), "line")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
     expect(creditsIn(lines("/**", spell(" * Co-authored", "-by:"), ` *   ${MODEL} <${VENDOR_ADDRESS}>`, " */"), "line")).toEqual([expect.objectContaining({ from: 2, line: 3 })]);
     expect(creditsIn(lines("/**", ` * ${signed}`, spell(" * Co-authored", "-by:"), ` *   ${MODEL} <${VENDOR_ADDRESS}>`, " */"), "line")).toEqual([expect.objectContaining({ from: 3, line: 4 })]);
+  });
+
+  // The line a self-description completes on is the one that makes it a credit.
+  it("spans a self-description to the line that completes it", () => {
+    expect(creditsIn(lines("This file is", spell("A", "I-generated.")), "line")).toEqual([expect.objectContaining({ from: 1, line: 2 })]);
+  });
+
+  /*
+   * In a line-comment block a folded trailer's value starts on the next line,
+   * behind the same comment prefix, and indented further than the trailer's
+   * own text. A line with the prefix and the trailer's indent is a comment of
+   * its own, not the trailer's value.
+   */
+  it("completes a trailer indented in a block with an address level with it", () => {
+    expect(creditsIn(lines(spell("  Co-authored", "-by: Alice"), spell("  <noreply@", "open", "ai.com>")), "line")).toEqual([expect.objectContaining({ from: 1, line: 2 })]);
+  });
+
+  // At the margin a line is its own, as git reads one: only an indented address continues a trailer.
+  it("leaves an address at the margin as a line of its own", () => {
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("<noreply@", "open", "ai.com>")), "line")).toEqual([]);
+  });
+
+  // Markdown indents a list item's continuation to its text, without repeating the bullet.
+  it("unfolds a trailer written as a list item onto the lines indented under its bullet", () => {
+    expect(creditsIn(lines(spell("* Co-authored", "-by:"), `  ${CODE_TOOL}`), "message")).toEqual([expect.objectContaining({ from: 1, line: 2 })]);
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("* ", CHAT_TOOL, " loads skills")), "message")).toEqual([]);
+  });
+
+  it("unfolds a trailer across a repeated comment prefix, and not onto the next comment", () => {
+    for (const prefix of ["//", "#", ";", "--", " *"]) {
+      expect(creditsIn(lines(spell(prefix, " Co-authored", "-by:"), `${prefix}   ${CHAT_TOOL}`), "line"), prefix).toEqual([expect.objectContaining({ from: 1, line: 2 })]);
+      expect(creditsIn(lines(`${prefix} ${trailer("Co-authored", "Jane Doe")}`, `${prefix} ${CHAT_TOOL} reads this file`), "line"), prefix).toEqual([]);
+    }
+  });
+
+  /*
+   * A credit already whole on a trailer's first line stays that line's, and a
+   * continuation that adds another tool credits it on its own line, so a new
+   * credit cannot hide behind an old one. A continuation adding no tool, and a
+   * note, add nothing.
+   */
+  it("credits a continuation that names another tool on its own line, and nothing for one that does not", () => {
+    const credit = trailer("Co-authored", CODE_TOOL);
+    expect(creditsIn(lines(credit, spell("  and Git", "Hub Co", "pilot")), "line")).toEqual([expect.objectContaining({ from: 1, line: 1 }), expect.objectContaining({ from: 2, line: 2 })]);
+    expect(creditsIn(lines(credit, `  ${CHAT_TOOL} <${spell("noreply@", "open", "ai.com")}>`), "line")).toEqual([expect.objectContaining({ from: 1, line: 1 }), expect.objectContaining({ from: 2, line: 2 })]);
+    // A tool's full name is a credit once complete: a person's name and address continued after it do not undo it.
+    expect(creditsIn(lines(credit, "  and Jane Doe <jane@example.com>"), "line")).toEqual([expect.objectContaining({ from: 1, line: 1 })]);
+    expect(creditsIn(lines(credit, "  Jane Doe <jane@example.com>"), "line")).toEqual([expect.objectContaining({ from: 1, line: 1 })]);
+    expect(creditsIn(lines(credit, "  with a note"), "line")).toEqual([expect.objectContaining({ from: 1, line: 1 })]);
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  and friends"), "line")).toEqual([]);
+    // A list item after a trailer is its own line, whatever its bullet or indent.
+    for (const item of [spell("* ", CHAT_TOOL, " loads skills differently"), spell("  * ", CHAT_TOOL, " loads skills"), spell("- ", CHAT_TOOL, " loads skills")]) {
+      expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), item), "line"), item).toEqual([]);
+    }
+    // A note that mentions a tool names no co-author.
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  (checked against the ", CODE_TOOL, " docs)")), "line")).toEqual([]);
   });
 
   it("reports the line of a multi-line text that carries the credit", () => {
@@ -215,42 +288,55 @@ describe("reading a diff", () => {
     ]);
   });
 
-  it("reads consecutive lines of a file as one text, and a gap or another file as a new one", () => {
-    const shown = [
-      { path: "a.md", line: 3, text: "x", added: false },
-      { path: "a.md", line: 4, text: "y", added: true },
-      { path: "a.md", line: 9, text: "z", added: true },
-      { path: "b.md", line: 10, text: "w", added: true },
-    ];
-    expect(diffBlocks(shown)).toEqual([
-      { path: "a.md", start: 3, texts: ["x", "y"], added: [false, true] },
-      { path: "a.md", start: 9, texts: ["z"], added: [true] },
-      { path: "b.md", start: 10, texts: ["w"], added: [true] },
-    ]);
+  /*
+   * Git C-quotes a path that holds a `"`, a `\` or a control character, and
+   * ends one that holds a space with a tab. Read as printed, the path names no
+   * file, and a final file read by it fails.
+   */
+  it("reads a path git quotes or ends with a tab as the path it is", () => {
+    const header = target => ["diff --git a/x b/x", "--- /dev/null", `+++ ${target}`, "@@ -0,0 +1 @@", "+a line"];
+    const pathOf = target => diffLines(header(target).join("\n"))[0].path;
+    expect(pathOf('"b/quo\\"te.md"')).toBe('quo"te.md');
+    expect(pathOf('"b/back\\\\slash.md"')).toBe("back\\slash.md");
+    expect(pathOf('"b/tab\\tname.md"')).toBe("tab\tname.md");
+    expect(pathOf('"b/caf\\303\\251.md"')).toBe("café.md");
+    expect(pathOf("b/sp ace.md\t")).toBe("sp ace.md");
+    expect(pathOf("b/plain.md")).toBe("plain.md");
   });
 
   /*
-   * Most code begins indented, as a folded trailer's continuation does. A
-   * block reaches back only to a trailer it continues, read as a line is read,
-   * and each file is read once however many of its blocks begin indented.
+   * A phrase wraps but never crosses a blank line, and neither does a folded
+   * trailer, so each added line is read in its whole paragraph of the final
+   * file, however far above or below the added line the credit starts or
+   * ends. Added lines in one paragraph make one block; a blank line parts two.
    */
-  it("extends a block back to the trailer it continues, and code to nothing, reading each file once", () => {
-    const credit = trailer("Co-authored", "Build Team");
-    const text = lines("function one() {", "  const a = 1;", "  const b = 2;", "}", credit, "  and friends", "  more", "", `* ${credit}`, "*   and friends", "*   more");
-    const shown = [];
+  it("reads each added line in its paragraph of the final file, once per paragraph and once per file", () => {
+    const text = lines("intro", "", "one", "two", "three", "", "four", "");
+    const reads = [];
     const git = args => {
-      shown.push(args.at(-1));
+      reads.push(args.at(-1));
       return { ok: true, out: text };
     };
-    const code = { path: "a.md", start: 3, texts: ["  const b = 2;"], added: [true] };
-    const folded = { path: "a.md", start: 7, texts: ["  more"], added: [true] };
-    const starred = { path: "a.md", start: 11, texts: ["*   more"], added: [true] };
-    expect(withTrailerStarts([code, folded, starred], "HEAD", git)).toEqual([
-      code,
-      { path: "a.md", start: 5, texts: [credit, "  and friends", "  more"], added: [false, false, true] },
-      { path: "a.md", start: 9, texts: [`* ${credit}`, "*   and friends", "*   more"], added: [false, false, true] },
-    ]);
-    expect(shown).toEqual(["HEAD:a.md"]);
+    const entry = (line, added = true) => ({ path: "a.md", line, text: text.split("\n")[line - 1], added });
+    expect(paragraphBlocks([entry(3), entry(5), entry(7), entry(6)], "HEAD", git)).toEqual({
+      blocks: [
+        { path: "a.md", start: 3, texts: ["one", "two", "three"], added: [true, false, true] },
+        { path: "a.md", start: 7, texts: ["four"], added: [true] },
+      ],
+    });
+    expect(reads).toEqual(["HEAD:a.md"]);
+  });
+
+  /*
+   * A credit an added line takes part in may start in the file above the
+   * change, so a file that cannot be read leaves the range unread rather than
+   * judged from the added lines alone.
+   */
+  it("reports a final file it could not read, rather than judging its added lines alone", () => {
+    const unreadable = () => ({ ok: false, out: "" });
+    expect(paragraphBlocks([{ path: "big.md", line: 7, text: "more", added: true }], "HEAD", unreadable)).toEqual({ problem: expect.stringContaining("could not read big.md at HEAD") });
+    // A file with no added line, or only a blank one, needs no read.
+    expect(paragraphBlocks([{ path: "big.md", line: 7, text: "  ", added: true }, { path: "big.md", line: 8, text: "kept", added: false }], "HEAD", unreadable)).toEqual({ blocks: [] });
   });
 
   it("names the paths a change adds, renames or copies, and not the ones it only edits", () => {
@@ -355,6 +441,60 @@ describe("the command in CI", () => {
     const head = commit("docs: finish it", { text: lines(start, spell(" *   <198982749+", "Co", "pilot@users.noreply.github.com>"), " */", "") });
     expect(decide(eventFor("pull_request", { pull_request: { title: "docs: finish it", body: "", head: { ref: "docs/finish", sha: head }, base: { sha: base } } }))).toBe(1);
     expect(printed()).toMatch(/file=notes\.md,line=4,title=AI credit::notes\.md:4 names it in a Co-authored-by trailer/);
+  });
+
+  /** A pull request of one commit that changes `file` from `before` to `after`. */
+  function change(before, after, { file = "notes.md" } = {}) {
+    const base = commit("chore: the base", { file, text: before });
+    run("checkout", "-q", "-b", "topic");
+    const head = commit("docs: change it", { file, text: after });
+    return eventFor("pull_request", { pull_request: { title: "docs: change it", body: "", head: { ref: "docs/change", sha: head }, base: { sha: base } } });
+  }
+
+  it("refuses a self-description an added line completes, though its first line was already there", () => {
+    expect(decide(change(lines("This file is", ""), lines("This file is", spell("A", "I-generated."), "")))).toBe(1);
+    expect(printed()).toMatch(/file=notes\.md,line=2,title=AI credit::notes\.md:2 calls it AI-made/);
+  });
+
+  // The diff shows no context; the paragraph holds the rest of a phrase however many lines it wraps over.
+  it("refuses a phrase an added line completes after several wrapped lines already there", () => {
+    const before = lines(spell("Mis", "tral"), "Large wrote", "");
+    expect(decide(change(before, lines(spell("Mis", "tral"), "Large wrote", "this file", "")))).toBe(1);
+    expect(printed()).toMatch(/file=notes\.md,line=3,title=AI credit::notes\.md:3 names it as the change's maker/);
+  });
+
+  it("refuses an address added to a trailer folded behind a comment prefix with no space after it", () => {
+    const before = lines(spell("//Co-authored", "-by:"), "// Alice", "");
+    expect(decide(change(before, lines(spell("//Co-authored", "-by:"), "// Alice", spell("// <noreply@", "open", "ai.com>"), "")))).toBe(1);
+    expect(printed()).toMatch(/file=notes\.md,line=3,title=AI credit::notes\.md:3 names it in a Co-authored-by trailer/);
+  });
+
+  it("refuses another tool an added continuation names, behind a credit that was already there", () => {
+    const credit = trailer("Co-authored", CODE_TOOL);
+    expect(decide(change(lines(credit, ""), lines(credit, spell("  and Git", "Hub Co", "pilot"), "")))).toBe(1);
+    expect(printed()).toMatch(/file=notes\.md,line=2,title=AI credit::notes\.md:2 names it in a Co-authored-by trailer/);
+  });
+
+  // Git quotes this name in its diff; read as printed, the final file the trailer starts in could not be read.
+  it.runIf(process.platform !== "win32")("reads a file whose path git quotes as the path it is, to find where a trailer starts", () => {
+    const start = lines(trailer("Co-authored", "Build Team"), "  and friends");
+    const address = spell("  <198982749+", "Co", "pilot@users.noreply.github.com>");
+    expect(decide(change(lines(start, ""), lines(start, address, ""), { file: 'quo"te.md' }))).toBe(1);
+    expect(printed()).toMatch(/file=quo"te\.md,line=3,title=AI credit::quo"te\.md:3 names it in a Co-authored-by trailer/);
+  });
+
+  // Git ends a path that holds a space with a tab in its diff; kept, it would be part of the name.
+  it("names a file whose path holds a space as the path it is", () => {
+    expect(decide(change("a line\n", lines("a line", spell(MADE, " with ", CODE_TOOL), ""), { file: "sp ace.md" }))).toBe(1);
+    expect(printed()).toMatch(/file=sp ace\.md,line=2,title=AI credit::sp ace\.md:2 states that it made the change/);
+  });
+
+  // A line break decoded from a quoted path would end the annotation and start a command of its own.
+  it.runIf(process.platform !== "win32")("keeps a path with a line break inside its annotation", () => {
+    expect(decide(change("a line\n", lines("a line", spell(MADE, " with ", CODE_TOOL), ""), { file: "line\n::notice title=Injected::oops.md" }))).toBe(1);
+    const out = printed();
+    expect(out.split("\n").filter(entry => entry.startsWith("::notice"))).toEqual([]);
+    expect(out).toContain("file=line%0A%3A%3Anotice title=Injected%3A%3Aoops.md,line=2,");
   });
 
   it("does not refuse a harmless continuation added to a credit that was already there", () => {
@@ -485,31 +625,51 @@ describe("the command as the commit-msg hook", () => {
     expect(complaint()).toMatch(/the committer, .+, is an AI tool's identity/);
   });
 
+  /** The diff `git commit --verbose` puts below its comment lines, as git 2.53 writes it, with one changed line. */
+  const verboseDiff = change => ["diff --git a/notes.md b/notes.md", "index 3367afd..df082d3 100644", "--- a/notes.md", "+++ b/notes.md", "@@ -1 +1,2 @@", " old", change];
+
   // A message given with `-m` or `-F` keeps its comment lines, and everything
   // below a scissors line, so all of it is read as the message. In the editor
-  // git opens, its scissors line is followed by its own comment lines, and it
-  // drops what is below; there that part is read as the diff the editor shows:
-  // its added lines count, and the lines it removes or keeps do not.
+  // git opens, its scissors line is followed by its own comment lines and then
+  // the diff, and it drops what is below; there that part is read as the diff
+  // the editor shows: its added lines count, and the lines it removes or keeps
+  // do not.
   it("reads comment lines, and below the scissors all a message keeps, but never what an editor's diff removes", () => {
     const credit = trailer("Co-authored", `${MODEL} <${VENDOR_ADDRESS}>`);
     const scissors = "# ------------------------ >8 ------------------------";
-    const editor = [scissors, "# Do not modify or remove the line above."];
+    const editor = [scissors, "# Do not modify or remove the line above.", "# Everything below it will be ignored."];
     expect(hook(lines("fix: a change", spell("# ", credit)))).toBe(1);
     expect(hook(lines("fix: a change", scissors, credit))).toBe(1);
     expect(hook(lines("fix: a change", scissors, spell(" ", credit)))).toBe(1);
-    expect(hook(lines("fix: a change", ...editor, spell("+", credit)))).toBe(1);
-    expect(hook(lines("fix: a change", ...editor, spell("-", credit)))).toBe(0);
-    expect(hook(lines("fix: a change", ...editor, spell(" ", credit)))).toBe(0);
+    expect(hook(lines("fix: a change", ...editor, ...verboseDiff(spell("+", credit))))).toBe(1);
+    expect(hook(lines("fix: a change", ...editor, ...verboseDiff(spell("-", credit))))).toBe(0);
+    expect(hook(lines("fix: a change", ...editor, ...verboseDiff(spell(" ", credit))))).toBe(0);
+    // Git's own buffer with no diff below its comment lines holds nothing more to read.
+    expect(hook(lines("fix: a change", ...editor, ""))).toBe(0);
   });
 
   it("knows the editor's diff by git's own lines, in any comment prefix or language, and reads a message's own text below the scissors as its message", () => {
     const credit = trailer("Co-authored", `${MODEL} <${VENDOR_ADDRESS}>`);
     for (const prefix of [";", "//"]) {
       const editor = [`${prefix} ------------------------ >8 ------------------------`, `${prefix} Ne modifiez pas et ne supprimez pas la ligne ci-dessus.`];
-      expect(hook(lines("fix: a change", ...editor, spell(" ", credit))), prefix).toBe(0);
-      expect(hook(lines("fix: a change", ...editor, spell("+", credit))), prefix).toBe(1);
+      expect(hook(lines("fix: a change", ...editor, ...verboseDiff(spell(" ", credit)))), prefix).toBe(0);
+      expect(hook(lines("fix: a change", ...editor, ...verboseDiff(spell("+", credit)))), prefix).toBe(1);
     }
     expect(hook(lines("fix: a change", "# ------------------------ >8 ------------------------", spell("Entirely A", "I-generated.")))).toBe(1);
+  });
+
+  /*
+   * What makes the editor's buffer is its shape, not its first line: git's
+   * comment lines, then its diff or nothing. A `-m` message whose own text
+   * below a scissors line opens with a comment line of its own is still a
+   * message, and a diff straight below the scissors line is still the diff.
+   */
+  it("reads a message's own text below a scissors line and a comment as its message, and a diff straight below the line as the diff", () => {
+    const scissors = "# ------------------------ >8 ------------------------";
+    expect(hook(lines("fix: a change", scissors, "# release notes", spell(" Entirely A", "I-generated.")))).toBe(1);
+    const made = said(MADE, "with", CODE_TOOL);
+    expect(hook(lines("fix: a change", scissors, ...verboseDiff(`-${made}`)))).toBe(0);
+    expect(hook(lines("fix: a change", scissors, ...verboseDiff(`+${made}`)))).toBe(1);
   });
 
   it("accepts a clean message, and refuses when it cannot read who is committing", () => {
