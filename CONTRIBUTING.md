@@ -371,7 +371,7 @@ These keywords auto-close the linked issue when the PR merges.
 
 ## Submitting a pull request
 
-Every change reaches `main` the same way: a short-lived branch off `main`, one pull request into `main`, squash-merged. There are no long-lived branches — no `dev`, release or integration branch — because CI runs only on pull requests into `main`, and a branch that gathers weeks of work is too large to review.
+Every change reaches `main` the same way: a short-lived branch off `main`, one pull request into `main`, squash-merged. There are no long-lived branches — no `dev`, release or integration branch — because the build, tests and secret scan never run on a pull request into any other branch, and a branch that gathers weeks of work is too large to review.
 
 1. **Fork** the repo and create a branch off `main`, one branch per pull request.
 2. **Make your change.** Add or update tests when relevant.
@@ -395,7 +395,7 @@ A feature too large for one pull request lands as several, each complete, tested
 
 Every pull request is squash-merged into `main`, the Version Packages pull request included. Its title becomes the commit message, so make sure it follows [Conventional Commits](#commit-messages).
 
-Merges go through GitHub's merge queue once it is switched on for `main`: it runs the required checks on each pull request combined with the latest `main`, and merges only what passes. Until then, a maintainer brings the branch up to date with `main` and merges it by hand once CI passes on the result.
+Merges go through GitHub's merge queue once it is switched on for `main`: it runs the required checks on each pull request combined with the latest `main`, and merges only what passes. Until then, a maintainer brings the branch up to date with `main` and merges it by hand once every check passes on the result.
 
 ### Branch protection
 
