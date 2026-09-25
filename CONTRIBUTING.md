@@ -371,29 +371,35 @@ These keywords auto-close the linked issue when the PR merges.
 
 ## Submitting a pull request
 
-1. **Fork** the repo and create a branch off `dev` (not `main` — see [Branch protection](#branch-protection)).
+Every change reaches `main` the same way: a short-lived branch off `main`, one pull request into `main`, squash-merged. There are no long-lived branches — no `dev`, release or integration branch — because lint, type-checking, the unit and integration tests and the secret scan never run on a pull request into any other branch, and a branch that gathers weeks of work is too large to review.
+
+1. **Fork** the repo and create a branch off `main`, one branch per pull request.
 2. **Make your change.** Add or update tests when relevant.
 3. **Run locally**: `pnpm lint && pnpm check-types && pnpm test`.
 4. **Add a changeset** if your PR touches any publishable package (see [Release process](#release-process) below).
-5. **Open the PR against `dev`.** Fill out the [PR template](.github/pull_request_template.md) — it's auto-applied when you open a PR.
+5. **Open the PR against `main`.** Fill out the [PR template](.github/pull_request_template.md) — it's auto-applied when you open a PR.
 6. **Watch CI.** Lint, typecheck, build, unit tests, and the integration matrix all need to be green before merge.
+
+### Landing a large feature in slices
+
+A feature too large for one pull request lands as several, each complete, tested and merged into `main` on its own. Until the feature is complete, the public API it adds is marked with the TSDoc `@experimental` tag, which carries no compatibility guarantee; [`packages/ui/STABILITY.md`](packages/ui/STABILITY.md) shows the convention. Don't collect the slices on a branch of their own.
 
 ### Reviewer expectations
 
-- At least one maintainer approval is required before merge.
+- At least one maintainer approval is required before merge, from a code owner for the files [`.github/CODEOWNERS`](.github/CODEOWNERS) names.
 - All conversations resolved.
 - All CI checks passing (no `continue-on-error` workarounds).
-- Branch up to date with `dev`.
+- Branch up to date with `main` before it merges (see [Merge strategy](#merge-strategy)).
 
 ### Merge strategy
 
-- **Squash and merge** — the default for feature branches and bug fixes. PR title becomes the squashed commit message, so make sure it follows Conventional Commits.
-- **Rebase and merge** — only for hotfixes that need to preserve individual commits.
-- **Merge commit** — used by the release workflow when merging Version Packages PRs.
+Every pull request is squash-merged into `main`, the Version Packages pull request included. Its title becomes the commit message, so make sure it follows [Conventional Commits](#commit-messages).
+
+Merges go through GitHub's merge queue once it is switched on for `main`: it runs the required checks on each pull request combined with the latest `main`, and merges only what passes. Until then, a maintainer brings the branch up to date with `main` and merges it by hand once every check passes on the result.
 
 ### Branch protection
 
-`main` and `dev` are protected. Direct pushes are blocked; all changes go through PRs. CI must pass before merge.
+`main` is protected. Direct pushes and force-pushes to it are blocked, so every change reaches it through a pull request, which merges only once the `CI gate` check passes, a maintainer has approved it, and every conversation is resolved.
 
 ---
 
@@ -425,8 +431,8 @@ Commit the generated `.changeset/*.md` file with your PR.
 
 ### How a release happens
 
-1. You merge your PR (with its changeset) into `dev`.
-2. [`.github/workflows/release.yml`](.github/workflows/release.yml) runs on `push` to `dev` and opens a `Version Packages` PR that bumps every `fixed[]` package by the same amount and rewrites per-package `CHANGELOG.md` files.
+1. You merge your PR (with its changeset) into `main`.
+2. [`.github/workflows/release.yml`](.github/workflows/release.yml) runs on `push` to `main` and opens a `Version Packages` PR that bumps every `fixed[]` package by the same amount and rewrites per-package `CHANGELOG.md` files.
 3. The Version Packages PR accumulates as more PRs land — so all pending changes ship together when it's merged.
 4. A maintainer reviews and merges the Version Packages PR.
 5. The release workflow runs again, this time publishing to npm:
