@@ -30,13 +30,17 @@ playwright*.config.*         @mobeenabdullah
 turbo.json                   @mobeenabdullah
 turbo.jsonc                  @mobeenabdullah
 
+# Every compiler, lint and build configuration a check runs with, wherever it
+# sits, and the Node version every workflow reads.
+tsconfig*.json               @mobeenabdullah
+eslint*.config.*             @mobeenabdullah
+tsup*.config.*               @mobeenabdullah
+/.nvmrc                      @mobeenabdullah
+
 # The configuration the checks read.
 /.changeset/config.json      @mobeenabdullah
 /.commitlintrc.json          @mobeenabdullah
 /.fallowrc.jsonc             @mobeenabdullah
 /.gitleaks.toml              @mobeenabdullah
-/eslint.config.mjs           @mobeenabdullah
-/eslint.scripts.config.mjs   @mobeenabdullah
 /fallow-health-baseline.json @mobeenabdullah
 /lint-staged.config.mjs      @mobeenabdullah
-/tsconfig.base.json          @mobeenabdullah

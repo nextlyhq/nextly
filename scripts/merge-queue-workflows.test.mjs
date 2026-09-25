@@ -472,6 +472,12 @@ describe("who owns what the required checks run", () => {
    */
   const rules = codeOwners(readFileSync(new URL("../.github/CODEOWNERS", import.meta.url), "utf8"));
 
+  // An owner GitHub cannot resolve, or none at all, leaves a path unowned
+  // however well the pattern matches, so each entry names an approved owner.
+  it("names only approved owners, on every entry", () => {
+    for (const rule of rules) expect(rule.owners.length > 0 && rule.owners.every(owner => APPROVED_OWNERS.includes(owner)), `${rule.pattern} ${rule.owners.join(" ")}`).toBe(true);
+  });
+
   it("owns itself, the hooks, the package scripts and the configuration the checks read", () => {
     for (const path of [".github/CODEOWNERS", ".husky/pre-commit", ".husky/commit-msg", ".husky/pre-push", "package.json", ...CHECK_CONFIGURATION]) {
       expect(ownersOf(rules, path), path).not.toEqual([]);
@@ -488,7 +494,7 @@ describe("who owns what the required checks run", () => {
   // A lane runs the test script a manifest names, with the configuration
   // beside it, over the task graph Turbo reads, so each of those is a check
   // definition too, wherever it sits.
-  it("owns every manifest, test configuration and task graph in the repository", () => {
+  it("owns every manifest, task graph, and test, compiler, lint and build configuration in the repository", () => {
     const definitions = trackedFiles().filter(path => LANE_DEFINITIONS.test(path));
     // The control: the walk finds the repository's manifests and configurations, not nothing.
     expect(definitions.length).toBeGreaterThan(50);
@@ -515,9 +521,13 @@ describe("who owns what the required checks run", () => {
   });
 });
 
+/** Who may approve a change to the checks. Adding an owner is a decision about that, made here and in CODEOWNERS together. */
+const APPROVED_OWNERS = ["@mobeenabdullah"];
+
 /** Configuration a required check reads, where a change alters what it decides. */
 const CHECK_CONFIGURATION = [
   "pnpm-workspace.yaml",
+  ".nvmrc",
   "turbo.jsonc",
   ".changeset/config.json",
   ".commitlintrc.json",
@@ -545,7 +555,7 @@ function codeOwners(text) {
     .filter(Boolean)
     .map(line => {
       const [pattern, ...owners] = line.split(/\s+/);
-      return { owners, matches: matcherFor(readablePattern(pattern)) };
+      return { pattern, owners, matches: matcherFor(readablePattern(pattern)) };
     });
 }
 
@@ -570,8 +580,8 @@ function ownersOf(rules, path) {
   return rules.filter(rule => rule.matches.test(path)).at(-1)?.owners ?? [];
 }
 
-/** Manifests, test configuration and task graphs, as the lanes find them. */
-const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|(?:vitest|playwright)[^/]*\.config\.[^/]+)$/;
+/** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|(?:vitest|playwright|eslint|tsup)[^/]*\.config\.[^/]+)$/;
 
 function trackedFiles() {
   return execFileSync("git", ["ls-files", "-z"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8" }).split("\0").filter(Boolean);
