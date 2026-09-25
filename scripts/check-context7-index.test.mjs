@@ -7,6 +7,7 @@ import {
   citedPaths,
   headings,
   LIBRARY,
+  exclusionMarker,
   markerFor,
   probeMarker,
   readCorpus,
@@ -171,14 +172,31 @@ describe("probeMarker", () => {
     expect(probeMarker("<p>markup</p>\n- a list\n", [])).toBeNull();
   });
 
-  it("finds a marker of its own in every committed excluded file", () => {
-    // The real files against everything else git tracks, so the probe has a
-    // sentence no other file the index may hold could answer for. CLAUDE.md
-    // is one line, `@AGENTS.md`, and even that is its own.
+  it("finds a sentence no kept file holds in every committed excluded file", () => {
+    // The real files against every file the configuration keeps, so a hit for
+    // the sentence can come only from an excluded file. CLAUDE.md is a copy of
+    // AGENTS.md, so the two share every sentence, which an exclusion allows.
     const config = JSON.parse(readFileSync("context7.json", "utf-8"));
     for (const name of config.excludeFiles.filter(name => corpus.has(name))) {
-      expect(markerFor(corpus, name), name).toEqual(expect.any(String));
+      expect(exclusionMarker(corpus, name, config), name).toEqual(expect.any(String));
     }
+  });
+
+  it("lets excluded files share a sentence, but never with a file the configuration keeps", () => {
+    const shared = "A sentence the source and its copy both hold.";
+    const files = new Map([
+      ["README.md", "# Nextly\n\nThe README, kept.\n"],
+      ["AGENTS.md", `# Agents\n\n${shared}\n`],
+      ["CLAUDE.md", `<!-- Generated from AGENTS.md. -->\n\n# Agents\n\n${shared}\n`],
+    ]);
+    const config = { folders: ["docs"], excludeFiles: ["AGENTS.md", "CLAUDE.md"] };
+    // The copy holds every line of its source, and a marker is still found.
+    const marker = exclusionMarker(files, "AGENTS.md", config);
+    expect(files.get("CLAUDE.md")).toContain(marker);
+    expect(files.get("README.md")).not.toContain(marker);
+    // Once the kept README holds all of it too, nothing can be asked for.
+    files.set("README.md", `# Agents\n\n${shared}\n`);
+    expect(exclusionMarker(files, "AGENTS.md", config)).toBeNull();
   });
 
   it("refuses a file git does not track, which the index cannot have read", () => {
@@ -266,7 +284,7 @@ function realMarkers() {
     excluded: Object.fromEntries(
       config.excludeFiles
         .filter(name => corpus.has(name))
-        .map(name => [name, markerFor(corpus, name)])
+        .map(name => [name, exclusionMarker(corpus, name, config)])
     ),
     witnesses: witnesses(corpus, config),
   };
@@ -300,11 +318,13 @@ describe("witnesses", () => {
   it("chooses one file per excluded set, the first in git's order with a sentence of its own", () => {
     const bySet = (a, b) => a.set.localeCompare(b.set);
     expect(witnesses(files, config).sort(bySet)).toEqual([
-      // The root file witnesses the name, before the package's copy.
+      // The root file witnesses the name, before the package's copy. Its
+      // heading is shared only with the package's file, which the same entry
+      // excludes, so the heading is a sentence no kept file holds.
       {
         set: "excludeFiles entry AGENTS.md",
         name: "AGENTS.md",
-        marker: "The root agent file.",
+        marker: "Agents",
       },
       // `docs/archive` holds only a file Context7's defaults may drop, so that
       // file stands in: absent, the folder is out one way or another; present,

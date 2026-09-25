@@ -1,5 +1,5 @@
 /**
- * What keeps each CLAUDE.md a copy of the instruction file Codex reads beside
+ * What keeps each CLAUDE.md a copy of the instruction file the AGENTS.md harness reads beside
  * it. Each case builds a small repository in a temporary directory, so the
  * property is judged on files, not on mocks.
  */

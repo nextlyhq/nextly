@@ -1,7 +1,7 @@
 /**
- * The instruction files Claude Code reads, as copies of the ones Codex reads.
+ * The instruction files Claude Code reads, as copies of the ones the AGENTS.md harness reads.
  *
- * Codex reads one file per directory — `AGENTS.override.md` over `AGENTS.md`
+ * The AGENTS.md harness reads one file per directory — `AGENTS.override.md` over `AGENTS.md`
  * — from the repository's root down to where it works. Claude Code reads
  * CLAUDE.md files, and an import does not bridge the two: it follows an
  * `@AGENTS.md` in a CLAUDE.md only when that resolves inside the directory
@@ -36,7 +36,7 @@ export function header(source) {
   return `<!-- Generated from ${posix.basename(source)} by \`pnpm instructions:sync\`. Edit that file, never this one. -->\n\n`;
 }
 
-/** Each CLAUDE.md Claude Code reads, and the file Codex takes in the same directory, which it copies. */
+/** Each CLAUDE.md Claude Code reads, and the file the AGENTS.md harness takes in the same directory, which it copies. */
 export function copies(tracked) {
   return [...instructionFiles(tracked)].map(([dir, source]) => ({ source, copy: posix.join(dir, "CLAUDE.md") }));
 }

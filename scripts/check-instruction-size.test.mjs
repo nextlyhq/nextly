@@ -1,5 +1,5 @@
 /**
- * What keeps the instructions Codex loads within what it reads of them. The
+ * What keeps the instructions the AGENTS.md harness loads within what it reads of them. The
  * chains are judged on file lists and sizes; the command on a small
  * repository built in a temporary directory, and on this one.
  */
@@ -37,7 +37,7 @@ describe("the chain Codex joins", () => {
 
   /*
    * The case a check of pairs would pass: any two of the three files fit, and
-   * the three are what Codex joins in `a/b`.
+   * the three are what the AGENTS.md harness joins in `a/b`.
    */
   it("fails a three-file chain where every pair fits and the three do not, naming the files and the bytes over", () => {
     const each = 12_000;

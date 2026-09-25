@@ -364,7 +364,7 @@ describe("reporting the skills themselves", () => {
 
 describe("reaching Claude Code", () => {
   /*
-   * Claude Code reads the CLAUDE.md beside each file Codex takes, a copy of
+   * Claude Code reads the CLAUDE.md beside each file the AGENTS.md harness takes, a copy of
    * it, since an import does not reach a session started below the importing
    * file. The copies themselves are tested beside `agent-instructions.mjs`;
    * here, that the check reports them as its own findings.

@@ -1,19 +1,19 @@
 /**
- * Whether the instructions Codex loads fit what it reads of them.
+ * Whether the instructions the AGENTS.md harness loads fit what it reads of them.
  *
- * Codex reads one instruction file from each directory on the path from the
+ * The AGENTS.md harness reads one instruction file from each directory on the path from the
  * repository's root to the directory it works in — `AGENTS.override.md` where
  * a directory has one, otherwise `AGENTS.md` — and joins them, root first, up
  * to 32 KiB. What is past that is cut from the end, so the most specific file,
  * the one for the directory being worked in, is the first to go. Measured
- * with codex-cli 0.155.1 and `codex debug prompt-input`, which renders what
- * the model would be sent without sending it: a chain of 32,769 bytes (32 KiB
- * and a final newline) loads whole, and a byte more is cut. The budget here
- * is 32 KiB exactly.
+ * with version 0.155.1 of that harness's command line, whose
+ * `debug prompt-input` command renders what the model would be sent without
+ * sending it: a chain of 32,769 bytes (32 KiB and a final newline) loads
+ * whole, and a byte more is cut. The budget here is 32 KiB exactly.
  *
  * Any directory's chain is the chain of its nearest ancestor that holds an
  * instruction file, so one chain per such directory covers every directory
- * Codex can be started in. Each chain over the budget is reported with its
+ * the AGENTS.md harness can be started in. Each chain over the budget is reported with its
  * files and the bytes over.
  *
  *   node scripts/check-instruction-size.mjs [--root <dir>]
@@ -27,15 +27,15 @@ import { isCliEntry } from "./cli-entry.mjs";
 
 export const LIMIT = 32 * 1024;
 
-/** The names Codex takes an instruction file by, the one it prefers first. */
+/** The names the AGENTS.md harness takes an instruction file by, the one it prefers first. */
 export const NAMES = ["AGENTS.override.md", "AGENTS.md"];
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Whether Codex takes `path` over `held`, the file already found in the same directory. */
+/** Whether the AGENTS.md harness takes `path` over `held`, the file already found in the same directory. */
 const preferred = (held, path) => held === undefined || NAMES.indexOf(posix.basename(path)) < NAMES.indexOf(posix.basename(held));
 
-/** For each directory holding an instruction file, the one Codex takes there, keyed by the directory (`.` for the root). */
+/** For each directory holding an instruction file, the one the AGENTS.md harness takes there, keyed by the directory (`.` for the root). */
 export function instructionFiles(tracked) {
   const taken = new Map();
   for (const path of tracked.filter(file => NAMES.includes(posix.basename(file)))) {
@@ -53,7 +53,7 @@ export function ancestors(dir) {
 }
 
 /**
- * The chain Codex joins for each directory holding an instruction file: the
+ * The chain the AGENTS.md harness joins for each directory holding an instruction file: the
  * file it takes from each directory on the way down, and their bytes.
  *
  * @returns {{ dir: string, files: { path: string, bytes: number }[], bytes: number }[]}

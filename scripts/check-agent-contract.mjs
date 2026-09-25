@@ -56,8 +56,8 @@ export const ANCHORS = ["AGENTS.md", ".claude/rules", SKILLS_HOME, REVIEW_PROMPT
  * 🔴 The anchor above accepts any file under `.claude/rules`, so this one could
  * be deleted while another kept the directory non-empty and the check stayed
  * green. AGENTS.md names it because its loading is the point: Claude Code
- * loads it by path, and Codex reads the same rules as a skill. A rule every
- * session needs is not kept in that directory at all, since Codex never reads
+ * loads it by path, and the AGENTS.md harness reads the same rules as a skill. A rule every
+ * session needs is not kept in that directory at all, since the AGENTS.md harness never reads
  * it; it is a section of AGENTS.md, held by REQUIRED_SECTIONS.
  */
 /**
@@ -561,7 +561,7 @@ export function skillFindings(base = root) {
 }
 
 /**
- * The file Codex takes in each directory must reach Claude Code too, as the
+ * The file the AGENTS.md harness takes in each directory must reach Claude Code too, as the
  * CLAUDE.md beside it: a copy `pnpm instructions:sync` writes, since an import
  * does not reach a session started below the importing file. The reasoning
  * and the measurements are in `scripts/agent-instructions.mjs`.
@@ -574,7 +574,7 @@ export function instructionCopyFindings(base, tracked) {
 
 /**
  * `.claude/rules` reaches Claude Code alone, so it holds only rules loaded by
- * path, each named in AGENTS.md so Codex is told where it applies and which
+ * path, each named in AGENTS.md so the AGENTS.md harness is told where it applies and which
  * skill carries it. A rule loaded in every session belongs in AGENTS.md, which
  * both tools load; kept there, it would be held by Claude Code alone.
  *
