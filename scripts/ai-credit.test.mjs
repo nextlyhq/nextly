@@ -71,6 +71,7 @@ describe("a message's credit, in each form", () => {
     expect(creditsIn(lines(spell(MADE, " with"), CODE_TOOL), "message")[0].line).toBe(2);
     expect(credited(lines("Thanks to", CHAT_TOOL), "message")).toBe(true);
     expect(creditsIn(lines("Thanks", "", "Claude Code reads skills from .claude/skills"), "message")).toEqual([]);
+    expect(creditsIn(lines(spell(MADE, " with"), "", "Claude Code reads skills from .claude/skills"), "message")).toEqual([]);
   });
 
   it("refuses calling the change AI-made", () => {
@@ -148,6 +149,8 @@ describe("an author or committer", () => {
       "Claude Dupont <claude.dupont@example.com>",
       "Cody <cody@example.com>",
       "Devin Smith <devin@example.com>",
+      "OpenAI Researcher <person@example.com>",
+      "Anthropic Team <team@example.org>",
     ];
     for (const identity of people) expect(isAiIdentity(identity), identity).toBe(false);
   });

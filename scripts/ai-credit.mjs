@@ -75,7 +75,9 @@ const GENERIC_AT = new RegExp(`^(?:${GENERIC.join("|")})${ENDS}`, "i");
 const BOT = `(?:${BOT_ACCOUNTS.join("|")})\\[bot\\]`;
 /** A name that is AI in general, or one of a tool's GitHub App accounts. No person is named either. */
 const AI_NAME = new RegExp(`^(?:${GENERIC.join("|")}|${BOT})$`, "i");
-/** A name that begins with an unambiguous tool's, as its vendors name it, such as a product and its edition. */
+/** An unambiguous tool's name in full, as its vendors name it. */
+const TOOL_NAME = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})$`, "i");
+/** A name that begins with an unambiguous tool's, such as a product and its edition; read only where no address says who it is. */
 const TOOL_NAMED = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})(?![\\w-])`, "i");
 const BARE_NAME = new RegExp(`^(?:${PROPER.join("|")})$`, "i");
 const AI_EMAIL = new RegExp(`^(?:[^@\\s]+@(?:anthropic|openai)\\.com|cursoragent@cursor\\.com|\\d+\\+(?:copilot|${BOT})@users\\.noreply\\.github\\.com)$`, "i");
@@ -87,14 +89,16 @@ const DEGREE = `(?:(?:partly|partially|mostly|largely|entirely|fully|mainly)${GA
 const AFTER = "[^\\S\\n]*(?:[,:;!.\\u2013\\u2014-][^\\S\\n]*)*";
 
 /**
- * The phrases that credit whatever is named right after them. Thanks counts as
+ * The phrases that credit whatever is named right after them. Each stops at
+ * the end of its line, so the one line break a name may follow is taken once,
+ * by what stands between the phrase and the name. Thanks counts as
  * an interjection, where a line, sentence or clause opens with it, never as
  * the verb in a sentence about thanking; credit counts only as credit given to
  * someone.
  */
 const LEADS = [
-  { form: "states that it made the change", lead: new RegExp(`\\b${MADE}${GAP}${DEGREE}${HOW}${GAP}`, "gi") },
-  { form: "credits its help", lead: new RegExp(`\\b${gapped("with (?:the )?(?:help|assistance) (?:of|from)")}${GAP}`, "gi") },
+  { form: "states that it made the change", lead: new RegExp(`\\b${MADE}${GAP}${DEGREE}${HOW}[^\\S\\n]*`, "gi") },
+  { form: "credits its help", lead: new RegExp(`\\b${gapped("with (?:the )?(?:help|assistance) (?:of|from)")}[^\\S\\n]*`, "gi") },
   { form: "thanks it", lead: new RegExp(`(?:^[^\\S\\n]*|[.!?:;,(\\u2013\\u2014-][^\\S\\n]*|\\b(?:many|big|huge|special|and)${GAP})(?:thanks|${gapped("thank you")}|thx)\\b(?:${GAP}to\\b)?${AFTER}`, "gim") },
   { form: "thanks it", lead: new RegExp(`\\b(?:kudos|props|shout-?outs?|h\\/t|${gapped("hat tip")})\\b(?:${GAP}to\\b)?${AFTER}`, "gi") },
   { form: "gives it credit", lead: new RegExp(`\\bcredits?(?:${GAP}(?:go(?:es)?${GAP})?to\\b|[^\\S\\n]*:)[^\\S\\n]*`, "gi") },
@@ -126,13 +130,13 @@ const PLACES = {
 
 /**
  * Whether `name <email>` is an AI tool's or its vendor's identity: its own
- * address, one of its GitHub App accounts, a name that begins with an
- * unambiguous tool's, AI in general, or a name a tool marks as its own. A given
- * name alone, such as a person's, never is.
+ * address, one of its GitHub App accounts, an unambiguous tool's name in full,
+ * AI in general, or a name a tool marks as its own. A person's name is not,
+ * even one that begins with a vendor's, as a researcher's may.
  */
 export function isAiIdentity(identity) {
   const { name, email } = identityParts(identity);
-  return AI_EMAIL.test(email) || AI_NAME.test(name) || TOOL_NAMED.test(name) || /\(aider\)/i.test(name);
+  return AI_EMAIL.test(email) || AI_NAME.test(name) || TOOL_NAME.test(name) || /\(aider\)/i.test(name);
 }
 
 function identityParts(identity) {
@@ -171,12 +175,12 @@ function trailerCredits(text, rules) {
 /**
  * A trailer with an address credits an AI when the identity is an AI's. One
  * without an address names whoever it credits outright, before any note, so
- * there a tool's plain name is enough.
+ * there a tool's plain name, or one that begins with a tool's, is enough.
  */
 function creditedByTrailer(value) {
   if (/<[^>]*>/.test(value)) return isAiIdentity(value);
   const name = value.split(/\s+(?:[(—]|-\s)|:/)[0].trim();
-  return isAiIdentity(name) || BARE_NAME.test(name);
+  return isAiIdentity(name) || BARE_NAME.test(name) || TOOL_NAMED.test(name);
 }
 
 /** Each crediting phrase followed by a name, reported on the line of the name it credits. */
