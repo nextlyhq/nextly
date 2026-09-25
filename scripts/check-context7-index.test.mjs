@@ -549,6 +549,9 @@ describe("verify", () => {
       const { status, lines } = await verify({ root, get: context7({ cites: ["README.md", "docs/getting-started/index.mdx"], topics }) });
       expect(status).toBe(1);
       expect(lines.slice(1)).toEqual(["  - packages/y/AGENTS.md is in excludeFiles and was indexed anyway"]);
+      // Its sentence back with no excluded holder cited is the set's, since every holder is in the set.
+      const uncited = await verify({ root, get: context7({ cites: ["README.md", "docs/getting-started/index.mdx"], topics: { ...topics, "Agent Guide": "README.md" } }) });
+      expect(uncited.lines.slice(1)).toEqual(['  - AGENTS.md is retrievable ("Agent Guide" came back, or the file was cited); excludeFiles entry AGENTS.md did not take']);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

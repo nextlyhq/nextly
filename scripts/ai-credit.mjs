@@ -264,17 +264,21 @@ const indentedUnderItem = (line, head, prefix) => /^[ \t]*\*$/.test(prefix) && /
  * goes on with the item, so a co-author after an explanation still belongs to
  * the trailer; but an explanation credits no one. What goes on with the value
  * (the value itself while it is empty, another co-author after a joining word,
- * an address, or a name alone) is read as it is, and anything else, a note
- * among them, as a closed note, which names no co-author and ends the one
- * before it.
+ * an address, or a name alone, a separator after it or not) is read as it is,
+ * and anything else, a note among them, as a note: bracketed whole, so that it
+ * names no co-author, ends the one before it once closed, and stays open for
+ * the lines after it where it opens a bracket it does not close.
  */
 function listItemPart(line, last) {
   const text = plain(line).trim();
-  return itemValue(last) === "" || continuesValue(text) ? text : `(${text.replace(/[()]/g, "")})`;
+  return valueEmpty(last) || continuesValue(text) ? text : `(${text})`;
 }
 
+/** Whether a trailer's value is still empty: nothing after its key, and no line folded onto it yet. */
+const valueEmpty = last => last.parts.length === 1 && last.parts[0].replace(TRAILER_HEAD, "").trim() === "";
+
 /** Whether a line goes on with a trailer's value: another co-author after a joining word, an address, or a name alone. */
-const continuesValue = text => JOINER.test(text) || ADDRESS.test(text) || nameAlone(beforeNote(text));
+const continuesValue = text => JOINER.test(text) || ADDRESS.test(text) || nameAlone(beforeNote(text).replace(/\s*[,;]$/, ""));
 
 /**
  * A name and nothing more, as a surname or a tool's name folded onto the next
@@ -286,9 +290,6 @@ const nameAlone = text => /^[A-Z0-9][\w.'-]*(?:\s+[A-Z0-9][\w.'-]*)*$/.test(text
 
 /** A line's text before a note in brackets or after a dash; a colon is kept, since what follows one explains. */
 const beforeNote = text => text.split(/\s+(?:[(—]|-\s)/)[0].trim();
-
-/** A trailer's value so far: its first line after the key, and the lines folded onto it. */
-const itemValue = last => [last.parts[0].replace(TRAILER_HEAD, ""), ...last.parts.slice(1)].join(" ").trim();
 
 /** An address in angle brackets, as a co-author's is written. */
 const ADDRESS = /<[^<>\s@]+@[^<>\s]+>/;
@@ -354,12 +355,15 @@ function growingCredit(parts, creditsOf) {
 /**
  * The part a credit completed by the first `count` parts belongs to. A name
  * that credits on its own, judged whole, was waiting only to see whether the
- * lines after it make a person of it. When they do not, and name no tool of
- * their own, the credit is that name's, on its own line.
+ * lines after it make a person of it. When they do not, the credit is that
+ * name's, on its own line, unless they name a tool of their own, whose line it
+ * then belongs to: not the line that completed the value, which may be a note
+ * added long after.
  */
 function creditedPart(parts, creditsOf, count) {
-  const kept = count > 1 && creditsOf(parts[0], true).length > 0 && !addsATool(parts.slice(1, count));
-  return kept ? 0 : count - 1;
+  if (count === 1 || creditsOf(parts[0], true).length === 0) return count - 1;
+  const tool = toolLineIn(parts.slice(1, count));
+  return tool === null ? 0 : tool + 1;
 }
 
 /**
@@ -411,11 +415,18 @@ const NOTE = /(?:^|\s)(?:[(—]|-\s)/;
 const balanced = text => (text.match(/\(/g) ?? []).length === (text.match(/\)/g) ?? []).length;
 
 /**
- * Whether lines folded onto a name name a tool of their own, as another
- * co-author does: any of the co-authors they hold, each judged whole. A note
- * opens with a bracket or a dash, so a name it mentions is not read.
+ * Where, among lines folded onto a name, the first to name a tool of its own
+ * is, as another co-author does, or null: each co-author they hold is judged
+ * whole. A note opens with a bracket or a dash, so a name it mentions is not
+ * read.
  */
-const addsATool = parts => coAuthors(parts, 0).some(({ group }) => growingCredit(group, (text, whole) => (creditsCoAuthor(text, whole) ? [text] : [])) !== null);
+function toolLineIn(parts) {
+  for (const { index, group } of coAuthors(parts, 0)) {
+    const found = growingCredit(group, (text, whole) => (creditsCoAuthor(text, whole) ? [text] : []));
+    if (found) return index + found.index;
+  }
+  return null;
+}
 
 /** A word that joins another co-author onto a trailer's value. */
 const JOINER = /^(?:(?:and|plus)\b|&|,)\s*/i;
