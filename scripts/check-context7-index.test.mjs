@@ -457,6 +457,28 @@ describe("verify", () => {
     );
   });
 
+  /*
+   * AGENTS.md and its generated CLAUDE.md share every sentence, and each is
+   * excluded by an entry of its own, so both probes ask for one sentence. An
+   * index holding one of the pair fails that entry only, since the citation
+   * says which file came back; a sentence cited from neither fails both
+   * rather than clearing either.
+   */
+  it("fails only the entry whose file came back when two excluded files share the sentence asked for", async () => {
+    const [agents, claude] = ["AGENTS.md", "CLAUDE.md"].map(name => markers.witnesses.find(witness => witness.name === name));
+    expect(agents.marker).toBe(claude.marker);
+    const { marker } = agents;
+    for (const [held, other] of [["AGENTS.md", "CLAUDE.md"], ["CLAUDE.md", "AGENTS.md"]]) {
+      const { status, lines } = await verify({ root: ".", get: context7({ topics: { ...kept, [marker]: held } }) });
+      expect(status).toBe(1);
+      expect(lines.join("\n")).toContain(`${held} is retrievable ("${marker}" came back, or the file was cited); excludeFiles entry ${held} did not take`);
+      expect(lines.join("\n")).not.toContain(`excludeFiles entry ${other}`);
+    }
+    const { status, lines } = await verify({ root: ".", get: context7({ topics: { ...kept, [marker]: "docs/getting-started/index.mdx" } }) });
+    expect(status).toBe(1);
+    for (const entry of ["AGENTS.md", "CLAUDE.md"]) expect(lines.join("\n")).toContain(`excludeFiles entry ${entry} may not have taken`);
+  });
+
   it("fails when a file outside the listed folders is retrievable", async () => {
     // The folders rule, witnessed by one file it keeps out. The citation
     // sample cannot see this: a file it happens not to cite is not a file
