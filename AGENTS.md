@@ -296,7 +296,18 @@ Why, as measured, and how to recover a file once it has been clobbered: the
 
 ## Git and PR rules
 
-- Never commit directly to main. Branch, open a PR, request review.
+- One flow: a short-lived branch off `main` for each pull request,
+  squash-merged into `main`, its title becoming the commit message. Never
+  commit to `main` directly, and keep no long-lived branch (`dev`, release,
+  integration): CI runs only on pull requests into `main`, and a branch that
+  gathers weeks of work is too large to review. A feature too large for one
+  pull request lands in slices, each complete and tested; public API not yet
+  finished is marked `@experimental` until the feature is, as
+  `packages/ui/STABILITY.md` uses the tag.
+- Merges go through the merge queue once it is switched on for `main`; it runs
+  the required checks on each pull request combined with the latest `main`.
+  Until then, bring a branch up to date with `main` and wait for `CI gate` on
+  the result before calling it ready to merge.
 - Do not add a "generated with" line naming an AI tool, an AI co-author
   trailer, or any other AI attribution to commits or PR bodies.
 - Husky runs gitleaks + lint-staged on commit, commitlint on the message, and
