@@ -9,10 +9,13 @@
  * reports a pass it did not earn. Neither shows up until the queue is switched
  * on, so the shape is checked here, before it is.
  */
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 
 import { load } from "js-yaml";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 const read = path => load(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
@@ -482,6 +485,16 @@ describe("who owns what the required checks run", () => {
     });
   }
 
+  // A lane runs the test script a manifest names, with the configuration
+  // beside it, over the task graph Turbo reads, so each of those is a check
+  // definition too, wherever it sits.
+  it("owns every manifest, test configuration and task graph in the repository", () => {
+    const definitions = trackedFiles().filter(path => LANE_DEFINITIONS.test(path));
+    // The control: the walk finds the repository's manifests and configurations, not nothing.
+    expect(definitions.length).toBeGreaterThan(50);
+    for (const path of definitions) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
   // The control: the walk reaches the scripts a required job runs, named
   // directly and through a package script, so an owned list is not an empty one.
   it("finds the scripts the CI gate's jobs run, directly and through a package script", () => {
@@ -491,15 +504,22 @@ describe("who owns what the required checks run", () => {
   });
 
   it("reads only the patterns it understands, and refuses any other rather than guess", () => {
-    expect(() => codeOwners("*.mjs @someone")).toThrow(/reads only anchored paths and directories/);
+    for (const unread of ["**/x.mjs @a", "docs/x.md @a", "x?.md @a", "[ab].md @a", "!x.md @a"]) expect(() => codeOwners(unread), unread).toThrow(/reads only anchored paths and directories, and file names at any depth/);
     expect(ownersOf(codeOwners("/scripts/ @a\n/scripts/x.mjs @b"), "scripts/x.mjs")).toEqual(["@b"]);
     expect(ownersOf(codeOwners("/scripts/ @a\n/scripts/x.mjs"), "scripts/x.mjs")).toEqual([]);
+    // A file name matches at any depth; an anchored path only where it is; a star never crosses a slash.
+    expect(ownersOf(codeOwners("package.json @a"), "packages/nextly/package.json")).toEqual(["@a"]);
+    expect(ownersOf(codeOwners("/package.json @a"), "packages/nextly/package.json")).toEqual([]);
+    expect(ownersOf(codeOwners("vitest*.config.* @a"), "packages/ui/vitest.integration.config.ts")).toEqual(["@a"]);
+    expect(ownersOf(codeOwners("/packages/*.json @a"), "packages/nextly/package.json")).toEqual([]);
   });
 });
 
 /** Configuration a required check reads, where a change alters what it decides. */
 const CHECK_CONFIGURATION = [
   "pnpm-workspace.yaml",
+  "turbo.jsonc",
+  ".changeset/config.json",
   ".commitlintrc.json",
   ".fallowrc.jsonc",
   ".gitleaks.toml",
@@ -512,9 +532,11 @@ const CHECK_CONFIGURATION = [
 ];
 
 /**
- * CODEOWNERS rules, in order. Only anchored paths and directories are read;
- * any other pattern is refused rather than guessed at, since a guess at what
- * a glob matches is exactly the reading that would pass an unowned path.
+ * CODEOWNERS rules, in order. Two forms are read: an anchored path or
+ * directory, whose segments may hold a `*` that stays within one segment, and
+ * a bare file name, which matches at any depth. Any other pattern is refused
+ * rather than guessed at, since a guess at what a glob matches is exactly the
+ * reading that would pass an unowned path.
  */
 function codeOwners(text) {
   return text
@@ -523,15 +545,36 @@ function codeOwners(text) {
     .filter(Boolean)
     .map(line => {
       const [pattern, ...owners] = line.split(/\s+/);
-      if (!/^\/[\w.-]+(?:\/[\w.-]+)*\/?$/.test(pattern)) throw new Error(`this test reads only anchored paths and directories, not ${pattern}`);
-      return { pattern, owners };
+      return { owners, matches: matcherFor(readablePattern(pattern)) };
     });
+}
+
+const ANCHORED = /^\/[\w.*-]+(?:\/[\w.*-]+)*\/?$/;
+const FILE_NAME = /^[\w.*-]+$/;
+
+function readablePattern(pattern) {
+  if (pattern.includes("**") || !(ANCHORED.test(pattern) || FILE_NAME.test(pattern))) {
+    throw new Error(`this test reads only anchored paths and directories, and file names at any depth, not ${pattern}`);
+  }
+  return pattern;
+}
+
+function matcherFor(pattern) {
+  const glob = part => part.split("*").map(text => text.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*");
+  if (FILE_NAME.test(pattern)) return new RegExp(`(?:^|/)${glob(pattern)}$`);
+  return new RegExp(`^${glob(pattern.slice(1))}${pattern.endsWith("/") ? "" : "$"}`);
 }
 
 /** A path's owners: the last rule that matches it decides, and a rule with no owners leaves it unowned. */
 function ownersOf(rules, path) {
-  const matching = rules.filter(({ pattern }) => (pattern.endsWith("/") ? `/${path}`.startsWith(pattern) : `/${path}` === pattern));
-  return matching.at(-1)?.owners ?? [];
+  return rules.filter(rule => rule.matches.test(path)).at(-1)?.owners ?? [];
+}
+
+/** Manifests, test configuration and task graphs, as the lanes find them. */
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|(?:vitest|playwright)[^/]*\.config\.[^/]+)$/;
+
+function trackedFiles() {
+  return execFileSync("git", ["ls-files", "-z"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8" }).split("\0").filter(Boolean);
 }
 
 const PACKAGE_SCRIPTS = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts;

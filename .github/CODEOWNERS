@@ -7,21 +7,31 @@
 # pull request. `main`'s ruleset requires a code owner's review; these entries
 # are what give that rule something to apply to.
 #
-# Every entry is an anchored path or directory, and the last entry that
-# matches a path decides its owners, as GitHub reads this file.
+# An entry is an anchored path or directory, or a file name that matches at
+# any depth; the last entry that matches a path decides its owners, as GitHub
+# reads this file.
 # `scripts/merge-queue-workflows.test.mjs` holds each required check's
 # workflow, and everything it runs, to having an owner here.
 
 # The workflows, their actions and this file.
 /.github/                    @mobeenabdullah
 
-# The hooks, the repository's scripts, and the package scripts that name them.
+# The hooks, and the repository's scripts.
 /.husky/                     @mobeenabdullah
 /scripts/                    @mobeenabdullah
-/package.json                @mobeenabdullah
 /pnpm-workspace.yaml         @mobeenabdullah
 
+# Every manifest, test configuration and task graph, wherever it sits: a CI
+# lane runs the test script a manifest names, with the configuration beside
+# it, over the task graph Turbo reads. A no-op test script would pass its lane.
+package.json                 @mobeenabdullah
+vitest*.config.*             @mobeenabdullah
+playwright*.config.*         @mobeenabdullah
+turbo.json                   @mobeenabdullah
+turbo.jsonc                  @mobeenabdullah
+
 # The configuration the checks read.
+/.changeset/config.json      @mobeenabdullah
 /.commitlintrc.json          @mobeenabdullah
 /.fallowrc.jsonc             @mobeenabdullah
 /.gitleaks.toml              @mobeenabdullah
@@ -30,4 +40,3 @@
 /fallow-health-baseline.json @mobeenabdullah
 /lint-staged.config.mjs      @mobeenabdullah
 /tsconfig.base.json          @mobeenabdullah
-/vitest.config.ts            @mobeenabdullah
