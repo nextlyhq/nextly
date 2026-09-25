@@ -28,13 +28,27 @@ plus the change rather than the tree CI ran on, and the two disagree. Measured
 on one merged pull request here, the branch head reported the CI job and one
 integration leg as `success` while the merge commit had them queued.
 
-**A merge commit whose jobs are all `skipped` was superseded, and that is a
-pass.** A push to `main` that a newer push has already overtaken skips its
-jobs rather than repeating work: the newer run's verdict includes this commit.
-`skipped` already passes the gate, and here it is literally true. Nothing is
-cancelled by this, so a `cancelled` job still means what it says and still
-blocks. To see what actually tested the commit, read the newest run of that
-workflow on `main`.
+**A merge commit whose test jobs are all `skipped` was either superseded or
+inert, and only a superseded one hands its verdict to another run.** The
+`Decide what this commit can affect` job of `ci.yml` and `integration.yml`
+makes that call, and its step summary says which. A run is superseded only
+when a newer push to `main` already has a run of the same workflow that is
+queued, in progress, or completed as `success` or `failure`
+(`.github/actions/superseded-on-main`). A newer run that was cancelled or timed
+out does not count, and this run then does its own work. A run is inert when
+every file changed since the last commit that workflow tested matches its inert
+paths: no run tested it, and none needed to. `skipped` passes the gate either
+way, so the gate cannot tell them apart for you.
+
+For a superseded commit, read the verdict from the first later run of that
+workflow on `main` whose substantive jobs (`Lint / Typecheck / Test / Build`,
+or the three `Integration (...)` legs) concluded `success` or `failure`. Not
+simply the newest run: that one may itself be skipped, queued or cancelled. It
+is a pass only at `success`. Until a later run reaches a verdict, nothing has
+tested the commit, and a covering run cancelled after this one skipped leaves
+it untested until the next push to `main`. Nothing is cancelled by skipping: on
+`main` each commit has a concurrency group of its own, so a `cancelled` job
+still means what it says and still blocks.
 
 **Know its range before trusting it.** The script's module header lists what it
 does not cover, and the four worth carrying in your head are: it snapshots
@@ -125,9 +139,14 @@ the candidate has a unique marker, grep for it as in step 2. When it does not �
 a binary, a rename, a mode change — compare its own patch:
 
 ```sh
-git diff "$CAND^..$CAND" -- "$PATHS"          # what the stranded commit did
-git diff "$MERGE^..$MERGE" -- "$PATHS"        # what the squash contains
+PATHS=(path/one "path/with space/two")          # one array element per path
+git diff "$CAND^..$CAND" -- "${PATHS[@]}"       # what the stranded commit did
+git diff "$MERGE^..$MERGE" -- "${PATHS[@]}"     # what the squash contains
 ```
+
+`PATHS` is an array on purpose. Quoted as one string, two paths become a single
+pathspec that matches nothing, and the net check below would then report a tail
+that lost nothing.
 
 Its hunks appearing in the second is the evidence. Their absence is the loss —
 **unless a later candidate cancels it.**
@@ -140,8 +159,7 @@ correction step 4 already makes for a pull request as a whole, applied to the
 candidate list:
 
 ```sh
-FIRST=$(git log --format=%H "$GH..$TIP" | tail -1)
-git diff "$GH..$TIP" -- "$PATHS"              # what the tail did, on net
+git diff "$GH..$TIP" -- "${PATHS[@]}"           # what the tail did, on net
 ```
 
 Compare THAT against the squash. A tail whose net effect is empty lost nothing,
