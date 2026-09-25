@@ -23,7 +23,18 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 
+import {
+  getMySQLDrizzleKit,
+  getPgDrizzleKit,
+} from "../../../database/drizzle-kit-lazy";
+import { canEmitWithoutDrizzleKit, emitDdl } from "../pipeline/ddl-emitter";
+import { stripKitDropsOfDeclaredConstraints } from "../pipeline/filter-unsafe-statements";
+
+import { applyDesiredSchema } from "../pipeline/index";
+
+import { getActiveExtensionSchema } from "./build-extension-schema";
 import { col, defineTable } from "./dsl";
+import { compileAndPublishExtensionSchema } from "./publish";
 
 const notes = defineTable(
   "notes",
@@ -212,6 +223,279 @@ const fkFixture = definePlugin({
         )
         .sort();
       expect(found).toEqual(["author_id->fk__authors.id", "user_id->users.id"]);
+    });
+  }
+);
+
+const shelves = defineTable("shelves", { id: col.id() });
+const items = defineTable(
+  "items",
+  {
+    id: col.id(),
+    status: col.enum(["draft", "live"]),
+    quantity: col.integer({ default: 0 }),
+    shelfId: col.shortText(),
+  },
+  {
+    checks: [{ name: "quantity", sql: "quantity >= 0" }],
+    foreignKeys: [
+      {
+        columns: ["shelfId"],
+        references: { table: "ck__shelves", columns: ["id"] },
+      },
+    ],
+  }
+);
+const constrainedFixture = definePlugin({
+  name: "schema-e2e-constraint-fixture",
+  version: "0.0.0",
+  nextly: "*",
+  contributes: { schema: { prefix: "ck", tables: [shelves, items] } },
+});
+
+// Every dialect, and asked of the database by writing rows it must refuse: a
+// table created without its constraints exists, has the right columns, and
+// accepts every one of these writes, so only enforcement separates the two.
+describeEachDialect("a new plugin table's constraints", dialect => {
+  const SHELF = "018f2c2e-0000-7000-8000-00000000c001";
+
+  /** Writes rows the tables must accept, then rows they must refuse. */
+  async function expectEnforced(adapter: TestNextly["adapter"]): Promise<void> {
+    const insertItem = (
+      id: string,
+      status: string,
+      quantity: number,
+      shelfId: string
+    ) =>
+      adapter.executeQuery(
+        `INSERT INTO ck__items (id, status, quantity, shelf_id) VALUES (?, ?, ?, ?)`.replace(
+          /\?/g,
+          makePlaceholders(dialect)
+        ),
+        [id, status, quantity, shelfId]
+      );
+
+    await adapter.executeQuery(
+      `INSERT INTO ck__shelves (id) VALUES ('${SHELF}')`
+    );
+    // The control: a row satisfying every constraint is accepted, so the
+    // refusals below are the constraints and not a broken insert.
+    await insertItem("018f2c2e-0000-7000-8000-00000000c101", "draft", 1, SHELF);
+
+    // A column left out takes its declared default rather than failing NOT
+    // NULL, which is what a table created without its defaults does.
+    await adapter.executeQuery(
+      `INSERT INTO ck__items (id, status, shelf_id) VALUES ('018f2c2e-0000-7000-8000-00000000c105', 'live', '${SHELF}')`
+    );
+    const defaulted = await adapter.executeQuery<Record<string, unknown>>(
+      `SELECT quantity FROM ck__items WHERE id = '018f2c2e-0000-7000-8000-00000000c105'`
+    );
+    expect(Number(defaulted[0]?.quantity)).toBe(0);
+
+    await expect(
+      insertItem("018f2c2e-0000-7000-8000-00000000c102", "archived", 2, SHELF)
+    ).rejects.toThrow();
+    await expect(
+      insertItem("018f2c2e-0000-7000-8000-00000000c103", "live", -1, SHELF)
+    ).rejects.toThrow();
+    await expect(
+      insertItem(
+        "018f2c2e-0000-7000-8000-00000000c104",
+        "live",
+        3,
+        "018f2c2e-0000-7000-8000-00000000dead"
+      )
+    ).rejects.toThrow();
+  }
+
+  it("are enforced on a fresh database", async () => {
+    current = await createTestNextly({
+      dialect,
+      plugins: [constrainedFixture],
+    });
+    await expectEnforced(current.adapter);
+  });
+
+  it("are enforced when dev push adds the tables to an existing database", async () => {
+    // The route a plugin's new table takes on a database that is already set
+    // up: the diff plans an add_table per table, and an apply of nothing else
+    // runs the emitter's statements as they stand. Built from the published
+    // specs, the ones that route is handed, in the diff's name order — the
+    // table holding the foreign key before the table it points at.
+    current = await createTestNextly({
+      dialect,
+      plugins: [constrainedFixture],
+    });
+    const adapter = current.adapter;
+    await adapter.executeQuery(`DROP TABLE ck__items`);
+    await adapter.executeQuery(`DROP TABLE ck__shelves`);
+    const specs = [...(getActiveExtensionSchema(dialect)?.specs ?? [])].sort(
+      (a, b) => a.name.localeCompare(b.name)
+    );
+    expect(specs.map(spec => spec.name)).toEqual(["ck__items", "ck__shelves"]);
+    const ops = specs.map(table => ({ type: "add_table" as const, table }));
+    expect(canEmitWithoutDrizzleKit(ops, dialect)).toBe(true);
+    for (const statement of emitDdl(ops, dialect)) {
+      await adapter.executeQuery(statement);
+    }
+    await expectEnforced(adapter);
+  });
+
+  it("survive an apply that falls back to drizzle-kit", async () => {
+    // PostgreSQL and MySQL create the constraints with their own statements,
+    // so the runtime tables handed to drizzle-kit carry none and the kit
+    // proposes dropping every one. The pipeline holds those drops back; asked
+    // here of the kit's REAL output against the live tables, so a change in
+    // how the kit spells a drop fails this rather than passing silently.
+    if (dialect === "sqlite") return;
+    current = await createTestNextly({
+      dialect,
+      plugins: [constrainedFixture],
+    });
+    const extension = getActiveExtensionSchema(dialect);
+    const scoped = {
+      ck__items: extension?.drizzle.ck__items,
+      ck__shelves: extension?.drizzle.ck__shelves,
+    };
+    const db = current.adapter.getDrizzle();
+    const proposed =
+      dialect === "postgresql"
+        ? await (
+            await getPgDrizzleKit()
+          ).pushSchema(scoped, db, { tables: ["ck__items", "ck__shelves"] })
+        : await (
+            await getMySQLDrizzleKit()
+          ).pushSchema(
+            scoped,
+            db,
+            String(
+              (
+                await current.adapter.executeQuery<Record<string, unknown>>(
+                  "SELECT DATABASE() AS name"
+                )
+              )[0]?.name
+            )
+          );
+    const ours = proposed.sqlStatements.filter(s => s.includes("ck__"));
+    // Population first: a kit that proposed nothing would pass the assertion
+    // below without the guard doing anything.
+    expect(ours.length).toBeGreaterThan(0);
+    const { kept } = stripKitDropsOfDeclaredConstraints(ours, {
+      tables: extension?.specs ?? [],
+    });
+    expect(kept).toEqual([]);
+  });
+});
+
+// One plugin, two releases of its schema: the second adds an enum value, a
+// check and a foreign key to a table the first already created.
+const shelvesV1 = defineTable("shelves", { id: col.id() });
+const itemsV1 = defineTable("items", {
+  id: col.id(),
+  status: col.enum(["draft", "live"]),
+  quantity: col.integer({ default: 0 }),
+  shelfId: col.shortText(),
+});
+const itemsV2 = defineTable(
+  "items",
+  {
+    id: col.id(),
+    status: col.enum(["draft", "live", "archived"]),
+    quantity: col.integer({ default: 0 }),
+    shelfId: col.shortText(),
+  },
+  {
+    checks: [{ name: "quantity", sql: "quantity >= 0" }],
+    foreignKeys: [
+      {
+        columns: ["shelfId"],
+        references: { table: "cx__shelves", columns: ["id"] },
+      },
+    ],
+  }
+);
+const release = (tables: ReturnType<typeof defineTable>[]) =>
+  definePlugin({
+    name: "schema-e2e-constraint-change",
+    version: "0.0.0",
+    nextly: "*",
+    contributes: { schema: { prefix: "cx", tables } },
+  });
+
+// Every dialect. A constraint change on an existing table is never on the
+// additive fast path, so this is drizzle-kit's route: on PostgreSQL and MySQL
+// the pipeline applies the constraint itself, and on SQLite the kit rebuilds
+// the table — which must keep the rows already in it.
+describeEachDialect(
+  "a plugin table's constraints, changed on an existing database",
+  dialect => {
+    it("are applied by the next schema apply, keeping the rows", async () => {
+      current = await createTestNextly({
+        dialect,
+        plugins: [release([shelvesV1, itemsV1])],
+      });
+      const adapter = current.adapter;
+      const SHELF = "018f2c2e-0000-7000-8000-00000000d001";
+      await adapter.executeQuery(
+        `INSERT INTO cx__shelves (id) VALUES ('${SHELF}')`
+      );
+      await adapter.executeQuery(
+        `INSERT INTO cx__items (id, status, quantity, shelf_id) VALUES ('018f2c2e-0000-7000-8000-00000000d101', 'live', 1, '${SHELF}')`
+      );
+
+      // What a config reload does: republish the plugin's schema, then apply.
+      await compileAndPublishExtensionSchema({
+        dialect,
+        plugins: [release([shelvesV1, itemsV2])],
+        config: {},
+        logger: { warn: () => {} },
+      });
+      const result = await applyDesiredSchema(
+        { collections: {}, singles: {}, components: {} },
+        "code",
+        { promptChannel: "terminal" }
+      );
+      expect(result.success, JSON.stringify(result)).toBe(true);
+
+      const kept = await adapter.executeQuery<Record<string, unknown>>(
+        `SELECT status FROM cx__items WHERE id = '018f2c2e-0000-7000-8000-00000000d101'`
+      );
+      expect(kept.map(row => row.status)).toEqual(["live"]);
+
+      const insertItem = (
+        id: string,
+        status: string,
+        quantity: number,
+        shelfId: string
+      ) =>
+        adapter.executeQuery(
+          `INSERT INTO cx__items (id, status, quantity, shelf_id) VALUES (?, ?, ?, ?)`.replace(
+            /\?/g,
+            makePlaceholders(dialect)
+          ),
+          [id, status, quantity, shelfId]
+        );
+      // The new enum value is admitted: the old check was replaced, not kept.
+      await insertItem(
+        "018f2c2e-0000-7000-8000-00000000d102",
+        "archived",
+        2,
+        SHELF
+      );
+      await expect(
+        insertItem("018f2c2e-0000-7000-8000-00000000d103", "gone", 3, SHELF)
+      ).rejects.toThrow();
+      await expect(
+        insertItem("018f2c2e-0000-7000-8000-00000000d104", "live", -1, SHELF)
+      ).rejects.toThrow();
+      await expect(
+        insertItem(
+          "018f2c2e-0000-7000-8000-00000000d105",
+          "live",
+          4,
+          "018f2c2e-0000-7000-8000-00000000dead"
+        )
+      ).rejects.toThrow();
     });
   }
 );

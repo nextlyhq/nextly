@@ -90,6 +90,7 @@ import {
 } from "../../domains/schema/pipeline/locks";
 import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
 import { NextlyError, describeError } from "../../errors";
+import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners/table-name";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -1330,13 +1331,19 @@ export async function runFileMigrations(args: {
   const executeSql = buildSqlExecutor(dz, dialect);
 
   // Owner rows for the drop guard: an app file dropping a plugin-migrated
-  // table is refused whole, before its first statement. Read once; absent
+  // table is refused whole, before its first statement. Read once; an absent
   // registry reads as "nothing is claimed" and refuses nothing, which is a
-  // database predating the registry.
+  // database predating the registry. Absent only when the listing says so: a
+  // listing that fails stops the run rather than disabling the guard.
   const { SchemaOwnersRepository: OwnersRepoForFiles, tableOwnersByName } =
     await import("../../domains/schema/ownership/schema-owners-repository");
+  const registryExists = (
+    await (
+      adapter as unknown as { listTables: () => Promise<string[]> }
+    ).listTables()
+  ).includes(SCHEMA_OWNERS_TABLE);
   const fileOwners = tableOwnersByName(
-    await new OwnersRepoForFiles(db, dialect).read()
+    registryExists ? await new OwnersRepoForFiles(db, dialect).read() : []
   );
 
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;

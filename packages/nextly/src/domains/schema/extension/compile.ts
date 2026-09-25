@@ -245,9 +245,41 @@ export function referenceTableStub(
 }
 
 /**
+ * A built column with the key and default its declaration carries.
+ *
+ * Both belong to the table the push creates rather than to statements added
+ * after it, and nothing adds them later: left off, a fresh database had no
+ * primary key on any dialect — so every foreign key pointing at the table was
+ * refused for want of a unique target — and an insert omitting a defaulted
+ * column failed NOT NULL. The default is the spec's own rendering, the text
+ * the diff compares, so the table created here and the one the diff expects
+ * are the same table.
+ */
+function withDeclaredKeyAndDefault(
+  built: unknown,
+  column: ExtensionColumn,
+  dialect: SupportedDialect
+): unknown {
+  let result = built as DrizzleColumnBuilder;
+  const rendered = defaultSql(column, dialect);
+  if (rendered !== undefined) {
+    result = result.default(drizzleSql.raw(rendered)) as DrizzleColumnBuilder;
+  }
+  return column.primaryKey === true ? result.primaryKey() : result;
+}
+
+/** The two modifiers every dialect's column builder offers. */
+interface DrizzleColumnBuilder {
+  primaryKey(): unknown;
+  default(value: unknown): unknown;
+}
+
+/**
  * The Drizzle table the runtime queries through.
  *
- * Columns only — see the module note on why indexes must not appear here.
+ * Columns, with their key and defaults. No indexes — see the module note — and
+ * checks and foreign keys only on SQLite, which accepts them nowhere but
+ * CREATE TABLE; the other dialects add them with statements of their own.
  */
 export function toDrizzleTable(
   table: ExtensionTable,
@@ -276,8 +308,9 @@ export function toDrizzleTable(
   // was wrong for every table whose columns are not already snake_case.
   const columns: Record<string, unknown> = {};
   for (const column of table.columns) {
-    columns[column.key] = buildUserDrizzleColumn(
-      toColumnDescriptor(column, dialect),
+    columns[column.key] = withDeclaredKeyAndDefault(
+      buildUserDrizzleColumn(toColumnDescriptor(column, dialect), dialect),
+      column,
       dialect
     );
   }
@@ -288,8 +321,12 @@ export function toDrizzleTable(
   if (dialect === "mysql") {
     return mysqlTable(table.name, columns as never);
   }
-  const checks = (table.checks ?? []).map(declared =>
-    check(`ck_${table.name}_${declared.name}`, drizzleSql.raw(declared.sql))
+  // Every check the spec carries — the declared ones and the one each
+  // `col.enum()` implies — from the spec itself, so the names and the SQL are
+  // the ones the diff compares against. Taking only the declared checks left
+  // an enum unenforced on SQLite, which has no later chance to add it.
+  const checks = (toTableSpec(table, dialect).checks ?? []).map(spec =>
+    check(spec.name, drizzleSql.raw(spec.sql))
   );
   const foreignKeys: {
     name: string;

@@ -6,6 +6,7 @@ import {
   drizzleTableNames,
   filterUnsafeStatements,
   findUnexpectedDestructiveStatements,
+  stripKitDropsOfDeclaredConstraints,
   stripKitDropsOfDeclaredIndexes,
 } from "../filter-unsafe-statements";
 
@@ -76,6 +77,66 @@ describe("filterUnsafeStatements — internal nextly_ table allowlist", () => {
     const out = filterUnsafeStatements(['DROP TABLE "dc_orphan"'], []);
     expect(out).toEqual([]);
     expect(warn).toHaveBeenCalledOnce();
+  });
+});
+
+describe("stripKitDropsOfDeclaredConstraints", () => {
+  const desired = {
+    tables: [
+      {
+        name: "ck__items",
+        checks: [
+          { name: "ck_ck__items_quantity" },
+          { name: "ck_ck__items_status_enum" },
+        ],
+        foreignKeys: [{ name: "fk_ck__items_shelf_id" }],
+      },
+      { name: "ck__shelves" },
+    ],
+  };
+
+  // What drizzle-kit rc.4 emitted, verbatim, when handed these tables after a
+  // fresh boot had created their constraints.
+  it("strips the kit's drops of declared checks and foreign keys (PostgreSQL)", () => {
+    const out = stripKitDropsOfDeclaredConstraints(
+      [
+        'ALTER TABLE "ck__items" DROP CONSTRAINT "fk_ck__items_shelf_id";',
+        'ALTER TABLE "ck__items" DROP CONSTRAINT "ck_ck__items_quantity";',
+        'ALTER TABLE "ck__items" DROP CONSTRAINT "ck_ck__items_status_enum";',
+      ],
+      desired
+    );
+    expect(out).toEqual({ kept: [], strippedCount: 3 });
+  });
+
+  it("strips them and the index backing the foreign key (MySQL)", () => {
+    const out = stripKitDropsOfDeclaredConstraints(
+      [
+        "ALTER TABLE `ck__items` DROP CONSTRAINT `fk_ck__items_shelf_id`;",
+        "DROP INDEX `fk_ck__items_shelf_id` ON `ck__items`",
+        "ALTER TABLE `ck__items` DROP CONSTRAINT `ck_ck__items_quantity`;",
+        "ALTER TABLE `ck__items` DROP CONSTRAINT `ck_ck__items_status_enum`;",
+      ],
+      desired
+    );
+    expect(out).toEqual({ kept: [], strippedCount: 4 });
+  });
+
+  it("keeps drops the desired schema does not declare", () => {
+    const keep = [
+      // Undeclared on this table.
+      'ALTER TABLE "ck__items" DROP CONSTRAINT "ck_ck__items_legacy";',
+      // Declared, but on a different table: names are per table on MySQL.
+      "ALTER TABLE `ck__shelves` DROP CONSTRAINT `ck_ck__items_quantity`;",
+      // An index that shares no foreign key's name.
+      "DROP INDEX `idx_ck__items_status` ON `ck__items`",
+      // Not a constraint at all.
+      'ALTER TABLE "ck__items" DROP COLUMN "quantity";',
+    ];
+    expect(stripKitDropsOfDeclaredConstraints(keep, desired)).toEqual({
+      kept: keep,
+      strippedCount: 0,
+    });
   });
 });
 

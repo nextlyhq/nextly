@@ -74,9 +74,11 @@ import {
   findUnexpectedDestructiveStatements,
   getDrizzleTableName,
   isDrizzleTable,
+  stripKitDropsOfDeclaredConstraints,
   stripKitDropsOfDeclaredIndexes,
 } from "./filter-unsafe-statements";
 import { indexRestoreStatements } from "./index-restore";
+import { kitRouteConstraintStatements } from "./kit-route-constraints";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
@@ -252,6 +254,28 @@ class DdlExecutionError extends Error {
 // Orphan-DROP statement patterns the unsafe-statement filter scans for.
 // Both forms accept an optional schema-qualifier and quote style; the
 // captured group is the bare object name used for owner-table inference.
+/**
+ * The table whose rebuild an operation approves, if any: a change to one of
+ * its columns on every dialect, and on SQLite a change to a check or a
+ * foreign key, which SQLite can only apply by rebuilding the table.
+ */
+function rebuildApprovedBy(op: Operation, dialect: SupportedDialect): string[] {
+  switch (op.type) {
+    case "change_column_type":
+    case "change_column_nullable":
+    case "change_column_default":
+      return [op.tableName.toLowerCase()];
+    case "add_check":
+    case "drop_check":
+    case "add_foreign_key":
+    case "drop_foreign_key":
+    case "change_foreign_key_action":
+      return dialect === "sqlite" ? [op.tableName.toLowerCase()] : [];
+    default:
+      return [];
+  }
+}
+
 // Gated debug log for which route (`useFastPath`) the apply took. Operators
 // set DEBUG_SCHEMA=1 to enable both this and drizzle-kit's chatter inside
 // withCapturedStdout. The non-additive enumeration on the fallback path
@@ -1192,7 +1216,13 @@ export class PushSchemaPipeline {
             pushResult.sqlStatements,
             desiredSnapshot
           );
-          emittedStatements = stripped.kept;
+          // Likewise the declared checks and foreign keys, which the kit's
+          // runtime tables do not carry on PostgreSQL and MySQL either.
+          const keptConstraints = stripKitDropsOfDeclaredConstraints(
+            stripped.kept,
+            desiredSnapshot
+          );
+          emittedStatements = keptConstraints.kept;
           if (stripped.strippedCount > 0) {
             // Once per apply, not per statement: enough to see the guard
             // acted without turning a routine emission into log noise.
@@ -1200,6 +1230,13 @@ export class PushSchemaPipeline {
               `[Nextly schema] Kept ${stripped.strippedCount} tracked index(es) ` +
                 `drizzle-kit emitted a DROP INDEX for (they are declared in the ` +
                 `desired schema; only a drop_index operation removes one).`
+            );
+          }
+          if (keptConstraints.strippedCount > 0) {
+            console.debug(
+              `[Nextly schema] Kept ${keptConstraints.strippedCount} declared ` +
+                `check or foreign-key element(s) drizzle-kit emitted a drop for ` +
+                `(only a drop_check or drop_foreign_key operation removes one).`
             );
           }
         }
@@ -1239,14 +1276,7 @@ export class PushSchemaPipeline {
         // table is the kit encoding a column drop we never approved
         // (rc.4 emits exactly that shape; probe-verified).
         const allowedRebuildTables = new Set(
-          resolvedOps
-            .filter(
-              op =>
-                op.type === "change_column_type" ||
-                op.type === "change_column_nullable" ||
-                op.type === "change_column_default"
-            )
-            .map(op => op.tableName.toLowerCase())
+          resolvedOps.flatMap(op => rebuildApprovedBy(op, dialect))
         );
         // Tables this apply is answerable for. On a UI save the locked ones are
         // excluded: their statements are dropped below and never execute, so
@@ -1348,9 +1378,24 @@ export class PushSchemaPipeline {
           safe,
           useFastPath ? [] : resolvedOps
         );
+        // The kit route's checks and foreign keys, which the kit never
+        // applies on PostgreSQL and MySQL. The fast path plans none — its op
+        // set excludes them, and a new table's own come from the emitter.
+        const constraints = useFastPath
+          ? { before: [], after: [] }
+          : kitRouteConstraintStatements(
+              resolvedOps,
+              desiredSnapshot.tables,
+              dialect
+            );
 
         try {
-          await this.deps.executor.executeStatements(tx, [...safe, ...restore]);
+          await this.deps.executor.executeStatements(tx, [
+            ...constraints.before,
+            ...safe,
+            ...restore,
+            ...constraints.after,
+          ]);
         } catch (err) {
           throw new DdlExecutionError(
             err instanceof Error ? err.message : String(err),
@@ -1365,7 +1410,12 @@ export class PushSchemaPipeline {
         // would report a mismatch on every apply that had to put an index
         // back; the pre-created CREATEs WERE planned (add_table ops) and
         // executed, so they count.
-        return safe.length + preCreatedStatements;
+        return (
+          safe.length +
+          preCreatedStatements +
+          constraints.before.length +
+          constraints.after.length
+        );
       };
 
       let statementsExecuted: number;

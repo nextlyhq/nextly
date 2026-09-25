@@ -133,6 +133,62 @@ describe("normalizeCheckExpression — hand-written checks on PostgreSQL", () =>
     // a column is the author's and changes what is compared.
     expect(n("price::integer > 0")).not.toBe(n("price > 0"));
   });
+
+  it("keeps a sized or length-one character cast, which changes the value", () => {
+    // `code` is char(3) and `s` is varchar(10); a sized cast truncates, so
+    // each of these admits values the uncast comparison refuses.
+    same(
+      "code = 'A' OR code::char(1) = 'A'",
+      "((code = 'A'::bpchar) OR ((code)::character(1) = 'A'::bpchar))"
+    );
+    expect(n("((code)::character(1) = 'A'::bpchar)")).not.toBe(n("code = 'A'"));
+    same(
+      "code::char = 'A' OR code::varchar(2) = 'AB' OR code = 'AB'::char",
+      "(((code)::character(1) = 'A'::bpchar) OR (((code)::character varying(2))::text = 'AB'::text) OR (code = 'AB'::character(1)))"
+    );
+    expect(n("code = 'AB'::character(1)")).not.toBe(n("code = 'AB'"));
+    expect(n("((code)::character varying(2))::text = 'AB'::text")).not.toBe(
+      n("code = 'AB'")
+    );
+  });
+
+  it("drops the unsized casts PostgreSQL inserts on a char(n) column", () => {
+    same(
+      "code IN ('A', 'B')",
+      "(code = ANY (ARRAY['A'::bpchar, 'B'::bpchar]))"
+    );
+    same("code = 'A'", "(code = 'A'::bpchar)");
+  });
+
+  it("drops an unsized varchar cast, which is text by another name", () => {
+    same(
+      "s::character varying = 'a'",
+      "(((s)::character varying)::text = 'a'::text)"
+    );
+    same("s::name = 'x'", "((s)::name = 'x'::name)");
+    expect(n("s::name = 'x'")).not.toBe(n("s = 'x'"));
+  });
+
+  it("compares a kept cast by the type it names, not the alias used", () => {
+    same(
+      "n::int8 > 0 OR n::float8 > 1 OR n::decimal(5,2) > 1 OR n::int2 > 1 OR s::bool",
+      "((((n)::bigint > 0) OR ((n)::double precision > (1)::double precision) OR ((n)::numeric(5,2) > (1)::numeric) OR ((n)::smallint > 1) OR (s)::boolean))"
+    );
+    same(
+      "t::timestamp(2) > now() OR t::timestamptz(3) > now() OR n::float > 1 OR s::varchar(3)[] IS NULL",
+      "((((t)::timestamp(2) without time zone > now()) OR ((t)::timestamp(3) with time zone > now()) OR ((n)::double precision > (1)::double precision) OR ((s)::character varying(3)[] IS NULL)))"
+    );
+    same(
+      "t::time > now() OR t::timestamp > now()",
+      "(((t)::time without time zone > now()) OR ((t)::timestamp without time zone > now()))"
+    );
+    // The size stays part of the type wherever PostgreSQL writes it.
+    expect(n("t::timestamp(2) > now()")).not.toBe(n("t::timestamp > now()"));
+    same(
+      "s::int4 > 1 OR s::timestamptz > now()",
+      "(((s)::integer > 1) OR ((s)::timestamp with time zone > now()))"
+    );
+  });
 });
 
 // MySQL 8.0.46's CHECK_CLAUSE for the authored expression beside each, read on

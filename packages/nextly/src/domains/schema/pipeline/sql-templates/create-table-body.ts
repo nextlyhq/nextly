@@ -121,12 +121,27 @@ export function createTableBody(
     lines.push(`${indent}PRIMARY KEY (${cols})`);
   }
 
-  // Inline constraints a table declares at creation. Valid in CREATE TABLE on
-  // all three dialects — which is the point: SQLite cannot add one later, and
-  // a plugin's first migration is the one place every dialect can still spell
-  // a check or a foreign key inline. Foreign keys whose target table this
-  // migration does not also create are still emitted: creation order within a
-  // stream is the author's contract (the DSL's dependency rules enforce it).
+  lines.push(...tableConstraintLines(table, q, indent));
+  return lines.join(",\n");
+}
+
+/**
+ * The checks and foreign keys a table declares, as `CREATE TABLE` clauses.
+ *
+ * Valid in CREATE TABLE on all three dialects — which is the point: SQLite
+ * cannot add one later, and a table's creation is the one place every dialect
+ * can still spell a check or a foreign key inline. Foreign keys whose target
+ * table the same statement batch does not also create are still emitted:
+ * creation order within a stream is the author's contract (the DSL's
+ * dependency rules enforce it). Shared with the dev-push emitter, which
+ * creates the same tables and must declare the same constraints.
+ */
+export function tableConstraintLines(
+  table: Pick<TableSpec, "checks" | "foreignKeys">,
+  q: QuoteIdentifier,
+  indent = "  "
+): string[] {
+  const lines: string[] = [];
   for (const check of table.checks ?? []) {
     lines.push(`${indent}CONSTRAINT ${q(check.name)} CHECK (${check.sql})`);
   }
@@ -139,6 +154,5 @@ export function createTableBody(
         `ON DELETE ${fk.onDelete.toUpperCase()} ON UPDATE ${fk.onUpdate.toUpperCase()}`
     );
   }
-
-  return lines.join(",\n");
+  return lines;
 }

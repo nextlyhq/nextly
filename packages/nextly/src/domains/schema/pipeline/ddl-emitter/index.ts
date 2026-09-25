@@ -1,6 +1,12 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import type { Operation } from "../diff/types";
+import type {
+  AddCheckOp,
+  AddForeignKeyOp,
+  Operation,
+  TableSpec,
+} from "../diff/types";
+import { generateSQL } from "../sql-templates";
 
 import { emitAdditiveDdl } from "./additive";
 import { emitPostgresDdl } from "./postgres";
@@ -171,9 +177,43 @@ export function withoutUnemittableIndexes(
  * run each op through `withoutUnemittableIndexes`.
  */
 export function emitDdl(ops: Operation[], dialect: SupportedDialect): string[] {
-  if (dialect === "postgresql") {
-    return ops.flatMap(op => emitPostgresDdl(op));
-  }
-  // `dialect` is narrowed to "mysql" | "sqlite" here — exactly AdditiveDialect.
-  return ops.flatMap(op => emitAdditiveDdl(op, dialect));
+  const statements =
+    dialect === "postgresql"
+      ? ops.flatMap(op => emitPostgresDdl(op))
+      : // `dialect` is narrowed to "mysql" | "sqlite" here — exactly AdditiveDialect.
+        ops.flatMap(op => emitAdditiveDdl(op, dialect));
+  // A new table's checks and foreign keys, after EVERY statement above: a
+  // foreign key may point at a table this same apply creates later in the
+  // list. SQLite declared them inside its CREATE TABLE, the only place it
+  // accepts them.
+  if (dialect === "sqlite") return statements;
+  const constraints = ops.flatMap(op =>
+    op.type === "add_table" ? tableConstraintOps(op.table) : []
+  );
+  return [...statements, ...constraints.map(op => generateSQL(op, dialect))];
+}
+
+/**
+ * The checks and foreign keys a table declares, as the operations that add
+ * them to a table that already exists.
+ *
+ * One list for everything that creates a table without them in its CREATE
+ * statement: this emitter on PostgreSQL and MySQL, and first-run setup, whose
+ * drizzle-kit push leaves them off there. Checks first, then foreign keys.
+ */
+export function tableConstraintOps(
+  table: Pick<TableSpec, "name" | "checks" | "foreignKeys">
+): Array<AddCheckOp | AddForeignKeyOp> {
+  return [
+    ...(table.checks ?? []).map(check => ({
+      type: "add_check" as const,
+      tableName: table.name,
+      check,
+    })),
+    ...(table.foreignKeys ?? []).map(foreignKey => ({
+      type: "add_foreign_key" as const,
+      tableName: table.name,
+      foreignKey,
+    })),
+  ];
 }

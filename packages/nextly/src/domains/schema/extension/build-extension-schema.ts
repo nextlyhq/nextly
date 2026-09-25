@@ -374,12 +374,11 @@ export async function buildExtensionSchema(
           // Untouched tables keep the spec COMPILED from the declaration.
           //
           // The Drizzle object is a lossy view of it: the neutral model
-          // carries declared checks, foreign keys and defaults that
-          // `toDrizzleTable` deliberately leaves off on PostgreSQL and MySQL,
-          // where they are applied as separate statements. Re-deriving every
-          // table from Drizzle therefore erased them — the desired schema
-          // proposed dropping defaults that were declared, and constraints
-          // vanished from migration generation and drift.
+          // carries declared checks and foreign keys that `toDrizzleTable`
+          // deliberately leaves off on PostgreSQL and MySQL, where they are
+          // applied as separate statements. Re-deriving every table from
+          // Drizzle therefore erased them, and constraints vanished from
+          // migration generation and drift.
           //
           // Identity again, matching what `runAfterDrizzle` validates: the
           // same object means the hook did not touch it, so the declaration

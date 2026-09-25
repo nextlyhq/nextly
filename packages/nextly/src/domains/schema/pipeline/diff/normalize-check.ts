@@ -28,9 +28,11 @@
 //     `~~` for LIKE, BETWEEN expanded into its two comparisons, a one-element
 //     IN list as an equality, and NOT pushed into a predicate that has a
 //     negated form).
-//   - Casts PostgreSQL inserts on its own are dropped: a cast on a literal,
-//     and a cast to a character type, which is how a varchar column is
-//     compared with text. Any other cast is kept.
+//   - Casts PostgreSQL inserts on its own are dropped: an unsized cast on a
+//     literal, and an unsized `::text` or `::character varying` on anything
+//     else, which is how a varchar column is compared with text. Any other
+//     cast is kept — a sized one, or one to `char` or `name`, truncates or
+//     pads, so it changes which values the check admits.
 //   - Anything the grammar below does not recognise is returned UNCHANGED, so
 //     an unfamiliar expression compares exactly as it did before this existed.
 //     A spurious drop-plus-add is the safe failure; treating two different
@@ -333,7 +335,7 @@ type Node =
   | { kind: "identifier"; text: string }
   | { kind: "call"; name: string; args: Node[] }
   | { kind: "array"; items: Node[] }
-  | { kind: "cast"; expr: Node; type: string; base: string }
+  | { kind: "cast"; expr: Node; base: string; modifier: string; arrays: string }
   | { kind: "negate"; expr: Node }
   | { kind: "arithmetic"; op: string; left: Node; right: Node }
   | { kind: "compare"; op: string; left: Node; right: Node }
@@ -681,7 +683,7 @@ class Parser {
       this.position += 1;
       const type = this.parseTypeName();
       if (type === null) return null;
-      expr = { kind: "cast", expr, type: type.text, base: type.base };
+      expr = { kind: "cast", expr, ...type };
     }
     return expr;
   }
@@ -689,22 +691,33 @@ class Parser {
   /**
    * A type name after `::` — one or more words, an optional modifier and any
    * number of array brackets. `base` is the words alone, which is what decides
-   * whether the cast is one PostgreSQL inserts by itself.
+   * whether the cast is one PostgreSQL inserts by itself. Words may follow the
+   * modifier as well: PostgreSQL reports `timestamp(3) with time zone`.
    */
-  private parseTypeName(): { text: string; base: string } | null {
+  private parseTypeName(): {
+    base: string;
+    modifier: string;
+    arrays: string;
+  } | null {
     const first = this.take();
     if (first?.kind !== "word") return null;
-    const base = this.parseTypeWords(first.text).join(" ");
+    const words = this.parseTypeWords(first.text);
     const modifier = this.parseTypeModifier();
     if (modifier === null) return null;
+    if (modifier !== "") words.push(...this.parseTypeContinuation());
     const arrays = this.parseArraySuffix();
     if (arrays === null) return null;
-    return { text: base + modifier + arrays, base };
+    return { base: words.join(" "), modifier, arrays };
   }
 
   /** The first word of a type name and the words that continue it. */
   private parseTypeWords(first: string): string[] {
-    const words = [first.toLowerCase()];
+    return [first.toLowerCase(), ...this.parseTypeContinuation()];
+  }
+
+  /** The words continuing a type name, as in `character varying`. */
+  private parseTypeContinuation(): string[] {
+    const words: string[] = [];
     for (;;) {
       const next = this.peek();
       if (next?.kind !== "word") return words;
@@ -828,19 +841,74 @@ function canonicalIdentifier(name: string): string {
 // =============================================================================
 
 /**
- * Character types. A cast to one of these is how PostgreSQL compares a varchar
- * column with a text value — `(status)::text = 'a'::text` — so it is the
- * server's doing, not the author's.
+ * Types a cast to which cannot change a character value: `text` and an unsized
+ * varchar are one type in PostgreSQL. A cast to one of these, unsized, on a
+ * column is how the server compares a varchar column with a text value —
+ * `(status)::text = 'a'::text` — so it is the server's doing, not the author's.
  */
-const CHARACTER_TYPES = new Set([
-  "text",
-  "character varying",
-  "varchar",
-  "character",
-  "char",
-  "bpchar",
-  "name",
-]);
+const TEXT_TYPES = new Set(["text", "character varying", "varchar"]);
+
+/**
+ * Types whose unsized cast still changes a literal: bare `char` and
+ * `character` mean length 1. PostgreSQL never inserts one of these on a
+ * literal by itself; it spells what it does insert `bpchar`.
+ */
+const LENGTH_ONE_TYPES = new Set(["char", "character"]);
+
+/**
+ * The name PostgreSQL reports for each alias a declaration may use, so a cast
+ * that is kept compares by the type it names rather than by how it was
+ * spelled: `n::int8` reads back as `(n)::bigint`.
+ */
+const TYPE_NAMES: Readonly<Record<string, string>> = {
+  int: "integer",
+  int4: "integer",
+  int2: "smallint",
+  int8: "bigint",
+  float4: "real",
+  float8: "double precision",
+  decimal: "numeric",
+  bool: "boolean",
+  varchar: "character varying",
+  char: "character",
+  float: "double precision",
+  timestamp: "timestamp without time zone",
+  timestamptz: "timestamp with time zone",
+  time: "time without time zone",
+  timetz: "time with time zone",
+};
+
+/** A kept cast, its type named as PostgreSQL reports it. */
+function keptCast(expr: Node, cast: Extract<Node, { kind: "cast" }>): Node {
+  // A bare `char` or `character` is `character(1)`, and reads back as such.
+  const modifier =
+    LENGTH_ONE_TYPES.has(cast.base) && cast.modifier === ""
+      ? "(1)"
+      : cast.modifier;
+  return {
+    kind: "cast",
+    expr,
+    base: TYPE_NAMES[cast.base] ?? cast.base,
+    modifier,
+    arrays: cast.arrays,
+  };
+}
+
+/**
+ * A cast's type as PostgreSQL writes it. The modifier of a time-zone type sits
+ * after its first word — `timestamp(3) with time zone` — and after the whole
+ * name for every other type.
+ */
+function typeText(cast: Extract<Node, { kind: "cast" }>): string {
+  const zone = /^(timestamp|time)( (?:with|without) time zone)$/.exec(
+    cast.base
+  );
+  const name =
+    zone !== null && cast.modifier !== ""
+      ? `${zone[1]}${cast.modifier}${zone[2]}`
+      : cast.base + cast.modifier;
+  return name + cast.arrays;
+}
 
 /**
  * Numeric types, for the one literal PostgreSQL re-quotes: a negative number
@@ -977,27 +1045,51 @@ function canonicalCast(
   expr: Node,
   cast: Extract<Node, { kind: "cast" }>
 ): Node {
-  const base = cast.base;
-  if (expr.kind === "literal") {
-    // `'-1'::integer` is the number -1; any other literal's cast only states
-    // the type the column comparison already gives it.
-    if (
-      expr.string &&
-      NUMERIC_TYPES.has(base) &&
-      /^'-?(?:\d+(?:\.\d*)?|\.\d+)'$/.test(expr.text)
-    ) {
-      return { kind: "literal", text: expr.text.slice(1, -1), string: false };
-    }
-    return expr;
+  if (expr.kind === "literal") return canonicalLiteralCast(expr, cast);
+  return isInsertedCast(expr, cast) ? expr : keptCast(expr, cast);
+}
+
+/**
+ * A cast on a literal. A length modifier is always the author's: PostgreSQL
+ * resolves operators on the unsized type, so the casts it inserts never carry
+ * one, and a sized cast truncates or pads the value it is applied to.
+ */
+function canonicalLiteralCast(
+  expr: Extract<Node, { kind: "literal" }>,
+  cast: Extract<Node, { kind: "cast" }>
+): Node {
+  if (cast.modifier !== "" || LENGTH_ONE_TYPES.has(cast.base)) {
+    return keptCast(expr, cast);
   }
+  // `'-1'::integer` is the number -1; any other literal's cast only states
+  // the type the column comparison already gives it.
   if (
-    expr.kind === "array" &&
-    expr.items.every(item => item.kind === "literal")
+    expr.string &&
+    NUMERIC_TYPES.has(cast.base) &&
+    /^'-?(?:\d+(?:\.\d*)?|\.\d+)'$/.test(expr.text)
   ) {
-    return expr;
+    return { kind: "literal", text: expr.text.slice(1, -1), string: false };
   }
-  if (CHARACTER_TYPES.has(base)) return expr;
-  return { kind: "cast", expr, type: cast.type, base };
+  return expr;
+}
+
+/**
+ * Whether PostgreSQL inserted this cast on something other than a literal:
+ * an unsized text cast, which is how a varchar column is compared with text,
+ * or `(ARRAY['a'::character varying, ...])::text[]`, the array of an IN list
+ * cast to the text array the comparison is made in.
+ */
+function isInsertedCast(
+  expr: Node,
+  cast: Extract<Node, { kind: "cast" }>
+): boolean {
+  if (!TEXT_TYPES.has(cast.base) || cast.modifier !== "") return false;
+  if (cast.arrays === "") return true;
+  return (
+    expr.kind === "array" &&
+    cast.arrays === "[]" &&
+    expr.items.every(item => item.kind === "literal")
+  );
 }
 
 /** The comparison each operator's negation is. */
@@ -1100,7 +1192,7 @@ const PRINTERS: ByKind<string> = {
   identifier: node => node.text,
   call: node => `${node.name}(${printList(node.args)})`,
   array: node => `ARRAY[${printList(node.items)}]`,
-  cast: node => `${print(node.expr, POSTFIX)}::${node.type}`,
+  cast: node => `${print(node.expr, POSTFIX)}::${typeText(node)}`,
   negate: node => `- ${print(node.expr, UNARY)}`,
   // Left-associative: an equal-strength right operand keeps its
   // parentheses, since `a - (b - c)` is not `a - b - c`.

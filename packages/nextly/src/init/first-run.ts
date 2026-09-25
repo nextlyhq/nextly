@@ -23,7 +23,10 @@ import {
   type ExtensionSchema,
   getActiveExtensionSchema,
 } from "../domains/schema/extension/build-extension-schema";
-import { emitDdl } from "../domains/schema/pipeline/ddl-emitter";
+import {
+  emitDdl,
+  tableConstraintOps,
+} from "../domains/schema/pipeline/ddl-emitter";
 
 import { runBoundedDiagnostic } from "./bounded-diagnostic";
 
@@ -171,11 +174,10 @@ async function createExtensionIndexes(
 /**
  * Replay the checks and foreign keys a fresh push could not carry.
  *
- * Rendered through `generateSQL`, the same templates the incremental apply
- * uses for `add_check` and `add_foreign_key` — not the DDL emitter, which
- * refuses both deliberately because they are not additive statements. Two
- * renderers would disagree about quoting and about which forms a dialect
- * accepts.
+ * The table's constraints as `tableConstraintOps` lists them, rendered
+ * through `generateSQL` — the same list and templates the dev-push emitter
+ * uses when it creates a table on PostgreSQL or MySQL. Two renderers would
+ * disagree about quoting and about which forms a dialect accepts.
  *
  * Failures warn rather than throw, matching the index replay above: a fresh
  * boot that cannot add one constraint should still finish and say so, because
@@ -187,28 +189,13 @@ async function createExtensionConstraints(
   logger: LoggerLike,
   passed: ExtensionSchema | null | undefined
 ): Promise<void> {
+  // SQLite accepts a check or a foreign key only inside CREATE TABLE, so its
+  // drizzle table declares them and the push above already created them.
+  if (dialect === "sqlite") return;
   const schema = passed ?? getActiveExtensionSchema(dialect);
   if (!schema) return;
 
-  const ops = [
-    ...schema.specs.flatMap(spec =>
-      (spec.checks ?? []).map(check => ({
-        type: "add_check" as const,
-        tableName: spec.name,
-        check,
-      }))
-    ),
-    // After the checks, because a foreign key needs the table it points at to
-    // exist and the push has already made them all — but ordering the two
-    // kinds keeps the statements readable in a log.
-    ...schema.specs.flatMap(spec =>
-      (spec.foreignKeys ?? []).map(foreignKey => ({
-        type: "add_foreign_key" as const,
-        tableName: spec.name,
-        foreignKey,
-      }))
-    ),
-  ];
+  const ops = schema.specs.flatMap(spec => tableConstraintOps(spec));
   if (ops.length === 0) return;
 
   const { generateSQL } = await import(
