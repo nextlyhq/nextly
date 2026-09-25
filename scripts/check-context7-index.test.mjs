@@ -524,6 +524,31 @@ describe("verify", () => {
       expect(await findings({ "Agent Guide": "packages/x/CLAUDE.md" }, [...sample, "packages/x/CLAUDE.md"])).toEqual([copy]);
       // A witness reported as retrievable is not reported again for its citation.
       expect(await findings({ "Agent Guide": "AGENTS.md" })).toEqual(['  - AGENTS.md is retrievable ("Agent Guide" came back, or the file was cited); excludeFiles entry AGENTS.md did not take']);
+      // A cited excluded file that does not hold the sentence does not say where it came from, so the set's own finding stands beside it.
+      expect(await findings({ "Agent Guide": "CLAUDE.md" })).toEqual([
+        '  - "Agent Guide" came back, cited from none of AGENTS.md, packages/x/CLAUDE.md, which all hold it; excludeFiles entry AGENTS.md may not have taken',
+        "  - CLAUDE.md is in excludeFiles and was indexed anyway",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // A cited file of the witness's own set is the one that came back: its citation is the finding, not a claim that the witness did.
+  it("reports a cited file of the witness's own set once, as the file that came back", async () => {
+    const guide = "# Agent Guide\n\nThe guide's own sentence.\n";
+    const root = scratchRepository({
+      "context7.json": JSON.stringify({ folders: ["docs"], excludeFiles: ["AGENTS.md"] }),
+      "README.md": "# Scratch Library\n\nThe README, kept.\n",
+      "docs/getting-started/index.mdx": "# Getting Started\n\nA docs page, kept.\n",
+      "AGENTS.md": guide,
+      "packages/y/AGENTS.md": guide,
+    });
+    try {
+      const topics = { "Scratch Library": "README.md", "Getting Started": "docs/getting-started/index.mdx", "Agent Guide": "packages/y/AGENTS.md" };
+      const { status, lines } = await verify({ root, get: context7({ cites: ["README.md", "docs/getting-started/index.mdx"], topics }) });
+      expect(status).toBe(1);
+      expect(lines.slice(1)).toEqual(["  - packages/y/AGENTS.md is in excludeFiles and was indexed anyway"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
