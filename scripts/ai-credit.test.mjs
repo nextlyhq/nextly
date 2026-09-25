@@ -51,6 +51,7 @@ describe("a message's credit, in each form", () => {
       said("Refactored", "mostly", "by", `**${PILOT_TOOL}**`),
       said("Implemented", "using", "an", "LLM"),
       said("With", "help from", MODEL),
+      said(MADE, "with", `<strong>${CHAT_TOOL}</strong>`),
     ];
     for (const line of statements) expect(credited(line, "message"), line).toBe(true);
   });
@@ -93,6 +94,7 @@ describe("a message's credit, in each form", () => {
       "Co-authored-by: Claude Dupont <claude.dupont@example.com>",
       "Reviewed-by: Cody Banks <cody@example.com>",
       "Signed-off-by: Jane Doe <jane@example.com>",
+      "Written by Claude Dupont, with thanks to Cody Banks",
     ];
     for (const line of mentions) expect(creditsIn(line, "message"), line).toEqual([]);
   });
@@ -262,6 +264,14 @@ describe("the command in CI", () => {
     run("checkout", "-q", "-b", "later");
     const later = commit("docs: add a line", { text: lines(spell(MADE, " with ", CODE_TOOL), "an added line", "") });
     expect(decide(eventFor("pull_request", { pull_request: { title: "docs: add a line", body: "", head: { ref: "docs/later", sha: later }, base: { sha: old } } }))).toBe(0);
+  });
+
+  it("refuses a trailer an added continuation line completes, though its first line was already there", () => {
+    const base = commit("chore: the base", { text: lines(trailer("Co-authored", spell("Git", "Hub")), "") });
+    run("checkout", "-q", "-b", "topic");
+    const head = commit("docs: finish the line", { text: lines(trailer("Co-authored", spell("Git", "Hub")), spell("  Co", "pilot Agent"), "") });
+    expect(decide(eventFor("pull_request", { pull_request: { title: "docs: finish the line", body: "", head: { ref: "docs/line", sha: head }, base: { sha: base } } }))).toBe(1);
+    expect(printed()).toMatch(/file=notes\.md,line=2,title=AI credit::notes\.md:2 names it in a Co-authored-by trailer/);
   });
 
   it("reads a file as text even where a changed attribute calls it binary", () => {

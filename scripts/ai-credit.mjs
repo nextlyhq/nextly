@@ -69,8 +69,9 @@ const VENDOR = `(?:(?:${VENDORS.join("|")})(?:'s)?${GAP})?`;
 /** A name ends at a word's end, and is only a component when an API, SDK, key or the like follows it. */
 const ENDS = "(?![\\w-])(?!(?:'s)?\\s+(?:api|sdk|client|library|package|embeddings?|endpoint|integration|provider|plugin|key|account|platform|console)s?\\b)";
 const TOOL_AT = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})${ENDS}`, "i");
-const PROPER_AT = new RegExp(`^${VENDOR}(?:${PROPER.join("|")})${ENDS}`);
-const PROPER_AT_ANY_CASE = new RegExp(PROPER_AT.source, "i");
+/** In prose, an ambiguous name followed by a capitalised surname is a person, as `Claude Dupont` is; a tool's full name matches first. */
+const PROPER_AT = new RegExp(`^${VENDOR}(?:${PROPER.join("|")})${ENDS}(?![^\\S\\n]+[A-Z][a-z])`);
+const PROPER_AT_ANY_CASE = new RegExp(`^${VENDOR}(?:${PROPER.join("|")})${ENDS}`, "i");
 const GENERIC_AT = new RegExp(`^(?:${GENERIC.join("|")})${ENDS}`, "i");
 const BOT = `(?:${BOT_ACCOUNTS.join("|")})\\[bot\\]`;
 /** A name that is AI in general, or one of a tool's GitHub App accounts. No person is named either. */
@@ -159,25 +160,36 @@ export function creditsIn(text, place = "message") {
     .split(/\r?\n/)
     .map(raw => plain(rules.words(raw)));
   const joined = lines.join("\n");
-  const trailers = unfolded(lines).flatMap(({ text: line, at }) => trailerCredits(line, rules).map(found => ({ ...found, from: at, line: at })));
+  const trailers = unfolded(lines).flatMap(({ text: line, at, end }) => trailerCredits(line, rules).map(found => ({ ...found, from: at, line: end })));
   const phrases = [...leadCredits(joined, rules), ...adjectiveCredits(joined, rules)].map(({ start, at, ...found }) => ({ ...found, from: lineAt(joined, start), line: lineAt(joined, at) }));
   return [...trailers, ...phrases];
 }
 
-/** The lines, with a trailer's folded continuation lines joined to it as git unfolds them; each keeps the line it starts on. */
+/**
+ * The lines, with a trailer's folded continuation lines joined to it as git
+ * unfolds them. Each keeps the lines it spans, so a credit completed by an
+ * added continuation line counts as the added line's.
+ */
 function unfolded(lines) {
   const logical = [];
   lines.forEach((line, index) => {
     const last = logical.at(-1);
-    if (last && /^[ \t]+\S/.test(line) && TRAILER.test(last.text)) last.text = `${last.text} ${line.trim()}`;
-    else logical.push({ text: line, at: index + 1 });
+    if (last && /^[ \t]+\S/.test(line) && TRAILER.test(last.text)) Object.assign(last, { text: `${last.text} ${line.trim()}`, end: index + 1 });
+    else logical.push({ text: line, at: index + 1, end: index + 1 });
   });
   return logical;
 }
 
-/** Markdown links read as their text, and emphasis marks as nothing, so a formatted credit reads as a plain one. */
+/**
+ * Markdown links read as their text, and emphasis marks and inline HTML tags
+ * as nothing, so a formatted credit reads as a plain one. A tag never holds an
+ * `@`, so an address in angle brackets stays.
+ */
 function plain(text) {
-  return text.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*_`]{1,3}/g, "");
+  return text
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/<\/?[a-z][a-z0-9-]*(?:\s[^<>@]*)?>/gi, "")
+    .replace(/[*_`]{1,3}/g, "");
 }
 
 /** The 1-based line an offset into a text falls on. */
