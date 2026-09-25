@@ -548,13 +548,20 @@ export function guidanceReferences(text) {
  * The skills' own findings: the Claude Code copy out of step with the skills,
  * and a skill either harness would fail to load. The copy is generated, so a
  * difference is fixed by running the generator, never by editing either side
- * into agreement by hand.
+ * into agreement by hand. A finding on the skills' own side — a link, or a
+ * file where their directory should be — is not: a sync would copy what the
+ * link points at and leave the link, so real files go there first.
  */
 export function skillFindings(base = root) {
   return [
-    ...skillCopyDrift(base).map(({ path, problem }) => ({ file: path, kind: "skills copy", claim: problem, fix: "pnpm skills:sync" })),
+    ...skillCopyDrift(base).map(({ path, problem }) => ({ file: path, kind: "skills copy", claim: problem, fix: remedyFor(path) })),
     ...skillFrontmatterProblems(base).map(({ skill, problem }) => ({ file: `${SKILLS_HOME}/${skill}/SKILL.md`, kind: "skill", claim: problem })),
   ];
+}
+
+/** What clears a skills-copy finding: real files where the skills have a link, and otherwise the generator. */
+function remedyFor(path) {
+  return path === SKILLS_HOME || path.startsWith(`${SKILLS_HOME}/`) ? `replace ${path} with real files, then run pnpm skills:sync` : "run pnpm skills:sync";
 }
 
 function main(base = root) {
@@ -678,7 +685,7 @@ function main(base = root) {
     // a refusal nobody saw — `derived-checks.md` on a gate's output.
     console.error(`agent-contract: FAIL — ${findings.length} finding(s)`);
     for (const { file, kind, claim, fix } of findings) {
-      if (kind === "skills copy" || kind === "skill") console.error(`  ${file}: ${claim}${fix ? ` — run ${fix}` : ""}`);
+      if (kind === "skills copy" || kind === "skill") console.error(`  ${file}: ${claim}${fix ? ` — ${fix}` : ""}`);
       else console.error(`  ${file}: ${kind} '${claim}' does not resolve`);
     }
     console.error(`\nread ${files.length} instruction file(s)`);
