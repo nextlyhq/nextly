@@ -1,5 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -275,6 +277,18 @@ function context7({
   };
 }
 
+/** A git repository in a temporary directory with these files tracked, as `verify` reads a checkout. */
+function scratchRepository(files) {
+  const root = mkdtempSync(join(tmpdir(), "context7-"));
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), text);
+  }
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["add", "-A"], { cwd: root });
+  return root;
+}
+
 /** The markers the script will ask for, read from the real files. */
 function realMarkers() {
   const config = JSON.parse(readFileSync("context7.json", "utf-8"));
@@ -477,6 +491,42 @@ describe("verify", () => {
     const { status, lines } = await verify({ root: ".", get: context7({ topics: { ...kept, [marker]: "docs/getting-started/index.mdx" } }) });
     expect(status).toBe(1);
     for (const entry of ["AGENTS.md", "CLAUDE.md"]) expect(lines.join("\n")).toContain(`excludeFiles entry ${entry} may not have taken`);
+  });
+
+  /*
+   * A probe's answer that cites an excluded file is direct evidence that the
+   * rule excluding it did not take, whichever set was probed. Here the answer
+   * to AGENTS.md's probe cites a package's CLAUDE.md, which holds the same
+   * sentence but is not its own set's witness, and the probe of that witness,
+   * the root CLAUDE.md, comes back empty: only the citation shows it.
+   */
+  it("reports an excluded file a probe's answer cites, though it is not its own set's witness, and each finding once", async () => {
+    const guide = "# Agent Guide\n\nThe guide's own sentence.\n";
+    const root = scratchRepository({
+      "context7.json": JSON.stringify({ folders: ["docs"], excludeFiles: ["AGENTS.md", "CLAUDE.md"] }),
+      "README.md": "# Scratch Library\n\nThe README, kept.\n",
+      "docs/getting-started/index.mdx": "# Getting Started\n\nA docs page, kept.\n",
+      "AGENTS.md": guide,
+      "CLAUDE.md": "# Root Copy\n\nThe root copy's own sentence.\n",
+      "packages/x/CLAUDE.md": guide,
+    });
+    const sample = ["README.md", "docs/getting-started/index.mdx"];
+    const kept = { "Scratch Library": "README.md", "Getting Started": "docs/getting-started/index.mdx" };
+    const findings = async (topics, cites = sample) => {
+      const { status, lines } = await verify({ root, get: context7({ cites, topics: { ...kept, ...topics } }) });
+      expect(status).toBe(1);
+      return lines.slice(1);
+    };
+    try {
+      const copy = "  - packages/x/CLAUDE.md is in excludeFiles and was indexed anyway";
+      expect(await findings({ "Agent Guide": "packages/x/CLAUDE.md" })).toEqual([copy]);
+      // Cited by the sample as well, it is still one finding.
+      expect(await findings({ "Agent Guide": "packages/x/CLAUDE.md" }, [...sample, "packages/x/CLAUDE.md"])).toEqual([copy]);
+      // A witness reported as retrievable is not reported again for its citation.
+      expect(await findings({ "Agent Guide": "AGENTS.md" })).toEqual(['  - AGENTS.md is retrievable ("Agent Guide" came back, or the file was cited); excludeFiles entry AGENTS.md did not take']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("fails when a file outside the listed folders is retrievable", async () => {
