@@ -257,14 +257,23 @@ function continuation(line, plainLine, last) {
  * indents an item's continuation to its text, without repeating the bullet,
  * where a comment block repeats its prefix. Under an item an indented line may
  * as well explain it, so it continues the trailer only as what the value still
- * needs: the value itself, while it is empty; another co-author, after a
- * joining word; or the address that completes one.
+ * needs: the value itself, while it is empty, or what goes on with a value.
  */
 const underListItem = (line, last, prefix) => indentedUnderItem(line, last.head, prefix) && continuesItem(plain(line).trim(), itemValue(last));
 
 const indentedUnderItem = (line, head, prefix) => /^[ \t]*\*$/.test(prefix) && /\S/.test(line) && !LIST_ITEM.test(line) && indentOf(line) >= prefix.length + indentOf(head.slice(prefix.length));
 
-const continuesItem = (text, value) => value === "" || JOINER.test(text) || ADDRESS.test(text);
+const continuesItem = (text, value) => value === "" || continuesValue(text);
+
+/** Whether a line goes on with a trailer's value: another co-author after a joining word, a note, an address, or a name alone. */
+const continuesValue = text => JOINER.test(text) || /^[(—]/.test(text) || ADDRESS.test(text) || nameAlone(namePart(text));
+
+/**
+ * A name and nothing more, as a surname or a tool's name folded onto the next
+ * line is: each word capitalised or a number, or a tool's name or identity in
+ * full. An explanation reads on in lower case.
+ */
+const nameAlone = text => /^[A-Z0-9][\w.'-]*(?:\s+[A-Z0-9][\w.'-]*)*$/.test(text) || isAiIdentity(text);
 
 /** A trailer's value so far: its first line after the key, and the lines folded onto it. */
 const itemValue = last => [last.parts[0].replace(TRAILER_HEAD, ""), ...last.parts.slice(1)].join(" ").trim();
@@ -306,7 +315,7 @@ const indentOf = text => /^[ \t]*/.exec(text)[0].length;
 function creditingSpan({ parts, at }, rules) {
   const key = trailerKey(parts[0], rules);
   if (key === undefined) return [];
-  const first = growingCredit(parts, (text, whole) => trailerCredits(text, rules, whole));
+  const first = growingCredit(parts.slice(0, IDENTITY_LINES), (text, whole) => trailerCredits(text, rules, whole));
   return [...placed(first, at), ...laterCoAuthorCredits(parts, at, key, first ? first.through + 1 : 1)];
 }
 
@@ -347,27 +356,53 @@ function creditedPart(parts, creditsOf, count) {
  * folded across lines is judged whole, as the first is.
  */
 function laterCoAuthorCredits(parts, at, key, from) {
-  const creditsOf = (text, whole) => (creditedByTrailer(withoutJoiner(text), whole) ? [{ form: `names it in a ${key} trailer`, excerpt: excerpt(text) }] : []);
+  const creditsOf = (text, whole) => (creditsCoAuthor(text, whole) ? [{ form: `names it in a ${key} trailer`, excerpt: excerpt(text) }] : []);
   return coAuthors(parts, from).flatMap(({ index, group }) => placed(growingCredit(group, creditsOf), at + index));
 }
 
-/** A trailer's parts from `from` on, as co-authors: each starts at a joining word, or at `from`, with the index it starts at. */
+/** A later co-author's lines, judged as a trailer's value is once a joining word is set aside. */
+const creditsCoAuthor = (text, whole) => creditedByTrailer(withoutJoiner(text), whole);
+
+/** A trailer's parts from `from` on, as co-authors, each with the index it starts at. */
 function coAuthors(parts, from) {
   const groups = [];
   parts.slice(from).forEach((part, offset) => {
-    if (groups.length === 0 || JOINER.test(part)) groups.push({ index: from + offset, group: [part] });
+    if (startsCoAuthor(part, groups.at(-1))) groups.push({ index: from + offset, group: [part] });
     else groups.at(-1).group.push(part);
   });
   return groups;
 }
 
 /**
- * Whether lines folded onto a name name a tool of their own, as another
- * co-author does: a tool's name or identity at their start, once a joining
- * word is set aside. A note opens with a bracket or a dash, so a name it
- * mentions is not read.
+ * Whether a folded line starts a co-author of its own: the first, one after a
+ * joining word, or one after a co-author already complete, with an address, a
+ * closing separator or a closed note, or as long as an identity gets. A name
+ * in progress goes on onto the next line, as a first name does onto a surname
+ * and address, and so does a note still open.
  */
-const addsATool = parts => creditedByTrailer(withoutJoiner(parts.join(" ")), true);
+const startsCoAuthor = (part, last) => !last || JOINER.test(part) || last.group.length >= IDENTITY_LINES || complete(last.group.join(" "));
+
+const complete = text => ADDRESS.test(text) || /[,;]\s*$/.test(text) || (NOTE.test(text) && balanced(text));
+
+/**
+ * The most lines one identity is read across: a name, a surname, an address,
+ * a note and one more. Past it a line starts an identity of its own, so a long
+ * run of folded lines is read in time that grows with its length, not with
+ * its square.
+ */
+const IDENTITY_LINES = 5;
+
+/** Where a note opens in a value: a bracket or a dash, at its start or after a space. */
+const NOTE = /(?:^|\s)(?:[(—]|-\s)/;
+
+const balanced = text => (text.match(/\(/g) ?? []).length === (text.match(/\)/g) ?? []).length;
+
+/**
+ * Whether lines folded onto a name name a tool of their own, as another
+ * co-author does: any of the co-authors they hold, each judged whole. A note
+ * opens with a bracket or a dash, so a name it mentions is not read.
+ */
+const addsATool = parts => coAuthors(parts, 0).some(({ group }) => growingCredit(group, (text, whole) => (creditsCoAuthor(text, whole) ? [text] : [])) !== null);
 
 /** A word that joins another co-author onto a trailer's value. */
 const JOINER = /^(?:(?:and|plus)\b|&|,)\s*/i;
@@ -405,8 +440,11 @@ function trailerCredits(text, rules, whole) {
  */
 function creditedByTrailer(value, whole) {
   if (/<[^>]*>/.test(value)) return isAiIdentity(value);
-  return namesToolOutright(value.split(/\s+(?:[(—]|-\s)|:/)[0].trim(), whole);
+  return namesToolOutright(namePart(value), whole);
 }
+
+/** A value's name, before any note: a bracket, a dash or a colon after it ends the name. */
+const namePart = value => value.split(/\s+(?:[(—]|-\s)|:/)[0].trim();
 
 function namesToolOutright(name, whole) {
   return (whole || !VENDOR_ALONE.test(name)) && namesATool(name, whole);
