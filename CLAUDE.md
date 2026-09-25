@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (ff1e57791b6f871b). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (dd8461181510f5f7). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -289,9 +289,11 @@ because a file you could not read is still one the shell will truncate.
 Better, make the write itself refuse: `set -o noclobber; printf '%s' "$content" > path`
 as ONE command (each tool call starts a fresh shell, with the option off), or
 Node's `writeFileSync(path, data, { flag: "wx" })`, which throws `EEXIST`.
-Both refuse to write through a symbolic link at the path itself, even a
-dangling one; a link in a directory above it is followed, and the file is
-created where that link points. `>|` opts out where overwriting is the intent.
+`wx` refuses a symbolic link at the path itself, even a dangling one, and so
+does `noclobber` in bash, where it was measured; another POSIX shell may follow
+a dangling link and create its target. A link in a directory above the path is
+followed by both, and a new file is created where that link points. `>|` opts
+out where overwriting is the intent.
 Under an editing tool that requires a prior read, use it rather than the shell.
 Why, as measured, and how to recover a file once it has been clobbered: the
 `recovering-a-clobbered-file` skill.

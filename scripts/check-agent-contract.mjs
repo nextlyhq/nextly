@@ -33,7 +33,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems } from "./agent-skills.mjs";
-import { copyDrift } from "./agent-instructions.mjs";
+import { copies, copyDrift, repositoryFiles } from "./agent-instructions.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -78,8 +78,15 @@ export const GUIDANCE_SCAN_EXCLUDES = ["scripts/check-agent-contract.test.mjs"];
 
 export const REQUIRED_RULES = [".claude/rules/integration-tests.md"];
 
-/** Sections AGENTS.md holds, by heading, because both tools must load them in every session. */
-export const REQUIRED_SECTIONS = ["## A whole-file write is a delete plus a create"];
+/**
+ * Sections AGENTS.md holds because both tools must load them in every
+ * session: each by its heading, and by the text that makes it the rule rather
+ * than a heading over nothing, here the two exclusive-create forms it
+ * prescribes.
+ */
+export const REQUIRED_SECTIONS = [
+  { heading: "## A whole-file write is a delete plus a create", holds: ["set -o noclobber", '{ flag: "wx" }'] },
+];
 
 /**
  * `pnpm <word>` that is not a script: pnpm's own verbs, and the binaries the
@@ -417,12 +424,20 @@ function markdownUnder(dir) {
   return out;
 }
 
+/**
+ * A directory's AGENTS.md and its `AGENTS.override.md`, those that exist. The
+ * override is the one the AGENTS.md harness takes where there is one, so its
+ * claims are checked as well as the file's beside it.
+ */
+function agentFilesIn(base, dir) {
+  return ["AGENTS.md", "AGENTS.override.md"].map(name => (dir ? `${dir}/${name}` : name)).filter(path => existsSync(join(base, path)));
+}
+
 /** The instruction files this repository ships, as repo-relative paths. */
 export function instructionFiles(base = root) {
   // CLAUDE.md is not read: it is a generated copy of AGENTS.md, held
   // identical separately, so reading it too would report each finding twice.
-  const files = [];
-  if (existsSync(join(base, "AGENTS.md"))) files.push("AGENTS.md");
+  const files = [...agentFilesIn(base, "")];
   // Executable guidance for the CI review agent, and the same kind of subject
   // as the rest: it names `.github/scripts/review-bot-gh.sh` with five
   // subcommands, two skills and a workflow file. Omitting it meant renaming
@@ -432,10 +447,7 @@ export function instructionFiles(base = root) {
   for (const dir of ["packages", "apps"]) {
     const full = join(base, dir);
     if (!existsSync(full)) continue;
-    for (const pkg of readdirSync(full)) {
-      const nested = join(full, pkg, "AGENTS.md");
-      if (existsSync(nested)) files.push(`${dir}/${pkg}/AGENTS.md`);
-    }
+    for (const pkg of readdirSync(full)) files.push(...agentFilesIn(base, `${dir}/${pkg}`));
   }
   // The skills are read where they live; the Claude Code copy is held
   // identical to them separately, so reading it too would report each finding
@@ -580,28 +592,84 @@ export function instructionCopyFindings(base, tracked) {
  *
  * @returns {{ file: string, kind: "instructions", claim: string, fix: string }[]}
  */
-export function ruleFindings(base, agents) {
+export function ruleFindings(base, agents, file = "AGENTS.md") {
   const dir = join(base, ".claude/rules");
   const rules = existsSync(dir) ? readdirSync(dir).filter(name => name.endsWith(".md")).sort() : [];
-  return [...rules.flatMap(name => ruleFinding(`.claude/rules/${name}`, readFileSync(join(dir, name), "utf8"), agents)), ...sectionFindings(agents)];
+  return [...rules.flatMap(name => ruleFinding(`.claude/rules/${name}`, readFileSync(join(dir, name), "utf8"), agents, file)), ...sectionFindings(agents, file)];
 }
 
-function ruleFinding(rule, text, agents) {
-  if (!loadsByPath(text)) return [{ file: rule, kind: "instructions", claim: "has no paths, so Claude Code loads it in every session and Codex never does", fix: "move it into AGENTS.md, which both load" }];
-  return agents.includes(rule) ? [] : [{ file: rule, kind: "instructions", claim: "is not named in AGENTS.md, so Codex is never told where it applies", fix: "name it in AGENTS.md with the skill that carries it to Codex" }];
+function ruleFinding(rule, text, agents, file) {
+  if (!loadsByPath(text)) return [{ file: rule, kind: "instructions", claim: "has no paths, so Claude Code loads it in every session and Codex never does", fix: `move it into ${file}, which both load` }];
+  return agents.includes(rule) ? [] : [{ file: rule, kind: "instructions", claim: `is not named in ${file}, so Codex is never told where it applies`, fix: `name it in ${file} with the skill that carries it to Codex` }];
 }
 
 /** Whether a rule's frontmatter scopes it by path. */
 const loadsByPath = text => /^paths\s*:/m.test(/^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? "");
 
-function sectionFindings(agents) {
-  const headings = new Set(agents.split(/\r?\n/));
-  return REQUIRED_SECTIONS.filter(heading => !headings.has(heading)).map(heading => ({
-    file: "AGENTS.md",
-    kind: "instructions",
-    claim: `no longer has the section "${heading.replace(/^#+ /, "")}", which both tools must load in every session`,
-    fix: "put it back",
-  }));
+function sectionFindings(agents, file) {
+  return REQUIRED_SECTIONS.flatMap(section => sectionFinding(agents, file, section));
+}
+
+/** A required section gone, or kept by its heading over text that no longer holds the rule. */
+function sectionFinding(agents, file, { heading, holds }) {
+  const name = heading.replace(/^#+ /, "");
+  const body = sectionBody(agents, heading);
+  if (body === null) return [{ file, kind: "instructions", claim: `no longer has the section "${name}", which both tools must load in every session`, fix: "put it back" }];
+  const lost = holds.filter(form => !body.includes(form));
+  return lost.length === 0 ? [] : [{ file, kind: "instructions", claim: `has the section "${name}" without ${lost.map(form => `\`${form}\``).join(" or ")}, the forms it prescribes`, fix: "put them back" }];
+}
+
+/** A Markdown heading's level, or 0 for a line that is not one. */
+const headingLevel = line => /^(#{1,6}) /.exec(line)?.[1].length ?? 0;
+
+/**
+ * Each line of a Markdown text, and whether it is code: a fence or a line
+ * inside one, where a `#` begins a comment rather than a heading. A fence is
+ * closed only by one of its own character at least as long, so an example of
+ * the other fence inside it stays code.
+ */
+function markdownLines(text) {
+  let open = null;
+  return text.split(/\r?\n/).map(line => {
+    const code = open !== null || fenceOf(line) !== undefined;
+    open = fenceAfter(open, line);
+    return { line, code };
+  });
+}
+
+/** The run of backticks or tildes a line opens a fence with, or undefined. */
+const fenceOf = line => /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+
+/** The fence open after a line: one the line opens, none once it closes the open one, or the open one still. */
+function fenceAfter(open, line) {
+  if (open === null) return fenceOf(line) ?? null;
+  return closesFence(open, line) ? null : open;
+}
+
+/** Whether a line closes a fence: the same character, at least as many, and nothing after them. */
+function closesFence(open, line) {
+  const fence = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
+  return fence !== undefined && fence[0] === open[0] && fence.length >= open.length;
+}
+
+/** The text under a heading, up to the next heading of its level or above; null when the heading is not there. */
+function sectionBody(text, heading) {
+  const lines = markdownLines(text);
+  const start = lines.findIndex(({ line, code }) => !code && line === heading);
+  if (start === -1) return null;
+  const level = headingLevel(heading);
+  const after = lines.slice(start + 1);
+  const end = after.findIndex(({ line, code }) => !code && headingLevel(line) > 0 && headingLevel(line) <= level);
+  return (end === -1 ? after : after.slice(0, end)).map(({ line }) => line).join("\n");
+}
+
+/**
+ * The root file the AGENTS.md harness takes, the override where there is one:
+ * the file the root CLAUDE.md copies, so the one both tools load in every
+ * session. The router, the rules and the required sections are read from it.
+ */
+export function rootInstructions(tracked) {
+  return copies(tracked).find(({ copy }) => copy === "CLAUDE.md")?.source ?? "AGENTS.md";
 }
 
 /** What clears a skills-copy finding: real files where the skills have a link, and otherwise the generator. */
@@ -654,14 +722,19 @@ function main(base = root) {
         )
       : []
   );
-  const agents = readFileSync(join(base, "AGENTS.md"), "utf8");
+  // The files the sync copies from: tracked ones, and new ones git does not
+  // ignore. Judged from tracked files alone, a new override the sync already
+  // copies would be checked as the AGENTS.md beside it.
+  const listed = repositoryFiles(base);
+  const rootFile = rootInstructions(listed);
+  const agents = readFileSync(join(base, rootFile), "utf8");
   const routed = routedSkills(agents);
   for (const { name, side } of routerDisagreements(routed, present)) {
-    findings.push({ file: "AGENTS.md", kind: "router", claim: `${name} — ${side}` });
+    findings.push({ file: rootFile, kind: "router", claim: `${name} — ${side}` });
   }
   findings.push(...skillFindings(base));
-  findings.push(...instructionCopyFindings(base, tracked));
-  findings.push(...ruleFindings(base, agents));
+  findings.push(...instructionCopyFindings(base, listed));
+  findings.push(...ruleFindings(base, agents, rootFile));
 
   for (const file of files) {
     const text = readFileSync(join(base, file), "utf8");

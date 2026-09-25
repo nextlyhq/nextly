@@ -339,10 +339,11 @@ async function finalizedEntry(get, api) {
 
 /**
  * A sentence of an excluded file that no file the configuration keeps holds, or
- * `null`. A hit for it can then come only from an excluded file, so excluded
+ * `null`. A hit for it can then come only from an excluded file. Excluded
  * files may share it — a generated CLAUDE.md shares every sentence of the
- * AGENTS.md it copies — since a hit from any of them is the same finding. A
- * kept control is held to every other file instead, by `markerFor`.
+ * AGENTS.md it copies — and a hit for a shared sentence is attributed by its
+ * citation (`leakOf`). A kept control is held to every other file instead, by
+ * `markerFor`.
  */
 export function exclusionMarker(corpus, name, config) {
   const kept = [...corpus].filter(([other]) => other !== name && excludingRule(other, config) === null).map(([, text]) => text);
@@ -437,14 +438,52 @@ async function keptControls({ corpus, api, get }) {
  */
 async function exclusionFindings({ corpus, api, get, config }) {
   const findings = [];
-  for (const { set, name, marker } of witnesses(corpus, config)) {
-    const answer = await retrievable(get, api, marker, name);
-    if (!answer.found && !answer.cites.has(name)) continue;
-    findings.push(
-      `${name} is retrievable ("${marker}" came back, or the file was cited); ${set} did not take`
-    );
+  for (const witness of witnesses(corpus, config)) {
+    const elsewhere = holdersElsewhere(corpus, config, witness);
+    const answer = await retrievable(get, api, witness.marker, witness.name);
+    const leak = leakOf(answer, witness.name, elsewhere);
+    if (leak) findings.push(leakFinding(leak, witness, elsewhere));
   }
   return findings;
+}
+
+/**
+ * The files outside a witness's set that hold its marker. The marker is kept
+ * from every file the configuration keeps, but excluded files may share it: a
+ * generated CLAUDE.md holds every sentence of the AGENTS.md it copies, and
+ * each is excluded by an entry of its own.
+ */
+function holdersElsewhere(corpus, config, { set, name, marker }) {
+  return [...corpus]
+    .filter(([other, text]) => other !== name && text.includes(marker) && excludingRule(other, config)?.set(other, config) !== set)
+    .map(([other]) => other);
+}
+
+/**
+ * What a probe's answer says about a set: `"witness"` when its witness came
+ * back, `"shared"` when its sentence came back from a file no answer names
+ * among those that hold it, or null. The witness cited is always its set's.
+ * The sentence alone is its set's only when no file outside the set holds it;
+ * otherwise the citation says which file the index held, and a sentence that
+ * came back naming none of them is reported against every set that holds it
+ * rather than cleared.
+ */
+function leakOf(answer, name, elsewhere) {
+  if (answer.cites.has(name)) return "witness";
+  if (!answer.found) return null;
+  return attributed(answer, elsewhere);
+}
+
+/** A sentence that came back, attributed: to its own set, to another set a citation names, or to all that hold it. */
+function attributed(answer, elsewhere) {
+  if (elsewhere.length === 0) return "witness";
+  return elsewhere.some(other => answer.cites.has(other)) ? null : "shared";
+}
+
+function leakFinding(leak, { set, name, marker }, elsewhere) {
+  return leak === "witness"
+    ? `${name} is retrievable ("${marker}" came back, or the file was cited); ${set} did not take`
+    : `"${marker}" came back, cited from none of ${[name, ...elsewhere].join(", ")}, which all hold it; ${set} may not have taken`;
 }
 
 /** The findings the index earns against the configuration, given a working library. */

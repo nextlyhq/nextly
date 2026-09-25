@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -36,7 +36,7 @@ describe("the Claude Code copy of the skills", () => {
     skill(SKILLS_HOME, "b");
     skill(CLAUDE_COPY, "stale");
 
-    syncSkillCopy(base);
+    expect(syncSkillCopy(base)).toEqual({ leftover: null });
 
     expect(skillCopyDrift(base)).toEqual([]);
     expect(readFileSync(join(base, CLAUDE_COPY, "a/SKILL.md"))).toEqual(readFileSync(join(base, SKILLS_HOME, "a/SKILL.md")));
@@ -119,6 +119,26 @@ describe("the Claude Code copy of the skills", () => {
     expect(() => syncSkillCopy(base, { rename })).toThrow("the swap was refused");
     expect(readFileSync(join(base, CLAUDE_COPY, "a/SKILL.md"), "utf8")).toContain("the old text");
     expect(readdirSync(join(base, ".claude"))).toEqual(["skills"]);
+  });
+
+  /*
+   * Once the new copy is in place the sync has done its work. Failing to
+   * remove the old copy afterwards is reported beside that success, not
+   * thrown as if the swap had failed.
+   */
+  it("reports the copy replaced, naming the old copy it set aside, when only removing that fails", () => {
+    skill(SKILLS_HOME, "a", "---\nname: a\ndescription: the new text\n---\n");
+    skill(CLAUDE_COPY, "a", "---\nname: a\ndescription: the old text\n---\n");
+    // Only the removal of the old copy is refused; every other removal goes through.
+    const remove = (path, options) => {
+      if (path.endsWith("-old")) throw new Error("the removal was refused");
+      rmSync(path, options);
+    };
+    const { leftover } = syncSkillCopy(base, { remove });
+    expect(readFileSync(join(base, CLAUDE_COPY, "a/SKILL.md"), "utf8")).toContain("the new text");
+    expect(leftover?.error.message).toBe("the removal was refused");
+    expect(readFileSync(join(leftover.path, "a/SKILL.md"), "utf8")).toContain("the old text");
+    expect(readdirSync(join(base, ".claude")).sort()).toEqual([basename(leftover.path), "skills"].sort());
   });
 
   /*
