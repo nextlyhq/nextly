@@ -63,11 +63,22 @@ export function diffRange({ event, payload = {}, lastTestedSha, sha }) {
  * @returns {{ base: string, head: string, files: string[] } | { reason: string }}
  */
 export function changedFiles(range, git = readGit) {
+  const compared = comparedRange(range, git);
+  return compared.reason ? compared : listChanges(compared.base, compared.head, git);
+}
+
+/**
+ * The two commits a range compares, or why they cannot be compared: a pull
+ * request from its merge base with its head, the queue from its base as given.
+ *
+ * @returns {{ base: string, head: string } | { reason: string }}
+ */
+export function comparedRange(range, git = readGit) {
+  if (range.reason) return { reason: range.reason };
   const problem = rangeProblem(range, git);
   if (problem) return { reason: problem };
   const from = comparisonBase(range, git);
-  if (!from) return { reason: `no merge base for ${range.base}..${range.head}` };
-  return listChanges(from, range.head, git);
+  return from ? { base: from, head: range.head } : { reason: `no merge base for ${range.base}..${range.head}` };
 }
 
 /** Why a range cannot be compared at all, or null. A first push reports an all-zero base, and a force push can leave one no longer fetchable. */

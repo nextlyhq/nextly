@@ -19,9 +19,9 @@ export function eventPayload(env = process.env) {
  * Git's output, or `ok: false` when git refused: an absent commit, or a range
  * it cannot read. A refusal is for the caller to decide about, not a crash.
  */
-export function readGit(args, { cwd } = {}) {
+export function readGit(args, { cwd, maxBuffer } = {}) {
   try {
-    return { ok: true, out: execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }) };
+    return { ok: true, out: execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer, stdio: ["ignore", "pipe", "ignore"] }) };
   } catch {
     return { ok: false, out: "" };
   }

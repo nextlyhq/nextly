@@ -26,6 +26,7 @@ const QUEUE_CHECKS = {
   ".github/workflows/pr-title.yml": ["Validate PR title follows Conventional Commits"],
   ".github/workflows/independent-review.yml": ["Independent review of the revision being merged"],
   ".github/workflows/secret-scan.yml": ["gitleaks"],
+  ".github/workflows/ai-credit.yml": ["No AI credit"],
 };
 
 describe("every workflow behind a required check, in the merge queue", () => {
