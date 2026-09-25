@@ -5,6 +5,7 @@ import { getDialectTables } from "../../../../database/index";
 import {
   drizzleTableNames,
   filterUnsafeStatements,
+  findUnexpectedDestructiveStatements,
   stripKitDropsOfDeclaredIndexes,
 } from "../filter-unsafe-statements";
 
@@ -238,5 +239,50 @@ describe("filterUnsafeStatements: plugin-migrated tables", () => {
       ["auth__identities"]
     );
     expect(kept).toEqual(['DROP TABLE "auth__identities"']);
+  });
+});
+
+describe("DROP SCHEMA", () => {
+  // drizzle-kit emits one when the schema it reconciles holds nothing it
+  // recognises as wanted. Executed, every later statement resolves nowhere.
+  const spellings = [
+    'DROP SCHEMA "cms";',
+    "DROP SCHEMA IF EXISTS cms CASCADE",
+    "  drop schema public",
+    "DROP DATABASE `nextly`",
+  ];
+
+  it.each(spellings)("is blocked by the unsafe-statement filter: %s", stmt => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // `cms` and `public` in the desired set as well: no table name makes a
+    // schema drop intended, and a check keyed on the set would let these by.
+    const out = filterUnsafeStatements(
+      [stmt, 'CREATE TABLE "users" ("id" text)'],
+      ["users", "cms", "public", "nextly"]
+    );
+    expect(out).toEqual(['CREATE TABLE "users" ("id" text)']);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("drops a schema")
+    );
+  });
+
+  it.each(spellings)("is an offender for the destructive scan: %s", stmt => {
+    // Scoped to a managed-table set that names no schema, which is how the
+    // pipeline calls it — a table-membership test alone would pass these.
+    expect(
+      findUnexpectedDestructiveStatements([stmt], undefined, new Set(["users"]))
+    ).toEqual([stmt]);
+  });
+
+  it("leaves statements that only mention a schema alone", () => {
+    // The control: the filter must not become a blanket refusal of anything
+    // naming a schema, which would stop ordinary creates.
+    const kept = [
+      'CREATE SCHEMA IF NOT EXISTS "cms"',
+      'CREATE TABLE "cms"."users" ("id" text)',
+      'ALTER TABLE "users" ADD COLUMN "drop_schema" text',
+    ];
+    expect(filterUnsafeStatements(kept, ["users"])).toEqual(kept);
+    expect(findUnexpectedDestructiveStatements(kept)).toEqual([]);
   });
 });

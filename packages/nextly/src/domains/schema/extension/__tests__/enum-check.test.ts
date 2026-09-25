@@ -63,6 +63,25 @@ describe("an enum column's permitted values", () => {
     ).toBe("s IN ('it''s')");
   });
 
+  it("writes a backslash value as hex on MySQL, and plainly elsewhere", () => {
+    // Under MySQL's default sql_mode `'back\slash'` means `backslash`, which
+    // would refuse every row holding the declared value. The hex literal says
+    // the declared value whatever the mode; the other dialects read a
+    // backslash as itself.
+    const values = ["a", "back\\slash"];
+    expect(enumCheckSql({ name: "s", enumValues: values }, "mysql")).toBe(
+      "s IN ('a', _utf8mb4 X'6261636b5c736c617368')"
+    );
+    expect(enumCheckSql({ name: "s", enumValues: values }, "postgresql")).toBe(
+      "s IN ('a', 'back\\slash')"
+    );
+    expect(
+      enumValuesIn(
+        enumCheckSql({ name: "s", enumValues: values }, "mysql") ?? ""
+      )
+    ).toEqual(values);
+  });
+
   it("keeps DECLARATION order rather than sorting", () => {
     // Sorting would make a reorder invisible, which sounds harmless until an
     // author reorders and the pipeline reports no change while the stored
@@ -117,6 +136,25 @@ describe("changing an enum's values", () => {
       "closed",
     ]);
     expect(enumValuesIn("state IN ('it''s')")).toEqual(["it's"]);
+  });
+
+  it("reads the expression PostgreSQL reports for a live constraint", () => {
+    // pg_get_constraintdef's spelling of `state IN ('open', 'closed')` on a
+    // varchar column, and of a one-value set, which it stores as an equality.
+    const live =
+      "((state)::text = ANY ((ARRAY['open'::character varying, 'closed'::character varying])::text[]))";
+    expect(enumValuesIn(live)).toEqual(["open", "closed"]);
+    expect(enumValuesIn("((state)::text = 'open'::text)")).toEqual(["open"]);
+    // MySQL's CHECK_CLAUSE for the same two shapes, escaping layer removed.
+    expect(
+      enumValuesIn("(`state` in (_utf8mb4'open',_utf8mb4'it\\'s'))")
+    ).toEqual(["open", "it's"]);
+    expect(enumValuesIn("(`state` = _utf8mb4'open')")).toEqual(["open"]);
+    expect(removedEnumValues(live, "state IN ('open')")).toEqual(["closed"]);
+  });
+
+  it("does not read two value sets as one", () => {
+    expect(enumValuesIn("a IN ('x', 'y') AND b IN ('z', 'w')")).toBeNull();
   });
 
   it("says nothing about an expression it did not write", () => {

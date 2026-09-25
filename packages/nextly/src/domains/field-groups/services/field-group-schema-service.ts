@@ -66,6 +66,7 @@ import { env } from "../../../lib/env";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { pluginEmptyColumnDefault } from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import type { ExtensionColumn } from "../../schema/extension/types";
 import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
@@ -75,6 +76,10 @@ import {
   isPluginDataField,
   pluginStorageFieldType,
 } from "../../schema/services/plugin-codegen";
+import {
+  addContributedDrizzleColumns,
+  contributedColumnsFor,
+} from "../../schema/services/runtime-schema-generator";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
@@ -533,13 +538,33 @@ export class FieldGroupSchemaService {
       return !name || !localizedNames.has(name);
     });
     const typeColumn = options.typeColumn;
+    // Columns a schema hook contributed to this table, read the way every
+    // entity runtime table reads them. This table is what drizzle-kit is
+    // handed for a field group, so without them the push creates the table
+    // without the column the desired spec asks for.
+    const contributed = contributedColumnsFor(tableName, this.dialect);
     switch (this.dialect) {
       case "postgresql":
-        return this.generatePostgresSchema(tableName, mainFields, typeColumn);
+        return this.generatePostgresSchema(
+          tableName,
+          mainFields,
+          typeColumn,
+          contributed
+        );
       case "mysql":
-        return this.generateMySQLSchema(tableName, mainFields, typeColumn);
+        return this.generateMySQLSchema(
+          tableName,
+          mainFields,
+          typeColumn,
+          contributed
+        );
       case "sqlite":
-        return this.generateSQLiteSchema(tableName, mainFields, typeColumn);
+        return this.generateSQLiteSchema(
+          tableName,
+          mainFields,
+          typeColumn,
+          contributed
+        );
       default:
         throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
     }
@@ -548,7 +573,8 @@ export class FieldGroupSchemaService {
   private generatePostgresSchema(
     tableName: string,
     fields: FieldConfig[],
-    typeColumn: string
+    typeColumn: string,
+    contributed: readonly ExtensionColumn[]
   ): unknown {
     // Required by Drizzle: pgTable() expects a `Record<string, PgColumnBuilderBase>`
     // but the column builders returned by helpers (pgText, pgInteger, ...) have
@@ -585,6 +611,7 @@ export class FieldGroupSchemaService {
         columns[field.name] = column;
       }
     }
+    addContributedDrizzleColumns(columns, contributed, "postgresql");
 
     // Required by Drizzle: pgTable() is generic over the column shape, and
     // our columns map is dynamic (Record<string, unknown>). The index
@@ -605,7 +632,8 @@ export class FieldGroupSchemaService {
   private generateMySQLSchema(
     tableName: string,
     fields: FieldConfig[],
-    typeColumn: string
+    typeColumn: string,
+    contributed: readonly ExtensionColumn[]
   ): unknown {
     const columns: Record<string, unknown> = {
       id: mysqlVarchar("id", { length: 36 }).primaryKey(),
@@ -636,6 +664,7 @@ export class FieldGroupSchemaService {
         columns[field.name] = column;
       }
     }
+    addContributedDrizzleColumns(columns, contributed, "mysql");
 
     return mysqlTable(
       tableName,
@@ -652,7 +681,8 @@ export class FieldGroupSchemaService {
   private generateSQLiteSchema(
     tableName: string,
     fields: FieldConfig[],
-    typeColumn: string
+    typeColumn: string,
+    contributed: readonly ExtensionColumn[]
   ): unknown {
     const columns: Record<string, unknown> = {
       id: sqliteText("id").primaryKey(),
@@ -679,6 +709,7 @@ export class FieldGroupSchemaService {
         columns[field.name] = column;
       }
     }
+    addContributedDrizzleColumns(columns, contributed, "sqlite");
 
     return sqliteTable(
       tableName,

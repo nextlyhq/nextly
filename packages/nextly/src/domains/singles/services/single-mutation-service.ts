@@ -865,10 +865,13 @@ export class SingleMutationService extends BaseService {
       // physical column name and both are refused. This previously removed `id` and `createdAt`
       // only, which left `updatedAt` and the first-publication marker writable from the request —
       // and the marker is meant to be set once, so a caller able to supply it could date a
-      // publication that never happened or overwrite a real one.
+      // publication that never happened or overwrite a real one. Columns a schema hook
+      // contributed to this Single's table are dropped by the same call: their contributor
+      // writes them, and the read path never returns them.
       const snakeCaseData = stripImmutableSystemFields(
         keysToSnakeCase(serializedData) as Record<string, unknown>,
-        "single"
+        "single",
+        singleMeta.tableName
       );
       // Commit the scalar update, the component subtree writes, the companion
       // upsert, AND the version snapshot atomically so any failure rolls back the
@@ -1417,6 +1420,7 @@ export class SingleMutationService extends BaseService {
                 ({ main: mainPayload, companion: companionData } =
                   splitPendingChange(
                     pendingDraft.snapshot,
+                    singleMeta.tableName,
                     companion && companionPhysicallyExists ? companion : null,
                     updatePayload
                   ));
@@ -2761,12 +2765,15 @@ export class SingleMutationService extends BaseService {
 
       this.logger.info("Single document updated", { slug, id: updatedDoc.id });
 
-      // Redact the response: drop write-only password hashes and any field
+      // Redact the response: drop write-only password hashes, the columns
+      // that never leave the server (including any a schema hook contributed
+      // to this Single's table, which the returned row carries), and any field
       // the caller may write but not read (parity with the query path), so a
       // mutation response can never echo a value the reader is denied. A
       // route-authorized REST caller isn't a trusted-server read, so its
       // override does not skip redaction (mirrors the collection path).
       stripPasswordFieldValues(updatedDoc, fieldConfigs);
+      stripServerOnlyColumns(updatedDoc, singleMeta.tableName);
       await applyFieldReadAccess({
         kind: "single",
         slug,

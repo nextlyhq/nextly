@@ -12,6 +12,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { diffSnapshots } from "../diff";
 import { introspectLiveSnapshot } from "../introspect-live";
 
 const URL = process.env.TEST_POSTGRES_URL ?? "";
@@ -64,13 +65,36 @@ describePg("pg constraint introspection", () => {
   });
 
   it("reads checks with the definition's expression unwrapped", async () => {
+    // Recorded as PostgreSQL deparses it — every subexpression parenthesised —
+    // because that text is what the server holds and is valid DDL as it
+    // stands. Only the `CHECK (...)` wrapper comes off.
     const snapshot = await introspectLiveSnapshot(db, "postgresql", [TABLE]);
     expect(snapshot.tables[0]?.checks).toEqual([
       {
         name: `ck_${TABLE}_score`,
-        sql: "score >= 0 AND (score IS NULL OR score < 1000)",
+        sql: "(score >= 0) AND ((score IS NULL) OR (score < 1000))",
       },
     ]);
+  });
+
+  it("a check reads as the same check it was declared as", async () => {
+    // The deparsed spelling differs from the authored one, so this is the
+    // comparison that decides whether the diff sees drift. It must not.
+    const snapshot = await introspectLiveSnapshot(db, "postgresql", [TABLE]);
+    const live = snapshot.tables[0];
+    if (live === undefined) throw new Error("expected the table");
+    const declared = {
+      ...live,
+      checks: [
+        {
+          name: `ck_${TABLE}_score`,
+          sql: "score >= 0 AND (score IS NULL OR score < 1000)",
+        },
+      ],
+    };
+    expect(diffSnapshots({ tables: [live] }, { tables: [declared] })).toEqual(
+      []
+    );
   });
 
   it("a table with no constraints reports empty lists, not undefined", async () => {

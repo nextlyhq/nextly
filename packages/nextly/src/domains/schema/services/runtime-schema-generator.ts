@@ -159,9 +159,7 @@ export function generateRuntimeSchema(
     ...options,
     isSingle: options.isSingle ?? tableName.startsWith("single_"),
     extensionColumns:
-      options.extensionColumns ??
-      getActiveExtensionSchema(dialect)?.entityColumns.get(tableName) ??
-      [],
+      options.extensionColumns ?? contributedColumnsFor(tableName, dialect),
   };
   let table: unknown;
   switch (dialect) {
@@ -286,6 +284,53 @@ function buildCompanionColumnRecord(
   return out;
 }
 
+/**
+ * The columns schema hooks contributed to `tableName`, from the active
+ * extension schema.
+ *
+ * One lookup for every runtime-table builder, so an entity table and a
+ * field-group table cannot disagree about whether a contribution exists.
+ */
+export function contributedColumnsFor(
+  tableName: string,
+  dialect: SupportedDialect
+): readonly ExtensionColumn[] {
+  return getActiveExtensionSchema(dialect)?.entityColumns.get(tableName) ?? [];
+}
+
+/**
+ * Add contributed columns to a runtime table's column record, in place.
+ *
+ * Keyed by their SQL name exactly as `toDrizzleTable` keys an extension
+ * table's own — so one column has one key wherever it is read from, and
+ * `ctx.db` sees the same handle on both.
+ *
+ * They must be in every runtime table and not only in the desired spec: the
+ * runtime tables are what drizzle-kit is handed, so a table built without them
+ * is created without them and the next push proposes DROPPING a column the
+ * desired spec still asks for. Present but unhidden, they reach every entry
+ * response — which is why `hidden` exists and why the response boundary strips
+ * them.
+ *
+ * A name the record already holds is left alone: a contribution never
+ * displaces a system or field column.
+ */
+export function addContributedDrizzleColumns(
+  // Drizzle's column builders are dialect-specific unions; the record is
+  // handed straight to pgTable / mysqlTable / sqliteTable.
+  columns: Record<string, unknown>,
+  contributed: readonly ExtensionColumn[],
+  dialect: SupportedDialect
+): void {
+  for (const column of contributed) {
+    if (column.name in columns) continue;
+    columns[column.name] = buildUserDrizzleColumn(
+      toColumnDescriptor(column, dialect),
+      dialect
+    );
+  }
+}
+
 function generatePostgresSchema(
   tableName: string,
   fields: FieldDefinition[],
@@ -374,22 +419,7 @@ function buildDrizzleColumnRecord(
     out[field.name] = buildUserDrizzleColumn(desc, dialect);
   }
 
-  // Contributed columns, keyed by their SQL name exactly as `toDrizzleTable`
-  // keys an extension table's own — so one column has one key wherever it is
-  // read from, and `ctx.db` sees the same handle on both.
-  //
-  // They must be HERE and not only in the desired spec: absent from the
-  // runtime table, drizzle-kit is handed a table without them and the next
-  // push proposes DROPPING the column it just created. Present but unhidden,
-  // they reach every entry response — which is why `hidden` exists and why
-  // the response boundary strips them.
-  for (const column of options.extensionColumns ?? []) {
-    if (column.name in out) continue;
-    out[column.name] = buildUserDrizzleColumn(
-      toColumnDescriptor(column, dialect),
-      dialect
-    );
-  }
+  addContributedDrizzleColumns(out, options.extensionColumns ?? [], dialect);
 
   return out;
 }

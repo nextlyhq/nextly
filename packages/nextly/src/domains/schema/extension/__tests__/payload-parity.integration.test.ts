@@ -22,6 +22,7 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { randomBytes } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 
+import { diffSnapshots } from "../../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { toTableSpec } from "../compile";
 import { col, defineTable } from "../dsl";
@@ -191,6 +192,36 @@ for (const entry of DIALECTS) {
           `INSERT INTO ${q(t.name)} (${q("id")}, ${q("state")}) VALUES ('b', 'banana')`
         )
       ).rejects.toThrow();
+    });
+
+    // Row 10, continued: the enum's constraint reads back as the SAME check
+    // the model declares. PostgreSQL deparses `state IN (...)` as
+    // `(state)::text = ANY ((ARRAY[...])::text[])`, so a textual comparison
+    // saw a changed check on every diff — dev push proposed dropping and
+    // re-adding it forever, and any later change to the values was refused as
+    // drift. The diff is asked directly, because "no check operations" is the
+    // property that matters, whatever spelling the server chose.
+    it("row 10 — a created enum check introspects with no diff against its declaration", async () => {
+      const t = table("enum_rt", {
+        id: col.id(),
+        state: col.enum(["open", "closed", "it's"]),
+        single: col.enum(["only"], { nullable: true }),
+      });
+      const live = await push(t);
+      const desired = toTableSpec(t, entry.dialect);
+
+      // The control: the live table really carries both constraints, so an
+      // empty diff below cannot come from a side that tracked no checks.
+      expect((live?.checks ?? []).map(c => c.name).sort()).toEqual(
+        (desired.checks ?? []).map(c => c.name).sort()
+      );
+      expect(desired.checks?.length).toBe(2);
+
+      const checkOps = diffSnapshots(
+        { tables: live === undefined ? [] : [live] },
+        { tables: [desired] }
+      ).filter(op => op.type === "add_check" || op.type === "drop_check");
+      expect(checkOps).toEqual([]);
     });
 
     // Row 3: indexes a plugin declares are emitted, including the compound

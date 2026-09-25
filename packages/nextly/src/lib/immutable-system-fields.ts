@@ -14,8 +14,16 @@
  * writable: they are content and lifecycle, not provenance. Only the columns the service alone
  * decides are closed, which is exactly what `writableByClient` records.
  *
+ * A column a schema hook contributed to the entity's table is closed for the same reason: it is a
+ * real column that is no field, so nothing before the write removes it, and its contributor writes
+ * it through `ctx.db`. It is dropped rather than refused because that is what happens to every
+ * other real column that is not a field here, and a caller round-tripping a document cannot have
+ * read it in the first place.
+ *
  * @module lib/immutable-system-fields
  */
+
+import { hiddenColumnMatcher } from "../shared/lib/password-fields";
 
 import {
   immutableSystemColumnNames,
@@ -59,19 +67,29 @@ export function immutableSystemFieldsFor(
 }
 
 /**
- * A copy of `data` without any client-supplied system column for that entity.
+ * A copy of `data` without any column a client may not write on that entity's table: its
+ * immutable system columns, and the columns schema hooks contributed to it.
  *
  * Returns a new object rather than mutating, so a caller can keep the original for hooks or
  * event payloads that legitimately describe what was requested.
+ *
+ * The contributed set is matched by the same predicate `stripServerOnlyColumns` uses on
+ * responses, so the read and the write cannot disagree about which columns are hidden. It is
+ * asked per TABLE, as that read is: a contributed name is not namespaced, and a field of the same
+ * name on another entity is that entity's own.
  */
 export function stripImmutableSystemFields(
   data: Record<string, unknown>,
-  entity: WritableEntityKind
+  entity: WritableEntityKind,
+  /** The SQL table the payload is written to. */
+  tableName: string
 ): Record<string, unknown> {
   const reserved = immutableSystemFieldsFor(entity);
+  const isHidden = hiddenColumnMatcher(tableName);
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
-    if (!reserved.has(key)) out[key] = value;
+    if (reserved.has(key) || isHidden(key)) continue;
+    out[key] = value;
   }
   return out;
 }

@@ -9,11 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import { diffSnapshots } from "../diff";
-import type {
-  CheckSpec,
-  ForeignKeySpec,
-  TableSpec,
-} from "../types";
+import type { CheckSpec, ForeignKeySpec, TableSpec } from "../types";
 import { generateSQL } from "../../sql-templates/index";
 import { buildInverseOperations } from "../../../migrate-create/down-generator";
 
@@ -32,7 +28,11 @@ describe("diffChecks", () => {
   it("adds a check the previous snapshot did not carry", () => {
     const ops = diffSnapshots(
       { tables: [tableWith([])] },
-      { tables: [tableWith([check("ck_orders_status", `status IN ('open','paid')`)])] }
+      {
+        tables: [
+          tableWith([check("ck_orders_status", `status IN ('open','paid')`)]),
+        ],
+      }
     );
     expect(ops).toEqual([
       {
@@ -49,16 +49,65 @@ describe("diffChecks", () => {
       { tables: [tableWith([])] }
     );
     expect(ops).toEqual([
-      { type: "drop_check", tableName: "fx__orders", check: check("ck_old", "score >= 0") },
+      {
+        type: "drop_check",
+        tableName: "fx__orders",
+        check: check("ck_old", "score >= 0"),
+      },
     ]);
   });
 
   it("changes a check's expression as drop-plus-add under the same name", () => {
     const ops = diffSnapshots(
-      { tables: [tableWith([check("ck_orders_status", `status IN ('open')`)])] },
-      { tables: [tableWith([check("ck_orders_status", `status IN ('open','paid')`)])] }
+      {
+        tables: [tableWith([check("ck_orders_status", `status IN ('open')`)])],
+      },
+      {
+        tables: [
+          tableWith([check("ck_orders_status", `status IN ('open','paid')`)]),
+        ],
+      }
     );
     expect(ops.map(op => op.type)).toEqual(["drop_check", "add_check"]);
+  });
+
+  it("reads PostgreSQL's spelling of a check as the check it was declared as", () => {
+    // The live side is what pg_get_constraintdef reports for an enum check on
+    // a varchar column; the desired side is what `col.enum()` declares. Compared
+    // as text these never match, so every comparison proposed a drop-plus-add.
+    const live = check(
+      "ck_orders_status",
+      "((status)::text = ANY ((ARRAY['open'::character varying, 'paid'::character varying])::text[]))"
+    );
+    const declared = check("ck_orders_status", "status IN ('open', 'paid')");
+    expect(
+      diffSnapshots(
+        { tables: [tableWith([live])] },
+        { tables: [tableWith([declared])] }
+      )
+    ).toEqual([]);
+  });
+
+  it("still changes a check PostgreSQL reports when the declaration differs", () => {
+    // The control for the case above: canonical comparison must not swallow a
+    // real change. The ops carry each side's own text, not the canonical form.
+    const live = check(
+      "ck_orders_status",
+      "((status)::text = ANY ((ARRAY['open'::character varying, 'paid'::character varying])::text[]))"
+    );
+    const declared = check(
+      "ck_orders_status",
+      "status IN ('open', 'paid', 'void')"
+    );
+    expect(
+      diffSnapshots(
+        { tables: [tableWith([live])] },
+        { tables: [tableWith([declared])] }
+      )
+    ).toEqual([
+      { type: "drop_check", tableName: "fx__orders", check: live },
+      { type: "add_check", tableName: "fx__orders", check: declared },
+    ]);
   });
 
   it("emits nothing when either side did not track checks", () => {
@@ -95,7 +144,11 @@ describe("check rendering", () => {
   });
 
   it("drops with the dialect's own verb", () => {
-    const drop = { type: "drop_check", tableName: op.tableName, check: op.check } as const;
+    const drop = {
+      type: "drop_check",
+      tableName: op.tableName,
+      check: op.check,
+    } as const;
     expect(generateSQL(drop, "postgresql")).toBe(
       `ALTER TABLE "fx__orders" DROP CONSTRAINT IF EXISTS "ck_orders_status"`
     );
@@ -120,13 +173,14 @@ describe("diffForeignKeys", () => {
   const fk = (
     name: string,
     over: Partial<ForeignKeySpec> = {}
-  ): ForeignKeySpec => ({
-    name,
-    columns: ["author_id"],
-    referencesTable: "dc_authors",
-    referencesColumns: ["id"],
-    onDelete: "cascade",
-    onUpdate: "no action",
+  ): ForeignKeySpec =>
+    ({
+      name,
+      columns: ["author_id"],
+      referencesTable: "dc_authors",
+      referencesColumns: ["id"],
+      onDelete: "cascade",
+      onUpdate: "no action",
       ...over,
     }) as never;
   const tableWithFks = (fks: unknown[] | undefined) => ({
@@ -195,7 +249,11 @@ describe("diffForeignKeys", () => {
 });
 
 describe("partial and expression indexes", () => {
-  const base = { name: "idx_fx__orders_open", columns: ["status"], unique: false };
+  const base = {
+    name: "idx_fx__orders_open",
+    columns: ["status"],
+    unique: false,
+  };
 
   it("renders the WHERE predicate on postgres and sqlite", () => {
     const op = {
@@ -235,8 +293,14 @@ describe("partial and expression indexes", () => {
   });
 
   it("a changed predicate re-keys the index, arriving as drop-plus-add", () => {
-    const prev = { ...tableWith([]), indexes: [{ ...base, where: "status = 'open'" }] };
-    const cur = { ...tableWith([]), indexes: [{ ...base, where: "status <> 'done'" }] };
+    const prev = {
+      ...tableWith([]),
+      indexes: [{ ...base, where: "status = 'open'" }],
+    };
+    const cur = {
+      ...tableWith([]),
+      indexes: [{ ...base, where: "status <> 'done'" }],
+    };
     const ops = diffSnapshots({ tables: [prev] }, { tables: [cur] });
     expect(ops.map(op => op.type)).toEqual(["drop_index", "add_index"]);
   });

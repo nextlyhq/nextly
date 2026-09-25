@@ -112,14 +112,14 @@ export interface DatabaseConfig {
     /**
      * The schema every managed table, index and enum lives in.
      *
-     * Defaults to `public`. Setting it puts core tables, entity tables,
-     * extension tables, the migrate lock and the ledger in one namespace, so
-     * two applications can share a database without colliding — the thing a
-     * shared cluster is usually bought for.
+     * Only `"public"` is supported for now, and leaving it out means the
+     * same. Any other value is refused at boot and by every CLI command: the
+     * schema push cannot yet create tables outside `public`, so an
+     * installation pointed elsewhere would start with no core tables.
      *
-     * Applied as `search_path` on every connection rather than by qualifying
-     * each table, so one setting covers everything that resolves a name,
-     * including SQL nobody wrote through the query builder.
+     * Reserved for placing an installation in its own namespace, applied as
+     * `search_path` on every connection so one setting covers everything
+     * that resolves a name.
      *
      * MySQL and SQLite have no equivalent (MySQL's schema IS its database,
      * SQLite is one file) and ignore it with a warning, so a config shared

@@ -25,12 +25,21 @@ afterEach(() => {
 });
 
 describe("the schema a CLI command resolves in", () => {
-  it("is the configured one once the config is loaded", () => {
-    // What `loadConfig` does on every command that reads nextly.config.ts.
-    setActivePostgresSchema(resolvePostgresSchema("cms", "postgresql"));
+  it("refuses a schema other than public when the config is loaded", () => {
+    // What `loadConfig` does on every command that reads nextly.config.ts, so
+    // `migrate`, `migrate:create` and `plugins install` refuse exactly as the
+    // server does: the push cannot yet create tables anywhere but `public`.
+    expect(() =>
+      setActivePostgresSchema(resolvePostgresSchema("cms", "postgresql"))
+    ).toThrow(
+      expect.objectContaining({ code: "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED" })
+    );
+    expect(activePostgresSchema()).toBe(DEFAULT_POSTGRES_SCHEMA);
+  });
 
-    // What `createCliAdapter` reads when it builds the adapter.
-    expect(activePostgresSchema()).toBe("cms");
+  it("accepts public named explicitly", () => {
+    setActivePostgresSchema(resolvePostgresSchema("public", "postgresql"));
+    expect(activePostgresSchema()).toBe(DEFAULT_POSTGRES_SCHEMA);
   });
 
   it("goes BACK to the default when a later config names no schema", () => {
@@ -39,11 +48,12 @@ describe("the schema a CLI command resolves in", () => {
     // more than once.
     //
     // `publishConfiguredPostgresSchema` used to return early when the key was
-    // absent, which made the value sticky — a process that had loaded `cms`
-    // kept it, so the second config's migrations and ledger targeted a schema
-    // its own settings never mentioned. Publishing unconditionally is the fix,
-    // and `resolvePostgresSchema` already answers the default for `undefined`.
-    setActivePostgresSchema(resolvePostgresSchema("cms", "postgresql"));
+    // absent, which made the value sticky — a process that had published
+    // another schema kept it, so the second config's migrations and ledger
+    // targeted a schema its own settings never mentioned. Publishing
+    // unconditionally is the fix, and `resolvePostgresSchema` already answers
+    // the default for `undefined`.
+    setActivePostgresSchema("cms");
     expect(activePostgresSchema()).toBe("cms");
 
     setActivePostgresSchema(resolvePostgresSchema(undefined, "postgresql"));

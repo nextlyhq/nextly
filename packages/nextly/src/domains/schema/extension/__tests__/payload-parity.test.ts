@@ -841,28 +841,26 @@ describe("row 23 — client-supplied id on create", () => {
 });
 
 describe("row 24 — a Postgres schema other than public", () => {
-  it("C: a collection resolves to a Postgres schema other than public", async () => {
+  it("is a gap for now: any schema but public is refused, not half-honoured", async () => {
     const {
       resolvePostgresSchema,
-      setActivePostgresSchema,
       activePostgresSchema,
       clearActivePostgresSchema,
     } = await import("../../services/postgres-schema");
 
-    // One resolution, published once: the adapter applies it as `search_path`
-    // and drizzle-kit filters introspection by it. Payload reaches the same
-    // place through `schemaName`; the difference is that here the lock row and
-    // the ledger follow the path too, because they are ordinary tables.
+    // Payload reaches another schema through `schemaName`. Here the setting is
+    // resolved and refused: the schema push cannot yet create tables outside
+    // `public`, and an installation pointed elsewhere would boot with none of
+    // its core tables. Recorded as a gap rather than claimed as parity.
     try {
-      setActivePostgresSchema(resolvePostgresSchema("cms", "postgresql"));
-      expect(activePostgresSchema()).toBe("cms");
+      expect(() => resolvePostgresSchema("cms", "postgresql")).toThrow(
+        expect.objectContaining({ code: "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED" })
+      );
+      expect(resolvePostgresSchema("public", "postgresql")).toBe("public");
+      expect(activePostgresSchema()).toBe("public");
     } finally {
       clearActivePostgresSchema();
     }
-
-    // The live half — a fresh install creating everything in `cms` and nothing
-    // in `public`, and two apps sharing one database — needs a real server and
-    // lives in the Postgres integration lane.
   });
 });
 

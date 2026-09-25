@@ -138,6 +138,32 @@ describe("freshPushSchema", () => {
       );
     });
 
+    it("never executes a DROP SCHEMA the kit emits", async () => {
+      // The emission observed when the kit reconciles a schema it believes
+      // holds nothing wanted: the configured schema itself, dropped on boot.
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      mockPushSchemaResult = {
+        sqlStatements: [
+          'DROP SCHEMA "cms";',
+          'CREATE TABLE "users" ("id" text)',
+        ],
+        hints: [],
+        apply: vi.fn(),
+      };
+      const { db, tx } = makePgDb();
+
+      const result = await freshPushSchema(
+        "postgresql",
+        db,
+        await fakeUsersSchema()
+      );
+
+      expect(result.statementsExecuted).toEqual([
+        'CREATE TABLE "users" ("id" text)',
+      ]);
+      expect(tx.execute).toHaveBeenCalledOnce();
+    });
+
     it("filters out DROP TABLE for tables not in the schema", async () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       mockPushSchemaResult = {

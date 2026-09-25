@@ -133,6 +133,15 @@ export const NEXTLY_ERROR_STATUS = {
   // transport above: nothing is broken and the request is not malformed, the
   // install simply cannot carry it out until one command is run.
   NEXTLY_CONFIG_TOOLING_UNAVAILABLE: 503,
+  // `db.postgres.schema` names one schema and the adapter the application
+  // supplied writes to another. 500 like the other boot-time configuration
+  // refusals: no request caused it, and the fix is a change to the server's
+  // own configuration.
+  NEXTLY_POSTGRES_SCHEMA_MISMATCH: 500,
+  // `db.postgres.schema` names a schema other than `public`, which the schema
+  // push cannot yet create tables in. 500 for the same reason as the mismatch
+  // above: a boot-time refusal of the server's own configuration.
+  NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED: 500,
 } as const;
 
 export type NextlyErrorCode = keyof typeof NEXTLY_ERROR_STATUS;

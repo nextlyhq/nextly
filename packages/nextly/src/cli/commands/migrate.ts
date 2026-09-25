@@ -672,12 +672,8 @@ async function recordElementOwners(deps: MigrateCoreDeps): Promise<void> {
   }
 }
 
-/**
- * Record the app's own extension tables, the current element owner rows, and
- * retire the stale element rows.
- */
+/** Record the current element owner rows, and retire the stale ones. */
 export async function syncElementOwners(deps: MigrateCoreDeps): Promise<void> {
-  await recordAppTableOwners(deps);
   await recordElementOwners(deps);
   await retireElementOwners(deps);
 }
@@ -689,10 +685,16 @@ export async function syncElementOwners(deps: MigrateCoreDeps): Promise<void> {
  * reconcile; an app table declared through `db.schema.extend` or produced by
  * `afterDrizzle` got none. The drop guard reads a table with no owner row as
  * nobody's and allows the drop, so a plugin migration dropping one of them —
- * the app's own data — was waved through. Written after the app's files have
- * applied, so the row describes a table the app's migrations created.
+ * the app's own data — was waved through.
+ *
+ * Written BEFORE the plugin phase, whose drop guard is what these rows are
+ * for: recorded after it, the first run after the table appeared still let a
+ * plugin module drop it. A row for a declared table not yet created is still
+ * true — the name is the app's, and a plugin dropping it is still foreign.
  */
-async function recordAppTableOwners(deps: MigrateCoreDeps): Promise<void> {
+export async function recordAppTableOwners(
+  deps: MigrateCoreDeps
+): Promise<void> {
   const appTables = [...(deps.extensionSchema?.owners.entries() ?? [])]
     .filter(([, owner]) => owner.kind === "app")
     .map(([name]) => name);
@@ -1132,6 +1134,7 @@ export async function migrateCore(
       });
       coreChanged = r.changed;
 
+      await recordAppTableOwners(deps);
       await runPluginPhase(deps);
 
       deps.logger.info("Phase 2: applying user migrations...");

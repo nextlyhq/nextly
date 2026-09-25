@@ -63,24 +63,25 @@ function pgCheckExpression(definition: string): string {
 }
 
 /**
- * Read foreign keys and named checks from pg_constraint for the snapshot's
- * tables, with the same empty-array-not-undefined contract as indexes: a
- * table with no constraints is TRACKED as having none.
- */
-/**
- * Best-effort normalisation of MySQL's CHECK_CLAUSE: backticks stripped and
- * whitespace collapsed, so the common single-condition check compares equal
- * to its declaration. MySQL parenthesises every subexpression, so a compound
- * clause may still differ textually from its authored spelling — the diff
- * matches checks by NAME first, and a mismatched expression surfaces as a
- * drop-plus-add, never as silence.
+ * MySQL's CHECK_CLAUSE with information_schema's own escaping undone.
+ *
+ * The clause is stored ESCAPED a second time: every quote and backslash in the
+ * printed expression carries a backslash, so `s IN ('a')` is reported as
+ * `` (`s` in (_utf8mb4\'a\')) `` and a value `it's` as `_utf8mb4\'it\\\'s\'`.
+ * Measured on MySQL 8.0.46, byte for byte, and identical whether the reading
+ * session runs with NO_BACKSLASH_ESCAPES or without it — the text is stored
+ * data, not something the reading session's mode re-renders. Taking that
+ * layer off leaves the clause as MySQL printed it, which is valid DDL again
+ * under MySQL's default sql_mode.
+ *
+ * Nothing else is rewritten. Backticks, keyword case, charset introducers and
+ * the parentheses MySQL puts around every subexpression stay, because
+ * stripping them as text would also rewrite the contents of string literals;
+ * the diff compares checks through `normalizeCheckExpression`, which reads
+ * each of those as syntax.
  */
 function mysqlCheckExpression(clause: string): string {
-  return clause
-    .replace(/`/g, "")
-    .replace(/\s+/g, " ")
-    .replace(/^\((.*)\)$/, "$1")
-    .trim();
+  return clause.replace(/\\([\s\S])/g, "$1").trim();
 }
 
 /** information_schema's rules already spell the diff's ReferentialAction. */
@@ -314,6 +315,24 @@ function groupPgChecks(
   return checks;
 }
 
+/**
+ * Read foreign keys and named checks from pg_constraint for the snapshot's
+ * tables, with the same empty-array-not-undefined contract as indexes: a
+ * table with no constraints is TRACKED as having none.
+ *
+ * Both reads are scoped through `PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT`, the
+ * predicate the index query uses, and for the same reason: `relname` is unique
+ * per schema, not per database, so a same-named table in another schema — two
+ * apps isolated by `search_path` in one database — would otherwise contribute
+ * ITS constraints to this snapshot. The diff would then report drift on a
+ * constraint the table does not have, or propose dropping one from the wrong
+ * table. The pg_class alias is `t` because that predicate is written against
+ * it.
+ *
+ * The referenced side needs no scope of its own: `confrelid` is the OID of the
+ * table the constraint actually references, so once the constraint belongs to
+ * the right table its target is exact.
+ */
 async function attachPgConstraints(
   db: PgMysqlExecute,
   snapshot: NextlySchemaSnapshot,
@@ -326,7 +345,7 @@ async function attachPgConstraints(
   if (snapshot.tables.length === 0) return;
 
   const fkResult = (await db.execute(
-    sql`SELECT con.conname AS name, tbl.relname AS table, ref.relname AS ref_table,
+    sql`SELECT con.conname AS name, t.relname AS table, ref.relname AS ref_table,
                con.confdeltype AS on_delete, con.confupdtype AS on_update,
                (SELECT array_agg(att.attname ORDER BY ord)
                 FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
@@ -337,9 +356,11 @@ async function attachPgConstraints(
                 JOIN pg_attribute att
                   ON att.attrelid = con.confrelid AND att.attnum = k.attnum) AS ref_columns
         FROM pg_constraint con
-        JOIN pg_class tbl ON tbl.oid = con.conrelid
+        JOIN pg_class t ON t.oid = con.conrelid
         JOIN pg_class ref ON ref.oid = con.confrelid
-        WHERE con.contype = 'f' AND tbl.relname IN (${tableNamesIn})`
+        WHERE con.contype = 'f'
+          AND ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+          AND t.relname IN (${tableNamesIn})`
   )) as {
     rows: Array<{
       name: string;
@@ -352,11 +373,13 @@ async function attachPgConstraints(
     }>;
   };
   const checkResult = (await db.execute(
-    sql`SELECT con.conname AS name, tbl.relname AS table,
+    sql`SELECT con.conname AS name, t.relname AS table,
                pg_get_constraintdef(con.oid) AS definition
         FROM pg_constraint con
-        JOIN pg_class tbl ON tbl.oid = con.conrelid
-        WHERE con.contype = 'c' AND tbl.relname IN (${tableNamesIn})`
+        JOIN pg_class t ON t.oid = con.conrelid
+        WHERE con.contype = 'c'
+          AND ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+          AND t.relname IN (${tableNamesIn})`
   )) as {
     rows: Array<{ name: string; table: string; definition: string }>;
   };

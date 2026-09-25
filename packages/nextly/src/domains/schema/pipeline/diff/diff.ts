@@ -36,6 +36,7 @@ import { renderedType } from "../sql-templates/create-table-body";
 
 import { typesDiffer } from "./declared-size";
 import { indexKey, isManagedIndexName } from "./index-util";
+import { normalizeCheckExpression } from "./normalize-check";
 import { normalizeDefault } from "./normalize-default";
 import type {
   AddColumnOp,
@@ -256,10 +257,16 @@ function diffForeignKeys(
 
 /**
  * Emit add_check / drop_check for a table present in both snapshots. Matched
- * by NAME, with the expression compared textually: a changed expression is a
- * drop plus an add under the same name, because no dialect rewrites a check's
- * expression in place — and matching on the expression alone would leave a
- * rename indistinguishable from an add, piling constraints under new names.
+ * by NAME, with the expressions compared in canonical form: a changed
+ * expression is a drop plus an add under the same name, because no dialect
+ * rewrites a check's expression in place — and matching on the expression
+ * alone would leave a rename indistinguishable from an add, piling constraints
+ * under new names.
+ *
+ * Canonical rather than textual because PostgreSQL reports a check in its own
+ * spelling (`x = ANY (ARRAY[...])` for `x IN (...)`, casts and parentheses
+ * added), so the declared text never equals the live text. The operations keep
+ * each side's original text; the canonical form is only compared.
  */
 function diffChecks(
   tableName: string,
@@ -272,7 +279,11 @@ function diffChecks(
   const curByName = new Map(cur.map(c => [c.name, c]));
   for (const [name, check] of curByName) {
     const before = prevByName.get(name);
-    if (before === undefined || before.sql !== check.sql) {
+    if (
+      before === undefined ||
+      normalizeCheckExpression(before.sql) !==
+        normalizeCheckExpression(check.sql)
+    ) {
       if (before !== undefined) {
         ops.push({ type: "drop_check", tableName, check: before });
       }

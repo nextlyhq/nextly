@@ -266,6 +266,76 @@ describe("access", () => {
  * plugin's `notes`. Each case records which Drizzle handle the write reached,
  * which is the observable consequence of the choice.
  */
+describe("a definition named by its SQL name", () => {
+  const A: SchemaOwner = { kind: "plugin", id: "a" };
+  const B: SchemaOwner = { kind: "plugin", id: "b" };
+  const H: SchemaOwner = { kind: "plugin", id: "h" };
+
+  function harness(opts: {
+    owner: SchemaOwner;
+    dependsOn: string[];
+    tables: { name: string; authored: string; owner: SchemaOwner }[];
+  }) {
+    const written: string[] = [];
+    const db = {
+      insert: (table: { name: string }) => ({
+        values: () => {
+          written.push(table.name);
+          return Promise.resolve();
+        },
+      }),
+    };
+    const surface = createPluginDatabase({
+      dialect: "postgresql",
+      owner: opts.owner,
+      dependsOn: new Set(opts.dependsOn),
+      owners: () => new Map(opts.tables.map(t => [t.name, t.owner])),
+      tables: () =>
+        Object.fromEntries(opts.tables.map(t => [t.name, { name: t.name }])),
+      tableList: () => opts.tables,
+      db: () => db,
+      relationalDb: () => db,
+      transaction: fn => fn({ db, relationalDb: db }),
+    });
+    return { surface, written };
+  }
+
+  const byName = (name: string) => defineTable(name, { id: col.id() });
+
+  it("reaches that table, not one another plugin AUTHORED under that name", async () => {
+    // An authored name may contain the separator: plugin `h` authoring
+    // `b__notes` compiles to `h__b__notes`. The SQL name is how an author
+    // escapes an ambiguous authored name, so it cannot itself be captured.
+    const { surface, written } = harness({
+      owner: A,
+      dependsOn: ["b", "h"],
+      tables: [
+        { name: "h__b__notes", authored: "b__notes", owner: H },
+        { name: "b__notes", authored: "notes", owner: B },
+      ],
+    });
+    await surface.insert(byName("b__notes"), {} as never);
+    expect(written).toEqual(["b__notes"]);
+  });
+
+  it("refuses a name that is both the caller's own authored table and another's SQL name", async () => {
+    const { surface, written } = harness({
+      owner: A,
+      dependsOn: ["b"],
+      tables: [
+        { name: "a__b__notes", authored: "b__notes", owner: A },
+        { name: "b__notes", authored: "notes", owner: B },
+      ],
+    });
+    await expect(
+      surface.insert(byName("b__notes"), {} as never)
+    ).rejects.toSatisfy(
+      error => NextlyError.is(error) && error.code === "INVALID_INPUT"
+    );
+    expect(written).toEqual([]);
+  });
+});
+
 describe("resolving an authored name several plugins share", () => {
   const A: SchemaOwner = { kind: "plugin", id: "a" };
   const B: SchemaOwner = { kind: "plugin", id: "b" };

@@ -17,6 +17,10 @@
  *
  * @module cli/commands/__tests__/migrate-plugins.integration
  */
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
@@ -32,7 +36,12 @@ import { SchemaEventsRepository } from "../../../domains/schema/events/schema-ev
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
 import { CORE_TABLE_NAMES } from "../../../schemas/index";
 import { createLogger } from "../../utils/logger";
-import { runPluginPhase, syncElementOwners } from "../migrate";
+import {
+  migrateCore,
+  recordAppTableOwners,
+  runPluginPhase,
+  syncElementOwners,
+} from "../migrate";
 
 const DIALECT = "sqlite" as const;
 
@@ -596,6 +605,55 @@ describe("ownership within and after one migrate run (sqlite)", () => {
     expect(await adapterFor(sqlite).listTables()).toContain("depa__data");
   });
 
+  it("protects an app table from a plugin module in the same run that first records it", async () => {
+    // The app's table already exists but has never been recorded — the first
+    // `migrate` after it appeared. Its owner row has to be in place before the
+    // plugin phase, or that phase's drop guard reads it as nobody's.
+    sqlite.exec('CREATE TABLE "app_ledger" ("id" text PRIMARY KEY)');
+    const extensionSchema = await buildExtensionSchema({
+      dialect: DIALECT,
+      coreTableNames: CORE_TABLE_NAMES,
+      entities: [],
+      pluginPrefixes: new Map(),
+      plugins: [],
+      app: {
+        owner: { kind: "app" },
+        tables: [defineTable("app_ledger", { id: col.id() })],
+      },
+    });
+    const dropper = await moduleFor(
+      "dropper",
+      [defineTable("own", { id: col.id() })],
+      ['DROP TABLE "app_ledger"']
+    );
+    const adapter = {
+      ...adapterFor(sqlite),
+      tableExists: async (name: string) =>
+        (await adapterFor(sqlite).listTables()).includes(name),
+    };
+
+    await expect(
+      migrateCore({
+        extensionSchema,
+        dialect: DIALECT,
+        db,
+        adapter,
+        migrationsDir: mkdtempSync(join(tmpdir(), "nx-app-own-")),
+        logger: createLogger({ quiet: true }),
+        lockMode: "fail-fast",
+        pluginMigrationSets: [
+          {
+            pluginName: "dropper",
+            pluginVersion: "1.0.0",
+            migrations: [dropper],
+          },
+        ],
+        pluginsWithMigrations: new Set(["dropper"]),
+      } as never)
+    ).rejects.toMatchObject({ code: "DROP_OF_FOREIGN_TABLE" });
+    expect(await adapter.listTables()).toContain("app_ledger");
+  });
+
   it("records the app's tables and a contributing plugin's applied version", async () => {
     // The app's own table had no owner row, so a plugin module dropping it was
     // allowed; and a plugin that only contributes an element had its version
@@ -639,7 +697,7 @@ describe("ownership within and after one migrate run (sqlite)", () => {
       filename: "plugin:contrib/v3",
     });
 
-    await syncElementOwners({
+    const syncDeps = {
       extensionSchema,
       dialect: DIALECT,
       db,
@@ -653,7 +711,11 @@ describe("ownership within and after one migrate run (sqlite)", () => {
           migrations: [contribModule],
         },
       ],
-    } as never);
+    } as never;
+    // The app's rows are written before the plugin phase, the element rows
+    // after every stream — the order `migrateCore` runs them in.
+    await recordAppTableOwners(syncDeps);
+    await syncElementOwners(syncDeps);
 
     const rows = sqlite
       .prepare(

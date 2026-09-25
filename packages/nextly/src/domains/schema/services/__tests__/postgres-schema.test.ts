@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
   activePostgresSchema,
+  assertAdapterPostgresSchema,
   clearActivePostgresSchema,
   createSchemaSql,
   DEFAULT_POSTGRES_SCHEMA,
@@ -53,6 +54,38 @@ describe("the configured PostgreSQL schema", () => {
     expect(validatePostgresSchema("a".repeat(63))).toHaveLength(63);
   });
 
+  it("refuses any schema but public on PostgreSQL, for now", () => {
+    // drizzle-kit reads every desired table as `public`; reconciling another
+    // schema creates nothing and proposes dropping that schema. Refused with
+    // the code that says it is unsupported, not that the name is malformed.
+    for (const name of ["cms", "tenant_42"]) {
+      let caught: unknown;
+      try {
+        resolvePostgresSchema(name, "postgresql");
+      } catch (error) {
+        caught = error;
+      }
+      expect(
+        NextlyError.isCode(caught, "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED")
+      ).toBe(true);
+      expect((caught as NextlyError).publicMessage).toContain(`"${name}"`);
+      expect((caught as NextlyError).publicMessage).toContain(
+        "not supported yet"
+      );
+    }
+    // Explicit `public` and absent are the two ways of saying the default.
+    expect(resolvePostgresSchema("public", "postgresql")).toBe("public");
+    expect(resolvePostgresSchema(undefined, "postgresql")).toBe("public");
+  });
+
+  it("names a malformed schema as invalid before calling it unsupported", () => {
+    // The shape check runs first, so a name that could never be used is
+    // reported as such rather than as merely not supported yet.
+    expect(() => resolvePostgresSchema("Cms", "postgresql")).toThrow(
+      expect.objectContaining({ code: "VALIDATION_ERROR" })
+    );
+  });
+
   it("ignores the setting on MySQL and SQLite, and says so", () => {
     // A config shared across dialects is the ordinary case, so refusing would
     // make one setting stop an app that runs perfectly. Warning is the
@@ -81,4 +114,75 @@ describe("the configured PostgreSQL schema", () => {
       NextlyError
     );
   });
+
+  it("is read by a second instance of this module", async () => {
+    // First-run reaches the push through a dynamic import, which a bundler may
+    // resolve to its own copy of this module. The value published at boot has
+    // to be the one that copy reads, or first-run introspects `public`.
+    setActivePostgresSchema("cms");
+    vi.resetModules();
+    const secondInstance = await import("../postgres-schema");
+    expect(secondInstance.activePostgresSchema).not.toBe(activePostgresSchema);
+    expect(secondInstance.activePostgresSchema()).toBe("cms");
+  });
+});
+
+describe("an adapter the application supplied", () => {
+  it.each([
+    ["cms", "cms"],
+    ["public", undefined],
+    ["public", "public"],
+  ])("is accepted when %s is also what it uses (%s)", (resolved, adapter) => {
+    expect(() => assertAdapterPostgresSchema(resolved, adapter)).not.toThrow();
+  });
+
+  it.each([
+    // Configured, adapter left at the server default.
+    [
+      "cms",
+      undefined,
+      ['"cms"', "sets no schema", "remove db.postgres.schema"],
+    ],
+    // Adapter configured, the config left at the default.
+    [
+      "public",
+      "cms",
+      [
+        "is not set",
+        'uses schema "cms"',
+        "create the adapter without a schema option",
+        'set db.postgres.schema to "cms"',
+      ],
+    ],
+    // Both configured, differently.
+    [
+      "cms",
+      "tenant",
+      [
+        'db.postgres.schema is "cms"',
+        'uses schema "tenant"',
+        'create the adapter with { schema: "cms" }',
+        'set db.postgres.schema to "tenant"',
+      ],
+    ],
+  ])(
+    "is refused when the config resolves to %s and it uses %s",
+    (resolved, adapter, mentions) => {
+      // Refused rather than reconciled: either side followed silently leaves
+      // drizzle-kit, the lock and the ledger in one schema and every service
+      // query in the other.
+      let caught: unknown;
+      try {
+        assertAdapterPostgresSchema(resolved, adapter);
+      } catch (error) {
+        caught = error;
+      }
+      expect(
+        NextlyError.isCode(caught, "NEXTLY_POSTGRES_SCHEMA_MISMATCH")
+      ).toBe(true);
+      for (const mention of mentions) {
+        expect((caught as NextlyError).publicMessage).toContain(mention);
+      }
+    }
+  );
 });

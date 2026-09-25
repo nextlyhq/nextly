@@ -32,6 +32,23 @@ const ORPHAN_DROP_PATTERNS: ReadonlyArray<{
   },
 ];
 
+/**
+ * A `DROP SCHEMA`, in any spelling the kit or a dialect produces.
+ *
+ * Nextly never drops a schema — not the one it runs in, not any other — so
+ * this is refused whatever the desired set says. drizzle-kit emits one when
+ * the schema it was asked to reconcile holds nothing it recognises as wanted,
+ * which is a disagreement about where the tables live, never an instruction.
+ * Executed, it removes the namespace every later statement resolves in.
+ * MySQL's `DROP DATABASE` is the same act under its other name.
+ */
+const DROP_SCHEMA = /^\s*DROP\s+(?:SCHEMA|DATABASE)\b/i;
+
+/** Whether a statement drops a schema (or, on MySQL, a database). */
+export function isDropSchemaStatement(statement: string): boolean {
+  return DROP_SCHEMA.test(statement);
+}
+
 /** Cheap structural check for Drizzle tables (carry Symbol.for("drizzle:Name")). */
 export function isDrizzleTable(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
@@ -152,6 +169,15 @@ export function filterUnsafeStatements(
   const desiredSet = new Set(desiredTableNames.map(t => t.toLowerCase()));
 
   return statements.filter(stmt => {
+    // ── DROP SCHEMA ─────────────────────────────────────────────────
+    // First and unconditional: no desired set makes this intended.
+    if (isDropSchemaStatement(stmt)) {
+      console.warn(
+        `[Nextly schema] Blocked a statement that drops a schema, emitted by drizzle-kit pushSchema: ${stmt}. Nextly never drops a schema; if one should go, drop it manually.`
+      );
+      return false;
+    }
+
     // ── Plugin-migrated tables ──────────────────────────────────────
     if (
       pluginMigratedTables !== undefined &&
@@ -486,6 +512,12 @@ export function findUnexpectedDestructiveStatements(
   const rebuildTargets = rebuiltTableNames(statements);
   const offenders: string[] = [];
   for (const s of statements) {
+    // Whatever `managedTables` says: a schema is not a table, and dropping one
+    // takes every managed table in it along.
+    if (isDropSchemaStatement(s)) {
+      offenders.push(s);
+      continue;
+    }
     const dropTable = s.match(
       // Skip an optional schema qualifier so `DROP TABLE "main"."posts"`
       // captures `posts`, not `main`.

@@ -30,6 +30,7 @@
  * @since 1.0.0
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
+import { normalizeCheckExpression } from "../pipeline/diff/normalize-check";
 
 import type { ExtensionColumn } from "./types";
 
@@ -53,13 +54,35 @@ export function enumCheckName(
 }
 
 /**
- * Single-quote a value for SQL.
+ * A value as a SQL string literal.
  *
- * Doubling is the escape every one of the three dialects uses, and the values
- * come from a plugin author's config rather than from a request — but a
- * config is still text somebody typed, and this string becomes DDL.
+ * Doubling the quote is the escape every one of the three dialects uses, and
+ * the values come from a plugin author's config rather than from a request —
+ * but a config is still text somebody typed, and this string becomes DDL.
+ *
+ * A backslash is the one character that cannot be written the same way
+ * everywhere. PostgreSQL and SQLite read it as itself; MySQL reads it as an
+ * escape under its default sql_mode and as itself under NO_BACKSLASH_ESCAPES,
+ * so `'back\slash'` would constrain the column to `backslash` under the
+ * default mode — refusing every row that holds the declared value. On MySQL
+ * such a value is therefore written as UTF-8 hex with a charset introducer,
+ * which states the declared value whatever the mode of the session running
+ * the DDL.
+ *
+ * That fixes what the DDL says, not everything MySQL then does with it: the
+ * server re-prints the clause with backslash escapes and re-reads it under the
+ * mode of whichever session opens the table, so under NO_BACKSLASH_ESCAPES it
+ * enforces a doubled backslash (measured on MySQL 8.0.46). No spelling of the
+ * DDL prevents that, and the diff compares such a check as exact text rather
+ * than claim a match — see `readLiteral` in normalize-check.ts.
  */
-function quote(value: string): string {
+function quote(value: string, dialect: SupportedDialect): string {
+  if (dialect === "mysql" && value.includes("\\")) {
+    const hex = Array.from(new TextEncoder().encode(value), byte =>
+      byte.toString(16).padStart(2, "0")
+    ).join("");
+    return `_utf8mb4 X'${hex}'`;
+  }
   return `'${value.replace(/'/g, "''")}'`;
 }
 
@@ -76,14 +99,22 @@ function quote(value: string): string {
  * for a NULL input, and a CHECK passes on NULL — stated here because it is
  * the kind of SQL three-valued-logic detail a reader should not have to
  * rediscover.
+ *
+ * The same spelling on every dialect apart from the backslash case in
+ * `quote`, although neither server reads it back this way. PostgreSQL keeps a
+ * parse tree rather than the text and deparses this as
+ * `status = ANY (ARRAY[...])` with casts added; MySQL reports
+ * `` (`status` in (_utf8mb4'a',...)) ``. The diff compares checks through
+ * `normalizeCheckExpression`, which reduces every spelling to one, so nothing
+ * here has to track what either server prints.
  */
 export function enumCheckSql(
   column: Pick<ExtensionColumn, "name" | "enumValues">,
-  _dialect: SupportedDialect
+  dialect: SupportedDialect
 ): string | undefined {
   const values = column.enumValues;
   if (values === undefined || values.length === 0) return undefined;
-  return `${column.name} IN (${values.map(quote).join(", ")})`;
+  return `${column.name} IN (${values.map(value => quote(value, dialect)).join(", ")})`;
 }
 
 /**
@@ -112,15 +143,30 @@ export function enumChecks(
  * Reads back what {@link enumCheckSql} wrote, so a comparison between the
  * declared set and the live one can name the values that changed rather than
  * reporting that an opaque expression differs.
+ *
+ * Read through `normalizeCheckExpression`, so the expression PostgreSQL
+ * reports for a live constraint reads the same as the one declared. That form
+ * spells a one-value set as an equality — PostgreSQL stores `x IN ('a')` as
+ * `x = 'a'` — so both shapes are accepted.
  */
 export function enumValuesIn(sql: string): string[] | null {
-  const match = /^\s*(\w+)\s+IN\s*\(([\s\S]*)\)\s*$/i.exec(sql);
+  const canonical = normalizeCheckExpression(sql);
+  // Only a column compared with string literals is a value set; the literal
+  // list is matched whole, so `a IN (...) AND b IN (...)` is not read as one.
+  const column = `(?:\\w+|"(?:[^"]|"")*")`;
+  const literal = `'(?:[^']|'')*'`;
+  const match =
+    new RegExp(`^\\s*${column}\\s*=\\s*(${literal})\\s*$`).exec(canonical) ??
+    new RegExp(
+      `^\\s*${column}\\s+IN\\s*\\((${literal}(?:\\s*,\\s*${literal})*)\\)\\s*$`,
+      "i"
+    ).exec(canonical);
   if (match === null) return null;
-  const body = match[2] ?? "";
+  const body = match[1] ?? "";
   const values: string[] = [];
-  const literal = /'((?:[^']|'')*)'/g;
+  const each = /'((?:[^']|'')*)'/g;
   let found: RegExpExecArray | null;
-  while ((found = literal.exec(body)) !== null) {
+  while ((found = each.exec(body)) !== null) {
     values.push((found[1] ?? "").replace(/''/g, "'"));
   }
   return values.length > 0 ? values : null;

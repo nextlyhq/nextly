@@ -20,7 +20,17 @@ import { NextlyError } from "../../../errors/nextly-error";
 /** Where PostgreSQL puts things when nobody says otherwise. */
 export const DEFAULT_POSTGRES_SCHEMA = "public";
 
-let active = DEFAULT_POSTGRES_SCHEMA;
+/**
+ * Pinned on `globalThis` rather than held in a module-level variable.
+ *
+ * Boot publishes from a static import, but first-run reaches `freshPushSchema`
+ * through a dynamic one, and a bundler may resolve the two to different
+ * instances of this module. A module-level value would then read `public` in
+ * exactly the push that decides which core tables a new schema receives.
+ */
+const globalForPostgresSchema = globalThis as unknown as {
+  __nextly_active_postgres_schema?: string;
+};
 
 /**
  * Validate a configured schema name, or refuse it.
@@ -50,6 +60,31 @@ export function validatePostgresSchema(name: string): string {
 }
 
 /**
+ * Refuse any schema but `public`, until the push can create tables elsewhere.
+ *
+ * Everything else about the setting works — the adapter's `search_path`, the
+ * publication, the CLI agreeing with the server — but drizzle-kit reads the
+ * desired tables as belonging to `public`. Asked to reconcile any other
+ * schema, it finds none of them wanted there, creates nothing, and proposes
+ * dropping the schema itself. A first boot would then run with no core tables
+ * at all, so the option is refused outright rather than half-honoured.
+ *
+ * The one check for every path that reads the option or builds an adapter
+ * from it, so the server and each CLI command refuse identically.
+ */
+export function assertSupportedPostgresSchema(name: string): string {
+  if (name === DEFAULT_POSTGRES_SCHEMA) return name;
+  throw new NextlyError({
+    code: "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED",
+    publicMessage:
+      `db.postgres.schema is "${name}", but a PostgreSQL schema other than "${DEFAULT_POSTGRES_SCHEMA}" is not supported yet: ` +
+      `Nextly can only create and migrate its tables in "${DEFAULT_POSTGRES_SCHEMA}". ` +
+      `Remove db.postgres.schema (and any schema option on the database adapter), or set it to "${DEFAULT_POSTGRES_SCHEMA}".`,
+    logContext: { reason: "postgres-schema-unsupported", name },
+  });
+}
+
+/**
  * Resolve the configured schema for this dialect, warning where it cannot apply.
  *
  * MySQL and SQLite have no equivalent — MySQL's "schema" IS its database, and
@@ -71,22 +106,86 @@ export function resolvePostgresSchema(
     );
     return DEFAULT_POSTGRES_SCHEMA;
   }
-  return name;
+  // PostgreSQL only: on the other dialects the value is ignored above, so
+  // refusing it there would stop an app over a setting that changes nothing.
+  return assertSupportedPostgresSchema(name);
+}
+
+/**
+ * Refuse an adapter whose schema is not the one the config resolved to.
+ *
+ * An adapter Nextly builds from the environment is handed
+ * `db.postgres.schema`, so it always agrees. One the application builds itself
+ * carries its own `schema` option, and Nextly does not reconfigure it: that
+ * adapter is the caller's object, possibly shared with code Nextly cannot see.
+ * Left alone, the two answers split the installation — drizzle-kit, the
+ * migrate lock and the ledger follow the published schema while every service
+ * query follows the adapter's `search_path` — and nothing errors, it simply
+ * creates and reads tables in two places.
+ *
+ * Absent on either side means `public`, because that is what each side then
+ * uses: the config resolves to it, and an adapter with no `search_path` of its
+ * own falls back to the server default.
+ *
+ * @param resolved - What {@link resolvePostgresSchema} answered
+ * @param adapterSchema - What the adapter reports, `undefined` for none
+ */
+export function assertAdapterPostgresSchema(
+  resolved: string,
+  adapterSchema: string | undefined
+): void {
+  const adapterEffective = adapterSchema ?? DEFAULT_POSTGRES_SCHEMA;
+  if (adapterEffective === resolved) return;
+  const configDescription =
+    resolved === DEFAULT_POSTGRES_SCHEMA
+      ? `db.postgres.schema is not set (so "${DEFAULT_POSTGRES_SCHEMA}")`
+      : `db.postgres.schema is "${resolved}"`;
+  const adapterDescription =
+    adapterSchema === undefined
+      ? `the database adapter passed to Nextly sets no schema (so "${DEFAULT_POSTGRES_SCHEMA}")`
+      : `the database adapter passed to Nextly uses schema "${adapterSchema}"`;
+  // Each remedy is phrased as the edit that makes that side match the other,
+  // so dropping a setting is offered where dropping it is what matches.
+  const fixAdapter =
+    resolved === DEFAULT_POSTGRES_SCHEMA
+      ? "create the adapter without a schema option"
+      : `create the adapter with { schema: "${resolved}" }`;
+  const fixConfig =
+    adapterSchema === undefined
+      ? "remove db.postgres.schema"
+      : `set db.postgres.schema to "${adapterEffective}"`;
+  throw new NextlyError({
+    code: "NEXTLY_POSTGRES_SCHEMA_MISMATCH",
+    publicMessage:
+      `${configDescription}, but ${adapterDescription}. ` +
+      `Both must name the same schema, or tables and migrations end up split between them. ` +
+      `To fix it, ${fixAdapter}, or ${fixConfig}.`,
+    logContext: {
+      reason: "postgres-schema-mismatch",
+      configured: resolved,
+      adapter: adapterSchema,
+    },
+  });
 }
 
 /** Publish the resolved schema for every later consumer. */
 export function setActivePostgresSchema(name: string): void {
-  active = validatePostgresSchema(name);
+  globalForPostgresSchema.__nextly_active_postgres_schema =
+    validatePostgresSchema(name);
 }
 
 /** The schema every consumer reads. `public` until boot says otherwise. */
 export function activePostgresSchema(): string {
-  return active;
+  return (
+    globalForPostgresSchema.__nextly_active_postgres_schema ??
+    DEFAULT_POSTGRES_SCHEMA
+  );
 }
 
 /** Reset to the default. For tests and for a reload that failed. */
 export function clearActivePostgresSchema(): void {
-  active = DEFAULT_POSTGRES_SCHEMA;
+  globalForPostgresSchema.__nextly_active_postgres_schema =
+    DEFAULT_POSTGRES_SCHEMA;
 }
 
 /**

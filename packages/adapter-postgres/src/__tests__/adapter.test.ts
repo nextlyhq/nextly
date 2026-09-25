@@ -203,6 +203,25 @@ describe("PostgresAdapter", () => {
     });
   });
 
+  describe("getConfiguredSchema()", () => {
+    // The report is only useful if it is the schema the connections actually
+    // use, so each case reads it beside the `search_path` the pool was given.
+    it.each([
+      [{ schema: "cms" }, "cms", "-c search_path=cms"],
+      [{}, undefined, undefined],
+      [{ schema: "" }, undefined, undefined],
+    ])(
+      "reports %j as %s, matching the pool's search_path",
+      async (extra, reported, options) => {
+        const configured = new PostgresAdapter({ ...testConfig, ...extra });
+        await configured.connect();
+
+        expect(configured.getConfiguredSchema()).toBe(reported);
+        expect(MockPool.lastConfig?.options).toBe(options);
+      }
+    );
+  });
+
   describe("isConnected()", () => {
     it("should return false when not connected", () => {
       expect(adapter.isConnected()).toBe(false);

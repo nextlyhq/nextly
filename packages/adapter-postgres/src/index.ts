@@ -694,6 +694,21 @@ export class PostgresAdapter extends DrizzleAdapter {
   }
 
   /**
+   * The schema set as `search_path` on every pooled connection.
+   *
+   * @remarks
+   * Answers with the same test `buildPoolConfig` applies, so an empty string
+   * reports `undefined` exactly as it sets no `search_path`: the value
+   * reported is the one the connections actually use.
+   *
+   * @returns The configured schema, or `undefined` when the server's default
+   *   `search_path` applies
+   */
+  getConfiguredSchema(): string | undefined {
+    return this.config.schema ? this.config.schema : undefined;
+  }
+
+  /**
    * Returns connection pool statistics.
    *
    * @returns Pool stats or null if not connected

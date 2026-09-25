@@ -35,6 +35,7 @@ import type { Nextly } from "../direct-api/nextly";
 import { resetEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
 import { normalizeLocalization } from "../domains/i18n/config/normalize";
 import type { LocalizationConfig } from "../domains/i18n/config/types";
+import { clearActiveExtensionSchema } from "../domains/schema/extension/active-schema";
 import { clearFieldTypes } from "../domains/schema/field-types/field-type-registry";
 import {
   refreshEndpointPresence,
@@ -588,6 +589,9 @@ export async function createTestNextly(
   // ensureCollectionTables workaround).
   clearCachedSnapshot();
   clearLiveSnapshots();
+  // The previous instance's extension schema, for the same reason `destroy()`
+  // clears it: an instance that was never destroyed left it published.
+  clearActiveExtensionSchema();
   // After `shutdownServices` above has disconnected the previous adapter, so a
   // database this drops has nothing attached to it. Covers the instance that
   // was never destroyed: its closure is unreachable, but its database is not.
@@ -763,6 +767,10 @@ async function bootServices(
       resetNextlyInstance();
       clearCachedSnapshot();
       clearLiveSnapshots();
+      // Process state keyed by dialect: a later boot on another dialect
+      // publishes beside this one's schema rather than over it, and a lookup
+      // that takes whichever dialect it finds first would read this one.
+      clearActiveExtensionSchema();
       // Last, and only after the adapter is closed: PostgreSQL will not drop a
       // database that still has a session attached. `shutdownServices`
       // normally does the disconnecting, but it swallows a rejection from it

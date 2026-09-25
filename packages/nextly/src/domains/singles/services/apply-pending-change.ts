@@ -44,6 +44,8 @@ export interface PendingChangeParts {
  */
 export function splitPendingChange(
   snapshot: unknown,
+  /** The Single's main table, which the returned `main` values are written to. */
+  tableName: string,
   companion: CompanionSchema | null,
   overrides?: Record<string, unknown>
 ): PendingChangeParts {
@@ -52,7 +54,8 @@ export function splitPendingChange(
       ...(keysToSnakeCase(snapshot) as Record<string, unknown>),
       ...(overrides ?? {}),
     },
-    "single"
+    "single",
+    tableName
   );
   if (!companion) return { main: payload, companion: {} };
   const { main, companion: companionValues } = splitLocalizedWrite(

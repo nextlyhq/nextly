@@ -208,7 +208,7 @@ them because the DSL is the one path that keeps them in migrations and drift.
 | `.where()` partial index | `indexes: [{ columns, where }]` (PostgreSQL/SQLite) |
 | `relations()` | `relations` on `defineTable` + `ref()` auto-edges |
 | `pgEnum` | `col.enum([...])` — stored as text, values enforced by a CHECK on every dialect |
-| `schemaName` | `db.postgres.schema` |
+| `schemaName` | not yet — `db.postgres.schema` accepts only `"public"` |
 | `generate:db-schema` | not needed — types come from the declaration |
 
 Two differences worth knowing:
@@ -221,23 +221,27 @@ Payload's `extendTable` reaches into Drizzle's internal symbols, and its hook
 tables lose their types. Ours build Drizzle objects from the neutral model and
 type them from the declaration, so `ctx.db` is checked without a codegen step.
 
-## One schema for the whole installation
+## The PostgreSQL schema
+
+On PostgreSQL every managed table, index and constraint lives in `public`.
+`db.postgres.schema` is reserved for choosing another schema, but only
+`"public"` is supported today:
 
 ```ts
 import { defineConfig } from "nextly";
 
 export default defineConfig({
-  db: { postgres: { schema: "cms" } },
+  // The only accepted value for now; leaving it out means the same thing.
+  db: { postgres: { schema: "public" } },
 });
 ```
 
-Every managed table, index and constraint lives in `cms` — core tables,
-entity tables, extension tables, the migrate lock and the ledger alike. It is
-applied as `search_path` on every connection rather than by qualifying each
-table, so one setting covers everything that resolves a name, including SQL
-nobody wrote through the query builder. The schema is created if it is
-missing, because a `search_path` naming a schema that does not exist does not
-fail — it falls through, and the tables land in `public` instead.
+Any other value is refused when the server boots and by every `nextly`
+command, with an error naming the value. The schema push cannot yet create
+tables outside `public`, so an installation pointed at another schema would
+start with none of its core tables. Remove the option, or set it to
+`"public"`. A database adapter you construct yourself must not set a schema of
+its own either; one that disagrees with the config is refused at boot.
 
 MySQL and SQLite have no equivalent (MySQL's schema IS its database, SQLite is
 one file). They ignore the setting and warn, so a config shared across

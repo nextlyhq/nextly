@@ -240,7 +240,30 @@ export function stripServerOnlyColumns(
   for (const key of RESPONSE_STRIPPED_KEYS) {
     if (key in entry) delete entry[key];
   }
-  for (const key of hiddenColumnNames(tableName)) {
-    if (key in entry) delete entry[key];
+  const isHidden = hiddenColumnMatcher(tableName);
+  for (const key of Object.keys(entry)) {
+    if (isHidden(key)) delete entry[key];
   }
+}
+
+/**
+ * Whether a key names a column a schema hook contributed to `tableName` as
+ * hidden, in either spelling.
+ *
+ * The one answer both directions of the entry API use: responses remove what
+ * it matches, and writes drop what it matches before the row is built, so a
+ * column cannot be hidden from reads yet writable, or the reverse.
+ *
+ * Either spelling because a row reaches the response boundary snake_cased from
+ * some paths and camelCased from others, and a write payload is snake_cased
+ * before the drop on some paths and after it on others. The hidden list holds
+ * SQL names, so a key matches when its snake_case form is one.
+ */
+export function hiddenColumnMatcher(
+  /** The SQL table the row is read from or written to. */
+  tableName: string
+): (key: string) => boolean {
+  const hidden = new Set(hiddenColumnNames(tableName));
+  if (hidden.size === 0) return () => false;
+  return key => hidden.has(key) || hidden.has(toSnakeCase(key));
 }

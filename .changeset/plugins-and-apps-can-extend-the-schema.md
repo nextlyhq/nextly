@@ -81,10 +81,11 @@ declared, not only add fields to them. `setup(config)` runs before plugin
 schema contributions are merged and never sees them; transforms run after, in
 dependency order, each handed a frozen copy.
 
-**`db.postgres.schema`** puts every managed table, the migrate lock and the
-ledger in one PostgreSQL schema, applied as `search_path` so it covers SQL
-that never went through the query builder. MySQL and SQLite warn and ignore
-it.
+**`db.postgres.schema`** is reserved for placing an installation in its own
+PostgreSQL schema, and accepts only `"public"` for now: any other value is
+refused at boot and by every CLI command, because the schema push cannot yet
+create tables outside `public`. MySQL and SQLite warn and ignore it. Schema
+pushes never run a `DROP SCHEMA`, whatever drizzle-kit emits.
 
 **`col.enum()` enforces its values** through a check constraint — the one
 mechanism all three dialects have — and `col.serial()` declares a

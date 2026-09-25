@@ -55,6 +55,7 @@ import {
   type ComponentRow,
   type ComponentInstanceData,
 } from "./field-group-utils";
+import { INSTANCE_ORDER, instanceKey } from "./instance-query";
 
 /**
  * Parameters for saving component data as part of a parent entry operation.
@@ -1540,12 +1541,8 @@ export class FieldGroupMutationService extends BaseService {
   ): Promise<ComponentRow[]> {
     try {
       return await this.adapter.select<ComponentRow>(tableName, {
-        where: this.whereAnd({
-          [STORAGE_FORMAT.columns.parentId]: parentId,
-          [STORAGE_FORMAT.columns.parentTable]: parentTable,
-          [STORAGE_FORMAT.columns.parentField]: fieldName,
-        }),
-        orderBy: [{ column: STORAGE_FORMAT.columns.order, direction: "asc" }],
+        where: this.whereAnd(instanceKey(parentId, parentTable, fieldName)),
+        orderBy: INSTANCE_ORDER,
       });
     } catch (error) {
       this.logger.debug("Could not query component table", {
@@ -1565,12 +1562,8 @@ export class FieldGroupMutationService extends BaseService {
   ): Promise<ComponentRow[]> {
     try {
       return await tx.select<ComponentRow>(tableName, {
-        where: this.whereAnd({
-          [STORAGE_FORMAT.columns.parentId]: parentId,
-          [STORAGE_FORMAT.columns.parentTable]: parentTable,
-          [STORAGE_FORMAT.columns.parentField]: fieldName,
-        }),
-        orderBy: [{ column: STORAGE_FORMAT.columns.order, direction: "asc" }],
+        where: this.whereAnd(instanceKey(parentId, parentTable, fieldName)),
+        orderBy: INSTANCE_ORDER,
       });
     } catch (error) {
       this.logger.debug("Could not query component table in tx", {

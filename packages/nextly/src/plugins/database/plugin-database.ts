@@ -111,35 +111,64 @@ export interface PluginDatabaseDeps {
  *    wrong plugin's rows, and nothing downstream could notice.
  *
  * The way out of that refusal is the SQL name: a definition named after the
- * compiled table (`defineTable("other__notes", ...)`) matches no authored
- * name and falls through to the exact-name path below.
+ * compiled table (`defineTable("other__notes", ...)`). An exact SQL-name match
+ * the caller can reach therefore wins over every authored-name match — an
+ * authored name may itself contain the separator, so another plugin's table
+ * AUTHORED `other__notes` (compiled `h__other__notes`) must not capture it.
+ * If that exact match and the caller's own authored match are different
+ * tables, the name means two things and is refused as well.
  */
 function sqlNameOf(
   definition: TableDefinition,
   deps: PluginDatabaseDeps
 ): string {
+  const rules = rulesOf(deps);
   const candidates = deps
     .tableList()
     .filter(table => table.authored === definition.name);
-
   const own = candidates.find(table => isSameOwner(table.owner, deps.owner));
+  const exact = reachableBySqlName(definition.name, deps, rules);
+  if (own && exact && own.name !== exact.name) {
+    throw ambiguousTable(definition.name, [own, exact]);
+  }
   if (own) return own.name;
+  if (exact) return exact.name;
 
-  const rules = rulesOf(deps);
   const reachable = candidates.filter(table =>
     canAccessTable(table.name, rules)
   );
-  if (reachable.length === 1) return reachable[0].name;
   if (reachable.length > 1) throw ambiguousTable(definition.name, reachable);
+  return (
+    reachable[0]?.name ?? unreachableName(definition.name, candidates, rules)
+  );
+}
 
-  // Nothing reachable by authored name. A definition that already carries a
-  // compiled SQL name is taken as written, for the access check to judge.
-  if (rules.owners.has(definition.name)) return definition.name;
+/** The table whose compiled SQL name is exactly `name`, if the caller may reach it. */
+function reachableBySqlName(
+  name: string,
+  deps: PluginDatabaseDeps,
+  rules: ReturnType<typeof rulesOf>
+): { name: string; owner: SchemaOwner } | undefined {
+  return deps
+    .tableList()
+    .find(table => table.name === name && canAccessTable(table.name, rules));
+}
 
-  // Otherwise return an unreachable candidate so the access check refuses
-  // with the real reason — "not a declared dependency" — rather than
-  // "not declared" for a table that exists.
-  return candidates[0]?.name ?? definition.name;
+/**
+ * The name to hand the access check when nothing reachable matched.
+ *
+ * A definition already carrying a compiled SQL name is taken as written, for
+ * the access check to judge. Otherwise an unreachable candidate is returned so
+ * the check refuses with the real reason — "not a declared dependency" —
+ * rather than "not declared" for a table that exists.
+ */
+function unreachableName(
+  name: string,
+  candidates: readonly { name: string }[],
+  rules: ReturnType<typeof rulesOf>
+): string {
+  if (rules.owners.has(name)) return name;
+  return candidates[0]?.name ?? name;
 }
 
 /**

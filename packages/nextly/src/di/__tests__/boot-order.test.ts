@@ -46,4 +46,31 @@ describe("the boot sequence in registerServices", () => {
   it("runs migrations before plugins initialise", () => {
     expect(migrationCall).toBeLessThan(pluginCall);
   });
+
+  /**
+   * First-run setup runs inside `initializeSchemaRegistry` and decides what to
+   * create by introspecting the ACTIVE PostgreSQL schema. Published after it,
+   * a boot into a new schema introspected `public` instead — and when `public`
+   * already held another installation, found its core tables there and
+   * created nothing in the schema the adapter writes to.
+   */
+  const schemaPublication = registerSource.indexOf("setActivePostgresSchema(");
+  const schemaRegistryInit = registerSource.indexOf(
+    "await initializeSchemaRegistry("
+  );
+
+  it("publishes the PostgreSQL schema exactly once", () => {
+    // Once, so a later second publication cannot quietly replace the value
+    // first-run already acted on — and present at all, so the ordering below
+    // is not satisfied by a -1.
+    expect(schemaPublication).toBeGreaterThan(-1);
+    expect(
+      registerSource.indexOf("setActivePostgresSchema(", schemaPublication + 1)
+    ).toBe(-1);
+    expect(schemaRegistryInit).toBeGreaterThan(-1);
+  });
+
+  it("publishes the PostgreSQL schema before first-run setup can run", () => {
+    expect(schemaPublication).toBeLessThan(schemaRegistryInit);
+  });
 });
