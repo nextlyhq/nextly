@@ -207,6 +207,11 @@ describe("a line a change adds", () => {
     expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), "  with a note", spell("  and ", CODE_TOOL)), "message")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
     // An ambiguous name in lower case is a name alone, as the trailer reads it in any case.
     expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("  clau", "de")), "message")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
+    // A name alone may end with the separator before the next co-author.
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("  ", CODE_TOOL, ",")), "message")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
+    // A note left open goes on across the lines after it, and once closed, a co-author after it is one of its own.
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), "  (checked against", `  ${CODE_TOOL}`), "message")).toEqual([]);
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), "  (checked against", `  ${CODE_TOOL}`, "  docs)", spell("  and ", CHAT_TOOL)), "message")).toEqual([expect.objectContaining({ from: 5, line: 5 })]);
     // An address goes on with the name before it, which a vendor's address makes a tool's; the name credited on its own line already.
     expect(creditsIn(lines(spell("* Co-authored", "-by: Clau", "de"), spell("  <claude@", "anthro", "pic.com>")), "message")).toEqual([expect.objectContaining({ from: 1, line: 1 })]);
   });
@@ -261,6 +266,8 @@ describe("a line a change adds", () => {
     const run = Array.from({ length: 12000 }, (_, n) => `  line ${n}`);
     expect(creditsIn(lines(trailer("Co-authored", CODE_TOOL), ...run), "line")).toEqual([expect.objectContaining({ from: 1, line: 1 })]);
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), ...run), "line")).toEqual([]);
+    // Under a list item every line goes on with the trailer, and each is decided without reading the value again.
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), ...Array.from({ length: 30000 }, (_, n) => `  line ${n}`)), "message")).toEqual([]);
   }, 5000);
 
   it("keeps a trailer's multi-line human name whole under a list item", () => {
@@ -558,6 +565,12 @@ describe("the command in CI", () => {
     const vendor = trailer("Co-authored", spell("Anthro", "pic"));
     expect(decide(change(lines(vendor, ""), lines(vendor, `  ${MODEL} <${VENDOR_ADDRESS}>`, "")))).toBe(1);
     expect(printed()).toMatch(/file=notes\.md,line=2,title=AI credit::notes\.md:2 names it in a Co-authored-by trailer/);
+  });
+
+  // The credit belongs to the tool's line, which was there, not to the note added below it that completes the value.
+  it("does not refuse a note added below a vendor, a note and a tool that were already there", () => {
+    const before = lines(spell("* Co-authored", "-by: Anthro", "pic"), "  (context)", `  ${CODE_TOOL}`);
+    expect(decide(change(lines(before, ""), lines(before, "  (more context)", "")))).toBe(0);
   });
 
   it("refuses a tool added after a note under a vendor's name that was already there", () => {
