@@ -604,7 +604,16 @@ async function recordElementOwners(deps: MigrateCoreDeps): Promise<void> {
         elementName: element.elementName,
         ownerKind: element.owner.kind,
         ownerId: element.owner.kind === "app" ? "app" : element.owner.id,
-        migratedBy: "app",
+        // The stream that carries the element, which is the CONTRIBUTOR's.
+        //
+        // Hard-coding "app" mis-filed every plugin contribution. A later
+        // module from that plugin changing or dropping its own index found the
+        // live index attributed to another stream, so `runPluginPhase`
+        // excluded it from the snapshot it compares — which then matched
+        // neither the module's `before` nor its target, and the upgrade
+        // stopped as drift over an element the plugin owns.
+        migratedBy:
+          element.owner.kind === "app" ? "app" : `plugin:${element.owner.id}`,
         ownerVersion: null,
         schemaVersion: null,
         state: "active" as const,

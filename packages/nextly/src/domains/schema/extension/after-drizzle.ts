@@ -246,7 +246,19 @@ export async function runAfterDrizzle(args: {
     tables = { ...tables, ...returned };
   }
 
+  // Only what the hook actually CHANGED is judged.
+  //
+  // With the merge above, the map holds every compiled table, not just the
+  // returned ones — so validating all of them refused a plugin's table that
+  // the hook had never seen, and an app using any `afterDrizzle` hook could
+  // not boot alongside any plugin that declares a table.
+  //
+  // Identity is the test: a table the hook left alone is the very object that
+  // was compiled, and it was validated when it was built. A table the hook
+  // returned is a different object, whether it reshaped one or invented it,
+  // and that is exactly the set these rules exist for.
   for (const [name, value] of Object.entries(tables)) {
+    if (value === args.tables[name]) continue;
     if (args.protectedTables.has(name)) {
       refuse(
         name,

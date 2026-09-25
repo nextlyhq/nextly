@@ -113,8 +113,35 @@ function matchesFor(
 }
 
 /** Run one transform over one entity, with attribution on failure. */
+/**
+ * A deeply frozen COPY of a value.
+ *
+ * A copy rather than freezing in place: the input is the live config, and
+ * freezing that would turn every later legitimate write into a silent no-op
+ * (or a throw in strict mode) far from here. Arrays and plain objects are
+ * rebuilt; anything else — a Date, a RegExp, a function a field uses as a
+ * validator — is passed through as it is, because copying it would change
+ * what the transform receives.
+ */
+function deepFreeze<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return Object.freeze(value.map(item => deepFreeze(item))) as unknown as T;
+  }
+  if (value === null || typeof value !== "object") return value;
+  // Plain objects only. A class instance rebuilt as a bare object would lose
+  // its prototype, and with it any method the transform means to call.
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  if (prototype !== Object.prototype && prototype !== null) return value;
+
+  const copy: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    copy[key] = deepFreeze(item);
+  }
+  return Object.freeze(copy) as unknown as T;
+}
+
 function transformOne(
-  entity: TransformableEntity,
+  entity: { definition: Record<string, unknown> },
   contribution: TransformContribution,
   transform: EntityTransform,
   slug: string,
@@ -123,9 +150,17 @@ function transformOne(
   const path = `${contribution.source}.transform[${String(position)}]`;
   let next: unknown;
   try {
-    // Frozen, so a transform that mutates instead of returning fails loudly
-    // here rather than making the result depend on transform order.
-    next = transform.transform(Object.freeze({ ...entity.definition }));
+    // Frozen ALL THE WAY DOWN, so a transform that mutates instead of
+    // returning fails loudly here rather than making the result depend on
+    // transform order.
+    //
+    // `Object.freeze({ ...definition })` froze only the outer object. The
+    // spread copies references, so `entity.fields.push(...)` and
+    // `entity.fields[0].name = "x"` reached the arrays and field objects of
+    // the ORIGINAL config, changed it in place, and then returned normally —
+    // the guard this comment promises, silently absent exactly where it
+    // matters most.
+    next = transform.transform(deepFreeze(entity.definition));
   } catch (cause) {
     if (cause instanceof NextlyError) throw cause;
     throw NextlyError.internal({
@@ -150,7 +185,36 @@ function transformOne(
       ],
     });
   }
-  return next as Record<string, unknown>;
+  // A transform reshapes an entity; it does not become a different one.
+  //
+  // Returning a different `slug` left the map key and the outer `entity.slug`
+  // as they were while the returned definition carried the new one. Two things
+  // followed, both silent: transforms run AFTER slug-collision validation, so
+  // renaming `posts` to `users` produced two configured entities claiming
+  // `users` and nothing re-checked it; and every later transform still matched
+  // on `posts`, so none could target what the entity now called itself.
+  //
+  // Refused rather than re-keyed. Re-keying would have to re-run collision
+  // validation and re-resolve the targets of transforms already applied, and
+  // a rename is not what this hook is for — `remapEntities` is.
+  const returned = next as Record<string, unknown>;
+  const declared = entity.definition.slug;
+  if (
+    typeof returned.slug === "string" &&
+    typeof declared === "string" &&
+    returned.slug !== declared
+  ) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path,
+          code: "INVALID",
+          message: `Transform of "${slug}" returned a definition with slug "${returned.slug}". A transform may reshape an entity but not rename it — slug collisions are validated before transforms run, and later transforms still target the declared slug. Use remapEntities to rename.`,
+        },
+      ],
+    });
+  }
+  return returned;
 }
 
 function applyOne(

@@ -36,7 +36,7 @@ import type { SchemaContribution } from "./run-hooks";
 
 interface PublishInput {
   dialect: SupportedDialect;
-  /** Enabled and disabled alike; disabled ones contribute nothing. */
+  /** Enabled and disabled alike; a disabled plugin still contributes storage. */
   plugins: readonly PluginDefinition[];
   /**
    * The transformed service config.

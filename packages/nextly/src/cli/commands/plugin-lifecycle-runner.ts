@@ -80,9 +80,44 @@ async function connect(options: RunnerOptions, context: CommandContext) {
   // PostgreSQL and none for SQLite, and an uninstall on the second cannot be
   // completed however complete the first would be.
   const definitions = config.plugins ?? [];
+
+  // Which modules this database has actually APPLIED.
+  //
+  // The uninstall plan was built from every DECLARED module, so a plugin
+  // installed at v1 whose config had since gained a v2 module scheduled v2's
+  // DOWN first — dropping a column or table that module never created. The
+  // DOWN failed, and because it ran before v1's, the plugin could not be
+  // uninstalled at all.
+  //
+  // Newest row per filename decides it, not the first: `migrate:down` records
+  // a rollback by INSERTING a `rolled_back` event after the `applied` one, so
+  // the latest state is what "is this applied?" asks. The same rule
+  // `runPluginPhase` uses.
+  const appliedModules = new Set<string>();
+  {
+    const newest = new Map<string, { status: string; at: number }>();
+    const events = new SchemaEventsRepository(
+      (adapter as unknown as DrizzleAdapter).getDrizzle(),
+      dialect
+    );
+    for (const row of await events.listFileApplies()) {
+      if (!row.filename?.startsWith("plugin:")) continue;
+      const at = row.startedAt.getTime();
+      const seen = newest.get(row.filename);
+      if (seen === undefined || at >= seen.at) {
+        newest.set(row.filename, { status: row.status, at });
+      }
+    }
+    for (const [filename, state] of newest) {
+      if (state.status === "applied") appliedModules.add(filename);
+    }
+  }
+
   for (const plugin of plugins) {
     const source = definitions.find(d => d.name === plugin.name);
-    const modules = source?.contributes?.schema?.migrations ?? [];
+    const modules = (source?.contributes?.schema?.migrations ?? []).filter(
+      module => appliedModules.has(qualifiedFilename(plugin.name, module.name))
+    );
     plugin.modules = modules.map(module => ({
       name: module.name,
       reversible: (module.dialects[dialect]?.down ?? []).length > 0,

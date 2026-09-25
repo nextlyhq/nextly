@@ -75,6 +75,7 @@ import {
   registerFieldType,
   withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
+import type { OwnerRecord } from "../domains/schema/ownership/owner-registry";
 import { builtByFor } from "../domains/schema/pipeline/registered-collections";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
 import type { ColumnOrigin } from "../domains/schema/services/field-column-descriptor";
@@ -1347,10 +1348,32 @@ export async function registerServices(
       const { assertSchemaVersionUsable } = await import(
         "../domains/schema/ownership/schema-version-check"
       );
-      const rows = await new SchemaOwnersRepository(
-        adapterDrizzleDb,
-        adapter.dialect
-      ).read();
+      // A registry that is not there yet reads as "nothing recorded", not as
+      // a failed boot.
+      //
+      // `nextly_schema_owners` arrives with this upgrade, and an EXISTING
+      // installation does not get it from first-run setup — that returns early
+      // once `nextly_schema_events` exists — while `runMigrationsOnBoot`
+      // defaults to off. So the first boot after upgrading queried a table
+      // nothing had created and threw, blocking development and production
+      // alike, in the exact place whose job is to print a development warning.
+      //
+      // Empty rows put every plugin in the "nothing applied yet" state the
+      // check already understands, which is the truth: the upgrade's
+      // migrations have not run. A real connection fault is not hidden by
+      // this — the next query makes it just as loudly, with a better message.
+      let rows: OwnerRecord[] = [];
+      try {
+        rows = await new SchemaOwnersRepository(
+          adapterDrizzleDb,
+          adapter.dialect
+        ).read();
+      } catch {
+        resolvedLogger.warn?.(
+          "Schema ownership registry not found — plugin schema versions cannot be checked yet. " +
+            "Run `nextly migrate` to create it."
+        );
+      }
       const production = process.env.NODE_ENV === "production";
       for (const plugin of plugins) {
         const own = rows.filter(r => r.ownerId === plugin.name);

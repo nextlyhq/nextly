@@ -143,6 +143,19 @@ export interface GenerateArgs {
    * an enable transition. Defaults to `"en"` when omitted.
    */
   defaultLocale?: string;
+  /**
+   * APP-owned extension tables, compiled from `db.schema.extend`.
+   *
+   * Part of the desired snapshot like any other table. Without them the
+   * generator only ever saw collections, singles and components, so a table an
+   * app declared through the documented extend hook was created by development
+   * bootstrap and silently absent from every migration — the one difference
+   * migrations exist to prevent.
+   *
+   * A PLUGIN's extension tables are not these: those ride the plugin's own
+   * module, which `migrate:create --plugin` writes.
+   */
+  extensionSpecs?: readonly TableSpec[];
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -199,6 +212,15 @@ export async function generateMigration(
     args.components,
     args.dialect
   );
+  if (args.extensionSpecs && args.extensionSpecs.length > 0) {
+    // Appended rather than merged: an extension table is a table of its own,
+    // and its name cannot collide with an entity's — the draft store refuses
+    // that at compile time, before anything reaches here.
+    desiredSnapshot.tables = [
+      ...desiredSnapshot.tables,
+      ...args.extensionSpecs,
+    ];
+  }
 
   // 2a. Plan companion `_locales` migrations for localized collections, singles, AND
   //     components (i18n Option B: companions are migration-owned, emitted as

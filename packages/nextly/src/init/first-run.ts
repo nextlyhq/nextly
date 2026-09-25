@@ -168,6 +168,65 @@ async function createExtensionIndexes(
   }
 }
 
+/**
+ * Replay the checks and foreign keys a fresh push could not carry.
+ *
+ * Rendered through `generateSQL`, the same templates the incremental apply
+ * uses for `add_check` and `add_foreign_key` — not the DDL emitter, which
+ * refuses both deliberately because they are not additive statements. Two
+ * renderers would disagree about quoting and about which forms a dialect
+ * accepts.
+ *
+ * Failures warn rather than throw, matching the index replay above: a fresh
+ * boot that cannot add one constraint should still finish and say so, because
+ * the alternative is an installation that cannot start at all.
+ */
+async function createExtensionConstraints(
+  adapter: AdapterLike,
+  dialect: "postgresql" | "mysql" | "sqlite",
+  logger: LoggerLike,
+  passed: ExtensionSchema | null | undefined
+): Promise<void> {
+  const schema = passed ?? getActiveExtensionSchema(dialect);
+  if (!schema) return;
+
+  const ops = [
+    ...schema.specs.flatMap(spec =>
+      (spec.checks ?? []).map(check => ({
+        type: "add_check" as const,
+        tableName: spec.name,
+        check,
+      }))
+    ),
+    // After the checks, because a foreign key needs the table it points at to
+    // exist and the push has already made them all — but ordering the two
+    // kinds keeps the statements readable in a log.
+    ...schema.specs.flatMap(spec =>
+      (spec.foreignKeys ?? []).map(foreignKey => ({
+        type: "add_foreign_key" as const,
+        tableName: spec.name,
+        foreignKey,
+      }))
+    ),
+  ];
+  if (ops.length === 0) return;
+
+  const { generateSQL } = await import(
+    "../domains/schema/pipeline/sql-templates/index"
+  );
+  for (const op of ops) {
+    try {
+      await adapter.executeQuery(generateSQL(op, dialect));
+    } catch (error) {
+      logger.warn(
+        `[nextly] could not create an extension constraint on ${op.tableName}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+}
+
 /** The check itself; bounded by its caller. */
 async function runCoreSchemaChecks(
   adapter: AdapterLike,
@@ -328,6 +387,16 @@ export async function ensureFirstRunSetup(
     // here: the two would then disagree about quoting and about which indexes
     // a dialect can build at all.
     await createExtensionIndexes(adapter, dialect, logger, extensionSchema);
+
+    // Extension CONSTRAINTS, replayed for the same reason as the indexes.
+    //
+    // `toDrizzleTable` leaves checks and foreign keys off on PostgreSQL and
+    // MySQL exactly as it leaves indexes off, so the push above created the
+    // tables and none of their integrity constraints — a declared check, a
+    // declared foreign key and the check that enforces `col.enum()` all
+    // enforced nothing on a fresh database. An installation that never runs
+    // dev push afterwards keeps that unconstrained schema forever.
+    await createExtensionConstraints(adapter, dialect, logger, extensionSchema);
 
     // `freshPushSchema` above already creates the ledger (it is in
     // getDialectTables). Only bootstrap it out-of-band as a fallback if it is

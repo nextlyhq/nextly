@@ -53,6 +53,37 @@ async function refusal(hook: DrizzleSchemaHook): Promise<string> {
   throw new Error("expected the hook to be refused, and it was accepted");
 }
 
+describe("tables the hook never touched", () => {
+  it("leaves a PLUGIN's table alone instead of refusing it", async () => {
+    // The merge puts every compiled table in the map, so validating all of
+    // them refused a plugin table the hook had never seen — any app with an
+    // `afterDrizzle` hook could not boot alongside any plugin with a table.
+    const pluginTable = pgTable("fx__widgets", { id: pgText("id") });
+    const appTable = pgTable("app_notes", { id: pgText("id") });
+
+    const out = await runAfterDrizzle({
+      dialect: "postgresql",
+      tables: { app_notes: appTable, fx__widgets: pluginTable },
+      // Returns ONLY the app's table, which is the ordinary shape of a hook.
+      hooks: [() => ({ app_notes: appTable })],
+      owners: OWNERS,
+      protectedTables: PROTECTED,
+    });
+
+    // Still present, still the same object: merged through, not re-validated.
+    expect(out.fx__widgets).toBe(pluginTable);
+  });
+
+  it("still refuses a plugin's table the hook DID return", async () => {
+    // The control. A check that skipped everything would satisfy the case
+    // above and drop the rule this module exists for.
+    const message = await refusal(() => ({
+      fx__widgets: pgTable("fx__widgets", { id: pgText("id") }),
+    }));
+    expect(message).toContain("fx");
+  });
+});
+
 describe("accepted", () => {
   it("leaves the tables untouched when there are no hooks", async () => {
     const tables = { app_notes: pgTable("app_notes", { id: pgText("id") }) };

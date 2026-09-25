@@ -307,9 +307,23 @@ export async function buildExtensionSchema(
       ? compiledSpecs
       : Object.entries(drizzle).map(([name, table]) => {
           const compiledSpec = compiledSpecs.find(spec => spec.name === name);
-          return table === undefined && compiledSpec !== undefined
-            ? compiledSpec
-            : drizzleTableToTableSpec(table as Table, input.dialect);
+          // Untouched tables keep the spec COMPILED from the declaration.
+          //
+          // The Drizzle object is a lossy view of it: the neutral model
+          // carries declared checks, foreign keys and defaults that
+          // `toDrizzleTable` deliberately leaves off on PostgreSQL and MySQL,
+          // where they are applied as separate statements. Re-deriving every
+          // table from Drizzle therefore erased them — the desired schema
+          // proposed dropping defaults that were declared, and constraints
+          // vanished from migration generation and drift.
+          //
+          // Identity again, matching what `runAfterDrizzle` validates: the
+          // same object means the hook did not touch it, so the declaration
+          // remains the better description of it.
+          if (compiledSpec !== undefined && table === compiled[name]) {
+            return compiledSpec;
+          }
+          return drizzleTableToTableSpec(table as Table, input.dialect);
         });
 
   // Adopted tables compile to drizzle ONLY: registered for typed access and

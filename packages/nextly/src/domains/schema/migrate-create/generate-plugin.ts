@@ -110,6 +110,43 @@ function renderDialect(
  * takes the version from the LAST module, so an un-bumped regeneration would
  * silently describe a schema the plugin's manifest no longer claims.
  */
+/**
+ * A dependency's CURRENT tables, re-carrying this plugin's earlier elements.
+ *
+ * "This plugin's" is decided structurally rather than from an owner field the
+ * spec does not carry: anything present in the previous module's view of the
+ * table and absent from the dependency's own current shape was put there by
+ * this plugin, because nothing else writes into that stored view.
+ */
+function withPriorContributions(
+  current: readonly TableSpec[],
+  previous: readonly TableSpec[]
+): TableSpec[] {
+  const previousByName = new Map(previous.map(table => [table.name, table]));
+  return current.map(table => {
+    const before = previousByName.get(table.name);
+    if (!before) return table;
+
+    const currentColumns = new Set(table.columns.map(column => column.name));
+    const mineColumns = before.columns.filter(
+      column => !currentColumns.has(column.name)
+    );
+    const currentIndexes = new Set(
+      (table.indexes ?? []).map(index => index.name)
+    );
+    const mineIndexes = (before.indexes ?? []).filter(
+      index => !currentIndexes.has(index.name)
+    );
+    if (mineColumns.length === 0 && mineIndexes.length === 0) return table;
+
+    return {
+      ...table,
+      columns: [...table.columns, ...mineColumns],
+      indexes: [...(table.indexes ?? []), ...mineIndexes],
+    };
+  });
+}
+
 export function buildPluginMigration(
   args: BuildPluginMigrationArgs
 ): BuiltPluginMigration | null {
@@ -145,10 +182,23 @@ export function buildPluginMigration(
     // their own owner's shape otherwise. Taking the previous module's view is
     // what makes a regeneration emit nothing when nothing changed: a fresh
     // baseline every time would re-emit the same ADD COLUMN forever.
-    const previousContributed =
-      previous?.contributed?.[dialect]?.tables ??
-      args.contributedBaselineByDialect?.[dialect] ??
-      [];
+    // The dependency as it is NOW, carrying only the elements THIS plugin
+    // contributed in earlier modules.
+    //
+    // Taking the previous module's `contributed` wholesale was wrong: it is
+    // the dependency's table as it looked THEN, so a column the dependency has
+    // since added to its own table appeared only on the desired side and came
+    // out as this plugin's addition. Worse, the stored before/after snapshots
+    // then described a table that no longer matched the live one either side
+    // of the dependency's own migration, and the upgrade stopped as drift.
+    //
+    // Rebasing keeps both properties: the dependency's own columns are
+    // identical on both sides and produce nothing, while this plugin's earlier
+    // contributions stay on the baseline so they are not proposed twice.
+    const previousContributed = withPriorContributions(
+      args.contributedBaselineByDialect?.[dialect] ?? [],
+      previous?.contributed?.[dialect]?.tables ?? []
+    );
 
     // ONE diff over the union. A foreign table appears on both sides, so only
     // the elements this plugin added to it come out as operations; its own

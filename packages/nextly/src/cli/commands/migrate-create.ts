@@ -383,12 +383,27 @@ export async function runMigrateCreate(
   logger.newline();
   logger.info("Comparing config to latest snapshot...");
 
+  // The APP's own extension tables, compiled the way boot compiles them.
+  //
+  // `db.schema.extend` is documented as the way an app declares a table of its
+  // own, and boot creates it — but the generator never saw it, so the table
+  // existed after a development bootstrap and was missing from every
+  // migration. Plugins are compiled alongside because an app hook may extend
+  // a plugin's table and would not resolve without them; only APP-OWNED tables
+  // are kept, since a plugin's ride its own module.
+  const extensionSpecs = await appExtensionSpecs(
+    configResult.config,
+    dialect,
+    logger
+  );
+
   let result;
   try {
     result = await generateMigration({
       name: name!,
       dialect,
       migrationsDir,
+      extensionSpecs,
       defaultLocale: configResult.config.localization?.defaultLocale,
       collections,
       singles,
@@ -506,6 +521,40 @@ const PLUGIN_BUNDLE_EXTERNALS = [
 ];
 
 const PLUGIN_DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
+
+/**
+ * The app's own extension tables, as migration specs.
+ *
+ * Compiled through the same entry point boot uses, so the migration describes
+ * exactly what boot would create. An app that declares nothing here compiles
+ * to nothing and the generator is unchanged.
+ */
+async function appExtensionSpecs(
+  config: LoadConfigResult["config"],
+  dialect: SupportedDialect,
+  logger: CommandContext["logger"]
+): Promise<TableSpec[]> {
+  const { compileAndPublishExtensionSchema } = await import(
+    "../../domains/schema/extension/publish"
+  );
+  const schema = await compileAndPublishExtensionSchema({
+    dialect,
+    plugins: config.plugins ?? [],
+    config: config,
+    logger: { warn: m => logger.warn(m) },
+  });
+  if (!schema) return [];
+
+  // App-owned only. A plugin's extension table belongs to the module
+  // `migrate:create --plugin` writes; emitting it here as well would have two
+  // streams claiming to create one table.
+  const appOwned = new Set(
+    schema.tables
+      .filter(table => table.owner.kind === "app")
+      .map(table => table.name)
+  );
+  return schema.specs.filter(spec => appOwned.has(spec.name));
+}
 
 /**
  * Compile this plugin's schema with its declared dependencies present.

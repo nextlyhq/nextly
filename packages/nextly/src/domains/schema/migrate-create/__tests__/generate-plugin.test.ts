@@ -306,6 +306,41 @@ describe("elements contributed to another owner's table", () => {
     expect(second).toBeNull();
   });
 
+  it("ignores a column the DEPENDENCY added to its own table", () => {
+    // The dependency migrates first and owns its own columns. Diffing against
+    // the previous module's stored view made its new column look like this
+    // plugin's addition, and the stored snapshots then matched neither live
+    // table — the upgrade stopped as drift over a change that was not ours.
+    const first = buildPluginMigration(CONTRIBUTING)!;
+
+    // The dependency has since added `note` to its own table; our contribution
+    // is unchanged.
+    const dependencyGrew: TableSpec = {
+      ...dependencyTable,
+      columns: [
+        ...dependencyTable.columns,
+        { name: "note", type: "varchar(255)", nullable: true },
+      ],
+    };
+    const second = buildPluginMigration({
+      ...CONTRIBUTING,
+      schemaVersion: 2,
+      existing: [first.module],
+      contributedBaselineByDialect: tablesByDialect(dependencyGrew),
+      contributedByDialect: tablesByDialect({
+        ...dependencyGrew,
+        columns: [
+          ...dependencyGrew.columns,
+          { name: "fx_ref", type: "varchar(255)", nullable: true },
+        ],
+      }),
+    });
+
+    // Nothing of ours changed, so there is nothing to emit — and in
+    // particular no ADD COLUMN for the dependency's own `note`.
+    expect(second).toBeNull();
+  });
+
   it("still emits the plugin's OWN table changes", () => {
     // The control: a module that reported nothing would satisfy the
     // regeneration test above while breaking the feature.
