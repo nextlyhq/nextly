@@ -10,13 +10,15 @@ name: AI credit
 # edit to either runs it again. In the queue it reads exactly what the queue
 # would land.
 #
-# The checker runs from the base the change is judged against, never from the
-# change, which could otherwise rewrite the rule it is judged by; the change is
-# only read. It follows that this can be made a required check only once the
-# checker is on `main`: before that, a base without it fails the job.
+# Neither this workflow nor the checker comes from the change, which could
+# otherwise rewrite the rule it is judged by. On a pull request the workflow is
+# `pull_request_target`, read from `main` whatever the change does to this
+# file, and in the queue the checker comes from the queue's base. The change is
+# only read by git: nothing from it runs, the token is read-only, and no secret
+# is used. Every pull request is read, whatever branch it targets. It follows
+# that this can be made a required check only once the checker is on `main`.
 on:
-  pull_request:
-    branches: [main]
+  pull_request_target:
     types: [opened, edited, synchronize, reopened]
   merge_group:
     types: [checks_requested]
@@ -36,13 +38,14 @@ jobs:
       - name: Checkout the change
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.event_name == 'merge_group' && github.ref || format('refs/pull/{0}/head', github.event.pull_request.number) }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout the checker from the base
+      - name: Checkout the checker from main
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.repository.default_branch }}
           path: trusted
           sparse-checkout: scripts
           persist-credentials: false

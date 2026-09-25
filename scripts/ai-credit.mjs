@@ -80,7 +80,9 @@ const TOOL_NAME = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})$`, "i");
 /** A name that begins with an unambiguous tool's, such as a product and its edition; read only where no address says who it is. */
 const TOOL_NAMED = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})(?![\\w-])`, "i");
 const BARE_NAME = new RegExp(`^(?:${PROPER.join("|")})$`, "i");
-const AI_EMAIL = new RegExp(`^(?:[^@\\s]+@(?:anthropic|openai)\\.com|cursoragent@cursor\\.com|\\d+\\+(?:copilot|${BOT})@users\\.noreply\\.github\\.com)$`, "i");
+const AI_EMAIL = new RegExp(`^(?:noreply@(?:anthropic|openai)\\.com|cursoragent@cursor\\.com|\\d+\\+(?:copilot|${BOT})@users\\.noreply\\.github\\.com)$`, "i");
+/** A vendor's own domain: people work there too, so an address there is a tool's only under a tool's name. */
+const VENDOR_EMAIL = /@(?:anthropic|openai)\.com$/i;
 const BRANCH_OWNER = new RegExp(`^(?:${BRANCH_OWNERS.join("|")})/`, "i");
 
 const MADE = "(?:generated|created|written|authored|co-?\\s?authored|co-?\\s?written|produced|drafted|made|built|coded|developed|implemented|refactored|assisted|pair-?\\s?programmed|vibe-?\\s?coded)";
@@ -129,14 +131,19 @@ const PLACES = {
 };
 
 /**
- * Whether `name <email>` is an AI tool's or its vendor's identity: its own
- * address, one of its GitHub App accounts, an unambiguous tool's name in full,
- * AI in general, or a name a tool marks as its own. A person's name is not,
- * even one that begins with a vendor's, as a researcher's may.
+ * Whether `name <email>` is an AI tool's or its vendor's identity: a tool's
+ * own address, a vendor's address under a tool's name, one of its GitHub App
+ * accounts, an unambiguous tool's name in full, AI in general, or a name a tool
+ * marks as its own. A person is not, even one whose name begins with a
+ * vendor's or whose address is a vendor's.
  */
 export function isAiIdentity(identity) {
   const { name, email } = identityParts(identity);
-  return AI_EMAIL.test(email) || AI_NAME.test(name) || TOOL_NAME.test(name) || /\(aider\)/i.test(name);
+  return AI_EMAIL.test(email) || isToolName(name) || (VENDOR_EMAIL.test(email) && BARE_NAME.test(name));
+}
+
+function isToolName(name) {
+  return AI_NAME.test(name) || TOOL_NAME.test(name) || /\(aider\)/i.test(name);
 }
 
 function identityParts(identity) {
@@ -152,9 +159,20 @@ export function creditsIn(text, place = "message") {
     .split(/\r?\n/)
     .map(raw => plain(rules.words(raw)));
   const joined = lines.join("\n");
-  const trailers = lines.flatMap((line, index) => trailerCredits(line, rules).map(found => ({ ...found, line: index + 1 })));
-  const phrases = [...leadCredits(joined, rules), ...adjectiveCredits(joined, rules)].map(({ at, ...found }) => ({ ...found, line: lineAt(joined, at) }));
+  const trailers = unfolded(lines).flatMap(({ text: line, at }) => trailerCredits(line, rules).map(found => ({ ...found, from: at, line: at })));
+  const phrases = [...leadCredits(joined, rules), ...adjectiveCredits(joined, rules)].map(({ start, at, ...found }) => ({ ...found, from: lineAt(joined, start), line: lineAt(joined, at) }));
   return [...trailers, ...phrases];
+}
+
+/** The lines, with a trailer's folded continuation lines joined to it as git unfolds them; each keeps the line it starts on. */
+function unfolded(lines) {
+  const logical = [];
+  lines.forEach((line, index) => {
+    const last = logical.at(-1);
+    if (last && /^[ \t]+\S/.test(line) && TRAILER.test(last.text)) last.text = `${last.text} ${line.trim()}`;
+    else logical.push({ text: line, at: index + 1 });
+  });
+  return logical;
 }
 
 /** Markdown links read as their text, and emphasis marks as nothing, so a formatted credit reads as a plain one. */
@@ -183,13 +201,13 @@ function creditedByTrailer(value) {
   return isAiIdentity(name) || BARE_NAME.test(name) || TOOL_NAMED.test(name);
 }
 
-/** Each crediting phrase followed by a name, reported on the line of the name it credits. */
+/** Each crediting phrase followed by a name, with where the phrase starts and where the name it credits does. */
 function leadCredits(text, rules) {
   return LEADS.flatMap(({ form, lead }) =>
     [...text.matchAll(lead)].flatMap(match => {
       const after = match.index + match[0].length;
       const name = namedAt(text.slice(after), rules);
-      return name === null ? [] : [{ form, excerpt: excerpt(text, match.index), at: after + name }];
+      return name === null ? [] : [{ form, excerpt: excerpt(text, match.index), start: match.index, at: after + name }];
     })
   );
 }
@@ -208,7 +226,7 @@ function names(text, rules) {
 function adjectiveCredits(text, rules) {
   const patterns = rules.generic ? [...NAMED_ADJECTIVES, GENERIC_ADJECTIVE] : NAMED_ADJECTIVES;
   const cased = rules.anyCase ? patterns.map(pattern => new RegExp(pattern.source, "gi")) : patterns;
-  return cased.flatMap(pattern => [...text.matchAll(pattern)].map(match => ({ form: "calls it AI-made", excerpt: excerpt(text, match.index), at: match.index })));
+  return cased.flatMap(pattern => [...text.matchAll(pattern)].map(match => ({ form: "calls it AI-made", excerpt: excerpt(text, match.index), start: match.index, at: match.index })));
 }
 
 function excerpt(text, from = 0) {
@@ -222,32 +240,40 @@ export function branchCredits(branch) {
   return [...owned, ...creditsIn(name, "name")];
 }
 
-/** The lines a unified diff adds, each with its file and its line number there. */
-export function linesAdded(diff) {
-  const state = { path: null, next: 0, inHunk: 0 };
-  const added = [];
-  for (const line of diff.split("\n")) readDiffLine(line, state, added);
-  return added;
+/**
+ * The lines a unified diff shows of the final files: each added line, and the
+ * unchanged lines beside it, each with its file, its line number there, and
+ * whether the change added it. An unchanged neighbour is read because a credit
+ * can be formed by adding a phrase next to a line already there.
+ */
+export function diffLines(diff) {
+  const state = { path: null, next: 0, oldLeft: 0, newLeft: 0 };
+  const lines = [];
+  for (const line of diff.split("\n")) readDiffLine(line, state, lines);
+  return lines;
 }
 
 /**
- * A hunk header says how many lines follow it, so inside a hunk every line is
- * content, even one that happens to begin like a header.
+ * A hunk header says how many old and new lines follow it, so inside a hunk
+ * every line is content, even one that happens to begin like a header.
  */
-function readDiffLine(line, state, added) {
-  if (state.inHunk > 0) return readHunkLine(line, state, added);
+function readDiffLine(line, state, lines) {
+  if (state.oldLeft + state.newLeft > 0) return readHunkLine(line, state, lines);
   if (line.startsWith("+++ ")) state.path = targetPath(line);
   else if (line.startsWith("@@")) Object.assign(state, hunkHeader(line));
 }
 
-function readHunkLine(line, state, added) {
+/** A removed line counts against the old side, an added one against the new, and an unchanged one against both. */
+function readHunkLine(line, state, lines) {
   if (line.startsWith("\\")) return;
-  state.inHunk -= 1;
-  if (line.startsWith("+")) addLine(line, state, added);
+  if (!line.startsWith("+")) state.oldLeft -= 1;
+  if (line.startsWith("-")) return;
+  state.newLeft -= 1;
+  keepLine(line, state, lines);
 }
 
-function addLine(line, state, added) {
-  if (state.path) added.push({ path: state.path, line: state.next, text: line.slice(1) });
+function keepLine(line, state, lines) {
+  if (state.path) lines.push({ path: state.path, line: state.next, text: line.slice(1), added: line.startsWith("+") });
   state.next += 1;
 }
 
@@ -261,22 +287,27 @@ const HUNK = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 function hunkHeader(line) {
   const match = HUNK.exec(line);
   if (!match) throw new Error(`cannot read the hunk header ${JSON.stringify(line)}`);
-  const [, removed = "1", start, addedCount = "1"] = match;
-  return { next: Number(start), inHunk: Number(removed) + Number(addedCount) };
+  const [, oldCount = "1", start, newCount = "1"] = match;
+  return { next: Number(start), oldLeft: Number(oldCount), newLeft: Number(newCount) };
 }
 
-/** Consecutive added lines of one file as one block, so a phrase wrapped across them reads whole. */
-export function addedBlocks(lines) {
+/** Consecutive lines of one file as one block, so a phrase wrapped across them reads whole. */
+export function diffBlocks(lines) {
   const blocks = [];
-  for (const added of lines) {
-    if (continues(blocks.at(-1), added)) blocks.at(-1).texts.push(added.text);
-    else blocks.push({ path: added.path, start: added.line, texts: [added.text] });
+  for (const entry of lines) {
+    if (continues(blocks.at(-1), entry)) extend(blocks.at(-1), entry);
+    else blocks.push({ path: entry.path, start: entry.line, texts: [entry.text], added: [entry.added] });
   }
   return blocks;
 }
 
-function continues(block, added) {
-  return Boolean(block) && block.path === added.path && block.start + block.texts.length === added.line;
+function continues(block, entry) {
+  return Boolean(block) && block.path === entry.path && block.start + block.texts.length === entry.line;
+}
+
+function extend(block, entry) {
+  block.texts.push(entry.text);
+  block.added.push(entry.added);
 }
 
 /** The paths `git diff --name-status -z` reports added, renamed or copied: a rename or copy carries two paths, anything else one. */
@@ -294,9 +325,11 @@ function entryWidth(status) {
 function rangeEvidence({ base, head }, git) {
   const commits = commitsIn({ base, head }, git);
   const names = git(["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", base, head], { maxBuffer: MAX_OUTPUT });
-  const diff = git(["-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", "--no-ext-diff", "-M", base, head], { maxBuffer: MAX_OUTPUT });
+  // Text, whatever a changed attribute says: a path marked binary would
+  // otherwise show no lines at all, and its credit none.
+  const diff = git(["-c", "core.quotePath=false", "diff", "--unified=1", "--text", "--no-textconv", "--no-color", "--no-ext-diff", "-M", base, head], { maxBuffer: MAX_OUTPUT });
   if (!commits || !names.ok || !diff.ok) return { problem: `could not read the commits and changes in ${base}..${head}` };
-  return { commits, paths: addedOrRenamed(names.out.split("\0")), lines: linesAdded(diff.out) };
+  return { commits, paths: addedOrRenamed(names.out.split("\0")), lines: diffLines(diff.out) };
 }
 
 /** The commits in a range, each read from its own object, or undefined when any cannot be read. */
@@ -330,15 +363,19 @@ function rangeFindings({ commits, paths, lines }) {
   return [
     ...commits.flatMap(commit => commitFindings(commit)),
     ...paths.flatMap(path => creditsIn(path, "name").map(found => ({ ...found, where: `the path ${path}` }))),
-    ...addedBlocks(lines).flatMap(block => blockFindings(block)),
+    ...diffBlocks(lines).flatMap(block => blockFindings(block)),
   ];
 }
 
-function blockFindings({ path, start, texts }) {
-  return creditsIn(texts.join("\n"), "line").map(found => {
-    const line = start + found.line - 1;
-    return { ...found, where: `${path}:${line}`, file: path, line };
-  });
+/** A block's credits that an added line takes part in: an unchanged line alone credits nothing new. */
+function blockFindings({ path, start, texts, added }) {
+  if (!added.includes(true)) return [];
+  return creditsIn(texts.join("\n"), "line")
+    .filter(found => added.slice(found.from - 1, found.line).includes(true))
+    .map(found => {
+      const line = start + found.line - 1;
+      return { ...found, where: `${path}:${line}`, file: path, line };
+    });
 }
 
 function commitFindings({ sha, author, committer, message }) {
@@ -364,12 +401,17 @@ function pullRequestFindings(payload) {
   ];
 }
 
-const EVENTS = new Set(["pull_request", "merge_group"]);
+/** The events this reads, each by the event whose payload it carries. */
+const EVENTS = new Map([
+  ["pull_request", "pull_request"],
+  ["pull_request_target", "pull_request"],
+  ["merge_group", "merge_group"],
+]);
 
 /** Decides for the CI step: a pull request, or what the merge queue would land. */
 function checkChange(env, git) {
-  const event = env.GITHUB_EVENT_NAME;
-  if (!EVENTS.has(event)) return refuse(`no range to read for a ${event || "missing"} event; give it one here before triggering this check on it`);
+  const event = EVENTS.get(env.GITHUB_EVENT_NAME);
+  if (!event) return refuse(`no range to read for a ${env.GITHUB_EVENT_NAME || "missing"} event; give it one here before triggering this check on it`);
   const read = readRange(event, eventPayload(env), git);
   return read.problem ? refuse(read.problem) : judge(read, event);
 }
@@ -401,7 +443,8 @@ function annotation({ file, line, where, form, excerpt: text }) {
 
 function reportClean({ commits, paths, lines }, event) {
   const published = event === "pull_request" ? "the title, description and branch, " : "";
-  console.log(`ai-credit: no AI credit in ${published}${commits.length} commit(s), ${paths.length} added or renamed path(s) and ${lines.length} added line(s).`);
+  const added = lines.filter(entry => entry.added).length;
+  console.log(`ai-credit: no AI credit in ${published}${commits.length} commit(s), ${paths.length} added or renamed path(s) and ${added} added line(s).`);
   return 0;
 }
 
@@ -413,11 +456,12 @@ function refuse(problem) {
 /** Decides for the commit-msg hook: the message about to be committed, and who is committing it. */
 function checkCommit(file, git) {
   if (!file) return refuseCommit(["no message file was given"]);
-  const message = committedText(readFileSync(file, "utf8"));
+  const { above, below } = committedParts(readFileSync(file, "utf8"));
   const identities = ["author", "committer"].map(role => [role, git(["var", `GIT_${role.toUpperCase()}_IDENT`])]);
   const reasons = [
     ...identities.filter(([, read]) => !read.ok).map(([role]) => `the commit's ${role} could not be read`),
-    ...creditsIn(message, "message").map(found => `the message, line ${found.line}, ${found.form}: ${found.excerpt}`),
+    ...creditsIn(above, "message").map(found => `the message, line ${found.line}, ${found.form}: ${found.excerpt}`),
+    ...creditsIn(below, "line").map(found => `the message below its scissors line, line ${found.line}, ${found.form}: ${found.excerpt}`),
     ...identities.filter(([, read]) => read.ok && isAiIdentity(withoutDate(read.out))).map(([role, read]) => `the ${role}, ${withoutDate(read.out)}, is an AI tool's identity`),
   ];
   return reasons.length > 0 ? refuseCommit(reasons) : 0;
@@ -428,11 +472,21 @@ function withoutDate(ident) {
 }
 
 /**
- * What git may keep of a message: everything above a scissors line. Comment
- * lines are read too, since a message given with `-m` or `-F` keeps them.
+ * A message, split at a scissors line. Comment lines are read, since a message
+ * given with `-m` or `-F` keeps them. Git drops what is below a scissors line
+ * only when it cleans an edited message, and keeps it otherwise, so that is
+ * read too, as the diff an editor usually shows there: its added lines and any
+ * plain text, but not the lines it removes or leaves unchanged, since removing
+ * an old credit credits nothing.
  */
-function committedText(message) {
-  return message.split(/^\S -{8,} >8 -{8,}$/m)[0];
+function committedParts(message) {
+  const [above, ...rest] = message.split(/^\S -{8,} >8 -{8,}$/m);
+  const below = rest
+    .join("\n")
+    .split("\n")
+    .filter(line => !/^[ -]/.test(line))
+    .map(line => line.replace(/^\+/, ""));
+  return { above, below: below.join("\n") };
 }
 
 function refuseCommit(reasons) {
