@@ -287,10 +287,11 @@ because a file you could not read is still one the shell will truncate.
 Better, make the write itself refuse: `set -o noclobber; printf '%s' "$content" > path`
 as ONE command (each tool call starts a fresh shell, with the option off), or
 Node's `writeFileSync(path, data, { flag: "wx" })`, which throws `EEXIST`.
-Both refuse through a symbolic link anywhere in the path, dangling or not;
-`>|` opts out where overwriting is the intent. Under an editing tool that
-requires a prior read, use it rather than the shell. Why, as measured, and how
-to recover a file once it has been clobbered: the
+Both refuse to write through a symbolic link at the path itself, even a
+dangling one; a link in a directory above it is followed, and the file is
+created where that link points. `>|` opts out where overwriting is the intent.
+Under an editing tool that requires a prior read, use it rather than the shell.
+Why, as measured, and how to recover a file once it has been clobbered: the
 `recovering-a-clobbered-file` skill.
 
 ## Git and PR rules
