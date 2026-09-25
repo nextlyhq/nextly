@@ -299,11 +299,12 @@ Why, as measured, and how to recover a file once it has been clobbered: the
 - One flow: a short-lived branch off `main` for each pull request,
   squash-merged into `main`, its title becoming the commit message. Never
   commit to `main` directly, and keep no long-lived branch (`dev`, release,
-  integration): the build, tests and secret scan never run on a pull request
-  into one, and a branch that gathers weeks of work is too large to review. A
-  feature too large for one pull request lands in slices, each complete and
-  tested; public API not yet finished is marked `@experimental` until the
-  feature is, as `packages/ui/STABILITY.md` uses the tag.
+  integration): lint, type-checking, the unit and integration tests and the
+  secret scan never run on a pull request into one, and a branch that gathers
+  weeks of work is too large to review. A feature too large for one pull
+  request lands in slices, each complete and tested; public API not yet
+  finished is marked `@experimental` until the feature is, as
+  `packages/ui/STABILITY.md` uses the tag.
 - Merges go through the merge queue once it is switched on for `main`; it runs
   the required checks on each pull request combined with the latest `main`.
   Until then, bring a branch up to date with `main`, and before calling it

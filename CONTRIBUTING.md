@@ -371,7 +371,7 @@ These keywords auto-close the linked issue when the PR merges.
 
 ## Submitting a pull request
 
-Every change reaches `main` the same way: a short-lived branch off `main`, one pull request into `main`, squash-merged. There are no long-lived branches — no `dev`, release or integration branch — because the build, tests and secret scan never run on a pull request into any other branch, and a branch that gathers weeks of work is too large to review.
+Every change reaches `main` the same way: a short-lived branch off `main`, one pull request into `main`, squash-merged. There are no long-lived branches — no `dev`, release or integration branch — because lint, type-checking, the unit and integration tests and the secret scan never run on a pull request into any other branch, and a branch that gathers weeks of work is too large to review.
 
 1. **Fork** the repo and create a branch off `main`, one branch per pull request.
 2. **Make your change.** Add or update tests when relevant.
