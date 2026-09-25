@@ -439,9 +439,10 @@ async function keptControls({ corpus, api, get }) {
 async function exclusionFindings({ corpus, api, get, config }) {
   const probes = [];
   for (const witness of witnesses(corpus, config)) {
-    const elsewhere = holdersElsewhere(corpus, config, witness);
+    const holders = holdersOf(corpus, witness);
+    const elsewhere = outsideSet(holders, config, witness);
     const answer = await retrievable(get, api, witness.marker, witness.name);
-    probes.push({ witness, elsewhere, answer, leak: leakOf(answer, witness.name, elsewhere, citesAnotherHolder(corpus, config, witness, answer)) });
+    probes.push({ witness, elsewhere, answer, leak: leakOf(answer, witness.name, elsewhere, citesAnExcludedHolder(holders, config, answer)) });
   }
   const leaks = probes.filter(probe => probe.leak);
   return [...leaks.map(probe => leakFinding(probe.leak, probe.witness, probe.elsewhere)), ...citedExclusions(probes, config, leaks)];
@@ -460,17 +461,18 @@ function citedExclusions(probes, config, leaks) {
   return [...cited].filter(path => !reported.has(path)).map(path => citationFinding(path, config)).filter(Boolean);
 }
 
-/**
- * The files outside a witness's set that hold its marker. The marker is kept
- * from every file the configuration keeps, but excluded files may share it: a
- * generated CLAUDE.md holds every sentence of the AGENTS.md it copies, and
- * each is excluded by an entry of its own.
- */
-function holdersElsewhere(corpus, config, { set, name, marker }) {
-  return [...corpus]
-    .filter(([other, text]) => other !== name && text.includes(marker) && excludingRule(other, config)?.set(other, config) !== set)
-    .map(([other]) => other);
+/** Every file but the witness that holds its marker: the one inventory both the holders outside its set and a cited holder are read from. */
+function holdersOf(corpus, { name, marker }) {
+  return [...corpus].filter(([other, text]) => other !== name && text.includes(marker)).map(([other]) => other);
 }
+
+/**
+ * The holders outside a witness's set. The marker is kept from every file the
+ * configuration keeps, but excluded files may share it: a generated CLAUDE.md
+ * holds every sentence of the AGENTS.md it copies, and each is excluded by an
+ * entry of its own.
+ */
+const outsideSet = (holders, config, { set }) => holders.filter(other => excludingRule(other, config)?.set(other, config) !== set);
 
 /**
  * What a probe's answer says about a set: `"witness"` when its witness came
@@ -490,9 +492,8 @@ function leakOf(answer, name, elsewhere, heldElsewhere) {
 /** A sentence that came back with no excluded holder cited: its own set's, or every set's that holds it. */
 const unattributed = elsewhere => (elsewhere.length === 0 ? "witness" : "shared");
 
-/** Whether a probe's answer cites an excluded file, other than the witness, that holds the sentence asked for. */
-const citesAnotherHolder = (corpus, config, { name, marker }, answer) =>
-  [...answer.cites].some(path => path !== name && citationFinding(path, config) !== null && Boolean(corpus.get(path)?.includes(marker)));
+/** Whether a probe's answer cites one of the sentence's holders that the configuration excludes. */
+const citesAnExcludedHolder = (holders, config, answer) => holders.some(path => answer.cites.has(path) && citationFinding(path, config) !== null);
 
 function leakFinding(leak, { set, name, marker }, elsewhere) {
   return leak === "witness"
