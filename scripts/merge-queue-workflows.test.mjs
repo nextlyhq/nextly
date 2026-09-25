@@ -146,8 +146,11 @@ describe("conditions that skip the queue's run", () => {
       "github.event.pull_request.head.repo.full_name == github.repository",
       // Any other name under `github` may differ between the runs.
       "github.event.action == 'synchronize'",
-      // One output that must pass two text tests at once.
+      // One output that must pass two text tests at once, of literals or of the event's name.
       "startsWith(needs.x.outputs.value, 'a') && endsWith(needs.x.outputs.value, 'b') && github.event_name == 'pull_request'",
+      "startsWith(needs.x.outputs.v, github.event_name) && endsWith(needs.x.outputs.v, 'b') && github.event_name != 'merge_group'",
+      // `format` reads `{{` and `}}` as braces.
+      "format('{{{0}}}', github.event_name) == '{pull_request}'",
       // A function GitHub runs is run here from its arguments, the event's name among them.
       "toJSON(github.event_name) == '\"pull_request\"'",
     ];
@@ -377,15 +380,16 @@ function* assigned(choices, values, index, assignment) {
  * each event's name, which a name may be compared with too; a number below,
  * between and above its numeric ones; `true`, `false`, empty text, which every
  * text starts with, ends with and contains, and a value equal to none of them;
- * and each ordered pair of its text literals run together, so that any two
- * tests of one value that one value can pass together are passed. Between
- * them they give each comparison every outcome it can have.
+ * and each ordered pair of its texts run together, its literals and the
+ * events' names, so that any two tests of one value that one value can pass
+ * together are passed. Between them they give each comparison every outcome it
+ * can have.
  */
 function candidateValues(literals) {
   const numbers = [...new Set(literals.filter(value => value !== "").map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
   const between = numbers.slice(1).map((number, at) => (numbers[at] + number) / 2);
   const around = numbers.length > 0 ? [numbers[0] - 1, numbers.at(-1) + 1] : [];
-  const texts = [...new Set(literals.filter(value => typeof value === "string"))];
+  const texts = [...new Set([...literals.filter(value => typeof value === "string"), ...PULL_REQUEST_EVENTS, QUEUE_EVENT])];
   const pairs = texts.flatMap(first => texts.map(second => first + second));
   return [...new Set([...literals, ...PULL_REQUEST_EVENTS, QUEUE_EVENT, ...between, ...around, true, false, "", NONE_OF_THEM, ...pairs])];
 }
