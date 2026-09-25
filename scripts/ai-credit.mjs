@@ -15,6 +15,9 @@
  * a component a product uses, not a maker of the change, so a name followed by
  * one of those counts as a mention.
  *
+ * A phrase is read across a single line break, since Markdown renders one as
+ * a space, but never across a blank line, which starts a new paragraph.
+ *
  * As the commit-msg hook (`--commit-msg <file>`) it reads the message and the
  * commit's author and committer, and refuses the commit before it exists. In
  * CI it reads a pull request, or the commits the merge queue would land: the
@@ -31,20 +34,27 @@ import { comparedRange, diffRange } from "./change-scope.mjs";
 import { isCliEntry } from "./cli-entry.mjs";
 import { commandText, eventPayload, readGit } from "./workflow-context.mjs";
 
+/** A run of whitespace holding at most one line break: words a phrase joins may wrap, but not across a paragraph. */
+const GAP = "(?:[^\\S\\n]*\\n[^\\S\\n]*|[^\\S\\n]+)";
+const gapped = pattern => pattern.replaceAll(" ", GAP);
+
 /** Names that stand for an AI tool, a model or its vendor, in any case. */
 const TOOLS = [
-  "claude code", "claude (?:opus|sonnet|haiku|instant)(?: ?[\\d.]+)?", "anthropic", "openai", "chat ?gpt", "gpt-?\\d[\\w.-]*",
-  "codex", "(?:github )?copilot", "gemini (?:code assist|cli|pro|flash|ultra|\\d[\\w.]*)", "cursor agent", "devin ai", "aider",
+  "claude code", "claude (?:opus|sonnet|haiku|instant)(?:\\s?[\\d.]+)?", "anthropic", "openai", "chat\\s?gpt", "gpt-?\\d[\\w.-]*",
+  "codex", "copilot", "gemini (?:code assist|cli|pro|flash|ultra|\\d[\\w.]*)", "cursor agent", "devin ai", "aider",
   "codeium", "tabnine", "codewhisperer", "amazon q(?: developer)?", "deepseek", "qwen[\\w.-]*", "zhipu", "z\\.ai",
-  "glm-?\\d[\\w.-]*", "mixtral", "codestral", "llama ?\\d[\\w.]*", "openhands", "roo code", "kilo code", "jetbrains ai",
+  "glm-?\\d[\\w.-]*", "mixtral", "codestral", "llama\\s?\\d[\\w.]*", "openhands", "roo code", "kilo code", "jetbrains ai",
   "sourcegraph cody", "replit agent", "bolt\\.new",
-];
+].map(gapped);
 
 /** Tool names that are also ordinary words or given names: in prose they count only capitalised. */
 const PROPER = ["Claude", "Cursor", "Devin", "Jules", "Cody", "Gemini", "Grok", "Mistral", "Windsurf", "Perplexity", "Junie", "Cline", "Lovable", "Kiro", "Amp"];
 
+/** The vendors whose name may stand before a tool's, as they name their own tools. */
+const VENDORS = ["Google", "GitHub", "Microsoft", "OpenAI", "Anthropic", "Amazon", "AWS", "Meta", "Mistral", "xAI", "Sourcegraph", "JetBrains", "Replit", "Cognition"];
+
 /** AI in general, naming no tool. */
-const GENERIC = ["(?:AI|LLM)s?(?: (?:tool|assistant|agent|model)s?)?", "(?:large )?language models?", "coding (?:agent|assistant)s?"];
+const GENERIC = ["(?:AI|LLM)s?(?: (?:tool|assistant|agent|model)s?)?", "(?:large )?language models?", "coding (?:agent|assistant)s?"].map(gapped);
 
 /** GitHub App accounts AI tools commit and review as. */
 const BOT_ACCOUNTS = [
@@ -55,34 +65,39 @@ const BOT_ACCOUNTS = [
 /** Tools that name the branches they open after themselves, as `<tool>/<topic>`. */
 const BRANCH_OWNERS = ["claude", "copilot", "codex", "cursor", "devin", "jules", "gemini", "openhands", "aider", "windsurf", "sweep"];
 
+const VENDOR = `(?:(?:${VENDORS.join("|")})(?:'s)?${GAP})?`;
 /** A name ends at a word's end, and is only a component when an API, SDK, key or the like follows it. */
 const ENDS = "(?![\\w-])(?!(?:'s)?\\s+(?:api|sdk|client|library|package|embeddings?|endpoint|integration|provider|plugin|key|account|platform|console)s?\\b)";
-const TOOL_AT = new RegExp(`^(?:${TOOLS.join("|")})${ENDS}`, "i");
-const PROPER_AT = new RegExp(`^(?:${PROPER.join("|")})${ENDS}`);
+const TOOL_AT = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})${ENDS}`, "i");
+const PROPER_AT = new RegExp(`^${VENDOR}(?:${PROPER.join("|")})${ENDS}`);
 const PROPER_AT_ANY_CASE = new RegExp(PROPER_AT.source, "i");
 const GENERIC_AT = new RegExp(`^(?:${GENERIC.join("|")})${ENDS}`, "i");
 const BOT = `(?:${BOT_ACCOUNTS.join("|")})\\[bot\\]`;
-const AI_NAME = new RegExp(`^(?:${TOOLS.join("|")}|${BOT})$`, "i");
-const BARE_NAME = new RegExp(`^(?:${[...PROPER, ...GENERIC].join("|")})$`, "i");
+/** A name that is AI in general, or one of a tool's GitHub App accounts. No person is named either. */
+const AI_NAME = new RegExp(`^(?:${GENERIC.join("|")}|${BOT})$`, "i");
+/** A name that begins with an unambiguous tool's, as its vendors name it, such as a product and its edition. */
+const TOOL_NAMED = new RegExp(`^${VENDOR}(?:${TOOLS.join("|")})(?![\\w-])`, "i");
+const BARE_NAME = new RegExp(`^(?:${PROPER.join("|")})$`, "i");
 const AI_EMAIL = new RegExp(`^(?:[^@\\s]+@(?:anthropic|openai)\\.com|cursoragent@cursor\\.com|\\d+\\+(?:copilot|${BOT})@users\\.noreply\\.github\\.com)$`, "i");
 const BRANCH_OWNER = new RegExp(`^(?:${BRANCH_OWNERS.join("|")})/`, "i");
 
-const MADE = "(?:generated|created|written|authored|co[- ]?authored|co[- ]?written|produced|drafted|made|built|coded|developed|implemented|refactored|assisted|pair[- ]programmed|vibe[- ]coded)";
-const HOW = "(?:with|by|using|via|through|in collaboration with|with (?:the )?(?:help|assistance) (?:of|from))";
-const DEGREE = "(?:(?:partly|partially|mostly|largely|entirely|fully|mainly)\\s+)?";
-const AFTER = "[\\s,:;!.\\u2013\\u2014-]*";
+const MADE = "(?:generated|created|written|authored|co-?\\s?authored|co-?\\s?written|produced|drafted|made|built|coded|developed|implemented|refactored|assisted|pair-?\\s?programmed|vibe-?\\s?coded)";
+const HOW = gapped("(?:with|by|using|via|through|in collaboration with|with (?:the )?(?:help|assistance) (?:of|from))");
+const DEGREE = `(?:(?:partly|partially|mostly|largely|entirely|fully|mainly)${GAP})?`;
+const AFTER = "[^\\S\\n]*(?:[,:;!.\\u2013\\u2014-][^\\S\\n]*)*";
 
 /**
  * The phrases that credit whatever is named right after them. Thanks counts as
- * an interjection, where a sentence or clause opens with it, never as the verb
- * in a sentence about thanking; credit counts only as credit given to someone.
+ * an interjection, where a line, sentence or clause opens with it, never as
+ * the verb in a sentence about thanking; credit counts only as credit given to
+ * someone.
  */
 const LEADS = [
-  { form: "states that it made the change", lead: new RegExp(`\\b${MADE}\\s+${DEGREE}${HOW}\\s+`, "gi") },
-  { form: "credits its help", lead: /\bwith (?:the )?(?:help|assistance) (?:of|from)\s+/gi },
-  { form: "thanks it", lead: new RegExp(`(?:^\\s*|[.!?:;,(\\u2013\\u2014-]\\s*|\\b(?:many|big|huge|special|and)\\s+)(?:thanks|thank you|thx)\\b(?:\\s+to\\b)?${AFTER}`, "gi") },
-  { form: "thanks it", lead: new RegExp(`\\b(?:kudos|props|shout-?outs?|h\\/t|hat tip)\\b(?:\\s+to\\b)?${AFTER}`, "gi") },
-  { form: "gives it credit", lead: /\bcredits?(?:\s+(?:go(?:es)?\s+)?to\b|\s*:)\s*/gi },
+  { form: "states that it made the change", lead: new RegExp(`\\b${MADE}${GAP}${DEGREE}${HOW}${GAP}`, "gi") },
+  { form: "credits its help", lead: new RegExp(`\\b${gapped("with (?:the )?(?:help|assistance) (?:of|from)")}${GAP}`, "gi") },
+  { form: "thanks it", lead: new RegExp(`(?:^[^\\S\\n]*|[.!?:;,(\\u2013\\u2014-][^\\S\\n]*|\\b(?:many|big|huge|special|and)${GAP})(?:thanks|${gapped("thank you")}|thx)\\b(?:${GAP}to\\b)?${AFTER}`, "gim") },
+  { form: "thanks it", lead: new RegExp(`\\b(?:kudos|props|shout-?outs?|h\\/t|${gapped("hat tip")})\\b(?:${GAP}to\\b)?${AFTER}`, "gi") },
+  { form: "gives it credit", lead: new RegExp(`\\bcredits?(?:${GAP}(?:go(?:es)?${GAP})?to\\b|[^\\S\\n]*:)[^\\S\\n]*`, "gi") },
 ];
 
 const MADE_ADJECTIVE = "(?:generated|assisted|authored|written|created|made)";
@@ -90,8 +105,9 @@ const NAMED_ADJECTIVES = [new RegExp(`\\b(?:${TOOLS.join("|")})-${MADE_ADJECTIVE
 const GENERIC_ADJECTIVE = new RegExp(`\\b(?:AI|LLM)-${MADE_ADJECTIVE}\\b`, "gi");
 /** A trailer, on a line of its own or in a comment: `//`, `#`, `*`, `--`, `;` or an HTML comment. */
 const TRAILER = /^\s*(?:(?:\/\/|#|\*|--|;|<!--)\s*)?([A-Za-z][A-Za-z0-9-]*-(?:by|with))\s*:\s*(.+?)\s*(?:-->)?\s*$/i;
-const LEADING_MARKS = /^[\s"'`*_([<@“‘]+/;
-const ARTICLE = /^(?:the|an?)\s+/i;
+/** What may stand between a crediting phrase and the name it credits: quotes, emphasis, a bracket, and one line break at most. */
+const LEADING_MARKS = /^(?:[^\S\n]|["'`*_([<@“‘])*(?:\n(?:[^\S\n]|["'`*_([<@“‘])*)?/;
+const ARTICLE = new RegExp(`^(?:the|an?)${GAP}`, "i");
 const MAX_OUTPUT = 256 * 1024 * 1024;
 
 /**
@@ -110,12 +126,13 @@ const PLACES = {
 
 /**
  * Whether `name <email>` is an AI tool's or its vendor's identity: its own
- * address, an unambiguous tool name, one of its GitHub App accounts, or a name
- * a tool marks as its own. A given name alone, such as a person's, never is.
+ * address, one of its GitHub App accounts, a name that begins with an
+ * unambiguous tool's, AI in general, or a name a tool marks as its own. A given
+ * name alone, such as a person's, never is.
  */
 export function isAiIdentity(identity) {
   const { name, email } = identityParts(identity);
-  return AI_EMAIL.test(email) || AI_NAME.test(name) || /\(aider\)/i.test(name);
+  return AI_EMAIL.test(email) || AI_NAME.test(name) || TOOL_NAMED.test(name) || /\(aider\)/i.test(name);
 }
 
 function identityParts(identity) {
@@ -127,9 +144,13 @@ function identityParts(identity) {
 /** Every credit a piece of text carries, each with the line it is on. */
 export function creditsIn(text, place = "message") {
   const rules = PLACES[place];
-  return String(text ?? "")
+  const lines = String(text ?? "")
     .split(/\r?\n/)
-    .flatMap((raw, index) => creditsOnLine(plain(rules.words(raw)), rules).map(found => ({ ...found, line: index + 1 })));
+    .map(raw => plain(rules.words(raw)));
+  const joined = lines.join("\n");
+  const trailers = lines.flatMap((line, index) => trailerCredits(line, rules).map(found => ({ ...found, line: index + 1 })));
+  const phrases = [...leadCredits(joined, rules), ...adjectiveCredits(joined, rules)].map(({ at, ...found }) => ({ ...found, line: lineAt(joined, at) }));
+  return [...trailers, ...phrases];
 }
 
 /** Markdown links read as their text, and emphasis marks as nothing, so a formatted credit reads as a plain one. */
@@ -137,8 +158,9 @@ function plain(text) {
   return text.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*_`]{1,3}/g, "");
 }
 
-function creditsOnLine(text, rules) {
-  return [...trailerCredits(text, rules), ...leadCredits(text, rules), ...adjectiveCredits(text, rules)];
+/** The 1-based line an offset into a text falls on. */
+function lineAt(text, offset) {
+  return text.slice(0, offset).split("\n").length;
 }
 
 function trailerCredits(text, rules) {
@@ -149,7 +171,7 @@ function trailerCredits(text, rules) {
 /**
  * A trailer with an address credits an AI when the identity is an AI's. One
  * without an address names whoever it credits outright, before any note, so
- * there a tool's plain name, or AI in general, is enough.
+ * there a tool's plain name is enough.
  */
 function creditedByTrailer(value) {
   if (/<[^>]*>/.test(value)) return isAiIdentity(value);
@@ -157,26 +179,36 @@ function creditedByTrailer(value) {
   return isAiIdentity(name) || BARE_NAME.test(name);
 }
 
+/** Each crediting phrase followed by a name, reported on the line of the name it credits. */
 function leadCredits(text, rules) {
   return LEADS.flatMap(({ form, lead }) =>
-    [...text.matchAll(lead)].filter(match => namesAt(text.slice(match.index + match[0].length), rules)).map(match => ({ form, excerpt: excerpt(text, match.index) }))
+    [...text.matchAll(lead)].flatMap(match => {
+      const after = match.index + match[0].length;
+      const name = namedAt(text.slice(after), rules);
+      return name === null ? [] : [{ form, excerpt: excerpt(text, match.index), at: after + name }];
+    })
   );
 }
 
-/** Whether the text right after a crediting phrase names an AI tool, or AI in general. */
-function namesAt(rest, rules) {
-  const text = rest.replace(LEADING_MARKS, "").replace(ARTICLE, "");
+/** Where, within the text after a crediting phrase, the AI tool or AI in general it names begins, or null when it names none. */
+function namedAt(rest, rules) {
+  const marks = LEADING_MARKS.exec(rest)[0].length;
+  return names(rest.slice(marks).replace(ARTICLE, ""), rules) ? marks : null;
+}
+
+/** Whether a text begins with an AI tool's name, or AI in general. */
+function names(text, rules) {
   return TOOL_AT.test(text) || GENERIC_AT.test(text) || (rules.anyCase ? PROPER_AT_ANY_CASE : PROPER_AT).test(text);
 }
 
 function adjectiveCredits(text, rules) {
   const patterns = rules.generic ? [...NAMED_ADJECTIVES, GENERIC_ADJECTIVE] : NAMED_ADJECTIVES;
   const cased = rules.anyCase ? patterns.map(pattern => new RegExp(pattern.source, "gi")) : patterns;
-  return cased.flatMap(pattern => [...text.matchAll(pattern)].map(match => ({ form: "calls it AI-made", excerpt: excerpt(text, match.index) })));
+  return cased.flatMap(pattern => [...text.matchAll(pattern)].map(match => ({ form: "calls it AI-made", excerpt: excerpt(text, match.index), at: match.index })));
 }
 
 function excerpt(text, from = 0) {
-  return text.slice(from, from + 100).trim();
+  return text.slice(from, from + 100).replace(/\s+/g, " ").trim();
 }
 
 /** The credits a branch name carries: a tool's own `<tool>/` prefix, or a credit spelled out in the name. */
@@ -229,6 +261,20 @@ function hunkHeader(line) {
   return { next: Number(start), inHunk: Number(removed) + Number(addedCount) };
 }
 
+/** Consecutive added lines of one file as one block, so a phrase wrapped across them reads whole. */
+export function addedBlocks(lines) {
+  const blocks = [];
+  for (const added of lines) {
+    if (continues(blocks.at(-1), added)) blocks.at(-1).texts.push(added.text);
+    else blocks.push({ path: added.path, start: added.line, texts: [added.text] });
+  }
+  return blocks;
+}
+
+function continues(block, added) {
+  return Boolean(block) && block.path === added.path && block.start + block.texts.length === added.line;
+}
+
 /** The paths `git diff --name-status -z` reports added, renamed or copied: a rename or copy carries two paths, anything else one. */
 export function addedOrRenamed(fields) {
   const entries = [];
@@ -242,22 +288,37 @@ function entryWidth(status) {
 
 /** Everything a range carries: its commits, its added or renamed paths, and its added lines, or why they cannot be read. */
 function rangeEvidence({ base, head }, git) {
-  const log = git(["log", "--format=%H%x00%an <%ae>%x00%cn <%ce>%x00%B%x1e", `${base}..${head}`], { maxBuffer: MAX_OUTPUT });
+  const commits = commitsIn({ base, head }, git);
   const names = git(["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", base, head], { maxBuffer: MAX_OUTPUT });
   const diff = git(["-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", "--no-ext-diff", "-M", base, head], { maxBuffer: MAX_OUTPUT });
-  if (![log, names, diff].every(read => read.ok)) return { problem: `could not read the commits and changes in ${base}..${head}` };
-  return { commits: commitsFrom(log.out), paths: addedOrRenamed(names.out.split("\0")), lines: linesAdded(diff.out) };
+  if (!commits || !names.ok || !diff.ok) return { problem: `could not read the commits and changes in ${base}..${head}` };
+  return { commits, paths: addedOrRenamed(names.out.split("\0")), lines: linesAdded(diff.out) };
 }
 
-function commitsFrom(log) {
-  return log
-    .split("\x1e")
-    .map(entry => entry.replace(/^\n/, ""))
-    .filter(Boolean)
-    .map(entry => {
-      const [sha, author, committer, message] = entry.split("\0");
-      return { sha, author, committer, message };
-    });
+/** The commits in a range, each read from its own object, or undefined when any cannot be read. */
+function commitsIn({ base, head }, git) {
+  const listed = git(["rev-list", `${base}..${head}`], { maxBuffer: MAX_OUTPUT });
+  if (!listed.ok) return undefined;
+  const commits = listed.out.split("\n").filter(Boolean).map(sha => commitAt(sha, git));
+  return commits.every(Boolean) ? commits : undefined;
+}
+
+/**
+ * One commit, read from its object: its headers up to the first blank line,
+ * then its message. Nothing a message holds can split it into another commit,
+ * as a separator character in a formatted log could.
+ */
+function commitAt(sha, git) {
+  const read = git(["cat-file", "commit", sha], { maxBuffer: MAX_OUTPUT });
+  if (!read.ok) return null;
+  const end = read.out.indexOf("\n\n");
+  const headers = end === -1 ? read.out : read.out.slice(0, end);
+  return { sha, author: identityHeader(headers, "author"), committer: identityHeader(headers, "committer"), message: end === -1 ? "" : read.out.slice(end + 2) };
+}
+
+function identityHeader(headers, role) {
+  const line = headers.split("\n").find(entry => entry.startsWith(`${role} `)) ?? "";
+  return withoutDate(line.slice(role.length + 1));
 }
 
 /** The findings for everything a range carries, each naming where it is. */
@@ -265,8 +326,15 @@ function rangeFindings({ commits, paths, lines }) {
   return [
     ...commits.flatMap(commit => commitFindings(commit)),
     ...paths.flatMap(path => creditsIn(path, "name").map(found => ({ ...found, where: `the path ${path}` }))),
-    ...lines.flatMap(added => creditsIn(added.text, "line").map(found => ({ ...found, where: `${added.path}:${added.line}`, file: added.path, line: added.line }))),
+    ...addedBlocks(lines).flatMap(block => blockFindings(block)),
   ];
+}
+
+function blockFindings({ path, start, texts }) {
+  return creditsIn(texts.join("\n"), "line").map(found => {
+    const line = start + found.line - 1;
+    return { ...found, where: `${path}:${line}`, file: path, line };
+  });
 }
 
 function commitFindings({ sha, author, committer, message }) {
@@ -341,7 +409,7 @@ function refuse(problem) {
 /** Decides for the commit-msg hook: the message about to be committed, and who is committing it. */
 function checkCommit(file, git) {
   if (!file) return refuseCommit(["no message file was given"]);
-  const message = committedText(readFileSync(file, "utf8"), commentChar(git));
+  const message = committedText(readFileSync(file, "utf8"));
   const identities = ["author", "committer"].map(role => [role, git(["var", `GIT_${role.toUpperCase()}_IDENT`])]);
   const reasons = [
     ...identities.filter(([, read]) => !read.ok).map(([role]) => `the commit's ${role} could not be read`),
@@ -355,19 +423,12 @@ function withoutDate(ident) {
   return ident.trim().replace(/\s+\d+\s+[-+]\d{4}$/, "");
 }
 
-/** What git keeps of a message: nothing below a scissors line, and no comment lines. */
-function committedText(message, comment) {
-  const kept = message.split(/^[#;] -{8,} >8 -{8,}$/m)[0];
-  return kept
-    .split("\n")
-    .filter(line => !line.startsWith(comment))
-    .join("\n");
-}
-
-function commentChar(git) {
-  const configured = git(["config", "core.commentChar"]);
-  const value = configured.ok ? configured.out.trim() : "";
-  return value && value !== "auto" ? value : "#";
+/**
+ * What git may keep of a message: everything above a scissors line. Comment
+ * lines are read too, since a message given with `-m` or `-F` keeps them.
+ */
+function committedText(message) {
+  return message.split(/^\S -{8,} >8 -{8,}$/m)[0];
 }
 
 function refuseCommit(reasons) {

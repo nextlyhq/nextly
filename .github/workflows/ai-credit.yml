@@ -9,6 +9,11 @@ name: AI credit
 # A title and a description are published the moment they are written, so an
 # edit to either runs it again. In the queue it reads exactly what the queue
 # would land.
+#
+# The checker runs from the base the change is judged against, never from the
+# change, which could otherwise rewrite the rule it is judged by; the change is
+# only read. It follows that this can be made a required check only once the
+# checker is on `main`: before that, a base without it fails the job.
 on:
   pull_request:
     branches: [main]
@@ -26,18 +31,28 @@ jobs:
     permissions:
       contents: read
     steps:
-      # The whole history, so both ends of the range are present.
-      - name: Checkout
+      # The change, with its whole history so both ends of its range are
+      # present. Nothing from it runs.
+      - name: Checkout the change
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout the checker from the base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          path: trusted
+          sparse-checkout: scripts
+          persist-credentials: false
+
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version-file: .nvmrc
+          node-version-file: trusted/.nvmrc
 
-      # The script loads only Node's own modules, so nothing is installed.
+      # The checker loads only Node's own modules, so nothing is installed. It
+      # runs in the change's checkout, whose history it reads.
       - name: Refuse AI credit
-        run: node scripts/ai-credit.mjs
+        run: node trusted/scripts/ai-credit.mjs

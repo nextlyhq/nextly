@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { load } from "js-yaml";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { addedOrRenamed, branchCredits, creditsIn, isAiIdentity, linesAdded, main } from "./ai-credit.mjs";
+import { addedBlocks, addedOrRenamed, branchCredits, creditsIn, isAiIdentity, linesAdded, main } from "./ai-credit.mjs";
 import { readGit } from "./workflow-context.mjs";
 
 /** Joined at run time, so that no line here reads as a credit. */
@@ -56,6 +56,21 @@ describe("a message's credit, in each form", () => {
   it("refuses thanks and credit given to a tool", () => {
     const thanks = [spell("Thanks, ", CODE_TOOL, "!"), said("Tests pass, and", "thanks to", CHAT_TOOL), said("Credit", "goes to", PILOT_TOOL), said("Kudos", "to", MODEL)];
     for (const line of thanks) expect(credited(line, "message"), line).toBe(true);
+  });
+
+  it("refuses a tool named in full, with its vendor or its edition", () => {
+    const full = [said(MADE, "with", spell("Goo", "gle Gem", "ini")), trailer("Co-authored", spell("Git", "Hub Co", "pilot Agent")), said("Thanks to", spell("Open", "AI's Co", "dex"))];
+    for (const line of full) expect(credited(line, "message"), line).toBe(true);
+  });
+
+  it("refuses AI in general as a trailer's identity, with an address as without", () => {
+    for (const line of [trailer("Co-authored", "AI <ai@example.com>"), trailer("Assisted", "LLM <bot@example.com>")]) expect(credited(line, "message"), line).toBe(true);
+  });
+
+  it("reads a phrase wrapped across one line break, as Markdown renders it, but not across a blank line", () => {
+    expect(creditsIn(lines(spell(MADE, " with"), CODE_TOOL), "message")[0].line).toBe(2);
+    expect(credited(lines("Thanks to", CHAT_TOOL), "message")).toBe(true);
+    expect(creditsIn(lines("Thanks", "", "Claude Code reads skills from .claude/skills"), "message")).toEqual([]);
   });
 
   it("refuses calling the change AI-made", () => {
@@ -148,6 +163,15 @@ describe("reading a diff", () => {
     ]);
   });
 
+  it("reads consecutive added lines of a file as one text, and a gap or another file as a new one", () => {
+    const added = [{ path: "a.md", line: 3, text: "x" }, { path: "a.md", line: 4, text: "y" }, { path: "a.md", line: 9, text: "z" }, { path: "b.md", line: 10, text: "w" }];
+    expect(addedBlocks(added)).toEqual([
+      { path: "a.md", start: 3, texts: ["x", "y"] },
+      { path: "a.md", start: 9, texts: ["z"] },
+      { path: "b.md", start: 10, texts: ["w"] },
+    ]);
+  });
+
   it("names the paths a change adds, renames or copies, and not the ones it only edits", () => {
     expect(addedOrRenamed(["A", "new.md", "M", "edited.md", "R096", "old.md", "moved.md", "C100", "src.md", "copy.md", "D", "gone.md", ""])).toEqual(["new.md", "moved.md", "copy.md"]);
   });
@@ -206,6 +230,18 @@ describe("the command in CI", () => {
     expect(printed()).toMatch(/::error file=notes\.md,line=2,title=AI credit::notes\.md:2 states that it made the change/);
   });
 
+  it("refuses a credit wrapped across added lines, naming the line of the tool", () => {
+    expect(decide(pullRequest({ text: lines("intro", spell(MADE, " with"), CODE_TOOL, "") }))).toBe(1);
+    expect(printed()).toMatch(/::error file=notes\.md,line=3,title=AI credit::notes\.md:3 states that it made the change/);
+  });
+
+  it("reads each commit whole, whatever characters its message holds", () => {
+    // A record separator is the character a formatted log would split commits on.
+    const message = lines("docs: add notes", "\x1e", trailer("Co-authored", `${MODEL} <${VENDOR_ADDRESS}>`));
+    expect(decide(pullRequest({ message }))).toBe(1);
+    expect(printed()).toMatch(/names it in a Co-authored-by trailer/);
+  });
+
   it("refuses a credit in a commit's message", () => {
     expect(decide(pullRequest({ message: lines("docs: add notes", "", trailer("Co-authored", `${MODEL} <${VENDOR_ADDRESS}>`)) }))).toBe(1);
     expect(printed()).toMatch(/the message of commit [0-9a-f]{9}, line 3, names it in a Co-authored-by trailer/);
@@ -250,7 +286,21 @@ describe("the workflow that runs it", () => {
     const triggers = workflow.on ?? workflow[true];
     expect(triggers.pull_request.types).toEqual(["opened", "edited", "synchronize", "reopened"]);
     expect(triggers.merge_group).toEqual({ types: ["checks_requested"] });
-    expect(workflow.jobs.credit.steps.at(-1).run).toBe("node scripts/ai-credit.mjs");
+    expect(workflow.jobs.credit.steps.at(-1).run).toBe("node trusted/scripts/ai-credit.mjs");
+  });
+});
+
+describe("where the workflow's checker comes from", () => {
+  // A change could rewrite the checker it is judged by, so the checker comes
+  // from the base the change is judged against, and the change is only read.
+  it("runs the checker from the base, and only reads the change", () => {
+    const steps = load(readFileSync(new URL("../.github/workflows/ai-credit.yml", import.meta.url), "utf8")).jobs.credit.steps;
+    const [change, checker] = steps.filter(step => String(step.uses).startsWith("actions/checkout@"));
+    expect(change.with["fetch-depth"]).toBe(0);
+    expect(change.with.ref).toBeUndefined();
+    expect(checker.with.ref).toBe("${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}");
+    expect(checker.with.path).toBe("trusted");
+    expect(steps.at(-1).run.startsWith(`node ${checker.with.path}/`)).toBe(true);
   });
 });
 
@@ -288,11 +338,13 @@ describe("the command as the commit-msg hook", () => {
     expect(complaint()).toMatch(/the committer, .+, is an AI tool's identity/);
   });
 
-  it("reads only what git keeps: no comment lines, nothing below the scissors", () => {
+  // A message given with `-m` or `-F` keeps its comment lines, so they are read;
+  // nothing below a scissors line is ever committed, so that is not.
+  it("reads comment lines, which a message can keep, but nothing below the scissors", () => {
     const credit = trailer("Co-authored", `${MODEL} <${VENDOR_ADDRESS}>`);
-    expect(hook(lines("fix: a change", spell("# ", credit)))).toBe(0);
+    expect(hook(lines("fix: a change", spell("# ", credit)))).toBe(1);
     expect(hook(lines("fix: a change", "# ------------------------ >8 ------------------------", credit))).toBe(0);
-    // The control: the same credit, kept, is refused.
+    // The control: the same credit, above the scissors, is refused.
     expect(hook(lines("fix: a change", "", credit))).toBe(1);
   });
 
