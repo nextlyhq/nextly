@@ -218,13 +218,28 @@ describe("verdictCommentReviewers", () => {
 
   // A rewritten branch no longer lists the revisions an abbreviation must be
   // unique against, while a comment naming a removed one survives.
-  it("refuses every comment verdict once history was rewritten", () => {
+  it("refuses a comment verdict once history was rewritten, when the repository resolved nothing", () => {
     expect(
       verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD, {
         knownRevisions: [HEAD],
         historyRewritten: true,
       })
     ).toEqual([]);
+  });
+
+  // After a rewrite the repository settles an abbreviation instead: GitHub
+  // resolves one that names a single commit among all it holds, and an
+  // ambiguous one to nothing.
+  it("counts a comment verdict after a rewrite only where the repository resolved its abbreviation to the head", () => {
+    const rewritten = resolvedRevisions =>
+      verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD, {
+        knownRevisions: [HEAD],
+        historyRewritten: true,
+        resolvedRevisions,
+      });
+    expect(rewritten({ [HEAD.slice(0, 10)]: HEAD })).toEqual([CODEX]);
+    expect(rewritten({ [HEAD.slice(0, 10)]: OLD })).toEqual([]);
+    expect(rewritten({ [OLD.slice(0, 10)]: HEAD })).toEqual([]);
   });
 
   // A caller that cannot establish completeness passes nothing, so a truncated
