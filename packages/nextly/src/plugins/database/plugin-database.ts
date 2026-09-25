@@ -234,10 +234,17 @@ function toColumns(
   definition: TableDefinition,
   values: Record<string, unknown>
 ): Record<string, unknown> {
+  // Onto the TABLE OBJECT's property names, which are the authored keys.
+  //
+  // Drizzle resolves `.values()` and `.set()` against the record it was built
+  // from, and `toDrizzleTable` keys that record by the authored key — so
+  // mapping to the SQL name here handed Drizzle properties it does not know.
+  // The SQL name still reaches the database: it is on the column the builder
+  // made, which is where Drizzle reads it from.
   const out: Record<string, unknown> = {};
   for (const column of definition.columns) {
     if (values[column.key] !== undefined) {
-      out[column.name] = values[column.key];
+      out[column.key] = values[column.key];
     }
   }
   return out;
@@ -469,12 +476,38 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           },
         });
       }
+
+      // A key the DATABASE assigns cannot be read back this way.
+      //
+      // The read-back is by the id the CALLER now holds, and for `col.serial()`
+      // there is no such id: the value is chosen during the insert. Without
+      // this the insert succeeded and the read-back searched for `undefined`,
+      // so the method failed after writing a row — the worst of both.
+      //
+      // Refused rather than papered over with `LAST_INSERT_ID()` /
+      // `last_insert_rowid()` / `RETURNING`: those are three different
+      // mechanisms with three different guarantees, and this surface exists to
+      // behave identically on all three dialects. Returning a wrong row under
+      // pooling would be worse than not offering the method.
+      if (idColumn.kind === "serial") {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: `${definition.name}.insertReturning`,
+              code: "INVALID",
+              message:
+                `"${definition.name}" has a database-assigned key (col.serial()), so insertReturning cannot read the row back — ` +
+                `the value is chosen during the insert and no portable statement returns it on all three dialects. ` +
+                `Use insert() and then select() by a column you set yourself, or declare col.id() if you need the key up front.`,
+            },
+          ],
+        });
+      }
+
       const handle = table as Record<string, unknown>;
       const row = await surface
         .select(definition)
-        .where(
-          eq(handle[idColumn.name] as never, filled[idColumn.key] as never)
-        )
+        .where(eq(handle[idColumn.key] as never, filled[idColumn.key] as never))
         .first();
       if (row === null) {
         throw NextlyError.internal({

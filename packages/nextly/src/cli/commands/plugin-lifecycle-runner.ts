@@ -388,11 +388,50 @@ export async function runPluginUninstall(
 ): Promise<void> {
   const deps = await connect(options, context);
   try {
-    await runPluginUninstallCommand(
-      name,
-      { keepData: options.keepData, yes: options.yes },
-      deps
+    const { withMigrateLock } = await import(
+      "../../domains/schema/pipeline/locks"
     );
+
+    // The WHOLE uninstall under the lock, not each module's DOWN.
+    //
+    // `runDown` already runs one module's statements and its ledger row in a
+    // transaction, but a transaction is not a lock: overlapping `nextly
+    // migrate` could apply a pending newer module between two DOWNs, and a
+    // second uninstall could act on the same one. On MySQL the earlier DDL of
+    // whichever loses is already committed and cannot be rolled back.
+    //
+    // Spanning the command is deliberate — the DOWNs, the ledger rows and the
+    // final owner state are one decision, and a racing writer between any two
+    // of them leaves a state no snapshot describes. Nothing here waits on an
+    // operator: a run without `--yes` refuses before any of it.
+    const outcome = await withMigrateLock(
+      (deps.adapter as unknown as DrizzleAdapter).getDrizzle(),
+      deps.dialect,
+      () =>
+        runPluginUninstallCommand(
+          name,
+          { keepData: options.keepData, yes: options.yes },
+          deps
+        ),
+      {
+        mode: "wait",
+        logger: {
+          warn: m => context.logger.warn(m),
+          info: m => context.logger.info(m),
+        },
+      }
+    );
+
+    if (!outcome.ran) {
+      throw new NextlyError({
+        code: "CONFLICT",
+        publicMessage:
+          `Another migration is holding the migrate lock, so ${name} was not uninstalled. ` +
+          `Nothing was changed — re-run once it finishes.`,
+        statusCode: 409,
+        logContext: { plugin: name, reason: outcome.reason },
+      });
+    }
   } finally {
     await deps.adapter.disconnect();
   }

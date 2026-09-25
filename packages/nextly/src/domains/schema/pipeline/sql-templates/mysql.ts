@@ -147,7 +147,7 @@ function generateDropIndex(op: DropIndexOp): string {
 }
 
 function generateAddTable(op: AddTableOp): string {
-  const cols = createTableBody(op.table, q);
+  const cols = createTableBody(op.table, q, "  ", "mysql");
   const createTable = `CREATE TABLE ${q(op.table.name)} (\n${cols}\n)`;
   const indexStmts = (op.table.indexes ?? []).map(i =>
     createIndexStatement(op.table.name, i)

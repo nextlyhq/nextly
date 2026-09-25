@@ -95,7 +95,9 @@ function createIndexStatement(tableName: string, index: IndexSpec): string {
   // An expression index carries per-dialect SQL in place of column names;
   // PG wants it double-parenthesized so the outer parens stay the index's
   // own column list.
-  const cols = index.expression ? `(${index.expression})` : index.columns.map(q).join(", ");
+  const cols = index.expression
+    ? `(${index.expression})`
+    : index.columns.map(q).join(", ");
   const where = index.where ? ` WHERE ${index.where}` : "";
   return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${q(index.name)} ON ${q(tableName)} (${cols})${where}`;
 }
@@ -154,7 +156,7 @@ function generateDropIndex(op: DropIndexOp): string {
 }
 
 function generateAddTable(op: AddTableOp): string {
-  const cols = createTableBody(op.table, q);
+  const cols = createTableBody(op.table, q, "  ", "postgresql");
   const createTable = `CREATE TABLE ${q(op.table.name)} (\n${cols}\n)`;
   // Render the table's tracked indexes as separate statements after CREATE
   // TABLE. When `indexes` is undefined (pre-C1 sentinel) none are emitted.

@@ -89,19 +89,22 @@ describe("generated columns on insert", () => {
     await surface.insert(notes, { bodyText: "hello" } as never);
 
     const row = (inserted[0] as Record<string, unknown>[])[0];
-    expect(row.created_at).toBeInstanceOf(Date);
-    expect(row.updated_at).toBeInstanceOf(Date);
+    expect(row.createdAt).toBeInstanceOf(Date);
+    expect(row.updatedAt).toBeInstanceOf(Date);
   });
 
-  it("maps authored keys onto their SQL column names", async () => {
+  it("sends the TABLE OBJECT's property names, which are the authored keys", async () => {
     const { surface, inserted } = harness();
     await surface.insert(notes, { bodyText: "hello" } as never);
 
     const row = (inserted[0] as Record<string, unknown>[])[0];
-    // `bodyText` is stored as `body_text`; sending the authored spelling
-    // would be a column the table does not have.
-    expect(row).toHaveProperty("body_text", "hello");
-    expect(row).not.toHaveProperty("bodyText");
+    // This asserted `body_text` before, which was the bug rather than the
+    // contract. Drizzle resolves `.values()` against the record the table was
+    // built from, and that record is keyed by the AUTHORED key — which is also
+    // what `InferRow` and `TableColumns` promise. The SQL name still reaches
+    // the database: it is carried on the column the builder made.
+    expect(row).toHaveProperty("bodyText", "hello");
+    expect(row).not.toHaveProperty("body_text");
   });
 
   it("accepts an array of rows", async () => {
@@ -122,10 +125,10 @@ describe("update", () => {
       .where({} as never);
 
     const values = updated[0] as Record<string, unknown>;
-    expect(values.updated_at).toBeInstanceOf(Date);
-    expect(values.body_text).toBe("changed");
-    // `created_at` must NOT be rewritten: it records when the row was made.
-    expect(values).not.toHaveProperty("created_at");
+    expect(values.updatedAt).toBeInstanceOf(Date);
+    expect(values.bodyText).toBe("changed");
+    // `createdAt` must NOT be rewritten: it records when the row was made.
+    expect(values).not.toHaveProperty("createdAt");
     expect(affected).toBe(3);
   });
 });

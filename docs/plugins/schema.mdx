@@ -235,8 +235,13 @@ Use `isUniqueViolation(ctx.dialect, err)` to tell "this row already exists"
 from "the database is broken". Both arrive as the same thrown object.
 
 ```ts
+import { isUniqueViolation } from "nextly/schema-extension";
+
 try {
-  await ctx.db.insert(identities, { provider: "github", externalId: id });
+  await ctx.db.insert(identities, {
+    provider: "github",
+    providerAccountId: accountId,
+  });
 } catch (err) {
   if (isUniqueViolation(ctx.dialect, err)) return existingIdentity();
   throw err;

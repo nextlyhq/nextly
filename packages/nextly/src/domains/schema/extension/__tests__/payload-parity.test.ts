@@ -487,6 +487,55 @@ describe("row 11 — any Drizzle column type", () => {
     }
   });
 
+  it("C2c: generates DDL that actually assigns the value", async () => {
+    // The spec's `type` is the INTROSPECTED one (`int4`, `int`) so the diff
+    // compares equal — which left the generated CREATE TABLE with a plain
+    // integer key. Dev push worked, because it builds from Drizzle's serial
+    // builders; the migration did not, and every insert omitting the column
+    // failed once it applied.
+    const { generateSQL } = await import("../../pipeline/sql-templates/index");
+    const spec = toTableSpec(
+      {
+        name: "fx__counters",
+        authored: "counters",
+        owner: { kind: "plugin" as const, id: "fx" },
+        columns: defineTable("counters", {
+          seq: col.serial(),
+        }).columns.map(c => ({ ...c })),
+        indexes: [],
+      } as never,
+      "postgresql"
+    );
+
+    expect(spec.columns[0]?.autoIncrement).toBe(true);
+
+    const pg = generateSQL(
+      { type: "add_table", table: spec } as never,
+      "postgresql"
+    );
+    expect(pg).toMatch(/serial PRIMARY KEY/i);
+
+    const my = generateSQL(
+      {
+        type: "add_table",
+        table: toTableSpec(
+          {
+            name: "fx__counters",
+            authored: "counters",
+            owner: { kind: "plugin" as const, id: "fx" },
+            columns: defineTable("counters", { seq: col.serial() }).columns.map(
+              c => ({ ...c })
+            ),
+            indexes: [],
+          } as never,
+          "mysql"
+        ),
+      } as never,
+      "mysql"
+    );
+    expect(my).toMatch(/AUTO_INCREMENT/i);
+  });
+
   it("C2b: refuses serial DECLARED BESIDE another key, by name", () => {
     // The shape this test used to assert. No dialect takes two primary keys,
     // and the author used to find out from MySQL's parser rather than from
@@ -509,6 +558,45 @@ describe("row 11 — any Drizzle column type", () => {
     expect(message).toContain("id");
     expect(message).toContain("seq");
     expect(message).toMatch(/INSTEAD of col\.id\(\)/);
+  });
+});
+
+describe("the typed surface addresses columns the way authors declare them", () => {
+  it("keys the Drizzle table by the AUTHORED key, named by the SQL one", async () => {
+    // `InferRow` and `TableColumns` are `keyof TColumns` — the authored keys.
+    // Keying the compiled record by the SQL name made those types describe a
+    // shape that did not exist: `ctx.db.table(def).providerAccountId` was
+    // undefined, and `select()` returned snake_case keys while typed camelCase.
+    const { col, defineTable } = await import("../dsl");
+    const { toDrizzleTable } = await import("../compile");
+    const { getColumns } = await import("drizzle-orm");
+
+    const identities = defineTable("identities", {
+      id: col.id(),
+      providerAccountId: col.shortText(),
+    });
+    const table = toDrizzleTable(
+      {
+        name: "fx__identities",
+        authored: "identities",
+        owner: { kind: "plugin", id: "fx" },
+        columns: identities.columns.map(c => ({ ...c })),
+        indexes: [],
+      } as never,
+      "postgresql"
+    );
+
+    const columns = getColumns(table as never) as Record<
+      string,
+      { name: string }
+    >;
+
+    // The property an author writes...
+    expect(columns.providerAccountId).toBeDefined();
+    // ...carrying the column name the database holds.
+    expect(columns.providerAccountId?.name).toBe("provider_account_id");
+    // And not the other way round, which is what it used to be.
+    expect(columns.provider_account_id).toBeUndefined();
   });
 });
 

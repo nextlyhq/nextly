@@ -302,6 +302,18 @@ export async function buildExtensionSchema(
   // absent from the migration model is the divergence this exists to close, and
   // it does not matter whether the hook changed the table or created it.
   // Tables the hooks left untouched re-derive to the spec they started with.
+  // A table the hook INTRODUCED is owned by the app, like every other thing
+  // an `afterDrizzle` hook may do.
+  //
+  // `owners` was filled from the pre-hook DSL tables only, so a hook-created
+  // table had no owner row. `reload-config` reads a missing owner as "removed"
+  // and retracts the dynamic schema on the next HMR reload, which made the
+  // table unavailable until a restart — and it was invisible to every
+  // ownership-based access path in between.
+  for (const name of Object.keys(drizzle)) {
+    if (!owners.has(name)) owners.set(name, { kind: "app" });
+  }
+
   const specs =
     (input.afterDrizzle ?? []).length === 0
       ? compiledSpecs

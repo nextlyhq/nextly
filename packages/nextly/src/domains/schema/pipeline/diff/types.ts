@@ -35,6 +35,21 @@ export interface ColumnSpec {
   // costs the nullability exemption the diff grants primary keys — never a
   // wrong op.
   primaryKey?: boolean;
+  // `true` when the DATABASE assigns this column's value — `col.serial()`.
+  //
+  // Carried separately from `type` because the two answer different
+  // questions. `type` is what introspection REPORTS (`int4` on PostgreSQL,
+  // `int` on MySQL) so the desired and live sides compare equal; this is what
+  // the DDL has to SAY so the sequence or AUTO_INCREMENT exists at all.
+  // Without it the generated migration produced a plain integer key, and every
+  // insert that omitted the column failed after the module applied — while dev
+  // push, which builds from Drizzle's own serial builders, worked.
+  //
+  // Recorded only on the desired side. Introspection reports the mechanism
+  // through `ownedSequenceDefault` (PostgreSQL) or the column's EXTRA
+  // (MySQL), and the diff must not read this field for the same reason it
+  // must not read `typeModifier`.
+  autoIncrement?: boolean;
   // `true` when the live default is a `nextval()` over the sequence this
   // column OWNS — what PostgreSQL materialises for a `serial` declaration.
   // Recorded only when true, and only by PostgreSQL introspection: no other

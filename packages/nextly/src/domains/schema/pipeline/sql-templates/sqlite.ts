@@ -160,7 +160,9 @@ export function generateSqliteSQL(op: Operation): string {
 
 function createIndexStatement(tableName: string, index: IndexSpec): string {
   // An expression index carries per-dialect SQL in place of column names.
-  const cols = index.expression ? `(${index.expression})` : index.columns.map(q).join(", ");
+  const cols = index.expression
+    ? `(${index.expression})`
+    : index.columns.map(q).join(", ");
   const where = index.where ? ` WHERE ${index.where}` : "";
   return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${q(index.name)} ON ${q(tableName)} (${cols})${where}`;
 }
@@ -174,7 +176,7 @@ function generateDropIndex(op: DropIndexOp): string {
 }
 
 function generateAddTable(op: AddTableOp): string {
-  const cols = createTableBody(op.table, q);
+  const cols = createTableBody(op.table, q, "  ", "sqlite");
   const createTable = `CREATE TABLE ${q(op.table.name)} (\n${cols}\n)`;
   const indexStmts = (op.table.indexes ?? []).map(i =>
     createIndexStatement(op.table.name, i)

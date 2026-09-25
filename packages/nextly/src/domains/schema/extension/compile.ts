@@ -80,6 +80,16 @@ function defaultSql(
   return String(value);
 }
 
+/**
+ * The authored key a SQL column name belongs to, or the name itself.
+ *
+ * The fallback matters for a reference to a table this function did not
+ * compile — a core table, say — whose properties are already SQL-named.
+ */
+function authoredKeyOf(table: ExtensionTable, sqlName: string): string {
+  return table.columns.find(column => column.name === sqlName)?.key ?? sqlName;
+}
+
 /** One index's name, derived rather than invented. */
 export function resolveIndexName(table: string, index: ExtensionIndex): string {
   if (index.name === undefined) {
@@ -120,6 +130,11 @@ export function toColumnSpec(
     nullable: descriptor.nullable,
     ...(rendered !== undefined ? { default: rendered } : {}),
     ...(column.primaryKey === true ? { primaryKey: true as const } : {}),
+    // The generation semantics `type` deliberately does not carry: it holds
+    // the INTROSPECTED type so the diff compares equal, which leaves the
+    // rendered DDL with no sequence and no AUTO_INCREMENT unless the spec says
+    // so separately.
+    ...(column.kind === "serial" ? { autoIncrement: true as const } : {}),
   };
 }
 
@@ -189,9 +204,18 @@ export function toDrizzleTable(
    */
   resolveReferenceTable?: (tableName: string) => unknown
 ): unknown {
+  // Keyed by the AUTHORED key, named by the SQL one.
+  //
+  // Drizzle's record key is the JavaScript property and the builder's argument
+  // is the column name, so `{ providerAccountId: varchar("provider_account_id") }`
+  // carries both. Keying by the SQL name instead made `InferRow` and
+  // `TableColumns` describe a shape that did not exist:
+  // `ctx.db.table(definition).providerAccountId` was undefined, and `select()`
+  // returned snake_case keys while typed as camelCase — so the typed surface
+  // was wrong for every table whose columns are not already snake_case.
   const columns: Record<string, unknown> = {};
   for (const column of table.columns) {
-    columns[column.name] = buildUserDrizzleColumn(
+    columns[column.key] = buildUserDrizzleColumn(
       toColumnDescriptor(column, dialect),
       dialect
     );
@@ -217,7 +241,13 @@ export function toDrizzleTable(
             | Record<string, unknown>
             | undefined);
     if (referenced === undefined) continue;
-    const localColumns = fk.columns.map(name => columns[name]);
+    // A foreign key names SQL columns, and the records are keyed by authored
+    // key — so the name is translated before the lookup. Reading `columns[name]`
+    // directly returned undefined and the key was silently skipped, which is
+    // worse than failing: the constraint simply would not exist.
+    const localColumns = fk.columns.map(
+      name => columns[authoredKeyOf(table, name)]
+    );
     const foreignColumns = fk.referencesColumns.map(name => referenced[name]);
     if (localColumns.includes(undefined) || foreignColumns.includes(undefined))
       continue;

@@ -15,6 +15,7 @@
  *
  * @module domains/schema/pipeline/sql-templates/create-table-body
  */
+import type { SupportedDialect } from "../../../../types/database";
 import type { ColumnSpec, TableSpec } from "../diff/types";
 
 /**
@@ -59,10 +60,32 @@ export function columnDefinition(c: ColumnSpec, q: QuoteIdentifier): string {
  * table created by a migration and the same table created by the Builder read
  * identically.
  */
-function createTableColumn(c: ColumnSpec, q: QuoteIdentifier): string {
+function createTableColumn(
+  c: ColumnSpec,
+  q: QuoteIdentifier,
+  dialect?: SupportedDialect
+): string {
   if (c.primaryKey !== true) return columnDefinition(c, q);
   const nullable = c.nullable ? "" : " NOT NULL";
   const def = c.default !== undefined ? ` DEFAULT ${c.default}` : "";
+
+  // A database-assigned key is spelled per dialect, and each spelling is the
+  // one that dialect actually accepts.
+  //
+  // PostgreSQL: `serial` creates the sequence and the default; introspection
+  // then reports `int4` plus `ownedSequenceDefault`, which the diff already
+  // knows to read as "no change". MySQL: `AUTO_INCREMENT` on a column that is
+  // a key, which this branch is. SQLite: an `INTEGER PRIMARY KEY` IS the rowid
+  // alias and assigns on its own, so the ordinary rendering is already right
+  // and adding a word would break it.
+  if (c.autoIncrement === true) {
+    if (dialect === "postgresql") {
+      return `${q(c.name)} serial PRIMARY KEY`;
+    }
+    if (dialect === "mysql") {
+      return `${q(c.name)} ${renderedType(c)} NOT NULL AUTO_INCREMENT PRIMARY KEY`;
+    }
+  }
   return `${q(c.name)} ${renderedType(c)} PRIMARY KEY${nullable}${def}`;
 }
 
@@ -80,7 +103,9 @@ function createTableColumn(c: ColumnSpec, q: QuoteIdentifier): string {
 export function createTableBody(
   table: TableSpec,
   q: QuoteIdentifier,
-  indent = "  "
+  indent = "  ",
+  /** Needed only for a database-assigned key, which each dialect spells its own way. */
+  dialect?: SupportedDialect
 ): string {
   const keyColumns = table.columns.filter(c => c.primaryKey === true);
   const composite = keyColumns.length > 1;
@@ -88,7 +113,7 @@ export function createTableBody(
   const lines = table.columns.map(c =>
     composite
       ? `${indent}${columnDefinition(c, q)}`
-      : `${indent}${createTableColumn(c, q)}`
+      : `${indent}${createTableColumn(c, q, dialect)}`
   );
 
   if (composite) {

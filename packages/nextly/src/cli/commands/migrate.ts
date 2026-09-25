@@ -679,9 +679,13 @@ export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
   const allRows = await owners.read();
   const elementStream = new Map<string, string>();
   for (const record of allRows) {
-    if ((record.elementKind ?? "table") === "table") continue;
+    const kind = record.elementKind ?? "table";
+    if (kind === "table") continue;
+    // Keyed by KIND as well as name: a column and an index on one table can
+    // share a name, and a kind-blind key would let one decide the other's
+    // stream.
     elementStream.set(
-      `${record.tableName}\u0000${record.elementName ?? ""}`,
+      `${record.tableName}\u0000${kind}\u0000${record.elementName ?? ""}`,
       record.migratedBy
     );
   }
@@ -699,13 +703,31 @@ export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
       const live = await introspectLiveSnapshot(deps.db, deps.dialect, managed);
       // Drop live elements another stream owns, so this plugin's comparison
       // sees only what its own stream claims.
+      //
+      // COLUMNS as well as indexes. When another plugin or the app contributes
+      // a column to this plugin's table, the plugin's own module has
+      // before/target snapshots that do not mention it while introspection
+      // still returns it — so the live table matched neither side and a valid
+      // upgrade was refused as drift. The registry has recorded
+      // `elementKind: "column"` all along; this simply asks it.
+      const ownedByAnother = (
+        kind: "column" | "index",
+        tableName: string,
+        elementName: string
+      ): boolean => {
+        const owner = elementStream.get(
+          `${tableName}\u0000${kind}\u0000${elementName}`
+        );
+        return owner !== undefined && owner !== stream;
+      };
+
       for (const table of live.tables) {
+        table.columns = table.columns.filter(
+          column => !ownedByAnother("column", table.name, column.name)
+        );
         if (table.indexes === undefined) continue;
         table.indexes = table.indexes.filter(
-          index =>
-            elementStream.get(`${table.name}\u0000${index.name}`) ===
-              undefined ||
-            elementStream.get(`${table.name}\u0000${index.name}`) === stream
+          index => !ownedByAnother("index", table.name, index.name)
         );
       }
       return live;
