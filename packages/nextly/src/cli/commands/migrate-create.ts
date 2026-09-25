@@ -785,7 +785,9 @@ async function runMigrateCreatePlugin(
     SupportedDialect,
     TableSpec[]
   >;
-  const contributions: Record<string, ContributedElements> = {};
+  const contributions: Partial<
+    Record<SupportedDialect, Record<string, ContributedElements>>
+  > = {};
   for (const dialect of PLUGIN_DIALECTS) {
     const built = await buildPluginDraft({
       dialect,
@@ -840,9 +842,12 @@ async function runMigrateCreatePlugin(
     );
     // By name, for the module to record: the next generation reads which
     // elements were this plugin's from here, never from the stored tables.
+    // Per dialect: a hook may add an element on one dialect only.
+    const onDialect: Record<string, ContributedElements> = {};
     for (const [table, elements] of mine) {
-      contributions[table] = contributedElementsOf(elements);
+      onDialect[table] = contributedElementsOf(elements);
     }
+    contributions[dialect] = onDialect;
 
     // Every table this plugin does not own, as its OWN owner declares it —
     // compiled without this plugin's hooks. Both sides of the foreign-table

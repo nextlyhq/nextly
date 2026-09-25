@@ -281,14 +281,19 @@ describe("elements contributed to another owner's table", () => {
     ...FIRST,
     contributedByDialect: tablesByDialect(withContribution),
     contributedBaselineByDialect: tablesByDialect(dependencyTable),
-    contributions: {
-      dep__orders: {
-        columns: ["fx_ref"],
-        indexes: [],
-        foreignKeys: [],
-        checks: [],
-      },
-    },
+    contributions: Object.fromEntries(
+      DIALECTS.map(dialect => [
+        dialect,
+        {
+          dep__orders: {
+            columns: ["fx_ref"],
+            indexes: [],
+            foreignKeys: [],
+            checks: [],
+          },
+        },
+      ])
+    ),
   };
 
   it("emits ADD COLUMN, not CREATE TABLE, for the foreign table", () => {
@@ -352,6 +357,69 @@ describe("elements contributed to another owner's table", () => {
     expect(up).toMatch(/ALTER TABLE .*dep__orders.* DROP COLUMN .*fx_ref/i);
     expect(up).not.toMatch(/DROP TABLE/i);
     expect(second!.module.contributions).toBeUndefined();
+  });
+
+  it("reads a module generated before contributions were recorded", () => {
+    // Such a module stores its before/after tables but not the names. Taking
+    // that as "nothing contributed" re-added the plugin's column on the next
+    // module; replaying the module's own sides recovers it.
+    const legacy = { ...buildPluginMigration(CONTRIBUTING)!.module };
+    delete legacy.contributions;
+    const next = buildPluginMigration({
+      ...CONTRIBUTING,
+      schemaVersion: 2,
+      name: "score",
+      tablesByDialect: tablesByDialect(tableSpec(true)),
+      existing: [legacy],
+    })!;
+    const up = next.module.dialects.postgresql.up.join("\n");
+    expect(up).toMatch(/score/);
+    expect(up).not.toMatch(/fx_ref/);
+  });
+
+  it("records contributions per dialect", () => {
+    // A hook may add an element on one dialect only; recording one dialect's
+    // names for all three would lose it on the others.
+    const onlyPostgres = buildPluginMigration({
+      ...CONTRIBUTING,
+      contributedByDialect: {
+        postgresql: [withContribution],
+        mysql: [],
+        sqlite: [],
+      },
+      contributions: {
+        postgresql: CONTRIBUTING.contributions.postgresql,
+      },
+    })!;
+    expect(Object.keys(onlyPostgres.module.contributions ?? {})).toEqual([
+      "postgresql",
+    ]);
+    expect(onlyPostgres.module.dialects.postgresql.up.join("\n")).toMatch(
+      /fx_ref/
+    );
+    expect(onlyPostgres.module.dialects.mysql.up.join("\n")).not.toMatch(
+      /fx_ref/
+    );
+
+    // And the next module keeps it on PostgreSQL alone.
+    const next = buildPluginMigration({
+      ...CONTRIBUTING,
+      contributedByDialect: {
+        postgresql: [withContribution],
+        mysql: [],
+        sqlite: [],
+      },
+      contributions: {
+        postgresql: CONTRIBUTING.contributions.postgresql,
+      },
+      schemaVersion: 2,
+      name: "score",
+      tablesByDialect: tablesByDialect(tableSpec(true)),
+      existing: [onlyPostgres.module],
+    })!;
+    for (const dialect of DIALECTS) {
+      expect(next.module.dialects[dialect].up.join("\n")).not.toMatch(/fx_ref/);
+    }
   });
 
   it("does not re-add an earlier contribution two modules later", () => {

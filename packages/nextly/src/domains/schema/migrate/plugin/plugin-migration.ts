@@ -70,15 +70,23 @@ export interface PluginMigration {
   /** The same foreign tables BEFORE this module, for the same diff. */
   contributedBefore?: Record<SupportedDialect, PluginMigrationSnapshot>;
   /**
-   * Which elements of the `contributed` tables are this plugin's, by table.
+   * Which elements of the `contributed` tables are this plugin's, per dialect
+   * and by table.
    *
    * The next module's generator needs exactly this, and the stored tables
    * cannot answer it: once a table has been stored with the contribution on
    * both sides, the contribution is indistinguishable from the owner's own
-   * columns. Names are the same on every dialect, so they are stored once.
+   * columns. Per dialect because a schema hook can add an element on one
+   * dialect only. A module without it — generated before it was recorded —
+   * is read by replaying the modules' own before/after sides instead.
    */
-  contributions?: Record<string, ContributedElements>;
+  contributions?: ContributionsByDialect;
 }
+
+/** A plugin's contributed element names, per dialect and by table. */
+export type ContributionsByDialect = Partial<
+  Record<SupportedDialect, Record<string, ContributedElements>>
+>;
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
@@ -124,7 +132,12 @@ export function canonicalMigrationForm(
       : [
           base,
           sides,
-          Object.entries(normalizeContributions(snapshots.contributions)),
+          DIALECTS.map(dialect => [
+            dialect,
+            Object.entries(
+              normalizeContributions(snapshots.contributions?.[dialect] ?? {})
+            ),
+          ]),
         ]
   );
 }
@@ -135,7 +148,7 @@ export interface MigrationSnapshots {
   before?: Record<SupportedDialect, PluginMigrationSnapshot>;
   contributed?: Record<SupportedDialect, PluginMigrationSnapshot>;
   contributedBefore?: Record<SupportedDialect, PluginMigrationSnapshot>;
-  contributions?: Record<string, ContributedElements>;
+  contributions?: ContributionsByDialect;
 }
 
 /** The checksum a generated module carries. */

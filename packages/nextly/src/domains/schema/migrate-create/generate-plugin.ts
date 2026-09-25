@@ -25,6 +25,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import {
   migrationChecksum,
   orderedMigrations,
+  type ContributionsByDialect,
   type DialectStatements,
   type PluginMigration,
 } from "../migrate/plugin/plugin-migration";
@@ -73,10 +74,10 @@ export interface BuildPluginMigrationArgs {
    */
   contributedBaselineByDialect?: Record<SupportedDialect, TableSpec[]>;
   /**
-   * Which elements of `contributedByDialect`'s tables are this plugin's, by
-   * table. Recorded in the module for the next generation to read.
+   * Which elements of `contributedByDialect`'s tables are this plugin's, per
+   * dialect and by table. Recorded in the module for the next generation.
    */
-  contributions?: Record<string, ContributedElements>;
+  contributions?: ContributionsByDialect;
   /** Modules the plugin already ships. */
   existing: readonly PluginMigration[];
 }
@@ -144,9 +145,7 @@ export function buildPluginMigration(
   >;
   const operationCounts = {} as Record<SupportedDialect, number>;
   let totalOperations = 0;
-  // Element names are the same on every dialect, so whichever dialect is
-  // compiled last states them for all.
-  let contributions: Record<string, ContributedElements> = {};
+  const contributions: ContributionsByDialect = {};
 
   for (const dialect of ALL_DIALECTS) {
     const previousTables = previous?.snapshot[dialect]?.tables ?? [];
@@ -163,11 +162,14 @@ export function buildPluginMigration(
           table,
         ])
       ),
-      previousContributions: previous?.contributions ?? {},
+      previousContributions: recordedContributions(args.existing, dialect),
       contributed: new Map(
         (args.contributedByDialect?.[dialect] ?? []).map(spec => [
           spec.name,
-          { spec, elements: args.contributions?.[spec.name] ?? NO_ELEMENTS },
+          {
+            spec,
+            elements: args.contributions?.[dialect]?.[spec.name] ?? NO_ELEMENTS,
+          },
         ])
       ),
       baselines: new Map(
@@ -179,7 +181,9 @@ export function buildPluginMigration(
     });
     const previousContributed = [...sides.before.values()];
     const desiredContributed = [...sides.after.values()];
-    contributions = sides.contributions;
+    if (Object.keys(sides.contributions).length > 0) {
+      contributions[dialect] = sides.contributions;
+    }
 
     // ONE diff over the union. A foreign table appears on both sides, so only
     // the elements this plugin added to it come out as operations; its own
@@ -226,6 +230,82 @@ export function buildPluginMigration(
     ...recorded,
   };
   return { module, operationCounts };
+}
+
+/**
+ * This plugin's contributed element names on one dialect, as the modules it
+ * already ships leave them.
+ *
+ * A module that records `contributions` states them outright. One generated
+ * before they were recorded is replayed from its own sides instead: what its
+ * `contributed` tables have that its `contributedBefore` tables do not, it
+ * added, and the reverse it removed. Both sides of such a module were built
+ * on the same owner declaration, so the owner's own columns never show up as
+ * a difference. Taking a recordless module as "no contributions" would make
+ * the next module add the plugin's columns a second time.
+ */
+function recordedContributions(
+  existing: readonly PluginMigration[],
+  dialect: SupportedDialect
+): Record<string, ContributedElements> {
+  let state: Record<string, ContributedElements> = {};
+  for (const module of orderedMigrations(existing)) {
+    if (module.contributions !== undefined) {
+      state = { ...(module.contributions[dialect] ?? {}) };
+      continue;
+    }
+    state = replayContributions(
+      state,
+      module.contributedBefore?.[dialect]?.tables ?? [],
+      module.contributed?.[dialect]?.tables ?? []
+    );
+  }
+  return state;
+}
+
+/** The element kinds a contribution records, keyed as `TableSpec` keys them. */
+const ELEMENT_KINDS = ["columns", "indexes", "foreignKeys", "checks"] as const;
+
+/** `state`, plus what `after` adds over `before`, minus what it drops. */
+function replayContributions(
+  state: Record<string, ContributedElements>,
+  before: readonly TableSpec[],
+  after: readonly TableSpec[]
+): Record<string, ContributedElements> {
+  const next: Record<string, ContributedElements> = { ...state };
+  const beforeByName = new Map(before.map(table => [table.name, table]));
+  const afterByName = new Map(after.map(table => [table.name, table]));
+  for (const name of new Set([...beforeByName.keys(), ...afterByName.keys()])) {
+    const current = next[name] ?? NO_ELEMENTS;
+    const merged = { ...NO_ELEMENTS };
+    for (const kind of ELEMENT_KINDS) {
+      merged[kind] = replayed(
+        current[kind],
+        beforeByName.get(name)?.[kind],
+        afterByName.get(name)?.[kind]
+      );
+    }
+    if (ELEMENT_KINDS.every(kind => merged[kind].length === 0)) {
+      delete next[name];
+    } else {
+      next[name] = merged;
+    }
+  }
+  return next;
+}
+
+/** One kind's names after a module: kept, plus added, minus dropped. */
+function replayed(
+  names: readonly string[],
+  before: readonly { name: string }[] | undefined,
+  after: readonly { name: string }[] | undefined
+): string[] {
+  const was = new Set((before ?? []).map(element => element.name));
+  const now = new Set((after ?? []).map(element => element.name));
+  const out = new Set(names);
+  for (const name of now) if (!was.has(name)) out.add(name);
+  for (const name of was) if (!now.has(name)) out.delete(name);
+  return [...out].sort();
 }
 
 function lastModule(
