@@ -278,7 +278,7 @@ function listItemPart(line, last) {
 const valueEmpty = last => last.parts.length === 1 && last.parts[0].replace(TRAILER_HEAD, "").trim() === "";
 
 /** Whether a line goes on with a trailer's value: another co-author after a joining word, an address, or a name alone. */
-const continuesValue = text => JOINER.test(text) || ADDRESS.test(text) || nameAlone(beforeNote(text).replace(/\s*[,;]$/, ""));
+const continuesValue = text => JOINER.test(text) || ADDRESS.test(text) || nameAlone(withoutSeparator(beforeNote(text)));
 
 /**
  * A name and nothing more, as a surname or a tool's name folded onto the next
@@ -329,7 +329,9 @@ function creditingSpan({ parts, at }, rules) {
   const key = trailerKey(parts[0], rules);
   if (key === undefined) return [];
   const first = growingCredit(parts.slice(0, IDENTITY_LINES), (text, whole) => trailerCredits(text, rules, whole));
-  return [...placed(first, at), ...laterCoAuthorCredits(parts, at, key, first ? first.through + 1 : 1)];
+  // Later co-authors start after the line the first credit belongs to, not the line that completed it:
+  // lines folded after a tool's line may name another tool of their own.
+  return [...placed(first, at), ...laterCoAuthorCredits(parts, at, key, first ? first.index + 1 : 1)];
 }
 
 const trailerKey = (line, rules) => (rules.trailers ? TRAILER_HEAD.exec(line)?.[1] : undefined);
@@ -338,16 +340,16 @@ const trailerKey = (line, rules) => (rules.trailers ? TRAILER_HEAD.exec(line)?.[
 const placed = (found, at) => (found ? found.credits.map(credit => ({ ...credit, from: at, line: at + found.index })) : []);
 
 /**
- * The first credit a value makes as its parts are read in, the index of the
- * part it belongs to, and the part that completes it, or null. An ambiguous
- * name, and a vendor's name standing alone, are judged only on the whole
- * value, so a vendor's name continued onto a person's name and address is
- * that person, while a tool's full name is a credit as soon as it is complete.
+ * The first credit a value makes as its parts are read in, and the index of
+ * the part it belongs to, or null. An ambiguous name, and a vendor's name
+ * standing alone, are judged only on the whole value, so a vendor's name
+ * continued onto a person's name and address is that person, while a tool's
+ * full name is a credit as soon as it is complete.
  */
 function growingCredit(parts, creditsOf) {
   for (let count = 1; count <= parts.length; count += 1) {
     const credits = creditsOf(parts.slice(0, count).join(" "), count === parts.length);
-    if (credits.length > 0) return { credits, index: creditedPart(parts, creditsOf, count), through: count - 1 };
+    if (credits.length > 0) return { credits, index: creditedPart(parts, creditsOf, count) };
   }
   return null;
 }
@@ -467,8 +469,11 @@ function creditedByTrailer(value, whole) {
   return namesToolOutright(namePart(value), whole);
 }
 
-/** A value's name, before any note: a bracket, a dash or a colon after it ends the name. */
-const namePart = value => value.split(/\s+(?:[(—]|-\s)|:/)[0].trim();
+/** A value's name, before any note: a bracket, a dash or a colon after it ends the name, and a separator after it is not part of it. */
+const namePart = value => withoutSeparator(value.split(/\s+(?:[(—]|-\s)|:/)[0].trim());
+
+/** A name without the comma or semicolon that may part it from the next. */
+const withoutSeparator = text => text.replace(/\s*[,;]$/, "");
 
 function namesToolOutright(name, whole) {
   return (whole || !VENDOR_ALONE.test(name)) && namesATool(name, whole);

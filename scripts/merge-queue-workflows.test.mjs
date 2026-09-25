@@ -146,6 +146,13 @@ describe("conditions that skip the queue's run", () => {
       "github.event.pull_request.head.repo.full_name == github.repository",
       // Any other name under `github` may differ between the runs.
       "github.event.action == 'synchronize'",
+      // One output that must pass two text tests at once, of literals or of the event's name.
+      "startsWith(needs.x.outputs.value, 'a') && endsWith(needs.x.outputs.value, 'b') && github.event_name == 'pull_request'",
+      "startsWith(needs.x.outputs.v, github.event_name) && endsWith(needs.x.outputs.v, 'b') && github.event_name != 'merge_group'",
+      // `format` reads `{{` and `}}` as braces.
+      "format('{{{0}}}', github.event_name) == '{pull_request}'",
+      // A function GitHub runs is run here from its arguments, the event's name among them.
+      "toJSON(github.event_name) == '\"pull_request\"'",
     ];
     const runs = [
       "",
@@ -169,6 +176,14 @@ describe("conditions that skip the queue's run", () => {
       "github.event.merge_group.base_sha != ''",
       // The repository's own names read alike in both runs.
       "github.repository == 'nextlyhq/nextly'",
+      // So do the names the workflow file fixes.
+      "github.workflow == 'CI'",
+      // `format` runs from its arguments: this runs in the queue alone, and this in both.
+      "format('{0}', github.event_name) == 'merge_group'",
+      "format('{0}', github.event_name) != ''",
+      // `join` and `toJSON` run from their arguments too, so these hold in both runs; an unknown result would not.
+      "join(fromJSON('[\"a\", \"b\"]'), '-') == 'a-b' || github.event_name == 'pull_request'",
+      "toJSON('a') == '\"a\"' || github.event_name == 'pull_request'",
     ];
     for (const condition of skips) expect(skipsTheQueue(condition), condition).toBe(true);
     for (const condition of runs) expect(skipsTheQueue(condition), condition).toBe(false);
@@ -178,12 +193,19 @@ describe("conditions that skip the queue's run", () => {
     expect(() => skipsTheQueue("github.event_name == 'pull_request' &&")).toThrow(/cannot read the condition/);
     expect(() => skipsTheQueue("github.event_name == ")).toThrow(/cannot read the condition/);
     expect(() => skipsTheQueue("github.event_name 'pull_request'")).toThrow(/cannot read the condition/);
+    // Whatever it reads: one that reads nothing of the event is read too.
+    expect(() => skipsTheQueue("needs.changes.outputs.inert ==")).toThrow(/cannot read the condition/);
   });
 
   // Every assignment of twelve outputs is far too many to try; the condition is refused, not passed.
   it("refuses a condition with too many unknowns to decide, rather than passing it", () => {
     const many = [...Array.from({ length: 12 }, (_, n) => `needs.job${n}.result == 'success'`), "github.event_name == 'pull_request'"].join(" && ");
     expect(() => skipsTheQueue(many)).toThrow(/cannot decide the condition/);
+    // A call this evaluator does not run, reading the event, could return anything in each run.
+    expect(() => skipsTheQueue("hashFiles(github.event_name) != ''")).toThrow(/cannot decide the condition.*reads the event/);
+    // Three text tests of one value may need a value no two literals make.
+    const threeTests = "startsWith(needs.x.outputs.v, 'a') && contains(needs.x.outputs.v, 'b') && endsWith(needs.x.outputs.v, 'c') && github.event_name == 'pull_request'";
+    expect(() => skipsTheQueue(threeTests)).toThrow(/cannot decide the condition.*3 text tests/);
   });
 
   it("reads a gate's dependencies as part of it, and leaves a job no required check stands on out", () => {
@@ -234,31 +256,65 @@ function skippingSteps(id, job) {
  * and in the queue only for some of its values, is. The event's own names do
  * not (`readingOf`), and a condition that reads none of them, nor the event's
  * name, reads alike in both runs under any one assignment, so it needs none
- * tried.
+ * tried. Every condition is read once first, so one that cannot be read is
+ * refused whatever it reads.
  */
 function skipsTheQueue(condition) {
   const tokens = conditionTokens(condition);
+  evaluate(tokens, condition, {});
   if (!tokens.some(readsTheEvent)) return false;
-  const readings = readingsIn(tokens);
-  for (const values of assignments(condition, readings, candidateValues(literalsIn(tokens)))) if (skipsUnder(condition, readings, values)) return true;
+  textTestsDecidable(tokens, condition);
+  const readings = readingsIn(tokens, condition);
+  for (const values of assignments(condition, readings, candidateValues(literalsIn(tokens)))) if (skipsUnder(tokens, condition, readings, values)) return true;
   return false;
 }
 
 const PULL_REQUEST_EVENTS = ["pull_request", "pull_request_target"];
 const QUEUE_EVENT = "merge_group";
 
-function skipsUnder(condition, readings, values) {
-  const outcome = (run, event) => truth(evaluate(condition, { ...knownIn(run, readings, values), "github.event_name": event }));
+function skipsUnder(tokens, condition, readings, values) {
+  const outcome = (run, event) => truth(evaluate(tokens, condition, { ...knownIn(run, readings, values), "github.event_name": event }));
   return PULL_REQUEST_EVENTS.some(event => outcome("pull request", event) !== false) && outcome("queue", QUEUE_EVENT) === false;
 }
+
+/** The functions that test text, for which one value may have to pass several tests at once. */
+const TEXT_TESTS = new Set(["contains", "startswith", "endswith"]);
+
+/**
+ * Refuses a condition that holds one unknown to more text tests than its
+ * values can pass together. A value is tried joined from two text literals at
+ * most, which passes any two tests at once where one value can, so a third
+ * test of the same value may need a value that is never tried.
+ */
+function textTestsDecidable(tokens, condition) {
+  const counts = new Map();
+  for (const name of textTestOperands(tokens)) counts.set(name, (counts.get(name) ?? 0) + 1);
+  const crowded = [...counts].find(([, count]) => count > 2);
+  if (crowded) throw new Error(`cannot decide the condition ${JSON.stringify(condition)}: it holds ${crowded[0]} to ${crowded[1]} text tests`);
+}
+
+/** Each unknown a text test reads, once for every test that reads it. */
+const textTestOperands = tokens => tokens.flatMap((token, at) => (isTextTest(tokens, at) ? [...new Set(tokens.slice(at + 2, closingParen(tokens, at + 1)).filter(isUnknownName).map(nameOf))] : []));
+
+const isTextTest = (tokens, at) => TEXT_TESTS.has(nameOf(tokens[at])) && tokens[at + 1] === "(";
 
 /** What one run reads under an assignment: each unknown's value there, fixed or the one its choice was given. */
 function knownIn(run, readings, values) {
   return Object.fromEntries(readings.map(({ key, runs }) => [key, "value" in runs[run] ? runs[run].value : values[runs[run].choice]]));
 }
 
-/** The repository's own names, which read alike in both runs. */
-const REPOSITORY_NAMES = new Set(["github.repository", "github.repository_id", "github.repository_owner", "github.repository_owner_id"]);
+/** The names the repository or the workflow file fixes, which read alike in both runs. */
+const FIXED_NAMES = new Set([
+  "github.repository",
+  "github.repository_id",
+  "github.repository_owner",
+  "github.repository_owner_id",
+  "github.workflow",
+  "github.job",
+  "github.server_url",
+  "github.api_url",
+  "github.graphql_url",
+]);
 
 /** Objects one run's payload lacks, so that every name under one reads as null in that run. */
 const ABSENT = [
@@ -268,10 +324,10 @@ const ABSENT = [
 
 /**
  * How the two runs read a name. Any name under `github` may differ between
- * them, apart from the repository's own, so each run takes a value of its
- * own; the queue's payload holds no pull request and a pull request's holds no
- * queue group, so a name under either is null in the run without it. Every
- * other name, such as an output, reads alike in both.
+ * them, apart from those the repository or the workflow file fixes, so each
+ * run takes a value of its own; the queue's payload holds no pull request and
+ * a pull request's holds no queue group, so a name under either is null in the
+ * run without it. Every other name, such as an output, reads alike in both.
  */
 function readingOf(name) {
   const reading = differsBetweenRuns(name) ? ownInEach(name) : sharedBy(name);
@@ -279,7 +335,7 @@ function readingOf(name) {
   return reading;
 }
 
-const differsBetweenRuns = name => within(name, "github") && !REPOSITORY_NAMES.has(name);
+const differsBetweenRuns = name => within(name, "github") && !FIXED_NAMES.has(name);
 
 const within = (name, object) => name === object || name.startsWith(`${object}.`);
 
@@ -324,34 +380,42 @@ function* assigned(choices, values, index, assignment) {
  * each event's name, which a name may be compared with too; a number below,
  * between and above its numeric ones; `true`, `false`, empty text, which every
  * text starts with, ends with and contains, and a value equal to none of them;
- * and its text literals run together, so that tests each looking for one of
- * them can pass at once. Between them they give each comparison every outcome
- * it can have.
+ * and each ordered pair of its texts run together, its literals and the
+ * events' names, so that any two tests of one value that one value can pass
+ * together are passed. Between them they give each comparison every outcome it
+ * can have.
  */
 function candidateValues(literals) {
   const numbers = [...new Set(literals.filter(value => value !== "").map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
   const between = numbers.slice(1).map((number, at) => (numbers[at] + number) / 2);
   const around = numbers.length > 0 ? [numbers[0] - 1, numbers.at(-1) + 1] : [];
-  const texts = literals.filter(value => typeof value === "string");
-  return [...new Set([...literals, ...PULL_REQUEST_EVENTS, QUEUE_EVENT, ...between, ...around, true, false, "", NONE_OF_THEM, texts.join("")])];
+  const texts = [...new Set([...literals.filter(value => typeof value === "string"), ...PULL_REQUEST_EVENTS, QUEUE_EVENT])];
+  const pairs = texts.flatMap(first => texts.map(second => first + second));
+  return [...new Set([...literals, ...PULL_REQUEST_EVENTS, QUEUE_EVENT, ...between, ...around, true, false, "", NONE_OF_THEM, ...pairs])];
 }
 
 /** Each name and call a condition reads but does not know, with how the two runs read it; a call is keyed by its arguments. */
-function readingsIn(tokens) {
+function readingsIn(tokens, condition) {
   const readings = new Map();
   tokens.forEach((token, at) => {
     if (!isUnknownName(token)) return;
-    const [key, runs] = tokens[at + 1] === "(" ? callReading(tokens, at) : [nameOf(token), readingOf(nameOf(token))];
+    const [key, runs] = tokens[at + 1] === "(" ? callReading(tokens, at, condition) : [nameOf(token), readingOf(nameOf(token))];
     readings.set(key, runs);
   });
   return [...readings].map(([key, runs]) => ({ key, runs }));
 }
 
-/** A call's key and reading: when its arguments read the event, what it returns may differ between the runs, so each takes a value of its own. */
-function callReading(tokens, at) {
+/**
+ * A call's key and reading, for a function this evaluator does not run. Its
+ * result is read alike in both runs; one whose arguments read the event could
+ * return something different in each, which no value given here would stand
+ * for, so the condition is refused rather than decided on an invented result.
+ */
+function callReading(tokens, at, condition) {
   const argumentTokens = tokens.slice(at + 2, closingParen(tokens, at + 1));
   const key = callKey(tokens[at].name, argumentTokens);
-  return [key, argumentTokens.some(readsTheEvent) ? ownInEach(key) : sharedBy(key)];
+  if (argumentTokens.some(readsTheEvent)) throw new Error(`cannot decide the condition ${JSON.stringify(condition)}: ${key} reads the event, and what it returns is not known`);
+  return [key, sharedBy(key)];
 }
 
 const literalsIn = tokens => tokens.filter(token => typeof token === "object" && "value" in token).map(token => token.value);
@@ -396,7 +460,21 @@ const FUNCTIONS = {
   startswith: (text, prefix) => lower(text).startsWith(lower(prefix)),
   endswith: (text, suffix) => lower(text).endsWith(lower(suffix)),
   fromjson: text => parsed(textOf(text)),
+  format: (template, ...values) => formatted(textOf(template), values),
+  join: (array, separator = ",") => (Array.isArray(array) ? array.map(textOf).join(textOf(separator)) : textOf(array)),
+  tojson: value => JSON.stringify(value, null, 2),
 };
+
+/**
+ * `format`'s text: each `{n}` replaced by the nth value as text, and `{{` and
+ * `}}` by a brace. A reference past the values fails GitHub's evaluation,
+ * which decides nothing here.
+ */
+function formatted(template, values) {
+  const references = [...template.matchAll(/\{\{|\}\}|\{(\d+)\}/g)].filter(match => match[1] !== undefined);
+  if (references.some(match => Number(match[1]) >= values.length)) return UNKNOWN;
+  return template.replace(/\{\{|\}\}|\{(\d+)\}/g, (match, index) => (index === undefined ? match[0] : textOf(values[Number(index)])));
+}
 
 /** A JSON document's value; text that is not one fails GitHub's evaluation, which decides nothing here. */
 function parsed(text) {
@@ -407,11 +485,10 @@ function parsed(text) {
   }
 }
 
-/** A condition's value, with `${{ }}` optional around it, as GitHub accepts it; no condition always runs. */
-function evaluate(condition, known) {
-  const text = condition.trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1").trim();
-  if (text === "") return true;
-  const parser = { tokens: tokenize(text, condition), at: 0, known, condition };
+/** A condition's value from its tokens (`conditionTokens`); no condition always runs. */
+function evaluate(tokens, condition, known) {
+  if (tokens.length === 0) return true;
+  const parser = { tokens, at: 0, known, condition };
   const value = parseOr(parser);
   if (parser.at !== parser.tokens.length) unreadable(parser.condition);
   return value;

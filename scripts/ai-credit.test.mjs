@@ -48,6 +48,8 @@ describe("a message's credit, in each form", () => {
       lines(spell("Co-authored-by: Clau", "de"), `  <${VENDOR_ADDRESS}>`),
       // An ambiguous name with its edition, as prose and a maker's phrase read it.
       trailer("Co-authored", spell("Mis", "tral Large")),
+      // An ambiguous name with the separator before a co-author that was never written.
+      trailer("Co-authored", spell("Clau", "de,")),
     ];
     for (const line of trailers) expect(credited(lines("fix: a change", "", line), "message"), line).toBe(true);
   });
@@ -207,8 +209,9 @@ describe("a line a change adds", () => {
     expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), "  with a note", spell("  and ", CODE_TOOL)), "message")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
     // An ambiguous name in lower case is a name alone, as the trailer reads it in any case.
     expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("  clau", "de")), "message")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
-    // A name alone may end with the separator before the next co-author.
+    // A name alone may end with the separator before the next co-author, and is judged without it.
     expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("  ", CODE_TOOL, ",")), "message")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
+    expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), spell("  Clau", "de,")), "message")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
     // A note left open goes on across the lines after it, and once closed, a co-author after it is one of its own.
     expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), "  (checked against", `  ${CODE_TOOL}`), "message")).toEqual([]);
     expect(creditsIn(lines(spell("* Co-authored", "-by: Jane Doe"), "  (checked against", `  ${CODE_TOOL}`, "  docs)", spell("  and ", CHAT_TOOL)), "message")).toEqual([expect.objectContaining({ from: 5, line: 5 })]);
@@ -259,6 +262,7 @@ describe("a line a change adds", () => {
     // An identity complete with its address, or closed by a separator, leaves the next line an identity of its own.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  and Alice Smith <alice@example.com>", `  ${MODEL} <${VENDOR_ADDRESS}>`), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  and Alice Smith,", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), spell("  and Clau", "de,")), "line")).toEqual([expect.objectContaining({ from: 2, line: 2 })]);
   });
 
   // An identity is read across a few lines at most, so a long run of folded lines takes time in proportion to its length.
@@ -571,6 +575,13 @@ describe("the command in CI", () => {
   it("does not refuse a note added below a vendor, a note and a tool that were already there", () => {
     const before = lines(spell("* Co-authored", "-by: Anthro", "pic"), "  (context)", `  ${CODE_TOOL}`);
     expect(decide(change(lines(before, ""), lines(before, "  (more context)", "")))).toBe(0);
+  });
+
+  // The first credit belongs to the tool's line, and the lines after that line are read for another tool of their own.
+  it("refuses another tool added after a vendor, a note and a tool that were already there", () => {
+    const before = lines(trailer("Co-authored", spell("Anthro", "pic")), "  (context)", `  ${CODE_TOOL}`);
+    expect(decide(change(lines(before, ""), lines(before, spell("  and ", CHAT_TOOL), "")))).toBe(1);
+    expect(printed()).toMatch(/file=notes\.md,line=4,title=AI credit::notes\.md:4 names it in a Co-authored-by trailer/);
   });
 
   it("refuses a tool added after a note under a vendor's name that was already there", () => {
