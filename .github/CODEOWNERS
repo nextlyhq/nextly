@@ -1,0 +1,33 @@
+# Who must review a change to what the checks on `main` decide.
+#
+# A pull request runs its own copy of every workflow it changes, in the merge
+# queue as on its own run, and the actions, scripts, hooks and configuration
+# those workflows run come from the same checkout. So a change to any of them
+# can change what a required check decides, including a check on that same
+# pull request. `main`'s ruleset requires a code owner's review; these entries
+# are what give that rule something to apply to.
+#
+# Every entry is an anchored path or directory, and the last entry that
+# matches a path decides its owners, as GitHub reads this file.
+# `scripts/merge-queue-workflows.test.mjs` holds each required check's
+# workflow, and everything it runs, to having an owner here.
+
+# The workflows, their actions and this file.
+/.github/                    @mobeenabdullah
+
+# The hooks, the repository's scripts, and the package scripts that name them.
+/.husky/                     @mobeenabdullah
+/scripts/                    @mobeenabdullah
+/package.json                @mobeenabdullah
+/pnpm-workspace.yaml         @mobeenabdullah
+
+# The configuration the checks read.
+/.commitlintrc.json          @mobeenabdullah
+/.fallowrc.jsonc             @mobeenabdullah
+/.gitleaks.toml              @mobeenabdullah
+/eslint.config.mjs           @mobeenabdullah
+/eslint.scripts.config.mjs   @mobeenabdullah
+/fallow-health-baseline.json @mobeenabdullah
+/lint-staged.config.mjs      @mobeenabdullah
+/tsconfig.base.json          @mobeenabdullah
+/vitest.config.ts            @mobeenabdullah

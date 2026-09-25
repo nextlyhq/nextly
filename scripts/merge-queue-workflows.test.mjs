@@ -458,3 +458,94 @@ describe("the title check's permissions", () => {
     }
   });
 });
+
+describe("who owns what the required checks run", () => {
+  /*
+   * A pull request runs its own copy of every workflow, action, script and
+   * configuration a required check uses, so a change to any of them can change
+   * what the check decides. `main`'s ruleset requires a code owner's review,
+   * and it applies only to a path CODEOWNERS names, so each of them has to
+   * have an owner there.
+   */
+  const rules = codeOwners(readFileSync(new URL("../.github/CODEOWNERS", import.meta.url), "utf8"));
+
+  it("owns itself, the hooks, the package scripts and the configuration the checks read", () => {
+    for (const path of [".github/CODEOWNERS", ".husky/pre-commit", ".husky/commit-msg", ".husky/pre-push", "package.json", ...CHECK_CONFIGURATION]) {
+      expect(ownersOf(rules, path), path).not.toEqual([]);
+    }
+  });
+
+  for (const [path, checks] of Object.entries(QUEUE_CHECKS)) {
+    it(`owns ${path}, and every action and script its required jobs run`, () => {
+      const workflow = read(path);
+      for (const used of [path, ...pathsRunBy(workflow, requiredJobs(workflow, checks))]) expect(ownersOf(rules, used), used).not.toEqual([]);
+    });
+  }
+
+  // The control: the walk reaches the scripts a required job runs, named
+  // directly and through a package script, so an owned list is not an empty one.
+  it("finds the scripts the CI gate's jobs run, directly and through a package script", () => {
+    const ci = read(".github/workflows/ci.yml");
+    const paths = pathsRunBy(ci, requiredJobs(ci, QUEUE_CHECKS[".github/workflows/ci.yml"]));
+    expect(paths).toEqual(expect.arrayContaining(["scripts/change-scope.mjs", "scripts/check-comment-convention.mjs", "package.json"]));
+  });
+
+  it("reads only the patterns it understands, and refuses any other rather than guess", () => {
+    expect(() => codeOwners("*.mjs @someone")).toThrow(/reads only anchored paths and directories/);
+    expect(ownersOf(codeOwners("/scripts/ @a\n/scripts/x.mjs @b"), "scripts/x.mjs")).toEqual(["@b"]);
+    expect(ownersOf(codeOwners("/scripts/ @a\n/scripts/x.mjs"), "scripts/x.mjs")).toEqual([]);
+  });
+});
+
+/** Configuration a required check reads, where a change alters what it decides. */
+const CHECK_CONFIGURATION = [
+  "pnpm-workspace.yaml",
+  ".commitlintrc.json",
+  ".fallowrc.jsonc",
+  ".gitleaks.toml",
+  "eslint.config.mjs",
+  "eslint.scripts.config.mjs",
+  "fallow-health-baseline.json",
+  "lint-staged.config.mjs",
+  "tsconfig.base.json",
+  "vitest.config.ts",
+];
+
+/**
+ * CODEOWNERS rules, in order. Only anchored paths and directories are read;
+ * any other pattern is refused rather than guessed at, since a guess at what
+ * a glob matches is exactly the reading that would pass an unowned path.
+ */
+function codeOwners(text) {
+  return text
+    .split("\n")
+    .map(line => line.replace(/#.*$/, "").trim())
+    .filter(Boolean)
+    .map(line => {
+      const [pattern, ...owners] = line.split(/\s+/);
+      if (!/^\/[\w.-]+(?:\/[\w.-]+)*\/?$/.test(pattern)) throw new Error(`this test reads only anchored paths and directories, not ${pattern}`);
+      return { pattern, owners };
+    });
+}
+
+/** A path's owners: the last rule that matches it decides, and a rule with no owners leaves it unowned. */
+function ownersOf(rules, path) {
+  const matching = rules.filter(({ pattern }) => (pattern.endsWith("/") ? `/${path}`.startsWith(pattern) : `/${path}` === pattern));
+  return matching.at(-1)?.owners ?? [];
+}
+
+const PACKAGE_SCRIPTS = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts;
+const SCRIPT_PATH = /\bscripts\/[\w./-]+\.(?:mjs|cjs|js|sh)\b/g;
+
+/** The local actions a set of jobs uses, and the scripts their steps name, directly or through a package script. */
+function pathsRunBy(workflow, ids) {
+  const steps = ids.flatMap(id => workflow.jobs[id].steps ?? []);
+  const actions = steps.map(step => String(step.uses ?? "")).filter(uses => uses.startsWith("./")).map(uses => `${uses.slice(2)}/action.yml`);
+  const texts = [...steps.map(step => String(step.run ?? "")), ...actions.map(action => readFileSync(new URL(`../${action}`, import.meta.url), "utf8"))];
+  return [...new Set([...actions, ...texts.flatMap(scriptsNamedIn)])];
+}
+
+function scriptsNamedIn(text) {
+  const viaPackage = [...text.matchAll(/\bpnpm (?:run )?([\w:-]+)/g)].map(match => PACKAGE_SCRIPTS[match[1]]).filter(Boolean);
+  return [...[text, ...viaPackage].flatMap(source => [...source.matchAll(SCRIPT_PATH)].map(match => match[0])), ...(viaPackage.length > 0 ? ["package.json"] : [])];
+}
