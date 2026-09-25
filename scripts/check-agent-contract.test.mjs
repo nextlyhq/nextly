@@ -319,6 +319,35 @@ describe("the command, run against another checkout", () => {
     }
   });
 
+  /**
+   * A checkout that meets the contract through AGENTS.md alone, with git
+   * initialised; each test below adds a root override its own way. `put`
+   * writes a file, `copy` makes CLAUDE.md the sync's copy of one, and `check`
+   * runs the command, staging everything first unless told not to.
+   */
+  function overrideCheckout() {
+    const base = mkdtempSync(join(tmpdir(), "agent-contract-override-"));
+    const put = (path, text) => {
+      mkdirSync(dirname(join(base, path)), { recursive: true });
+      writeFileSync(join(base, path), text);
+    };
+    const copy = (source, text) => put("CLAUDE.md", header(source, text) + text);
+    const check = ({ stage = true } = {}) => {
+      if (stage) execFileSync("git", ["add", "-A"], { cwd: base });
+      return spawnSync(process.execPath, [CHECK, "--root", base], { encoding: "utf8" });
+    };
+    const rules = "| `a` | when a applies |\n\n`.claude/rules/integration-tests.md` is read by path.\n\n";
+    put("AGENTS.md", `${rules}${WHOLE_FILE_SECTION}`);
+    copy("AGENTS.md", `${rules}${WHOLE_FILE_SECTION}`);
+    put(".claude/rules/integration-tests.md", '---\npaths:\n  - "**/*.integration.test.ts"\n---\n\nA rule.\n');
+    put(".github/review-prompt.md", "Review.\n");
+    put("package.json", "{}\n");
+    put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\n---\n");
+    syncSkillCopy(base);
+    execFileSync("git", ["init", "-q"], { cwd: base });
+    return { base, put, copy, check, rules };
+  }
+
   /*
    * With a root override, the AGENTS.md harness reads it and never the
    * AGENTS.md beside it, and the root CLAUDE.md copies it, so the sections both
@@ -326,36 +355,52 @@ describe("the command, run against another checkout", () => {
    * check although AGENTS.md still has it; the control puts it back.
    */
   it("holds the root override, not the AGENTS.md beside it, to the required sections", () => {
-    const base = mkdtempSync(join(tmpdir(), "agent-contract-override-"));
-    const put = (path, text) => {
-      mkdirSync(dirname(join(base, path)), { recursive: true });
-      writeFileSync(join(base, path), text);
-    };
-    const run = () => {
-      execFileSync("git", ["add", "-A"], { cwd: base });
-      return spawnSync(process.execPath, [CHECK, "--root", base], { encoding: "utf8" });
-    };
+    const { base, put, copy, check, rules } = overrideCheckout();
     try {
-      const rules = "| `a` | when a applies |\n\n`.claude/rules/integration-tests.md` is read by path.\n\n";
-      put("AGENTS.md", `${rules}${WHOLE_FILE_SECTION}`);
       put("AGENTS.override.md", rules);
-      put("CLAUDE.md", header("AGENTS.override.md", rules) + rules);
-      put(".claude/rules/integration-tests.md", '---\npaths:\n  - "**/*.integration.test.ts"\n---\n\nA rule.\n');
-      put(".github/review-prompt.md", "Review.\n");
-      put("package.json", "{}\n");
-      put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\n---\n");
-      syncSkillCopy(base);
-      execFileSync("git", ["init", "-q"], { cwd: base });
-
-      const lost = run();
+      copy("AGENTS.override.md", rules);
+      const lost = check();
       expect(lost.status).toBe(1);
       expect(lost.stderr).toContain('AGENTS.override.md: no longer has the section "A whole-file write is a delete plus a create"');
 
       put("AGENTS.override.md", `${rules}${WHOLE_FILE_SECTION}`);
-      put("CLAUDE.md", header("AGENTS.override.md", `${rules}${WHOLE_FILE_SECTION}`) + rules + WHOLE_FILE_SECTION);
-      const kept = run();
+      copy("AGENTS.override.md", `${rules}${WHOLE_FILE_SECTION}`);
+      const kept = check();
       expect(kept.stderr).toBe("");
       expect(kept.status).toBe(0);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("checks the paths the root override names, since agents read it and not the AGENTS.md beside it", () => {
+    const { base, put, copy, check, rules } = overrideCheckout();
+    try {
+      const override = `${rules}Runs \`.github/workflows/gone.yml\`.\n\n${WHOLE_FILE_SECTION}`;
+      put("AGENTS.override.md", override);
+      copy("AGENTS.override.md", override);
+      const run = check();
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain("AGENTS.override.md: path '.github/workflows/gone.yml' does not resolve");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  /*
+   * The sync copies an override git does not track yet, so the check reads
+   * the same files: judged from tracked files alone, it would check the
+   * AGENTS.md beside the override and call the copy of the override drift.
+   */
+  it("checks an override the sync would copy before it is staged", () => {
+    const { base, put, copy, check, rules } = overrideCheckout();
+    try {
+      execFileSync("git", ["add", "-A"], { cwd: base });
+      put("AGENTS.override.md", rules);
+      copy("AGENTS.override.md", rules);
+      const run = check({ stage: false });
+      expect(run.stderr).toContain('AGENTS.override.md: no longer has the section "A whole-file write is a delete plus a create"');
+      expect(run.stderr).not.toContain("CLAUDE.md:");
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
@@ -473,6 +518,9 @@ describe("reaching Claude Code", () => {
       expect(ruleFindings(base, `${heading}\n\nOnly \`set -o noclobber\`.\n`).map(finding => finding.claim)).toEqual([claim('`{ flag: "wx" }`')]);
       const fenced = `${heading}\n\n\`\`\`sh\n# a comment, not a heading\nset -o noclobber\n\`\`\`\n\nOr \`{ flag: "wx" }\`.\n\n## Next\n`;
       expect(ruleFindings(base, fenced)).toEqual([]);
+      // A fence closes only on its own character: the other fence shown inside it, and a heading there, stay code.
+      const nested = `${heading}\n\n\`\`\`md\n~~~\n## Not a heading\n~~~\n\`\`\`\n\nUse \`set -o noclobber\` or \`{ flag: "wx" }\`.\n\n## Next\n`;
+      expect(ruleFindings(base, nested)).toEqual([]);
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

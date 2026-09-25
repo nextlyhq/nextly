@@ -33,7 +33,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems } from "./agent-skills.mjs";
-import { copies, copyDrift } from "./agent-instructions.mjs";
+import { copies, copyDrift, repositoryFiles } from "./agent-instructions.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -424,12 +424,20 @@ function markdownUnder(dir) {
   return out;
 }
 
+/**
+ * A directory's AGENTS.md and its `AGENTS.override.md`, those that exist. The
+ * override is the one the AGENTS.md harness takes where there is one, so its
+ * claims are checked as well as the file's beside it.
+ */
+function agentFilesIn(base, dir) {
+  return ["AGENTS.md", "AGENTS.override.md"].map(name => (dir ? `${dir}/${name}` : name)).filter(path => existsSync(join(base, path)));
+}
+
 /** The instruction files this repository ships, as repo-relative paths. */
 export function instructionFiles(base = root) {
   // CLAUDE.md is not read: it is a generated copy of AGENTS.md, held
   // identical separately, so reading it too would report each finding twice.
-  const files = [];
-  if (existsSync(join(base, "AGENTS.md"))) files.push("AGENTS.md");
+  const files = [...agentFilesIn(base, "")];
   // Executable guidance for the CI review agent, and the same kind of subject
   // as the rest: it names `.github/scripts/review-bot-gh.sh` with five
   // subcommands, two skills and a workflow file. Omitting it meant renaming
@@ -439,10 +447,7 @@ export function instructionFiles(base = root) {
   for (const dir of ["packages", "apps"]) {
     const full = join(base, dir);
     if (!existsSync(full)) continue;
-    for (const pkg of readdirSync(full)) {
-      const nested = join(full, pkg, "AGENTS.md");
-      if (existsSync(nested)) files.push(`${dir}/${pkg}/AGENTS.md`);
-    }
+    for (const pkg of readdirSync(full)) files.push(...agentFilesIn(base, `${dir}/${pkg}`));
   }
   // The skills are read where they live; the Claude Code copy is held
   // identical to them separately, so reading it too would report each finding
@@ -619,15 +624,32 @@ const headingLevel = line => /^(#{1,6}) /.exec(line)?.[1].length ?? 0;
 
 /**
  * Each line of a Markdown text, and whether it is code: a fence or a line
- * inside one, where a `#` begins a comment rather than a heading.
+ * inside one, where a `#` begins a comment rather than a heading. A fence is
+ * closed only by one of its own character at least as long, so an example of
+ * the other fence inside it stays code.
  */
 function markdownLines(text) {
-  let fenced = false;
+  let open = null;
   return text.split(/\r?\n/).map(line => {
-    const fence = /^ {0,3}(?:```|~~~)/.test(line);
-    if (fence) fenced = !fenced;
-    return { line, code: fence || fenced };
+    const code = open !== null || fenceOf(line) !== undefined;
+    open = fenceAfter(open, line);
+    return { line, code };
   });
+}
+
+/** The run of backticks or tildes a line opens a fence with, or undefined. */
+const fenceOf = line => /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+
+/** The fence open after a line: one the line opens, none once it closes the open one, or the open one still. */
+function fenceAfter(open, line) {
+  if (open === null) return fenceOf(line) ?? null;
+  return closesFence(open, line) ? null : open;
+}
+
+/** Whether a line closes a fence: the same character, at least as many, and nothing after them. */
+function closesFence(open, line) {
+  const fence = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
+  return fence !== undefined && fence[0] === open[0] && fence.length >= open.length;
 }
 
 /** The text under a heading, up to the next heading of its level or above; null when the heading is not there. */
@@ -700,14 +722,18 @@ function main(base = root) {
         )
       : []
   );
-  const rootFile = rootInstructions(tracked);
+  // The files the sync copies from: tracked ones, and new ones git does not
+  // ignore. Judged from tracked files alone, a new override the sync already
+  // copies would be checked as the AGENTS.md beside it.
+  const listed = repositoryFiles(base);
+  const rootFile = rootInstructions(listed);
   const agents = readFileSync(join(base, rootFile), "utf8");
   const routed = routedSkills(agents);
   for (const { name, side } of routerDisagreements(routed, present)) {
     findings.push({ file: rootFile, kind: "router", claim: `${name} — ${side}` });
   }
   findings.push(...skillFindings(base));
-  findings.push(...instructionCopyFindings(base, tracked));
+  findings.push(...instructionCopyFindings(base, listed));
   findings.push(...ruleFindings(base, agents, rootFile));
 
   for (const file of files) {

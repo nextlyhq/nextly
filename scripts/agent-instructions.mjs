@@ -153,7 +153,7 @@ function refusal(base, source, copy) {
 }
 
 /** The files to copy from: tracked ones, and new ones git does not ignore, so a new AGENTS.md is copied before it is staged. */
-function repositoryFiles(base) {
+export function repositoryFiles(base) {
   return execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: base, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
     .split("\0")
     .filter(path => path && entryAt(join(base, path)) !== null);
