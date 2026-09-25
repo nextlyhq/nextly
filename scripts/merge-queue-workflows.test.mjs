@@ -11,6 +11,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { posix } from "node:path";
 import { isBuiltin } from "node:module";
 
 import { load } from "js-yaml";
@@ -501,6 +502,20 @@ describe("who owns what the required checks run", () => {
     for (const path of definitions) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
+  // A configuration runs with whatever it extends or imports, so that is a
+  // check definition too; each is found from the configurations themselves.
+  it("owns every shared configuration a compiler or lint configuration extends or imports", () => {
+    const files = trackedFiles();
+    const packages = workspacePackages(files);
+    const shared = files.filter(path => SHARING_CONFIGURATION.test(path)).flatMap(path => sharedConfigurationOf(path, packages));
+    // The control: the walk reaches the shared packages, not nothing.
+    expect(shared.some(path => path.startsWith("packages/tsconfig/"))).toBe(true);
+    expect(shared.some(path => path.startsWith("packages/eslint-config/"))).toBe(true);
+    // And a relative import, as the nextly package's lint configuration makes of its own rule.
+    expect(shared.some(path => path.startsWith("packages/nextly/"))).toBe(true);
+    for (const path of new Set(shared)) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
   // The control: the walk reaches the scripts a required job runs, named
   // directly and through a package script, so an owned list is not an empty one.
   it("finds the scripts the CI gate's jobs run, directly and through a package script", () => {
@@ -527,6 +542,7 @@ const APPROVED_OWNERS = ["@mobeenabdullah"];
 /** Configuration a required check reads, where a change alters what it decides. */
 const CHECK_CONFIGURATION = [
   "pnpm-workspace.yaml",
+  "pnpm-lock.yaml",
   ".nvmrc",
   "turbo.jsonc",
   ".changeset/config.json",
@@ -582,6 +598,36 @@ function ownersOf(rules, path) {
 
 /** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
 const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|(?:vitest|playwright|eslint|tsup)[^/]*\.config\.[^/]+)$/;
+
+/** Compiler and lint configuration, which may extend or import shared configuration. */
+const SHARING_CONFIGURATION = /(?:^|\/)(?:tsconfig[^/]*\.json|eslint[^/]*\.config\.[^/]+)$/;
+const EXTENDS = /"extends"\s*:\s*(\[[^\]]*\]|"[^"]*")/;
+const CONFIGURATION_IMPORT = /(?:\bfrom\s+|\brequire\(\s*|\bimport\(\s*)["']([^"']+)["']/g;
+
+function readRepositoryFile(path) {
+  return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+}
+
+/** The workspace's packages by name, so a specifier naming one resolves to its directory. */
+function workspacePackages(files) {
+  const manifests = files.filter(path => /^packages\/[^/]+\/package\.json$/.test(path));
+  return new Map(manifests.map(path => [JSON.parse(readRepositoryFile(path)).name, posix.dirname(path)]));
+}
+
+/** The repository files a configuration extends or imports: a relative path, or a workspace package by name. */
+function sharedConfigurationOf(path, packages) {
+  const text = readRepositoryFile(path);
+  const extended = EXTENDS.exec(text)?.[1] ?? "";
+  const specifiers = [...extended.matchAll(/"([^"]+)"/g), ...text.matchAll(CONFIGURATION_IMPORT)].map(match => match[1]);
+  return specifiers.map(specifier => repositoryPathOf(specifier, path, packages)).filter(Boolean);
+}
+
+function repositoryPathOf(specifier, from, packages) {
+  if (specifier.startsWith(".")) return posix.normalize(posix.join(posix.dirname(from), specifier));
+  const [scope, name, ...rest] = specifier.split("/");
+  const directory = packages.get(`${scope}/${name}`);
+  return directory ? `${directory}/${rest.join("/") || "package.json"}` : null;
+}
 
 function trackedFiles() {
   return execFileSync("git", ["ls-files", "-z"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8" }).split("\0").filter(Boolean);

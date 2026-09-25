@@ -37,6 +37,15 @@ eslint*.config.*             @mobeenabdullah
 tsup*.config.*               @mobeenabdullah
 /.nvmrc                      @mobeenabdullah
 
+# The shared configuration those extend and import, and the lockfile that
+# fixes the exact version of every tool a check runs.
+/packages/eslint-config/     @mobeenabdullah
+/packages/eslint-plugin/     @mobeenabdullah
+/packages/prettier-config/   @mobeenabdullah
+/packages/tsconfig/          @mobeenabdullah
+/packages/nextly/eslint-bare-error-rule.js @mobeenabdullah
+/pnpm-lock.yaml              @mobeenabdullah
+
 # The configuration the checks read.
 /.changeset/config.json      @mobeenabdullah
 /.commitlintrc.json          @mobeenabdullah
