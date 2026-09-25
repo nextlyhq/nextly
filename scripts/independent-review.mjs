@@ -18,10 +18,19 @@
  * that reads exactly like one of its own. So its reviews are not counted: a
  * login that anything can post as says nothing about who reviewed.
  *
- * Coverage means the revision being merged: a review of an earlier head, or
- * one made before the base last moved, read a different diff. The decision is
- * `ci-verdict`'s, reused, so this gate and the merge-verification gate cannot
- * disagree about whether Codex read a revision.
+ * Coverage means the revision being merged. A review of an earlier head read
+ * a different change, and so did one made before the pull request was moved
+ * to another base branch. `main` advancing under an unchanged head does not
+ * void a review, as it voids no approval on GitHub: the review is of the
+ * change, and the queue itself re-tests the change on the latest `main`. The
+ * decision is `ci-verdict`'s, reused, so this gate and the merge-verification
+ * gate cannot disagree about whether Codex read a revision.
+ *
+ * Codex states a clean pass only in a summary comment that names the revision
+ * by an abbreviation. Once a branch's history was rewritten, the pull
+ * request's own commits can no longer show that an abbreviation is unique, so
+ * GitHub, which holds every object, is asked to resolve it; it resolves an
+ * ambiguous one to nothing.
  *
  * It decides in the merge queue, where the queued pull requests are named by the
  * `(#number)` GitHub gives each squash commit. The queue lands those commits,
@@ -29,7 +38,7 @@
  *
  * Usage (in the workflow, on `merge_group`): GH_TOKEN=… node scripts/independent-review.mjs
  */
-import { completeRevisionSet, latestBaseChange, reviewersCovering } from "./ci-verdict.mjs";
+import { completeRevisionSet, latestBaseChange, reviewedCommitFrom, reviewersCovering } from "./ci-verdict.mjs";
 import { isCliEntry } from "./cli-entry.mjs";
 import { countRewriteEvents } from "./verify-merge.mjs";
 import { commandText, eventPayload, queuedCommitSubjects, readGit } from "./workflow-context.mjs";
@@ -52,23 +61,27 @@ export function queuedPullNumbers(subjects) {
 
 /**
  * The verdict for one queued pull request, from its evidence: whether Codex
- * reviewed the revision it lands, after the base last moved.
+ * reviewed the revision it lands, since the pull request last moved to another
+ * base branch. `resolved` holds what GitHub resolved each abbreviation to.
  */
-export function coverage({ number, pr, reviews, comments, commits, timeline }) {
+export function coverage({ number, pr, reviews, comments, commits, timeline, resolved = {} }) {
   const head = pr.head.sha;
   const options = {
     since: latestBaseChange(timeline),
     knownRevisions: completeRevisionSet(commits.map(commit => commit?.sha), pr.commits),
     historyRewritten: countRewriteEvents(timeline) > 0,
+    resolvedRevisions: resolved,
   };
   const covered = reviewersCovering(reviews, comments, head, options).includes(CODEX);
   return { number, head, covered, by: covered ? "Codex" : null };
 }
 
-async function getJson(path, { token, fetchImpl }) {
+/** A GitHub API resource, or undefined where GitHub answers one of the `absentOn` statuses; any other failure throws. */
+async function getJson(path, { token, fetchImpl }, absentOn = []) {
   const headers = { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" };
   if (token) headers.authorization = `Bearer ${token}`;
   const response = await fetchImpl(`https://api.github.com/${path}`, { headers });
+  if (absentOn.includes(response.status)) return undefined;
   if (!response.ok) throw new Error(`GET ${path}: HTTP ${response.status}`);
   return response.json();
 }
@@ -99,7 +112,28 @@ async function evidenceFor(number, context) {
     getPages(`repos/${repo}/pulls/${number}/commits`, context),
     getPages(`repos/${repo}/issues/${number}/timeline`, context),
   ]);
-  return { number, pr, reviews: reviews.flat(), comments: comments.flat(), commits: commits.flat(), timeline };
+  const evidence = { number, pr, reviews: reviews.flat(), comments: comments.flat(), commits: commits.flat(), timeline };
+  return { ...evidence, resolved: await resolvedAbbreviations(evidence, context) };
+}
+
+/**
+ * After a rewrite, the full revision GitHub resolves each abbreviation to, for
+ * every Codex comment that names a prefix of the head. Without a rewrite the
+ * pull request's own commits settle an abbreviation, and nothing is asked.
+ */
+async function resolvedAbbreviations({ pr, comments, timeline }, context) {
+  if (countRewriteEvents(timeline) === 0) return {};
+  const head = pr.head.sha.toLowerCase();
+  const named = comments.filter(comment => comment?.user?.login === CODEX).map(comment => reviewedCommitFrom(comment?.body));
+  const prefixes = [...new Set(named.filter(abbreviation => abbreviation !== undefined && head.startsWith(abbreviation)))];
+  const resolved = await Promise.all(prefixes.map(async abbreviation => [abbreviation, await resolveRevision(abbreviation, context)]));
+  return Object.fromEntries(resolved.filter(([, revision]) => revision !== undefined));
+}
+
+/** GitHub answers 422 for an abbreviation that names no single commit it holds. */
+async function resolveRevision(abbreviation, context) {
+  const commit = await getJson(`repos/${context.repository}/commits/${abbreviation}`, context, [422]);
+  return commit?.sha?.toLowerCase();
 }
 
 /** The queued pull requests' numbers for this run, or why there are none. */
