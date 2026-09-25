@@ -20,16 +20,13 @@ import {
   pluginOfLedgerRow,
   scopeLedgerRows,
 } from "../../domains/schema/events/ledger-scope";
-import {
-  appliedFilenames,
-  newestEventsByFilename,
-} from "../../domains/schema/events/newest-event";
+import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
 import {
   SchemaEventsRepository,
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
 import { truncateErrorMessage } from "../../domains/schema/events/schema-events-repository";
-import { qualifiedFilename } from "../../domains/schema/migrate/plugin/plugin-migration";
+import { recordPluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import { assertNoForeignDrops } from "../../domains/schema/ownership/drop-guard";
 import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
@@ -218,21 +215,6 @@ export async function migrateDownCore(
     deps.db,
     deps.dialect,
     async () => {
-      for (const p of planned) {
-        try {
-          await deps.execDown(p.downSql);
-        } catch (err) {
-          await deps.recordFailed(
-            p.filename,
-            truncateErrorMessage(describeError(err, { context: false }))
-          );
-          throw err;
-        }
-        await deps.recordRolledBack(p.filename);
-        rolledBack.push(p.filename);
-        deps.logger.success(`Rolled back ${p.filename}`);
-      }
-
       // A plugin rollback moves that plugin's APPLIED schema version back.
       //
       // Only the ledger was being rewritten, so rolling a plugin from schema
@@ -243,7 +225,45 @@ export async function migrateDownCore(
       // The new version is read from what REMAINS applied rather than
       // computed by subtraction: modules can be rolled back out of order and
       // a step count would drift from the ledger it is meant to describe.
-      if (deps.options.plugin) await deps.recordPluginSchemaVersion?.();
+      //
+      // Run whenever any module rolled back, INCLUDING when a later one then
+      // failed: the earlier DOWNs and their ledger events are committed, and
+      // leaving the version where it was let boot accept code expecting the
+      // columns they removed. A failure here must not hide the DOWN failure
+      // that is the operator's real problem: after a failure it is logged beside
+      // that failure, which is what the command throws.
+      const syncVersion = async (afterFailure: boolean): Promise<void> => {
+        if (!deps.options.plugin || rolledBack.length === 0) return;
+        try {
+          await deps.recordPluginSchemaVersion?.();
+        } catch (versionError) {
+          if (!afterFailure) throw versionError;
+          deps.logger.error(
+            `The plugin's recorded schema version could not be updated after the partial rollback: ${describeError(versionError, { context: false })}`
+          );
+        }
+      };
+
+      try {
+        for (const p of planned) {
+          try {
+            await deps.execDown(p.downSql);
+          } catch (err) {
+            await deps.recordFailed(
+              p.filename,
+              truncateErrorMessage(describeError(err, { context: false }))
+            );
+            throw err;
+          }
+          await deps.recordRolledBack(p.filename);
+          rolledBack.push(p.filename);
+          deps.logger.success(`Rolled back ${p.filename}`);
+        }
+      } catch (err) {
+        await syncVersion(true);
+        throw err;
+      }
+      await syncVersion(false);
     },
     {
       mode: "fail-fast",
@@ -255,64 +275,6 @@ export async function migrateDownCore(
   );
 
   return { rolledBack };
-}
-
-/**
- * The highest `schemaVersion` among a plugin's modules that are STILL applied,
- * or null when none is.
- *
- * Read from the ledger rather than stepped down by one: a rollback can take
- * several modules, and modules can be reverted out of order, so counting would
- * describe something the ledger does not.
- *
- * "Still applied" is `appliedFilenames` — the newest event per filename. A
- * rollback is recorded by INSERTING a `rolled_back` event after the `applied`
- * one, so a filter for `applied` rows kept the module this command had just
- * reverted, and the owner rows then held the version of a module whose tables
- * were gone.
- */
-export function pluginSchemaVersionFromLedger(
-  rows: SchemaEventRow[],
-  plugin: string,
-  migrations: ReadonlyArray<{ name: string; schemaVersion: number }>
-): number | null {
-  const applied = appliedFilenames(scopeLedgerRows(rows, plugin));
-  let version: number | null = null;
-  for (const module of migrations) {
-    if (!applied.has(qualifiedFilename(plugin, module.name))) continue;
-    version = Math.max(version ?? 0, module.schemaVersion);
-  }
-  return version;
-}
-
-/**
- * Write `pluginSchemaVersionFromLedger` onto every owner row of the plugin.
- *
- * Takes the ledger reader and the owner store rather than a connection so the
- * rollback path can be exercised end to end without a database: the ledger it
- * reads is the one `recordRolledBack` has just written to.
- */
-export async function recordPluginSchemaVersionFromLedger(deps: {
-  plugin: string;
-  migrations: ReadonlyArray<{ name: string; schemaVersion: number }>;
-  listFileApplies: () => Promise<SchemaEventRow[]>;
-  owners: {
-    read(): Promise<OwnerRecord[]>;
-    upsert(rows: readonly OwnerRecord[]): Promise<void>;
-  };
-}): Promise<void> {
-  const mine = (await deps.owners.read()).filter(
-    row => row.ownerId === deps.plugin
-  );
-  if (mine.length === 0) return;
-  const version = pluginSchemaVersionFromLedger(
-    await deps.listFileApplies(),
-    deps.plugin,
-    deps.migrations
-  );
-  await deps.owners.upsert(
-    mine.map(row => ({ ...row, schemaVersion: version }))
-  );
 }
 
 // ============================================================================

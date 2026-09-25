@@ -259,6 +259,130 @@ describe("access", () => {
   });
 });
 
+/**
+ * Which compiled table an authored name picks when several plugins use it.
+ *
+ * A definition records no owner, so `notes` alone has to choose between every
+ * plugin's `notes`. Each case records which Drizzle handle the write reached,
+ * which is the observable consequence of the choice.
+ */
+describe("resolving an authored name several plugins share", () => {
+  const A: SchemaOwner = { kind: "plugin", id: "a" };
+  const B: SchemaOwner = { kind: "plugin", id: "b" };
+  const C: SchemaOwner = { kind: "plugin", id: "c" };
+
+  function sharedHarness(opts: {
+    owner: SchemaOwner;
+    dependsOn: string[];
+    tables: { name: string; owner: SchemaOwner }[];
+  }) {
+    const written: string[] = [];
+    const db = {
+      insert: (table: { name: string }) => ({
+        values: () => {
+          written.push(table.name);
+          return Promise.resolve();
+        },
+      }),
+    };
+    const surface = createPluginDatabase({
+      dialect: "postgresql",
+      owner: opts.owner,
+      dependsOn: new Set(opts.dependsOn),
+      owners: () => new Map(opts.tables.map(t => [t.name, t.owner])),
+      tables: () =>
+        Object.fromEntries(opts.tables.map(t => [t.name, { name: t.name }])),
+      tableList: () =>
+        opts.tables.map(t => ({ ...t, authored: "notes" as string })),
+      db: () => db,
+      relationalDb: () => db,
+      transaction: fn => fn({ db, relationalDb: db }),
+    });
+    return { surface, written };
+  }
+
+  it("uses the caller's own table, even when a dependency shares the name", async () => {
+    const { surface, written } = sharedHarness({
+      owner: A,
+      dependsOn: ["b"],
+      tables: [
+        { name: "b__notes", owner: B },
+        { name: "a__notes", owner: A },
+      ],
+    });
+    await surface.insert(notes, { bodyText: "x" } as never);
+    expect(written).toEqual(["a__notes"]);
+  });
+
+  it("uses the one reachable dependency table", async () => {
+    const { surface, written } = sharedHarness({
+      owner: A,
+      dependsOn: ["b"],
+      tables: [{ name: "b__notes", owner: B }],
+    });
+    await surface.insert(notes, { bodyText: "x" } as never);
+    expect(written).toEqual(["b__notes"]);
+  });
+
+  it("ignores a same-named table the caller cannot reach", async () => {
+    // Listed FIRST, which is the order that used to win: the unrelated
+    // plugin's table was chosen and the valid dependency read was refused.
+    const { surface, written } = sharedHarness({
+      owner: A,
+      dependsOn: ["b"],
+      tables: [
+        { name: "c__notes", owner: C },
+        { name: "b__notes", owner: B },
+      ],
+    });
+    await surface.insert(notes, { bodyText: "x" } as never);
+    expect(written).toEqual(["b__notes"]);
+  });
+
+  it("refuses a name two reachable dependencies share, and writes nothing", async () => {
+    const { surface, written } = sharedHarness({
+      owner: A,
+      dependsOn: ["b", "c"],
+      tables: [
+        { name: "b__notes", owner: B },
+        { name: "c__notes", owner: C },
+      ],
+    });
+    const refusal = await surface
+      .insert(notes, { bodyText: "x" } as never)
+      .then(
+        () => null,
+        (error: unknown) => error
+      );
+
+    expect(NextlyError.is(refusal) && refusal.code === "INVALID_INPUT").toBe(
+      true
+    );
+    const message = (refusal as NextlyError).publicMessage;
+    expect(message).toContain('"notes"');
+    expect(message).toContain("b__notes");
+    expect(message).toContain("c__notes");
+    expect(written).toEqual([]);
+  });
+
+  it("resolves the ambiguity when the definition uses the SQL name", async () => {
+    const { surface, written } = sharedHarness({
+      owner: A,
+      dependsOn: ["b", "c"],
+      tables: [
+        { name: "b__notes", owner: B },
+        { name: "c__notes", owner: C },
+      ],
+    });
+    const cNotes = defineTable("c__notes", {
+      id: col.id(),
+      bodyText: col.shortText(),
+    });
+    await surface.insert(cNotes, { bodyText: "x" } as never);
+    expect(written).toEqual(["c__notes"]);
+  });
+});
+
 describe("the surface ctx.db used to be", () => {
   it("refuses an old-style call by name, pointing at ctx.db.raw", async () => {
     // `ctx.db` was the Drizzle instance, so plugins wrote

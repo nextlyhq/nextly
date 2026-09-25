@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  migrateDownCore,
-  recordPluginSchemaVersionFromLedger,
-  selectAppliedTargets,
-} from "../migrate-down";
+import { migrateDownCore, selectAppliedTargets } from "../migrate-down";
+import { recordPluginSchemaVersionFromLedger } from "../../../domains/schema/migrate/plugin/plugin-schema-version";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
 import type { OwnerRecord } from "../../../domains/schema/ownership/owner-registry";
 import { createLogger } from "../../utils/logger";
@@ -306,6 +303,55 @@ describe("plugin schema version after a rollback", () => {
 
     expect(result.rolledBack).toEqual(["plugin:auth/002_more"]);
     expect(owners.map(o => o.schemaVersion)).toEqual([1]);
+  });
+
+  it("recomputes the version when a later module's DOWN fails", async () => {
+    // Two modules roll back: 003 succeeds and is recorded, 002 then fails.
+    // 003's rollback is committed, so the rows must stop claiming 3 even
+    // though the command as a whole failed.
+    const three = [...migrations, { name: "003_last", schemaVersion: 3 }];
+    const ledger: SchemaEventRow[] = [
+      row("plugin:auth/001_init", "applied", 1000),
+      row("plugin:auth/002_more", "applied", 2000),
+      row("plugin:auth/003_last", "applied", 3000),
+    ];
+    let clock = 4000;
+    let owners: OwnerRecord[] = [{ ...ownerRow, schemaVersion: 3 }];
+    let calls = 0;
+
+    const { deps } = baseDeps({
+      options: {
+        step: 2,
+        allowDataLoss: true,
+        yes: false,
+        dryRun: false,
+        plugin: "auth",
+      },
+      listFileApplies: async () => [...ledger],
+      execDown: async () => {
+        calls += 1;
+        if (calls === 2) throw new Error("DOWN of 002 failed");
+        return 1;
+      },
+      recordRolledBack: async (filename: string) => {
+        ledger.push(row(filename, "rolled_back", clock++));
+      },
+      recordPluginSchemaVersion: () =>
+        recordPluginSchemaVersionFromLedger({
+          plugin: "auth",
+          migrations: three,
+          listFileApplies: async () => [...ledger],
+          owners: {
+            read: async () => owners,
+            upsert: async rows => {
+              owners = [...rows];
+            },
+          },
+        }),
+    });
+
+    await expect(migrateDownCore(deps)).rejects.toThrow(/DOWN of 002 failed/);
+    expect(owners.map(o => o.schemaVersion)).toEqual([2]);
   });
 
   it("records null once no module of the plugin remains applied", async () => {

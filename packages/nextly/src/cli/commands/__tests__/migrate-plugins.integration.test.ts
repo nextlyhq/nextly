@@ -24,11 +24,15 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
-import { type PluginMigration } from "../../../domains/schema/migrate/plugin/plugin-migration";
+import {
+  migrationChecksum,
+  type PluginMigration,
+} from "../../../domains/schema/migrate/plugin/plugin-migration";
+import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
 import { CORE_TABLE_NAMES } from "../../../schemas/index";
 import { createLogger } from "../../utils/logger";
-import { runPluginPhase } from "../migrate";
+import { runPluginPhase, syncElementOwners } from "../migrate";
 
 const DIALECT = "sqlite" as const;
 
@@ -316,7 +320,11 @@ describe("a plugin's first migration creates its constraints inline (C8)", () =>
     const owners = defineTable("c8owners", { id: col.id() });
     const linked = defineTable(
       "c8linked",
-      { id: col.id(), ownerId: col.shortText(), score: col.integer({ nullable: true }) },
+      {
+        id: col.id(),
+        ownerId: col.shortText(),
+        score: col.integer({ nullable: true }),
+      },
       {
         foreignKeys: [
           {
@@ -357,9 +365,7 @@ describe("a plugin's first migration creates its constraints inline (C8)", () =>
       checkEnforced = true;
     }
     expect(checkEnforced).toBe(true);
-    sqlite.exec(
-      `INSERT INTO c8g__c8owners (id) VALUES ('o1')`
-    );
+    sqlite.exec(`INSERT INTO c8g__c8owners (id) VALUES ('o1')`);
     sqlite.exec(
       `INSERT INTO c8g__c8linked (id, owner_id, score) VALUES ('l1', 'o1', 3)`
     );
@@ -413,7 +419,11 @@ describe("the all-constructs round trip (C8)", () => {
         ],
         checks: [{ name: "score_ok", sql: "score >= 0" }],
         indexes: [
-          { columns: ["score"], where: "score IS NOT NULL", name: "idx_rt_partial" },
+          {
+            columns: ["score"],
+            where: "score IS NOT NULL",
+            name: "idx_rt_partial",
+          },
         ],
       }
     );
@@ -482,7 +492,9 @@ describe("the all-constructs round trip (C8)", () => {
     for (const stmt of [...g.dialects.sqlite.down].reverse()) {
       sqlite.exec(stmt);
     }
-    expect(await adapterFor(sqlite).listTables()).not.toContain("rtx__rtlinked");
+    expect(await adapterFor(sqlite).listTables()).not.toContain(
+      "rtx__rtlinked"
+    );
     sqlite.exec(
       `INSERT INTO nextly_schema_events
          (id, event_type, status, source, filename, started_at, ended_at)
@@ -503,5 +515,167 @@ describe("the all-constructs round trip (C8)", () => {
       reRejected = true;
     }
     expect(reRejected).toBe(true);
+  });
+});
+
+describe("ownership within and after one migrate run (sqlite)", () => {
+  let sqlite: Database.Database;
+  let db: unknown;
+
+  beforeAll(async () => {
+    sqlite = new Database(":memory:");
+    db = drizzle({ client: sqlite });
+    await reconcileCore({
+      db,
+      dialect: DIALECT,
+      logger: { info: () => {}, warn: () => {} },
+    });
+  });
+
+  afterAll(() => sqlite.close());
+
+  async function moduleFor(
+    pluginName: string,
+    tables: ReturnType<typeof defineTable>[],
+    extraUp: string[] = []
+  ): Promise<PluginMigration> {
+    const built = buildPluginMigration({
+      pluginName,
+      schemaVersion: 1,
+      name: "v1",
+      now: new Date(Date.UTC(2026, 8, 25, 10, 0, 0)),
+      tablesByDialect: await tablesByDialect(pluginName, pluginName, tables),
+      existing: [],
+    })!.module;
+    if (extraUp.length === 0) return built;
+    // Appended by hand, and the checksum recomputed over the result, so the
+    // module is one its author could have shipped rather than a tampered one.
+    const dialects = {
+      ...built.dialects,
+      sqlite: {
+        ...built.dialects.sqlite,
+        up: [...built.dialects.sqlite.up, ...extraUp],
+      },
+    };
+    return {
+      ...built,
+      dialects,
+      checksum: migrationChecksum(dialects, {
+        snapshot: built.snapshot,
+        before: built.before,
+        ...(built.contributed ? { contributed: built.contributed } : {}),
+        ...(built.contributedBefore
+          ? { contributedBefore: built.contributedBefore }
+          : {}),
+      }),
+    };
+  }
+
+  it("refuses a later module dropping a table an earlier one created in the same run", async () => {
+    // The drop guard read the owner rows once, before the phase: `depa`'s
+    // table did not exist then, so it had no row, and `depb` dropping it in
+    // the same run looked like dropping a table nobody owned.
+    const a = await moduleFor("depa", [defineTable("data", { id: col.id() })]);
+    const b = await moduleFor(
+      "depb",
+      [defineTable("own", { id: col.id() })],
+      ['DROP TABLE "depa__data"']
+    );
+    await expect(
+      runPluginPhase({
+        dialect: DIALECT,
+        db,
+        adapter: adapterFor(sqlite),
+        logger: createLogger({ quiet: true }),
+        pluginMigrationSets: [
+          { pluginName: "depa", pluginVersion: "1.0.0", migrations: [a] },
+          { pluginName: "depb", pluginVersion: "1.0.0", migrations: [b] },
+        ],
+      } as never)
+    ).rejects.toMatchObject({ code: "DROP_OF_FOREIGN_TABLE" });
+    expect(await adapterFor(sqlite).listTables()).toContain("depa__data");
+  });
+
+  it("records the app's tables and a contributing plugin's applied version", async () => {
+    // The app's own table had no owner row, so a plugin module dropping it was
+    // allowed; and a plugin that only contributes an element had its version
+    // written as null, so boot judged it behind after it had applied.
+    const extensionSchema = await buildExtensionSchema({
+      dialect: DIALECT,
+      coreTableNames: CORE_TABLE_NAMES,
+      entities: [],
+      pluginPrefixes: new Map([
+        ["host", "host"],
+        ["contrib", "contrib"],
+      ]),
+      dependencies: new Map([["contrib", new Set(["host"])]]),
+      plugins: [
+        {
+          owner: { kind: "plugin", id: "host" },
+          tables: [defineTable("items", { id: col.id() })],
+        },
+        {
+          owner: { kind: "plugin", id: "contrib" },
+          extend: [
+            ({ schema }) => {
+              schema.extendTable("host__items", {
+                columns: { extra: col.shortText({ nullable: true }) },
+              });
+            },
+          ],
+        },
+      ],
+      app: {
+        owner: { kind: "app" },
+        tables: [defineTable("app_audit", { id: col.id() })],
+      },
+    });
+
+    const contribModule = { name: "v3", schemaVersion: 3 } as PluginMigration;
+    await new SchemaEventsRepository(db, DIALECT).insertEvent({
+      eventType: "file_apply",
+      status: "applied",
+      source: "cli-migrate",
+      filename: "plugin:contrib/v3",
+    });
+
+    await syncElementOwners({
+      extensionSchema,
+      dialect: DIALECT,
+      db,
+      adapter: adapterFor(sqlite),
+      migrationsDir: "/tmp/unused",
+      logger: createLogger({ quiet: true }),
+      pluginMigrationSets: [
+        {
+          pluginName: "contrib",
+          pluginVersion: "2.0.0",
+          migrations: [contribModule],
+        },
+      ],
+    } as never);
+
+    const rows = sqlite
+      .prepare(
+        "SELECT table_name, element_kind, element_name, owner_id, migrated_by, schema_version FROM nextly_schema_owners WHERE table_name IN ('app_audit', 'host__items')"
+      )
+      .all() as Array<Record<string, unknown>>;
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        table_name: "app_audit",
+        element_kind: "table",
+        owner_id: "app",
+        migrated_by: "app",
+      })
+    );
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        table_name: "host__items",
+        element_kind: "column",
+        element_name: "extra",
+        owner_id: "contrib",
+        schema_version: 3,
+      })
+    );
   });
 });

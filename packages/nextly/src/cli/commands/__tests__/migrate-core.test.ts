@@ -274,6 +274,45 @@ describe("the extension schema migrateCore is handed", () => {
     expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
   });
 
+  it("refuses a plugin that only contributes an element and ships no migrations", async () => {
+    // It owns no table, so a table-only check let it through, and its column
+    // reached development through push and production never.
+    const d = deps({
+      extensionSchema: await buildExtensionSchema({
+        dialect: "postgresql",
+        coreTableNames: [],
+        entities: [],
+        pluginPrefixes: new Map([
+          ["host", "host"],
+          ["contrib", "contrib"],
+        ]),
+        dependencies: new Map([["contrib", new Set(["host"])]]),
+        plugins: [
+          {
+            owner: { kind: "plugin", id: "host" },
+            tables: [defineTable("items", { id: col.id() })],
+          },
+          {
+            owner: { kind: "plugin", id: "contrib" },
+            extend: [
+              ({ schema }) => {
+                schema.extendTable("host__items", {
+                  columns: { extra: col.shortText({ nullable: true }) },
+                });
+              },
+            ],
+          },
+        ],
+      }),
+      // The table's owner ships migrations; the contributor does not.
+      pluginsWithMigrations: new Set(["host"]),
+    });
+    await expect(migrateCore(d as never)).rejects.toMatchObject({
+      code: "PLUGIN_MIGRATIONS_UNAVAILABLE",
+    });
+    expect(d.reconcileCoreFn).not.toHaveBeenCalled();
+  });
+
   it("lets the same table through when its plugin ships migrations", async () => {
     const d = deps({
       extensionSchema: await pluginSchema(),

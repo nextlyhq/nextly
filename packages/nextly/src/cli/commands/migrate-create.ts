@@ -95,6 +95,7 @@ import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../plugins/plugin-slug";
+import { topoSortPlugins } from "../../plugins/topo-sort";
 import { CORE_TABLE_NAMES } from "../../schemas/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
@@ -630,6 +631,77 @@ async function buildPluginDraft(args: {
   }
 }
 
+/** Every plugin a plugin declares it depends on, required or optional. */
+function declaredDependencies(plugin: PluginDefinition): string[] {
+  return [
+    ...Object.keys(plugin.dependsOn ?? {}),
+    ...Object.keys(plugin.optionalDependsOn ?? {}),
+  ];
+}
+
+/** The table prefix a plugin's declared tables compile under. */
+function schemaPrefixOf(plugin: PluginDefinition): string {
+  return (
+    plugin.contributes?.schema?.prefix ??
+    pluginAdminSlug(plugin.name).replace(/-/g, "_")
+  );
+}
+
+/**
+ * The plugins compiled beside `target` when its migration module is generated:
+ * its dependencies, THEIR dependencies, and so on, in dependency order.
+ *
+ * Direct dependencies alone are not enough. When C depends on B and B's hook
+ * extends a table of B's own dependency A, compiling C runs B's hook, and that
+ * hook needs A's table in the draft and B's dependency edge on A — without
+ * them it fails on `Table "x" does not exist` although boot, which compiles
+ * every plugin, resolves the same graph. So the closure is walked through
+ * every declared dependency that is configured, and the dependency map and the
+ * prefixes cover every plugin in it, not only the target.
+ *
+ * Ordered by `topoSortPlugins`, the sort boot uses, so a missing required
+ * dependency or a cycle is refused with the error boot would give. An optional
+ * dependency the config does not carry is left out, as boot leaves it out.
+ * `target` replaces any configured entry of the same name: the module is
+ * generated from the plugin entry on disk, not from the copy the app installs.
+ */
+export function pluginDependencyClosure(
+  target: PluginDefinition,
+  configured: readonly PluginDefinition[]
+): {
+  dependencyPlugins: PluginDefinition[];
+  dependencies: Map<string, ReadonlySet<string>>;
+  pluginPrefixes: Map<string, string>;
+} {
+  const byName = new Map(configured.map(plugin => [plugin.name, plugin]));
+  byName.set(target.name, target);
+
+  const members = new Map<string, PluginDefinition>([[target.name, target]]);
+  const pending = [target];
+  for (let plugin = pending.pop(); plugin; plugin = pending.pop()) {
+    for (const name of declaredDependencies(plugin)) {
+      const dependency = byName.get(name);
+      if (!dependency || members.has(name)) continue;
+      members.set(name, dependency);
+      pending.push(dependency);
+    }
+  }
+
+  const ordered = topoSortPlugins([...members.values()]);
+  return {
+    dependencyPlugins: ordered.filter(plugin => plugin.name !== target.name),
+    dependencies: new Map(
+      ordered.map(plugin => [
+        plugin.name,
+        new Set(declaredDependencies(plugin)),
+      ])
+    ),
+    pluginPrefixes: new Map(
+      ordered.map(plugin => [plugin.name, schemaPrefixOf(plugin)])
+    ),
+  };
+}
+
 /** The table a draft refusal says could not be extended, if that is what it says. */
 function missingExtendTarget(error: unknown): string | undefined {
   if (!(error instanceof NextlyError)) return undefined;
@@ -696,9 +768,6 @@ async function runMigrateCreatePlugin(
   // on which app installs it. Such a hook is refused by name here rather than
   // silently producing a module without it.
   const extend = definition.contributes?.schema?.extend ?? [];
-  const prefix =
-    definition.contributes?.schema?.prefix ??
-    pluginAdminSlug(definition.name).replace(/-/g, "_");
 
   // Modules the plugin already ships; absent on first generation.
   //
@@ -751,33 +820,31 @@ async function runMigrateCreatePlugin(
   // contributor (see `recordElementOwners` in migrate.ts). A plugin module
   // carrying a column on a table it does not own would be a second answer to
   // a question that already has one.
-  const dependencyNames = new Set([
-    ...Object.keys(definition.dependsOn ?? {}),
-    ...Object.keys(definition.optionalDependsOn ?? {}),
-  ]);
+  //
+  // The dependencies' own dependencies come too, since a dependency's hook
+  // can reach into a table of its own dependency (see
+  // `pluginDependencyClosure`).
+  //
+  // `version` and `nextly` are required by the definition type and read by
+  // nothing here: the closure orders by name and dependency maps alone. The
+  // entry is only checked for a name and a schemaVersion above, so an absent
+  // value is carried as empty rather than refused.
+  const target: PluginDefinition = {
+    ...definition,
+    name: definition.name,
+    version: definition.version ?? "",
+    nextly: definition.nextly ?? "",
+  };
   // The app's config, read ONLY to find the dependency definitions this plugin
   // declares. Its collections and entity tables are deliberately not compiled
-  // — a plugin's module must not vary with the app that generates it. A repo
-  // with no config loads defaults, which simply yields no dependencies, and
-  // the refusal below then names what is missing.
-  const dependencyPlugins: PluginDefinition[] =
-    dependencyNames.size === 0
+  // — a plugin's module must not vary with the app that generates it.
+  const configured: readonly PluginDefinition[] =
+    declaredDependencies(target).length === 0
       ? []
-      : (
-          (await loadConfig({ configPath: options.config, cwd })).config
-            .plugins ?? []
-        ).filter(candidate => dependencyNames.has(candidate.name));
-  const dependencies = new Map<string, ReadonlySet<string>>([
-    [definition.name, dependencyNames],
-  ]);
-  const pluginPrefixes = new Map<string, string>([[definition.name, prefix]]);
-  for (const dependency of dependencyPlugins) {
-    pluginPrefixes.set(
-      dependency.name,
-      dependency.contributes?.schema?.prefix ??
-        pluginAdminSlug(dependency.name).replace(/-/g, "_")
-    );
-  }
+      : ((await loadConfig({ configPath: options.config, cwd })).config
+          .plugins ?? []);
+  const { dependencyPlugins, dependencies, pluginPrefixes } =
+    pluginDependencyClosure(target, configured);
 
   const tablesByDialect = {} as Record<SupportedDialect, TableSpec[]>;
   const contributedByDialect = {} as Record<SupportedDialect, TableSpec[]>;
@@ -796,9 +863,9 @@ async function runMigrateCreatePlugin(
       tables,
       extend,
       dependencies,
-      // Dependencies FIRST: `runExtensionHooks` takes the list already
-      // topologically sorted, and a hook cannot extend a table the draft has
-      // not been told about yet.
+      // Dependencies FIRST, and among them each before its dependents:
+      // `runExtensionHooks` takes the list already topologically sorted, and a
+      // hook cannot extend a table the draft has not been told about yet.
       dependencyPlugins,
     });
     // The tables this plugin OWNS. Its module creates exactly these — never

@@ -33,7 +33,7 @@ Nextly validates plugins **fail-fast at boot** (D7): a bad plugin config stops s
 | `PLUGIN_UNINSTALL_IRREVERSIBLE` | 409 | A full uninstall needs a migration module that has no DOWN statements for this database's dialect. | Uninstall with `--keep-data`, or ship a DOWN for that module. |
 | `PLUGIN_SCHEMA_BEHIND` | 409 | At boot, a plugin declares a newer `schemaVersion` than its applied migrations reach. | Run `nextly migrate`, or `nextly plugins install <name>`. |
 | `PLUGIN_SCHEMA_UNINSTALLED` | 409 | At boot, a plugin that was fully uninstalled is still listed in the config. | Run `nextly plugins install <name>` to reinstate it, or remove it from the config. |
-| `PLUGIN_MIGRATIONS_UNAVAILABLE` | 409 | `nextly migrate` found tables owned by a plugin that ships no migration modules, so production has no way to create them. | Generate the plugin's modules with `nextly migrate:create --plugin <name>`. |
+| `PLUGIN_MIGRATIONS_UNAVAILABLE` | 409 | `nextly migrate` found tables, or columns and indexes added to another plugin's table, from a plugin that ships no migration modules, so production has no way to create them. | Generate the plugin's modules with `nextly migrate:create --plugin <name>`. |
 | `PLUGIN_SCHEMA_VERSION_NOT_ADVANCED` | 409 | `nextly migrate:create --plugin` was run without raising the plugin's `schemaVersion` past its last module's. | Raise `schemaVersion`, then generate again. |
 
 ## Permissions

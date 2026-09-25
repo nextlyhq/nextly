@@ -57,6 +57,7 @@ import type { ExtensionSchema } from "../../domains/schema/extension/build-exten
 import { compileExtensionSchema } from "../../domains/schema/extension/publish";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
+import { pluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import {
   pluginMigrationSetsFrom,
   runPluginMigrations,
@@ -623,6 +624,27 @@ async function recordElementOwners(deps: MigrateCoreDeps): Promise<void> {
     "../../domains/schema/ownership/schema-owners-repository"
   );
   const owners = new OwnersRepo(deps.db, deps.dialect);
+  // A plugin's applied schema version is the highest on any of its rows, and
+  // a plugin that only contributes elements has no rows but these. Written as
+  // `null`, its version never existed — the boot gate judged it behind after
+  // a migration that applied — and every run overwrote whatever version had
+  // been recorded. Read from the ledger by the rule `migrate:down` uses, so
+  // both agree on what a plugin has applied.
+  const ledger = await new SchemaEventsRepository(
+    deps.db,
+    deps.dialect
+  ).listFileApplies();
+  const pluginVersion = (pluginId: string) => {
+    const set = deps.pluginMigrationSets?.find(
+      candidate => candidate.pluginName === pluginId
+    );
+    return {
+      ownerVersion: set?.pluginVersion ?? null,
+      schemaVersion: set
+        ? pluginSchemaVersionFromLedger(ledger, pluginId, set.migrations)
+        : null,
+    };
+  };
   for (const [tableName, elements] of elementOwners) {
     await owners.upsert(
       elements.map(element => ({
@@ -641,18 +663,54 @@ async function recordElementOwners(deps: MigrateCoreDeps): Promise<void> {
         // stopped as drift over an element the plugin owns.
         migratedBy:
           element.owner.kind === "app" ? "app" : `plugin:${element.owner.id}`,
-        ownerVersion: null,
-        schemaVersion: null,
+        ...(element.owner.kind === "app"
+          ? { ownerVersion: null, schemaVersion: null }
+          : pluginVersion(element.owner.id)),
         state: "active" as const,
       }))
     );
   }
 }
 
-/** Record the current element owner rows, then retire the stale ones. */
-async function syncElementOwners(deps: MigrateCoreDeps): Promise<void> {
+/**
+ * Record the app's own extension tables, the current element owner rows, and
+ * retire the stale element rows.
+ */
+export async function syncElementOwners(deps: MigrateCoreDeps): Promise<void> {
+  await recordAppTableOwners(deps);
   await recordElementOwners(deps);
   await retireElementOwners(deps);
+}
+
+/**
+ * Table-level owner rows for the tables the APP declares.
+ *
+ * Plugin tables get theirs from the plugin phase and core tables from the core
+ * reconcile; an app table declared through `db.schema.extend` or produced by
+ * `afterDrizzle` got none. The drop guard reads a table with no owner row as
+ * nobody's and allows the drop, so a plugin migration dropping one of them —
+ * the app's own data — was waved through. Written after the app's files have
+ * applied, so the row describes a table the app's migrations created.
+ */
+async function recordAppTableOwners(deps: MigrateCoreDeps): Promise<void> {
+  const appTables = [...(deps.extensionSchema?.owners.entries() ?? [])]
+    .filter(([, owner]) => owner.kind === "app")
+    .map(([name]) => name);
+  if (appTables.length === 0) return;
+  const { SchemaOwnersRepository: OwnersRepo } = await import(
+    "../../domains/schema/ownership/schema-owners-repository"
+  );
+  await new OwnersRepo(deps.db, deps.dialect).upsert(
+    appTables.map(tableName => ({
+      tableName,
+      ownerKind: "app" as const,
+      ownerId: "app",
+      migratedBy: "app",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active" as const,
+    }))
+  );
 }
 
 /**
@@ -824,17 +882,21 @@ export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
         return;
       }
 
-      await owners.upsert(
-        tables.map(tableName => ({
-          tableName,
-          ownerKind: "plugin" as const,
-          ownerId: pluginName,
-          migratedBy: `plugin:${pluginName}`,
-          ownerVersion: pluginVersion,
-          schemaVersion,
-          state: "active" as const,
-        }))
-      );
+      const recorded = tables.map(tableName => ({
+        tableName,
+        ownerKind: "plugin" as const,
+        ownerId: pluginName,
+        migratedBy: `plugin:${pluginName}`,
+        ownerVersion: pluginVersion,
+        schemaVersion,
+        state: "active" as const,
+      }));
+      await owners.upsert(recorded);
+      // The drop guard reads `ownerRows` before every module, so it has to
+      // learn what each module created as the run goes. Read once before the
+      // phase, it did not know a table a dependency's module had just made,
+      // and a later module in the same run could drop that table unchallenged.
+      for (const row of recorded) ownerRows.set(row.tableName, row);
     },
   });
   if (pluginOutcome.applied > 0 || pluginOutcome.adopted > 0) {
@@ -859,21 +921,37 @@ function assertPluginTablesAreMigratable(
   extensionSchema: ExtensionSchema | undefined,
   pluginsWithMigrations: ReadonlySet<string>
 ): void {
-  const owners = extensionSchema?.owners;
-  if (!owners) return;
+  if (!extensionSchema) return;
 
-  const unmigratable = [...owners.entries()]
-    .filter(
-      ([, owner]) =>
-        owner.kind === "plugin" && !pluginsWithMigrations.has(owner.id)
-    )
-    .map(([name]) => name);
+  // Tables a plugin owns, and elements a plugin added to somebody else's
+  // table. The second counts as much as the first: a plugin that only extends
+  // a dependency's table owns no table of its own, so a table-only check let
+  // it through and its column or index reached development through push and
+  // production never.
+  const unmigratable = [
+    ...[...extensionSchema.owners.entries()]
+      .filter(
+        ([, owner]) =>
+          owner.kind === "plugin" && !pluginsWithMigrations.has(owner.id)
+      )
+      .map(([name]) => name),
+    ...[...extensionSchema.elementOwners.entries()].flatMap(
+      ([table, elements]) =>
+        elements
+          .filter(
+            element =>
+              element.owner.kind === "plugin" &&
+              !pluginsWithMigrations.has(element.owner.id)
+          )
+          .map(element => `${table}.${element.elementName}`)
+    ),
+  ];
   if (unmigratable.length === 0) return;
 
   throw new NextlyError({
     code: "PLUGIN_MIGRATIONS_UNAVAILABLE",
     publicMessage:
-      "A plugin declares tables but ships no migrations to create them. They exist in development through push; generate the plugin's migrations before deploying.",
+      "A plugin declares tables or table elements but ships no migrations to create them. They exist in development through push; generate the plugin's migrations before deploying.",
     logContext: { tables: unmigratable },
   });
 }

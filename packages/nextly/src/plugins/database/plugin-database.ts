@@ -97,9 +97,22 @@ export interface PluginDatabaseDeps {
  * the naming rules, and would have disagreed with them for any table whose
  * authored name contained the separator.
  *
- * Ambiguity — two reachable tables sharing an authored name — resolves to the
- * caller's OWN table. A plugin naming a table `notes` means its own `notes`,
- * whatever a dependency also calls its table.
+ * A definition is plain data and records no owner, so the authored name alone
+ * has to pick the table. It does so in this order:
+ *
+ * 1. The caller's OWN table. A plugin naming a table `notes` means its own
+ *    `notes`, whatever a dependency also calls its table.
+ * 2. Otherwise, a table the caller may REACH — the same rule the access check
+ *    applies. A table the caller cannot reach is never a candidate: choosing
+ *    it would only turn a valid dependency read into a refusal because some
+ *    unrelated plugin happens to use the same name.
+ * 3. Two reachable tables sharing the name are refused, not guessed between.
+ *    Picking one would let `select` and `insert` quietly run against the
+ *    wrong plugin's rows, and nothing downstream could notice.
+ *
+ * The way out of that refusal is the SQL name: a definition named after the
+ * compiled table (`defineTable("other__notes", ...)`) matches no authored
+ * name and falls through to the exact-name path below.
  */
 function sqlNameOf(
   definition: TableDefinition,
@@ -112,10 +125,51 @@ function sqlNameOf(
   const own = candidates.find(table => isSameOwner(table.owner, deps.owner));
   if (own) return own.name;
 
-  // Not the caller's own. Return the single remaining candidate so the access
-  // check can decide; returning the authored name instead would produce a
-  // "not declared" message for a table that exists.
+  const rules = rulesOf(deps);
+  const reachable = candidates.filter(table =>
+    canAccessTable(table.name, rules)
+  );
+  if (reachable.length === 1) return reachable[0].name;
+  if (reachable.length > 1) throw ambiguousTable(definition.name, reachable);
+
+  // Nothing reachable by authored name. A definition that already carries a
+  // compiled SQL name is taken as written, for the access check to judge.
+  if (rules.owners.has(definition.name)) return definition.name;
+
+  // Otherwise return an unreachable candidate so the access check refuses
+  // with the real reason — "not a declared dependency" — rather than
+  // "not declared" for a table that exists.
   return candidates[0]?.name ?? definition.name;
+}
+
+/**
+ * The refusal for an authored name two reachable plugins both use.
+ *
+ * Names every colliding table and its owner, because the fix is the author's
+ * to make and they cannot make it without knowing which SQL name to use.
+ */
+function ambiguousTable(
+  authored: string,
+  reachable: readonly { name: string; owner: SchemaOwner }[]
+): NextlyError {
+  const listed = reachable
+    .map(table => `"${table.name}" (${describeOwner(table.owner)})`)
+    .join(", ");
+  return NextlyError.invalidInput({
+    message:
+      `The table "${authored}" is ambiguous: more than one table this plugin may reach uses that name — ${listed}. ` +
+      `Refer to the one you mean by its SQL name instead, for example defineTable("${reachable[0].name}", ...), ` +
+      `so a read or write cannot land on the wrong plugin's table.`,
+    logContext: {
+      reason: "ambiguous-authored-table-name",
+      table: authored,
+      candidates: reachable.map(table => table.name),
+    },
+  });
+}
+
+function describeOwner(owner: SchemaOwner): string {
+  return owner.kind === "plugin" ? `plugin "${owner.id}"` : "the app";
 }
 
 function isSameOwner(a: SchemaOwner, b: SchemaOwner): boolean {
