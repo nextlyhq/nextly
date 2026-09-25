@@ -20,7 +20,7 @@ description: Use when writing or debugging Nextly integration tests (*.integrati
    - `pnpm test:integration:sqlite` -> no URL needed
      `pnpm docker:test` does NOT start them — it probes the DEV stack's
      `postgres` service and exits 1 when that is down. Start them the way
-     AGENTS.md ("Build and test") documents: `docker start` by container name
+     the `running-builds-and-tests` skill documents: `docker start` by container name
      when they already exist, `docker compose -f docker-compose.test.yml up -d`
      on a fresh clone. NEVER point a TEST\_\* URL at a database you did not
      create for the run.

@@ -337,6 +337,18 @@ async function finalizedEntry(get, api) {
   return entry;
 }
 
+/**
+ * A sentence of an excluded file that no file the configuration keeps holds, or
+ * `null`. A hit for it can then come only from an excluded file, so excluded
+ * files may share it — a generated CLAUDE.md shares every sentence of the
+ * AGENTS.md it copies — since a hit from any of them is the same finding. A
+ * kept control is held to every other file instead, by `markerFor`.
+ */
+export function exclusionMarker(corpus, name, config) {
+  const kept = [...corpus].filter(([other]) => other !== name && excludingRule(other, config) === null).map(([, text]) => text);
+  return probeMarker(corpus.get(name), kept);
+}
+
 /** A marker for a tracked file, or `Unanswerable` when it offers nothing of its own to ask for. */
 export function markerFor(corpus, name) {
   if (!corpus.has(name))
@@ -373,16 +385,17 @@ export function witnesses(corpus, config) {
     set,
     ...witnessOf(
       corpus,
+      config,
       set,
       files.sort((a, b) => a.rank - b.rank).map(file => file.name)
     ),
   }));
 }
 
-/** The first of a set's files that offers a sentence of its own, with that sentence. */
-function witnessOf(corpus, set, names) {
+/** The first of a set's files that offers a sentence no kept file holds, with that sentence. */
+function witnessOf(corpus, config, set, names) {
   for (const name of names) {
-    const marker = probeMarker(corpus.get(name), othersOf(corpus, name));
+    const marker = exclusionMarker(corpus, name, config);
     if (marker !== null) return { name, marker };
   }
   throw new Unanswerable(
