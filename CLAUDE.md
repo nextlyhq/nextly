@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync`. Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (e4f13ac970305691). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 

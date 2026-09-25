@@ -289,7 +289,7 @@ describe("the command, run against another checkout", () => {
     try {
       const agents = "| `a` | when a applies |\n\n`.claude/rules/integration-tests.md` is read by path.\n\n## A whole-file write is a delete plus a create\n";
       put("AGENTS.md", agents);
-      put("CLAUDE.md", header("AGENTS.md") + agents);
+      put("CLAUDE.md", header("AGENTS.md", agents) + agents);
       put(".claude/rules/integration-tests.md", '---\npaths:\n  - "**/*.integration.test.ts"\n---\n\nA rule.\n');
       put(".github/review-prompt.md", "Review.\n");
       put("package.json", "{}\n");
@@ -374,7 +374,7 @@ describe("reaching Claude Code", () => {
     try {
       mkdirSync(join(base, "packages/p"), { recursive: true });
       writeFileSync(join(base, "AGENTS.md"), "root\n");
-      writeFileSync(join(base, "CLAUDE.md"), `${header("AGENTS.md")}root, edited\n`);
+      writeFileSync(join(base, "CLAUDE.md"), `${header("AGENTS.md", "root\n")}root, edited\n`);
       writeFileSync(join(base, "packages/p/AGENTS.md"), "p\n");
       expect(instructionCopyFindings(base, ["AGENTS.md", "CLAUDE.md", "packages/p/AGENTS.md"])).toEqual([
         { file: "CLAUDE.md", kind: "instructions", claim: "differs from AGENTS.md", fix: "run pnpm instructions:sync" },
