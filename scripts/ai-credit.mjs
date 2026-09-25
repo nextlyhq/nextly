@@ -249,15 +249,28 @@ function continuation(line, plainLine, last) {
   if (!continuable(plainLine, last)) return null;
   const prefix = commentPrefix(last.head);
   if (line.startsWith(prefix)) return continuingText(line.slice(prefix.length), last.head.slice(prefix.length));
-  return underListItem(line, last.head, prefix) ? plain(line).trim() : null;
+  return underListItem(line, last, prefix) ? plain(line).trim() : null;
 }
 
 /**
- * Whether a line continues a trailer written as a `*` list item: Markdown
+ * Whether a line continues a trailer written as a `*` list item. Markdown
  * indents an item's continuation to its text, without repeating the bullet,
- * where a comment block repeats its prefix.
+ * where a comment block repeats its prefix. Under an item an indented line may
+ * as well explain it, so it continues the trailer only as what the value still
+ * needs: the value itself, while it is empty; another co-author, after a
+ * joining word; or the address that completes one.
  */
-const underListItem = (line, head, prefix) => /^[ \t]*\*$/.test(prefix) && /\S/.test(line) && !LIST_ITEM.test(line) && indentOf(line) >= prefix.length + indentOf(head.slice(prefix.length));
+const underListItem = (line, last, prefix) => indentedUnderItem(line, last.head, prefix) && continuesItem(plain(line).trim(), itemValue(last));
+
+const indentedUnderItem = (line, head, prefix) => /^[ \t]*\*$/.test(prefix) && /\S/.test(line) && !LIST_ITEM.test(line) && indentOf(line) >= prefix.length + indentOf(head.slice(prefix.length));
+
+const continuesItem = (text, value) => value === "" || JOINER.test(text) || ADDRESS.test(text);
+
+/** A trailer's value so far: its first line after the key, and the lines folded onto it. */
+const itemValue = last => [last.parts[0].replace(TRAILER_HEAD, ""), ...last.parts.slice(1)].join(" ").trim();
+
+/** An address in angle brackets, as a co-author's is written. */
+const ADDRESS = /<[^<>\s@]+@[^<>\s]+>/;
 
 /** Whether a line may continue the one above it: that one is a trailer, and this one is not. */
 const continuable = (line, last) => Boolean(last) && TRAILER_HEAD.test(last.parts[0]) && !TRAILER_HEAD.test(line);
@@ -283,47 +296,83 @@ const LIST_ITEM = /^\s*[*+-]\s/;
 const indentOf = text => /^[ \t]*/.exec(text)[0].length;
 
 /**
- * A trailer's credits, each spanning its lines up to the one that completes
- * it. A credit already whole on its first line stays that line's, so an added
+ * A trailer's credits, each spanning its lines up to the one it belongs to. A
+ * credit already whole on its first line stays that line's, so an added
  * continuation that says nothing more does not make it new; one an added
- * continuation completes counts as that line's. A continuation after that
- * which names a tool of its own credits it on its own line, so a new credit
- * cannot hide behind an old one.
+ * continuation completes, or names a tool of its own in, counts as that
+ * line's. Each later co-author is read the same way from the line it starts
+ * on, so a new credit cannot hide behind an old one.
  */
 function creditingSpan({ parts, at }, rules) {
-  const first = growingCredit(parts, rules);
-  const credits = first ? first.credits.map(credit => ({ ...credit, from: at, line: at + first.index })) : [];
-  return [...credits, ...continuationCredits(parts, at, rules, first ? first.index + 1 : 1)];
+  const key = trailerKey(parts[0], rules);
+  if (key === undefined) return [];
+  const first = growingCredit(parts, (text, whole) => trailerCredits(text, rules, whole));
+  return [...placed(first, at), ...laterCoAuthorCredits(parts, at, key, first ? first.through + 1 : 1)];
 }
 
+const trailerKey = (line, rules) => (rules.trailers ? TRAILER_HEAD.exec(line)?.[1] : undefined);
+
+/** A value's credits, on the lines they belong to, counted from the value's first line at `at`. */
+const placed = (found, at) => (found ? found.credits.map(credit => ({ ...credit, from: at, line: at + found.index })) : []);
+
 /**
- * The first credit a trailer's value makes as its parts are read in, and the
- * index of the part that completes it, or null. An ambiguous name, and a
- * vendor's name standing alone, are judged only on the whole value, so a
- * vendor's name continued onto a person's name and address is that person,
- * while a tool's full name is a credit as soon as it is complete.
+ * The first credit a value makes as its parts are read in, the index of the
+ * part it belongs to, and the part that completes it, or null. An ambiguous
+ * name, and a vendor's name standing alone, are judged only on the whole
+ * value, so a vendor's name continued onto a person's name and address is
+ * that person, while a tool's full name is a credit as soon as it is complete.
  */
-function growingCredit(parts, rules) {
+function growingCredit(parts, creditsOf) {
   for (let count = 1; count <= parts.length; count += 1) {
-    const credits = trailerCredits(parts.slice(0, count).join(" "), rules, count === parts.length);
-    if (credits.length > 0) return { credits, index: count - 1 };
+    const credits = creditsOf(parts.slice(0, count).join(" "), count === parts.length);
+    if (credits.length > 0) return { credits, index: creditedPart(parts, creditsOf, count), through: count - 1 };
   }
   return null;
 }
 
-/** The credits a trailer's continuations make of their own, from the part at `from` on, each on its own line. */
-function continuationCredits(parts, at, rules, from) {
-  const key = rules.trailers ? TRAILER_HEAD.exec(parts[0])?.[1] : undefined;
-  if (key === undefined) return [];
-  return parts.slice(from).flatMap((part, offset) => (namesAnotherTool(part) ? [{ form: `names it in a ${key} trailer`, excerpt: excerpt(part), from: at + from + offset, line: at + from + offset }] : []));
+/**
+ * The part a credit completed by the first `count` parts belongs to. A name
+ * that credits on its own, judged whole, was waiting only to see whether the
+ * lines after it make a person of it. When they do not, and name no tool of
+ * their own, the credit is that name's, on its own line.
+ */
+function creditedPart(parts, creditsOf, count) {
+  const kept = count > 1 && creditsOf(parts[0], true).length > 0 && !addsATool(parts.slice(1, count));
+  return kept ? 0 : count - 1;
 }
 
 /**
- * Whether a continuation names a tool of its own, as another co-author does:
- * a tool's name or identity at its start, once a joining word is set aside. A
- * note opens with a bracket or a dash, so the name it may mention is not read.
+ * The credits a trailer's later co-authors make, from the part at `from` on.
+ * Each starts at a joining word, or at `from`, and runs on to the next, so one
+ * folded across lines is judged whole, as the first is.
  */
-const namesAnotherTool = part => creditedByTrailer(part.replace(/^(?:and|&|plus|,)\s*/i, ""), true);
+function laterCoAuthorCredits(parts, at, key, from) {
+  const creditsOf = (text, whole) => (creditedByTrailer(withoutJoiner(text), whole) ? [{ form: `names it in a ${key} trailer`, excerpt: excerpt(text) }] : []);
+  return coAuthors(parts, from).flatMap(({ index, group }) => placed(growingCredit(group, creditsOf), at + index));
+}
+
+/** A trailer's parts from `from` on, as co-authors: each starts at a joining word, or at `from`, with the index it starts at. */
+function coAuthors(parts, from) {
+  const groups = [];
+  parts.slice(from).forEach((part, offset) => {
+    if (groups.length === 0 || JOINER.test(part)) groups.push({ index: from + offset, group: [part] });
+    else groups.at(-1).group.push(part);
+  });
+  return groups;
+}
+
+/**
+ * Whether lines folded onto a name name a tool of their own, as another
+ * co-author does: a tool's name or identity at their start, once a joining
+ * word is set aside. A note opens with a bracket or a dash, so a name it
+ * mentions is not read.
+ */
+const addsATool = parts => creditedByTrailer(withoutJoiner(parts.join(" ")), true);
+
+/** A word that joins another co-author onto a trailer's value. */
+const JOINER = /^(?:(?:and|plus)\b|&|,)\s*/i;
+
+const withoutJoiner = text => text.replace(JOINER, "");
 
 /**
  * Markdown links read as their text, and emphasis marks and inline HTML tags
@@ -759,16 +808,26 @@ function committedParts(message) {
 
 /**
  * Whether what follows a scissors line is git's own: comment lines in its
- * prefix, then nothing, or a diff, which git starts with `diff --git`. A
- * message's own text below a scissors line goes on otherwise, even after a
- * comment line of its own.
+ * prefix, then nothing, or a diff. A message's own text below a scissors line
+ * goes on otherwise, even after a comment line of its own, or a line of its
+ * own that happens to begin as git's diff does.
  */
 function isEditorBuffer(below, prefix) {
   const first = below.findIndex(line => !line.startsWith(prefix));
   if (first === -1) return true;
   const rest = below.slice(first);
-  return rest[0].startsWith("diff --git ") || rest.every(line => line.trim() === "");
+  return isGitDiff(rest) || rest.every(line => line.trim() === "");
 }
+
+/**
+ * A header git writes on the line after `diff --git`, before any `---`: the
+ * blobs' range, a mode, a similarity, or a rename or copy. Every file's diff
+ * has one, since even a change of mode alone is written as a pair of them.
+ */
+const EXTENDED_HEADER = /^(?:index [0-9a-f]+\.\.[0-9a-f]+|(?:old|new) mode \d|(?:new|deleted) file mode \d|(?:dis)?similarity index \d|(?:rename|copy) (?:from|to) )/;
+
+/** Whether lines are git's diff: `diff --git`, then a header only git writes there. */
+const isGitDiff = lines => lines[0].startsWith("diff --git ") && EXTENDED_HEADER.test(lines[1] ?? "");
 
 function diffAdditions(lines) {
   return lines.filter(line => !/^[ -]/.test(line)).map(line => line.replace(/^\+/, ""));
