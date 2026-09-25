@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { format, resolveConfig } from "prettier";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { copies, copyDrift, header, syncCopies } from "./agent-instructions.mjs";
@@ -77,11 +78,47 @@ describe("the copies Claude Code reads", () => {
     expect(read("CLAUDE.md")).toBe(copyOf("AGENTS.md", "root rules\n"));
   });
 
-  it("takes a copy the formatter re-padded along with its source as unedited", () => {
-    put("AGENTS.md", "| a | b |\n| --- | --- |\n");
-    put("CLAUDE.md", `${header("AGENTS.md", "| a | b |\n|---|---|\n")}| a   | b   |\n| --- | --- |\n`);
+  /*
+   * The formatter runs on every commit and rewrites a copy as it rewrites its
+   * source, so a copy it rewrote after the sync, and whose source has changed
+   * since, is still one nobody edited. The text is run through the formatter
+   * itself, with this repository's settings, so the test follows what it
+   * actually rewrites: markers, emphasis, escapes, tables and breaks.
+   */
+  it("takes a copy the formatter rewrote as unedited, once its source has moved on", async () => {
+    const written = [
+      "* a bullet with *emphasis* and __strong__ text",
+      "+ another, naming TEST_* and snake_case and `--no-verify`",
+      "",
+      "| a | b |",
+      "|---|:-:|",
+      "| longer cell | x |",
+      "",
+      "c | d",
+      "--|--",
+      "1 | 2",
+      "",
+      "***",
+      "",
+      "A literal * star and an escaped \\_ underscore.",
+      "",
+    ].join("\n");
+    const formatted = await format(written, { ...(await resolveConfig(join(REPO, "AGENTS.md"))), parser: "markdown" });
+    expect(formatted).not.toBe(written);
+    put("AGENTS.md", "rules written since\n");
+    put("CLAUDE.md", `${header("AGENTS.md", written)}${formatted}`);
     syncCopies(base, ["AGENTS.md", "CLAUDE.md"]);
-    expect(read("CLAUDE.md")).toBe(copyOf("AGENTS.md", "| a | b |\n| --- | --- |\n"));
+    expect(read("CLAUDE.md")).toBe(copyOf("AGENTS.md", "rules written since\n"));
+  });
+
+  it("refuses a copy edited only in its punctuation, which the formatter never rewrites", () => {
+    const body = "Never bypass hooks with `--no-verify`, and send `no-store`.\n";
+    put("AGENTS.md", "rules written since\n");
+    put("CLAUDE.md", `${header("AGENTS.md", body)}${body.replace("--no-verify", "noverify")}`);
+    expect(() => syncCopies(base, ["AGENTS.md", "CLAUDE.md"])).toThrow("CLAUDE.md holds text of its own");
+    put("CLAUDE.md", `${header("AGENTS.md", body)}${body.replace("no-store", "nostore")}`);
+    expect(() => syncCopies(base, ["AGENTS.md", "CLAUDE.md"])).toThrow("CLAUDE.md holds text of its own");
+    expect(read("CLAUDE.md")).toContain("nostore");
   });
 
   it("refuses to overwrite a CLAUDE.md holding text of its own, and leaves it as it was", () => {
@@ -131,16 +168,37 @@ describe("the copies Claude Code reads", () => {
     expect(existsSync(join(base, "gone/CLAUDE.md"))).toBe(false);
   });
 
-  it("names a copy that differs, one that is missing, and a CLAUDE.md with no instruction file to copy", () => {
+  it("names a copy only out of date, one holding text of its own, one missing, and a CLAUDE.md with no instruction file to copy", () => {
     put("AGENTS.md", "root rules\n");
     put("CLAUDE.md", `${header("AGENTS.md", "root rules\n")}root rules, edited in the copy\n`);
-    put("p/AGENTS.md", "package rules\n");
+    put("p/AGENTS.md", "package rules, changed since\n");
+    put("p/CLAUDE.md", copyOf("p/AGENTS.md", "package rules\n"));
+    put("m/AGENTS.md", "m rules\n");
     put("q/CLAUDE.md", "Orphaned.\n");
-    expect(copyDrift(base, ["AGENTS.md", "CLAUDE.md", "p/AGENTS.md", "q/CLAUDE.md"])).toEqual([
-      { path: "CLAUDE.md", problem: "differs from AGENTS.md", fix: "run pnpm instructions:sync" },
-      { path: "p/CLAUDE.md", problem: "is missing, so Claude Code never reads p/AGENTS.md", fix: "run pnpm instructions:sync" },
+    expect(copyDrift(base, ["AGENTS.md", "CLAUDE.md", "p/AGENTS.md", "p/CLAUDE.md", "m/AGENTS.md", "q/CLAUDE.md"])).toEqual([
+      { path: "CLAUDE.md", problem: "holds text of its own that AGENTS.md does not", fix: "move that text into AGENTS.md, then run pnpm instructions:sync" },
+      { path: "p/CLAUDE.md", problem: "differs from p/AGENTS.md", fix: "run pnpm instructions:sync" },
+      { path: "m/CLAUDE.md", problem: "is missing, so Claude Code never reads m/AGENTS.md", fix: "run pnpm instructions:sync" },
       { path: "q/CLAUDE.md", problem: "copies no AGENTS.md beside it, so the AGENTS.md harness never reads its text", fix: "move its text into an AGENTS.md there, then run pnpm instructions:sync" },
     ]);
+  });
+
+  /*
+   * The drift check and the sync must agree on which copies were edited: a
+   * finding that names the sync as its fix, for a copy the sync then refuses,
+   * sends the reader round in a circle.
+   */
+  it("names the sync as the fix for exactly the copies the sync then rewrites", () => {
+    put("AGENTS.md", "root rules, changed since\n");
+    const files = ["AGENTS.md", "CLAUDE.md"];
+    put("CLAUDE.md", copyOf("AGENTS.md", "root rules\n"));
+    expect(copyDrift(base, files).map(finding => finding.fix)).toEqual(["run pnpm instructions:sync"]);
+    syncCopies(base, files);
+    expect(copyDrift(base, files)).toEqual([]);
+
+    put("CLAUDE.md", `${copyOf("AGENTS.md", "root rules, changed since\n")}A line of its own.\n`);
+    expect(copyDrift(base, files).map(finding => finding.fix)).toEqual(["move that text into AGENTS.md, then run pnpm instructions:sync"]);
+    expect(() => syncCopies(base, files)).toThrow("CLAUDE.md holds text of its own");
   });
 });
 
