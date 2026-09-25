@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (67815d22b73d2b5e). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (dd8461181510f5f7). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -300,7 +300,20 @@ Why, as measured, and how to recover a file once it has been clobbered: the
 
 ## Git and PR rules
 
-- Never commit directly to main. Branch, open a PR, request review.
+- One flow: a short-lived branch off `main` for each pull request,
+  squash-merged into `main`, its title becoming the commit message. Never
+  commit to `main` directly, and keep no long-lived branch (`dev`, release,
+  integration): lint, type-checking, the unit and integration tests and the
+  secret scan never run on a pull request into one, and a branch that gathers
+  weeks of work is too large to review. A feature too large for one pull
+  request lands in slices, each complete and tested; public API not yet
+  finished is marked `@experimental` until the feature is, as
+  `packages/ui/STABILITY.md` uses the tag.
+- Merges go through the merge queue once it is switched on for `main`; it runs
+  the required checks on each pull request combined with the latest `main`.
+  Until then, bring a branch up to date with `main`, and before calling it
+  ready to merge, run `node scripts/verify-merge.mjs <pr-number>` on the
+  result: `CI gate` alone leaves out the integration legs and the secret scan.
 - Do not add a "generated with" line naming an AI tool, an AI co-author
   trailer, or any other AI attribution to commits or PR bodies.
 - Husky runs gitleaks + lint-staged on commit, commitlint on the message, and
