@@ -10,6 +10,11 @@
  * rules are held here. What each rule allows was measured against the Claude
  * Code the pinned action installs (2.1.222); moving the pin is when to measure
  * again.
+ *
+ * The file rules are not the only road to a grant. Another input of the
+ * action, another flag or another allowlist entry widens what the agent may do
+ * without touching them, so those are pinned as well: a change to any of them
+ * is a change to this file too, and gets read as one.
  */
 import { readFileSync } from "node:fs";
 
@@ -25,8 +30,35 @@ const runOf = name => steps.find(step => step.name === name).run;
 /** The one directory the agent writes to, and where the post step reads what it wrote. */
 const PAYLOAD_DIR = ".nextly-review";
 
+/** The action's inputs as reviewed. One that carries permissions, such as `settings`, would sidestep the allowlist. */
+const INPUTS = ["anthropic_api_key", "claude_args", "github_token", "prompt", "track_progress"];
+/** The agent's flags as reviewed, each set once. A second `--allowedTools`, or a permission mode, widens the grant unseen. */
+const FLAGS = ["--allowedTools", "--disallowedTools", "--max-turns"];
+/**
+ * The allowlist as reviewed. An entry matches a command prefix, so it has to be
+ * safe under any arguments appended to it, and nothing here can judge that; so
+ * adding or changing an entry is a deliberate edit of this list.
+ */
+const ALLOWED = [
+  "Read",
+  "Grep",
+  "Glob",
+  `Edit(/${PAYLOAD_DIR}/**)`,
+  "Bash(${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*)",
+  "Bash(bash ${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*)",
+  "Bash(git show:*)",
+  "Bash(git diff:*)",
+  "Bash(git log:*)",
+  "Bash(git merge-base:*)",
+  "Bash(rg:*)",
+  "Bash(ls:*)",
+];
+
 /** The path rules Claude Code accepts and never consults when it decides a file permission. */
 const neverConsulted = rules => rules.filter(rule => /^(Write|MultiEdit|NotebookEdit|Glob)\(/.test(rule));
+
+/** Every flag an argument string sets. Quoted values are blanked first, so a rule's own text is never read as a flag. */
+const flagsOf = args => args.replace(/"[^"]*"/g, '""').match(/(?<=^|\s)--?[A-Za-z][\w-]*/g) ?? [];
 
 /** Every rule one `--flag "a,b(c)"` of the agent's arguments lists, each read whole. */
 function rulesOf(flag) {
@@ -59,5 +91,25 @@ describe("the files the review agent may write", () => {
     expect(agent.with.prompt).toContain(`${PAYLOAD_DIR}/review.json`);
     expect(read(".github/review-prompt.md")).toContain(`${PAYLOAD_DIR}/review.json`);
     expect(runOf("Post the review as the review bot")).toContain(`test -s ${PAYLOAD_DIR}/review.json`);
+  });
+});
+
+describe("what else could widen the agent's grant", () => {
+  it("passes the action only the inputs reviewed", () => {
+    expect(Object.keys(agent.with).sort()).toEqual(INPUTS);
+  });
+
+  it("sets each flag reviewed exactly once, and no other flag", () => {
+    // The control: a repeated flag and a permission mode, both of which the reader has to see.
+    expect(flagsOf('--allowedTools "Read" --allowedTools "Edit" --permission-mode acceptEdits')).toEqual([
+      "--allowedTools",
+      "--allowedTools",
+      "--permission-mode",
+    ]);
+    expect(flagsOf(agent.with.claude_args).sort()).toEqual([...FLAGS].sort());
+  });
+
+  it("grants exactly the allowlist reviewed", () => {
+    expect(rulesOf("allowedTools")).toEqual(ALLOWED);
   });
 });

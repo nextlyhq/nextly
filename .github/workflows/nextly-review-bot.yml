@@ -261,9 +261,11 @@ jobs:
           # and Read rules alone, the Write tool and a shell redirect's target
           # included; a rule written for Write is accepted and never consulted,
           # so it grants nothing. The leading `/` anchors it at the directory
-          # the agent starts in, the checkout. The git verbs are local-only,
-          # and there is no other Edit or Write rule and no bare Bash, so the
-          # agent cannot alter the tree.
+          # the agent starts in, the checkout. There is no other Edit or Write
+          # rule and no bare Bash. The Edit rule bounds the file tools only: a
+          # Bash entry whose command takes a flag that writes a file or runs
+          # another program crosses the same line, which is why each entry has
+          # to be safe under any arguments, as above.
           #
           # Keeping the model API key on the runner rests on two layers, not on
           # this list alone. Outbound: the gateway fixes the destination of
