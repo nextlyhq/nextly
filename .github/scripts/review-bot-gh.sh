@@ -42,6 +42,30 @@ require_path() {
   [[ -n "${1:-}" && "${1:0:1}" != "-" && "$1" != *$'\n'* ]] || die "expected a path, got '${1:-}'"
 }
 
+# The tag the post job ends everything it posts with: the workflow run that
+# posted it and, for a reply, the reply's place in the payload. Re-running a
+# failed job re-runs the same run with the same payload, so the tag is how a
+# re-run tells what an earlier attempt already posted; a new request is a new
+# run, and posts afresh. The tag is appended after the agent's text, so only a
+# tag that ENDS a body counts: one the agent wrote into that text, naming some
+# other run, is never the last line.
+posted_tag() {
+  printf '<!-- nextly-review-bot run:%s%s -->' "$1" "${2:+ reply:$2}"
+}
+
+# Ids of what this bot posted at an endpoint whose last line is a tag, one per
+# line, narrowed to those whose `<field>` is `<value>`: a review's `commit_id`,
+# a reply's `in_reply_to_id`. `--paginate` prints each page as an array of its
+# own, which jq reads one after another, so a match on any page is found.
+posted_ids() {
+  gh api --paginate "$1?per_page=100" |
+    jq -r --arg tag "$2" --arg field "$3" --arg value "$4" '
+      .[]
+      | select(.user.login == "nextly-review-bot[bot]" and (.[$field] | tostring) == $value)
+      | select((.body // "") | split("\n") | map(rtrimstr("\r") | select(length > 0)) | last == $tag)
+      | .id'
+}
+
 # The local history the review reads, with every flag fixed here. `git diff`,
 # `git show` and `git log` take `--output=<file>` among their options, which
 # writes anywhere the runner can, so the agent is given these commands rather
@@ -135,44 +159,64 @@ case "$command" in
     exec "${GIT_READ[@]}" log --no-ext-diff --no-textconv -L "$1:$2" "$rev"
     ;;
   review-ids-at)
-    # One id per line for this bot's reviews at one commit, sorted so the set
-    # can be differenced. The bot posts as its own GitHub App, so its reviews
-    # are the ones under that App's login. Emitting a value PER MATCH rather
-    # than per page is what makes this survive pagination: `--paginate --jq`
-    # runs the expression once per page, so an expression that returns a single
-    # value returns one per page, and a numeric test on the result then fails
-    # open.
+    # The reviews one run of the workflow posted at one commit, one id per
+    # line. The bot posts as its own GitHub App, so its reviews are the ones
+    # under that App's login, and the run's tag tells which of them this run
+    # posted, on this attempt or an earlier one.
     require_number "${1:-}"
     require_sha "${2:-}"
-    gh api --paginate "repos/$REPO/pulls/$1/reviews" \
-      --jq ".[] | select(.user.login == \"nextly-review-bot[bot]\" and .commit_id == \"$2\") | .id" |
-      sort
+    require_number "${3:-}"
+    posted_ids "repos/$REPO/pulls/$1/reviews" "$(posted_tag "$3")" commit_id "$2"
     ;;
   post-review)
-    # The agent composes the review JSON; this only decides where it is sent.
+    # The agent composes the review JSON; this only decides where it is sent,
+    # and tags it with the run that sends it.
     #
-    # An expected head may be given, and when it is, the PR is re-read here and
-    # the post refused if the branch has moved. The agent checks the head when
-    # it starts, which leaves the whole length of a review as a window in which
-    # a push can land; closing it at the moment of writing is what keeps a
-    # review from describing a commit nobody is looking at any more.
+    # The PR is re-read here and the post refused if the branch has moved since
+    # the head reviewed. The agent checks the head when it starts, which leaves
+    # the whole length of a review as a window in which a push can land;
+    # closing it at the moment of writing is what keeps a review from
+    # describing a commit nobody is looking at any more.
+    #
+    # A run posts its review once. Re-running a failed job posts the same
+    # payload again, and a POST whose response was lost may well have landed,
+    # so a review this run already posted at this head is reported rather than
+    # posted twice. Not knowing is not taken as "not yet": if the reviews
+    # cannot be read, nothing is posted.
     require_number "${1:-}"
     require_file "${2:-}"
-    if [ -n "${3:-}" ]; then
-      require_sha "$3"
-      current=$(gh api "repos/$REPO/pulls/$1" --jq '.head.sha')
-      [ "$current" = "$3" ] || die "head moved to $current since $3 was reviewed; not posting"
+    require_sha "${3:-}"
+    require_number "${4:-}"
+    current=$(gh api "repos/$REPO/pulls/$1" --jq '.head.sha')
+    [ "$current" = "$3" ] || die "head moved to $current since $3 was reviewed; not posting"
+    tag=$(posted_tag "$4")
+    posted=$(posted_ids "repos/$REPO/pulls/$1/reviews" "$tag" commit_id "$3") ||
+      die "could not read the reviews, so cannot tell whether run $4 already posted; not posting"
+    if [ -n "$posted" ]; then
+      echo "review-bot-gh: run $4 already posted review ${posted//$'\n'/, } at $3; not posting it again" >&2
+      exit 0
     fi
-    exec gh api --method POST "repos/$REPO/pulls/$1/reviews" --input "$2"
+    review=$(jq --arg tag "$tag" '.body += "\n\n" + $tag' "$2")
+    exec gh api --method POST "repos/$REPO/pulls/$1/reviews" --input - <<<"$review"
     ;;
   reply)
     # Reply inside an existing review thread; the body comes from a file so no
-    # comment text has to survive shell quoting.
+    # comment text has to survive shell quoting. It is tagged with the run and
+    # its place in the payload, and posted once per run as a review is.
     require_number "${1:-}"
     require_number "${2:-}"
     require_file "${3:-}"
-    exec gh api --method POST "repos/$REPO/pulls/$1/comments" \
-      -F in_reply_to="$2" -F body=@"$3"
+    require_number "${4:-}"
+    require_number "${5:-}"
+    tag=$(posted_tag "$4" "$5")
+    posted=$(posted_ids "repos/$REPO/pulls/$1/comments" "$tag" in_reply_to_id "$2") ||
+      die "could not read the review comments, so cannot tell whether run $4 already replied; not posting"
+    if [ -n "$posted" ]; then
+      echo "review-bot-gh: run $4 already posted reply $5 as comment ${posted//$'\n'/, }; not posting it again" >&2
+      exit 0
+    fi
+    reply=$(jq -n --rawfile body "$3" --arg tag "$tag" --argjson to "$2" '{in_reply_to: $to, body: ($body + "\n\n" + $tag)}')
+    exec gh api --method POST "repos/$REPO/pulls/$1/comments" --input - <<<"$reply"
     ;;
   *)
     die "usage: review-bot-gh.sh {pr|head-sha|diff|reviews|review-ids-at|review-comments|issue-comments|files|threads|file-at|base-file|delta|line-history|post-review|reply} ..."

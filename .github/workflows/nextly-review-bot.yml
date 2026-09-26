@@ -58,11 +58,13 @@ jobs:
     # Gates evaluated before a runner starts: a pull request conversation, the
     # review phrase, a trusted author (a stranger cannot spend the API budget or
     # prompt-inject the agent), and never another bot. A dispatch carries no
-    # comment to test, so it passes here and meets the same eligibility rules in
-    # the resolve step, which is also where draft/fork/base are checked for both
-    # paths.
+    # comment to test, so it passes here only from the default branch, as the
+    # `post` job's environment would admit it, and so is refused before the
+    # paid agent runs rather than after; it then meets the same eligibility
+    # rules in the resolve step, which is also where draft/fork/base are
+    # checked for both paths.
     if: >
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch) ||
       (github.event.issue.pull_request &&
       contains(github.event.comment.body, '@nextly-bot') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
@@ -334,21 +336,6 @@ jobs:
           name: review-payload
           path: ${{ runner.temp }}/payload
 
-      # What already exists at this head, so the confirmation below can require
-      # something NEW rather than accepting a review from an earlier request.
-      # Ids are emitted one per line: `--paginate --jq` runs the expression once
-      # per page, so any expression returning a single value per page yields one
-      # value PER PAGE, which a numeric test then chokes on.
-      - name: Record reviews already posted at this head
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NUMBER: ${{ github.event.issue.number || inputs.pr }}
-          SHA: ${{ needs.review.outputs.sha }}
-        run: |
-          set -euo pipefail
-          .github/scripts/review-bot-gh.sh review-ids-at "$NUMBER" "$SHA" > "${RUNNER_TEMP}/ids-before.txt"
-          echo "reviews already at this head: $(wc -l < "${RUNNER_TEMP}/ids-before.txt")"
-
       # The bot's own identity, minted only now, in the one job that never ran
       # the agent. A review running past the hour an App token lasts would find
       # one minted before it expired at posting time.
@@ -372,7 +359,10 @@ jobs:
       # merge queue counts the bot's review while Codex is held up. Replies
       # follow the review, each body through a file so no comment text passes
       # through the shell; one that cannot post, to a thread removed since,
-      # say, is reported without undoing the review.
+      # say, is reported without undoing the review. Each post names this run,
+      # and a reply its place in the payload, so re-running this job after a
+      # failure posts only what the earlier attempt did not: the gateway tags
+      # every post with them and skips one this run already made.
       - name: Post the review as the review bot
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -390,7 +380,7 @@ jobs:
             then {commit_id: $sha, event: "COMMENT", body, comments: (.comments // [])}
             else error("the payload is not a review: an object with a string body and a comments array")
             end' "$PAYLOAD/review.json" > "$out/review.json"
-          "$gateway" post-review "$NUMBER" "$out/review.json" "$SHA"
+          "$gateway" post-review "$NUMBER" "$out/review.json" "$SHA" "$GITHUB_RUN_ID"
           if [ -f "$PAYLOAD/replies.json" ]; then
             if ! count=$(jq -e 'if type == "array" then length else error("not an array") end' "$PAYLOAD/replies.json"); then
               echo "::warning::replies.json is not a JSON array, so no reply was posted"
@@ -398,7 +388,7 @@ jobs:
             fi
             for i in $(seq 0 $((count - 1))); do
               if ! { jq -er ".[$i].body" "$PAYLOAD/replies.json" > "$out/reply-$i.md" &&
-                "$gateway" reply "$NUMBER" "$(jq -r ".[$i].in_reply_to" "$PAYLOAD/replies.json")" "$out/reply-$i.md"; }; then
+                "$gateway" reply "$NUMBER" "$(jq -r ".[$i].in_reply_to" "$PAYLOAD/replies.json")" "$out/reply-$i.md" "$GITHUB_RUN_ID" "$i"; }; then
                 echo "::warning::reply $((i + 1)) of $count could not be posted; the review stands"
               fi
             done
@@ -414,11 +404,12 @@ jobs:
           SHA: ${{ needs.review.outputs.sha }}
         run: |
           set -euo pipefail
-          .github/scripts/review-bot-gh.sh review-ids-at "$NUMBER" "$SHA" > "${RUNNER_TEMP}/ids-after.txt"
           # A review this run did not post proves nothing: repeating the request
           # on an unchanged head would otherwise be certified by the previous
-          # run's review. Only an id that was not there before counts.
-          if ! comm -13 "${RUNNER_TEMP}/ids-before.txt" "${RUNNER_TEMP}/ids-after.txt" | grep -q .; then
+          # run's review. Only a review carrying this run's tag counts, and a
+          # re-run of this job finds the one an earlier attempt posted.
+          ids=$(.github/scripts/review-bot-gh.sh review-ids-at "$NUMBER" "$SHA" "$GITHUB_RUN_ID")
+          if [ -z "$ids" ]; then
             echo "::error::the agent finished but this run posted no review for $SHA"
             exit 1
           fi

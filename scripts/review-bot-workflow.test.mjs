@@ -19,11 +19,19 @@
  * gets read as one. And since no allowlist is proof against everything, the
  * bot's identity is kept off the agent's runner altogether: the review is
  * posted from a second job, which the agent never ran in.
+ *
+ * That job can be re-run after a failure, and it then posts the same payload
+ * again. The gateway posts once per run, provided each call says which run is
+ * posting, so the post and confirm steps are run here as GitHub runs them, and
+ * the calls they make are what is asserted.
  */
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { load } from "js-yaml";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const { jobs } = load(read(".github/workflows/nextly-review-bot.yml"));
@@ -173,6 +181,14 @@ describe("where the bot's identity lives", () => {
     expect(JSON.stringify(jobs.review)).not.toContain("REVIEW_BOT_PRIVATE_KEY");
   });
 
+  it("runs a dispatch only from the default branch, before the paid agent starts", () => {
+    // The environment refuses other branches only once the post job starts; by
+    // then the agent has run, so the review job refuses them itself.
+    expect(jobs.review.if).toContain(
+      "(github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch) ||",
+    );
+  });
+
   it("takes the App identity only in a job after the agent's, which never runs the agent", () => {
     expect(jobs.post.environment).toBe("review-bot");
     expect(jobs.post.needs).toBe("review");
@@ -219,5 +235,75 @@ describe("what else could widen the agent's grant", () => {
 
   it("denies exactly the denylist reviewed", () => {
     expect(rulesOf("disallowedTools")).toEqual(DISALLOWED);
+  });
+});
+
+describe.runIf(process.platform !== "win32")("posting once per run", () => {
+  const RUN = "424242";
+  const SHA = "a".repeat(40);
+  let dir;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "review-bot-post-"));
+    // The steps call the gateway by its path in the checkout, so the stand-in
+    // sits there. It records each call, and lists the reviews of the run it is
+    // asked about from a file named for that run.
+    const gateway = join(dir, ".github", "scripts", "review-bot-gh.sh");
+    mkdirSync(join(dir, ".github", "scripts"), { recursive: true });
+    writeFileSync(
+      gateway,
+      [
+        "#!/usr/bin/env bash",
+        'printf "%s\\n" "$*" >> "$FAKE/calls"',
+        'case "$1" in',
+        '  review-ids-at) cat "$FAKE/ids-$4" 2>/dev/null || true ;;',
+        '  head-sha) printf "%s\\n" "$SHA" ;;',
+        "esac",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(gateway, 0o755);
+    mkdirSync(join(dir, "payload"));
+    writeFileSync(join(dir, "payload", "review.json"), JSON.stringify({ body: "the review", comments: [] }));
+    writeFileSync(
+      join(dir, "payload", "replies.json"),
+      JSON.stringify([
+        { in_reply_to: 101, body: "one" },
+        { in_reply_to: 102, body: "two" },
+      ]),
+    );
+    mkdirSync(join(dir, "temp"));
+  });
+
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  /** Runs one post-job step as GitHub's bash does, with `files` written beside the stand-in first. */
+  function runStep(name, files = {}) {
+    for (const file of readdirSync(dir).filter(file => file === "calls" || file.startsWith("ids-"))) rmSync(join(dir, file));
+    for (const [file, text] of Object.entries(files)) writeFileSync(join(dir, file), text);
+    writeFileSync(join(dir, "step.sh"), named(postSteps, name).run);
+    const env = { PATH: process.env.PATH, HOME: dir, FAKE: dir, RUNNER_TEMP: join(dir, "temp"), GITHUB_RUN_ID: RUN, NUMBER: "7", SHA, PAYLOAD: join(dir, "payload") };
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], { cwd: dir, encoding: "utf8", env });
+    const calls = existsSync(join(dir, "calls")) ? readFileSync(join(dir, "calls"), "utf8").trim().split("\n") : [];
+    return { status: result.status, output: result.stdout + result.stderr, calls };
+  }
+
+  it("names this run on every post, and each reply's place in the payload", () => {
+    const { status, output, calls } = runStep("Post the review as the review bot");
+    expect(status, output).toBe(0);
+    const out = join(dir, "temp", "nextly-review-post");
+    expect(calls).toEqual([`post-review 7 ${out}/review.json ${SHA} ${RUN}`, `reply 7 101 ${out}/reply-0.md ${RUN} 0`, `reply 7 102 ${out}/reply-1.md ${RUN} 1`]);
+  });
+
+  it("confirms with the review this run posted, whichever attempt posted it", () => {
+    const { status, output, calls } = runStep("Confirm this run posted a review", { [`ids-${RUN}`]: "555\n" });
+    expect(status, output).toBe(0);
+    expect(calls[0]).toBe(`review-ids-at 7 ${SHA} ${RUN}`);
+  });
+
+  it("refuses to confirm with a review an earlier request posted at this head", () => {
+    const { status, output } = runStep("Confirm this run posted a review", { "ids-111": "444\n" });
+    expect(status).toBe(1);
+    expect(output).toContain("this run posted no review");
   });
 });
