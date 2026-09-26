@@ -117,11 +117,42 @@ describe("diffIndexes", () => {
   });
 });
 
+describe("a text cast in an expression index", () => {
+  const table = (expression: string) => ({
+    name: "fx__scores",
+    columns: [
+      { name: "id", type: "text", nullable: false },
+      { name: "n", type: "integer", nullable: false },
+      { name: "label", type: "varchar(64)", nullable: false },
+    ],
+    indexes: [
+      { name: "idx_fx__scores_key", columns: [], unique: false, expression },
+    ],
+  });
+  const ops = (before: string, after: string) =>
+    diffSnapshots({ tables: [table(before)] }, { tables: [table(after)] }).map(
+      op => op.type
+    );
+
+  it("is the author's on a non-text column, so adding one re-keys the index", () => {
+    // `n::text` sorts as text, `n` as a number: two different indexes.
+    expect(ops("n", "(n)::text").sort()).toEqual(["add_index", "drop_index"]);
+  });
+
+  it("is PostgreSQL's own on a text-like column, so it changes nothing", () => {
+    expect(ops("(label)::text", "label")).toEqual([]);
+  });
+});
+
 describe("expression index key lists compare by what each key computes", () => {
   it("PostgreSQL's spelling of a two-key list equals its declaration", () => {
     const table = (expression: string) => ({
       name: "fx__users",
-      columns: [{ name: "id", type: "text", nullable: false }],
+      columns: [
+        { name: "id", type: "text", nullable: false },
+        { name: "email", type: "varchar(255)", nullable: false },
+        { name: "status", type: "varchar(32)", nullable: false },
+      ],
       indexes: [
         {
           name: "idx_fx__users_email_status",

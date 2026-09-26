@@ -268,3 +268,59 @@ describe("a declared check on a column a hook removed", () => {
     expect(spec.columns.map(c => c.name)).not.toContain("amount");
   });
 });
+
+describe("an expression index on a column a hook removed", () => {
+  const searched = defineTable(
+    "app_searched",
+    { id: col.id(), email: col.shortText(), code: col.shortText() },
+    {
+      indexes: [
+        { columns: [], expression: "lower(email)", name: "idx_searched_email" },
+      ],
+    }
+  );
+  const buildSearched = (
+    afterDrizzle: Parameters<typeof buildExtensionSchema>[0]["afterDrizzle"]
+  ) =>
+    buildExtensionSchema({
+      dialect: "postgresql",
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map(),
+      plugins: [],
+      app: {
+        owner: { kind: "app" },
+        extend: [({ schema }) => schema.addTable(searched)],
+      },
+      afterDrizzle,
+    });
+  const without = async (column: string) => {
+    const declared = (await buildSearched([])).tables.find(
+      t => t.name === "app_searched"
+    )!;
+    const built = await buildSearched([
+      () => ({
+        app_searched: toDrizzleTable(
+          {
+            ...declared,
+            columns: declared.columns.filter(c => c.name !== column),
+            indexes: [],
+          },
+          "postgresql"
+        ),
+      }),
+    ]);
+    return built.specs.find(s => s.name === "app_searched")!;
+  };
+
+  it("goes with the column, as a plain index does", async () => {
+    // Kept, it would reach the migration as an index on a missing column.
+    expect((await without("email")).indexes?.map(i => i.name)).toEqual([]);
+  });
+
+  it("stays when the hook removed a column it does not read", async () => {
+    expect((await without("code")).indexes?.map(i => i.name)).toEqual([
+      "idx_searched_email",
+    ]);
+  });
+});

@@ -31,7 +31,7 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { normalizeCheckExpression } from "../pipeline/diff/normalize-check";
-import type { TableSpec } from "../pipeline/diff/types";
+import type { CheckSpec, TableSpec } from "../pipeline/diff/types";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { checkConstraintName } from "../services/index-name";
 
@@ -175,9 +175,6 @@ export function enumChecks(
  * could not outlive the column's drop anyway, and on MySQL and SQLite blocks
  * it while it stands. A table that owns no enum check, now or before, keeps
  * `checks` untracked, exactly as it was.
- *
- * Limitation: a check carrying an explicit `enumName` is recognised only
- * while its column still declares it.
  */
 export function withContributedEnumChecks(
   spec: TableSpec,
@@ -188,26 +185,34 @@ export function withContributedEnumChecks(
   const own = enumChecks(spec.name, contributed, dialect);
   const ownNames = new Set(own.map(check => check.name));
   const desiredColumns = new Set(spec.columns.map(column => column.name));
-  // The default-named check of every column whose enum check, if it had one,
-  // no longer has anything to constrain.
-  const withdrawn = new Set(
-    [
-      ...contributed.filter(
-        column => enumCheckSql(column, dialect) === undefined
-      ),
-      ...(previous?.columns ?? []).filter(
-        column => !desiredColumns.has(column.name)
-      ),
-    ].map(column => enumCheckName(spec.name, { name: column.name }))
-  );
+  // The columns whose enum check these contributions answer for: every
+  // contributed column, and every column the table no longer has — a check on
+  // a dropped column has nothing left to constrain, and on MySQL and SQLite it
+  // blocks the drop while it stands.
+  const answeredFor = new Set([
+    ...contributed.map(column => column.name),
+    ...(previous?.columns ?? [])
+      .map(column => column.name)
+      .filter(name => !desiredColumns.has(name)),
+  ]);
+  // A previous check is stale when it is an enum check on one of those
+  // columns that the contributions no longer declare. It is matched by what
+  // it constrains, not by its name, because `col.enum(values, { name })`
+  // names it freely — and the name it had is not recoverable from the column
+  // once the column stops declaring it.
+  const isStale = (check: CheckSpec): boolean => {
+    if (ownNames.has(check.name)) return false;
+    const read = readEnumCheck(check.sql);
+    return read !== null && answeredFor.has(read.column);
+  };
   const previousChecks = previous?.checks ?? [];
-  const stale = previousChecks.filter(check => withdrawn.has(check.name));
+  const stale = previousChecks.filter(isStale);
   if (own.length === 0 && stale.length === 0) return spec;
   return {
     ...spec,
     checks: [
       ...previousChecks.filter(
-        check => !ownNames.has(check.name) && !withdrawn.has(check.name)
+        check => !ownNames.has(check.name) && !isStale(check)
       ),
       ...own,
     ],
@@ -215,22 +220,26 @@ export function withContributedEnumChecks(
 }
 
 /**
- * The values a check expression permits, or null when it is not one of ours.
+ * The column an enum check constrains and the values it permits, or null when
+ * the expression is not one of ours.
  *
  * Reads back what {@link enumCheckSql} wrote, so a comparison between the
  * declared set and the live one can name the values that changed rather than
- * reporting that an opaque expression differs.
+ * reporting that an opaque expression differs, and a check can be matched to
+ * its column whatever it is named.
  *
  * Read through `normalizeCheckExpression`, so the expression PostgreSQL
  * reports for a live constraint reads the same as the one declared. That form
  * spells a one-value set as an equality — PostgreSQL stores `x IN ('a')` as
  * `x = 'a'` — so both shapes are accepted.
  */
-export function enumValuesIn(sql: string): string[] | null {
+function readEnumCheck(
+  sql: string
+): { column: string; values: string[] } | null {
   const canonical = normalizeCheckExpression(sql);
   // Only a column compared with string literals is a value set; the literal
   // list is matched whole, so `a IN (...) AND b IN (...)` is not read as one.
-  const column = `(?:\\w+|"(?:[^"]|"")*")`;
+  const column = `(\\w+|"(?:[^"]|"")*")`;
   const literal = `'(?:[^']|'')*'`;
   const match =
     new RegExp(`^\\s*${column}\\s*=\\s*(${literal})\\s*$`).exec(canonical) ??
@@ -239,14 +248,24 @@ export function enumValuesIn(sql: string): string[] | null {
       "i"
     ).exec(canonical);
   if (match === null) return null;
-  const body = match[1] ?? "";
+  const name = match[1] ?? "";
+  const body = match[2] ?? "";
   const values: string[] = [];
   const each = /'((?:[^']|'')*)'/g;
   let found: RegExpExecArray | null;
   while ((found = each.exec(body)) !== null) {
     values.push((found[1] ?? "").replace(/''/g, "'"));
   }
-  return values.length > 0 ? values : null;
+  if (values.length === 0) return null;
+  return {
+    column: name.startsWith('"') ? name.slice(1, -1).replace(/""/g, '"') : name,
+    values,
+  };
+}
+
+/** The values an enum check permits, or null when it is not one of ours. */
+export function enumValuesIn(sql: string): string[] | null {
+  return readEnumCheck(sql)?.values ?? null;
 }
 
 /**

@@ -58,14 +58,41 @@
  * Never used as DDL: the diff keeps each side's own text on the operations it
  * emits, so what reaches the database is always what was declared or read.
  */
-export function normalizeCheckExpression(expression: string): string {
+export function normalizeCheckExpression(
+  expression: string,
+  columns?: ColumnCastContext
+): string {
   const tokens = tokenize(expression);
   if (tokens === null) return expression;
   const parser = new Parser(tokens);
   const tree = parser.parseExpression();
   if (tree === null || !parser.atEnd()) return expression;
-  return print(canonical(tree), 0);
+  const outer = castContext;
+  castContext = columns;
+  try {
+    return print(canonical(tree), 0);
+  } finally {
+    castContext = outer;
+  }
 }
+
+/**
+ * What the comparison knows about the columns an expression reads: the ones
+ * whose type is text-like (`varchar`, `char`, `text`), which are the only
+ * columns PostgreSQL wraps in an inserted `::text` cast.
+ *
+ * Without it, an unsized text cast on a bare column is read as inserted
+ * whatever the column's type — right for a varchar, wrong for `n::text` on an
+ * integer, which changes what the expression means (and how an index on it
+ * sorts). With it, that cast is kept on every column that is not text-like.
+ */
+export interface ColumnCastContext {
+  /** Lower-cased names of the text-like columns. */
+  textColumns: ReadonlySet<string>;
+}
+
+/** The context the running normalisation reads; set only for its duration. */
+let castContext: ColumnCastContext | undefined;
 
 /**
  * The canonical form of an index's key list, one key at a time.
@@ -82,9 +109,12 @@ export function normalizeCheckExpression(expression: string): string {
  * stripping parentheses or casts as text) would, since `a * (b + c)` and
  * `a * b + c` differ only in a pair of parentheses.
  */
-export function normalizeExpressionList(expressions: string): string {
+export function normalizeExpressionList(
+  expressions: string,
+  columns?: ColumnCastContext
+): string {
   return splitTopLevel(expressions)
-    .map(key => normalizeCheckExpression(key.trim()))
+    .map(key => normalizeCheckExpression(key.trim(), columns))
     .join(", ");
 }
 
@@ -1092,6 +1122,11 @@ function canonicalIdentifier(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
+/** A canonical identifier's column name, without the quotes it may carry. */
+function unquotedName(text: string): string {
+  return text.startsWith('"') ? text.slice(1, -1).replace(/""/g, '"') : text;
+}
+
 // =============================================================================
 // Canonical rewrites
 // =============================================================================
@@ -1369,7 +1404,14 @@ function isInsertedCast(
   cast: Extract<Node, { kind: "cast" }>
 ): boolean {
   if (!TEXT_TYPES.has(cast.base) || cast.modifier !== "") return false;
-  if (cast.arrays === "") return true;
+  if (cast.arrays === "") {
+    // On a bare column, the cast is inserted only where the column is
+    // text-like — when the caller can say which columns are.
+    if (expr.kind === "identifier" && castContext !== undefined) {
+      return castContext.textColumns.has(unquotedName(expr.text));
+    }
+    return true;
+  }
   return (
     expr.kind === "array" &&
     cast.arrays === "[]" &&

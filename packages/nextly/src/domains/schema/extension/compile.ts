@@ -208,7 +208,12 @@ export function toTableSpec(
   // from the same name, and a name derived earlier (pre-prefix) could never
   // match the live side — the diff would propose a drop-plus-add on every
   // comparison. An explicit name always wins.
-  const foreignKeys = table.foreignKeys?.map(fk => ({
+  //
+  // A table this compiler builds owns every check and foreign key it has, so
+  // both are always TRACKED — an empty list when none is declared, never
+  // absent. Absent reads as "not tracked" to the diff, which then plans no
+  // drop: removing a table's last check or key would leave it in place.
+  const foreignKeys = (table.foreignKeys ?? []).map(fk => ({
     ...fk,
     name: resolveForeignKeyName(table, fk),
   }));
@@ -223,18 +228,9 @@ export function toTableSpec(
     })) ?? [];
   const fromEnums = enumChecks(table.name, table.columns, dialect);
   assertDistinctCheckNames(table, [...declared, ...fromEnums]);
-  const checks =
-    declared.length + fromEnums.length > 0
-      ? [...declared, ...fromEnums]
-      : undefined;
+  const checks = [...declared, ...fromEnums];
 
-  return {
-    name: table.name,
-    columns,
-    indexes,
-    ...(foreignKeys !== undefined ? { foreignKeys } : {}),
-    ...(checks !== undefined ? { checks } : {}),
-  };
+  return { name: table.name, columns, indexes, foreignKeys, checks };
 }
 
 /**

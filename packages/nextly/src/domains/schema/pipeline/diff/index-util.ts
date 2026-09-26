@@ -1,8 +1,9 @@
 import {
+  type ColumnCastContext,
   normalizeCheckExpression,
   normalizeExpressionList,
 } from "./normalize-check";
-import type { IndexSpec } from "./types";
+import type { ColumnSpec, IndexSpec } from "./types";
 
 /**
  * A stable logical key for matching desired vs live indexes.
@@ -18,7 +19,7 @@ import type { IndexSpec } from "./types";
  * emitted. No existing comparison changes, because none compared a multi-column
  * index.
  */
-export function indexKey(idx: IndexSpec): string {
+export function indexKey(idx: IndexSpec, columns?: ColumnCastContext): string {
   // The predicate and expression are part of the identity: a changed
   // WHERE re-keys the index, which the diff reads as drop-plus-add rather
   // than leaving two indexes that differ only in what they filter. Plain
@@ -38,14 +39,42 @@ export function indexKey(idx: IndexSpec): string {
   const expression =
     idx.expression === undefined || idx.expression === ""
       ? ""
-      : normalizeExpressionList(idx.expression);
-  return `${idx.columns.join(",")}|${idx.unique ? "u" : "n"}|${canonical(idx.where)}|${expression}`;
+      : normalizeExpressionList(idx.expression, columns);
+  return `${idx.columns.join(",")}|${idx.unique ? "u" : "n"}|${canonical(idx.where, columns)}|${expression}`;
 }
 
 /** An index predicate in its canonical spelling, or "" for none. */
-function canonical(sql: string | undefined): string {
-  return sql === undefined || sql === "" ? "" : normalizeCheckExpression(sql);
+function canonical(
+  sql: string | undefined,
+  columns: ColumnCastContext | undefined
+): string {
+  return sql === undefined || sql === ""
+    ? ""
+    : normalizeCheckExpression(sql, columns);
 }
+
+/**
+ * The cast context for a table's index expressions: its text-like columns,
+ * the only ones PostgreSQL wraps in an inserted `::text` cast. A column counts
+ * when either side of the comparison types it as text, so a column whose type
+ * is changing from varchar is still read as the server printed it.
+ */
+export function textColumnsOf(
+  ...sides: readonly (readonly ColumnSpec[])[]
+): ColumnCastContext {
+  const textColumns = new Set<string>();
+  for (const columns of sides) {
+    for (const column of columns) {
+      if (TEXT_LIKE.test(column.type)) {
+        textColumns.add(column.name.toLowerCase());
+      }
+    }
+  }
+  return { textColumns };
+}
+
+const TEXT_LIKE =
+  /^\s*(?:varchar|character varying|char|character|bpchar|text|tinytext|mediumtext|longtext|citext|string)\b/i;
 
 /**
  * Only our own indexes (idx_/uq_ prefixes) may be dropped. Primary keys and

@@ -292,6 +292,82 @@ describe("withContributedEnumChecks", () => {
     ]);
   });
 
+  it("drops an explicitly named check once its column stops being an enum", () => {
+    // `col.enum(values, { name })` names the check freely, so it is matched
+    // by the column it constrains, not by the default spelling.
+    const plain = { ...enumColumn, enumValues: undefined } as ExtensionColumn;
+    const out = withContributedEnumChecks(
+      {
+        ...spec,
+        columns: [
+          ...spec.columns,
+          { name: "review_state", type: "text", nullable: true },
+        ],
+      },
+      [plain],
+      {
+        ...spec,
+        columns: [
+          ...spec.columns,
+          { name: "review_state", type: "text", nullable: true },
+        ],
+        checks: [
+          { name: "ck_dc_posts_legacy", sql: "id <> ''" },
+          {
+            name: "ck_dc_posts_state_values",
+            sql: "review_state IN ('draft', 'live')",
+          },
+        ],
+      },
+      "postgresql"
+    );
+    expect(out.checks?.map(check => check.name)).toEqual([
+      "ck_dc_posts_legacy",
+    ]);
+  });
+
+  it("replaces an explicitly named check the column now declares under another name", () => {
+    const out = withContributedEnumChecks(
+      {
+        ...spec,
+        columns: [
+          ...spec.columns,
+          { name: "review_state", type: "text", nullable: true },
+        ],
+      },
+      [enumColumn],
+      {
+        ...spec,
+        checks: [
+          {
+            name: "ck_dc_posts_state_values",
+            sql: "review_state IN ('draft')",
+          },
+        ],
+      },
+      "postgresql"
+    );
+    expect(out.checks?.map(check => check.name)).toEqual([
+      "ck_dc_posts_review_state_enum",
+    ]);
+  });
+
+  it("keeps a value-set check on a column the contributions do not own", () => {
+    const out = withContributedEnumChecks(
+      spec,
+      [enumColumn],
+      {
+        ...spec,
+        checks: [{ name: "chk_dc_posts_kind", sql: "kind IN ('a', 'b')" }],
+      },
+      "postgresql"
+    );
+    expect(out.checks?.map(check => check.name)).toEqual([
+      "chk_dc_posts_kind",
+      "ck_dc_posts_review_state_enum",
+    ]);
+  });
+
   it("carries the check onto a table that does not exist yet", () => {
     const out = withContributedEnumChecks(
       spec,

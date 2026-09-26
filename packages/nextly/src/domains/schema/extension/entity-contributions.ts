@@ -67,7 +67,7 @@ export function withEntityContributions(
 
   const present = new Set(columns.map(column => column.name));
   const indexes: IndexSpec[] = [...(spec.indexes ?? [])];
-  const keys = new Set(indexes.map(indexKey));
+  const keys = new Set(indexes.map(index => indexKey(index)));
   for (const index of contributedIndexes) {
     if (index.columns.length === 0) continue;
     if (!index.columns.every(column => present.has(column))) continue;

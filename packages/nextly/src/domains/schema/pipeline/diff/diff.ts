@@ -42,8 +42,11 @@
 import { renderedType } from "../sql-templates/create-table-body";
 
 import { typesDiffer } from "./declared-size";
-import { indexKey, isManagedIndexName } from "./index-util";
-import { normalizeCheckExpression } from "./normalize-check";
+import { indexKey, isManagedIndexName, textColumnsOf } from "./index-util";
+import {
+  type ColumnCastContext,
+  normalizeCheckExpression,
+} from "./normalize-check";
 import { normalizeDefault } from "./normalize-default";
 import type {
   AddColumnOp,
@@ -109,7 +112,12 @@ export function diffSnapshots(
       // with IF NOT EXISTS, so it no-ops against the old index still carrying
       // the name, and the drop after it then removes the index outright. The
       // pair routes through one bucket with the drop ahead of its add.
-      const indexOps = diffIndexes(name, prevT.indexes, curT.indexes);
+      const indexOps = diffIndexes(
+        name,
+        prevT.indexes,
+        curT.indexes,
+        textColumnsOf(prevT.columns, curT.columns)
+      );
       const rekeyedNames = new Set(
         indexOps
           .filter(
@@ -275,12 +283,13 @@ function byForeignKeyDependency(tables: readonly TableSpec[]): TableSpec[] {
 function diffIndexes(
   tableName: string,
   prev: IndexSpec[] | undefined,
-  cur: IndexSpec[] | undefined
+  cur: IndexSpec[] | undefined,
+  columns: ColumnCastContext
 ): Operation[] {
   if (prev === undefined || cur === undefined) return [];
   const ops: Operation[] = [];
-  const prevByKey = new Map(prev.map(i => [indexKey(i), i]));
-  const curByKey = new Map(cur.map(i => [indexKey(i), i]));
+  const prevByKey = new Map(prev.map(i => [indexKey(i, columns), i]));
+  const curByKey = new Map(cur.map(i => [indexKey(i, columns), i]));
   for (const [key, idx] of curByKey) {
     if (!prevByKey.has(key)) {
       ops.push({ type: "add_index", tableName, index: idx });

@@ -393,6 +393,17 @@ export function specAfterHook(args: {
   const present = new Set(columns.map(column => column.name));
   const covers = (names: readonly string[]): boolean =>
     names.every(name => present.has(name));
+  // The columns the hook took away. An index on one goes with it, as the
+  // database takes it: by its columns, or — for an expression index, whose
+  // `columns` are empty — by the names its expression reads.
+  const removed = args.compiledSpec.columns
+    .map(column => column.name)
+    .filter(name => !present.has(name));
+  const survives = (index: IndexSpec): boolean => {
+    if (index.expression === undefined) return covers(index.columns);
+    const named = checkIdentifiers(index.expression, args.dialect);
+    return !removed.some(name => named.has(name.toLowerCase()));
+  };
 
   const added = (after.indexes ?? []).filter(
     index =>
@@ -402,9 +413,7 @@ export function specAfterHook(args: {
   const addedNames = new Set(added.map(index => index.name));
   const indexes = [
     ...(args.compiledSpec.indexes ?? []).filter(
-      index =>
-        !addedNames.has(index.name) &&
-        (index.expression !== undefined || covers(index.columns))
+      index => !addedNames.has(index.name) && survives(index)
     ),
     ...added,
   ];
@@ -427,9 +436,6 @@ export function specAfterHook(args: {
   // hook removed would reach the DDL naming a column that no longer exists,
   // and fail when the migration applies. Refused here instead, while the
   // config can still be fixed.
-  const removed = args.compiledSpec.columns
-    .map(column => column.name)
-    .filter(name => !present.has(name));
   for (const check of keptChecks) {
     const named = checkIdentifiers(check.sql, args.dialect);
     const gone = removed.find(name => named.has(name.toLowerCase()));
@@ -462,12 +468,14 @@ export function specAfterHook(args: {
 }
 
 /**
- * The identifiers a check's SQL names, lowercased.
+ * The identifiers a check's or an index expression's SQL names, lowercased.
  *
  * Read through the shared SQL scanner, so text inside a string literal or a
  * comment is not mistaken for a column and a quoted name is read whole. Every
- * word of the code is taken, keywords included: a keyword that happens to
- * equal a removed column's name only makes the refusal above conservative.
+ * word of the code is taken, keywords and function names included: one that
+ * happens to equal a removed column's name only makes the check refusal
+ * conservative, and drops an index the column's removal would have left
+ * unusable anyway only when the two share a name.
  */
 function checkIdentifiers(sql: string, dialect: SupportedDialect): Set<string> {
   const names = new Set<string>();

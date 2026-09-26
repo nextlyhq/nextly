@@ -26,6 +26,7 @@ import {
   uniqueIndexNameForColumn,
 } from "../../services/index-name";
 import { toDrizzleTable, toTableSpec } from "../compile";
+import { diffSnapshots } from "../../pipeline/diff/diff";
 import type { ExtensionColumn, ExtensionTable } from "../types";
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
@@ -582,5 +583,55 @@ describe("a string default on a column MySQL stores as TEXT", () => {
       columns: [column("label", "text", { default: "x" })],
     };
     expect(toTableSpec(varchar, "mysql").columns[0].default).toBe("'x'");
+  });
+});
+
+describe("an extension table's checks and foreign keys", () => {
+  it("are tracked when none is declared, so removing the last one drops it", async () => {
+    const before = await buildExtensionSchema({
+      dialect: "postgresql",
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map(),
+      plugins: [],
+      app: {
+        owner: { kind: "app" },
+        extend: [
+          ({ schema }) =>
+            schema.addTable(
+              defineTable("app_flags", {
+                id: col.id(),
+                state: col.enum(["on", "off"]),
+              })
+            ),
+        ],
+      },
+    });
+    const after = await buildExtensionSchema({
+      dialect: "postgresql",
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map(),
+      plugins: [],
+      app: {
+        owner: { kind: "app" },
+        extend: [
+          ({ schema }) =>
+            schema.addTable(
+              defineTable("app_flags", { id: col.id(), state: col.shortText() })
+            ),
+        ],
+      },
+    });
+    const spec = (s: typeof before) =>
+      s.specs.find(t => t.name === "app_flags")!;
+    // Absent would read as "not tracked" and plan no drop at all.
+    expect(spec(after).checks).toEqual([]);
+    expect(spec(after).foreignKeys).toEqual([]);
+    const ops = diffSnapshots(
+      { tables: [spec(before)] },
+      { tables: [spec(after)] }
+    );
+    expect(ops.filter(op => op.type === "drop_check")).toHaveLength(1);
   });
 });
