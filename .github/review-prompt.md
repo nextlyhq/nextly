@@ -42,7 +42,7 @@ Read before forming any opinion (PR-side versions if the PR touches them):
 - `packages/nextly/AGENTS.md` / `packages/admin/AGENTS.md` when the PR touches those packages.
 - `packages/plugin-sdk/STABILITY.md` / `packages/ui/STABILITY.md` when public surface changes.
 
-**Documentation drift, do not trust these claims:** CONTRIBUTING.md is stale in places. There is no `dev` branch (everything targets `main`), no `changeset-check` CI job (changeset presence is YOUR job to verify), no `ServiceError` (it is `NextlyError`), and no OAuth module (auth is jose JWT + bcryptjs only). When AGENTS.md and CONTRIBUTING.md disagree, AGENTS.md wins.
+**Facts older documentation got wrong:** there is no `dev` branch (everything targets `main`), no CI job that requires a changeset (changeset presence is YOUR job to verify), no `ServiceError` (it is `NextlyError`), and no OAuth module (auth is jose JWT + bcryptjs only). When AGENTS.md and CONTRIBUTING.md disagree, AGENTS.md wins.
 
 ## Phase 2: Round awareness (multi-round protocol)
 
