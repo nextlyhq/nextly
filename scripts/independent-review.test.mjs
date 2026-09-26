@@ -142,9 +142,9 @@ describe("coverage of one queued pull request", () => {
 it("names the login the review bot's gateway and protocol look for", () => {
   const gateway = readFileSync(join(SCRIPTS, "..", ".github", "scripts", "review-bot-gh.sh"), "utf8");
   const protocol = readFileSync(join(SCRIPTS, "..", ".github", "review-prompt.md"), "utf8");
-  expect(gateway).toContain(`select(.user.login == \\"${REVIEW_BOT}\\"`);
+  expect(gateway).toContain(`select(.user.login == "${REVIEW_BOT}"`);
   expect(protocol).toContain(`filter author login \`${REVIEW_BOT}\``);
-  expect(gateway).not.toContain(`"${WORKFLOWS}\\"`);
+  expect(gateway).not.toContain(`"${WORKFLOWS}"`);
 });
 
 describe("whether Codex is held up by its usage limit", () => {
