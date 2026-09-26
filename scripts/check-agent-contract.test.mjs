@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ANCHORS,
+  CONTRIBUTING,
   EXTENSIONLESS_FILES,
   REVIEW_PROMPT,
   REQUIRED_RULES,
@@ -40,6 +41,7 @@ import {
   routedSkills,
   routerDisagreements,
   skillFindings,
+  workspaceScripts,
 } from "./check-agent-contract.mjs";
 import { header } from "./agent-instructions.mjs";
 import { syncSkillCopy } from "./agent-skills.mjs";
@@ -214,7 +216,7 @@ describe("refusing a file set that cannot have found anything", () => {
    * them either — a collector that dropped AGENTS.md while picking up three
    * skills matches any total. Membership is what gets asserted.
    */
-  const COMPLETE = ["AGENTS.md", ...REQUIRED_RULES, ".claude/rules/another-rule.md", ".agents/skills/y/SKILL.md", REVIEW_PROMPT];
+  const COMPLETE = ["AGENTS.md", ...REQUIRED_RULES, ".claude/rules/another-rule.md", ".agents/skills/y/SKILL.md", REVIEW_PROMPT, CONTRIBUTING];
 
   it("names every anchor missing from an empty set", () => {
     expect(missingAnchors([])).toEqual([...ANCHORS, ...REQUIRED_RULES]);
@@ -296,6 +298,7 @@ describe("the command, run against another checkout", () => {
       put("CLAUDE.md", header("AGENTS.md", agents) + agents);
       put(".claude/rules/integration-tests.md", '---\npaths:\n  - "**/*.integration.test.ts"\n---\n\nA rule.\n');
       put(".github/review-prompt.md", "Review.\n");
+      put("CONTRIBUTING.md", "Contributing.\n");
       put("package.json", "{}\n");
       put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\n---\n");
       put(".claude/skills/a/SKILL.md", "---\nname: a\ndescription: edited in the copy by hand\n---\n");
@@ -341,6 +344,7 @@ describe("the command, run against another checkout", () => {
     copy("AGENTS.md", `${rules}${WHOLE_FILE_SECTION}`);
     put(".claude/rules/integration-tests.md", '---\npaths:\n  - "**/*.integration.test.ts"\n---\n\nA rule.\n');
     put(".github/review-prompt.md", "Review.\n");
+    put("CONTRIBUTING.md", "Contributing.\n");
     put("package.json", "{}\n");
     put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\n---\n");
     syncSkillCopy(base);
@@ -404,6 +408,72 @@ describe("the command, run against another checkout", () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+
+  /*
+   * The contributor guide goes through the same reading as the agent guidance.
+   * The control is the same checkout once the guide cites what exists: a path
+   * that is there, and the script run through the workspace that declares it.
+   */
+  it("reports a path or a script the contributor guide cites that does not resolve", () => {
+    const { base, put, check } = overrideCheckout();
+    try {
+      put("pnpm-workspace.yaml", 'packages:\n  - "e2e"\n');
+      put("e2e/package.json", '{ "name": "@scope/e2e", "scripts": { "test:e2e": "playwright test" } }\n');
+      put("CONTRIBUTING.md", "See `.github/workflows/gone.yml`, then run `pnpm test:e2e`.\n");
+      const stale = check();
+      expect(stale.status).toBe(1);
+      expect(stale.stderr).toContain("CONTRIBUTING.md: path '.github/workflows/gone.yml' does not resolve");
+      expect(stale.stderr).toContain("CONTRIBUTING.md: script 'pnpm test:e2e' does not resolve");
+
+      put(".github/workflows/gone.yml", "on: push\n");
+      put("CONTRIBUTING.md", "See `.github/workflows/gone.yml`, then run `pnpm --filter @scope/e2e test:e2e`.\n");
+      const current = check();
+      expect(current.stderr).toBe("");
+      expect(current.status).toBe(0);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("reading the workspaces pnpm declares", () => {
+  /** A checkout with an app under `apps/*` and a workspace at the fixed directory `e2e`. */
+  const inCheckout = (workspaceFile, body) => {
+    const base = mkdtempSync(join(tmpdir(), "agent-contract-workspaces-"));
+    const put = (path, text) => {
+      mkdirSync(dirname(join(base, path)), { recursive: true });
+      writeFileSync(join(base, path), text);
+    };
+    try {
+      put("pnpm-workspace.yaml", workspaceFile);
+      put("apps/web/package.json", '{ "name": "web-app", "scripts": { "dev": "next dev" } }\n');
+      put("e2e/package.json", '{ "name": "@scope/e2e", "scripts": { "test:e2e": "playwright test" } }\n');
+      return body(base);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  };
+
+  it("reads a fixed directory and every directory under a pattern, by name and by directory", () => {
+    inCheckout('packages:\n  - "apps/*"\n  - "e2e"\n', base => {
+      const scripts = workspaceScripts(base);
+      expect(scripts.get("@scope/e2e")).toEqual(new Set(["test:e2e"]));
+      expect(scripts.get("e2e")).toEqual(new Set(["test:e2e"]));
+      expect(scripts.get("web-app")).toEqual(new Set(["dev"]));
+      expect(scripts.get("web")).toEqual(new Set(["dev"]));
+    });
+  });
+
+  it("refuses a pattern it cannot read, rather than reading it as matching nothing", () => {
+    inCheckout('packages:\n  - "packages/**"\n', base => {
+      expect(() => workspaceScripts(base)).toThrow('cannot read the workspace pattern "packages/**"');
+    });
+  });
+
+  // The real list declares `e2e`, which a list kept by hand here once missed.
+  it("finds the e2e workspace this repository declares", () => {
+    expect(workspaceScripts().get("@nextlyhq/e2e")).toContain("test:e2e");
   });
 });
 
@@ -618,8 +688,15 @@ describe("the population the check actually reads", () => {
 
   it("holds the review prompt as an anchor, so its deletion refuses", () => {
     expect(ANCHORS).toContain(REVIEW_PROMPT);
-    expect(missingAnchors(["AGENTS.md", ...REQUIRED_RULES, ".agents/skills/y/SKILL.md"]))
+    expect(missingAnchors(["AGENTS.md", ...REQUIRED_RULES, ".agents/skills/y/SKILL.md", CONTRIBUTING]))
       .toEqual([REVIEW_PROMPT]);
+  });
+
+  // The contributor guide is read for the same reason, and held the same way.
+  it("collects the contributor guide, and holds it as an anchor", () => {
+    expect(instructionFiles()).toContain(CONTRIBUTING);
+    expect(missingAnchors(["AGENTS.md", ...REQUIRED_RULES, ".agents/skills/y/SKILL.md", REVIEW_PROMPT]))
+      .toEqual([CONTRIBUTING]);
   });
 
   it("recognises the extensionless dotfiles the instructions name", () => {
