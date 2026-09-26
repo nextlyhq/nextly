@@ -3,7 +3,8 @@
  * loadable by both harnesses. Each case builds a small repository in a
  * temporary directory, so the property is judged on files, not on mocks.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -137,6 +138,8 @@ describe("the Claude Code copy of the skills", () => {
     const { leftover } = syncSkillCopy(base, { remove });
     expect(readFileSync(join(base, CLAUDE_COPY, "a/SKILL.md"), "utf8")).toContain("the new text");
     expect(leftover?.error.message).toBe("the removal was refused");
+    // Named for the process that made it, which is how another sync tells it from one still in use.
+    expect(basename(leftover.path)).toMatch(new RegExp(`^\\.skills-sync-${process.pid}-.+-old$`));
     expect(readFileSync(join(leftover.path, "a/SKILL.md"), "utf8")).toContain("the old text");
     expect(readdirSync(join(base, ".claude")).sort()).toEqual([basename(leftover.path), "skills"].sort());
   });
@@ -167,7 +170,29 @@ describe("the Claude Code copy of the skills", () => {
     expect(readdirSync(join(base, ".claude"))).toEqual(["skills"]);
   });
 
-  // A sync killed before its cleanup leaves its staging copy, which no later run would remove or report.
+  /*
+   * Two syncs in one checkout overlap for as long as one holds a staging copy.
+   * That copy is in use, not left behind, until its process is gone.
+   */
+  it("leaves a copy a running sync owns unreported, and names it once that sync is gone", async () => {
+    skill(SKILLS_HOME, "a");
+    const other = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+    const inUse = `.skills-sync-${other.pid}-abc123`;
+    try {
+      mkdirSync(join(base, ".claude", inUse, "a"), { recursive: true });
+      const said = [];
+      expect(syncCommand(base, {}, { log: () => {}, error: line => said.push(line) })).toBe(0);
+      expect(said).toEqual([]);
+    } finally {
+      other.kill();
+      await once(other, "exit");
+    }
+    const said = [];
+    expect(syncCommand(base, {}, { log: () => {}, error: line => said.push(line) })).toBe(1);
+    expect(said).toEqual([`agent-skills: .claude/${inUse} was left by another sync; delete it, then sync again`]);
+  });
+
+  // A sync killed before its cleanup leaves its staging copy, which no later run would remove or report. This one's name carries no process, as copies made before names did.
   it("fails the sync command, naming it, while a staging copy an interrupted sync left remains", () => {
     skill(SKILLS_HOME, "a");
     mkdirSync(join(base, ".claude", ".skills-sync-interrupted", "a"), { recursive: true });

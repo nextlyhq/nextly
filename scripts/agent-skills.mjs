@@ -125,20 +125,49 @@ function entryAt(path) {
 
 /**
  * How a sync names what it puts beside the copy Claude Code reads: its staging
- * copy, and the old copy it sets aside, which is the staging name plus `-old`.
+ * copy, `.skills-sync-<process ID>-<random>`, and the old copy it sets aside,
+ * which is the staging name plus `-old`. The process ID tells a copy another
+ * sync is still using from one a sync left behind.
  */
 const STAGING_PREFIX = ".skills-sync-";
 
+/** The process that made a copy, read from its name, or null for a name that carries none. */
+function maker(name) {
+  const found = /^\.skills-sync-(\d+)-/.exec(name);
+  const pid = found ? Number(found[1]) : 0;
+  return pid > 0 ? pid : null;
+}
+
+/**
+ * Whether a process is running. Signal 0 checks without signalling; EPERM
+ * means the process exists but belongs to another user.
+ */
+function running(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+/** Whether a copy belongs to another sync that is still running, and so is in use rather than left behind. */
+function inUseByAnother(name) {
+  const pid = maker(name);
+  return pid !== null && pid !== process.pid && running(pid);
+}
+
 /**
  * What syncs left beside the copy Claude Code reads: a staging copy or an old
- * copy set aside, which nothing but a sync makes. `.claude/` is git-ignored, so
- * neither git nor the contract check would show one.
+ * copy set aside, which nothing but a sync makes, less any another sync is
+ * still using. `.claude/` is git-ignored, so neither git nor the contract check
+ * would show one.
  */
 function leftoverCopies(base = root) {
   const home = dirname(join(base, CLAUDE_COPY));
   if (!existsSync(home)) return [];
   return readdirSync(home)
-    .filter(name => name.startsWith(STAGING_PREFIX))
+    .filter(name => name.startsWith(STAGING_PREFIX) && !inUseByAnother(name))
     .sort()
     .map(name => join(home, name));
 }
@@ -163,7 +192,7 @@ function leftoverCopies(base = root) {
 export function syncSkillCopy(base = root, { rename = renameSync, remove = rmSync } = {}) {
   const copy = join(base, CLAUDE_COPY);
   mkdirSync(dirname(copy), { recursive: true });
-  const staging = mkdtempSync(join(dirname(copy), STAGING_PREFIX));
+  const staging = mkdtempSync(join(dirname(copy), `${STAGING_PREFIX}${process.pid}-`));
   try {
     cpSync(join(base, SKILLS_HOME), staging, { recursive: true, dereference: true });
     return { leftover: swapIn(staging, copy, { rename, remove }) };
