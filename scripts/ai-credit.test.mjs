@@ -265,6 +265,8 @@ describe("a line a change adds", () => {
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  with a note", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
     expect(creditsIn(lines(trailer("Co-authored", spell("Anthro", "pic")), "  some", "  context", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ line: 1 }), expect.objectContaining({ from: 4, line: 4 })]);
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  context", spell("  ", CODE_TOOL, " (the CLI)")), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
+    // A colon ending the name, with nothing after it, is its separator; one followed by words opens an explanation.
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  context", spell("  ", CODE_TOOL, ":")), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
     // Only a line that is an identity of its own starts one, read as a list item's line is: more words after a tool's name,
     // behind a comma or a colon or not, are an explanation that mentions it, after plain words or a capitalised one alike.
     const mentions = ["  with a note", "  Summary"].flatMap(before => [" reads this file", ": reads this file", ", the tool reviewed this file"].map(mention => [before, mention]));

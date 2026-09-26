@@ -513,8 +513,8 @@ function creditedByTrailer(value, whole) {
 /** A value's name, before any note: a bracket, a dash or a colon after it ends the name, and a separator after it is not part of it. */
 const namePart = value => withoutSeparator(value.split(/\s+(?:[(—]|-\s)|:/)[0].trim());
 
-/** A name without the comma or semicolon that may part it from the next. */
-const withoutSeparator = text => text.replace(/\s*[,;]$/, "");
+/** A name without the comma or semicolon that may part it from the next, or a colon ending it with nothing after. */
+const withoutSeparator = text => text.replace(/\s*[,;:]$/, "");
 
 function namesToolOutright(name, whole) {
   return (whole || !VENDOR_ALONE.test(name)) && namesATool(name, whole);
