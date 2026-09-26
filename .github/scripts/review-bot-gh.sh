@@ -98,14 +98,16 @@ case "$command" in
     ;;
   review-ids-at)
     # One id per line for this bot's reviews at one commit, sorted so the set
-    # can be differenced. Emitting a value PER MATCH rather than per page is
-    # what makes this survive pagination: `--paginate --jq` runs the expression
-    # once per page, so an expression that returns a single value returns one
-    # per page, and a numeric test on the result then fails open.
+    # can be differenced. The bot posts as its own GitHub App, so its reviews
+    # are the ones under that App's login. Emitting a value PER MATCH rather
+    # than per page is what makes this survive pagination: `--paginate --jq`
+    # runs the expression once per page, so an expression that returns a single
+    # value returns one per page, and a numeric test on the result then fails
+    # open.
     require_number "${1:-}"
     require_sha "${2:-}"
     gh api --paginate "repos/$REPO/pulls/$1/reviews" \
-      --jq ".[] | select(.user.login == \"github-actions[bot]\" and .commit_id == \"$2\") | .id" |
+      --jq ".[] | select(.user.login == \"nextly-review-bot[bot]\" and .commit_id == \"$2\") | .id" |
       sort
     ;;
   post-review)

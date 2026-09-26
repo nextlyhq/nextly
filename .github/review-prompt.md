@@ -46,9 +46,9 @@ Read before forming any opinion (PR-side versions if the PR touches them):
 
 ## Phase 2: Round awareness (multi-round protocol)
 
-Prior rounds were posted by `github-actions[bot]` with a marker in the review body. Establish state before hunting:
+Prior rounds were posted by `nextly-review-bot[bot]`, this bot's own GitHub App, with a marker in the review body. Only that login counts: any workflow can post as `github-actions[bot]`, so a marker under it proves nothing about an earlier round. Establish state before hunting:
 
-1. `.github/scripts/review-bot-gh.sh reviews <N>`, filter author login `github-actions[bot]` and bodies containing `pr-review-agent`. Extract the latest `round:<n>` and `head:<sha>` from the marker.
+1. `.github/scripts/review-bot-gh.sh reviews <N>`, filter author login `nextly-review-bot[bot]` and bodies containing `pr-review-agent`. Extract the latest `round:<n>` and `head:<sha>` from the marker.
 2. Pull all review threads with resolution state: `.github/scripts/review-bot-gh.sh threads <N>` (returns `isResolved`, `isOutdated`, `path`, `line`, and each comment's author, body, url and `databaseId`). Include threads from every reviewer (humans, Codex, CodeRabbit); never duplicate a finding anyone has already made.
 3. Classify every prior finding of this bot:
    - **Resolved threads:** verify the fix actually landed at `HEAD_SHA` by reading the code; do not trust the resolution click. Resolved with no change = new P1 ("marked resolved without a change").
