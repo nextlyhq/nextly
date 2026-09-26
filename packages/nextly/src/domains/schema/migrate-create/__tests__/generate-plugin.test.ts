@@ -19,6 +19,7 @@ import { diffSnapshots } from "../../pipeline/diff/diff";
 import type { ColumnSpec, TableSpec } from "../../pipeline/diff/types";
 import { generateSQL } from "../../pipeline/sql-templates/index";
 
+import { withCyclicForeignKeysSplit } from "../cyclic-foreign-keys";
 import { buildInverseOperations } from "../down-generator";
 import {
   buildPluginMigration,
@@ -52,12 +53,18 @@ function sharedCoreRender(
   dialect: SupportedDialect
 ): { up: string[]; down: string[] } {
   const prev = { tables: previous };
-  const operations = diffSnapshots(prev, { tables: desired });
+  const operations = withCyclicForeignKeysSplit(
+    diffSnapshots(prev, { tables: desired }),
+    dialect,
+    previous
+  );
   return {
     up: operations.map(op => generateSQL(op, dialect)),
-    down: buildInverseOperations(operations, prev).map(op =>
-      generateSQL(op, dialect)
-    ),
+    down: withCyclicForeignKeysSplit(
+      buildInverseOperations(operations, prev),
+      dialect,
+      desired
+    ).map(op => generateSQL(op, dialect)),
   };
 }
 

@@ -871,7 +871,8 @@ export class SingleMutationService extends BaseService {
       const snakeCaseData = stripImmutableSystemFields(
         keysToSnakeCase(serializedData) as Record<string, unknown>,
         "single",
-        singleMeta.tableName
+        singleMeta.tableName,
+        fieldConfigs
       );
       // Commit the scalar update, the component subtree writes, the companion
       // upsert, AND the version snapshot atomically so any failure rolls back the
@@ -1421,6 +1422,7 @@ export class SingleMutationService extends BaseService {
                   splitPendingChange(
                     pendingDraft.snapshot,
                     singleMeta.tableName,
+                    fieldConfigs,
                     companion && companionPhysicallyExists ? companion : null,
                     updatePayload
                   ));

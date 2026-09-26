@@ -60,6 +60,7 @@ import {
   NO_APP_STREAM_TABLES,
   type AppStreamTables,
 } from "./app-stream";
+import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
 import { buildInverseOperations } from "./down-generator";
 import { formatMigrationFile, formatTimestamp, slugify } from "./format-file";
 import { promptRenames, type RenameDecision } from "./prompt-renames";
@@ -278,14 +279,24 @@ export async function generateMigration(
     return null;
   }
 
-  // 7. Generate UP SQL per op.
+  // 7. Generate UP SQL per op, a foreign-key cycle's keys split out of the
+  // table operations that cannot carry them (see `withCyclicForeignKeysSplit`).
+  operations = withCyclicForeignKeysSplit(
+    operations,
+    args.dialect,
+    previousSnapshot.tables
+  );
   const sqlStatements = operations.map(op => generateSQL(op, args.dialect));
 
   // 7a. Generate DOWN SQL by inverting the RESOLVED ops (renames preserved).
   // Inverting the resolved ops — not re-diffing — keeps a forward rename as a
   // reverse rename rather than a data-losing drop+add. Object-removing ops
   // recover their original spec from previousSnapshot.
-  const inverseOps = buildInverseOperations(operations, previousSnapshot);
+  const inverseOps = withCyclicForeignKeysSplit(
+    buildInverseOperations(operations, previousSnapshot),
+    args.dialect,
+    desiredSnapshot.tables
+  );
   const downSqlStatements = inverseOps.map(op => generateSQL(op, args.dialect));
 
   // 7b. Append UI metadata-row upserts for any touched UI-built table (§4.12.7).

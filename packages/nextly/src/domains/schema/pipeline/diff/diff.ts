@@ -234,8 +234,11 @@ export function diffSnapshots(
  * A cycle cannot be ordered. The walk starts from the first table by name and
  * places each table after the ones it references that are not already being
  * placed, so for `a` ↔ `b` it yields `b` then `a`, with `b`'s key pointing
- * forward. SQLite accepts that; on PostgreSQL and MySQL one key of the cycle
- * has to be added after both tables exist, which a later migration can do.
+ * forward. SQLite accepts that. On PostgreSQL and MySQL the forward key is
+ * added once both tables exist — by the dev-push emitter, which adds every new
+ * table's keys last, and in every generated migration file (`migrate:create`,
+ * plugin modules, `migrate:baseline`) by `withCyclicForeignKeysSplit`, which
+ * also breaks a dropped cycle before its tables go.
  */
 function byForeignKeyDependency(tables: readonly TableSpec[]): TableSpec[] {
   const byName = new Map(tables.map(table => [table.name, table]));

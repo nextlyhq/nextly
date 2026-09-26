@@ -23,7 +23,15 @@ import { join } from "node:path";
 
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import {
+  describe,
+  expect,
+  it,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+} from "vitest";
 
 import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
@@ -729,5 +737,161 @@ describe("ownership within and after one migrate run (sqlite)", () => {
         schema_version: 3,
       })
     );
+  });
+});
+
+describe("a contribution applied after its dependency moved on (sqlite)", () => {
+  // `contrib` shipped a module adding a column to `host__items` while `host`
+  // was at v1. `host` has since shipped v2, which changes the same table on
+  // its own account. A fresh install applies `host` v1 and v2 first — the
+  // dependency order — and only then `contrib` v1, whose copies of the table
+  // were frozen at host v1. The live table therefore matches neither copy,
+  // and only the contributed column is `contrib`'s to judge.
+  const hostV1 = defineTable("items", { id: col.id() });
+  const hostV2 = defineTable("items", {
+    id: col.id(),
+    note: col.shortText({ nullable: true }),
+  });
+
+  let sqlite: Database.Database;
+  let db: unknown;
+
+  beforeEach(async () => {
+    sqlite = new Database(":memory:");
+    db = drizzle({ client: sqlite });
+    await reconcileCore({
+      db,
+      dialect: DIALECT,
+      logger: { info: () => {}, warn: () => {} },
+    });
+  });
+
+  afterEach(() => sqlite.close());
+
+  /** `host`'s own table, and the same table with `contrib`'s column, at host v1. */
+  async function hostItemsAtV1() {
+    const built = await buildExtensionSchema({
+      dialect: DIALECT,
+      coreTableNames: CORE_TABLE_NAMES,
+      entities: [],
+      pluginPrefixes: new Map([
+        ["host", "host"],
+        ["contrib", "contrib"],
+      ]),
+      dependencies: new Map([["contrib", new Set(["host"])]]),
+      plugins: [
+        { owner: { kind: "plugin", id: "host" }, tables: [hostV1] },
+        {
+          owner: { kind: "plugin", id: "contrib" },
+          extend: [
+            ({ schema }) => {
+              schema.extendTable("host__items", {
+                columns: { extra: col.shortText({ nullable: true }) },
+              });
+            },
+          ],
+        },
+      ],
+    });
+    const withContribution = built.specs.find(t => t.name === "host__items")!;
+    const baseline = (await tablesByDialect("host", "host", [hostV1])).sqlite;
+    return { withContribution, baseline };
+  }
+
+  async function modules() {
+    const hostFirst = buildPluginMigration({
+      pluginName: "host",
+      schemaVersion: 1,
+      name: "v1",
+      now: new Date(Date.UTC(2026, 8, 20)),
+      tablesByDialect: await tablesByDialect("host", "host", [hostV1]),
+      existing: [],
+    })!.module;
+    const hostSecond = buildPluginMigration({
+      pluginName: "host",
+      schemaVersion: 2,
+      name: "v2",
+      now: new Date(Date.UTC(2026, 8, 22)),
+      tablesByDialect: await tablesByDialect("host", "host", [hostV2]),
+      existing: [hostFirst],
+    })!.module;
+    const { withContribution, baseline } = await hostItemsAtV1();
+    const none = { postgresql: [], mysql: [], sqlite: [] };
+    const contribFirst = buildPluginMigration({
+      pluginName: "contrib",
+      schemaVersion: 1,
+      name: "v1",
+      now: new Date(Date.UTC(2026, 8, 21)),
+      tablesByDialect: none,
+      contributedByDialect: { ...none, sqlite: [withContribution] },
+      contributedBaselineByDialect: { ...none, sqlite: baseline },
+      contributions: {
+        sqlite: {
+          host__items: {
+            columns: ["extra"],
+            indexes: [],
+            foreignKeys: [],
+            checks: [],
+          },
+        },
+      },
+      existing: [],
+    })!.module;
+    return { hostFirst, hostSecond, contribFirst };
+  }
+
+  function run(
+    sets: Array<{ pluginName: string; migrations: PluginMigration[] }>
+  ) {
+    return runPluginPhase({
+      dialect: DIALECT,
+      db,
+      adapter: adapterFor(sqlite),
+      logger: createLogger({ quiet: true }),
+      pluginMigrationSets: sets.map(s => ({ ...s, pluginVersion: "1.0.0" })),
+    } as never);
+  }
+
+  function columnsOfItems(): string[] {
+    return (
+      sqlite.prepare("PRAGMA table_info(host__items)").all() as Array<{
+        name: string;
+      }>
+    ).map(c => c.name);
+  }
+
+  it("applies the contribution on a table the dependency has since changed", async () => {
+    const { hostFirst, hostSecond, contribFirst } = await modules();
+    await run([
+      { pluginName: "host", migrations: [hostFirst, hostSecond] },
+      { pluginName: "contrib", migrations: [contribFirst] },
+    ]);
+
+    // Its SQL ran — the column exists — beside the dependency's own change.
+    expect(columnsOfItems()).toEqual(
+      expect.arrayContaining(["id", "note", "extra"])
+    );
+    const ledger = sqlite
+      .prepare(
+        "SELECT filename, status FROM nextly_schema_events WHERE event_type = 'file_apply' AND filename = ?"
+      )
+      .all(`plugin:contrib/${contribFirst.name}`) as Array<{ status: string }>;
+    expect(ledger.map(r => r.status)).toEqual(["applied"]);
+  });
+
+  it("still refuses a contributed column that drifted by hand", async () => {
+    // The narrowing is to this plugin's elements, not away from them: a live
+    // `extra` that is neither absent (before) nor the declared column (target)
+    // is drift, exactly as it was before the tables were narrowed.
+    const { hostFirst, hostSecond, contribFirst } = await modules();
+    await run([{ pluginName: "host", migrations: [hostFirst, hostSecond] }]);
+    sqlite.exec("ALTER TABLE host__items ADD COLUMN extra INTEGER");
+
+    await expect(
+      run([
+        { pluginName: "host", migrations: [hostFirst, hostSecond] },
+        { pluginName: "contrib", migrations: [contribFirst] },
+      ])
+    ).rejects.toThrow(/does not match|drift/i);
   });
 });

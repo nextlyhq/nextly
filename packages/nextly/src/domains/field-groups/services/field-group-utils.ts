@@ -1,6 +1,8 @@
 import type { FieldConfig } from "../../../collections/fields/types";
+import { isVirtualField } from "../../../collections/fields/virtual";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
+import { isFieldGroupFieldType } from "../storage/field-group-field-type";
 import { fieldGroupTypeKeys } from "../storage/field-group-type-key";
 
 /**
@@ -77,6 +79,25 @@ export interface ComponentInstanceData {
    * one. The index signature below already admits it; the accessor is what knows which.
    */
   [key: string]: unknown;
+}
+
+/**
+ * Whether a component field is stored in a column of the component's own row.
+ *
+ * Not the descriptor's `fieldProducesColumn`, deliberately: that rule also
+ * gives a many-to-many relationship no column, because a collection keeps its
+ * links in a junction table. A component has no junction, so such a field is
+ * stored on the instance row like any other relationship value. Only a virtual
+ * field (which stores nothing) and a nested field group (which has its own
+ * table) have no column here. The DDL, the runtime tables, the ALTER plan and
+ * the row serializer all ask this one question.
+ */
+export function componentFieldHasColumn(field: {
+  type?: unknown;
+  options?: unknown;
+  virtual?: unknown;
+}): boolean {
+  return !isVirtualField(field) && !isFieldGroupFieldType(field.type);
 }
 
 export function toSnakeCase(name: string): string {

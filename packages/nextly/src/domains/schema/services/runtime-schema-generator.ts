@@ -529,6 +529,26 @@ function withNullability(column: unknown, nullable: boolean): unknown {
 }
 
 /**
+ * The `created_at` / `updated_at` pair every SQLite runtime table built from
+ * fields declares: integer timestamps, not null, stamped by the application,
+ * since SQLite has no timestamp default of its own that Drizzle reads back as
+ * a Date.
+ */
+export function sqliteTimestampColumns(): {
+  created_at: unknown;
+  updated_at: unknown;
+} {
+  return {
+    created_at: sqliteInteger("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updated_at: sqliteInteger("updated_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  };
+}
+
+/**
  * Translates a user-field descriptor into the appropriate Drizzle
  * column builder. The descriptor's `kind` is the dispatch key —
  * the per-dialect Drizzle imports stay isolated to this function.

@@ -31,6 +31,7 @@ import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
 import {
   assertAppliedUnchanged,
   assertModuleIntact,
+  moduleSql,
   orderedMigrations,
   qualifiedFilename,
   type PluginMigration,
@@ -38,6 +39,12 @@ import {
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
 import { assertNoForeignDrops } from "../../ownership/drop-guard";
 import type { OwnerRecord } from "../../ownership/owner-registry";
+import {
+  mergeContributions,
+  narrowToContributions,
+} from "../../migrate-create/app-stream";
+
+import { recordedContributions } from "./recorded-contributions";
 
 /** One plugin's migrations, in the order the resolver placed the plugin. */
 export interface PluginMigrationSet {
@@ -136,10 +143,13 @@ export async function runPluginMigrations(
     skipped: 0,
   };
   for (const set of sets) {
-    for (const migration of orderedMigrations(set.migrations)) {
+    const ordered = orderedMigrations(set.migrations);
+    for (const [position, migration] of ordered.entries()) {
       // Not caught: the first failure must stop later plugins and the app
       // phase, which assume a state that was never reached.
-      result[await applyModule(set, migration, deps)] += 1;
+      result[
+        await applyModule(set, migration, ordered.slice(0, position), deps)
+      ] += 1;
     }
   }
   return result;
@@ -148,6 +158,8 @@ export async function runPluginMigrations(
 async function applyModule(
   set: PluginMigrationSet,
   migration: PluginMigration,
+  /** The plugin's modules ordered before this one, for its contributions. */
+  earlier: readonly PluginMigration[],
   deps: RunPluginMigrationsDeps
 ): Promise<"applied" | "adopted" | "skipped"> {
   // Before anything is read from the database: a module whose SQL was edited
@@ -194,18 +206,36 @@ async function applyModule(
   const names = [
     ...new Set([...before.tables, ...target.tables].map(table => table.name)),
   ];
-  const live = await deps.introspect(names, `plugin:${set.pluginName}`);
+  // A contributed table is judged on this plugin's elements alone, exactly as
+  // the app stream judges the tables it contributes to (`narrowToContributions`,
+  // the same function). Its `contributedBefore`/`contributed` copies are the
+  // whole table as it was when the module was generated; the owner may have
+  // shipped later modules since, which a fresh install applies first, so the
+  // live table then matches neither copy and a valid contribution would be
+  // refused as drift. The elements that are this plugin's are the ones its
+  // modules record either side of this one — the same replay the generator
+  // reads them from.
+  const sides = narrowToContributions({
+    before,
+    target,
+    live: await deps.introspect(names, `plugin:${set.pluginName}`),
+    contributions: mergeContributions(
+      recordedContributions(earlier, deps.dialect),
+      recordedContributions([...earlier, migration], deps.dialect)
+    ),
+  });
 
   const { state } = await reconcileFile({
     file: {
       filename,
-      sql: (migration.dialects[deps.dialect]?.up ?? []).join(";\n"),
+      // Split by the executor, like an app file; see `moduleSql`.
+      sql: moduleSql(migration, deps.dialect, "up"),
       path: `plugin:${set.pluginName}/${migration.name}`,
       sha256: migration.checksum,
     },
-    before,
-    target,
-    live,
+    before: sides.before,
+    target: sides.target,
+    live: sides.live,
     repo: deps.repo,
     executeSql: deps.executeSql,
   });

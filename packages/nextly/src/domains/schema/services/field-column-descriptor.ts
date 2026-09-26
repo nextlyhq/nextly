@@ -26,6 +26,7 @@
  * lockstep automatically.
  */
 
+import { isVirtualField } from "../../../collections/fields/virtual";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   SYSTEM_COLUMNS,
@@ -219,17 +220,10 @@ export function fieldProducesColumn(field: {
   virtual?: unknown;
 }): boolean {
   if (typeof field.type !== "string") return true;
-  // A virtual field stores nothing: no column, no insert, no select. The
-  // root spelling is the one every field type carries; group and repeater
-  // keep their documented options.virtual spelling working beside it.
-  if (field.virtual === true) return false;
-  if (
-    typeof field.options === "object" &&
-    field.options !== null &&
-    (field.options as { virtual?: unknown }).virtual === true
-  ) {
-    return false;
-  }
+  // A virtual field stores nothing: no column, no insert, no select. Both
+  // spellings of the flag are read by the one predicate the localization
+  // classifier also asks.
+  if (isVirtualField(field)) return false;
   // Field-group and component values live in their own dedicated tables (fg_{slug} or
   // comp_{slug}) and are stripped from the parent row on write, so the parent needs no column.
   if (isFieldGroupFieldType(field.type)) return false;

@@ -26,6 +26,7 @@ import {
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
 import { truncateErrorMessage } from "../../domains/schema/events/schema-events-repository";
+import { moduleSql } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { recordPluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import { assertNoForeignDrops } from "../../domains/schema/ownership/drop-guard";
@@ -316,7 +317,7 @@ function pluginModuleDownSql(
       logContext: { filename, plugin: pluginName, module: moduleName },
     });
   }
-  return (module.dialects[dialect]?.down ?? []).join(";\n");
+  return moduleSql(module, dialect, "down");
 }
 
 interface MigrateDownCommandOptions {

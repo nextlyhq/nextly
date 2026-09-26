@@ -50,6 +50,7 @@ import {
 
 import {
   COMPONENT_META_KEYS,
+  componentFieldHasColumn,
   toSnakeCase,
   shouldTreatAsJson,
   type ComponentRow,
@@ -1717,6 +1718,14 @@ export class FieldGroupMutationService extends BaseService {
 
       const field = fieldMap.get(key);
       if (!field) {
+        continue;
+      }
+      // A declared field with no column on the instance row — a virtual one,
+      // whose value a read computes and a round-tripped document carries back —
+      // is not written: naming it would address a column the table lacks and
+      // fail the whole write. The descriptor's rule, so the row matches the
+      // table the pipeline generated.
+      if (!componentFieldHasColumn(field)) {
         continue;
       }
 

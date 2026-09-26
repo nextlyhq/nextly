@@ -11,9 +11,14 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { SupportedDialect } from "../../database/schema-registry";
 import { appliedFilenames } from "../../domains/schema/events/newest-event";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
-import { qualifiedFilename } from "../../domains/schema/migrate/plugin/plugin-migration";
+import {
+  moduleSql,
+  qualifiedFilename,
+  type PluginMigration,
+} from "../../domains/schema/migrate/plugin/plugin-migration";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import { assertNoForeignDrops } from "../../domains/schema/ownership/drop-guard";
 import {
@@ -26,7 +31,7 @@ import type { CommandContext } from "../program";
 import { createCliAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 
-import { executeTransaction } from "./migrate";
+import { executeTransaction, splitSqlStatements } from "./migrate";
 import {
   runPluginInstallCommand,
   runPluginUninstallCommand,
@@ -71,6 +76,23 @@ function toLifecyclePlugins(
       reversible: true,
     })),
   }));
+}
+
+/**
+ * The statements a module's DOWN runs on one dialect, one per driver call.
+ *
+ * The module's entries are per-operation renderings, and one of them can hold
+ * two statements — a foreign-key action change is a drop and an add. MySQL
+ * runs with `multipleStatements` off and refuses such an entry whole, so the
+ * entries are split into single statements exactly as `migrate:down --plugin`
+ * splits the same module, from the same text (`moduleSql`): the two rollback
+ * paths run the same statements, and the drop guard judges the ones that run.
+ */
+export function pluginModuleDownStatements(
+  module: Pick<PluginMigration, "dialects">,
+  dialect: SupportedDialect
+): string[] {
+  return splitSqlStatements(moduleSql(module, dialect, "down"), dialect);
 }
 
 async function connect(options: RunnerOptions, context: CommandContext) {
@@ -129,7 +151,10 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       );
       plugin.modules = modules.map(module => ({
         name: module.name,
-        reversible: (module.dialects[dialect]?.down ?? []).length > 0,
+        // Judged on the statements `runDown` would execute, so "reversible"
+        // and "what the rollback runs" cannot disagree about a DOWN whose
+        // entries split to nothing.
+        reversible: pluginModuleDownStatements(module, dialect).length > 0,
       }));
     }
   };
@@ -172,7 +197,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const module = (definition?.contributes?.schema?.migrations ?? []).find(
       m => m.name === moduleName
     );
-    const statements = module?.dialects[dialect]?.down ?? [];
+    const statements = module
+      ? pluginModuleDownStatements(module, dialect)
+      : [];
     if (statements.length === 0) return 0;
 
     const filename = qualifiedFilename(plugin.name, moduleName);

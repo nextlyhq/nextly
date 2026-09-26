@@ -53,7 +53,6 @@ import {
   isRepeaterField,
   isGroupField,
   isJSONField,
-  isFieldGroupField,
   isDataField,
 } from "../../../collections/fields/guards";
 import type {
@@ -79,8 +78,11 @@ import {
 import {
   addContributedDrizzleColumns,
   contributedColumnsFor,
+  sqliteTimestampColumns,
 } from "../../schema/services/runtime-schema-generator";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
+
+import { componentFieldHasColumn } from "./field-group-utils";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 
@@ -233,14 +235,13 @@ export class FieldGroupSchemaService {
       `  ${this.q}${STORAGE_FORMAT.columns.type}${this.q} ${types.varchar(255)},`
     );
 
-    for (const field of fields) {
-      if (!isDataField(field) && !isPluginDataField(field)) continue;
-      // Skip component fields — data lives in the referenced component's table.
-      if (isFieldGroupField(field)) continue;
+    // Only fields that own a column on this row (`columnFields`): a nested
+    // component keeps its data in its own table and a virtual field stores
+    // nothing, and this DDL, the runtime tables and the ALTER plan share the
+    // one list so they cannot give the table different columns.
+    for (const field of this.columnFields(fields)) {
       // i18n: translatable columns live in the companion, not the main comp_ table.
-      if ("name" in field && field.name && localizedNames.has(field.name)) {
-        continue;
-      }
+      if (localizedNames.has(field.name)) continue;
 
       const columnSQL = this.generateColumnSQL(this.asMappableField(field));
       if (columnSQL) {
@@ -278,55 +279,30 @@ export class FieldGroupSchemaService {
       );
     }
 
-    for (const field of fields) {
-      if (!isDataField(field) && !isPluginDataField(field)) continue;
-      if (isFieldGroupField(field)) continue;
-      if (!("name" in field) || !field.name) continue;
-      // Localized fields live in the companion, not the main comp_ table — no main index.
-      if (localizedNames.has(field.name)) continue;
-      if (!this.fieldHasForeignKey(field)) continue;
-
+    // A plain index on every column that references another table, then on
+    // every other column a field asks to index — one per column either way.
+    // Localized fields live in the companion, not the main comp_ table, so
+    // they get no main index.
+    const mainColumns = this.columnFields(fields).filter(
+      field => !localizedNames.has(field.name)
+    );
+    const referencing = mainColumns.filter(field =>
+      this.fieldHasForeignKey(field)
+    );
+    const declaredIndexed = mainColumns.filter(
+      field =>
+        !this.fieldHasForeignKey(field) && "index" in field && field.index
+    );
+    for (const field of [...referencing, ...declaredIndexed]) {
       const columnName = this.toSnakeCase(field.name);
       const indexName = `idx_${tableName}_${columnName}`;
 
-      if (this.dialect === "mysql") {
-        indexStatements.push(
-          `CREATE INDEX ${this.q}${indexName}${this.q} ON ${this.q}${tableName}${this.q}(${this.q}${columnName}${this.q});`
-        );
-      } else {
-        indexStatements.push(
-          `CREATE INDEX IF NOT EXISTS ${this.q}${indexName}${this.q} ON ${this.q}${tableName}${this.q}(${this.q}${columnName}${this.q});`
-        );
-      }
+      indexStatements.push(
+        this.createIndexSql(indexName, tableName, columnName)
+      );
     }
 
-    for (const field of fields) {
-      if (!isDataField(field) && !isPluginDataField(field)) continue;
-      if (isFieldGroupField(field)) continue;
-      if (!("name" in field) || !field.name) continue;
-      // Localized fields live in the companion, not the main comp_ table — no main index.
-      if (localizedNames.has(field.name)) continue;
-      if (!("index" in field && field.index)) continue;
-      if (this.fieldHasForeignKey(field)) continue;
-
-      const columnName = this.toSnakeCase(field.name);
-      const indexName = `idx_${tableName}_${columnName}`;
-
-      if (this.dialect === "mysql") {
-        indexStatements.push(
-          `CREATE INDEX ${this.q}${indexName}${this.q} ON ${this.q}${tableName}${this.q}(${this.q}${columnName}${this.q});`
-        );
-      } else {
-        indexStatements.push(
-          `CREATE INDEX IF NOT EXISTS ${this.q}${indexName}${this.q} ON ${this.q}${tableName}${this.q}(${this.q}${columnName}${this.q});`
-        );
-      }
-    }
-
-    for (const field of fields) {
-      if (!isDataField(field) && !isPluginDataField(field)) continue;
-      if (isFieldGroupField(field)) continue;
-      if (!("name" in field) || !field.name) continue;
+    for (const field of this.columnFields(fields)) {
       // Localized fields live in the companion, not the main comp_ table — no main index.
       if (localizedNames.has(field.name)) continue;
       if (!("unique" in field && field.unique)) continue;
@@ -601,11 +577,7 @@ export class FieldGroupSchemaService {
       updated_at: pgTimestamp("updated_at").defaultNow().notNull(),
     };
 
-    for (const field of fields) {
-      if (!isDataField(field) && !isPluginDataField(field)) continue;
-      if (isFieldGroupField(field)) continue;
-      if (!("name" in field) || !field.name) continue;
-
+    for (const field of this.columnFields(fields)) {
       const column = this.mapFieldToPostgresColumn(this.asMappableField(field));
       if (column) {
         columns[field.name] = column;
@@ -654,11 +626,7 @@ export class FieldGroupSchemaService {
       updated_at: mysqlTimestamp("updated_at").defaultNow().notNull(),
     };
 
-    for (const field of fields) {
-      if (!isDataField(field) && !isPluginDataField(field)) continue;
-      if (isFieldGroupField(field)) continue;
-      if (!("name" in field) || !field.name) continue;
-
+    for (const field of this.columnFields(fields)) {
       const column = this.mapFieldToMySQLColumn(this.asMappableField(field));
       if (column) {
         columns[field.name] = column;
@@ -691,19 +659,10 @@ export class FieldGroupSchemaService {
       _parent_field: sqliteText(STORAGE_FORMAT.columns.parentField).notNull(),
       _order: sqliteInteger(STORAGE_FORMAT.columns.order).default(0),
       [STORAGE_FORMAT.columns.type]: sqliteText(typeColumn),
-      created_at: sqliteInteger("created_at", { mode: "timestamp" })
-        .notNull()
-        .$defaultFn(() => new Date()),
-      updated_at: sqliteInteger("updated_at", { mode: "timestamp" })
-        .notNull()
-        .$defaultFn(() => new Date()),
+      ...sqliteTimestampColumns(),
     };
 
-    for (const field of fields) {
-      if (!isDataField(field) && !isPluginDataField(field)) continue;
-      if (isFieldGroupField(field)) continue;
-      if (!("name" in field) || !field.name) continue;
-
+    for (const field of this.columnFields(fields)) {
       const column = this.mapFieldToSQLiteColumn(this.asMappableField(field));
       if (column) {
         columns[field.name] = column;
@@ -1192,12 +1151,39 @@ export class FieldGroupSchemaService {
     return false;
   }
 
+  /**
+   * The fields that own a column on the component's row: named data fields,
+   * less those `componentFieldHasColumn` rules out. Every loop that builds the
+   * CREATE, the indexes, the runtime tables or the ALTER plan reads this list,
+   * so they cannot disagree about which fields are columns.
+   */
+  private columnFields(
+    fields: FieldConfig[]
+  ): Array<DataFieldConfig & { name: string }> {
+    return fields.filter(
+      (field): field is DataFieldConfig & { name: string } =>
+        (isDataField(field) || isPluginDataField(field)) &&
+        componentFieldHasColumn(field) &&
+        "name" in field &&
+        typeof field.name === "string" &&
+        field.name.length > 0
+    );
+  }
+
+  /** A plain index on one column, in this dialect's spelling. */
+  private createIndexSql(
+    indexName: string,
+    tableName: string,
+    columnName: string
+  ): string {
+    // MySQL has no IF NOT EXISTS for CREATE INDEX.
+    const ifNotExists = this.dialect === "mysql" ? "" : "IF NOT EXISTS ";
+    return `CREATE INDEX ${ifNotExists}${this.q}${indexName}${this.q} ON ${this.q}${tableName}${this.q}(${this.q}${columnName}${this.q});`;
+  }
+
   private buildFieldMap(fields: FieldConfig[]): Map<string, DataFieldConfig> {
     const map = new Map<string, DataFieldConfig>();
-    for (const field of fields) {
-      if (!isDataField(field) && !isPluginDataField(field)) continue;
-      if (isFieldGroupField(field)) continue;
-      if (!("name" in field) || !field.name) continue;
+    for (const field of this.columnFields(fields)) {
       map.set(field.name, field);
     }
     return map;

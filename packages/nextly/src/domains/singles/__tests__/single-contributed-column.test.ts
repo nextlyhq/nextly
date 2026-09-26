@@ -156,6 +156,7 @@ describe("a column a schema hook contributed to a Single's table", () => {
     const { main } = splitPendingChange(
       { siteName: "Draft", searchVector: "from-draft" },
       TABLE,
+      siteSettingsMeta().fields,
       null
     );
 

@@ -3480,7 +3480,12 @@ export class CollectionMutationService extends BaseService {
         // timestamps below are authoritative — a stray `createdBy` alias can't
         // survive to overwrite the owner stamp. Columns a schema hook
         // contributed to this table go too: their contributor writes them.
-        ...stripImmutableSystemFields(finalData, "collection", tableName),
+        ...stripImmutableSystemFields(
+          finalData,
+          "collection",
+          tableName,
+          fields
+        ),
         created_at: now,
         updated_at: now,
         // Stamp the row owner with the creating user's id, so a consumer can
@@ -6415,7 +6420,12 @@ export class CollectionMutationService extends BaseService {
           // rather than inferred: the literal's own shape would refuse the
           // first-publish stamp appended before the UPDATE is assembled.
           let updatePayload: Record<string, unknown> = {
-            ...stripImmutableSystemFields(finalData, "collection", tableName),
+            ...stripImmutableSystemFields(
+              finalData,
+              "collection",
+              tableName,
+              fields
+            ),
             updatedAt: new Date(),
           };
 
@@ -6920,7 +6930,8 @@ export class CollectionMutationService extends BaseService {
                 ...stripImmutableSystemFields(
                   finalData,
                   "collection",
-                  tableName
+                  tableName,
+                  fields
                 ),
                 updatedAt: updatePayload.updatedAt,
               };
@@ -8746,7 +8757,12 @@ export class CollectionMutationService extends BaseService {
         // timestamps below are authoritative — a stray `createdBy` alias can't
         // survive to overwrite the owner stamp. Columns a schema hook
         // contributed to this table go too: their contributor writes them.
-        ...stripImmutableSystemFields(finalData, "collection", tableName),
+        ...stripImmutableSystemFields(
+          finalData,
+          "collection",
+          tableName,
+          fields
+        ),
         // Snake_case keys: the runtime Drizzle schema names these columns
         // created_at / updated_at / created_by, and the adapter maps by column
         // name. (The prior camelCase createdAt/updatedAt keys here were ignored
@@ -9478,7 +9494,12 @@ export class CollectionMutationService extends BaseService {
         : await tx.update<unknown>(
             tableName,
             {
-              ...stripImmutableSystemFields(finalData, "collection", tableName),
+              ...stripImmutableSystemFields(
+                finalData,
+                "collection",
+                tableName,
+                fields
+              ),
               // The SQL name: a dynamic table keys its system columns by it,
               // and the adapter-built update refuses a key that names no
               // column rather than dropping it.
@@ -9687,7 +9708,8 @@ export class CollectionMutationService extends BaseService {
                 ...stripImmutableSystemFields(
                   finalData,
                   "collection",
-                  tableName
+                  tableName,
+                  fields
                 ),
               },
               fields,

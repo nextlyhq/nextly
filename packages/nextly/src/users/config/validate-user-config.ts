@@ -29,6 +29,7 @@
  */
 
 import { SQL_RESERVED_KEYWORDS } from "../../collections/config/validate-config";
+import { isVirtualField } from "../../collections/fields/virtual";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import { RESERVED_PLUGIN_OPTION_KEYS } from "../../plugins/plugin-options";
 
@@ -46,6 +47,7 @@ export type UserValidationErrorCode =
   | "USER_FIELD_TYPE_NOT_ALLOWED"
   | "USER_FIELD_TYPE_REQUIRED"
   | "USER_FIELD_HAS_MANY_UNSUPPORTED"
+  | "USER_FIELD_VIRTUAL_UNSUPPORTED"
   | "USER_FIELD_PLUGIN_OPTION_RESERVED"
   // Field name errors
   | "USER_FIELD_NAME_REQUIRED"
@@ -419,6 +421,19 @@ function validateUserFields(
         path: `${fieldPath}.hasMany`,
         code: "USER_FIELD_HAS_MANY_UNSUPPORTED",
         message: `User custom field '${f.type}' stores a single value, so hasMany cannot be used with it.`,
+      });
+    }
+
+    // A custom user field is always a `user_ext` column: its DDL, its runtime
+    // table and every user write build that column from the field whatever the
+    // flag says, so a virtual user field would be stored rather than computed.
+    // Refused here, where the config is read, instead of accepted and ignored.
+    if (isVirtualField(f)) {
+      errors.push({
+        path: `${fieldPath}.virtual`,
+        code: "USER_FIELD_VIRTUAL_UNSUPPORTED",
+        message:
+          "User custom fields are stored in the user_ext table and cannot be virtual. Remove `virtual`, or compute the value where the user is read.",
       });
     }
 

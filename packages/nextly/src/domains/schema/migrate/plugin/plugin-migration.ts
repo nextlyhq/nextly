@@ -171,6 +171,27 @@ export function migrationChecksum(content: MigrationContent): string {
     .digest("hex");
 }
 
+/**
+ * One direction of a module on one dialect, as the SQL text an executor splits.
+ *
+ * An entry of `dialects[dialect].up`/`.down` is one OPERATION's rendering, and
+ * `generateSQL` does not promise that is one statement: a foreign-key action
+ * change is a drop and an add in one entry. So no caller hands the entries to
+ * a driver as they stand — a MySQL connection runs with `multipleStatements`
+ * off and refuses the pair whole. Every path that runs a module (the apply,
+ * `migrate:down --plugin`, `plugins uninstall`) reads this text and puts it
+ * through the literal-aware `splitSqlStatements`, the splitter an app
+ * migration file goes through, so a module runs as the same statements
+ * whichever path runs it.
+ */
+export function moduleSql(
+  migration: Pick<PluginMigration, "dialects">,
+  dialect: SupportedDialect,
+  direction: keyof DialectStatements
+): string {
+  return (migration.dialects[dialect]?.[direction] ?? []).join(";\n");
+}
+
 /** The ledger filename a plugin's migration is recorded under. */
 export function qualifiedFilename(
   pluginName: string,

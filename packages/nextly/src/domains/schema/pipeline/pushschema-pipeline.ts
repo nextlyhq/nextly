@@ -80,6 +80,7 @@ import {
 import { indexRestoreStatements } from "./index-restore";
 import { kitRouteConstraintStatements } from "./kit-route-constraints";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
+import { assertPreCleanupAccepted } from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
 import { executePreResolutionOps } from "./pre-resolution/executor";
@@ -332,6 +333,19 @@ function isConstraintOp(op: Operation): op is Extract<
     op.type === "add_foreign_key" ||
     op.type === "drop_foreign_key" ||
     op.type === "change_foreign_key_action"
+  );
+}
+
+/**
+ * A pre-cleanup refusal or failure, as the apply reports it. An abort is not a
+ * DDL failure: it keeps its own type so the outer mapper classifies it as
+ * CONFIRMATION_DECLINED.
+ */
+function preCleanupFailure(err: unknown): Error {
+  if (err instanceof PromptCancelledError) return err;
+  return new DdlExecutionError(
+    err instanceof Error ? err.message : String(err),
+    err
   );
 }
 
@@ -1094,6 +1108,42 @@ export class PushSchemaPipeline {
         // evaluates the precondition at all.
         const kit = useFastPath ? undefined : await getKit();
 
+        // Pre-cleanup's refusals, asked before the first statement below: on
+        // MySQL every rename, drop and lifted foreign key commits as it runs,
+        // so a resolution refused after them would leave them behind a failed
+        // apply. Snapshot patching for make_optional was already applied above
+        // by patching `desired` before drizzleSchema was built. Aggregate
+        // fields across all collections so a provide_default value is
+        // validated against its field's type.
+        // FieldConfig.name is typed string|undefined (some field types like
+        // row containers have no name); filter to only named fields, which
+        // are the only ones the classifier could have emitted events for.
+        // Aggregate symmetrically with applyMakeOptionalToDesired which
+        // patches collections + singles + components — keeping the two in
+        // sync so a future classifier-on-singles event has field metadata
+        // to validate provide_default values against.
+        const aggregatedFields: Array<{ name: string; type: string }> = [
+          ...Object.values(desired.collections),
+          ...Object.values(desired.singles),
+          ...Object.values(desired.components),
+        ].flatMap(c =>
+          c.fields
+            .filter(
+              (f): f is typeof f & { name: string } =>
+                typeof f.name === "string"
+            )
+            .map(f => ({ name: f.name, type: f.type }))
+        );
+        try {
+          assertPreCleanupAccepted({
+            resolutions: dispatchResult.resolutions,
+            events: classificationResult.events,
+            fields: aggregatedFields,
+          });
+        } catch (err) {
+          throw preCleanupFailure(err);
+        }
+
         // Phase C: pre-resolution executor runs renames + drops, led by the
         // kit route's check and foreign-key drops: a constraint still in
         // place blocks dropping, or on MySQL retyping, a column it names. The
@@ -1122,30 +1172,8 @@ export class PushSchemaPipeline {
         }
 
         // Phase D' (F5 PR 4): pre-cleanup executor runs UPDATE/DELETE for
-        // provide_default + delete_nonconforming resolutions. Snapshot
-        // patching for make_optional was already applied above by patching
-        // `desired` before drizzleSchema was built. Aggregate fields across
-        // all collections so the executor can validate provide_default
-        // values against field types.
-        // FieldConfig.name is typed string|undefined (some field types like
-        // row containers have no name); filter to only named fields, which
-        // are the only ones the classifier could have emitted events for.
-        // Aggregate symmetrically with applyMakeOptionalToDesired which
-        // patches collections + singles + components — keeping the two in
-        // sync so a future classifier-on-singles event has field metadata
-        // to validate provide_default values against.
-        const aggregatedFields: Array<{ name: string; type: string }> = [
-          ...Object.values(desired.collections),
-          ...Object.values(desired.singles),
-          ...Object.values(desired.components),
-        ].flatMap(c =>
-          c.fields
-            .filter(
-              (f): f is typeof f & { name: string } =>
-                typeof f.name === "string"
-            )
-            .map(f => ({ name: f.name, type: f.type }))
-        );
+        // provide_default + delete_nonconforming resolutions, every one of
+        // them already accepted before the first statement above.
         try {
           await this.deps.preCleanupExecutor.execute({
             tx,
@@ -1159,11 +1187,7 @@ export class PushSchemaPipeline {
           // PromptCancelledError from abort is not a DDL failure — let it
           // propagate with its original type so the outer error mapper
           // classifies it as CONFIRMATION_DECLINED.
-          if (err instanceof PromptCancelledError) throw err;
-          throw new DdlExecutionError(
-            err instanceof Error ? err.message : String(err),
-            err
-          );
+          throw preCleanupFailure(err);
         }
 
         // Phase D: pushSchema for purely-additive remainder.

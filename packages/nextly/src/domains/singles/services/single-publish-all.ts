@@ -673,6 +673,7 @@ export class SinglePublishAllService extends BaseService {
       const { main, companion: companionValues } = splitPendingChange(
         draft.snapshot,
         plan.singleMeta.tableName,
+        plan.singleMeta.fields,
         companion
       );
       delete main.status;

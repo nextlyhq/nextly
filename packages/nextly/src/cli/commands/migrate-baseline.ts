@@ -49,6 +49,7 @@ import {
   resolveDeclaredSchema,
   type ResolvedEntity,
 } from "../../domains/schema/migrate/resolved-schema";
+import { withCyclicForeignKeysSplit } from "../../domains/schema/migrate-create/cyclic-foreign-keys";
 import {
   formatMigrationFile,
   formatTimestamp,
@@ -489,9 +490,11 @@ export async function baselineCore(
         junctionTables.size > 0
           ? await introspectLiveSnapshot(db, dialect, [...junctionTables])
           : { tables: [] };
-      const junctionSql = diffSnapshots(EMPTY_SNAPSHOT, junctionLive).map(op =>
-        generateSQL(op, dialect)
-      );
+      const junctionSql = withCyclicForeignKeysSplit(
+        diffSnapshots(EMPTY_SNAPSHOT, junctionLive),
+        dialect,
+        []
+      ).map(op => generateSQL(op, dialect));
 
       // The companion's own columns, read from the database for the same
       // reason the junction's are: what is standing there is the schema being
@@ -524,7 +527,11 @@ export async function baselineCore(
       // Companions carry a foreign key to their main table, so every main
       // table has to exist before any of them runs.
       const sqlStatements = [
-        ...plan.operations.map(op => generateSQL(op, dialect)),
+        // A foreign-key cycle standing in the database has one key split out
+        // of the CREATE TABLEs, as every generated migration does.
+        ...withCyclicForeignKeysSplit(plan.operations, dialect, []).map(op =>
+          generateSQL(op, dialect)
+        ),
         ...junctionSql,
         ...companionSql.statements,
       ];

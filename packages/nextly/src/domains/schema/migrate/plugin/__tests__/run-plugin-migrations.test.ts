@@ -558,3 +558,91 @@ describe("drop guard in the runner", () => {
     expect(h.started).toEqual([]);
   });
 });
+
+describe("contributed tables are judged on the plugin's own elements", () => {
+  // A module generated before contributions were recorded: which elements are
+  // the plugin's is replayed from its own sides — `extra` is on `contributed`
+  // and not on `contributedBefore` — through the same function the generator
+  // reads them with.
+  const host = (extra: ColumnSpec[]): TableSpec => ({
+    name: "host__items",
+    columns: [
+      { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+      ...extra,
+    ],
+    indexes: [],
+  });
+  const extra: ColumnSpec = { name: "extra", type: "text", nullable: true };
+  const note: ColumnSpec = { name: "note", type: "text", nullable: true };
+
+  function recordless(): PluginMigration {
+    const up = ["ALTER TABLE host__items ADD COLUMN extra text"];
+    const dialects = {
+      postgresql: { up, down: [] },
+      mysql: { up, down: [] },
+      sqlite: { up, down: [] },
+    };
+    const none = { tables: [] };
+    const side = (table: TableSpec) => ({
+      postgresql: { tables: [table] },
+      mysql: { tables: [table] },
+      sqlite: { tables: [table] },
+    });
+    const content = {
+      name: "001",
+      schemaVersion: 1,
+      dialects,
+      snapshot: { postgresql: none, mysql: none, sqlite: none },
+      before: { postgresql: none, mysql: none, sqlite: none },
+      contributedBefore: side(host([])),
+      contributed: side(host([extra])),
+    };
+    return { ...content, checksum: migrationChecksum(content) };
+  }
+
+  it("applies over a dependency that changed the table since", async () => {
+    // Live has the owner's later `note` and not yet `extra`: neither frozen
+    // copy, but exactly the plugin's before-state on its own element.
+    const h = deps();
+    h.live.set("host__items", [host([note])]);
+    const result = await runPluginMigrations(
+      [{ pluginName: "c", pluginVersion: "1.0.0", migrations: [recordless()] }],
+      h.deps
+    );
+    expect(result).toEqual({ applied: 1, adopted: 0, skipped: 0 });
+    expect(h.executed.join("\n")).toContain("ADD COLUMN extra");
+  });
+
+  it("adopts when the element is already live beside the owner's change", async () => {
+    const h = deps();
+    h.live.set("host__items", [host([note, extra])]);
+    const result = await runPluginMigrations(
+      [{ pluginName: "c", pluginVersion: "1.0.0", migrations: [recordless()] }],
+      h.deps
+    );
+    expect(result).toEqual({ applied: 0, adopted: 1, skipped: 0 });
+    expect(h.executed).toEqual([]);
+    // The contributed table stays out of the plugin's owned tables.
+    expect(h.owners[0]).toMatchObject({ tables: [] });
+  });
+
+  it("refuses the plugin's own element in a shape neither side declares", async () => {
+    const h = deps();
+    h.live.set("host__items", [
+      host([note, { name: "extra", type: "integer", nullable: true }]),
+    ]);
+    await expect(
+      runPluginMigrations(
+        [
+          {
+            pluginName: "c",
+            pluginVersion: "1.0.0",
+            migrations: [recordless()],
+          },
+        ],
+        h.deps
+      )
+    ).rejects.toThrow(/does not match|drift/i);
+    expect(h.executed).toEqual([]);
+  });
+});

@@ -851,6 +851,7 @@ Every field type (except `join`, which is virtual) inherits the following from `
 | `index` | `boolean` | `false` | Create a single-field database index. |
 | `localized` | `boolean` | `false` | **Reserved for a future release.** When implemented, will store separate values per locale. |
 | `custom` | `Record<string, unknown>` | — | Arbitrary metadata for plugins or hooks. Not persisted. |
+| `virtual` | `boolean` | `false` | On a collection, Single or component: store nothing. The field gets no column, a value sent for it on create or update is dropped before the write, and it is never localized. Compute its value in an `afterRead` hook. Group and repeater also accept `options.virtual`. Custom user fields are always stored, so user config validation refuses `virtual` on them. |
 
 ### `admin`
 
