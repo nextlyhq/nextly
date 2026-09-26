@@ -283,9 +283,15 @@ describe.runIf(process.platform !== "win32")("the tooling step, run as GitHub ru
   const commits = {};
 
   // A variable git reads from the environment, such as GIT_DIR inside a hook,
-  // would point these commands at another repository.
-  const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
-  const git = (...args) => execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args], { cwd: dir, encoding: "utf8", env: cleanEnv() }).trim();
+  // would point these commands at another repository, and the developer's own
+  // configuration could sign these commits or run hooks on them, and fail
+  // them. So git here reads neither, only the settings given below.
+  const isolatedEnv = () => ({
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))),
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+  });
+  const git = (...args) => execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args], { cwd: dir, encoding: "utf8", env: isolatedEnv() }).trim();
 
   /** Commits a protocol and a gateway that each name the commit they are read from. */
   function commitTooling(name) {
