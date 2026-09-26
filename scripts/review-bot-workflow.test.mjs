@@ -26,9 +26,9 @@
  * the calls they make are what is asserted.
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 
 import { load } from "js-yaml";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -99,6 +99,22 @@ const postReads = () =>
   named(postSteps, "Post the review as the review bot")
     .run.replaceAll('"$out/review.json"', '"$out/"')
     .replace("::warning::replies.json", "::warning::");
+
+/** The paths the post job checks out, the workflow's own commit's copies. */
+const checkedOut = () => usesOf(postSteps, "actions/checkout")[0].with["sparse-checkout"].split("\n").filter(Boolean);
+
+/** Every module a set of modules loads through relative imports, the set included. */
+function withImports(paths) {
+  const found = new Set();
+  const pending = [...paths];
+  while (pending.length > 0) {
+    const path = pending.pop();
+    if (found.has(path)) continue;
+    found.add(path);
+    for (const [, specifier] of read(path).matchAll(/\b(?:from|import)\s+["'](\.[^"']+)["']/g)) pending.push(posix.normalize(posix.join(posix.dirname(path), specifier)));
+  }
+  return found;
+}
 
 /** Every rule one `--flag "a,b(c)"` of the agent's arguments lists, each read whole. */
 function rulesOf(flag) {
@@ -202,8 +218,18 @@ describe("where the bot's identity lives", () => {
   it("posts with the gateway from the workflow's own commit, never the reviewed branch's", () => {
     const checkouts = usesOf(postSteps, "actions/checkout");
     expect(checkouts).toHaveLength(1);
-    expect(checkouts[0].with).toMatchObject({ ref: "${{ github.sha }}", "sparse-checkout": ".github/scripts", "persist-credentials": false });
+    expect(checkouts[0].with).toMatchObject({ ref: "${{ github.sha }}", "sparse-checkout-cone-mode": false, "persist-credentials": false });
+    expect(checkedOut()[0]).toBe(".github/scripts");
     expect(named(postSteps, "Post the review as the review bot").run).toContain("gateway=.github/scripts/review-bot-gh.sh\n");
+  });
+
+  it("checks out every module the post job runs, and each module that one imports", () => {
+    // The job checks out only what it names, so a module missing from the
+    // list, or one a listed module imports, fails the post when it runs.
+    const started = [...postSteps.map(step => step.run ?? "").join("\n").matchAll(/\bnode (scripts\/[\w./-]+\.mjs)/g)].map(match => match[1]);
+    // The control: the post step runs the anchor check.
+    expect(started).toContain("scripts/review-anchors.mjs");
+    for (const path of withImports(started)) expect(checkedOut().some(entry => path === entry || path.startsWith(`${entry}/`)), path).toBe(true);
   });
 });
 
@@ -241,7 +267,7 @@ describe("what else could widen the agent's grant", () => {
   });
 });
 
-describe.runIf(process.platform !== "win32")("posting once per run", () => {
+describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs it", () => {
   const RUN = "424242";
   const SHA = "a".repeat(40);
   let dir;
@@ -260,14 +286,21 @@ describe.runIf(process.platform !== "win32")("posting once per run", () => {
         'printf "%s\\n" "$*" >> "$FAKE/calls"',
         'case "$1" in',
         '  review-ids-at) cat "$FAKE/ids-$4" 2>/dev/null || true ;;',
+        '  files) cat "$FAKE/files.json" ;;',
         '  head-sha) printf "%s\\n" "$SHA" ;;',
         "esac",
         "",
       ].join("\n"),
     );
     chmodSync(gateway, 0o755);
+    // The modules the job checks out beside the gateway, copied as the job has them.
+    for (const path of checkedOut().filter(entry => entry.startsWith("scripts/"))) {
+      mkdirSync(join(dir, posix.dirname(path)), { recursive: true });
+      copyFileSync(new URL(`../${path}`, import.meta.url), join(dir, path));
+    }
+    // One changed file, whose diff shows new lines 1 to 3.
+    writeFileSync(join(dir, "files.json"), JSON.stringify([{ filename: "src/a.ts", patch: "@@ -1,2 +1,3 @@\n one\n+two\n three" }]));
     mkdirSync(join(dir, "payload"));
-    writeFileSync(join(dir, "payload", "review.json"), JSON.stringify({ body: "the review", comments: [] }));
     writeFileSync(
       join(dir, "payload", "replies.json"),
       JSON.stringify([
@@ -281,7 +314,8 @@ describe.runIf(process.platform !== "win32")("posting once per run", () => {
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   /** Runs one post-job step as GitHub's bash does, with `files` written beside the stand-in first. */
-  function runStep(name, files = {}) {
+  function runStep(name, files = {}, comments = []) {
+    writeFileSync(join(dir, "payload", "review.json"), JSON.stringify({ body: "the review", comments }));
     for (const file of readdirSync(dir).filter(file => file === "calls" || file.startsWith("ids-"))) rmSync(join(dir, file));
     for (const [file, text] of Object.entries(files)) writeFileSync(join(dir, file), text);
     writeFileSync(join(dir, "step.sh"), named(postSteps, name).run);
@@ -295,7 +329,27 @@ describe.runIf(process.platform !== "win32")("posting once per run", () => {
     const { status, output, calls } = runStep("Post the review as the review bot");
     expect(status, output).toBe(0);
     const out = join(dir, "temp", "nextly-review-post");
-    expect(calls).toEqual([`post-review 7 ${out}/review.json ${SHA} ${RUN}`, `reply 7 101 ${out}/reply-0.md ${RUN} 0`, `reply 7 102 ${out}/reply-1.md ${RUN} 1`]);
+    expect(calls).toEqual([`files 7`, `post-review 7 ${out}/inline.json ${SHA} ${RUN}`, `reply 7 101 ${out}/reply-0.md ${RUN} 0`, `reply 7 102 ${out}/reply-1.md ${RUN} 1`]);
+  });
+
+  it("posts a comment the diff shows inline, and one it does not as a file-level thread", () => {
+    const comments = [
+      { path: "src/a.ts", line: 2, side: "RIGHT", body: "shown" },
+      { path: "src/a.ts", line: 40, side: "RIGHT", body: "not shown" },
+    ];
+    const { status, output, calls } = runStep("Post the review as the review bot", {}, comments);
+    expect(status, output).toBe(0);
+    const out = join(dir, "temp", "nextly-review-post");
+    expect(calls.slice(0, 3)).toEqual([`files 7`, `post-review 7 ${out}/inline.json ${SHA} ${RUN}`, `post-file-comment 7 ${SHA} src/a.ts ${out}/file-0.md ${RUN} 0`]);
+    expect(JSON.parse(readFileSync(join(out, "inline.json"), "utf8")).comments).toEqual([comments[0]]);
+    expect(readFileSync(join(out, "file-0.md"), "utf8")).toContain("not shown");
+  });
+
+  it("posts nothing when a comment is on a file the change does not touch", () => {
+    const { status, output, calls } = runStep("Post the review as the review bot", {}, [{ path: "src/b.ts", line: 1, body: "elsewhere" }]);
+    expect(status).not.toBe(0);
+    expect(output).toContain("src/b.ts, which the diff does not change");
+    expect(calls).toEqual([`files 7`]);
   });
 
   it("confirms with the review this run posted, whichever attempt posted it", () => {
