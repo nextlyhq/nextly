@@ -296,8 +296,13 @@ jobs:
       # ever be a comment on the reviewed head: the event is set to COMMENT, so
       # the bot never approves or requests changes whatever the payload says,
       # the commit is the one reviewed, and the gateway refuses to post once
-      # the branch has moved. Each reply's body goes through a file, so no
-      # comment text passes through the shell.
+      # the branch has moved. One inline comment GitHub cannot anchor refuses
+      # the whole review with a 422, and then nothing is posted and the run
+      # fails: a review whose findings sat only in its body would open no
+      # thread to resolve, yet the merge queue counts the bot's review while
+      # Codex is held up. Replies follow the review, each body through a file
+      # so no comment text passes through the shell; one that cannot post, to
+      # a thread removed since, say, is reported without undoing the review.
       - name: Post the review as the review bot
         if: steps.ask.outputs.run == 'true'
         env:
@@ -311,21 +316,17 @@ jobs:
           mkdir -p "$out"
           test -s .nextly-review/review.json || { echo "::error::the agent wrote no review payload for $SHA"; exit 1; }
           jq --arg sha "$SHA" '.event = "COMMENT" | .commit_id = $sha' .nextly-review/review.json > "$out/review.json"
-          # One inline comment GitHub cannot anchor refuses the whole review
-          # with a 422. The comments then move into the summary, where the
-          # protocol puts what it cannot anchor, and the review posts once more.
-          if ! result=$("$gateway" post-review "$NUMBER" "$out/review.json" "$SHA" 2>&1); then
-            echo "$result"
-            grep -q "HTTP 422" <<<"$result" || exit 1
-            jq '.body += "\n\n**Not inline-anchorable (GitHub refused an anchor, so every inline comment moved here):**\n" + ([.comments[]? | "- `\(.path):\(.line)`: \(.body)"] | join("\n")) | .comments = []' \
-              "$out/review.json" > "$out/review-folded.json"
-            "$gateway" post-review "$NUMBER" "$out/review-folded.json" "$SHA"
-          fi
+          "$gateway" post-review "$NUMBER" "$out/review.json" "$SHA"
           if [ -f .nextly-review/replies.json ]; then
-            count=$(jq 'length' .nextly-review/replies.json)
+            if ! count=$(jq -e 'if type == "array" then length else error("not an array") end' .nextly-review/replies.json); then
+              echo "::warning::replies.json is not a JSON array, so no reply was posted"
+              count=0
+            fi
             for i in $(seq 0 $((count - 1))); do
-              jq -r ".[$i].body" .nextly-review/replies.json > "$out/reply-$i.md"
-              "$gateway" reply "$NUMBER" "$(jq -r ".[$i].in_reply_to" .nextly-review/replies.json)" "$out/reply-$i.md"
+              if ! { jq -er ".[$i].body" .nextly-review/replies.json > "$out/reply-$i.md" &&
+                "$gateway" reply "$NUMBER" "$(jq -r ".[$i].in_reply_to" .nextly-review/replies.json)" "$out/reply-$i.md"; }; then
+                echo "::warning::reply $((i + 1)) of $count could not be posted; the review stands"
+              fi
             done
           fi
 

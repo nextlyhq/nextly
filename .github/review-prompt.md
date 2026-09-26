@@ -137,7 +137,7 @@ AGENTS.md permalink to the rule lines.>
 
 Everything in ONE review so the PR gets one notification. Write the payload with the Write tool to `.nextly-review/review.json` (the only directory you may write to), and replies to earlier findings, if any, to `.nextly-review/replies.json`. You do not post them. Once you finish, the workflow posts both as the review bot, `nextly-review-bot[bot]`, with a token you never hold; a `post-review` or `reply` call of your own is refused, and so is a raw `gh api` call.
 
-Set `commit_id` to `HEAD_SHA`, the commit you actually reviewed. The workflow posts only as a comment on that commit, and refuses to post if the branch has moved since, because a review that lands against a commit nobody is looking at any more is worse than no review: it reads as current. If GitHub refuses an inline anchor, the workflow moves every inline comment into the summary and posts that instead, so validate each anchor in Phase 6.
+Set `commit_id` to `HEAD_SHA`, the commit you actually reviewed. The workflow posts only as a comment on that commit, and refuses to post if the branch has moved since, because a review that lands against a commit nobody is looking at any more is worse than no review: it reads as current. If GitHub refuses an inline anchor, it refuses the whole review, and the workflow then posts nothing and the run fails: a review whose findings sat only in its body would open no thread to resolve. So validate every anchor in Phase 6, and keep what you cannot anchor in the summary's Not inline-anchorable section.
 
 If you cannot finish the review, do NOT write a payload that reads as a finished round. Say plainly in your final message what stopped you, so the run is treated as a failed round rather than a clean one.
 
@@ -158,7 +158,7 @@ If you cannot finish the review, do NOT write a payload that reads as a finished
 ```
 
 - `event` must be `COMMENT` (a pending review from omitting `event` is invisible: silent failure).
-- One bad anchor 422s the whole review, which the workflow then posts with every inline comment moved into the summary; you validated anchors in Phase 6 so that it does not.
+- One bad anchor 422s the whole review, and then nothing is posted: the round is lost. That is why you validated every anchor in Phase 6.
 - Summary body template:
 
 ```markdown
