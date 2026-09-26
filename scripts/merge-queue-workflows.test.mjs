@@ -887,9 +887,66 @@ describe("who owns what the required checks run", () => {
     const files = trackedFiles();
     const tracked = new Set(files);
     const setups = files.filter(path => TEST_CONFIGURATION.test(path)).flatMap(path => setupModulesOf(path, tracked));
-    // The control: a package's own setup module, the shared one at the root, and a global setup.
-    expect(setups).toEqual(expect.arrayContaining(["packages/nextly/src/__tests__/setup.ts", "scripts/vitest-dom-setup.ts", "packages/blocks-react/vitest.global-setup.ts"]));
+    // The control: a package's own setup module, the shared one at the root, a
+    // global setup, and the one the browser tests' Playwright configuration runs.
+    expect(setups).toEqual(expect.arrayContaining(["packages/nextly/src/__tests__/setup.ts", "scripts/vitest-dom-setup.ts", "packages/blocks-react/vitest.global-setup.ts", "e2e/global-setup.ts"]));
     for (const path of new Set(setups)) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // The readers behind the tests above take forms this repository does not use
+  // today, so those tests cannot fail on them; each form is held here instead.
+  it("follows a root script through the root scripts it runs, to the Turbo tasks at the end", () => {
+    const scripts = { "ci:generate": "pnpm generate --force", generate: "turbo run generate", unrelated: "turbo run dev" };
+    expect([...commandsRunBy(["pnpm ci:generate"], scripts)].flatMap(turboTasksIn)).toEqual(["generate"]);
+  });
+
+  it("reads a task's package-scoped definitions as well as its shared one", () => {
+    const graph = { test: { dependsOn: ["^build"] }, "some-package#test": { dependsOn: ["generate"] }, "other#lint": { dependsOn: ["format"] } };
+    expect(dependenciesOf(graph, "test").sort()).toEqual(["build", "generate"]);
+  });
+
+  it("reads every form in which a module loads a file beside it", () => {
+    const text = [
+      'import rule from "./rule.js";',
+      'import "./side-effect.js";',
+      'export { other } from "./re-export.js";',
+      'const required = require("./required.cjs");',
+      'const dynamic = await import("./dynamic.mjs");',
+      'const list = readFileSync(new URL("./list.json", import.meta.url), "utf8");',
+      'import shared from "@scope/shared";',
+    ].join("\n");
+    const loads = ["dynamic.mjs", "list.json", "re-export.js", "required.cjs", "rule.js", "side-effect.js"].map(file => `packages/a/${file}`);
+    expect(loadsIn(text, "packages/a/eslint.config.mjs").sort()).toEqual(loads);
+  });
+
+  it("reads a setup key given a string or strings, and refuses any other form rather than read it as naming nothing", () => {
+    const config = "packages/a/vitest.config.ts";
+    expect(setupModulesIn('test: { setupFiles: ["./setup.ts", "../shared.ts"], globalSetup: "./global.ts" }', config)).toEqual(["packages/a/setup.ts", "packages/shared.ts", "packages/a/global.ts"]);
+    expect(setupModulesIn('globalTeardown: "./teardown.ts",', "e2e/playwright.config.ts")).toEqual(["e2e/teardown.ts"]);
+    for (const unread of ["setupFiles: [setup]", 'globalSetup: require.resolve("./global.ts")', "test: { setupFiles }", "setupFiles: setups,"]) {
+      expect(() => setupModulesIn(unread, config), unread).toThrow(/cannot read/);
+    }
+  });
+
+  it("names a program a package script runs in any JavaScript or TypeScript form", () => {
+    const named = script => [...script.matchAll(LOCAL_FILE)].map(([, file]) => file);
+    expect(named("tsx scripts/generate.mts && node ./bin/run.cts && tsx src/cli.tsx --check scripts/x.js")).toEqual(["scripts/generate.mts", "./bin/run.cts", "src/cli.tsx", "scripts/x.js"]);
+  });
+
+  it("reads a step's shell and the inputs it hands an action, not its name or a whole-line comment", () => {
+    expect(stepTexts({ name: "turbo run dev", run: "# turbo run dev\npnpm test" })).toEqual(["\npnpm test"]);
+    expect(stepTexts({ uses: "actions/github-script@v7", with: { script: "require('./scripts/x.cjs')" } })).toEqual(["", "require('./scripts/x.cjs')"]);
+  });
+
+  it("reads what a local action's steps run, never the prose around them", () => {
+    const integration = read(".github/workflows/integration.yml");
+    const { actions, texts } = runBy(integration, requiredJobs(integration, QUEUE_CHECKS[".github/workflows/integration.yml"]));
+    const setup = ".github/actions/integration-setup/action.yml";
+    const action = load(readRepositoryFile(setup));
+    // The control: the jobs use the action, and what its steps run is read.
+    expect(actions).toContain(setup);
+    expect(texts).toEqual(expect.arrayContaining(action.runs.steps.filter(step => step.run).map(step => step.run)));
+    expect(texts.some(text => text.includes(action.description.slice(0, 40)))).toBe(false);
   });
 
   // The control: the walk reaches the scripts a required job runs, named
@@ -978,9 +1035,9 @@ const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.
 /** A workspace package's manifest, whose scripts Turbo runs. */
 const WORKSPACE_MANIFEST = /^(?:packages|apps)\/[^/]+\/package\.json$|^e2e\/package\.json$/;
 const LINT_CONFIGURATION = /(?:^|\/)eslint[^/]*\.config\.[^/]+$/;
-const TEST_CONFIGURATION = /(?:^|\/)vitest[^/]*\.config\.[^/]+$/;
-/** A file a package script names from the package's own directory. */
-const LOCAL_FILE = /(?:^|[\s="'])(\.{0,2}\/?[\w./-]+\.(?:cjs|mjs|js|ts|sh|json))(?=$|[\s"';&|)])/g;
+const TEST_CONFIGURATION = /(?:^|\/)(?:vitest|playwright)[^/]*\.config\.[^/]+$/;
+/** A file a package script names from the package's own directory, as a program in any JavaScript or TypeScript form, a shell script or data. */
+const LOCAL_FILE = /(?:^|[\s="'])(\.{0,2}\/?[\w./-]+\.(?:[cm]?js|jsx|[cm]?ts|tsx|sh|json))(?=$|[\s"';&|)])/g;
 
 /** A JSONC text as data: comments outside strings removed, and trailing commas. */
 function parsedJsonc(text) {
@@ -999,7 +1056,7 @@ function tasksRequiredChecksRun() {
     const workflow = read(path);
     return runBy(workflow, requiredJobs(workflow, checks)).texts;
   });
-  const named = [...texts, ...texts.flatMap(rootScriptsNamedIn)].flatMap(turboTasksIn);
+  const named = [...commandsRunBy(texts)].flatMap(turboTasksIn);
   const graph = parsedJsonc(readRepositoryFile("turbo.jsonc")).tasks;
   return reachable(named, task => dependenciesOf(graph, task));
 }
@@ -1009,9 +1066,15 @@ function turboTasksIn(text) {
   return [...text.matchAll(/\bturbo (?:run )?((?:\w[\w:-]*[ \t]*)+)/g)].flatMap(match => match[1].trim().split(/\s+/));
 }
 
-/** The tasks one task depends on in the task graph, a dependency's `^` and `<package>#` prefixes set aside. */
+/**
+ * The tasks one task depends on in the task graph: through its shared
+ * definition and through each package's own (`<package>#<task>`), which can add
+ * dependencies of its own. A dependency's `^` and `<package>#` prefixes are set
+ * aside, since what is reached is the task.
+ */
 function dependenciesOf(graph, task) {
-  return (graph[task]?.dependsOn ?? []).map(dependency => dependency.replace(/^\^/, "").replace(/^.*#/, ""));
+  const definitions = Object.entries(graph).filter(([name]) => name === task || name.endsWith(`#${task}`));
+  return definitions.flatMap(([, definition]) => definition.dependsOn ?? []).map(dependency => dependency.replace(/^\^/, "").replace(/^.*#/, ""));
 }
 
 /**
@@ -1060,24 +1123,46 @@ function loadedThrough(roots, tracked) {
 }
 
 function loadedBy(path, tracked) {
-  const text = readRepositoryFile(path);
-  const imported = [...text.matchAll(CONFIGURATION_IMPORT)].map(match => match[1]).filter(specifier => specifier.startsWith("."));
-  const read = [...text.matchAll(/readFileSync\(([^;]*?)["']utf-?8["']/g)].flatMap(match => [...match[1].matchAll(/["']([^"']+)["']/g)].map(literal => `./${literal[1]}`));
-  return [...imported, ...read].map(specifier => repositoryPathOf(specifier, path, new Map())).filter(target => tracked.has(target));
+  return loadsIn(readRepositoryFile(path), path).filter(target => tracked.has(target));
 }
 
-/** The modules a test configuration's `setupFiles` and `globalSetup` name, as repository paths. */
-function setupModulesOf(path, tracked) {
-  const text = readRepositoryFile(path);
-  const lists = [...text.matchAll(/\b(?:setupFiles|globalSetup)\s*:\s*(\[[^\]]*\]|["'][^"']+["'])/g)].map(match => match[1]);
-  const named = lists.flatMap(list => [...list.matchAll(/["']([^"']+)["']/g)].map(match => posix.normalize(posix.join(posix.dirname(path), match[1]))));
-  return named.filter(module => tracked.has(module));
+/** The files beside it a module's text loads: a relative import in any form, and a file it reads with `readFileSync`. */
+function loadsIn(text, path) {
+  const imported = [...text.matchAll(CONFIGURATION_IMPORT)].map(match => match[1]).filter(specifier => specifier.startsWith("."));
+  const read = [...text.matchAll(/readFileSync\(([^;]*?)["']utf-?8["']/g)].flatMap(match => [...match[1].matchAll(/["']([^"']+)["']/g)].map(literal => `./${literal[1]}`));
+  return [...imported, ...read].map(specifier => repositoryPathOf(specifier, path, new Map()));
 }
+
+/** The modules a test configuration's setup keys name, as repository paths. */
+function setupModulesOf(path, tracked) {
+  return setupModulesIn(readRepositoryFile(path), path).filter(module => tracked.has(module));
+}
+
+/**
+ * The modules `setupFiles`, `globalSetup` and `globalTeardown` name in a
+ * configuration's text. Only a string, or an array of strings, can be read
+ * from the text; a key given a variable, a call or anything else is refused
+ * rather than read as naming nothing, which would leave its module unowned.
+ */
+function setupModulesIn(text, path) {
+  const shorthand = SETUP_SHORTHAND.exec(text);
+  if (shorthand) throw new Error(`${path} gives ${shorthand[1]} a variable, which this test cannot read`);
+  return [...text.matchAll(SETUP_KEY)].flatMap(key => {
+    const value = SETUP_VALUE.exec(text.slice(key.index + key[0].length));
+    if (!value) throw new Error(`${path} declares ${key[1]} in a form this test cannot read: ${text.slice(key.index, key.index + 80)}`);
+    return [...value[0].matchAll(/["']([^"']+)["']/g)].map(match => posix.normalize(posix.join(posix.dirname(path), match[1])));
+  });
+}
+
+const SETUP_KEY = /\b(setupFiles|globalSetup|globalTeardown)\s*:\s*/g;
+const SETUP_SHORTHAND = /\b(setupFiles|globalSetup|globalTeardown)\s*[,}]/;
+const SETUP_VALUE = /^(?:\[\s*(?:["'][^"'\n]+["']\s*,?\s*)*\]|["'][^"'\n]+["'])/;
 
 /** Compiler and lint configuration, which may extend or import shared configuration. */
 const SHARING_CONFIGURATION = /(?:^|\/)(?:tsconfig[^/]*\.json|eslint[^/]*\.config\.[^/]+)$/;
 const EXTENDS = /"extends"\s*:\s*(\[[^\]]*\]|"[^"]*")/;
-const CONFIGURATION_IMPORT = /(?:\bfrom\s+|\brequire\(\s*|\bimport\(\s*)["']([^"']+)["']/g;
+/** A module another loads: `import … from`, `export … from`, a bare `import` for its side effects, `require()` and `import()`. */
+const CONFIGURATION_IMPORT = /(?:\bfrom\s+|\bimport\s+|\brequire\(\s*|\bimport\(\s*)["']([^"']+)["']/g;
 
 function readRepositoryFile(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -1111,26 +1196,46 @@ function trackedFiles() {
 const PACKAGE_SCRIPTS = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts;
 const SCRIPT_PATH = /\bscripts\/[\w./-]+\.(?:mjs|cjs|js|sh)\b/g;
 
-/** What a set of jobs runs: the local actions it uses, and the text of its steps and of those actions. */
+/** What a set of jobs runs: the local actions it uses, however nested, and what each of its steps and theirs runs. */
 function runBy(workflow, ids) {
   const steps = ids.flatMap(id => workflow.jobs[id].steps ?? []);
-  const actions = steps.map(step => String(step.uses ?? "")).filter(uses => uses.startsWith("./")).map(uses => `${uses.slice(2)}/action.yml`);
-  const texts = [...steps.map(step => String(step.run ?? "")), ...actions.map(action => readFileSync(new URL(`../${action}`, import.meta.url), "utf8"))];
-  // A whole-line comment runs nothing, in a step's shell or in an action's
-  // YAML, which is read as text: prose there that mentions a command is not
-  // the command.
-  return { actions, texts: texts.map(text => text.replace(/^[ \t]*#.*$/gm, "")) };
+  const actions = [...reachable(localActionsOf(steps), action => localActionsOf(actionSteps(action)))];
+  return { actions, texts: [...steps, ...actions.flatMap(actionSteps)].flatMap(stepTexts) };
+}
+
+/** The local actions a list of steps uses, as the paths of their definitions. */
+function localActionsOf(steps) {
+  return steps.map(step => String(step.uses ?? "")).filter(uses => uses.startsWith("./")).map(uses => `${uses.slice(2)}/action.yml`);
+}
+
+/** A composite action's steps, read from its definition, so its name and descriptions are never taken for commands. */
+function actionSteps(path) {
+  return load(readRepositoryFile(path))?.runs?.steps ?? [];
+}
+
+/**
+ * What one step runs: its shell, and the inputs it hands an action, which can
+ * be code, as the script `actions/github-script` runs is. A whole-line comment
+ * in either runs nothing, so prose there that mentions a command is dropped.
+ */
+function stepTexts(step) {
+  return [step.run ?? "", ...Object.values(step.with ?? {})].map(value => String(value).replace(/^[ \t]*#.*$/gm, ""));
 }
 
 /** The local actions a set of jobs uses, and the scripts their steps name, directly or through a package script. */
 function pathsRunBy(workflow, ids) {
   const { actions, texts } = runBy(workflow, ids);
-  return [...new Set([...actions, ...texts.flatMap(scriptsNamedIn)])];
+  return [...new Set([...actions, ...[...commandsRunBy(texts)].flatMap(scriptsNamedIn)])];
+}
+
+/** Each command step texts run: the texts themselves, and every root script they name, followed through the root scripts it names in turn. */
+function commandsRunBy(texts, scripts = PACKAGE_SCRIPTS) {
+  return reachable(texts, text => rootScriptsNamedIn(text, scripts));
 }
 
 /** The root package scripts a command runs with `pnpm <script>`, as their commands. */
-function rootScriptsNamedIn(text) {
-  return [...text.matchAll(/\bpnpm (?:run )?([\w:-]+)/g)].map(match => PACKAGE_SCRIPTS[match[1]]).filter(Boolean);
+function rootScriptsNamedIn(text, scripts = PACKAGE_SCRIPTS) {
+  return [...text.matchAll(/\bpnpm (?:run )?([\w:-]+)/g)].map(match => scripts[match[1]]).filter(Boolean);
 }
 
 function scriptsNamedIn(text) {

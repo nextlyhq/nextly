@@ -57,6 +57,7 @@ rollup*.config.*             @mobeenabdullah
 /packages/nextly/scripts/    @mobeenabdullah
 /packages/ui/scripts/        @mobeenabdullah
 vitest.global-setup.*        @mobeenabdullah
+/e2e/global-setup.ts         @mobeenabdullah
 /packages/admin/src/__tests__/setup.ts @mobeenabdullah
 /packages/nextly/src/__tests__/setup.ts @mobeenabdullah
 /packages/plugin-form-builder/src/__tests__/setup.ts @mobeenabdullah
