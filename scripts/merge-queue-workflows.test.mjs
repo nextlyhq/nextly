@@ -954,7 +954,23 @@ describe("who owns what the required checks run", () => {
     ["a directory's TSX index", "d/x", "d/x/index.tsx"],
     ["a directory's ES module index", "d/x", "d/x/index.mjs"],
   ])("resolves %s", (_, imported, file) => {
-    expect(resolvedModule(imported, new Set([file]))).toBe(file);
+    expect(resolvedModules(imported, new Set([file]))).toEqual([file]);
+  });
+
+  it("resolves an import to every file it can name, whichever of them the tool that loads it picks", () => {
+    // TypeScript compiles `./x.jsx` from `x.tsx`, and a runtime that loads it
+    // as written gets `x.jsx`, so a change to either changes what runs.
+    expect(resolvedModules("d/x.jsx", new Set(["d/x.jsx", "d/x.tsx"])).sort()).toEqual(["d/x.jsx", "d/x.tsx"]);
+  });
+
+  it("reads the imports of every module a lint configuration's walk reaches, in any module extension", () => {
+    // The configuration imports a helper written in TSX, which alone imports the rule.
+    const files = {
+      "packages/x/eslint.config.mjs": 'import { helper } from "./helper.jsx";',
+      "packages/x/helper.tsx": 'import rule from "./rule.js";',
+      "packages/x/rule.ts": "",
+    };
+    expect(loadedThrough(["packages/x/eslint.config.mjs"], new Set(Object.keys(files)), path => files[path]).sort()).toEqual(["packages/x/helper.tsx", "packages/x/rule.ts"]);
   });
 
   it("follows a test or tooling file's imports into the ones it imports in turn, and never through a product module", () => {
@@ -1170,33 +1186,38 @@ function scriptsCalledBy(scripts, name) {
  * reads with `readFileSync`, which is how a rule reads its allowlist. A file
  * that is not a module, such as that allowlist, is reached but not read.
  */
-function loadedThrough(roots, tracked) {
-  const reached = reachable(roots, path => (/\.(?:[cm]?js|ts)$/.test(path) ? loadedBy(path, tracked) : []));
+function loadedThrough(roots, tracked, readFile = readRepositoryFile) {
+  const reached = reachable(roots, path => (isModule(path) ? loadedBy(path, tracked, readFile) : []));
   return [...reached].filter(path => !roots.includes(path));
 }
 
 /** The files a module loads, as tracked paths; `readFile` reads its text, the repository's copy unless told otherwise. */
 function loadedBy(path, tracked, readFile = readRepositoryFile) {
   return loadsIn(readFile(path), path)
-    .map(target => resolvedModule(target, tracked))
-    .filter(Boolean);
+    .flatMap(target => resolvedModules(target, tracked));
 }
 
 /** The TypeScript sources a JavaScript extension compiles from: `./x.js` is written for `./x.ts` or `./x.tsx`. */
 const SOURCES_OF = { ".js": [".ts", ".tsx"], ".jsx": [".tsx"], ".mjs": [".mts"], ".cjs": [".cts"] };
 /** Every extension a module is written with here, and so every one an import can leave out. */
 const MODULE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+/** Whether the walks read a file's imports: a module in any of those extensions, never a file it only reads, such as an allowlist. */
+const isModule = path => MODULE_EXTENSIONS.some(extension => path.endsWith(extension));
 
 /**
- * The tracked file an import names, resolved as TypeScript and Node resolve
- * it: as written, from the TypeScript source a JavaScript extension names,
- * or with an extension or an index file added, in any module extension.
+ * Every tracked file an import can name, resolved as TypeScript and Node
+ * resolve it: as written, from the TypeScript source a JavaScript extension
+ * names, or with an extension or an index file added, in any module
+ * extension. All of them, not the first: which one runs depends on what loads
+ * the module, since TypeScript compiles `./x.js` from `x.ts` where a runtime
+ * that loads it as written gets `x.js`, and a change to either changes what
+ * runs.
  */
-function resolvedModule(path, tracked) {
+function resolvedModules(path, tracked) {
   const [, stem, written] = /^(.*?)(\.[cm]?jsx?)?$/.exec(path);
   const typescript = (SOURCES_OF[written] ?? []).map(extension => `${stem}${extension}`);
   const added = [...MODULE_EXTENSIONS, ...MODULE_EXTENSIONS.map(extension => `/index${extension}`)].map(extension => `${path}${extension}`);
-  return [path, ...typescript, ...added].find(candidate => tracked.has(candidate)) ?? null;
+  return [path, ...typescript, ...added].filter(candidate => tracked.has(candidate));
 }
 
 /**
@@ -1209,7 +1230,7 @@ const TOOLING = /(?:^|\/)(?:scripts|__tests__)\//;
 
 /** The test and tooling files a set of modules imports, however deep, the modules themselves left out. */
 function toolingImportedBy(roots, tracked, readFile = readRepositoryFile) {
-  const reached = reachable(roots, path => (/\.(?:[cm]?[jt]sx?)$/.test(path) ? loadedBy(path, tracked, readFile).filter(target => TOOLING.test(target)) : []));
+  const reached = reachable(roots, path => (isModule(path) ? loadedBy(path, tracked, readFile).filter(target => TOOLING.test(target)) : []));
   return [...reached].filter(path => !roots.includes(path));
 }
 
