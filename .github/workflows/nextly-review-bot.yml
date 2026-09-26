@@ -62,9 +62,10 @@ jobs:
     # `post` job's environment would admit it, and so is refused before the
     # paid agent runs rather than after; it then meets the same eligibility
     # rules in the resolve step, which is also where draft/fork/base are
-    # checked for both paths.
+    # checked for both paths. The branch is compared by its full ref: a tag
+    # can share its name, and `github.ref_name` would not tell them apart.
     if: >
-      (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
       (github.event.issue.pull_request &&
       contains(github.event.comment.body, '@nextly-bot') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&

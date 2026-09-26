@@ -183,10 +183,13 @@ describe("where the bot's identity lives", () => {
 
   it("runs a dispatch only from the default branch, before the paid agent starts", () => {
     // The environment refuses other branches only once the post job starts; by
-    // then the agent has run, so the review job refuses them itself.
+    // then the agent has run, so the review job refuses them itself. It names
+    // the branch by its full ref: a dispatch of a tag called `main` has the
+    // ref name `main` too, and the ref `refs/tags/main`.
     expect(jobs.review.if).toContain(
-      "(github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch) ||",
+      "(github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||",
     );
+    expect(jobs.review.if).not.toContain("ref_name");
   });
 
   it("takes the App identity only in a job after the agent's, which never runs the agent", () => {
