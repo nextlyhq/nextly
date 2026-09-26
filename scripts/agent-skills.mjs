@@ -151,8 +151,15 @@ function running(pid) {
   }
 }
 
-/** Whether a copy belongs to another sync that is still running, and so is in use rather than left behind. */
+/**
+ * Whether a copy is the staging copy of another sync that is still running,
+ * which that sync removes itself. An old copy set aside is in use only for
+ * the moment between its swap and its removal, and one whose removal failed
+ * is left behind even while its process runs on, so an old copy is never
+ * taken as in use: a retry after that moment is clean.
+ */
 function inUseByAnother(name) {
+  if (name.endsWith("-old")) return false;
   const pid = maker(name);
   return pid !== null && pid !== process.pid && running(pid);
 }
