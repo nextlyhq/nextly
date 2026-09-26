@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { pluginAdminSlug } from "../../../../plugins/plugin-slug";
 import {
+  assertIndexBuildable,
   assertUsableAppTableName,
   mysqlKeyBytes,
   judgeIndex,
@@ -244,5 +245,48 @@ describe("MySQL key widths", () => {
         defined: true,
       });
     }
+  });
+});
+
+describe("declaration-time index rules", () => {
+  const cols = [column("id", "varchar", 36), column("owner", "varchar", 36)];
+
+  it("refuses a partial index, which MySQL cannot build, whatever the live dialect", () => {
+    const partial = { columns: ["owner"], unique: true, where: "owner <> ''" };
+    expect(judgeIndex(partial, cols, "mysql")).toMatchObject({
+      reason: "partial-not-supported",
+    });
+    expect(judgeIndex(partial, cols, "postgresql")).toBeNull();
+    expect(judgeIndex(partial, cols, "sqlite")).toBeNull();
+    expect(refusal(() => assertIndexBuildable(partial, cols, "fx__t"))).toMatch(
+      /partial/
+    );
+    // The control: the same index without the predicate is buildable.
+    expect(() =>
+      assertIndexBuildable({ columns: ["owner"], unique: true }, cols, "fx__t")
+    ).not.toThrow();
+  });
+
+  it("refuses an explicit name no dialect stores whole, and accepts 63 characters", () => {
+    // Used verbatim, so it cannot be hashed down: MySQL would refuse it and
+    // PostgreSQL would truncate it to a name the diff never finds.
+    const at = `idx_${"n".repeat(59)}`;
+    expect(at).toHaveLength(63);
+    expect(() =>
+      assertIndexBuildable(
+        { columns: ["owner"], unique: false, name: at },
+        cols,
+        "fx__t"
+      )
+    ).not.toThrow();
+    expect(
+      refusal(() =>
+        assertIndexBuildable(
+          { columns: ["owner"], unique: false, name: `${at}n` },
+          cols,
+          "fx__t"
+        )
+      )
+    ).toMatch(/at most 63/);
   });
 });

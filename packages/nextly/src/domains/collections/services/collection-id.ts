@@ -49,10 +49,68 @@ export interface CollectionDbOptions {
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-([1-8])[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/** Read the options off a collection definition, whatever else it carries. */
-export function dbOptionsOf(collection: unknown): CollectionDbOptions {
-  const db = (collection as { db?: unknown } | undefined)?.db;
-  return typeof db === "object" && db !== null ? db : {};
+// The options each code-first collection declares, keyed by slug.
+//
+// Held in memory rather than on the registry row because the code config is
+// their only source: it is loaded on every boot, reload and CLI run, and a
+// Builder collection has no way to set them. Each lifecycle publishes them
+// once, from its own config, at the point that config takes effect: boot in
+// `registerServices`, an HMR reload when it commits (and puts the previous set
+// back when it is refused). The registry sync does not publish them — it runs
+// mid-reload, before the reload knows whether it will land. A write reads the
+// options the running config declares rather than a copy that could fall
+// behind it.
+//
+// On `globalThis` for the reason the webhook recording policy is: Next.js can
+// evaluate this module in more than one server module graph, and a
+// module-local map would let the sync populate one instance while the write
+// path reads another — where an empty entry silently means UUIDv4 and a
+// discarded client id.
+const globalForDbOptions = globalThis as unknown as {
+  __nextly_collectionDbOptions?: Map<string, CollectionDbOptions>;
+};
+if (!globalForDbOptions.__nextly_collectionDbOptions) {
+  globalForDbOptions.__nextly_collectionDbOptions = new Map();
+}
+const publishedDbOptions = globalForDbOptions.__nextly_collectionDbOptions;
+
+/**
+ * The published options, as the entries `publishCollectionDbOptions` takes.
+ *
+ * For a caller that publishes provisionally and may have to put the previous
+ * set back — an HMR reload that is later refused keeps the previous config,
+ * and with it the previous options.
+ */
+export function publishedCollectionDbOptions(): Array<{
+  slug: string;
+  db: CollectionDbOptions;
+}> {
+  return [...publishedDbOptions].map(([slug, db]) => ({ slug, db }));
+}
+
+/**
+ * Replace the published options with those the given collections declare.
+ *
+ * A replacement rather than a merge: a collection whose `db` block was removed
+ * from the config, or that is gone altogether, must stop being read with its
+ * old options on the next write.
+ */
+export function publishCollectionDbOptions(
+  collections: Iterable<{ slug: string; db?: CollectionDbOptions }>
+): void {
+  publishedDbOptions.clear();
+  for (const { slug, db } of collections) {
+    if (db !== undefined) publishedDbOptions.set(slug, db);
+  }
+}
+
+/**
+ * The options a collection's writes follow: what its code config declares, or
+ * none — the defaults — for a collection that declares none, which includes
+ * every collection built in the admin.
+ */
+export function collectionDbOptions(slug: string): CollectionDbOptions {
+  return publishedDbOptions.get(slug) ?? {};
 }
 
 /** The id a new entry gets on this collection. */
@@ -70,8 +128,11 @@ export function generateEntryId(options: CollectionDbOptions): string {
  * round-trip (read an entry, edit it, post it back) fail on a field the
  * caller never meant to set.
  */
-export function resolveEntryId(collection: unknown, supplied: unknown): string {
-  const options = dbOptionsOf(collection);
+export function resolveEntryId(
+  /** The collection's options; see `collectionDbOptions`. */
+  options: CollectionDbOptions,
+  supplied: unknown
+): string {
   if (options.allowIdOnCreate !== true) return generateEntryId(options);
   if (supplied === undefined || supplied === null) {
     return generateEntryId(options);

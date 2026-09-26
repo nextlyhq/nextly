@@ -23,6 +23,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
+import { sql } from "drizzle-orm";
 
 import { getDialectTablesForPush } from "../../../database/index";
 import { NextlyError } from "../../../errors";
@@ -40,7 +41,12 @@ import {
   resolveRegistryNameFromCatalog,
 } from "../../field-groups/storage/resolve-storage-names";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
-import { toColumnSpec } from "../extension/compile";
+import { withEntityContributions } from "../extension/entity-contributions";
+import {
+  refusingNewDanglingReferences,
+  type SqliteForeignKeySession,
+  withSqliteForeignKeysOff,
+} from "../migrate/sqlite-foreign-keys";
 import {
   dropsPluginMigratedTable,
   pluginMigratedTableSet,
@@ -64,7 +70,7 @@ import {
 } from "./diff/build-from-fields";
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
-import type { Operation, NextlySchemaSnapshot } from "./diff/types";
+import type { Operation, NextlySchemaSnapshot, TableSpec } from "./diff/types";
 import { describePrecondition } from "./errors";
 // Index restore uses the all-dialect templates, not ddl-emitter/: that module
 // is the PostgreSQL fast path and throws for the dialect this exists for.
@@ -103,6 +109,12 @@ import type {
 } from "./pushschema-pipeline-interfaces";
 import { builtByFor } from "./registered-collections";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
+import {
+  sqliteRebuiltTables,
+  untrackedConstraintCounts,
+  untrackedConstraintRefusal,
+  withoutDropsLeftToRebuild,
+} from "./sql-templates/sqlite-rebuild";
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
 
@@ -280,60 +292,29 @@ function rebuildApprovedBy(op: Operation, dialect: SupportedDialect): string[] {
 /**
  * The SQLite tables whose checks or foreign keys this apply changes. SQLite
  * changes either only by rebuilding the table, which the kit does from the
- * desired definition.
+ * desired definition. Which operations those are is decided once, beside the
+ * migration templates' own rebuild (`sqliteRebuiltTables`).
  */
 function sqliteConstraintRebuilds(
   ops: readonly Operation[],
   dialect: SupportedDialect
 ): Set<string> {
-  if (dialect !== "sqlite") return new Set();
-  return new Set(
-    ops.filter(isConstraintOp).map(op => op.tableName.toLowerCase())
-  );
+  return dialect === "sqlite" ? sqliteRebuiltTables(ops) : new Set();
 }
 
 /**
  * The operations the pre-resolution phase runs, less the column drops SQLite
- * must leave to a table rebuild.
- *
- * SQLite refuses `ALTER TABLE ... DROP COLUMN` on a column a foreign key or a
- * check names. When this apply changes a table's constraints the kit rebuilds
- * that table from the desired definition — which no longer has the column —
- * so the drop happens there, approved by `rebuildApprovedBy`, rather than
- * failing up front. Only those tables: a column change alone keeps its drop
- * here, where the kit never sees it.
+ * must leave to a table rebuild — the same rule the migration templates apply
+ * (`withoutDropsLeftToRebuild`). When this apply changes a table's constraints
+ * the kit rebuilds that table from the desired definition, which no longer has
+ * the column, so the drop happens there, approved by `rebuildApprovedBy`.
  */
-function withoutDropsLeftToRebuild(
+function withoutSqliteDropsLeftToRebuild(
   ops: Operation[],
   dialect: SupportedDialect
 ): Operation[] {
   const rebuilt = sqliteConstraintRebuilds(ops, dialect);
-  if (rebuilt.size === 0) return ops;
-  return ops.filter(
-    op =>
-      !(op.type === "drop_column" && rebuilt.has(op.tableName.toLowerCase()))
-  );
-}
-
-/** Whether an operation adds, drops or changes a check or a foreign key. */
-function isConstraintOp(op: Operation): op is Extract<
-  Operation,
-  {
-    type:
-      | "add_check"
-      | "drop_check"
-      | "add_foreign_key"
-      | "drop_foreign_key"
-      | "change_foreign_key_action";
-  }
-> {
-  return (
-    op.type === "add_check" ||
-    op.type === "drop_check" ||
-    op.type === "add_foreign_key" ||
-    op.type === "drop_foreign_key" ||
-    op.type === "change_foreign_key_action"
-  );
+  return rebuilt.size === 0 ? ops : withoutDropsLeftToRebuild(ops, rebuilt);
 }
 
 /**
@@ -805,82 +786,81 @@ export class PushSchemaPipeline {
           : identifierCaseRules({ dialect })
       );
 
+      // What hooks contributed to each entity table — columns, their
+      // defaults, their enum checks and indexes — applied by the one helper
+      // the app's migration stream applies them with, for all three entity
+      // kinds, so dev push and a generated migration cannot describe the
+      // table differently. Checks are merged over the LIVE table's, so
+      // tracking them does not propose dropping ones this pipeline never
+      // declared.
+      const liveTablesByName = new Map(
+        liveSnapshot.tables.map(table => [table.name, table])
+      );
+      const withContributions = (spec: TableSpec): TableSpec =>
+        withEntityContributions(
+          spec,
+          extensions,
+          liveTablesByName.get(spec.name),
+          dialect
+        );
+
       const desiredSnapshot: NextlySchemaSnapshot = {
         tables: [
           ...Object.values(desired.collections).map(c =>
-            buildDesiredTableFromFields(
-              c.tableName,
-              // FieldConfig has the shape buildDesiredTableFromFields expects;
-              // cast through unknown for the structural-vs-nominal type gap.
-              c.fields as unknown as Parameters<
-                typeof buildDesiredTableFromFields
-              >[1],
-              dialect,
-              // Thread the status flag so the diff includes the status system
-              // column when Draft/Published is enabled. Thread `localized` so a
-              // localized collection's translatable columns are omitted from the
-              // main table's desired snapshot (they live in the companion
-              // `_locales` table) rather than being re-added by the diff.
-              {
-                builtBy: builtByFor("collection", c.builderOwned),
-                hasStatus: c.status === true,
-                localized: c.localized === true,
-                // Config-declared compound indexes name FIELDS.
-                indexes: [...(c.indexes ?? [])],
-                // A hook was handed a TABLE, so what it contributed names SQL
-                // COLUMNS. Sent down its own channel: passing these as fields
-                // asked the descriptor to resolve `created_at`, which is a
-                // system column and no field, so every contributed index on
-                // one was refused as undeclared.
-                columnIndexes: (
-                  extensions?.entityIndexes.get(c.tableName) ?? []
-                ).map(index => ({
-                  columns: index.columns,
-                  unique: index.unique,
-                  ...(index.name !== undefined ? { name: index.name } : {}),
-                })),
-                // Columns a hook contributed to this entity. Without them the
-                // desired spec described a table the contribution is not in,
-                // so the column was never created — and `extendTable` on an
-                // entity did nothing at all, silently.
-                extensionColumns: (
-                  extensions?.entityColumns.get(c.tableName) ?? []
-                ).map(column => toColumnSpec(column, dialect)),
-              }
+            withContributions(
+              buildDesiredTableFromFields(
+                c.tableName,
+                // FieldConfig has the shape buildDesiredTableFromFields expects;
+                // cast through unknown for the structural-vs-nominal type gap.
+                c.fields as unknown as Parameters<
+                  typeof buildDesiredTableFromFields
+                >[1],
+                dialect,
+                // Thread the status flag so the diff includes the status system
+                // column when Draft/Published is enabled. Thread `localized` so a
+                // localized collection's translatable columns are omitted from the
+                // main table's desired snapshot (they live in the companion
+                // `_locales` table) rather than being re-added by the diff.
+                {
+                  builtBy: builtByFor("collection", c.builderOwned),
+                  hasStatus: c.status === true,
+                  localized: c.localized === true,
+                  // Config-declared compound indexes name FIELDS.
+                  indexes: [...(c.indexes ?? [])],
+                }
+              )
             )
           ),
           ...Object.values(desired.singles).map(s =>
-            buildDesiredTableFromFields(
-              s.tableName,
-              s.fields as unknown as Parameters<
-                typeof buildDesiredTableFromFields
-              >[1],
-              dialect,
-              {
-                builtBy: builtByFor("single", s.builderOwned),
-                hasStatus: s.status === true,
-                localized: (s as { localized?: boolean }).localized === true,
-                extensionColumns: (
-                  extensions?.entityColumns.get(s.tableName) ?? []
-                ).map(column => toColumnSpec(column, dialect)),
-              }
+            withContributions(
+              buildDesiredTableFromFields(
+                s.tableName,
+                s.fields as unknown as Parameters<
+                  typeof buildDesiredTableFromFields
+                >[1],
+                dialect,
+                {
+                  builtBy: builtByFor("single", s.builderOwned),
+                  hasStatus: s.status === true,
+                  localized: (s as { localized?: boolean }).localized === true,
+                }
+              )
             )
           ),
           ...Object.values(desired.components).map(c =>
-            buildDesiredTableFromComponentFields(
-              c.tableName,
-              c.fields as unknown as Parameters<
-                typeof buildDesiredTableFromComponentFields
-              >[1],
-              dialect,
-              {
-                builtBy: builtByFor("fieldGroup", c.builderOwned),
-                localized: (c as { localized?: boolean }).localized === true,
-                typeColumn: fieldGroupTypeColumns.get(c.tableName),
-                extensionColumns: (
-                  extensions?.entityColumns.get(c.tableName) ?? []
-                ).map(column => toColumnSpec(column, dialect)),
-              }
+            withContributions(
+              buildDesiredTableFromComponentFields(
+                c.tableName,
+                c.fields as unknown as Parameters<
+                  typeof buildDesiredTableFromComponentFields
+                >[1],
+                dialect,
+                {
+                  builtBy: builtByFor("fieldGroup", c.builderOwned),
+                  localized: (c as { localized?: boolean }).localized === true,
+                  typeColumn: fieldGroupTypeColumns.get(c.tableName),
+                }
+              )
             )
           ),
           // Already compiled, so they are appended rather than rebuilt: the
@@ -1108,6 +1088,19 @@ export class PushSchemaPipeline {
         // evaluates the precondition at all.
         const kit = useFastPath ? undefined : await getKit();
 
+        // A SQLite rebuild on the kit route is made from the runtime tables,
+        // which declare only what the schema tracks. Refused here, before
+        // anything writes, when a table it would rebuild holds a foreign key
+        // or check the schema does not describe — the same question, asked
+        // by the same expressions, that guards a migration's rebuild.
+        if (kit !== undefined && dialect === "sqlite") {
+          await refuseKitRebuildsLosingConstraints(
+            sqliteSessionOf(tx),
+            resolvedOps,
+            desiredSnapshot.tables
+          );
+        }
+
         // Pre-cleanup's refusals, asked before the first statement below: on
         // MySQL every rename, drop and lifted foreign key commits as it runs,
         // so a resolution refused after them would leave them behind a failed
@@ -1155,7 +1148,7 @@ export class PushSchemaPipeline {
         try {
           await preResExecutor(
             tx,
-            withoutDropsLeftToRebuild(resolvedOps, dialect),
+            withoutSqliteDropsLeftToRebuild(resolvedOps, dialect),
             dialect,
             constraints.before
           );
@@ -1526,13 +1519,39 @@ export class PushSchemaPipeline {
 
       if (isSqlite) {
         // SQLite: skip db.transaction() per F3 PR-4 (PRAGMA-vs-tx
-        // compatibility). Wrap in foreign_keys = OFF/ON instead.
-        await this.runSqlitePragma(db, "PRAGMA foreign_keys = OFF");
-        try {
-          statementsExecuted = await runApply(db);
-        } finally {
-          await this.runSqlitePragma(db, "PRAGMA foreign_keys = ON");
-        }
+        // compatibility), and apply under SQLite's schema-change contract —
+        // the same one a migration runs under: foreign keys off for the
+        // whole apply, so a table rebuild cannot cascade into the rows of
+        // tables that reference it, then `PRAGMA foreign_key_check` once
+        // every statement has run, and the previous setting restored.
+        //
+        // With no transaction there is nothing to roll back: a refusal here
+        // reports an apply that has already landed, so the operator learns
+        // which references are dangling instead of the push reading as clean.
+        const session = sqliteSessionOf(db);
+        statementsExecuted = await withSqliteForeignKeysOff(
+          session,
+          async () => {
+            try {
+              return await refusingNewDanglingReferences(
+                session,
+                () => runApply(db),
+                (count, pairs) =>
+                  `This schema change left ${String(count)} row(s) referencing rows that do not exist (${pairs}). SQLite applies a dev push without a transaction, so the change is in place: remove or repair those rows.`
+              );
+            } catch (err) {
+              // Only the reference check's own refusal is re-classified;
+              // anything `runApply` threw keeps the type it was thrown with.
+              if (
+                err instanceof NextlyError &&
+                err.code === "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION"
+              ) {
+                throw new DdlExecutionError(err.message, err);
+              }
+              throw err;
+            }
+          }
+        );
       } else {
         // PG / MySQL: db.transaction() for atomicity (PG only; MySQL DDL
         // is auto-committed regardless. F15 adds MySQL pre-flight).
@@ -1625,15 +1644,6 @@ export class PushSchemaPipeline {
         },
       };
     }
-  }
-
-  private async runSqlitePragma(db: unknown, pragma: string): Promise<void> {
-    interface SqliteRunClient {
-      run(query: unknown): unknown;
-    }
-    const { sql: sqlTag } = await import("drizzle-orm");
-    const dbTyped = db as SqliteRunClient;
-    dbTyped.run(sqlTag.raw(pragma));
   }
 
   private buildDrizzleSchema(
@@ -1877,3 +1887,69 @@ function toRenameResolutions(
 }
 
 export { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable };
+
+/**
+ * The dev-push SQLite handle as the schema-change contract reads it. The
+ * better-sqlite3 Drizzle handle answers synchronously; `all` is the form that
+ * returns rows, `run` the one for a statement that returns none.
+ */
+function sqliteSessionOf(db: unknown): SqliteForeignKeySession {
+  const client = db as {
+    all(query: unknown): unknown;
+    run(query: unknown): unknown;
+  };
+  return {
+    read: <T>(statement: string) =>
+      Promise.resolve(client.all(sql.raw(statement)) as T[]),
+    run: async statement => {
+      await client.run(sql.raw(statement));
+    },
+  };
+}
+
+/**
+ * Refuses a SQLite apply whose drizzle-kit rebuild would drop a live foreign
+ * key or check the desired schema does not declare.
+ *
+ * The kit rebuilds a table whose checks or foreign keys change
+ * (`sqliteRebuiltTables`) from the runtime Drizzle tables, and those carry
+ * only what the schema tracks. A Schema Builder table can hold a
+ * relationship's foreign key or a validation check the schema never
+ * describes, and a rebuild would drop it without a word. Counted against the
+ * live table by `untrackedConstraintCounts`, the rule a migration's rebuild
+ * guard applies, so the two routes cannot disagree about what would be lost.
+ */
+async function refuseKitRebuildsLosingConstraints(
+  session: SqliteForeignKeySession,
+  ops: readonly Operation[],
+  desiredTables: readonly TableSpec[]
+): Promise<void> {
+  for (const table of sqliteRebuiltTables(ops)) {
+    const spec = desiredTables.find(t => t.name.toLowerCase() === table);
+    if (spec === undefined) continue;
+    const counts = untrackedConstraintCounts(spec, ops);
+    const [row] = await session.read<{
+      foreign_keys: number;
+      checks: number;
+    }>(
+      `SELECT ${counts.foreignKeys} AS "foreign_keys", ${counts.checks} AS "checks"`
+    );
+    const lost =
+      Number(row?.foreign_keys) > 0
+        ? "foreign keys"
+        : Number(row?.checks) > 0
+          ? "checks"
+          : undefined;
+    if (lost === undefined) continue;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `schema.${spec.name}`,
+          code: "SQLITE_REBUILD_WOULD_DROP_UNTRACKED_CONSTRAINTS",
+          message: untrackedConstraintRefusal(spec.name, lost),
+        },
+      ],
+      logContext: { table: spec.name, lost },
+    });
+  }
+}

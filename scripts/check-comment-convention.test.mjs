@@ -224,7 +224,7 @@ describe("the allowlist", () => {
   // 507 -> 506: one recorded offence in `services/users.ts` no longer exists,
   // so the list shrank by a digest. The entry itself remains, which is why the
   // count above does not move. 506 -> 505: likewise one in `di/register.ts`.
-  const EXPECTED_TOTAL = 505;
+  const EXPECTED_TOTAL = 504;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

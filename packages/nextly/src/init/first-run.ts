@@ -27,6 +27,7 @@ import {
   emitDdl,
   tableConstraintOps,
 } from "../domains/schema/pipeline/ddl-emitter";
+import type { TableSpec } from "../domains/schema/pipeline/diff/types";
 
 import { runBoundedDiagnostic } from "./bounded-diagnostic";
 
@@ -144,12 +145,9 @@ async function createExtensionIndexes(
   adapter: AdapterLike,
   dialect: "postgresql" | "mysql" | "sqlite",
   logger: LoggerLike,
-  passed: ExtensionSchema | null | undefined
+  specs: readonly TableSpec[]
 ): Promise<void> {
-  const schema = passed ?? getActiveExtensionSchema(dialect);
-  if (!schema) return;
-
-  const ops = schema.specs.flatMap(spec =>
+  const ops = specs.flatMap(spec =>
     (spec.indexes ?? []).map(index => ({
       type: "add_index" as const,
       tableName: spec.name,
@@ -187,15 +185,13 @@ async function createExtensionConstraints(
   adapter: AdapterLike,
   dialect: "postgresql" | "mysql" | "sqlite",
   logger: LoggerLike,
-  passed: ExtensionSchema | null | undefined
+  specs: readonly TableSpec[]
 ): Promise<void> {
   // SQLite accepts a check or a foreign key only inside CREATE TABLE, so its
   // drizzle table declares them and the push above already created them.
   if (dialect === "sqlite") return;
-  const schema = passed ?? getActiveExtensionSchema(dialect);
-  if (!schema) return;
 
-  const ops = schema.specs.flatMap(spec => tableConstraintOps(spec));
+  const ops = specs.flatMap(spec => tableConstraintOps(spec));
   if (ops.length === 0) return;
 
   const { generateSQL } = await import(
@@ -373,7 +369,12 @@ export async function ensureFirstRunSetup(
     // Emitted through the pipeline's own emitter rather than by composing SQL
     // here: the two would then disagree about quoting and about which indexes
     // a dialect can build at all.
-    await createExtensionIndexes(adapter, dialect, logger, extensionSchema);
+    await createExtensionIndexes(
+      adapter,
+      dialect,
+      logger,
+      extensionSchema?.specs ?? []
+    );
 
     // Extension CONSTRAINTS, replayed for the same reason as the indexes.
     //
@@ -383,7 +384,12 @@ export async function ensureFirstRunSetup(
     // declared foreign key and the check that enforces `col.enum()` all
     // enforced nothing on a fresh database. An installation that never runs
     // dev push afterwards keeps that unconstrained schema forever.
-    await createExtensionConstraints(adapter, dialect, logger, extensionSchema);
+    await createExtensionConstraints(
+      adapter,
+      dialect,
+      logger,
+      extensionSchema?.specs ?? []
+    );
 
     // `freshPushSchema` above already creates the ledger (it is in
     // getDialectTables). Only bootstrap it out-of-band as a fallback if it is
@@ -412,6 +418,77 @@ export async function ensureFirstRunSetup(
     );
     return { ranSetup: false, reason: "probe_failed" };
   }
+}
+
+/**
+ * Create the extension tables an EXISTING database does not have yet, with
+ * their indexes and constraints — before any plugin initialises.
+ *
+ * First-run creates every extension table, but only on a fresh database. On an
+ * existing one, a plugin added since the last boot had its tables compiled and
+ * nothing to create them until the development push, which runs after
+ * `registerServices` — after the plugin's `init()` has already run. An `init`
+ * that seeds its own table then failed the boot, and the push that would have
+ * created the table never ran. Production creates the same tables through the
+ * plugin's migration modules, which `registerServices` also applies before
+ * plugins initialise.
+ *
+ * Only MISSING tables, and only creation: the push is scoped to them, so an
+ * existing table's alterations stay with the development push, which has the
+ * classifier and prompts a change to existing data needs. The same push,
+ * index replay and constraint replay first-run uses, so a table created here
+ * is the table first-run would have created.
+ *
+ * Failure-safe like first-run: a table that cannot be created is reported, and
+ * the plugin whose `init` needs it then fails with the query that names it.
+ */
+export async function createMissingExtensionTables(args: {
+  adapter: AdapterLike;
+  logger: LoggerLike;
+  extensionSchema: ExtensionSchema | null | undefined;
+  deps?: Partial<Pick<EnsureFirstRunSetupDeps, "freshPushSchema">>;
+}): Promise<string[]> {
+  const { adapter, logger, extensionSchema } = args;
+  if (!extensionSchema) return [];
+  const dialect = adapter.dialect;
+
+  const missing: TableSpec[] = [];
+  for (const spec of extensionSchema.specs) {
+    if (!(spec.name in extensionSchema.drizzle)) continue;
+    try {
+      if (!(await adapter.tableExists(spec.name))) missing.push(spec);
+    } catch (error) {
+      logger.warn(
+        `[nextly] could not check whether ${spec.name} exists: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+  if (missing.length === 0) return [];
+
+  try {
+    const freshPushSchema =
+      args.deps?.freshPushSchema ??
+      (await import("../domains/schema/pipeline/fresh-push")).freshPushSchema;
+    await freshPushSchema(
+      dialect,
+      adapter.getDrizzle(),
+      Object.fromEntries(
+        missing.map(spec => [spec.name, extensionSchema.drizzle[spec.name]])
+      )
+    );
+  } catch (error) {
+    logger.warn(
+      `[nextly] could not create extension tables ${missing
+        .map(spec => spec.name)
+        .join(", ")}: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return [];
+  }
+  await createExtensionIndexes(adapter, dialect, logger, missing);
+  await createExtensionConstraints(adapter, dialect, logger, missing);
+  return missing.map(spec => spec.name);
 }
 
 async function resolveDeps(

@@ -13,6 +13,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import type { BuildColumns } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import {
   mysqlTable,
@@ -27,19 +28,12 @@ import {
   type AnyMySqlColumn,
 } from "drizzle-orm/mysql-core";
 
+import { MEDIA_INDEXES, mysqlIndexes } from "../_internal/core-indexes";
 import { users } from "../users/mysql";
 
-/**
- * Media table for storing uploaded files and images
- *
- * Supports various storage backends (Vercel Blob, S3, R2, local filesystem)
- * Stores file metadata in database, actual files in configured storage
- *
- * MySQL variant - uses JSON instead of JSONB for tags
- */
-export const media = mysqlTable(
-  "media",
-  {
+/** `media` columns, a fresh builder record per call (see `core-table-contributions`). */
+export function mediaColumns() {
+  return {
     id: varchar("id", { length: 36 })
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
@@ -98,14 +92,25 @@ export const media = mysqlTable(
     updatedAt: datetime("updated_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
-  },
-  t => [
-    index("media_uploaded_by_idx").on(t.uploadedBy),
-    index("media_mime_type_idx").on(t.mimeType),
-    index("media_uploaded_at_idx").on(t.uploadedAt),
-    index("media_folder_id_idx").on(t.folderId),
-  ]
-);
+  };
+}
+
+/** `media` indexes, from `MEDIA_INDEXES`. */
+export function mediaExtraConfig(
+  t: BuildColumns<"media", ReturnType<typeof mediaColumns>, "mysql">
+) {
+  return mysqlIndexes(MEDIA_INDEXES, t);
+}
+
+/**
+ * Media table for storing uploaded files and images
+ *
+ * Supports various storage backends (Vercel Blob, S3, R2, local filesystem)
+ * Stores file metadata in database, actual files in configured storage
+ *
+ * MySQL variant - uses JSON instead of JSONB for tags
+ */
+export const media = mysqlTable("media", mediaColumns(), mediaExtraConfig);
 
 /**
  * Media Folders table for organizing media files (MySQL)

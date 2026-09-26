@@ -17,7 +17,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { migrationChecksum } from "../../migrate/plugin/plugin-migration";
 import { diffSnapshots } from "../../pipeline/diff/diff";
 import type { ColumnSpec, TableSpec } from "../../pipeline/diff/types";
-import { generateSQL } from "../../pipeline/sql-templates/index";
+import { generateStatements } from "../../pipeline/sql-templates/index";
 
 import { withCyclicForeignKeysSplit } from "../cyclic-foreign-keys";
 import { buildInverseOperations } from "../down-generator";
@@ -59,12 +59,16 @@ function sharedCoreRender(
     previous
   );
   return {
-    up: operations.map(op => generateSQL(op, dialect)),
-    down: withCyclicForeignKeysSplit(
-      buildInverseOperations(operations, prev),
+    up: generateStatements(operations, dialect, desired),
+    down: generateStatements(
+      withCyclicForeignKeysSplit(
+        buildInverseOperations(operations, prev),
+        dialect,
+        desired
+      ),
       dialect,
-      desired
-    ).map(op => generateSQL(op, dialect)),
+      previous
+    ),
   };
 }
 
@@ -144,6 +148,42 @@ describe("buildPluginMigration", () => {
       expect(second.module.dialects[dialect].down.join("\n")).toMatch(/score/i);
     }
     expect(second.module.before.postgresql).toEqual(first.snapshot.postgresql);
+  });
+
+  it("renders a CHECK change on SQLite as a rebuild, where a statement per op cannot exist", () => {
+    // An enum's permitted values changing is a check change. SQLite has no
+    // ALTER for one, so rendering operation by operation threw and the
+    // module could not be generated at all.
+    const withCheck = (values: string): TableSpec => ({
+      ...tableSpec(false),
+      checks: [
+        { name: "ck_fx__notes_label_enum", sql: `label IN (${values})` },
+      ],
+    });
+    const first = buildPluginMigration({
+      ...FIRST,
+      tablesByDialect: tablesByDialect(withCheck("'a'")),
+    })!.module;
+    const second = buildPluginMigration({
+      pluginName: "fixture",
+      schemaVersion: 2,
+      name: "widen_label",
+      now: new Date("2026-09-23T10:47:00Z"),
+      tablesByDialect: tablesByDialect(withCheck("'a', 'b'")),
+      existing: [first],
+    })!;
+
+    const sqlite = second.module.dialects.sqlite;
+    expect(sqlite).toEqual(
+      sharedCoreRender(
+        first.snapshot.sqlite.tables,
+        second.module.snapshot.sqlite.tables,
+        "sqlite"
+      )
+    );
+    // The up rebuild carries the new values, the down's the old ones.
+    expect(sqlite.up.join("\n")).toMatch(/'a', 'b'/);
+    expect(sqlite.down.join("\n")).toMatch(/label IN \('a'\)/);
   });
 
   it("returns null when nothing changed (the exit-2 contract)", () => {

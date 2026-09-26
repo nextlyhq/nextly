@@ -284,22 +284,49 @@ produce identical output.
 | Target | Columns | Indexes |
 | --- | --- | --- |
 | Your own tables | yes | yes |
-| A dependency's tables | no | no |
-| Entity tables (`dc_*`, `single_*`, `comp_*`) | no — use `contributes.extend` | yes |
-| Core tables (`nextly_*`, `users`, `media`) | no | no |
+| A plugin you name in `dependsOn` / `optionalDependsOn` | yes, hidden | yes |
+| Any other plugin's tables | no | no |
+| Entity tables (`dc_*`, `single_*`, `comp_*`) | yes, hidden | yes |
+| Extendable core tables (`users`, `media`, `nextly_jobs`, `audit_log`, `activity_log`) | yes, hidden | yes |
+| Every other core table | no | no |
 
-Columns on an entity table are refused even to the app. Entity reads select
-the whole table, so a raw column would either leak into API responses or be
-proposed as a `DROP` by dev push. `contributes.extend` gives the same column
-REST, admin, validation and access control as well.
+The app may add columns and indexes to any plugin's table, under the same
+rules.
+
+Which migrations carry what you add depends on the table. On your own tables
+and on a dependency's, your plugin's own migration modules carry it. On an
+entity table or an extendable core table — whether a plugin or the app added
+it — the APP's migrations carry it: `nextly migrate:create` in the app writes
+the statement, so it reaches a database with the app's next migration.
+
+A column added to a table you do not own is **hidden**: it exists on the table,
+so migrations and dev push keep it, and on an entity table it is stripped
+from every REST response, Direct API read, version snapshot and webhook
+payload, and a value sent for it through the entry API is dropped. The column
+must be nullable or have a default, since the table may already have rows.
+
+You read and write a column you added to an entity or core table through
+`ctx.db.contributed(table, columns)`, keyed by row id — see
+[Columns on a table you do not own](/docs/database/extending-the-schema#columns-on-a-table-you-do-not-own).
+It reaches only your own contributed columns and the row's id; the table's
+other columns, other plugins' contributions, inserts and deletes are refused.
+
+A hidden column is storage for your plugin's own bookkeeping, not a field. To
+give a collection a field that editors and API callers see, with validation and
+access control, use `contributes.extend`.
 
 ## What is deliberately unsupported
 
-Views and native enums. Checks, foreign keys, and partial or expression
-indexes ARE supported: declare them on `defineTable` and they travel through
+Views, native enums, and partial indexes: an index with a `where` predicate is
+refused on every dialect, because declarations are checked against all three
+and MySQL has none. Checks, foreign keys, and expression indexes ARE
+supported: declare them on `defineTable` and they travel through
 dev push, plugin migrations and drift checks on every dialect — inline in the
 table's `CREATE TABLE` on its first migration, and through the table rebuild
-where a dialect cannot add one in place. `col.ref()` alone records a reference
+where a dialect cannot add one in place. An expression index key must compute a
+value: `DESC`, `ASC`, `NULLS FIRST/LAST`, `COLLATE` and operator classes such as
+`text_pattern_ops` are refused at `defineTable`, because no dialect reports them
+back and the index would be planned again on every push. `col.ref()` alone records a reference
 for documentation and validation; a constraint comes from the `foreignKeys`
 option.
 

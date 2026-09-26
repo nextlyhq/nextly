@@ -9,16 +9,15 @@
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { IndexSpec, Operation, TableSpec } from "../diff/types";
+import { createIndexSql } from "../sql-templates/create-index";
+import { columnDefinition } from "../sql-templates/create-table-body";
 
+import { createTableStatement, tableIndexStatements } from "./create-table";
 import { quoteIdent } from "./identifiers";
 
 /** Render a single CREATE [UNIQUE] INDEX statement for the apply fast-path. */
 function createIndexStatement(tableName: string, index: IndexSpec): string {
-  const cols = index.columns.map(c => quoteIdent(c)).join(", ");
-  return (
-    `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ` +
-    `${quoteIdent(index.name)} ON ${quoteIdent(tableName)} (${cols})`
-  );
+  return createIndexSql(tableName, index, "postgresql", quoteIdent);
 }
 
 /**
@@ -48,41 +47,6 @@ function createIndexStatement(tableName: string, index: IndexSpec): string {
  */
 function renderAlterTypeUsing(columnName: string, toType: string): string {
   return `USING ${quoteIdent(columnName)}::${toType}`;
-}
-
-// Render the column tail shared by ADD COLUMN and CREATE TABLE column
-// lists: `<type> [NOT NULL] [DEFAULT <expr>]`. `type` and `default` are
-// dialect-ready tokens produced by diff/build-from-fields.ts (Postgres
-// accepts them verbatim — `int4`, `varchar(255)`, `now()`, `'draft'`).
-function columnTail(col: {
-  type: string;
-  nullable: boolean;
-  default?: string;
-}): string {
-  let s = col.type;
-  if (col.nullable === false) s += " NOT NULL";
-  if (col.default !== undefined) s += ` DEFAULT ${col.default}`;
-  return s;
-}
-
-// Render one CREATE TABLE column expression. The synthetic `id` column
-// is the collection-table primary key: build-from-fields emits it first
-// with type "text" and nullable:false; drizzle-kit's canonical form is
-// `"id" text PRIMARY KEY NOT NULL` (verified against a real Builder-
-// created table on Neon).
-function createTableColumn(col: {
-  name: string;
-  type: string;
-  nullable: boolean;
-  default?: string;
-}): string {
-  if (col.name === "id") {
-    // PRIMARY KEY implies NOT NULL but we emit it explicitly to match
-    // drizzle-kit's wire output exactly (downstream tooling that
-    // textually scans the DDL won't be surprised).
-    return `${quoteIdent(col.name)} ${col.type} PRIMARY KEY NOT NULL`;
-  }
-  return `${quoteIdent(col.name)} ${columnTail(col)}`;
 }
 
 // Emit Nextly's canonical secondary indexes for a managed collection
@@ -128,18 +92,21 @@ export function emitPostgresDdl(op: Operation): string[] {
     case "add_column":
       return [
         `ALTER TABLE ${quoteIdent(op.tableName)} ADD COLUMN ` +
-          `${quoteIdent(op.column.name)} ${columnTail(op.column)}`,
+          columnDefinition(op.column, quoteIdent),
       ];
 
     case "add_table": {
-      const cols = op.table.columns.map(createTableColumn);
-      const createTable = `CREATE TABLE ${quoteIdent(op.table.name)} (\n  ${cols.join(",\n  ")}\n)`;
+      const createTable = createTableStatement(
+        op.table,
+        "postgresql",
+        quoteIdent
+      );
       // C1: render the table's tracked indexes (slug/created_at + user/
       // relationship). When `indexes` is undefined (pre-C1 sentinel), fall
       // back to the legacy hardcoded canonical slug/created_at indexes.
       const indexStmts =
         op.table.indexes !== undefined
-          ? op.table.indexes.map(i => createIndexStatement(op.table.name, i))
+          ? tableIndexStatements(op.table, "postgresql", quoteIdent)
           : createTableCanonicalIndexes(op.table);
       return [createTable, ...indexStmts];
     }

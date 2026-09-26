@@ -467,6 +467,59 @@ describe("FieldGroupDataService", () => {
     });
   });
 
+  describe("a virtual field-group field", () => {
+    // Stores nothing: its value is computed on read, so a payload carrying it
+    // must not become instance rows. `seo` beside it is the control — the same
+    // call must still write that one, so the absence is the rule and not a
+    // save that wrote nothing at all.
+    const virtualHero = { ...seoComponentField(), name: "hero", virtual: true };
+
+    it("is not written by a pooled save", async () => {
+      ctx.adapter.select.mockResolvedValue([]);
+
+      await ctx.service.saveComponentData({
+        parentId: "entry-1",
+        parentTable: "dc_pages",
+        fields: [seoComponentField(), virtualHero],
+        data: {
+          seo: { metaTitle: "About" },
+          hero: { metaTitle: "Computed" },
+        },
+      });
+
+      const written = ctx.adapter.insert.mock.calls.map(
+        ([, row]) => (row as Record<string, unknown>)._parent_field
+      );
+      expect(written).toEqual(["seo"]);
+    });
+
+    it("is not written by a save inside a transaction", async () => {
+      const tx = createMockTxContext({
+        select: vi.fn().mockResolvedValue([]),
+      });
+
+      await ctx.service.saveComponentDataInTransaction(
+        tx as unknown as Parameters<
+          typeof ctx.service.saveComponentDataInTransaction
+        >[0],
+        {
+          parentId: "entry-1",
+          parentTable: "dc_pages",
+          fields: [seoComponentField(), virtualHero],
+          data: {
+            seo: { metaTitle: "About" },
+            hero: { metaTitle: "Computed" },
+          },
+        }
+      );
+
+      const written = tx.insert.mock.calls.map(
+        ([, row]) => (row as Record<string, unknown>)._parent_field
+      );
+      expect(written).toEqual(["seo"]);
+    });
+  });
+
   describe("deleteComponentData", () => {
     it("deletes all component instances for a parent across all component fields", async () => {
       await ctx.service.deleteComponentData({

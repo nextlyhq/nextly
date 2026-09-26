@@ -57,6 +57,7 @@ import type { ExtensionSchema } from "../../domains/schema/extension/build-exten
 import { compileExtensionSchema } from "../../domains/schema/extension/publish";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
+import { executeTransaction } from "../../domains/schema/migrate/migration-transaction";
 import { pluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import {
   pluginMigrationSetsFrom,
@@ -65,6 +66,10 @@ import {
 } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
+import {
+  assertRunnableStatements,
+  splitSqlStatements,
+} from "../../domains/schema/migrate/split-sql";
 import {
   mergeContributions,
   narrowToContributions,
@@ -78,7 +83,10 @@ import {
   parseSnapshotFile,
   type SnapshotFile,
 } from "../../domains/schema/migrate-create/snapshot-io";
-import { assertNoForeignDrops } from "../../domains/schema/ownership/drop-guard";
+import {
+  assertNoForeignDrops,
+  readLiveColumns,
+} from "../../domains/schema/ownership/drop-guard";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type {
   ContributedElements,
@@ -603,9 +611,9 @@ function buildSqlExecutor(
 ): (sqlText: string) => Promise<number> {
   return async sqlText => {
     const statements = splitSqlStatements(sqlText, dialect);
-    await executeTransaction(dz, dialect, async () => {
+    await executeTransaction(dz, async tx => {
       for (const statement of statements) {
-        await dz.executeQuery(statement);
+        await tx.execute(statement);
       }
     });
     return statements.length;
@@ -812,6 +820,8 @@ export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
     dialect: deps.dialect,
     appliedShas,
     owners: ownerRows,
+    liveColumns: statements =>
+      readLiveColumns(deps.db, deps.dialect, [statements]),
     introspect: async (names, stream) => {
       const liveTables = await safeListTables(deps.adapter);
       const managed = snapshotComparableTables(
@@ -1096,6 +1106,12 @@ export async function migrateCore(
         db: deps.db,
         dialect: deps.dialect,
         fieldGroupRegistryTable,
+        // What hooks contributed to the core tables: carried by the app's
+        // migrations, so the reconcile sets them aside when comparing, and
+        // its push reaches a state that includes the ones already live.
+        ...(deps.extensionSchema !== undefined
+          ? { contributions: deps.extensionSchema }
+          : {}),
         logger: {
           info: m => deps.logger.debug(m),
           warn: m => deps.logger.warn(m),
@@ -1368,14 +1384,19 @@ export async function runFileMigrations(args: {
     if (remaining <= 0) break;
 
     // Both apply routes run the same whole-file judgement, so a foreign drop
-    // is refused identically with or without a paired snapshot.
+    // — or a statement the runner's transaction cannot hold — is refused
+    // identically with or without a paired snapshot, before the ledger
+    // records an attempt.
+    const upStatements = splitSqlStatements(m.upSql, dialect);
     assertNoForeignDrops({
-      statements: splitSqlStatements(m.upSql, dialect),
+      statements: upStatements,
       stream: "app",
       owners: fileOwners,
       dialect,
       source: filename,
+      liveColumns: await readLiveColumns(db, dialect, [upStatements]),
     });
+    assertRunnableStatements(upStatements, dialect, filename);
 
     if (!target) {
       // No paired snapshot (hand-written migration): run verbatim + record.
@@ -1613,404 +1634,12 @@ export function parseSqlSections(content: string): {
   };
 }
 
-export async function executeTransaction(
-  adapter: DrizzleAdapter,
-  dialect: SupportedDialect,
-  fn: () => Promise<void>
-): Promise<void> {
-  const beginSql =
-    dialect === "mysql" ? "START TRANSACTION" : "BEGIN TRANSACTION";
-  const commitSql = "COMMIT";
-  const rollbackSql = "ROLLBACK";
-
-  try {
-    await adapter.executeQuery(beginSql);
-    await fn();
-    await adapter.executeQuery(commitSql);
-  } catch (error) {
-    try {
-      await adapter.executeQuery(rollbackSql);
-    } catch {
-      // Ignore rollback errors
-    }
-    throw error;
-  }
-}
-
 /**
- * Whether a `--` line comment begins at `index`.
- *
- * MySQL is the odd one out: it starts a comment at `--` only when the next
- * character is whitespace or a control character, so `n--1` is `n - -1` rather
- * than a comment. Postgres and SQLite comment on any `--`. Treating MySQL like
- * the others would swallow the rest of that line, take its semicolon with it,
- * and hand the driver two statements in one string.
- *
- * One predicate rather than two, because the line filter and the character scan
- * both need this answer and a second copy would drift from this one.
+ * The splitter lives with the migration domain, where the plugin runner and
+ * the drop guard read it; re-exported for the command modules and tests that
+ * import it from here.
  */
-function isLineCommentAt(
-  text: string,
-  index: number,
-  dialect?: SupportedDialect
-): boolean {
-  if (text[index] !== "-" || text[index + 1] !== "-") return false;
-  if (dialect !== "mysql") return true;
-  const next = text[index + 2];
-  // End of input closes the statement anyway, so `--` with nothing after it is
-  // a comment for this purpose.
-  if (next === undefined) return true;
-  // Whitespace or a control character, which is MySQL's rule verbatim. Written as
-  // a code-point comparison rather than a regex range: a control character inside
-  // a pattern is unreadable in source and `no-control-regex` rejects it.
-  // A third `-` does NOT qualify — `n---1` is arithmetic rather than a comment.
-  return /\s/.test(next) || next.charCodeAt(0) <= 0x1f;
-}
-
-/**
- * The character that CLOSES the quoted region this character opens, or
- * undefined when it opens none.
- *
- * `'` and `"` close with themselves everywhere. The identifier forms are
- * dialect-specific: SQLite reads `[...]` as a quoted identifier while Postgres
- * reads `[` as an array subscript, and MySQL uses backticks where Postgres has
- * no such form.
- */
-function quoteOpenerAt(
-  char: string | undefined,
-  dialect?: SupportedDialect
-): string | undefined {
-  if (char === "'" || char === '"') return char;
-  if (dialect === "sqlite" && char === "[") return "]";
-  if (dialect === "mysql" && char === "`") return "`";
-  return undefined;
-}
-
-/**
- * Whether a string literal opening at `index` honours backslash escapes.
- *
- * 🔴 A PROPERTY OF THE LITERAL, not of the dialect alone. MySQL escapes with
- * backslashes in every string; SQLite never does; PostgreSQL does so only in an
- * `E'...'` escape string and treats a backslash in an ordinary literal as an
- * ordinary character. Deciding by dialect alone is wrong in both directions --
- * it mis-splits a valid PostgreSQL escape string, and applying parity to every
- * dialect mis-splits an ordinary value ending in a backslash.
- */
-function opensBackslashEscapedString(
-  text: string,
-  index: number,
-  opener: string,
-  dialect: SupportedDialect | undefined
-): boolean {
-  // A quoted IDENTIFIER never escapes — a backtick or a bracket delimits a name,
-  // not a literal — so only the two literal quotes are candidates.
-  if (opener !== "'" && opener !== '"') return false;
-  // 🔴 MySQL escapes in BOTH literal quotes. Under its default SQL mode a
-  // double quote also delimits a string, so backslash handling has to apply to
-  // whichever of the two opened the region. Gating on the single quote alone
-  // leaves `SELECT "left \"; right"` splitting at the semicolon INSIDE the
-  // value.
-  if (dialect === "mysql") return true;
-  if (dialect !== "postgresql") return false;
-  // PostgreSQL's escape strings are single-quoted only: `E"…"` is not one.
-  if (opener !== "'") return false;
-  const prev = text[index - 1];
-  if (prev !== "E" && prev !== "e") return false;
-  // Not part of a longer word: `VALUES (E'x')` opens an escape string, while an
-  // identifier merely ending in `e` before a literal does not.
-  const before = text[index - 2];
-  return before === undefined || !/[A-Za-z0-9_$]/.test(before);
-}
-
-/**
- * Whether a quote at `index` CLOSES the literal it appears in.
- *
- * The two questions — does this literal escape at all, and is this particular
- * quote escaped — are answered here rather than in the scanning loop, which is
- * long enough that one more condition inside it is one more thing to read past.
- */
-function closesLiteral(
-  text: string,
-  index: number,
-  escapesWithBackslash: boolean
-): boolean {
-  return !(escapesWithBackslash && precededByOddBackslashes(text, index));
-}
-
-/**
- * Whether the character at `index` is escaped by the backslash run before it.
- *
- * 🔴 PARITY, not the single preceding character. A doubled backslash is one
- * LITERAL backslash — which is how MySQL string escaping writes it — so a value
- * ending in a backslash puts `\\` immediately before its closing quote.
- * Reading only that last character calls the quote escaped, leaves the splitter
- * inside a string it has actually left, swallows the statement's semicolon, and
- * concatenates the next statement onto it. A driver with multi-statements
- * disabled then rejects the pair, after earlier statements in the same file
- * have already run.
- *
- * An EVEN run means the backslashes escape each other and the character stands
- * on its own; an odd run means the last one escapes it.
- */
-function precededByOddBackslashes(text: string, index: number): boolean {
-  let run = 0;
-  for (let k = index - 1; k >= 0 && text[k] === "\\"; k -= 1) run += 1;
-  return run % 2 === 1;
-}
-
-/** Where a scan currently stands with respect to an open string literal. */
-type LiteralState = {
-  inString: boolean;
-  stringChar: string;
-  escapesWithBackslash: boolean;
-};
-
-/**
- * Advance `state` across the character at `index`.
- *
- * The splitter and the line pre-scan both have to agree about where a literal
- * begins and ends; two copies of this decision would drift, and the drift would
- * be silent because each looks correct beside its own caller.
- */
-function advanceLiteralState(
-  text: string,
-  index: number,
-  dialect: SupportedDialect | undefined,
-  state: LiteralState
-): number {
-  const char = text[index];
-  if (!state.inString) {
-    const opener = quoteOpenerAt(char, dialect);
-    if (opener) {
-      state.inString = true;
-      state.stringChar = opener;
-      // Recorded when the literal OPENS: the `E` prefix is only visible here,
-      // and by the closing quote it is long past.
-      state.escapesWithBackslash = opensBackslashEscapedString(
-        text,
-        index,
-        opener,
-        dialect
-      );
-    }
-    return 1;
-  }
-
-  if (char !== state.stringChar) return 1;
-
-  // Backslash-escaped: an ordinary character that happens to be the delimiter.
-  if (!closesLiteral(text, index, state.escapesWithBackslash)) return 1;
-
-  // 🔴 A DOUBLED delimiter escapes the delimiter and does NOT leave the
-  // literal. Closing on the first and reopening on the second looks harmless
-  // -- the state toggles twice and comes back correct -- but the REOPENED
-  // literal is a different one: `escapesWithBackslash` is recorded from the
-  // prefix at the opening quote, and the second quote of a pair is no longer
-  // adjacent to the `E` of a Postgres escape string. The mode is silently
-  // lost, so a later `\'` reads as the closing quote and the statement is cut
-  // at the next semicolon INSIDE the value.
-  if (text[index + 1] === state.stringChar) return 2;
-
-  state.inString = false;
-  return 1;
-}
-
-/**
- * End index (exclusive) of the comment beginning at `index`, or -1 if none.
- *
- * Both comment forms in one place because a scan that knows about `--` and not
- * about a block comment disagrees with one that knows about both -- and an
- * apostrophe inside `/* it's a note *\/` then reads as an opening quote,
- * putting the rest of the file "inside a literal" for that scan alone.
- */
-function commentEndAt(
-  text: string,
-  index: number,
-  dialect?: SupportedDialect
-): number {
-  if (isLineCommentAt(text, index, dialect)) {
-    const lineEnd = text.indexOf("\n", index);
-    return lineEnd === -1 ? text.length : lineEnd;
-  }
-  if (text[index] === "/" && text[index + 1] === "*") {
-    const close = text.indexOf("*/", index + 2);
-    return close === -1 ? text.length : close + 2;
-  }
-  return -1;
-}
-
-/**
- * For every character of `sql`, whether it sits inside a string literal.
- *
- * 🔴 The cleanup below both DROPS lines and REWRITES them, and each is an edit
- * to whatever it touches. A description carrying a comment marker or a
- * breakpoint marker is data, and editing it stores a silently truncated value
- * in the replayed database -- the migration still succeeds, so nothing reports
- * it. A per-LINE answer is not enough: a literal can open midway through a line
- * that began as ordinary SQL.
- */
-function literalMask(sql: string, dialect?: SupportedDialect): boolean[] {
-  const mask: boolean[] = new Array(sql.length).fill(false);
-  const state: LiteralState = {
-    inString: false,
-    stringChar: "",
-    escapesWithBackslash: false,
-  };
-
-  for (let i = 0; i < sql.length; i++) {
-    if (!state.inString) {
-      const commentEnd = commentEndAt(sql, i, dialect);
-      if (commentEnd !== -1) {
-        i = commentEnd - 1;
-        continue;
-      }
-    }
-    const consumed = advanceLiteralState(sql, i, dialect, state);
-    mask[i] = state.inString;
-    if (consumed === 2) {
-      mask[i + 1] = state.inString;
-      i += 1;
-    }
-  }
-
-  return mask;
-}
-
-/** Remove breakpoint markers that lie OUTSIDE a literal, leaving data intact. */
-function stripMarkersOutsideLiterals(
-  line: string,
-  lineStart: number,
-  mask: boolean[]
-): string {
-  const MARKER = "--> statement-breakpoint";
-  let out = "";
-  for (let i = 0; i < line.length; i++) {
-    if (!mask[lineStart + i] && line.startsWith(MARKER, i)) {
-      i += MARKER.length - 1;
-      continue;
-    }
-    out += line[i];
-  }
-  return out;
-}
-
-export function splitSqlStatements(
-  sql: string,
-  dialect?: SupportedDialect
-): string[] {
-  // Remove Drizzle's statement breakpoint markers and SQL comments.
-  // drizzle-kit uses two marker patterns in generated migration SQL:
-  //   1. Standalone: `--> statement-breakpoint` on its own line (between CREATE TABLE blocks)
-  //   2. Inline: `SQL_STATEMENT;--> statement-breakpoint` on the same line (after CREATE INDEX/ALTER)
-  // Both must be cleaned out before executing, otherwise the marker text
-  // ends up as invalid SQL in the next statement.
-  // Where every literal sits, so neither half of the cleanup edits data.
-  const mask = literalMask(sql, dialect);
-  let lineStart = 0;
-  const cleanedSql = sql
-    .split("\n")
-    .map(line => {
-      const entry = { line, start: lineStart };
-      lineStart += line.length + 1;
-      return entry;
-    })
-    .filter(({ line, start }) => {
-      // A line that BEGINS inside a literal is a continuation of a value.
-      if (mask[start]) return true;
-      const trimmed = line.trim();
-      if (trimmed.startsWith("--> statement-breakpoint")) return false;
-      // Remove pure SQL comment lines (but keep lines that have SQL after comments)
-      if (
-        isLineCommentAt(trimmed, 0, dialect) &&
-        !trimmed.includes("CREATE") &&
-        !trimmed.includes("ALTER") &&
-        !trimmed.includes("DROP") &&
-        !trimmed.includes("INSERT")
-      )
-        return false;
-      return true;
-    })
-    // Strip inline markers (pattern 2) that appear after semicolons on the
-    // same line, e.g. `CREATE INDEX ...;--> statement-breakpoint`. Without
-    // this, the text after the semicolon pollutes the next accumulated
-    // statement and causes a MySQL syntax error. Per OCCURRENCE rather than
-    // per line: a literal can open midway through a line of ordinary SQL, and
-    // rewriting the whole line edits the value inside it.
-    .map(({ line, start }) => stripMarkersOutsideLiterals(line, start, mask))
-    .join("\n");
-
-  const statements: string[] = [];
-  let current = "";
-  const state: LiteralState = {
-    inString: false,
-    stringChar: "",
-    escapesWithBackslash: false,
-  };
-
-  for (let i = 0; i < cleanedSql.length; i++) {
-    const char = cleanedSql[i];
-
-    // Comments are copied through verbatim without being scanned, because the
-    // characters inside one are prose rather than SQL. An apostrophe in a
-    // retained comment ("SQLite doesn't support ...") would otherwise open a
-    // string that never closes, and every semicolon after it stops separating
-    // statements — the whole file then reaches the driver as one statement.
-    if (!state.inString && isLineCommentAt(cleanedSql, i, dialect)) {
-      const lineEnd = cleanedSql.indexOf("\n", i);
-      const end = lineEnd === -1 ? cleanedSql.length : lineEnd;
-      current += cleanedSql.slice(i, end);
-      i = end - 1;
-      continue;
-    }
-    if (!state.inString && char === "/" && cleanedSql[i + 1] === "*") {
-      const close = cleanedSql.indexOf("*/", i + 2);
-      const end = close === -1 ? cleanedSql.length : close + 2;
-      current += cleanedSql.slice(i, end);
-      i = end - 1;
-      continue;
-    }
-
-    // Quoted IDENTIFIERS count as quoted regions too, not just string literals.
-    // SQLite accepts `[a--b]` and MySQL accepts a backtick-quoted `a--b`; with
-    // only ' and " tracked, the dashes inside one read as a comment opener and
-    // the statement's semicolon disappears into it.
-    //
-    // The bracket and backtick forms are applied per dialect rather than
-    // everywhere: `[` is not a quote in Postgres, where it subscripts an array,
-    // so treating it as one there would swallow ordinary SQL.
-    const consumed = advanceLiteralState(cleanedSql, i, dialect, state);
-    if (consumed === 2) {
-      current += cleanedSql[i] + cleanedSql[i + 1];
-      i += 1;
-      continue;
-    }
-
-    if (char === ";" && !state.inString) {
-      const statement = current.trim();
-      const hasSQL =
-        /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|SELECT|TRUNCATE|GRANT|REVOKE)\b/i.test(
-          statement
-        );
-      if (statement && hasSQL) {
-        statements.push(statement);
-      }
-      current = "";
-    } else {
-      current += char;
-    }
-  }
-
-  const finalStatement = current.trim();
-  const hasFinalSQL =
-    /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|SELECT|TRUNCATE|GRANT|REVOKE)\b/i.test(
-      finalStatement
-    );
-  if (finalStatement && hasFinalSQL) {
-    statements.push(finalStatement);
-  }
-
-  return statements;
-}
+export { splitSqlStatements };
 
 // F11: dropped local generateUUID() in favor of node:crypto's randomUUID,
 // which is what the rest of the codebase uses (matches schema/migration-journal

@@ -16,9 +16,9 @@
  *
  * A column a schema hook contributed to the entity's table is closed for the same reason: it is a
  * real column that is no field, so nothing before the write removes it, and its contributor writes
- * it through `ctx.db`. It is dropped rather than refused because that is what happens to every
- * other real column that is not a field here, and a caller round-tripping a document cannot have
- * read it in the first place.
+ * it through `ctx.db.contributed`, which reaches that column and no other. It is dropped rather
+ * than refused because that is what happens to every other real column that is not a field here,
+ * and a caller round-tripping a document cannot have read it in the first place.
  *
  * @module lib/immutable-system-fields
  */

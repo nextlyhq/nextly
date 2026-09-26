@@ -38,16 +38,26 @@
  * — an unterminated string or comment, a backslash whose meaning depends on
  * a server setting, a MySQL executable comment — refuses the statement.
  *
+ * **Renames count as taking the table.** A migration that renames another
+ * owner's table (or moves it with PostgreSQL's `SET SCHEMA`) is refused like
+ * a drop of it. Following renames within one statement list is not enough:
+ * the rename can ship in one module and the drop of the new name in a later
+ * one, or in an uninstall's DOWN, and by then no owner row names the table
+ * by what it is called.
+ *
  * **Known limit.** Only text is read. A function body written as an ordinary
  * single-quoted string (`AS 'DROP TABLE x'`), or SQL passed as a string to a
- * function that runs it, is data to this reader, not code. `EXECUTE` and
- * `PREPARE`, the statements that run SQL assembled at run time, are refused.
+ * function that runs it, is data to this reader, not code. The statements
+ * that RUN such text are refused: `EXECUTE` and `PREPARE`, which run SQL
+ * assembled at run time, and a PostgreSQL `DO` whose body is not
+ * dollar-quoted, which runs a string this reader skips as a literal.
  *
  * @module domains/schema/ownership/drop-guard
  * @since 1.0.0
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
+import { scanSql, type SqlSegment } from "../migrate/sql-scan";
 
 import type { OwnerRecord } from "./owner-registry";
 import { SchemaOwnersRepository } from "./schema-owners-repository";
@@ -126,100 +136,12 @@ type Token =
 const WORD = /(?:[\w$]|[^\p{ASCII}])+/uy;
 
 /**
- * A PostgreSQL dollar-quote delimiter: `$$` or `$tag$`. A `$` followed by a
- * digit is a positional parameter (`$1`), not a delimiter, which the tag's
- * first character rules out.
+ * Lexes one statement's text into tokens, from the segments the shared
+ * scanner (`sql-scan.ts`) finds — the scanner the splitter uses, so the text
+ * this reads as a string, a comment or a body is the text the executor was
+ * handed as one. Every refusal names the whole statement.
  */
-const DOLLAR_DELIMITER =
-  /\$(?:(?:[A-Za-z_]|[^\p{ASCII}])(?:\w|[^\p{ASCII}])*)?\$/uy;
-
-/**
- * How a quoted token treats a backslash.
- *
- * - `literal`: an ordinary character (SQLite strings, every quoted name).
- * - `escape`: escapes the next character (PostgreSQL's `E'...'`).
- * - `ambiguous`: its meaning depends on a server setting — MySQL's
- *   NO_BACKSLASH_ESCAPES, PostgreSQL's standard_conforming_strings — so
- *   where it sits immediately before the closing quote character, where the
- *   two readings end the string in different places, the statement is
- *   refused. Anywhere else both readings end the string at the same quote.
- */
-type BackslashRule = "literal" | "escape" | "ambiguous";
-
-/**
- * One lexing rule: whether it applies at a position, and how to read what
- * starts there. `read` pushes whatever tokens the text produces and returns
- * where the next token starts.
- */
-interface LexRule {
-  applies(text: string, at: number): boolean;
-  read(text: string, at: number, out: Token[]): number;
-}
-
-/** One step through a quoted token: the text it adds and where it resumes. */
-interface QuotedStep {
-  add: string;
-  next: number;
-  /** Set on the closing quote, where the token ends. */
-  closed?: boolean;
-}
-
-/** Lexes one statement's text. Every refusal names the whole statement. */
 class Lexer {
-  /**
-   * The rules tried at each position, in order; the first that applies
-   * reads the text there, and a position no rule claims is a word or a
-   * punctuation character. The order matters: a MySQL `--` that is not a
-   * comment falls through every later rule to punctuation, and a `$` that
-   * does not start a dollar-quoted body falls through to a word.
-   */
-  private readonly rules: readonly LexRule[] = [
-    { applies: (text, at) => /\s/.test(text[at]), read: (_, at) => at + 1 },
-    {
-      applies: (text, at) =>
-        text.startsWith("--", at) && this.dashCommentAt(text, at),
-      read: lineEnd,
-    },
-    {
-      applies: (text, at) => text[at] === "#" && this.dialect === "mysql",
-      read: lineEnd,
-    },
-    {
-      applies: (text, at) => text.startsWith("/*", at),
-      read: (text, at) => this.blockCommentEnd(text, at),
-    },
-    {
-      applies: (text, at) => text[at] === "'",
-      read: (text, at, out) => this.singleQuoted(text, at, out),
-    },
-    {
-      applies: (text, at) => text[at] === '"',
-      read: (text, at, out) => this.doubleQuoted(text, at, out),
-    },
-    {
-      applies: (text, at) => text[at] === "`" && this.dialect !== "postgresql",
-      read: (text, at, out) => this.backtickName(text, at, out),
-    },
-    {
-      applies: (text, at) => text[at] === "[" && this.dialect === "sqlite",
-      read: (text, at, out) => this.bracketedName(text, at, out),
-    },
-    {
-      applies: (text, at) =>
-        text[at] === "$" &&
-        this.dialect === "postgresql" &&
-        this.dollarAt(text, at) !== undefined,
-      read: (text, at, out) => this.dollarBody(text, at, out),
-    },
-    {
-      applies: (text, at) => text[at] === ";",
-      read: (_, at, out) => {
-        out.push({ kind: "end" });
-        return at + 1;
-      },
-    },
-  ];
-
   constructor(
     private readonly dialect: SupportedDialect,
     private readonly statement: string
@@ -230,236 +152,111 @@ class Lexer {
   }
 
   tokens(text: string, out: Token[] = []): Token[] {
-    let i = 0;
-    while (i < text.length) i = this.readAt(text, i, out);
+    for (const segment of scanSql(text, this.dialect)) {
+      this.segmentTokens(text, segment, out);
+    }
     return out;
   }
 
-  /** Reads the token (or skips the whitespace or comment) starting at `at`. */
-  private readAt(text: string, at: number, out: Token[]): number {
-    const rule = this.rules.find(candidate => candidate.applies(text, at));
-    return rule ? rule.read(text, at, out) : this.wordOrPunct(text, at, out);
-  }
-
-  /** A `'...'` string; SQLite also takes it as a name where one is expected. */
-  private singleQuoted(text: string, at: number, out: Token[]): number {
-    const quoted = this.quoted(text, at, "'", this.plainStringRule());
-    out.push({
-      kind: "string",
-      asName: this.dialect === "sqlite" ? quoted.content : undefined,
-    });
-    return quoted.end;
-  }
-
   /**
-   * A `"..."` token. MySQL reads it as a string by default and as a name
-   * under ANSI_QUOTES, so it carries both readings; elsewhere it is a name.
+   * The tokens one segment produces. Anything the scan could not place with
+   * certainty is refused: an unterminated string, name, comment or body, a
+   * backslash whose meaning depends on a server setting where it decides
+   * where a string ends, and a MySQL executable comment, which MySQL and
+   * MariaDB run while every other reader skips it.
    */
-  private doubleQuoted(text: string, at: number, out: Token[]): number {
-    if (this.dialect === "mysql") {
-      const quoted = this.quoted(text, at, '"', "ambiguous");
-      out.push({ kind: "string", asName: quoted.content });
-      return quoted.end;
+  private segmentTokens(text: string, segment: SqlSegment, out: Token[]): void {
+    switch (segment.kind) {
+      case "code":
+        this.codeTokens(text.slice(segment.start, segment.end), out);
+        return;
+      case "line-comment":
+        return;
+      case "block-comment":
+        if (segment.executable) {
+          this.refuse(
+            "a MySQL executable comment (/*! ... */) runs text this guard reads as a comment"
+          );
+        }
+        if (segment.unterminated) this.refuse("unterminated block comment");
+        return;
+      case "string":
+        if (segment.unterminated) {
+          this.refuse(
+            segment.quote === "'"
+              ? "unterminated string"
+              : "unterminated quoted name"
+          );
+        }
+        if (segment.ambiguousBackslash) {
+          this.refuse(
+            "a backslash before a quote ends the string in a place that depends on server settings"
+          );
+        }
+        // SQLite takes a `'...'` string as a name wherever one is expected,
+        // and MySQL's ANSI_QUOTES mode reads `"..."` as one.
+        out.push({
+          kind: "string",
+          asName:
+            (this.dialect === "sqlite" && segment.quote === "'") ||
+            (this.dialect === "mysql" && segment.quote === '"')
+              ? segment.content
+              : undefined,
+        });
+        return;
+      case "quoted-name":
+        if (segment.unterminated) {
+          this.refuse(
+            segment.bracketed
+              ? "unterminated bracketed name"
+              : "unterminated quoted name"
+          );
+        }
+        out.push(
+          segment.unicodeEscaped
+            ? { kind: "escaped-name" }
+            : { kind: "name", name: segment.content }
+        );
+        return;
+      case "dollar-body":
+        // Read as code, bracketed by `end` tokens: its contents are a
+        // statement list of their own, so a drop inside a `DO` block or a
+        // function body is read like any other, and a drop's target list
+        // cannot run past the body's edge.
+        if (segment.unterminated) {
+          this.refuse("unterminated dollar-quoted body");
+        }
+        out.push({ kind: "end" });
+        this.tokens(text.slice(segment.bodyStart, segment.bodyEnd), out);
+        out.push({ kind: "end" });
+        return;
     }
-    const quoted = this.quoted(text, at, '"', "literal");
-    out.push({ kind: "name", name: quoted.content });
-    return quoted.end;
   }
 
-  /** A MySQL or SQLite backtick-quoted name. */
-  private backtickName(text: string, at: number, out: Token[]): number {
-    const quoted = this.quoted(text, at, "`", "literal");
-    out.push({ kind: "name", name: quoted.content });
-    return quoted.end;
-  }
-
-  /** SQLite's bracketed name has no escape: it ends at the first `]`. */
-  private bracketedName(text: string, at: number, out: Token[]): number {
-    const end = text.indexOf("]", at + 1);
-    if (end === -1) this.refuse("unterminated bracketed name");
-    out.push({ kind: "name", name: text.slice(at + 1, end) });
-    return end + 1;
-  }
-
-  /**
-   * Whether `--` at `at` starts a comment. Always in PostgreSQL and SQLite;
-   * in MySQL only when followed by whitespace, a control character or the
-   * end of the text — otherwise `1--1` is arithmetic.
-   */
-  private dashCommentAt(text: string, at: number): boolean {
-    if (this.dialect !== "mysql") return true;
-    const next = text.charCodeAt(at + 2);
-    return Number.isNaN(next) || next <= 0x20;
-  }
-
-  /**
-   * Where the block comment starting at `at` ends.
-   *
-   * PostgreSQL nests block comments, so `/* /* *\/ x *\/` is one comment;
-   * MySQL and SQLite end every block comment at the first `*\/`. MySQL and
-   * MariaDB EXECUTE the body of `/*! ... *\/` and `/*M! ... *\/`, which to
-   * every other reader is a comment, so on MySQL a statement carrying one is
-   * refused rather than decide which server version would run it. An
-   * unterminated comment is refused too, although SQLite would accept one.
-   */
-  private blockCommentEnd(text: string, at: number): number {
-    if (this.dialect === "mysql" && /^\/\*M?!/i.test(text.slice(at, at + 4))) {
-      this.refuse(
-        "a MySQL executable comment (/*! ... */) runs text this guard reads as a comment"
-      );
-    }
-    if (this.dialect !== "postgresql") {
-      const end = text.indexOf("*/", at + 2);
-      if (end === -1) this.refuse("unterminated block comment");
-      return end + 2;
-    }
-    let depth = 1;
-    let i = at + 2;
-    while (i < text.length) {
-      if (text.startsWith("/*", i)) {
-        depth += 1;
-        i += 2;
-      } else if (text.startsWith("*/", i)) {
-        depth -= 1;
-        i += 2;
-        if (depth === 0) return i;
-      } else {
+  /** Words, punctuation and statement ends in a stretch of code. */
+  private codeTokens(code: string, out: Token[]): void {
+    let i = 0;
+    while (i < code.length) {
+      if (/\s/.test(code[i])) {
         i += 1;
+        continue;
       }
-    }
-    return this.refuse("unterminated block comment");
-  }
-
-  /** How a single-quoted string treats a backslash, per dialect. */
-  private plainStringRule(): BackslashRule {
-    return this.dialect === "sqlite" ? "literal" : "ambiguous";
-  }
-
-  /**
-   * A quoted token starting at `at`: its content, with the doubled-quote
-   * escape undone, and where it ends.
-   */
-  private quoted(
-    text: string,
-    at: number,
-    close: string,
-    backslash: BackslashRule
-  ): { content: string; end: number } {
-    let content = "";
-    let i = at + 1;
-    for (;;) {
-      if (i >= text.length) this.refuse(unterminatedReason(close));
-      const step = this.quotedStep(text, i, close, backslash);
-      if (step.closed) return { content, end: step.next };
-      content += step.add;
-      i = step.next;
-    }
-  }
-
-  /**
-   * One character (or escape pair) inside a quoted token. A doubled closing
-   * quote is one literal quote; a single one ends the token.
-   */
-  private quotedStep(
-    text: string,
-    at: number,
-    close: string,
-    backslash: BackslashRule
-  ): QuotedStep {
-    const c = text[at];
-    if (c === "\\") return this.backslashStep(text, at, close, backslash);
-    if (c !== close) return { add: c, next: at + 1 };
-    if (text[at + 1] === close) return { add: close, next: at + 2 };
-    return { add: "", next: at + 1, closed: true };
-  }
-
-  /** A backslash inside a quoted token, read by the token's rule. */
-  private backslashStep(
-    text: string,
-    at: number,
-    close: string,
-    backslash: BackslashRule
-  ): QuotedStep {
-    if (backslash === "escape") {
-      return { add: text.slice(at, at + 2), next: at + 2 };
-    }
-    if (backslash === "ambiguous" && text[at + 1] === close) {
-      this.refuse(
-        "a backslash before a quote ends the string in a place that depends on server settings"
-      );
-    }
-    return { add: "\\", next: at + 1 };
-  }
-
-  private dollarAt(text: string, at: number): string | undefined {
-    DOLLAR_DELIMITER.lastIndex = at;
-    return DOLLAR_DELIMITER.exec(text)?.[0];
-  }
-
-  /**
-   * A PostgreSQL dollar-quoted body, read as code.
-   *
-   * The body ends at the first repeat of its own delimiter, whatever lies
-   * between. Its contents are lexed as a statement list of their own and
-   * bracketed by `end` tokens, so a drop inside a `DO` block or a function
-   * body is read like any other, and a drop's target list cannot run past
-   * the body's edge.
-   */
-  private dollarBody(text: string, at: number, out: Token[]): number {
-    const delimiter = this.dollarAt(text, at) as string;
-    const bodyStart = at + delimiter.length;
-    const bodyEnd = text.indexOf(delimiter, bodyStart);
-    if (bodyEnd === -1) this.refuse("unterminated dollar-quoted body");
-    out.push({ kind: "end" });
-    this.tokens(text.slice(bodyStart, bodyEnd), out);
-    out.push({ kind: "end" });
-    return bodyEnd + delimiter.length;
-  }
-
-  private wordOrPunct(text: string, at: number, out: Token[]): number {
-    WORD.lastIndex = at;
-    const match = WORD.exec(text);
-    if (!match) {
-      out.push({ kind: "punct", char: text[at] });
-      return at + 1;
-    }
-    const word = match[0];
-    const end = at + word.length;
-    const upper = word.toUpperCase();
-    if (this.dialect === "postgresql") {
-      // `E'...'` honours backslash escapes; the prefix has to be the whole
-      // word, since `nameE'x'` is a name followed by a string.
-      if (upper === "E" && text[end] === "'") {
-        const quoted = this.quoted(text, end, "'", "escape");
-        out.push({ kind: "string" });
-        return quoted.end;
+      if (code[i] === ";") {
+        out.push({ kind: "end" });
+        i += 1;
+        continue;
       }
-      if (upper === "U" && text[end] === "&" && text[end + 1] === '"') {
-        const quoted = this.quoted(text, end + 1, '"', "literal");
-        out.push({ kind: "escaped-name" });
-        return quoted.end;
+      WORD.lastIndex = i;
+      const word = WORD.exec(code)?.[0];
+      if (word === undefined) {
+        out.push({ kind: "punct", char: code[i] });
+        i += 1;
+        continue;
       }
+      out.push({ kind: "word", upper: word.toUpperCase(), text: word });
+      i += word.length;
     }
-    out.push({ kind: "word", upper, text: word });
-    return end;
   }
-}
-
-/**
- * Where a line comment starting at `at` ends. PostgreSQL ends one at a
- * carriage return as well as a newline; ending there in every dialect reads
- * more text as code, never less.
- */
-function lineEnd(text: string, at: number): number {
-  for (let i = at; i < text.length; i += 1) {
-    if (text[i] === "\n" || text[i] === "\r") return i;
-  }
-  return text.length;
-}
-
-/** Why a quoted token that never closes is refused, by its quote. */
-function unterminatedReason(close: string): string {
-  return close === "'" ? "unterminated string" : "unterminated quoted name";
 }
 
 /** Statement keywords that drop tables without naming them. */
@@ -496,6 +293,12 @@ class DropReader {
   /** Current name → the name the table had before this list renamed it. */
   private readonly renamedFrom = new Map<string, string>();
   readonly dropped: string[] = [];
+  /**
+   * Tables this list renames or moves to another schema, by every name the
+   * table is known by in the list: the name it had before the list and the
+   * name the rename was written against, when they differ.
+   */
+  readonly renamed: string[] = [];
 
   constructor(private readonly dialect: SupportedDialect) {}
 
@@ -512,14 +315,30 @@ class DropReader {
   }
 
   rename(from: string, to: string): void {
-    const original = this.renamedFrom.get(from) ?? from;
+    const original = this.relocate(from);
     this.renamedFrom.delete(from);
     if (to === original) this.renamedFrom.delete(to);
     else this.renamedFrom.set(to, original);
   }
 
+  /**
+   * Records that the table currently called `name` leaves that name — a
+   * rename, or a move to another schema — and returns the name it had before
+   * this list.
+   */
+  relocate(name: string): string {
+    const original = this.renamedFrom.get(name) ?? name;
+    this.renamed.push(original);
+    if (original !== name) this.renamed.push(name);
+    return original;
+  }
+
   get isMysql(): boolean {
     return this.dialect === "mysql";
+  }
+
+  get isPostgres(): boolean {
+    return this.dialect === "postgresql";
   }
 }
 
@@ -616,8 +435,28 @@ class StatementWalk {
         break;
       case "RENAME":
         return this.readRenameStatement(at, first);
+      case "DO":
+        if (first && this.reader.isPostgres) this.assertDollarQuotedDo(at);
+        break;
     }
     return at + 1;
+  }
+
+  /**
+   * PostgreSQL's `DO [LANGUAGE lang] body` runs its body as code. A
+   * dollar-quoted body is lexed as code and read like any other statement;
+   * a body written as a string literal (`DO 'BEGIN DROP TABLE x; END'`) is
+   * skipped as data by the lexer, so what it drops cannot be read and the
+   * statement is refused. The lexer marks the start of a dollar-quoted body
+   * with an `end` token, which is what must follow the keyword and its
+   * optional LANGUAGE clause.
+   */
+  private assertDollarQuotedDo(at: number): void {
+    const bodyAt = this.word(at + 1) === "LANGUAGE" ? at + 3 : at + 1;
+    if (this.tokens[bodyAt]?.kind === "end") return;
+    this.refuse(
+      "DO runs a body written as a string, which this guard reads as data rather than code"
+    );
   }
 
   /**
@@ -797,6 +636,8 @@ class StatementWalk {
    * `RENAME AS <new>` and `RENAME <new>`. Column, constraint and index
    * renames are not table renames: `RENAME [COLUMN] a TO b` and `RENAME
    * CONSTRAINT` in PostgreSQL and SQLite, `RENAME COLUMN|INDEX|KEY` in MySQL.
+   * PostgreSQL's `SET SCHEMA <schema>` moves the table out from under its
+   * name, and is recorded as the table leaving it.
    * The tokens are not consumed, so the walk still sees every word in the
    * statement.
    */
@@ -807,11 +648,28 @@ class StatementWalk {
     // ALTER TABLE that renames nothing is never refused over its name.
     let table: string | undefined;
     for (let k = tableAt + 1; !this.atStatementEnd(k); k += 1) {
+      if (this.isSetSchemaAt(k)) {
+        table ??= this.qualifiedName(tableAt)?.name;
+        if (table === undefined) {
+          this.refuse("a SET SCHEMA whose table name cannot be read");
+        }
+        this.reader.relocate(table);
+        continue;
+      }
       const newNameAt = this.tableRenameTargetAt(k);
       if (newNameAt === undefined) continue;
       table ??= this.qualifiedName(tableAt)?.name;
       table = this.recordTableRename(table, newNameAt);
     }
+  }
+
+  /** PostgreSQL's `SET SCHEMA`, which only a table move spells that way. */
+  private isSetSchemaAt(at: number): boolean {
+    return (
+      this.reader.isPostgres &&
+      this.word(at) === "SET" &&
+      this.word(at + 1) === "SCHEMA"
+    );
   }
 
   /**
@@ -895,11 +753,459 @@ class StatementWalk {
  */
 export function tablesDroppedBy(
   statements: readonly string[],
+  dialect: SupportedDialect,
+  liveColumns?: LiveColumns
+): string[] {
+  return readStatements(statements, dialect, liveColumns).dropped;
+}
+
+/**
+ * One reading of a statement list: the tables it drops and the tables it
+ * renames or moves away, from the same walk, so the two can never be read
+ * under different rules.
+ */
+function readStatements(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  liveColumns: LiveColumns | undefined
+): Pick<DropReader, "dropped" | "renamed"> {
+  const reader = new DropReader(dialect);
+  const preserving = rebuildBlockStatements(statements, dialect, liveColumns);
+  statements.forEach((statement, index) => {
+    if (!preserving.has(index)) reader.read(statement);
+  });
+  return reader;
+}
+
+/**
+ * A statement's tokens, or undefined when it holds more than one statement
+ * or cannot be read — neither can be part of a rebuild block.
+ */
+function soleStatementTokens(
+  statement: string,
+  dialect: SupportedDialect
+): Token[] | undefined {
+  let tokens: Token[];
+  try {
+    tokens = new Lexer(dialect, statement).tokens(statement);
+  } catch (error) {
+    if (error instanceof UnparsableDropTarget) return undefined;
+    throw error;
+  }
+  while (tokens.at(-1)?.kind === "end") tokens.pop();
+  return tokens.some(token => token.kind === "end") ? undefined : tokens;
+}
+
+/** Reads one statement's tokens in order, consuming what matches. */
+class TokenCursor {
+  private at = 0;
+
+  constructor(private readonly tokens: readonly Token[]) {}
+
+  /** Consumes the next token when it is `word`. */
+  word(word: string): boolean {
+    const token = this.tokens[this.at];
+    if (token?.kind !== "word" || token.upper !== word) return false;
+    this.at += 1;
+    return true;
+  }
+
+  /** Consumes the next token when it is the punctuation `char`. */
+  punct(char: string): boolean {
+    const token = this.tokens[this.at];
+    if (token?.kind !== "punct" || token.char !== char) return false;
+    this.at += 1;
+    return true;
+  }
+
+  /** Consumes `IF EXISTS` / `IF NOT EXISTS` when present. */
+  ifExists(): void {
+    const start = this.at;
+    if (!this.word("IF")) return;
+    this.word("NOT");
+    if (!this.word("EXISTS")) this.at = start;
+  }
+
+  /** Consumes one possibly qualified name; its last part, lower-cased. */
+  name(): string | undefined {
+    let name = this.part();
+    if (name === undefined) return undefined;
+    while (this.punct(".")) {
+      name = this.part();
+      if (name === undefined) return undefined;
+    }
+    return name;
+  }
+
+  /** Consumes `( a, b, ... )`: the names, or undefined when it is not one. */
+  nameList(): string[] | undefined {
+    if (!this.punct("(")) return undefined;
+    const names: string[] = [];
+    do {
+      const name = this.name();
+      if (name === undefined) return undefined;
+      names.push(name);
+    } while (this.punct(","));
+    return this.punct(")") ? names : undefined;
+  }
+
+  /** Consumes `a, b, ...` with no parentheses. */
+  bareNameList(): string[] | undefined {
+    const names: string[] = [];
+    do {
+      const name = this.name();
+      if (name === undefined) return undefined;
+      names.push(name);
+    } while (this.punct(","));
+    return names;
+  }
+
+  /**
+   * Consumes a parenthesised CREATE TABLE body: the names of its columns,
+   * skipping table constraints, or undefined when it is not one.
+   */
+  columnDefinitions(): string[] | undefined {
+    if (!this.punct("(")) return undefined;
+    const columns: string[] = [];
+    for (;;) {
+      const first = this.tokens[this.at];
+      const constraint =
+        first?.kind === "word" && TABLE_CONSTRAINT_WORDS.has(first.upper);
+      if (!constraint) {
+        const column = this.part();
+        if (column === undefined) return undefined;
+        columns.push(column);
+      }
+      // The rest of the item, to the comma or parenthesis that ends it.
+      let depth = 0;
+      for (;;) {
+        const token = this.tokens[this.at];
+        if (token === undefined) return undefined;
+        if (token.kind === "punct" && depth === 0) {
+          if (token.char === ",") break;
+          if (token.char === ")") {
+            this.at += 1;
+            return columns;
+          }
+        }
+        if (token.kind === "punct" && token.char === "(") depth += 1;
+        if (token.kind === "punct" && token.char === ")") depth -= 1;
+        this.at += 1;
+      }
+      this.at += 1;
+    }
+  }
+
+  get done(): boolean {
+    return this.at === this.tokens.length;
+  }
+
+  /** Whether the next token is one of `words`, without consuming it. */
+  peekWord(words: ReadonlySet<string>): boolean {
+    const token = this.tokens[this.at];
+    return token?.kind === "word" && words.has(token.upper);
+  }
+
+  /** Whether a comma outside parentheses follows: a second clause. */
+  hasTopLevelComma(): boolean {
+    let depth = 0;
+    for (let k = this.at; k < this.tokens.length; k += 1) {
+      const token = this.tokens[k];
+      if (token.kind !== "punct") continue;
+      if (token.char === "(") depth += 1;
+      else if (token.char === ")") depth -= 1;
+      else if (token.char === "," && depth === 0) return true;
+    }
+    return false;
+  }
+
+  private part(): string | undefined {
+    const token = this.tokens[this.at];
+    let name: string | undefined;
+    if (token?.kind === "word") name = token.text;
+    else if (token?.kind === "name") name = token.name;
+    else if (token?.kind === "string") name = token.asName;
+    if (name === undefined) return undefined;
+    this.at += 1;
+    return name.toLowerCase();
+  }
+}
+
+/** Words that open a table constraint rather than a column definition. */
+const TABLE_CONSTRAINT_WORDS = new Set([
+  "CONSTRAINT",
+  "PRIMARY",
+  "FOREIGN",
+  "UNIQUE",
+  "CHECK",
+]);
+
+/** A rebuild's twin name for `table`. */
+const REBUILD_PREFIX = "__new_";
+
+/**
+ * The indexes of the statements, within a statement list, that belong to a
+ * COMPLETE table rebuild — the `DROP TABLE t` and the rename of the twin
+ * back to `t` — and so do not take `t` from its owner.
+ *
+ * SQLite changes a table's constraints by rebuilding it, as four adjacent
+ * statements, each a statement of its own:
+ *
+ *     CREATE TABLE __new_t (c1 ..., c2 ..., <constraints>)
+ *     INSERT INTO __new_t (c1, c2) SELECT c1, c2 FROM t
+ *     DROP TABLE t
+ *     ALTER TABLE __new_t RENAME TO t
+ *
+ * The copy has to fill every column the twin declares from the same-named
+ * column of `t`, with nothing after the FROM — no filter, no join — so the
+ * rows `t` held are the rows it holds afterwards, under its own name. A DROP
+ * or a rename outside such a block, a block out of order, a copy that
+ * filters or reorders, or a twin renamed to another name is not one, and is
+ * read as the drop or rename it is.
+ *
+ * The text alone cannot say whether the twin keeps every column `t` has, so
+ * the block counts only against `t`'s LIVE columns: every one of them has to
+ * be declared by the twin, and so copied. A twin missing one — or a table
+ * whose live columns were not read — leaves the block read as the drop of
+ * `t` it then is.
+ */
+export function rebuildBlockStatements(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  liveColumns: LiveColumns | undefined
+): ReadonlySet<number> {
+  return followColumns(statements, dialect, liveColumns).preserving;
+}
+
+/**
+ * The columns each table in `liveColumns` has once `statements` have run —
+ * for judging the next unit of a run against the state this one leaves.
+ */
+export function columnsAfter(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  liveColumns: LiveColumns
+): LiveColumns {
+  return followColumns(statements, dialect, liveColumns).after;
+}
+
+/**
+ * Walks a statement list with the tables' columns in hand: a rebuild block is
+ * judged against the columns its table has at that point, and single-clause
+ * `ALTER TABLE ... ADD|DROP|RENAME COLUMN` statements before it move those
+ * columns as the database would.
+ *
+ * A statement on a tracked table that is not one of those — a multi-clause
+ * ALTER, an ADD or DROP of something other than a column, any other ALTER,
+ * or a DROP or CREATE of the table outside a block — stops the table being
+ * tracked: its columns are then unknown, and a later rebuild of it counts as
+ * a drop, as one whose columns were never read does. A statement list entry
+ * holding more than one statement, or one that cannot be read, stops every
+ * table being tracked.
+ */
+function followColumns(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  liveColumns: LiveColumns | undefined
+): { preserving: ReadonlySet<number>; after: LiveColumns } {
+  const columns = new Map(
+    [...(liveColumns ?? [])].map(([table, set]) => [table, new Set(set)])
+  );
+  const preserving = new Set<number>();
+  for (let i = 0; i < statements.length; i += 1) {
+    const block = rebuildBlockAt(statements, i, dialect);
+    if (block) {
+      const live = columns.get(block.table);
+      const declared = new Set(block.columns);
+      if (
+        live !== undefined &&
+        live.size > 0 &&
+        [...live].every(column => declared.has(column))
+      ) {
+        preserving.add(i + 2);
+        preserving.add(i + 3);
+      }
+      if (live !== undefined) columns.set(block.table, declared);
+      i += 3;
+      continue;
+    }
+    const tokens = soleStatementTokens(statements[i], dialect);
+    if (tokens) followColumnChange(tokens, columns);
+    else columns.clear();
+  }
+  return { preserving, after: columns };
+}
+
+/** Words after ADD or DROP that name something other than a column. */
+const NON_COLUMN_ELEMENTS = new Set([
+  "CONSTRAINT",
+  "INDEX",
+  "KEY",
+  "FOREIGN",
+  "PRIMARY",
+  "UNIQUE",
+  "CHECK",
+  "DEFAULT",
+  "NOT",
+  "FULLTEXT",
+  "SPATIAL",
+  "PARTITION",
+]);
+
+/**
+ * Applies one statement's effect on the tracked tables' columns: a
+ * single-clause `ALTER TABLE t ADD [COLUMN] c`, `DROP [COLUMN] c` or
+ * `RENAME [COLUMN] a TO b` moves them; anything else that touches a tracked
+ * table stops it being tracked.
+ */
+function followColumnChange(
+  tokens: readonly Token[],
+  columns: Map<string, Set<string>>
+): void {
+  const cursor = new TokenCursor(tokens);
+  if (cursor.word("DROP") || cursor.word("CREATE")) {
+    // A tracked table dropped or created outside a rebuild block: whatever
+    // it holds afterwards is not what was read.
+    cursor.word("TEMPORARY");
+    if (!cursor.word("TABLE")) return;
+    cursor.ifExists();
+    const table = cursor.name();
+    if (table !== undefined) columns.delete(table);
+    return;
+  }
+  if (!cursor.word("ALTER") || !cursor.word("TABLE")) return;
+  cursor.ifExists();
+  cursor.word("ONLY");
+  const table = cursor.name();
+  const set = table === undefined ? undefined : columns.get(table);
+  if (table === undefined || set === undefined) return;
+  if (!applyColumnClause(cursor, set)) columns.delete(table);
+}
+
+/**
+ * Applies the one clause after `ALTER TABLE t` to `set`, returning whether it
+ * was a column change this understands — false for anything else, including
+ * a second clause.
+ */
+function applyColumnClause(cursor: TokenCursor, set: Set<string>): boolean {
+  const adding = cursor.word("ADD");
+  if (adding || cursor.word("DROP")) {
+    if (cursor.peekWord(NON_COLUMN_ELEMENTS)) return false;
+    cursor.word("COLUMN");
+    cursor.ifExists();
+    const column = cursor.name();
+    if (column === undefined || cursor.hasTopLevelComma()) return false;
+    if (adding) set.add(column);
+    else set.delete(column);
+    return true;
+  }
+  if (cursor.word("RENAME")) {
+    if (cursor.peekWord(new Set(["TO", "AS"]))) return false;
+    cursor.word("COLUMN");
+    const from = cursor.name();
+    if (from === undefined || !cursor.word("TO")) return false;
+    const to = cursor.name();
+    if (to === undefined || !cursor.done || !set.delete(from)) return false;
+    set.add(to);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * The tables the statement list rebuilds in blocks of that shape — the
+ * tables whose live columns `rebuildBlockStatements` needs.
+ */
+export function rebuiltTables(
+  statements: readonly string[],
   dialect: SupportedDialect
 ): string[] {
-  const reader = new DropReader(dialect);
-  for (const statement of statements) reader.read(statement);
-  return reader.dropped;
+  const tables = new Set<string>();
+  for (let i = 0; i + 3 < statements.length; i += 1) {
+    const block = rebuildBlockAt(statements, i, dialect);
+    if (block) tables.add(block.table);
+  }
+  return [...tables];
+}
+
+/** A table's live columns, lower-cased, by lower-cased table name. */
+export type LiveColumns = ReadonlyMap<string, ReadonlySet<string>>;
+
+/**
+ * The live columns of every table the statement lists rebuild, read from the
+ * database the statements are about to run on — what `assertNoForeignDrops`
+ * and `rebuildBlockStatements` compare a rebuild's twin against.
+ */
+export async function readLiveColumns(
+  db: unknown,
+  dialect: SupportedDialect,
+  statementLists: ReadonlyArray<readonly string[]>
+): Promise<LiveColumns> {
+  const tables = [
+    ...new Set(statementLists.flatMap(list => rebuiltTables(list, dialect))),
+  ];
+  if (tables.length === 0) return new Map();
+  const { queryLiveColumnTypes } = await import(
+    "../pipeline/live-column-types"
+  );
+  const live = await queryLiveColumnTypes(db, dialect, tables);
+  return new Map(
+    [...live].map(([table, columns]) => [
+      table.toLowerCase(),
+      new Set([...columns.keys()].map(column => column.toLowerCase())),
+    ])
+  );
+}
+
+/**
+ * The table a block of rebuild shape starting at `i` rebuilds, and the
+ * columns its twin declares, if one starts there.
+ */
+function rebuildBlockAt(
+  statements: readonly string[],
+  i: number,
+  dialect: SupportedDialect
+): { table: string; columns: string[] } | undefined {
+  const [create, copy, drop, rename] = statements
+    .slice(i, i + 4)
+    .map(statement => soleStatementTokens(statement, dialect));
+  if (!create || !copy || !drop || !rename) return undefined;
+
+  const creating = new TokenCursor(create);
+  if (!creating.word("CREATE") || !creating.word("TABLE")) return undefined;
+  creating.ifExists();
+  const twin = creating.name();
+  if (!twin?.startsWith(REBUILD_PREFIX)) return undefined;
+  const table = twin.slice(REBUILD_PREFIX.length);
+  const columns = creating.columnDefinitions();
+  if (!columns || columns.length === 0 || !creating.done) return undefined;
+
+  const copying = new TokenCursor(copy);
+  if (!copying.word("INSERT") || !copying.word("INTO")) return undefined;
+  if (copying.name() !== twin) return undefined;
+  const into = copying.nameList();
+  if (!copying.word("SELECT")) return undefined;
+  const selected = copying.bareNameList();
+  if (!copying.word("FROM") || copying.name() !== table || !copying.done) {
+    return undefined;
+  }
+  const same = (list: string[] | undefined) =>
+    list !== undefined &&
+    list.length === columns.length &&
+    list.every((name, at) => name === columns[at]);
+  if (!same(into) || !same(selected)) return undefined;
+
+  const dropping = new TokenCursor(drop);
+  if (!dropping.word("DROP") || !dropping.word("TABLE")) return undefined;
+  dropping.ifExists();
+  if (dropping.name() !== table || !dropping.done) return undefined;
+
+  const renaming = new TokenCursor(rename);
+  if (!renaming.word("ALTER") || !renaming.word("TABLE")) return undefined;
+  if (renaming.name() !== twin) return undefined;
+  if (!renaming.word("RENAME") || !renaming.word("TO")) return undefined;
+  if (renaming.name() !== table || !renaming.done) return undefined;
+  return { table, columns };
 }
 
 /** Which migration stream is running: `core`, `app`, or `plugin:<name>`. */
@@ -916,6 +1222,11 @@ export type MigrationStream = string;
  * refused. Absence means nobody has claimed it, and a migration that drops a
  * table nothing claims is the ordinary case for tables created before this
  * registry existed.
+ *
+ * Renaming or moving another stream's table is refused the same way. After
+ * the rename no owner row names the table, so a later drop of the new name —
+ * in another module, or an uninstall's DOWN — would be judged by a name
+ * nobody claims and approved.
  */
 export function assertNoForeignDrops(args: {
   statements: readonly string[];
@@ -925,6 +1236,12 @@ export function assertNoForeignDrops(args: {
   dialect: SupportedDialect;
   /** For the error message. */
   source: string;
+  /**
+   * The live columns of the tables the statements rebuild
+   * (`readLiveColumns`). A rebuild of a table missing here is read as the
+   * drop it would otherwise be.
+   */
+  liveColumns?: LiveColumns;
 }): void {
   // Looked up case-insensitively. PostgreSQL folds an unquoted
   // `DROP TABLE APP_NOTES` to `app_notes`, and an exact lookup of the name as
@@ -936,9 +1253,9 @@ export function assertNoForeignDrops(args: {
     const key = name.toLowerCase();
     ownersByName.set(key, [...(ownersByName.get(key) ?? []), record]);
   }
-  let dropped: string[];
+  let read: Pick<DropReader, "dropped" | "renamed">;
   try {
-    dropped = tablesDroppedBy(args.statements, args.dialect);
+    read = readStatements(args.statements, args.dialect, args.liveColumns);
   } catch (error) {
     // Re-raised with the file it came from, which the reader never sees and
     // the operator needs to find the statement.
@@ -951,10 +1268,10 @@ export function assertNoForeignDrops(args: {
     }
     throw error;
   }
-  for (const table of dropped) {
-    const owner = ownersByName
-      .get(table)
-      ?.find(record => record.migratedBy !== args.stream);
+  const foreignOwner = (table: string): OwnerRecord | undefined =>
+    ownersByName.get(table)?.find(record => record.migratedBy !== args.stream);
+  for (const table of read.dropped) {
+    const owner = foreignOwner(table);
     if (!owner) continue;
 
     throw new NextlyError({
@@ -964,6 +1281,25 @@ export function assertNoForeignDrops(args: {
       logContext: {
         table,
         droppedBy: args.stream,
+        belongsTo: owner.migratedBy,
+        ownerId: owner.ownerId,
+        source: args.source,
+      },
+    });
+  }
+  for (const table of read.renamed) {
+    const owner = foreignOwner(table);
+    if (!owner) continue;
+
+    // The foreign-drop code: a rename takes the table from its owner's name
+    // just as a drop does, and the operator's remedy is the same.
+    throw new NextlyError({
+      code: "DROP_OF_FOREIGN_TABLE",
+      publicMessage:
+        "A migration would rename a table that belongs to a different owner. It has been refused, and nothing was applied.",
+      logContext: {
+        table,
+        renamedBy: args.stream,
         belongsTo: owner.migratedBy,
         ownerId: owner.ownerId,
         source: args.source,

@@ -371,6 +371,17 @@ export class SchemaEventsRepository {
       .where(sql`event_type = 'file_apply'`)) as unknown as SchemaEventRow[];
   }
 
+  /**
+   * Every `file_rollback` row: rollbacks that failed. Kept apart from
+   * `listFileApplies`, whose rows alone decide whether a migration is applied.
+   */
+  async listFailedRollbacks(): Promise<SchemaEventRow[]> {
+    return (await this.db
+      .select()
+      .from(this.table)
+      .where(sql`event_type = 'file_rollback'`)) as unknown as SchemaEventRow[];
+  }
+
   /** All `file_apply` rows for a single filename (applied + failed + rolled_back). */
   async findFileApplies(filename: string): Promise<SchemaEventRow[]> {
     return (await this.db

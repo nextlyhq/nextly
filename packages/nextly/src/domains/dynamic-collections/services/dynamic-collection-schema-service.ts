@@ -29,10 +29,7 @@ import {
   type BaseValidationError,
 } from "../../../shared/base-validator";
 import { env } from "../../../shared/lib/env";
-import {
-  pluginEmptyColumnDefault,
-  storageTypeToken,
-} from "../../../shared/lib/plugin-storage";
+import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import {
   fieldGroupSlugList,
   isFieldGroupFieldType,
@@ -58,9 +55,16 @@ import {
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
-import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
+import { backfillDefaultForType } from "../../schema/utils/backfill-default";
+import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
+
+/**
+ * Field types this service stores in a JSON array column (see its column-type
+ * map), so their NOT NULL backfill is `[]` rather than the text empty.
+ */
+const COLLECTION_JSON_ARRAY_TYPES: ReadonlySet<string> = new Set(["chips"]);
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 
@@ -3309,51 +3313,15 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
     type: string,
     field?: Partial<FieldDefinition>
   ): string {
-    // A contributed type states its own backfill before the primitive's is
-    // derived: `{}` satisfies a json column and then fails every read that
-    // expects the structure the type actually stores. Read from the field as
-    // DECLARED — `type` here may already be the storage primitive, under which
-    // the contributed type is not registered and states nothing.
-    const contributed = pluginEmptyColumnDefault(field ?? { type }, type, {
-      json: serialized => quoteJsonSqlDefault(serialized, this.dialect),
-      literal: (value, storageToken) =>
+    // The shared backfill decision; this path stores `chips` as a JSON array.
+    return backfillDefaultForType({
+      type,
+      field,
+      dialect: this.dialect,
+      formatDefaultValue: (value, storageToken) =>
         this.formatDefaultValue(value, storageToken),
+      jsonArrayTypes: COLLECTION_JSON_ARRAY_TYPES,
     });
-    if (contributed !== undefined) return contributed;
-
-    switch (type) {
-      case "text":
-      case "textarea":
-      case "email":
-      case "password":
-      case "richText":
-      case "code":
-        return "''";
-      case "number":
-        return "0";
-      case "checkbox":
-        return this.dialect === "sqlite" ? "0" : "FALSE";
-      case "date":
-        if (this.dialect === "sqlite") {
-          return String(Math.floor(Date.now() / 1000));
-        }
-        return "NOW()";
-      case "json":
-      case "repeater":
-      case "group":
-        return quoteJsonSqlDefault("{}", this.dialect);
-      case "chips":
-        return quoteJsonSqlDefault("[]", this.dialect);
-      case "relationship":
-      case "upload":
-        // Relations are nullable by nature when adding to existing tables
-        return "NULL";
-      case "select":
-      case "radio":
-        return "''";
-      default:
-        return "''";
-    }
   }
 
   /**
@@ -3389,7 +3357,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
 
     // Handle JSON (needs to be a quoted JSON string)
     if (type === "json") {
-      return quoteJsonSqlDefault(
+      return quoteExpressionSqlDefault(
         typeof value === "string" ? value : JSON.stringify(value),
         this.dialect
       );

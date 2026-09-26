@@ -38,12 +38,25 @@ import { reloadDynamicTables } from "./reload-dynamic-tables";
 const callerLabel = (caller?: string): string =>
   caller ? `[Nextly:${caller}]` : "[Nextly]";
 
+/**
+ * Whether this process applies code-first schema on boot: development, and not
+ * opted out with `NEXTLY_DISABLE_BOOT_APPLY=1`.
+ *
+ * One predicate for everything that creates schema outside migrations at boot
+ * — the development push below and the creation of missing extension tables in
+ * `registerServices` — so an opt-out that stops one stops both.
+ */
+export function bootApplyEnabled(): boolean {
+  return (
+    process.env.NODE_ENV === "development" &&
+    process.env.NEXTLY_DISABLE_BOOT_APPLY !== "1"
+  );
+}
+
 export async function runBootTimeApplyIfDev(opts?: {
   caller?: string;
 }): Promise<void> {
-  if (process.env.NODE_ENV !== "development") return;
-
-  if (process.env.NEXTLY_DISABLE_BOOT_APPLY === "1") return;
+  if (!bootApplyEnabled()) return;
 
   const label = callerLabel(opts?.caller);
   try {

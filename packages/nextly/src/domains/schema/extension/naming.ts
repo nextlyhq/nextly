@@ -28,6 +28,7 @@ import {
 } from "../services/field-column-descriptor";
 import {
   columnTypeIsIndexable,
+  MAX_INDEX_NAME_LENGTH,
   uniquenessCanBeAnIndex,
 } from "../services/index-name";
 
@@ -40,8 +41,14 @@ export const ALL_DIALECTS: readonly SupportedDialect[] = [
   "sqlite",
 ];
 
-/** The strictest identifier limit of the three dialects (Postgres). */
-export const MAX_IDENTIFIER_LENGTH = 63;
+/**
+ * The strictest identifier limit of the three dialects (Postgres).
+ *
+ * The bound derived index and constraint names are held to, read from there
+ * rather than restated, so a table name and the names derived from it can
+ * never be checked against two different limits.
+ */
+export const MAX_IDENTIFIER_LENGTH = MAX_INDEX_NAME_LENGTH;
 
 /** The separator between a plugin's prefix and its table name. */
 export const PREFIX_SEPARATOR = "__";
@@ -150,6 +157,25 @@ export function assertUsableTableName(name: string, path: string): void {
   }
 }
 
+/**
+ * Refuse an explicit schema-object name no dialect can store as written.
+ *
+ * A DERIVED name is bounded with a hash (`boundedIdentifier`), but an explicit
+ * one is the author's and is used verbatim, so it cannot be shortened without
+ * becoming a name the author never wrote. Past the bound MySQL refuses it and
+ * PostgreSQL silently truncates it, after which the live constraint no longer
+ * carries the name the desired schema declares and every diff proposes
+ * dropping and re-adding it. Refused here, at declaration, on every dialect.
+ */
+export function assertExplicitIdentifier(name: string, path: string): void {
+  if (name.length > MAX_IDENTIFIER_LENGTH) {
+    refuse(
+      path,
+      `An explicit name may be at most ${String(MAX_IDENTIFIER_LENGTH)} characters, the longest every dialect stores unchanged; "${name}" is ${String(name.length)}.`
+    );
+  }
+}
+
 /** Refuse an app table name that collides with core or with a plugin's namespace. */
 export function assertUsableAppTableName(
   name: string,
@@ -234,7 +260,8 @@ export type IndexRefusal =
   | "not-indexable"
   | "unique-not-indexable"
   | "key-too-wide"
-  | "unknown-column";
+  | "unknown-column"
+  | "partial-not-supported";
 
 export interface IndexVerdict {
   dialect: SupportedDialect;
@@ -302,6 +329,17 @@ export function judgeIndex(
   dialect: SupportedDialect,
   columnsAreKnown = true
 ): IndexVerdict | null {
+  // MySQL has no partial indexes. Creating the index without its predicate
+  // would enforce it over more rows than declared — for a unique index, a
+  // constraint nobody asked for — so the declaration is refused instead.
+  if (dialect === "mysql" && index.where !== undefined) {
+    return {
+      dialect,
+      reason: "partial-not-supported",
+      message:
+        "mysql has no partial indexes, so an index carrying `where` cannot be built there.",
+    };
+  }
   const byName = new Map(columns.map(column => [column.name, column]));
   let keyBytes = 0;
 
@@ -364,6 +402,12 @@ export function assertIndexBuildable(
    */
   columnsAreKnown = true
 ): void {
+  if (index.name !== undefined) {
+    assertExplicitIdentifier(
+      index.name,
+      `${tableName}.indexes[${index.columns.join(",")}]`
+    );
+  }
   for (const dialect of ALL_DIALECTS) {
     const verdict = judgeIndex(index, columns, dialect, columnsAreKnown);
     if (verdict) {

@@ -98,17 +98,14 @@ export class DrizzleStatementExecutor
     // wraps statements in the active transaction context automatically.
     const dbTyped = this.db as SqliteSyncRunClient;
 
-    // PRAGMA foreign_keys = OFF/ON wrapping for the recreate-table
-    // pattern is handled by PushSchemaPipeline.apply (BEFORE/AFTER the
-    // db.transaction() wrapper). SQLite silently no-ops PRAGMA
-    // foreign_keys changes INSIDE a transaction, so we can't toggle
-    // here. See pipeline comments at the txFn call site for the full
-    // rationale.
+    // PRAGMA foreign_keys = OFF/ON wrapping for the recreate-table pattern,
+    // and the `PRAGMA foreign_key_check` that refuses dangling references,
+    // belong to the whole apply rather than to one batch of it: the
+    // pipeline runs every SQLite apply under the shared schema-change
+    // contract (`migrate/sqlite-foreign-keys.ts`), checking once after the
+    // last statement. SQLite silently no-ops PRAGMA foreign_keys changes
+    // INSIDE a transaction, so this executor could not toggle it anyway.
     //
-    // We DO run PRAGMA foreign_key_check after the loop here — that
-    // pragma works inside a transaction. If it surfaces violations,
-    // the throw propagates up, the transaction rolls back, and the
-    // pipeline restores foreign_keys = ON in its finally block.
     // Splitting and idempotency tolerance are single-sourced in
     // sql-statement-utils.ts — this executor and fresh-push previously
     // carried drifting private copies of both.
@@ -119,36 +116,6 @@ export class DrizzleStatementExecutor
         if (isIdempotencyError(err)) continue;
         throw err;
       }
-    }
-
-    // Verify FK integrity post-apply. Returns rows for any orphan
-    // (child rows with no matching parent). If the recreate pattern
-    // left the schema sound, this returns zero rows.
-    //
-    // Aggregating by table makes the error message scannable in a CLI;
-    // raw fkid is the index into PRAGMA foreign_key_list and not useful
-    // without a separate lookup.
-    const violations = dbTyped.all(
-      sqlTag.raw("PRAGMA foreign_key_check")
-    ) as Array<{
-      table: string;
-      rowid: number;
-      parent: string;
-      fkid: number;
-    }>;
-    if (violations.length > 0) {
-      const byTable = new Map<string, number>();
-      for (const v of violations) {
-        byTable.set(v.table, (byTable.get(v.table) ?? 0) + 1);
-      }
-      const summary = [...byTable.entries()]
-        .map(([t, n]) => `${t}: ${n} orphan(s)`)
-        .join(", ");
-      const sample = JSON.stringify(violations.slice(0, 5));
-      throw new Error(
-        `SQLite foreign_key_check found ${violations.length} FK violation(s) after schema apply (${summary}). ` +
-          `First few rows: ${sample}`
-      );
     }
   }
 }

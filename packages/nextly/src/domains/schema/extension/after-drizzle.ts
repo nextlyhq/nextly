@@ -21,10 +21,18 @@ import { getTableConfig as mysqlTableConfig } from "drizzle-orm/mysql-core";
 import { getTableConfig as pgTableConfig } from "drizzle-orm/pg-core";
 import { getTableConfig as sqliteTableConfig } from "drizzle-orm/sqlite-core";
 
-import type { SupportedDialect } from "../../../database/schema-registry";
+import type {
+  DynamicRelationEdge,
+  SupportedDialect,
+} from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
+import { drizzleTableToTableSpec } from "../../../schemas/_internal/drizzle-to-tablespec";
+import { scanSql } from "../migrate/sql-scan";
+import type { ColumnSpec, IndexSpec, TableSpec } from "../pipeline/diff/types";
 
-import type { SchemaOwner } from "./types";
+import { enumChecks } from "./enum-check";
+import { assertUsableAppTableName } from "./naming";
+import type { ExtensionTable, SchemaOwner } from "./types";
 
 export type DrizzleSchemaHook = (args: {
   dialect: SupportedDialect;
@@ -229,6 +237,15 @@ export async function runAfterDrizzle(args: {
    * first two Nextly maintains, and an adopted one nothing here maintains.
    */
   protectedTables: ReadonlySet<string>;
+  /**
+   * What a table the hook INTRODUCES is judged against: the same rule an app
+   * table declared through `db.schema.extend` meets, so the escape hatch is
+   * not a way around it.
+   */
+  naming: {
+    coreTableNames: readonly string[];
+    pluginPrefixes: readonly string[];
+  };
 }): Promise<Record<string, unknown>> {
   if (args.hooks.length === 0) return args.tables;
 
@@ -279,6 +296,19 @@ export async function runAfterDrizzle(args: {
         "An app may only shape its own tables here."
       );
     }
+    // A name no compile produced, and that no rule above claims, is a table
+    // the hook introduced. It is the app's, so it answers to the app's naming
+    // rule: a managed prefix
+    // (`dc_`, `single_`, `comp_`, `nextly_`) would be reconciled — and
+    // dropped — by the pipeline that owns it, a `_locales` suffix by the
+    // localization layer, and a plugin's namespace by that plugin.
+    if (!(name in args.tables)) {
+      assertUsableAppTableName(
+        name,
+        args.naming.coreTableNames,
+        args.naming.pluginPrefixes
+      );
+    }
     assertColumnsConvertible(value as Table, name);
     assertTableConvertible(value as Table, name, args.dialect);
     if (getTableName(value as Table) !== name) {
@@ -291,4 +321,221 @@ export async function runAfterDrizzle(args: {
   }
 
   return tables;
+}
+
+/** Two derived columns describe the same column in every compared respect. */
+function sameColumn(a: ColumnSpec, b: ColumnSpec): boolean {
+  return (
+    a.type === b.type &&
+    a.nullable === b.nullable &&
+    a.default === b.default &&
+    (a.primaryKey === true) === (b.primaryKey === true)
+  );
+}
+
+/** Two indexes with the same name, columns and uniqueness. */
+function sameIndex(a: IndexSpec, b: IndexSpec): boolean {
+  return (
+    a.name === b.name &&
+    a.unique === b.unique &&
+    a.columns.length === b.columns.length &&
+    a.columns.every((column, i) => column === b.columns[i])
+  );
+}
+
+/**
+ * The migration spec of a compiled table after a hook reshaped it.
+ *
+ * Starts from the COMPILED spec and applies only what the hook changed.
+ * Re-deriving the whole spec from the hook's Drizzle table loses everything a
+ * Drizzle table does not carry: `toDrizzleTable` leaves checks, foreign keys
+ * and the enum checks off on PostgreSQL and MySQL (they are separate
+ * statements), `autoIncrement` is spec-only, and a hook that rebuilt a table
+ * to widen one column rarely restates its indexes. Each of those read as "the
+ * table has none", so the next push or generated migration dropped them — and
+ * a MySQL serial key lost AUTO_INCREMENT, failing every insert that omits it.
+ *
+ * What the hook changed is found by comparing like with like: the hook's
+ * Drizzle table against the COMPILED Drizzle table, both through the same
+ * converter. A column that converts identically is one the hook restated, and
+ * keeps its compiled spec; a column that converts differently, or is new, takes
+ * the hook's. A column the hook left out is gone, and so are the enum check,
+ * foreign keys and indexes that named it. An index the hook declares that the
+ * compiled table did not is added; a declared index is otherwise kept, since a
+ * rebuilt table that omits one says nothing about wanting it dropped.
+ */
+export function specAfterHook(args: {
+  compiledSpec: TableSpec;
+  compiledTable: Table;
+  hookTable: Table;
+  /** The declaration, for the enum checks a dropped column takes with it. */
+  declared: ExtensionTable | undefined;
+  dialect: SupportedDialect;
+}): TableSpec {
+  const before = drizzleTableToTableSpec(args.compiledTable, args.dialect);
+  const after = drizzleTableToTableSpec(args.hookTable, args.dialect);
+
+  const compiledColumns = new Map(
+    args.compiledSpec.columns.map(column => [column.name, column])
+  );
+  const beforeColumns = new Map(
+    before.columns.map(column => [column.name, column])
+  );
+  const columns = after.columns.map(column => {
+    const restated = beforeColumns.get(column.name);
+    const compiled = compiledColumns.get(column.name);
+    return restated !== undefined &&
+      compiled !== undefined &&
+      sameColumn(restated, column)
+      ? compiled
+      : column;
+  });
+  const present = new Set(columns.map(column => column.name));
+  const covers = (names: readonly string[]): boolean =>
+    names.every(name => present.has(name));
+
+  const added = (after.indexes ?? []).filter(
+    index =>
+      covers(index.columns) &&
+      !(before.indexes ?? []).some(known => sameIndex(known, index))
+  );
+  const addedNames = new Set(added.map(index => index.name));
+  const indexes = [
+    ...(args.compiledSpec.indexes ?? []).filter(
+      index =>
+        !addedNames.has(index.name) &&
+        (index.expression !== undefined || covers(index.columns))
+    ),
+    ...added,
+  ];
+
+  const droppedEnumChecks = new Set(
+    enumChecks(
+      args.compiledSpec.name,
+      (args.declared?.columns ?? []).filter(
+        column => !present.has(column.name)
+      ),
+      args.dialect
+    ).map(check => check.name)
+  );
+
+  const keptChecks = (args.compiledSpec.checks ?? []).filter(
+    check => !droppedEnumChecks.has(check.name)
+  );
+  // A declared check is kept whatever the hook did — its SQL is the author's,
+  // not something derived from a column — so one that names a column the
+  // hook removed would reach the DDL naming a column that no longer exists,
+  // and fail when the migration applies. Refused here instead, while the
+  // config can still be fixed.
+  const removed = args.compiledSpec.columns
+    .map(column => column.name)
+    .filter(name => !present.has(name));
+  for (const check of keptChecks) {
+    const named = checkIdentifiers(check.sql, args.dialect);
+    const gone = removed.find(name => named.has(name.toLowerCase()));
+    if (gone !== undefined) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `db.schema.afterDrizzle.${args.compiledSpec.name}`,
+            code: "INVALID",
+            message: `The hook removed column "${gone}" from "${args.compiledSpec.name}", which the check "${check.name}" declared on that table still names. Keep the column, or remove the check from the table's declaration.`,
+          },
+        ],
+      });
+    }
+  }
+
+  return {
+    ...args.compiledSpec,
+    columns,
+    indexes,
+    ...(args.compiledSpec.foreignKeys !== undefined
+      ? {
+          foreignKeys: args.compiledSpec.foreignKeys.filter(fk =>
+            covers(fk.columns)
+          ),
+        }
+      : {}),
+    ...(args.compiledSpec.checks !== undefined ? { checks: keptChecks } : {}),
+  };
+}
+
+/**
+ * The identifiers a check's SQL names, lowercased.
+ *
+ * Read through the shared SQL scanner, so text inside a string literal or a
+ * comment is not mistaken for a column and a quoted name is read whole. Every
+ * word of the code is taken, keywords included: a keyword that happens to
+ * equal a removed column's name only makes the refusal above conservative.
+ */
+function checkIdentifiers(sql: string, dialect: SupportedDialect): Set<string> {
+  const names = new Set<string>();
+  for (const segment of scanSql(sql, dialect)) {
+    if (segment.kind === "quoted-name") {
+      names.add(segment.content.toLowerCase());
+    } else if (segment.kind === "code") {
+      for (const word of sql
+        .slice(segment.start, segment.end)
+        .match(/[A-Za-z_][\w$]*/g) ?? []) {
+        names.add(word.toLowerCase());
+      }
+    }
+  }
+  return names;
+}
+
+/**
+ * The relation edges, re-keyed to the tables the hooks actually returned.
+ *
+ * An edge names its columns by the PROPERTY key of the table it is resolved
+ * against, and the edges were built from the compiled tables. A hook that
+ * rebuilt a table is free to key its columns differently — by SQL name, most
+ * often — and the registry resolves every edge against the table that runs,
+ * so one edge naming a key that table lacks failed `defineRelations` and took
+ * `db.query` down for the whole schema. Each key is carried across by the SQL
+ * column it names; a column the hook removed leaves an edge that cannot
+ * resolve, which is refused here, naming it, rather than at the registry.
+ */
+export function rekeyRelationEdges(args: {
+  edges: Map<string, DynamicRelationEdge[]>;
+  compiled: Record<string, unknown>;
+  returned: Record<string, unknown>;
+}): void {
+  const reshaped = (table: string): boolean =>
+    table in args.compiled && args.returned[table] !== args.compiled[table];
+  const carry = (table: string, key: string, path: string): string => {
+    if (!reshaped(table)) return key;
+    const sqlName = getColumns(args.compiled[table] as Table)[key]?.name;
+    const entry = Object.entries(
+      getColumns(args.returned[table] as Table)
+    ).find(([, column]) => column.name === sqlName);
+    if (sqlName === undefined || entry === undefined) {
+      refuse(
+        table,
+        `no column "${sqlName ?? key}", which the relation ${path} joins on`,
+        "Keep the column, or remove the relation that uses it."
+      );
+    }
+    return entry[0];
+  };
+
+  for (const [table, list] of args.edges) {
+    args.edges.set(
+      table,
+      list.map(edge => ({
+        ...edge,
+        fromColumn: carry(table, edge.fromColumn, `${table}.${edge.key}`),
+        ...(edge.toColumn !== undefined
+          ? {
+              toColumn: carry(
+                edge.targetTable,
+                edge.toColumn,
+                `${table}.${edge.key}`
+              ),
+            }
+          : {}),
+      }))
+    );
+  }
 }

@@ -112,8 +112,14 @@ describe("a hook that extends a declared dependency's table", () => {
       (error as { publicData?: { errors?: { message?: string }[] } })
         .publicData ?? {}
     ).errors;
-    expect(errors?.map(e => e.message)).toContainEqual(
-      'Table "dep__orders" does not exist, so it cannot be extended.'
-    );
+    // Matched by its opening sentence, which is what `migrate:create`
+    // recognises it by; the rest says which tables a hook can see.
+    expect(
+      errors?.some(e =>
+        (e.message ?? "").startsWith(
+          'Table "dep__orders" does not exist, so it cannot be extended.'
+        )
+      )
+    ).toBe(true);
   });
 });

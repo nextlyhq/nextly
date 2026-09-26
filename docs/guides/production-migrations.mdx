@@ -280,7 +280,7 @@ Specific examples:
 2. Reads the `nextly_schema_events` ledger to see which `.sql` files have been applied (a `file_apply` event per file).
 3. Verifies SHA-256 hashes of already-applied files. **Hash mismatch = abort with `MIGRATION_TAMPERED` (exit 2).** No partial state, nothing else runs.
 4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp).
-5. Applies each pending file in a transaction (PostgreSQL/SQLite) or statement-by-statement (MySQL; see [database support](/docs/database/support) for MySQL caveats).
+5. Applies each pending file in one transaction on one connection (on MySQL each DDL statement still commits as it runs; see [database support](/docs/database/support) for MySQL caveats). What a file may contain is below.
 6. Records each applied file in `nextly_schema_events` as a `file_apply` event, opened with `started_at`, `filename` and `sha256` and closed with `ended_at` and `statements_executed`.
 
 | Exit code | Meaning |
@@ -289,6 +289,51 @@ Specific examples:
 | 1 | A migration failed during execution |
 | 2 | `MIGRATION_TAMPERED`. Abort before running any. |
 | 3 | `MIGRATION_MISSING`. Abort; file referenced in DB but missing from disk. |
+
+## What a migration file may contain
+
+Every migration file, plugin module and `-- DOWN` section runs as **one
+transaction on one database connection**, which the runner opens and commits
+itself. A few kinds of statement cannot live inside that, and `nextly migrate`,
+`migrate:down` and `plugins uninstall` refuse the whole file before any of it
+runs. `migrate:down --dry-run` reports the same refusals without executing
+anything.
+
+| Statement | What happens | Why |
+|---|---|---|
+| `BEGIN`, `START TRANSACTION`, `COMMIT`, `END` (with any modifiers, such as `BEGIN IMMEDIATE` or `START TRANSACTION READ WRITE`) | Left out; the rest of the file runs | The runner's own transaction already brackets the file. |
+| `ROLLBACK`, `ABORT`, `SAVEPOINT`, `RELEASE`, `COMMIT PREPARED`, `PREPARE TRANSACTION`, `XA …` | File refused | Each one would undo, split or hand off the runner's transaction, which would then record work that did not happen. |
+| PostgreSQL `SET …` (except `SET LOCAL`, `SET CONSTRAINTS`, `SET TRANSACTION`), `RESET`, `DISCARD` | File refused | A session setting stays on the pooled connection after the migration. Use `SET LOCAL`, which ends with the transaction. |
+| MySQL `SET …` (except user variables, `SET @name = …`), including one inside `/*!…*/` | File refused | The same: `SET FOREIGN_KEY_CHECKS = 0` would stay on a pooled connection and switch checks off for whatever it serves next. Order the statements instead (create a table before the tables that reference it, drop it after them), or drop the foreign key and add it back within the migration. |
+| PostgreSQL `VACUUM`, `CREATE`/`DROP INDEX CONCURRENTLY`, `REINDEX … CONCURRENTLY`, `CREATE`/`DROP DATABASE`, `CREATE`/`DROP TABLESPACE`, `ALTER SYSTEM`; SQLite `VACUUM`, `ATTACH`, `DETACH` | File refused | The database cannot run them inside a transaction. Run them outside the migration, after it has applied. |
+| MySQL `LOCK TABLES`, `UNLOCK TABLES` (and the `INSTANCE` forms) | File refused | They commit the migration's transaction implicitly, and the locks stay with the pooled connection. |
+
+PostgreSQL's `ALTER TYPE … ADD VALUE` runs inside the transaction (PostgreSQL 12
+and later), but the value it adds cannot be used until the transaction commits,
+so use it in a later migration file.
+
+The error names the statement and says what to write instead.
+
+**Routine and trigger bodies are one statement.** A `CREATE TRIGGER … BEGIN … END`
+(SQLite, MySQL), a MySQL `CREATE PROCEDURE`/`FUNCTION`/`EVENT … BEGIN … END`, and a
+PostgreSQL `BEGIN ATOMIC` function body reach the database whole, so no
+`DELIMITER` line is needed. A PostgreSQL `$$ … $$` body is likewise never split.
+A `DROP TABLE` inside such a body is judged like any other drop in the file: a
+body that drops a table another owner holds is refused.
+
+**On SQLite, foreign-key enforcement is off while a file runs, and checked before
+it commits.** The runner sets `PRAGMA foreign_keys = OFF` before the transaction,
+runs the file, then runs `PRAGMA foreign_key_check`; if any row would reference a
+row that no longer exists, the file is rolled back and refused with
+`NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION` (`logContext.reason` is
+`dangling-reference`). The setting is restored afterwards. The same error with
+`reason` `enforcement-still-on` means enforcement could not be switched off,
+because another transaction was open on the connection when the migration
+started; nothing was applied — re-run the command once that work has finished
+(at boot, restart the process).
+This is SQLite's documented way to rebuild a table (create `__new_x`, copy the
+rows, drop `x`, rename): dropping a parent table this way keeps the rows of
+tables that reference it, instead of deleting them through `ON DELETE CASCADE`.
 
 ## Builder entities and production
 
@@ -499,6 +544,14 @@ After a successful rollback, the migration is recorded as `rolled_back` in
 `nextly_schema_events` and becomes pending again, so the next `nextly migrate`
 re-applies it.
 
+A rollback whose DOWN fails is recorded as a `file_rollback` event, and the
+migration stays **applied**: on PostgreSQL and SQLite the DOWN ran in one
+transaction and was undone, so a later `migrate:down` or `plugins uninstall`
+starts from that same migration again. On MySQL each DDL statement commits as
+it runs, so part of the DOWN may have taken effect; `nextly migrate:status`
+lists every applied migration whose latest rollback failed, and flags the MySQL
+ones, so the schema can be checked before anything is run again.
+
 **In production, prefer rolling forward** (a new corrective migration) or
 restoring from a backup. `migrate:down` is a manual, CLI-only break-glass tool;
 it never runs on boot.
@@ -592,6 +645,19 @@ The scan happens before execution rather than filtering statements during it,
 because a file with some statements removed would still be recorded as
 applied — the ledger would claim a migration ran that partly did not.
 
+A **complete** SQLite table rebuild is not a drop: four adjacent statements —
+`CREATE TABLE __new_t (…)`, `INSERT INTO __new_t (columns) SELECT columns FROM t`
+copying every column the new table declares, `DROP TABLE t`,
+`ALTER TABLE __new_t RENAME TO t` — keep the table and its rows under the same
+name. This is how SQLite adds a check or a foreign key, including one that an
+app or plugin contributes to a table another owner holds. The new table has to
+declare every column the live table has when the migration runs — the runner
+reads them from the database first, following any `ADD`/`DROP`/`RENAME COLUMN`
+earlier in the same file — so a rebuild that leaves a column out is read as
+the drop of the table it is. A lone `DROP`, a rename of the table, or a
+rebuild that filters, reorders or renames elsewhere is still refused. A migration that **renames** another owner's table (or moves
+it with PostgreSQL's `SET SCHEMA`) is refused like a drop.
+
 Development push never drops a plugin-migrated table at all, whatever your
 config says. A plugin removed from config is exactly when its data is most at
 risk, and that is a decision for `nextly plugins uninstall` rather than a side
@@ -637,3 +703,13 @@ uninstall when any module has no DOWN: running the reversible ones and
 stopping would leave the tables partly existing with no module describing what
 is there. `--keep-data` leaves everything in place and marks the owner
 orphaned.
+
+A full uninstall that would drop tables lists them and stops with
+`PLUGIN_UNINSTALL_UNCONFIRMED` until you re-run it with `--yes`. Tables that a
+development push created, with no applied migration module to undo them, are
+refused with `PLUGIN_UNINSTALL_IRREVERSIBLE` (`logContext.reason` is
+`no-applied-module`): drop them with a migration, or reset the development
+database. Every refusal — these, a dependent plugin, a module that fails its
+checksum, a DOWN that would drop another owner's table — is decided before the
+migrate lock is taken and before `onUninstall` or any DOWN runs, so a refused
+uninstall changes nothing.

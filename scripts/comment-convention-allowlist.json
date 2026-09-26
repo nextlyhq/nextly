@@ -312,9 +312,8 @@
     "digests": ["736602a7e7e37941"]
   },
   "packages/nextly/src/di/register.ts": {
-    "count": 5,
+    "count": 4,
     "digests": [
-      "3b36a36d5b6266c4",
       "7e5c57aa1fbd7a0f",
       "c37909a17b34d363",
       "c4704b07cd3f3890",

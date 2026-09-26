@@ -13,16 +13,22 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import type { BuildColumns } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   varchar,
   datetime,
   json,
-  index,
   text,
   timestamp,
 } from "drizzle-orm/mysql-core";
+
+import {
+  ACTIVITY_LOG_INDEXES,
+  AUDIT_LOG_INDEXES,
+  mysqlIndexes,
+} from "../_internal/core-indexes";
 
 // Append-only by application convention, with two exceptions the application
 // itself performs and an operator hardening this table has to allow for:
@@ -46,9 +52,9 @@ import {
 //
 // The append-only posture and these two duties only look contradictory while
 // the grant is all-or-nothing.
-export const auditLog = mysqlTable(
-  "audit_log",
-  {
+/** `audit_log` columns, a fresh builder record per call (see `core-table-contributions`). */
+export function auditLogColumns() {
+  return {
     id: varchar("id", { length: 191 }).primaryKey(),
     kind: varchar("kind", { length: 64 }).notNull(),
     actorUserId: varchar("actor_user_id", { length: 191 }),
@@ -74,48 +80,28 @@ export const auditLog = mysqlTable(
     // explicit_defaults_for_timestamp mode, which can rewrite the column and
     // leave the live schema disagreeing with the desired one forever.
     identityErasedAt: datetime("identity_erased_at"),
-  },
-  t => [
-    index("audit_log_kind_idx").on(t.kind),
-    index("audit_log_actor_user_id_idx").on(t.actorUserId),
-    index("audit_log_target_user_id_idx").on(t.targetUserId),
-    index("audit_log_created_at_idx").on(t.createdAt),
-  ]
+  };
+}
+
+/** `audit_log` indexes, from `AUDIT_LOG_INDEXES`. */
+export function auditLogExtraConfig(
+  t: BuildColumns<"audit_log", ReturnType<typeof auditLogColumns>, "mysql">
+) {
+  return mysqlIndexes(AUDIT_LOG_INDEXES, t);
+}
+
+export const auditLog = mysqlTable(
+  "audit_log",
+  auditLogColumns(),
+  auditLogExtraConfig
 );
 
-/**
- * Activity log table for recording user actions across all collections (MySQL).
- *
- * See postgres.ts for detailed documentation.
- * Main differences:
- * - Uses varchar(191) for string IDs (MySQL utf8mb4 index length limit)
- * - Uses datetime for timestamps
- */
-export const activityLog = mysqlTable(
-  "activity_log",
-  {
+/** `activity_log` columns, a fresh builder record per call (see `core-table-contributions`). */
+export function activityLogColumns() {
+  return {
     id: varchar("id", { length: 191 }).primaryKey(),
     userId: varchar("user_id", { length: 191 }).notNull(),
-    /**
-     * What KIND of caller `user_id` refers to.
-     *
-     * `user_id` is already documented as "the actor, as an opaque reference
-     * that outlives their account" — the name is historical, the meaning is the
-     * actor. What it could never say is WHICH KIND, so a write had to be by a
-     * signed-in person to be recordable at all: any other actor was refused and
-     * left no trace. Imports, API-key writes, job writes and bulk edits were
-     * invisible rather than merely unattributed, and nothing about them is
-     * recoverable after the fact.
-     *
-     * With the kind on the row, `user_id` holds a user's id, an API key's own
-     * id, or a system caller's name, and the reader knows which. The accountable
-     * human is derived rather than stored twice: for a key that is the key's
-     * owner, which the keys table holds and outlives this row.
-     *
-     * NULL on rows written before this existed. Those are all user writes, since
-     * no other kind was recordable — a fact about the old gate rather than an
-     * assumption, so a reader may read NULL as `"user"`.
-     */
+    /** What KIND of caller `user_id` refers to; see the PostgreSQL definition. */
     actorType: varchar("actor_type", { length: 16 }),
     userName: varchar("user_name", { length: 255 }),
     userEmail: varchar("user_email", { length: 255 }),
@@ -134,10 +120,30 @@ export const activityLog = mysqlTable(
     // to NOT NULL DEFAULT CURRENT_TIMESTAMP and make every row read as an
     // erased actor.
     identityErasedAt: datetime("identity_erased_at"),
-  },
-  t => [
-    index("idx_activity_log_created_at").on(t.createdAt),
-    index("idx_activity_log_collection").on(t.collection, t.createdAt),
-    index("idx_activity_log_user_id").on(t.userId, t.createdAt),
-  ]
+  };
+}
+
+/** `activity_log` indexes, from `ACTIVITY_LOG_INDEXES`. */
+export function activityLogExtraConfig(
+  t: BuildColumns<
+    "activity_log",
+    ReturnType<typeof activityLogColumns>,
+    "mysql"
+  >
+) {
+  return mysqlIndexes(ACTIVITY_LOG_INDEXES, t);
+}
+
+/**
+ * Activity log table for recording user actions across all collections (MySQL).
+ *
+ * See postgres.ts for detailed documentation.
+ * Main differences:
+ * - Uses varchar(191) for string IDs (MySQL utf8mb4 index length limit)
+ * - Uses datetime for timestamps
+ */
+export const activityLog = mysqlTable(
+  "activity_log",
+  activityLogColumns(),
+  activityLogExtraConfig
 );

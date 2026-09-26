@@ -145,7 +145,7 @@ describe("enum", () => {
     );
   });
 
-  it("carries an explicit type name for a native PostgreSQL enum", () => {
+  it("carries an explicit name for its CHECK constraint", () => {
     const named = defineTable("orders", {
       id: col.id(),
       state: col.enum(["open"] as const, { name: "order_status" }),

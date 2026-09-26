@@ -536,9 +536,14 @@ export interface PluginContributions {
    * config it is handed. Transforms run after the merge, which is the first
    * moment those entities exist to be changed.
    *
-   * Runs in topological plugin order with the app last, the same order schema
-   * hooks run in: a plugin transforming a dependency's collection sees it as
-   * the dependency left it.
+   * Runs in topological plugin order, the same order schema hooks run in: a
+   * plugin transforming a dependency's collection sees it as the dependency
+   * left it. Targets code-first entities (the app's and every plugin's); a
+   * Schema Builder entity is stored data a transform cannot change — use
+   * `extend` to add fields to one. A DISABLED plugin's transforms still run,
+   * so disabling it never changes a table, but contribute no behaviour: every
+   * hook, access rule, validator or function default they set is put back to
+   * what the entity had.
    */
   transforms?: EntityTransform[];
   /** @public Custom permissions; CRUD is auto-seeded separately. */

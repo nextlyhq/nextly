@@ -80,18 +80,6 @@ interface MinimalFieldDef {
 
 /** Optional toggles that affect which system columns are injected. */
 export interface BuildDesiredTableOptions {
-  /**
-   * Indexes a schema hook contributed to this entity, naming SQL COLUMNS.
-   *
-   * Kept apart from `indexes`, which names FIELDS. The two were merged once,
-   * and every contributed index on a system column was refused as a field the
-   * entity does not declare.
-   */
-  columnIndexes?: readonly {
-    columns: readonly string[];
-    unique: boolean;
-    name?: string;
-  }[];
   /** When true, a `status` system column is injected (varchar/text NOT NULL DEFAULT 'draft'). */
   hasStatus?: boolean;
   /**
@@ -114,20 +102,6 @@ export interface BuildDesiredTableOptions {
    * no indexes, so a Builder collection cannot declare one in v1.
    */
   indexes?: readonly DeclaredIndex[];
-  /**
-   * Columns a schema hook contributed to this entity, already compiled.
-   *
-   * Kept apart from `fields` for the same reason `columnIndexes` is kept apart
-   * from `indexes`: a field is resolved through the column descriptor, and a
-   * contributed column has already been through it — passing these as fields
-   * would ask the descriptor to resolve a name that is no field of the entity.
-   *
-   * Arriving as `ColumnSpec` rather than as the extension model keeps the
-   * rendering in the one place that owns it: this module never learns what an
-   * extension column is, and the contributed column cannot be described here
-   * differently from how the extension compiler describes its own.
-   */
-  extensionColumns?: readonly ColumnSpec[];
 }
 
 /**
@@ -175,31 +149,6 @@ interface CollectionIndexContext<F> {
    * was added, so an app that declared one has been running without it.
    */
   declaredIndexes?: readonly DeclaredIndex[];
-  /**
-   * Indexes whose COLUMNS are already resolved, contributed by a schema hook.
-   *
-   * Separate from `declaredIndexes` because the two speak different
-   * languages. A declared index names FIELDS, which are resolved to columns
-   * through the descriptor; an extension index names SQL COLUMNS, because the
-   * hook that added it was handed a table rather than a field list.
-   *
-   * Passing the second through the first refuses every system column: there is
-   * no field called `created_at`, so a hook indexing it was told the entity
-   * does not declare it — which it does not, as a FIELD.
-   */
-  columnIndexes?: readonly {
-    columns: readonly string[];
-    unique: boolean;
-    name?: string;
-  }[];
-  /**
-   * Every column this table will have, when the caller already knows.
-   *
-   * Supplied rather than inferred so a contributed index is checked against
-   * the real set — a system column that happens to carry no index of its own
-   * is invisible to anything derived from the indexes built above.
-   */
-  tableColumnNames?: ReadonlySet<string>;
   /**
    * The logical kind of the column a field materialises.
    *
@@ -318,20 +267,9 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
     }
   }
   indexes.push(...declaredIndexSpecs(tableName, fields, context));
-  // The columns this table is known to have: everything the indexes above
-  // already name, plus every field that materialises one. A contributed index
-  // is kept only if its columns are among them.
-  const knownColumns =
-    context.tableColumnNames ??
-    new Set<string>([
-      ...indexes.flatMap(index => index.columns),
-      ...fields
-        .map(field => columnNameFor(field))
-        .filter((c): c is string => c !== null),
-    ]);
-  indexes.push(
-    ...contributedIndexSpecs(tableName, knownColumns, context.columnIndexes)
-  );
+  // What schema hooks contributed to the table is applied afterwards, by
+  // `withEntityContributions`, over the spec this builds — the one helper dev
+  // push and the migration stream share.
   return dedupeIndexes(indexes);
 }
 
@@ -346,34 +284,6 @@ const UNKEYABLE_KINDS = new Set(["json", "longText"]);
  * mean an author writes a unique compound index, sees no error, and discovers
  * on the first duplicate row that it was never created.
  */
-/**
- * Specs for indexes a hook contributed, whose columns need no resolution.
- *
- * Only the columns the table actually has: a hook may index a column another
- * contribution adds, and an index naming a column that is not there is invalid
- * DDL. Skipped rather than refused, because the hook is not wrong to have
- * asked — the column simply is not part of THIS table's desired state.
- */
-function contributedIndexSpecs(
-  tableName: string,
-  knownColumns: ReadonlySet<string>,
-  entries: CollectionIndexContext<MinimalFieldDef>["columnIndexes"]
-): IndexSpec[] {
-  const out: IndexSpec[] = [];
-  for (const entry of entries ?? []) {
-    if (entry.columns.length === 0) continue;
-    if (!entry.columns.every(column => knownColumns.has(column))) continue;
-    out.push({
-      name:
-        entry.name ??
-        indexNameForColumns(tableName, entry.columns, entry.unique),
-      columns: [...entry.columns],
-      unique: entry.unique,
-    });
-  }
-  return out;
-}
-
 function declaredIndexSpecs<F extends MinimalFieldDef>(
   tableName: string,
   fields: readonly F[],
@@ -461,26 +371,6 @@ function declaredIndexColumn<F extends MinimalFieldDef>(
   return column;
 }
 
-/**
- * Append the columns a schema hook contributed to this table.
- *
- * One function for collections, singles and components because it is one
- * rule: a contributed column is added, and a name the table already has wins.
- * Written twice, the two copies were a clone group and the second copy was
- * free to drift into overriding a system column.
- */
-function appendExtensionColumns(
-  columns: ColumnSpec[],
-  contributed: readonly ColumnSpec[] | undefined
-): void {
-  for (const column of contributed ?? []) {
-    // A duplicate name would be a silent override rather than the refusal the
-    // draft already issues on a table it can see.
-    if (columns.some(existing => existing.name === column.name)) continue;
-    columns.push(column);
-  }
-}
-
 export function buildDesiredTableFromFields(
   tableName: string,
   fields: MinimalFieldDef[],
@@ -562,17 +452,7 @@ export function buildDesiredTableFromFields(
     });
   }
 
-  // LAST, so a hook cannot displace a system column or a field.
-  appendExtensionColumns(columns, options.extensionColumns);
-
   const indexes = collectionIndexSpecs(tableName, fields, {
-    // Built AFTER the contributed columns are in, so an index a hook
-    // contributed over a column the same hook contributed resolves. Built
-    // before, the index was refused as naming a column the table lacks.
-    tableColumnNames: new Set(columns.map(c => c.name)),
-    ...(options.columnIndexes !== undefined
-      ? { columnIndexes: options.columnIndexes }
-      : {}),
     hasSlugColumn: columns.some(c => c.name === "slug"),
     hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
     hasCreatedByColumn: columns.some(c => c.name === "created_by"),
@@ -634,8 +514,6 @@ export function buildDesiredTableFromComponentFields(
      * table about to be created and for every database that has not migrated.
      */
     typeColumn?: string;
-    /** Contributed columns, as on a collection or single. */
-    extensionColumns?: readonly ColumnSpec[];
   }
 ): TableSpec {
   const typeColumn = options.typeColumn ?? STORAGE_FORMAT.columns.type;
@@ -832,8 +710,6 @@ export function buildDesiredTableFromComponentFields(
       default: undefined,
     });
   }
-
-  appendExtensionColumns(columns, options.extensionColumns);
 
   // Component tables have no slug. They get a composite index on the parent-link
   // columns plus the system created_at index — mirroring field-group-schema-service.ts

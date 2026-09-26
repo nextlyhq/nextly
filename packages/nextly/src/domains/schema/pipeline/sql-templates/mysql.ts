@@ -10,27 +10,16 @@
 // Pure functions. No I/O. No semicolons.
 
 import type {
-  AddCheckOp,
-  AddForeignKeyOp,
-  AddColumnOp,
-  AddIndexOp,
-  AddTableOp,
   ChangeColumnDefaultOp,
   ChangeColumnNullableOp,
   ChangeColumnTypeOp,
-  ColumnSpec,
-  DropCheckOp,
-  DropForeignKeyOp,
-  DropColumnOp,
   DropIndexOp,
   DropTableOp,
-  IndexSpec,
   Operation,
-  RenameColumnOp,
-  RenameTableOp,
 } from "../diff/types";
 
-import { columnDefinition, createTableBody } from "./create-table-body";
+import { commonStatementSql, dropConstraintSql } from "./common-statements";
+import { createIndexSql } from "./create-index";
 import {
   changeForeignKeyActionSql,
   unsupportedOperation,
@@ -38,10 +27,6 @@ import {
 import { quoteIdent } from "./identifier-quoting";
 
 const q = (n: string) => quoteIdent(n, "mysql");
-
-function columnDef(c: ColumnSpec): string {
-  return columnDefinition(c, q);
-}
 
 export function generateMysqlSQL(op: Operation): string {
   // The three dialect dispatchers are switches over the SAME `Operation`
@@ -57,33 +42,33 @@ export function generateMysqlSQL(op: Operation): string {
   // fallow-ignore-next-line code-duplication
   switch (op.type) {
     case "add_table":
-      return generateAddTable(op);
+    case "rename_table":
+    case "add_column":
+    case "drop_column":
+    case "rename_column":
+    case "add_check":
+    case "add_foreign_key":
+      // Rendered alike on every dialect but for the quote function.
+      return commonStatementSql(op, "mysql", q);
     case "drop_table":
       return generateDropTable(op);
-    case "rename_table":
-      return generateRenameTable(op);
-    case "add_column":
-      return generateAddColumn(op);
-    case "drop_column":
-      return generateDropColumn(op);
-    case "rename_column":
-      return generateRenameColumn(op);
     case "change_column_type":
       return generateChangeColumnType(op);
     case "change_column_nullable":
       return generateChangeColumnNullable(op);
     case "change_column_default":
       return generateChangeColumnDefault(op);
-    case "add_check":
-      return generateAddCheck(op);
     case "drop_check":
-      return generateDropCheck(op);
-    case "add_foreign_key":
-      return generateAddForeignKey(op);
+      return dropConstraintSql(op.tableName, op.check.name, "DROP CHECK", q);
     case "drop_foreign_key":
-      return generateDropForeignKey(op);
+      return dropConstraintSql(
+        op.tableName,
+        op.foreignKey.name,
+        "DROP FOREIGN KEY",
+        q
+      );
     case "add_index":
-      return generateAddIndex(op);
+      return createIndexSql(op.tableName, op.index, "mysql", q);
     case "drop_index":
       return generateDropIndex(op);
     case "change_foreign_key_action":
@@ -97,82 +82,13 @@ export function generateMysqlSQL(op: Operation): string {
   }
 }
 
-function createIndexStatement(tableName: string, index: IndexSpec): string {
-  // MySQL has no partial index. The resolve step refuses a declaration with a
-  // WHERE on this dialect; throwing here is the render-layer backstop, so a
-  // spec that reaches this point fails loudly instead of silently losing the
-  // predicate.
-  if (index.where) {
-    return unsupportedOperation("generateMysqlSQL", {
-      type: `add_index (partial, ${index.name})`,
-    });
-  }
-  // A functional key part (8.0.13+): the expression is the key, unquoted.
-  const cols = index.expression
-    ? index.expression
-    : index.columns.map(c => `\`${c}\``).join(", ");
-  return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX ${q(index.name)} ON \`${tableName}\` (${cols})`;
-}
-
-function generateAddCheck(op: AddCheckOp): string {
-  // CHECK needs MySQL >= 8.0.16; the adapter capability probe is the right
-  // place to refuse older servers, where this statement would be parsed and
-  // silently ignored rather than enforced.
-  return `ALTER TABLE \`${op.tableName}\` ADD CONSTRAINT \`${op.check.name}\` CHECK (${op.check.sql})`;
-}
-
-function generateDropCheck(op: DropCheckOp): string {
-  return `ALTER TABLE \`${op.tableName}\` DROP CHECK \`${op.check.name}\``;
-}
-
-function generateAddForeignKey(op: AddForeignKeyOp): string {
-  const { foreignKey } = op;
-  const cols = foreignKey.columns.map(c => `\`${c}\``).join(", ");
-  const refCols = foreignKey.referencesColumns.map(c => `\`${c}\``).join(", ");
-  const actions = ` ON DELETE ${foreignKey.onDelete.toUpperCase()} ON UPDATE ${foreignKey.onUpdate.toUpperCase()}`;
-  return `ALTER TABLE \`${op.tableName}\` ADD CONSTRAINT \`${foreignKey.name}\` FOREIGN KEY (${cols}) REFERENCES \`${foreignKey.referencesTable}\` (${refCols})${actions}`;
-}
-
-function generateDropForeignKey(op: DropForeignKeyOp): string {
-  return `ALTER TABLE \`${op.tableName}\` DROP FOREIGN KEY \`${op.foreignKey.name}\``;
-}
-
-function generateAddIndex(op: AddIndexOp): string {
-  return createIndexStatement(op.tableName, op.index);
-}
-
 // MySQL requires the table in DROP INDEX.
 function generateDropIndex(op: DropIndexOp): string {
   return `DROP INDEX ${q(op.index.name)} ON ${q(op.tableName)}`;
 }
 
-function generateAddTable(op: AddTableOp): string {
-  const cols = createTableBody(op.table, q, "  ", "mysql");
-  const createTable = `CREATE TABLE ${q(op.table.name)} (\n${cols}\n)`;
-  const indexStmts = (op.table.indexes ?? []).map(i =>
-    createIndexStatement(op.table.name, i)
-  );
-  return [createTable, ...indexStmts].join(";\n");
-}
-
 function generateDropTable(op: DropTableOp): string {
   return `DROP TABLE ${q(op.tableName)}`;
-}
-
-function generateRenameTable(op: RenameTableOp): string {
-  return `ALTER TABLE ${q(op.fromName)} RENAME TO ${q(op.toName)}`;
-}
-
-function generateAddColumn(op: AddColumnOp): string {
-  return `ALTER TABLE ${q(op.tableName)} ADD COLUMN ${columnDef(op.column)}`;
-}
-
-function generateDropColumn(op: DropColumnOp): string {
-  return `ALTER TABLE ${q(op.tableName)} DROP COLUMN ${q(op.columnName)}`;
-}
-
-function generateRenameColumn(op: RenameColumnOp): string {
-  return `ALTER TABLE ${q(op.tableName)} RENAME COLUMN ${q(op.fromColumn)} TO ${q(op.toColumn)}`;
 }
 
 // F11 PR 3 review fix #1: MySQL MODIFY COLUMN requires the column type

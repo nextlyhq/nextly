@@ -104,6 +104,7 @@ describe("createPluginContext (P1 reshape)", () => {
     expect(
       (Object.keys(ctx.db) as string[]).filter(k => k !== "raw").sort()
     ).toEqual([
+      "contributed",
       "delete",
       "insert",
       "insertReturning",

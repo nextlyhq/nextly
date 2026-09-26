@@ -16,6 +16,8 @@
 import { getColumns } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { SupportedDialect } from "../../../../database/schema-registry";
+import { FieldGroupSchemaService } from "../../../field-groups/services/field-group-schema-service";
 import { buildDesiredTableFromFields } from "../../pipeline/diff/build-from-fields";
 import { stripServerOnlyColumns } from "../../../../shared/lib/password-fields";
 import { generateRuntimeSchema } from "../../services/runtime-schema-generator";
@@ -30,6 +32,7 @@ import {
 import { toColumnSpec } from "../compile";
 import type { SchemaHook } from "../draft";
 import { col } from "../dsl";
+import { withEntityContributions } from "../entity-contributions";
 
 function input(extend: readonly SchemaHook[]): ExtensionSchemaInput {
   return {
@@ -67,16 +70,18 @@ afterEach(() => {
 describe("a column contributed to an entity table", () => {
   it("reaches the entity's DESIRED spec, so the push creates it", async () => {
     const schema = await buildExtensionSchema(addsSearchVector);
-    const contributed = schema.entityColumns.get("dc_posts") ?? [];
 
-    const spec = buildDesiredTableFromFields(
-      "dc_posts",
-      [{ name: "title", type: "text" }],
-      "postgresql",
-      {
-        builtBy: "codeFirst",
-        extensionColumns: contributed.map(c => toColumnSpec(c, "postgresql")),
-      }
+    // Through the helper dev push and the migration stream both apply.
+    const spec = withEntityContributions(
+      buildDesiredTableFromFields(
+        "dc_posts",
+        [{ name: "title", type: "text" }],
+        "postgresql",
+        { builtBy: "codeFirst" }
+      ),
+      schema,
+      undefined,
+      "postgresql"
     );
 
     expect(spec.columns.map(c => c.name)).toContain("search_vector");
@@ -160,17 +165,35 @@ describe("a column contributed to an entity table", () => {
   it("does not displace a column the entity already has", async () => {
     // The guard: a contributed name colliding with a system or field column
     // must not silently override it. The draft refuses the collision on a
-    // table it can see; this is the belt for one it cannot.
-    const spec = buildDesiredTableFromFields(
-      "dc_posts",
-      [{ name: "title", type: "text" }],
-      "postgresql",
+    // table it can see; this is the belt for one it cannot, applied by the
+    // helper dev push and the migration stream share.
+    const spec = withEntityContributions(
+      buildDesiredTableFromFields(
+        "dc_posts",
+        [{ name: "title", type: "text" }],
+        "postgresql",
+        { builtBy: "codeFirst" }
+      ),
       {
-        builtBy: "codeFirst",
-        extensionColumns: [
-          { name: "title", type: "varchar(3)", nullable: false },
-        ],
-      }
+        entityColumns: new Map([
+          [
+            "dc_posts",
+            [
+              {
+                key: "title",
+                name: "title",
+                kind: "varchar",
+                length: 3,
+                nullable: false,
+                hidden: true,
+              },
+            ],
+          ],
+        ]),
+        entityIndexes: new Map(),
+      },
+      undefined,
+      "postgresql"
     );
 
     expect(spec.columns.filter(c => c.name === "title")).toHaveLength(1);
@@ -178,4 +201,80 @@ describe("a column contributed to an entity table", () => {
       "varchar(3)"
     );
   });
+});
+
+describe("a defaulted column contributed to an entity table", () => {
+  /**
+   * One contribution on each kind of entity table, for one dialect: a
+   * collection and a Single through the entity generator, a component through
+   * the field-group service — the three builders drizzle-kit is handed.
+   */
+  const contributesDefaults = (dialect: SupportedDialect) => ({
+    ...input([
+      ({ schema }) => {
+        for (const table of ["dc_posts", "single_site", "comp_hero"]) {
+          schema.extendTable(table, {
+            columns: { reviewState: col.shortText({ default: "draft" }) },
+          });
+        }
+      },
+    ]),
+    dialect,
+    entities: [
+      ...input([]).entities,
+      {
+        name: "single_site",
+        slug: "site",
+        entityKind: "single" as const,
+        columns: [{ name: "id", kind: "varchar", nullable: false }],
+      },
+      {
+        name: "comp_hero",
+        slug: "hero",
+        entityKind: "component" as const,
+        columns: [{ name: "id", kind: "varchar", nullable: false }],
+      },
+    ],
+  });
+
+  /** The text of a `sql.raw()` default, as the DDL will carry it. */
+  const rawSql = (value: unknown): string =>
+    (value as { queryChunks: { value: string[] }[] }).queryChunks
+      .map(chunk => chunk.value.join(""))
+      .join("");
+
+  it.each(["postgresql", "mysql", "sqlite"] as const)(
+    "carries its declared default into every runtime builder on %s",
+    async dialect => {
+      // The desired spec keeps the default; a runtime table without it is the
+      // table drizzle-kit creates, so the two described different columns —
+      // an `ADD COLUMN ... NOT NULL` with no default on a populated table.
+      const schema = await buildExtensionSchema(contributesDefaults(dialect));
+      setActiveExtensionSchema(dialect, schema);
+      const [contributed] = schema.entityColumns.get("dc_posts") ?? [];
+      const expected = toColumnSpec(contributed, dialect).default;
+      expect(expected).toBeDefined();
+
+      const tables = [
+        generateRuntimeSchema("dc_posts", [] as never, dialect).table,
+        generateRuntimeSchema("single_site", [] as never, dialect).table,
+        new FieldGroupSchemaService(dialect).generateRuntimeSchema(
+          "comp_hero",
+          [],
+          { typeColumn: "_component_type" }
+        ),
+      ];
+      for (const table of tables) {
+        const column = (
+          getColumns(table as never) as Record<
+            string,
+            { hasDefault: boolean; notNull: boolean; default: unknown }
+          >
+        )["review_state"];
+        expect(column?.notNull).toBe(true);
+        expect(column?.hasDefault).toBe(true);
+        expect(rawSql(column?.default)).toBe(expected);
+      }
+    }
+  );
 });

@@ -30,7 +30,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import { createPool, type Pool } from "mysql2";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { quoteJsonSqlDefault } from "../../../utils/sql-literal";
+import { quoteExpressionSqlDefault } from "../../../utils/sql-literal";
 import { generateMysqlSQL } from "../../sql-templates/mysql";
 import { introspectLiveSnapshot } from "../introspect-live";
 
@@ -58,7 +58,7 @@ const REBUILT_TABLE = "dc_expr_defaults_rebuilt";
 //
 // The expected REPORTED text further down stays literal on purpose: that is
 // MySQL's normalisation of this DDL, not something this package computes.
-const JSON_OBJECT_DEFAULT = quoteJsonSqlDefault("{}", "mysql");
+const JSON_OBJECT_DEFAULT = quoteExpressionSqlDefault("{}", "mysql");
 
 // The emitted JSON default alongside the other expression shapes a live table
 // can carry. MySQL reports each one differently, which is the point: the three

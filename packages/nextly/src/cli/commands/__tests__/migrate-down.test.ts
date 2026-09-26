@@ -63,9 +63,9 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
       listFileApplies: async () => [row("a.sql", "applied", 1000)],
       fileExists: async () => true,
       readDownSql: async () => 'ALTER TABLE "t" DROP COLUMN "c";',
-      execDown: async (sql: string) => {
-        executed.push(sql);
-        return 1;
+      execDown: async (statements: readonly string[]) => {
+        executed.push(statements.join(";\n"));
+        return statements.length;
       },
       recordRolledBack: async (filename: string) => {
         recorded.push(filename);
@@ -107,6 +107,134 @@ describe("migrateDownCore", () => {
   it("requires --allow-data-loss when DOWN drops a column", async () => {
     const { deps } = baseDeps();
     await expect(migrateDownCore(deps)).rejects.toThrow(/allow-data-loss/);
+  });
+
+  it.each([
+    ['ALTER TABLE "t" DROP "c"', "postgresql"],
+    ["ALTER TABLE `t` DROP `c`", "mysql"],
+    ['TRUNCATE "t"', "postgresql"],
+    // A column drop beside a constraint drop, in one ALTER.
+    ['ALTER TABLE "t" DROP COLUMN "c", DROP CONSTRAINT "t_k"', "postgresql"],
+  ] as const)(
+    "requires --allow-data-loss for %s on %s",
+    async (downSql, dialect) => {
+      // PostgreSQL and MySQL drop a column without the COLUMN keyword; each of
+      // these loses data as surely as `DROP COLUMN` does.
+      const { deps, executed } = baseDeps({
+        dialect,
+        readDownSql: async () => downSql,
+      });
+      await expect(migrateDownCore(deps)).rejects.toThrow(/allow-data-loss/);
+      expect(executed).toEqual([]);
+    }
+  );
+
+  it("does not require --allow-data-loss for a complete SQLite table rebuild", async () => {
+    // A constraint-only DOWN on SQLite rebuilds the table: the rows are
+    // copied into the twin before the original is dropped.
+    const rebuild = [
+      'CREATE TABLE "__new_t" ("id" TEXT PRIMARY KEY, "a" TEXT)',
+      'INSERT INTO "__new_t" ("id", "a") SELECT "id", "a" FROM "t"',
+      'DROP TABLE "t"',
+      'ALTER TABLE "__new_t" RENAME TO "t"',
+    ];
+    const { deps, executed } = baseDeps({
+      dialect: "sqlite",
+      readDownSql: async () => `${rebuild.join(";\n")};`,
+      // The table as the database holds it: the twin declares every column.
+      readLiveColumns: async () => new Map([["t", new Set(["id", "a"])]]),
+    });
+    await migrateDownCore(deps);
+    expect(executed).toEqual([rebuild.join(";\n")]);
+
+    // A twin that leaves out a live column loses that column's data.
+    const narrow = baseDeps({
+      dialect: "sqlite",
+      readDownSql: async () => `${rebuild.join(";\n")};`,
+      readLiveColumns: async () =>
+        new Map([["t", new Set(["id", "a", "secret"])]]),
+    });
+    await expect(migrateDownCore(narrow.deps)).rejects.toThrow(
+      /allow-data-loss/
+    );
+
+    // The control: the same DROP without the copy before it loses the rows.
+    const bare = baseDeps({
+      dialect: "sqlite",
+      readDownSql: async () => 'DROP TABLE "t";',
+    });
+    await expect(migrateDownCore(bare.deps)).rejects.toThrow(/allow-data-loss/);
+  });
+
+  it("does not require --allow-data-loss for a DOWN that drops no data", async () => {
+    // The control: the same path, with a DOWN that drops a constraint and an
+    // index — schema only.
+    const { deps, executed } = baseDeps({
+      readDownSql: async () =>
+        'ALTER TABLE "t" DROP CONSTRAINT "t_c_check";\nDROP INDEX "t_idx";',
+    });
+    await migrateDownCore(deps);
+    expect(executed.length).toBe(1);
+  });
+
+  describe("a dry run reports what a real run would refuse, without throwing", () => {
+    it("for a DOWN that cannot be read", async () => {
+      const unreadable = Object.assign(
+        new Error("module changed after sealing"),
+        {
+          code: "MIGRATION_CHECKSUM_MISMATCH",
+        }
+      );
+      const lines: string[] = [];
+      const { deps, executed } = baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: true },
+        logger: {
+          ...createLogger({ quiet: true }),
+          info: (m: string) => lines.push(m),
+        },
+        readDownSql: async () => {
+          throw unreadable;
+        },
+      });
+      await expect(migrateDownCore(deps)).resolves.toEqual({ rolledBack: [] });
+      expect(lines.join("\n")).toMatch(
+        /a real run would be refused: .*module changed after sealing/
+      );
+      expect(executed).toEqual([]);
+
+      // The same target, for real: the refusal the preview reported.
+      const real = baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: false },
+        readDownSql: async () => {
+          throw unreadable;
+        },
+      });
+      await expect(migrateDownCore(real.deps)).rejects.toBe(unreadable);
+      expect(real.executed).toEqual([]);
+    });
+
+    it("for a statement the runner's transaction cannot hold", async () => {
+      const lines: string[] = [];
+      const { deps } = baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: true },
+        logger: {
+          ...createLogger({ quiet: true }),
+          info: (m: string) => lines.push(m),
+        },
+        readDownSql: async () => 'DROP TABLE "t";\nROLLBACK;',
+      });
+      await expect(migrateDownCore(deps)).resolves.toEqual({ rolledBack: [] });
+      expect(lines.join("\n")).toMatch(
+        /a real run would be refused: .*ROLLBACK/
+      );
+
+      const real = baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: false },
+        readDownSql: async () => 'DROP TABLE "t";\nROLLBACK;',
+      });
+      await expect(migrateDownCore(real.deps)).rejects.toThrow(/ROLLBACK/);
+      expect(real.executed).toEqual([]);
+    });
   });
 
   it("requires --yes in production", async () => {

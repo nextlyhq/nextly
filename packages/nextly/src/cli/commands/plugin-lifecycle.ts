@@ -6,7 +6,7 @@
  * lifecycle belongs beside its introspection.
  *
  * The decisions live in `uninstall-plan.ts`, which is tested without a
- * database. This file is the part that talks to one: connect, take the lock,
+ * database. This file is the part that talks to one: decide, take the lock,
  * run the plan, record the outcome.
  *
  * ## Why the plugin must still be in config to be uninstalled
@@ -25,7 +25,9 @@ import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-ow
 import {
   planUninstall,
   type UninstallInput,
+  type UninstallPlan,
 } from "../../domains/schema/ownership/uninstall-plan";
+import { NextlyError } from "../../errors/nextly-error";
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 
@@ -54,6 +56,18 @@ export interface LifecyclePlugin {
   modules: { name: string; reversible: boolean }[];
 }
 
+/**
+ * One module's DOWN as it will run: verified against its checksums and
+ * judged by the drop guard before any module of the uninstall runs, and then
+ * executed exactly as judged.
+ */
+export interface PreparedModuleDown {
+  moduleName: string;
+  /** The module's ledger key, `plugin:<name>/<module>`. */
+  filename: string;
+  statements: string[];
+}
+
 export interface PluginLifecycleDeps {
   adapter: CLIDatabaseAdapter;
   db: unknown;
@@ -74,14 +88,34 @@ export interface PluginLifecycleDeps {
     opts: { keepData: boolean }
   ) => Promise<void>;
   /**
-   * Executes DOWN statements for one module, newest first.
+   * Every named module's DOWN, in the order given, each verified against
+   * the checksum it was sealed and applied with and judged by the drop
+   * guard. Throws on the first module that fails either, so an uninstall
+   * that would be refused part way is refused before anything runs.
+   */
+  prepareDowns: (
+    plugin: LifecyclePlugin,
+    moduleNames: readonly string[]
+  ) => Promise<PreparedModuleDown[]>;
+  /**
+   * Executes one prepared module's DOWN statements and records the module
+   * rolled back.
    *
    * REQUIRED for the same reason: optional, it was never passed, so a
    * confirmed uninstall logged every module as reverted and recorded the
    * plugin uninstalled while its tables and their data stayed exactly where
    * they were.
    */
-  runDown: (plugin: LifecyclePlugin, moduleName: string) => Promise<number>;
+  runDown: (
+    plugin: LifecyclePlugin,
+    down: PreparedModuleDown
+  ) => Promise<number>;
+  /**
+   * Runs `work` holding the migrate lock, after re-reading `plugins` from
+   * the ledger, and releases the lock however `work` ends. Throws when the
+   * lock cannot be had, without running `work`.
+   */
+  underMigrateLock: <T>(work: () => Promise<T>) => Promise<T>;
   /**
    * Applies the plugin's pending migration modules.
    *
@@ -100,22 +134,18 @@ export interface PluginLifecycleDeps {
   readAppliedModules: () => Promise<ReadonlySet<string>>;
 }
 
-function find(
-  plugins: LifecyclePlugin[],
-  name: string,
-  logger: CommandContext["logger"]
-): LifecyclePlugin {
+function find(plugins: LifecyclePlugin[], name: string): LifecyclePlugin {
   const plugin = plugins.find(p => p.name === name);
   if (plugin) return plugin;
   // Named rather than "not found": an operator who mistyped needs to see what
   // IS configured, and one whose plugin is genuinely absent needs to know the
   // config is what was consulted.
-  logger.error(
-    `No plugin named "${name}" is configured. Configured: ${
+  throw NextlyError.notFound({
+    message: `No plugin named "${name}" is configured. Configured: ${
       plugins.map(p => p.name).join(", ") || "(none)"
-    }`
-  );
-  process.exit(1);
+    }`,
+    logContext: { plugin: name },
+  });
 }
 
 /**
@@ -129,7 +159,7 @@ export async function runPluginInstallCommand(
   name: string,
   deps: PluginLifecycleDeps
 ): Promise<void> {
-  const plugin = find(deps.plugins, name, deps.logger);
+  const plugin = find(deps.plugins, name);
   const registry = createOwnerRegistry(
     new SchemaOwnersRepository(deps.db, deps.dialect)
   );
@@ -194,18 +224,50 @@ export async function runPluginInstallCommand(
   );
 }
 
+/** What an uninstall that passed every refusal will do. */
+interface UninstallDecision {
+  plugin: LifecyclePlugin;
+  plan: UninstallPlan;
+  /** The modules' DOWNs, newest first, each already verified and judged. */
+  downs: PreparedModuleDown[];
+}
+
 /**
- * Uninstall: refuse, plan, then execute.
+ * Uninstall: decide, then execute under the migrate lock.
  *
- * Every refusal is decided before anything runs, so a rejected uninstall
- * leaves the database exactly as it found it.
+ * Every refusal is decided before the lock is taken and before anything
+ * runs, and is thrown rather than exited on: an exit inside the locked work
+ * skips the lock's release, and on PostgreSQL the lock is a row that then
+ * blocks every migration until it expires.
+ *
+ * The decision is made again once the lock is held, against the plan
+ * re-read from the ledger there, because the one made before it can be stale
+ * by then — and it is that second decision that runs. A refusal from it
+ * still leaves the database as it found it: it is thrown before the hook and
+ * before any DOWN.
  */
 export async function runPluginUninstallCommand(
   name: string,
   opts: { keepData: boolean; yes: boolean },
   deps: PluginLifecycleDeps
 ): Promise<void> {
-  const plugin = find(deps.plugins, name, deps.logger);
+  await decideUninstall(name, opts, deps);
+  await deps.underMigrateLock(async () => {
+    const decision = await decideUninstall(name, opts, deps);
+    await executeUninstall(decision, opts, deps);
+  });
+}
+
+/**
+ * Every refusal an uninstall can meet, in the order an operator should see
+ * them. Reads the database; changes nothing.
+ */
+async function decideUninstall(
+  name: string,
+  opts: { keepData: boolean; yes: boolean },
+  deps: PluginLifecycleDeps
+): Promise<UninstallDecision> {
+  const plugin = find(deps.plugins, name);
   const repository = new SchemaOwnersRepository(deps.db, deps.dialect);
   const registry = createOwnerRegistry(repository);
   const owned = await registry.listByOwner(plugin.name);
@@ -229,7 +291,7 @@ export async function runPluginUninstallCommand(
     keepData: opts.keepData,
   };
 
-  // Throws on a dependent or an irreversible module. Nothing has run yet.
+  // Throws on a dependent or an irreversible module.
   const plan = planUninstall(input);
 
   // Tables to drop, and nothing that would drop them.
@@ -237,24 +299,36 @@ export async function runPluginUninstallCommand(
   // Development push creates a plugin's tables from the compiled model and
   // records their ownership, without any migration module being applied — so
   // the owner rows name tables to drop while the module list, which is built
-  // from the ledger's applied rows, is empty. The command then ran no DOWN
-  // statements, reported the tables dropped and marked the plugin
-  // `uninstalled`, leaving the tables and their data exactly where they were.
+  // from the ledger's applied rows, is empty. Running no DOWN statements and
+  // marking the plugin `uninstalled` would leave the tables and their data
+  // exactly where they were.
   //
   // Refused rather than improvised: the honest answer is that this database
   // has no recorded statement that undoes those tables, and inventing DROPs
   // here would be a destructive path nothing generated and nothing reviewed.
   if (plan.tablesDropped.length > 0 && plan.downModules.length === 0) {
-    deps.logger.error(
-      `${plugin.name} owns ${String(plan.tablesDropped.length)} table(s), but this database has no applied migration module to undo them — ` +
-        `they were created by a development push rather than by a migration.`
-    );
-    for (const table of plan.tablesDropped) deps.logger.error(`  - ${table}`);
-    deps.logger.error(
-      "Nothing was changed. Drop them with a migration, or remove the plugin from config and reset the development database."
-    );
-    process.exit(1);
+    for (const table of plan.tablesDropped) deps.logger.warn(`  - ${table}`);
+    throw new NextlyError({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      publicMessage:
+        `${plugin.name} owns ${String(plan.tablesDropped.length)} table(s), listed above, but this database has no applied migration module to undo them — ` +
+        `they were created by a development push rather than by a migration. ` +
+        `Nothing was changed. Drop them with a migration, or remove the plugin from config and reset the development database.`,
+      logContext: {
+        plugin: plugin.name,
+        reason: "no-applied-module",
+        tables: plan.tablesDropped,
+      },
+    });
   }
+
+  // Before the confirmation: a DOWN that would be refused is refused whether
+  // or not the operator confirms, and asking them to confirm it first only
+  // costs them a run.
+  const downs =
+    plan.downModules.length > 0
+      ? await deps.prepareDowns(plugin, plan.downModules)
+      : [];
 
   if (plan.tablesDropped.length > 0 && !opts.yes) {
     deps.logger.warn(
@@ -269,20 +343,35 @@ export async function runPluginUninstallCommand(
         deps.logger.warn(`  - ${element}`);
       }
     }
-    deps.logger.error(
-      "Re-run with --yes to confirm, or --keep-data to leave the tables in place."
-    );
-    process.exit(1);
+    throw new NextlyError({
+      code: "PLUGIN_UNINSTALL_UNCONFIRMED",
+      publicMessage:
+        "Nothing was changed. Re-run with --yes to confirm, or --keep-data to leave the tables in place.",
+      logContext: { plugin: plugin.name, tables: plan.tablesDropped },
+    });
   }
+
+  return { plugin, plan, downs };
+}
+
+/** Runs a decided uninstall: the hook, the DOWNs, the owner state. */
+async function executeUninstall(
+  { plugin, plan, downs }: UninstallDecision,
+  opts: { keepData: boolean },
+  deps: PluginLifecycleDeps
+): Promise<void> {
+  const registry = createOwnerRegistry(
+    new SchemaOwnersRepository(deps.db, deps.dialect)
+  );
 
   await deps.runLifecycleHook(plugin, "onUninstall", {
     keepData: opts.keepData,
   });
 
-  for (const moduleName of plan.downModules) {
-    const executed = await deps.runDown(plugin, moduleName);
+  for (const down of downs) {
+    const executed = await deps.runDown(plugin, down);
     deps.logger.info(
-      `Reverted ${moduleName} (${String(executed)} statement(s))`
+      `Reverted ${down.moduleName} (${String(executed)} statement(s))`
     );
   }
 

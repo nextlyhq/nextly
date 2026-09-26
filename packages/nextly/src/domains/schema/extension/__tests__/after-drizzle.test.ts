@@ -27,6 +27,8 @@ const OWNERS = new Map<string, SchemaOwner>([
   ["fx__widgets", { kind: "plugin", id: "fx" }],
 ]);
 const PROTECTED = new Set(["users", "dc_posts"]);
+/** The naming rule an introduced table answers to; `fx` is a plugin prefix. */
+const NAMING = { coreTableNames: ["users", "media"], pluginPrefixes: ["fx"] };
 
 async function run(hook: DrizzleSchemaHook) {
   return runAfterDrizzle({
@@ -35,6 +37,7 @@ async function run(hook: DrizzleSchemaHook) {
     hooks: [hook],
     owners: OWNERS,
     protectedTables: PROTECTED,
+    naming: NAMING,
   });
 }
 
@@ -68,6 +71,7 @@ describe("tables the hook never touched", () => {
       hooks: [() => ({ app_notes: appTable })],
       owners: OWNERS,
       protectedTables: PROTECTED,
+      naming: NAMING,
     });
 
     // Still present, still the same object: merged through, not re-validated.
@@ -84,6 +88,39 @@ describe("tables the hook never touched", () => {
   });
 });
 
+describe("a table the hook introduces", () => {
+  // It is the app's, so it meets the rule an app table declared through
+  // `db.schema.extend` meets. `app_audit` is the control: an ordinary name is
+  // still accepted, so the refusals below are about the name.
+  it("is accepted under an ordinary app name", async () => {
+    const out = await run(() => ({
+      app_audit: pgTable("app_audit", { id: pgText("id").primaryKey() }),
+    }));
+    expect(Object.keys(out)).toContain("app_audit");
+  });
+
+  it.each([
+    [
+      "a managed collection prefix",
+      "dc_audit",
+      /prefix the schema pipeline manages/,
+    ],
+    ["the core prefix", "nextly_audit", /reserved for core tables/],
+    [
+      "a localization companion suffix",
+      "app_audit_locales",
+      /localization layer/,
+    ],
+    ["a core table's name", "media", /is a core table/],
+    ["a plugin's namespace", "fx__audit", /namespace of the plugin prefix/],
+  ])("is refused under %s", async (_label, name, reason) => {
+    const message = await refusal(() => ({
+      [name]: pgTable(name, { id: pgText("id").primaryKey() }),
+    }));
+    expect(message).toMatch(reason);
+  });
+});
+
 describe("accepted", () => {
   it("leaves the tables untouched when there are no hooks", async () => {
     const tables = { app_notes: pgTable("app_notes", { id: pgText("id") }) };
@@ -93,6 +130,7 @@ describe("accepted", () => {
       hooks: [],
       owners: OWNERS,
       protectedTables: PROTECTED,
+      naming: NAMING,
     });
     expect(out).toBe(tables);
   });

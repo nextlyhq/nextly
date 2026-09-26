@@ -65,7 +65,14 @@ export interface ExtensionColumn {
    * any string going into it.
    */
   enumValues?: readonly string[];
-  /** An explicit name for the constraint the values become. */
+  /**
+   * The name of the CHECK the values become, in place of the column's.
+   *
+   * Scoped per table: the constraint is named `ck_<table>_<enumName>`,
+   * shortened with a hash when longer than 63 characters, exactly as a
+   * declared check's name is. MySQL requires check names to be unique across
+   * the schema, so a name used verbatim could not be shared between tables.
+   */
   enumName?: string;
   /**
    * Refreshed on every update, as a portable token.
@@ -128,7 +135,10 @@ export interface ExtensionIndex {
   unique: boolean;
   /** Optional explicit name; otherwise derived with the portable index-name rules. */
   name?: string;
-  /** Partial-index predicate (PostgreSQL/SQLite). */
+  /**
+   * Partial-index predicate. Refused at declaration on every extension table,
+   * because MySQL has none and declarations are checked for all dialects.
+   */
   where?: string;
   /** Expression index: per-dialect SQL in place of columns. */
   expression?: string;

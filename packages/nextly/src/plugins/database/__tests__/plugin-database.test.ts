@@ -249,6 +249,28 @@ describe("delete", () => {
     const { surface } = harness();
     expect(await surface.delete(notes).where({} as never)).toBe(2);
   });
+
+  it("reads MySQL's count from the header mysql2 returns first in a pair", async () => {
+    // mysql2 resolves a write to `[ResultSetHeader, fields]`, not to the
+    // header itself; the other drivers' shapes are the case above.
+    const db = {
+      delete: () => ({
+        where: () => Promise.resolve([{ affectedRows: 4 }, undefined]),
+      }),
+    };
+    const surface = createPluginDatabase({
+      dialect: "mysql",
+      owner: OWNER,
+      dependsOn: new Set(),
+      owners: () => new Map([["fx__notes", OWNER]]),
+      tables: () => ({ fx__notes: { name: "fx__notes" } }),
+      tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
+      db: () => db,
+      relationalDb: () => db,
+      transaction: fn => fn({ db, relationalDb: db }),
+    });
+    expect(await surface.delete(notes).where({} as never)).toBe(4);
+  });
 });
 
 describe("access", () => {

@@ -3,7 +3,7 @@
  * ships instead of loose `.sql` files.
  *
  * The diff-and-render work goes through exactly the primitives the app path
- * uses (`diffSnapshots` → `generateSQL` → `buildInverseOperations`): a plugin
+ * uses (`diffSnapshots` → `generateStatements` → `buildInverseOperations`): a plugin
  * migration that rendered through a second implementation could drift from the
  * app's for the same table shape, and the divergence would surface as a
  * dialect-specific failure in a plugin author's CI, far from its cause.
@@ -37,7 +37,8 @@ import type {
   Operation,
   TableSpec,
 } from "../pipeline/diff/types";
-import { generateSQL } from "../pipeline/sql-templates/index";
+import { withForeignKeysLiftedForTypeChanges } from "../pipeline/foreign-key-lift";
+import { generateStatements } from "../pipeline/sql-templates/index";
 
 import { foreignTableSides, NO_ELEMENTS } from "./app-stream";
 import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
@@ -102,19 +103,33 @@ function renderDialect(
 ): { statements: DialectStatements; operations: Operation[] } {
   const previous: NextlySchemaSnapshot = { tables: [...previousTables] };
   const desired: NextlySchemaSnapshot = { tables: [...desiredTables] };
+  // On MySQL, every existing foreign key a type change covers is lifted
+  // around it — the transform `migrate:create` applies to the app's stream.
   const operations = withCyclicForeignKeysSplit(
-    diffSnapshots(previous, desired),
+    withForeignKeysLiftedForTypeChanges(
+      diffSnapshots(previous, desired),
+      previous.tables,
+      dialect
+    ),
     dialect,
     previous.tables
   );
-  const up = operations.map(op => generateSQL(op, dialect));
+  // Rendered as lists through `generateStatements`, as the app's file is: on
+  // SQLite a check or foreign-key change is a rebuild of its table to the
+  // schema each direction leads to, so a direction is not one statement per
+  // operation there.
+  const up = generateStatements(operations, dialect, desired.tables);
   // Inverting the ops — not re-diffing — keeps a forward rename-shaped change
   // reversible in principle and always emits the exact inverse of what ran.
-  const down = withCyclicForeignKeysSplit(
-    buildInverseOperations(operations, previous),
+  const down = generateStatements(
+    withCyclicForeignKeysSplit(
+      buildInverseOperations(operations, previous),
+      dialect,
+      desired.tables
+    ),
     dialect,
-    desired.tables
-  ).map(op => generateSQL(op, dialect));
+    previous.tables
+  );
   return { statements: { up, down }, operations };
 }
 

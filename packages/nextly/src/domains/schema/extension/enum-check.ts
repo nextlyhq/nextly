@@ -31,6 +31,9 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { normalizeCheckExpression } from "../pipeline/diff/normalize-check";
+import type { TableSpec } from "../pipeline/diff/types";
+import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
+import { checkConstraintName } from "../services/index-name";
 
 import type { ExtensionColumn } from "./types";
 
@@ -43,14 +46,23 @@ import type { ExtensionColumn } from "./types";
  * a constraint that must be dropped and a different one added, on every
  * single comparison.
  *
- * An explicit `enumName` wins, so an author who has already named the
- * constraint in a hand-written migration can keep that name.
+ * An explicit `enumName` replaces the column's part of the name, never the
+ * table's: it is scoped as `ck_<table>_<enumName>`, exactly as a declared
+ * check's name is. MySQL requires a check name to be unique across the whole
+ * schema, so one enum name reused on two tables — natural for a set of values
+ * shared between them — would otherwise make the second CREATE TABLE fail.
+ *
+ * Both forms go through the bounded namer, so a long table or column name
+ * yields a name every dialect stores whole.
  */
 export function enumCheckName(
   tableName: string,
   column: Pick<ExtensionColumn, "name" | "enumName">
 ): string {
-  return column.enumName ?? `ck_${tableName}_${column.name}_enum`;
+  return checkConstraintName(
+    tableName,
+    column.enumName ?? `${column.name}_enum`
+  );
 }
 
 /**
@@ -100,8 +112,9 @@ function quote(value: string, dialect: SupportedDialect): string {
  * the kind of SQL three-valued-logic detail a reader should not have to
  * rediscover.
  *
- * The same spelling on every dialect apart from the backslash case in
- * `quote`, although neither server reads it back this way. PostgreSQL keeps a
+ * The same spelling on every dialect apart from the identifier's quote
+ * character and the backslash case in `quote`, although neither server reads
+ * it back this way. PostgreSQL keeps a
  * parse tree rather than the text and deparses this as
  * `status = ANY (ARRAY[...])` with casts added; MySQL reports
  * `` (`status` in (_utf8mb4'a',...)) ``. The diff compares checks through
@@ -114,7 +127,12 @@ export function enumCheckSql(
 ): string | undefined {
   const values = column.enumValues;
   if (values === undefined || values.length === 0) return undefined;
-  return `${column.name} IN (${values.map(value => quote(value, dialect)).join(", ")})`;
+  // The column is QUOTED, in the dialect's own quote character. Bare, a name
+  // that is also a keyword stops naming the column: PostgreSQL reads `user`
+  // as CURRENT_USER — a valid check comparing the role name, which then
+  // refuses every row — and MySQL refuses `key`, `order` or `group` as a
+  // syntax error.
+  return `${quoteIdent(column.name, dialect)} IN (${values.map(value => quote(value, dialect)).join(", ")})`;
 }
 
 /**
@@ -135,6 +153,65 @@ export function enumChecks(
     out.push({ name: enumCheckName(tableName, column), sql });
   }
   return out;
+}
+
+/**
+ * An ENTITY table's desired spec, with the enum checks of the columns
+ * contributed to it.
+ *
+ * An extension table's checks come from `toTableSpec`. A column contributed to
+ * a collection, Single or component reaches its table's spec by another route
+ * — as a bare `ColumnSpec` — so the check its `col.enum()` implies has to be
+ * added here, from the same `enumChecks`, or the column is created as plain
+ * text and any value is stored.
+ *
+ * An entity table's spec leaves `checks` undefined — "not tracked" — because
+ * nothing in its field-derived description declares one. Tracking them now
+ * makes the diff drop every live check the desired side does not name, so the
+ * checks this pipeline does not own are carried over from `previous` (the
+ * live table, or the last snapshot) unchanged. What is dropped is only what
+ * these contributions own: a check named for a contributed column that no
+ * longer declares an enum, or for a column the table no longer has — which
+ * could not outlive the column's drop anyway, and on MySQL and SQLite blocks
+ * it while it stands. A table that owns no enum check, now or before, keeps
+ * `checks` untracked, exactly as it was.
+ *
+ * Limitation: a check carrying an explicit `enumName` is recognised only
+ * while its column still declares it.
+ */
+export function withContributedEnumChecks(
+  spec: TableSpec,
+  contributed: readonly ExtensionColumn[],
+  previous: TableSpec | undefined,
+  dialect: SupportedDialect
+): TableSpec {
+  const own = enumChecks(spec.name, contributed, dialect);
+  const ownNames = new Set(own.map(check => check.name));
+  const desiredColumns = new Set(spec.columns.map(column => column.name));
+  // The default-named check of every column whose enum check, if it had one,
+  // no longer has anything to constrain.
+  const withdrawn = new Set(
+    [
+      ...contributed.filter(
+        column => enumCheckSql(column, dialect) === undefined
+      ),
+      ...(previous?.columns ?? []).filter(
+        column => !desiredColumns.has(column.name)
+      ),
+    ].map(column => enumCheckName(spec.name, { name: column.name }))
+  );
+  const previousChecks = previous?.checks ?? [];
+  const stale = previousChecks.filter(check => withdrawn.has(check.name));
+  if (own.length === 0 && stale.length === 0) return spec;
+  return {
+    ...spec,
+    checks: [
+      ...previousChecks.filter(
+        check => !ownNames.has(check.name) && !withdrawn.has(check.name)
+      ),
+      ...own,
+    ],
+  };
 }
 
 /**

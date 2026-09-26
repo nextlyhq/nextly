@@ -133,6 +133,62 @@ describe("defineTable", () => {
     ).toEqual(["t.indexes[0]"]);
   });
 
+  it("refuses an explicit foreign key name past 63 characters, and accepts 63", () => {
+    const declare = (name: string) =>
+      defineTable(
+        "t",
+        { id: col.id(), ownerId: col.shortText() },
+        {
+          foreignKeys: [
+            {
+              columns: ["ownerId"],
+              references: { table: "users", columns: ["id"] },
+              name,
+            },
+          ],
+        }
+      );
+    expect(() => declare(`fk_${"n".repeat(60)}`)).not.toThrow();
+    expect(validationPaths(() => declare(`fk_${"n".repeat(61)}`))).toEqual([
+      "t.foreignKeys[0]",
+    ]);
+  });
+
+  it("refuses a decimal default finer than the column's scale, naming the column", () => {
+    // MySQL 8.0.46 stores `DECIMAL(10,2) DEFAULT 1.555` as 1.56, so the live
+    // default would never match the declaration.
+    expect(
+      validationPaths(() =>
+        defineTable("t", {
+          id: col.id(),
+          price: col.decimal(10, 2, { default: 1.555 }),
+        })
+      )
+    ).toEqual(["t.price"]);
+    // Exponent form, which is how JavaScript writes a small number.
+    expect(
+      validationPaths(() =>
+        defineTable("t", {
+          id: col.id(),
+          rate: col.decimal(10, 6, { default: 1e-7 }),
+        })
+      )
+    ).toEqual(["t.rate"]);
+    // The boundary is the scale itself, not a smaller cap.
+    expect(() =>
+      defineTable("t", {
+        id: col.id(),
+        price: col.decimal(10, 2, { default: 1.55 }),
+      })
+    ).not.toThrow();
+    expect(() =>
+      defineTable("t", {
+        id: col.id(),
+        rate: col.decimal(10, 7, { default: 1e-7 }),
+      })
+    ).not.toThrow();
+  });
+
   it("refuses a table with no columns", () => {
     expect(validationPaths(() => defineTable("t", {}))).toEqual(["t"]);
   });

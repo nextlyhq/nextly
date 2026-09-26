@@ -20,14 +20,15 @@ import {
   text,
   timestamp,
   integer,
-  index,
-  uniqueIndex,
   boolean,
 } from "drizzle-orm/pg-core";
+import type { PgBuildExtraConfigColumns } from "drizzle-orm/pg-core";
 
-export const users = pgTable(
-  "users",
-  {
+import { USERS_INDEXES, pgIndexes } from "../_internal/core-indexes";
+
+/** `users` columns, a fresh builder record per call (see `core-table-contributions`). */
+export function usersColumns() {
+  return {
     id: text("id").primaryKey(),
     name: text("name"),
     email: text("email").notNull(),
@@ -56,9 +57,14 @@ export const users = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: false })
       .defaultNow()
       .notNull(),
-  },
-  t => [
-    uniqueIndex("users_email_unique").on(t.email),
-    index("users_created_at_idx").on(t.createdAt),
-  ]
-);
+  };
+}
+
+/** `users` indexes, from `USERS_INDEXES`. */
+export function usersExtraConfig(
+  t: PgBuildExtraConfigColumns<ReturnType<typeof usersColumns>>
+) {
+  return pgIndexes(USERS_INDEXES, t);
+}
+
+export const users = pgTable("users", usersColumns(), usersExtraConfig);

@@ -709,6 +709,32 @@ export function renderDialectType(
 }
 
 /**
+ * The size a kind declares that its introspected type token leaves out.
+ *
+ * PostgreSQL introspects `char(n)` as the bare `bpchar`, which is why
+ * `renderDialectType` answers `bpchar` for it — and PostgreSQL introspection
+ * reports the width separately, as `character_maximum_length`, in the column's
+ * `typeModifier`. The desired side has to carry the width the same way: without
+ * it the migration renders an unbounded `bpchar` where a push creates
+ * `char(n)`, and a later width change is invisible to the diff, which compares
+ * sizes only when both sides state one.
+ *
+ * Every other kind either states its size inside the type (`varchar(n)`,
+ * `numeric(p, s)`, MySQL's `char(n)`) or has none, so undefined.
+ */
+export function renderDialectTypeModifier(
+  kind: ColumnKind,
+  dialect: SupportedDialect,
+  opts: { length?: number }
+): string | undefined {
+  if (kind === "char" && dialect === "postgresql") {
+    // The same default width the MySQL rendering and the runtime builder use.
+    return String(opts.length ?? 1);
+  }
+  return undefined;
+}
+
+/**
  * Returns the length for kinds that carry one. Used by both the
  * dialect-token rendering and the runtime Drizzle builder.
  */

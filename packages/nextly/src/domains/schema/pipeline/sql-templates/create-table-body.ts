@@ -16,7 +16,12 @@
  * @module domains/schema/pipeline/sql-templates/create-table-body
  */
 import type { SupportedDialect } from "../../../../types/database";
-import type { ColumnSpec, TableSpec } from "../diff/types";
+import type {
+  CheckSpec,
+  ColumnSpec,
+  ForeignKeySpec,
+  TableSpec,
+} from "../diff/types";
 
 /**
  * The column's type as it must be WRITTEN, with any declared size restored.
@@ -35,6 +40,28 @@ export function renderedType(c: ColumnSpec): string {
   // Already spelled inside the type — the MySQL and SQLite case.
   if (c.type.includes("(")) return c.type;
   return `${c.type}(${c.typeModifier})`;
+}
+
+/**
+ * The spec with its key column marked — the one answer to "which column is
+ * the key" for everything that creates a table from a spec.
+ *
+ * A spec that marks a column `primaryKey` is taken at its word, so a key
+ * named something other than `id` keeps its PRIMARY KEY and a user field
+ * named `id` does not accidentally become one. A spec written before the
+ * marker existed leaves it undefined on every column; only for those does the
+ * historical `id` convention still decide, so an older snapshot cannot produce
+ * a table with no primary key at all.
+ */
+export function resolvePrimaryKey(table: TableSpec): TableSpec {
+  if (table.columns.some(c => c.primaryKey !== undefined)) return table;
+  if (!table.columns.some(c => c.name === "id")) return table;
+  return {
+    ...table,
+    columns: table.columns.map(c =>
+      c.name === "id" ? { ...c, primaryKey: true } : c
+    ),
+  };
 }
 
 /** Quotes an identifier the way one dialect spells it. */
@@ -89,6 +116,17 @@ function createTableColumn(
   return `${q(c.name)} ${renderedType(c)} PRIMARY KEY${nullable}${def}`;
 }
 
+/** What `createTableBody` includes beyond the columns and the key. */
+export interface CreateTableBodyOptions {
+  /**
+   * Whether the table's checks and foreign keys are declared inside the body.
+   * Defaults to true. The dev-push emitter passes false on PostgreSQL and
+   * MySQL, where it adds them once every table of the apply exists, so a
+   * foreign key may point at a table created later in the same batch.
+   */
+  constraints?: boolean;
+}
+
 /**
  * The full body of a `CREATE TABLE`: every column, and a table-level key when
  * more than one column carries the marker.
@@ -105,7 +143,8 @@ export function createTableBody(
   q: QuoteIdentifier,
   indent = "  ",
   /** Needed only for a database-assigned key, which each dialect spells its own way. */
-  dialect?: SupportedDialect
+  dialect?: SupportedDialect,
+  options: CreateTableBodyOptions = {}
 ): string {
   const keyColumns = table.columns.filter(c => c.primaryKey === true);
   const composite = keyColumns.length > 1;
@@ -121,7 +160,9 @@ export function createTableBody(
     lines.push(`${indent}PRIMARY KEY (${cols})`);
   }
 
-  lines.push(...tableConstraintLines(table, q, indent));
+  if (options.constraints !== false) {
+    lines.push(...tableConstraintLines(table, q, indent));
+  }
   return lines.join(",\n");
 }
 
@@ -141,18 +182,36 @@ export function tableConstraintLines(
   q: QuoteIdentifier,
   indent = "  "
 ): string[] {
-  const lines: string[] = [];
-  for (const check of table.checks ?? []) {
-    lines.push(`${indent}CONSTRAINT ${q(check.name)} CHECK (${check.sql})`);
-  }
-  for (const fk of table.foreignKeys ?? []) {
-    const cols = fk.columns.map(q).join(", ");
-    const refCols = fk.referencesColumns.map(q).join(", ");
-    lines.push(
-      `${indent}CONSTRAINT ${q(fk.name)} FOREIGN KEY (${cols}) ` +
-        `REFERENCES ${q(fk.referencesTable)} (${refCols}) ` +
-        `ON DELETE ${fk.onDelete.toUpperCase()} ON UPDATE ${fk.onUpdate.toUpperCase()}`
-    );
-  }
-  return lines;
+  return [
+    ...(table.checks ?? []).map(
+      check => `${indent}CONSTRAINT ${q(check.name)} ${checkClause(check)}`
+    ),
+    ...(table.foreignKeys ?? []).map(
+      fk => `${indent}CONSTRAINT ${q(fk.name)} ${foreignKeyClause(fk, q)}`
+    ),
+  ];
+}
+
+/**
+ * A check's clause, after its `CONSTRAINT <name>`: the one spelling for a
+ * check declared in CREATE TABLE and one added by ALTER TABLE.
+ */
+export function checkClause(check: CheckSpec): string {
+  return `CHECK (${check.sql})`;
+}
+
+/**
+ * A foreign key's clause, after its `CONSTRAINT <name>`: the one spelling for
+ * a key declared in CREATE TABLE and one added by ALTER TABLE.
+ */
+export function foreignKeyClause(
+  fk: ForeignKeySpec,
+  q: QuoteIdentifier
+): string {
+  const cols = fk.columns.map(q).join(", ");
+  const refCols = fk.referencesColumns.map(q).join(", ");
+  return (
+    `FOREIGN KEY (${cols}) REFERENCES ${q(fk.referencesTable)} (${refCols}) ` +
+    `ON DELETE ${fk.onDelete.toUpperCase()} ON UPDATE ${fk.onUpdate.toUpperCase()}`
+  );
 }

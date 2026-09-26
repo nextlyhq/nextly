@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import Database from "better-sqlite3";
+import type { SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import {
   describe,
@@ -57,8 +58,42 @@ const DIALECT = "sqlite" as const;
 function adapterFor(sqlite: Database.Database) {
   return {
     dialect: DIALECT,
+    getCapabilities: () => ({ dialect: DIALECT }),
+    // A PRAGMA that reads a setting returns its rows, as the SQLite adapter's
+    // does; everything else runs for its effect.
     executeQuery: async (statement: string) => {
+      if (/^PRAGMA\s+\w+\s*$/i.test(statement.trim())) {
+        return sqlite.prepare(statement).all();
+      }
       sqlite.exec(statement);
+      return [];
+    },
+    // The single-connection transaction the executor runs a module in, as
+    // the SQLite adapter opens it.
+    transaction: async <T>(
+      work: (ctx: {
+        execute: (statement: string) => Promise<unknown[]>;
+        drizzle: () => unknown;
+        queryStatement: (statement: SQL) => Promise<unknown[]>;
+      }) => Promise<T>
+    ): Promise<T> => {
+      sqlite.exec("BEGIN IMMEDIATE");
+      try {
+        const result = await work({
+          execute: async statement => {
+            sqlite.exec(statement);
+            return [];
+          },
+          drizzle: () => drizzle({ client: sqlite }),
+          queryStatement: async statement =>
+            drizzle({ client: sqlite }).all(statement),
+        });
+        sqlite.exec("COMMIT");
+        return result;
+      } catch (error) {
+        sqlite.exec("ROLLBACK");
+        throw error;
+      }
     },
     listTables: async () =>
       (
@@ -434,14 +469,9 @@ describe("the all-constructs round trip (C8)", () => {
             onDelete: "cascade",
           },
         ],
+        // No partial (`where`) index: extension tables refuse one at
+        // declaration, because MySQL cannot create it as declared.
         checks: [{ name: "score_ok", sql: "score >= 0" }],
-        indexes: [
-          {
-            columns: ["score"],
-            where: "score IS NOT NULL",
-            name: "idx_rt_partial",
-          },
-        ],
       }
     );
     const built = buildPluginMigration({
@@ -466,7 +496,7 @@ describe("the all-constructs round trip (C8)", () => {
         { pluginName: "rtx", pluginVersion: "1.0.0", migrations: [g] },
       ],
     };
-    // 1. Apply: tables, check, FK cascade, both indexes exist.
+    // 1. Apply: tables, check, FK cascade and the expression index exist.
     await runPluginPhase(phase as never);
     const tables = await adapterFor(sqlite).listTables();
     expect(tables).toContain("rtx__rtowners");
@@ -479,7 +509,6 @@ describe("the all-constructs round trip (C8)", () => {
           )
           .all(table) as Array<{ name: string }>
       ).map(r => r.name);
-    expect(indexNames("rtx__rtlinked")).toContain("idx_rt_partial");
     expect(indexNames("rtx__rtowners")).toContain("idx_rt_expr");
     let rejected = false;
     try {
@@ -512,6 +541,9 @@ describe("the all-constructs round trip (C8)", () => {
     expect(await adapterFor(sqlite).listTables()).not.toContain(
       "rtx__rtlinked"
     );
+    expect(await adapterFor(sqlite).listTables()).not.toContain(
+      "rtx__rtowners"
+    );
     sqlite.exec(
       `INSERT INTO nextly_schema_events
          (id, event_type, status, source, filename, started_at, ended_at)
@@ -523,6 +555,7 @@ describe("the all-constructs round trip (C8)", () => {
     //    the table is genuinely gone.
     await runPluginPhase(phase as never);
     expect(await adapterFor(sqlite).listTables()).toContain("rtx__rtlinked");
+    expect(indexNames("rtx__rtowners")).toContain("idx_rt_expr");
     let reRejected = false;
     try {
       sqlite.exec(

@@ -56,7 +56,9 @@ These ship today but carry no guarantee yet — use them, but expect change:
 - Schema extensibility (P2): `contributes.schema` (`tables`, `extend`,
   `migrations`), the `defineTable` / `col.*` DSL, `schema.extendTable`,
   `schema.adoptTable` and `db.schema.afterDrizzle`
-- `contributes.transform` — changing entities another plugin declared
+- `contributes.transforms` — changing entities another plugin declared
+- `ctx.db.contributed(table, columns)` — reading and writing the hidden
+  columns a plugin contributed to a table it does not own
 - Collection `db` options: `db.idType`, `db.allowIdOnCreate`
 - `db.postgres.schema` (accepts only `"public"` for now)
 

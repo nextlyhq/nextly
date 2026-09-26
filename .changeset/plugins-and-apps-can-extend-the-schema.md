@@ -53,10 +53,11 @@ been applied. On an upgraded database that meant writing to a column that did
 not exist yet.
 
 What the schema model cannot carry into migrations and drift detection is
-REFUSED rather than lost: partial and expression indexes on dialects without
-them, check constraints, foreign keys and enums where the diff cannot see
-them, and anything an app's `afterDrizzle` hook returns that would not survive
-the round trip. A constraint that exists on one machine and no deployment is
+REFUSED rather than lost: partial (`where`) indexes on every dialect, because
+MySQL has none; expression index keys carrying an ordering, collation or
+operator class, which no dialect reports back; check constraints, foreign keys
+and enums where the diff cannot see them; and anything an app's `afterDrizzle`
+hook returns that would not survive the round trip. A constraint that exists on one machine and no deployment is
 worse than one that does not exist at all.
 
 Ownership is recorded per table and per element, so no path drops a table — or
@@ -66,7 +67,10 @@ record is never dropped by anything.
 `nextly plugins install` and `nextly plugins uninstall` manage a plugin's
 schema. Install refuses while a dependency is not installed; uninstall has
 `--keep-data`, a refusal while another plugin depends on it, and a refusal
-when a migration cannot be undone.
+when a migration cannot be undone. Uninstall asks for confirmation, and
+`--yes` gives it where there is no terminal; a development database whose plugin
+tables were pushed rather than migrated is refused, because there is no DOWN to
+run.
 
 **A column contributed to a table you do not own now arrives.**
 `extendTable({ columns })` validated the column, marked it hidden and recorded
@@ -76,7 +80,12 @@ reaches the desired spec, the runtime table and the schema fingerprint, and is
 stripped from every entry the API returns — a column on the table is a column
 `select()` returns, and this one is no field of the entity.
 
-**`contributes.transform`** lets a plugin change entities another plugin
+**`ctx.db.contributed(table, columns)`** reads and writes the columns a plugin
+contributed to a table it does not own, by row id, and names only those
+columns. A column on a core table arrives with the app's migrations; until it
+has, the call is refused with an error naming the column and the table.
+
+**`contributes.transforms`** lets a plugin change entities another plugin
 declared, not only add fields to them. `setup(config)` runs before plugin
 schema contributions are merged and never sees them; transforms run after, in
 dependency order, each handed a frozen copy.
@@ -93,8 +102,23 @@ database-assigned key. A collection can choose `db.idType` between random and
 time-ordered UUIDs, and accept a client-supplied id with
 `db.allowIdOnCreate`.
 
+**Migration files run as one unit.** Each file, plugin module or DOWN runs in
+one transaction on one connection, split into statements by a dialect-aware
+scanner that keeps `DO $$` bodies and trigger and routine bodies whole. A file
+is refused before anything runs when it holds a statement that would end or
+split that transaction, a session setting that would outlive it on a pooled
+connection, or a statement the database cannot run inside a transaction
+(`VACUUM`, `CONCURRENTLY` index builds, MySQL `LOCK TABLES`, SQLite `ATTACH`).
+On SQLite each unit runs with `foreign_keys` off and a `foreign_key_check`
+before commit, so a table rebuild keeps child rows, and a unit that leaves a
+new dangling reference is rolled back with
+`NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION`. A pending file that relied on a
+refused statement has to be edited before it applies; applied files are never
+re-read.
+
 Full details: `docs/plugins/schema.mdx`, `docs/database/extending-the-schema.mdx`
 and `docs/guides/production-migrations.mdx`.
+
 **BREAKING — `ctx.db` is no longer the Drizzle instance.** It is now the
 owner-checked surface, and the four verbs it shares with Drizzle take
 different arguments: `ctx.db.select(myTable)` where you wrote

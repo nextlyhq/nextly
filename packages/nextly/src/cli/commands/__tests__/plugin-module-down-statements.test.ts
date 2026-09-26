@@ -125,4 +125,24 @@ describe("pluginModuleDownStatements", () => {
       pluginModuleDownStatements(module, "mysql").map(s => s.replace(/;$/, ""))
     ).toEqual(down);
   });
+
+  it("keeps a statement whatever keyword it starts with", () => {
+    // A hand-written DOWN may clean up through a procedure or a session
+    // setting; none of them may be dropped for not being DDL.
+    const down = [
+      "CALL fx_cleanup_notes()",
+      "SET @fx_uninstalling = 1",
+      "DROP TABLE IF EXISTS `fx__notes`",
+    ];
+    const module = {
+      dialects: {
+        postgresql: { up: [], down: [] },
+        mysql: { up: [], down },
+        sqlite: { up: [], down: [] },
+      },
+    };
+    expect(
+      pluginModuleDownStatements(module, "mysql").map(s => s.replace(/;$/, ""))
+    ).toEqual(down);
+  });
 });

@@ -81,31 +81,23 @@ describe("buildServiceConfig — retention carry-through", () => {
   });
 
   /**
-   * `runMigrationsOnBoot` on the SERVICE config is internal wiring, not an
-   * option — it tells `registerServices` whether to open the boot-migrations
-   * gate, and that must match what `runProdMigrationsIfEnabled` will actually
-   * do, which reads the nested `db` block. A caller-supplied value winning here
-   * would open no gate while migrations ran anyway, which is precisely the
-   * unguarded window the gate exists to close.
-   *
-   * The opposite direction is asserted too: a caller cannot manufacture a gate
-   * that nothing will ever settle, which would hang every later consumer.
+   * The decision to migrate on boot is read in ONE place,
+   * `runProdMigrationsIfEnabled`, from the nested `db` block — so that block
+   * has to reach registration whole. A flag copied beside it would be a second
+   * reading of the same decision, which is how a gate came to be opened that
+   * nothing settled.
    */
-  it("derives the gate flag from the nested config, ignoring a caller override", () => {
-    const enabled = buildServiceConfig({
-      config: {
-        db: { runMigrationsOnBoot: true },
-      } as unknown as SanitizedNextlyConfig,
-      runMigrationsOnBoot: false,
-    } as Parameters<typeof buildServiceConfig>[0]);
-    expect(enabled.runMigrationsOnBoot).toBe(true);
-
-    const disabled = buildServiceConfig({
-      config: {
-        db: { runMigrationsOnBoot: false },
-      } as unknown as SanitizedNextlyConfig,
+  it("forwards the whole db block, run decision included", () => {
+    const db = {
       runMigrationsOnBoot: true,
+      migrationsDir: "./migrations",
+      uiSchemaFile: "./ui-schema.json",
+    };
+    const result = buildServiceConfig({
+      config: { db } as unknown as SanitizedNextlyConfig,
     } as Parameters<typeof buildServiceConfig>[0]);
-    expect(disabled.runMigrationsOnBoot).toBe(false);
+    expect(result.db).toEqual(db);
+    // Nothing reads a flag beside the block any more; none is set.
+    expect(result).not.toHaveProperty("runMigrationsOnBoot");
   });
 });

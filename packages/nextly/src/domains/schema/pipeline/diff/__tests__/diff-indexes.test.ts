@@ -116,3 +116,35 @@ describe("diffIndexes", () => {
     );
   });
 });
+
+describe("expression index key lists compare by what each key computes", () => {
+  it("PostgreSQL's spelling of a two-key list equals its declaration", () => {
+    const table = (expression: string) => ({
+      name: "fx__users",
+      columns: [{ name: "id", type: "text", nullable: false }],
+      indexes: [
+        {
+          name: "idx_fx__users_email_status",
+          columns: [],
+          unique: false,
+          expression,
+        },
+      ],
+    });
+    expect(
+      diffSnapshots(
+        { tables: [table("lower((email)::text), status")] },
+        { tables: [table("lower(email), status")] }
+      )
+    ).toEqual([]);
+    // The control: a different second key is a different index.
+    expect(
+      diffSnapshots(
+        { tables: [table("lower((email)::text), status")] },
+        { tables: [table("lower(email), state")] }
+      )
+        .map(op => op.type)
+        .sort()
+    ).toEqual(["add_index", "drop_index"]);
+  });
+});

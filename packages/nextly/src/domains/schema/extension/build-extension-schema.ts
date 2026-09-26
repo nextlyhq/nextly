@@ -28,14 +28,21 @@ import { drizzleTableToTableSpec } from "../../../schemas/_internal/drizzle-to-t
 import type { TableSpec } from "../pipeline/diff/types";
 
 import { getActiveExtensionSchema } from "./active-schema";
-import { type DrizzleSchemaHook, runAfterDrizzle } from "./after-drizzle";
+import {
+  type DrizzleSchemaHook,
+  rekeyRelationEdges,
+  runAfterDrizzle,
+  specAfterHook,
+} from "./after-drizzle";
 import {
   authoredKeyOf,
   referenceTableStub,
+  resolveIndexName,
   toDrizzleTable,
   toTableSpec,
 } from "./compile";
 import { type SeedEntityTable, SchemaDraftStore } from "./draft";
+import { enumChecks } from "./enum-check";
 import { runExtensionHooks, type SchemaContribution } from "./run-hooks";
 import type {
   ExtensionColumn,
@@ -309,30 +316,55 @@ export async function buildExtensionSchema(
       owner: SchemaOwner;
     }>
   >();
+  const recordElement = (
+    table: string,
+    element: {
+      elementKind: "column" | "index" | "fk" | "check";
+      elementName: string;
+      owner: SchemaOwner;
+    }
+  ): void => {
+    const list = elementOwners.get(table) ?? [];
+    list.push(element);
+    elementOwners.set(table, list);
+  };
   for (const table of tables) {
     for (const index of table.indexes) {
       if (index.contributedBy === undefined) continue;
-      const list = elementOwners.get(table.name) ?? [];
-      list.push({
+      // The name the table's SPEC gives the index, from the one rule that
+      // names it. A recorded name the spec does not use — a hand-spelled
+      // `idx_<table>_<cols>` where the spec says `uq_` or a hashed form —
+      // named an element the table never has: the contributor's side of the
+      // diff then lacked the index, so every generation added it again, and
+      // its removal was never emitted.
+      recordElement(table.name, {
         elementKind: "index",
-        elementName:
-          index.name ?? `idx_${table.name}_${index.columns.join("_")}`,
+        elementName: resolveIndexName(table.name, index),
         owner: index.contributedBy,
       });
-      elementOwners.set(table.name, list);
     }
     // Hidden columns a foreign contributor added, element-recorded the same
     // way: the column rides the contributor's stream, and the table owner's
     // reconcile excludes it.
     for (const column of table.columns) {
       if (column.contributedBy === undefined) continue;
-      const list = elementOwners.get(table.name) ?? [];
-      list.push({
+      recordElement(table.name, {
         elementKind: "column",
         elementName: column.name,
         owner: column.contributedBy,
       });
-      elementOwners.set(table.name, list);
+      // The CHECK a contributed `col.enum()` implies belongs to the same
+      // contributor as its column. The table's spec carries it (`toTableSpec`
+      // derives it from every column), so left unrecorded it was on the
+      // compiled table and in no stream's elements: the owner's module never
+      // declares it and the contributor's diff never saw it.
+      for (const check of enumChecks(table.name, [column], input.dialect)) {
+        recordElement(table.name, {
+          elementKind: "check",
+          elementName: check.name,
+          owner: column.contributedBy,
+        });
+      }
     }
   }
 
@@ -427,7 +459,15 @@ export async function buildExtensionSchema(
     hooks: input.afterDrizzle ?? [],
     owners,
     protectedTables,
+    naming: {
+      coreTableNames: input.coreTableNames,
+      pluginPrefixes: [...input.pluginPrefixes.values()],
+    },
   });
+
+  // The edges were keyed to the compiled tables; the registry resolves them
+  // against the ones the hooks returned. See `rekeyRelationEdges`.
+  rekeyRelationEdges({ edges: relations, compiled, returned: drizzle });
 
   // The migration model follows the hook, rather than describing the shape the
   // hook was handed.
@@ -478,7 +518,19 @@ export async function buildExtensionSchema(
           if (compiledSpec !== undefined && table === compiled[name]) {
             return compiledSpec;
           }
-          return drizzleTableToTableSpec(table as Table, input.dialect);
+          // A table the hook introduced has no declaration to start from, so
+          // its Drizzle table is the whole description. One it reshaped keeps
+          // its declaration and takes only the hook's changes.
+          if (compiledSpec === undefined) {
+            return drizzleTableToTableSpec(table as Table, input.dialect);
+          }
+          return specAfterHook({
+            compiledSpec,
+            compiledTable: compiled[name] as Table,
+            hookTable: table as Table,
+            declared: tables.find(declared => declared.name === name),
+            dialect: input.dialect,
+          });
         });
 
   // Adopted tables compile to drizzle ONLY: registered for typed access and
@@ -490,12 +542,18 @@ export async function buildExtensionSchema(
   const adoptedRelations = new Map<string, DynamicRelationEdge[]>();
   for (const table of store.adoptedTables()) {
     adopted[table.name] = toDrizzleTable(table as never, input.dialect);
-    // App-owned, so nextly.db reaches the table and a plugin's owner check
-    // does not — the access rule the plan gives adopted tables.
+    // App-owned, so the app's own `ctx.db` surface reaches the table and a
+    // plugin's owner check does not — the access rule adopted tables follow.
     owners.set(table.name, { kind: "app" });
     const edges = relationEdgesOf(table as ExtensionTable, byName, coreTables);
     if (edges.length > 0) adoptedRelations.set(table.name, edges);
   }
+  // An adopted table cannot be reshaped, but it can point at one that was.
+  rekeyRelationEdges({
+    edges: adoptedRelations,
+    compiled,
+    returned: drizzle,
+  });
 
   return {
     tables,

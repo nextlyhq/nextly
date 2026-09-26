@@ -27,14 +27,21 @@ import { check, foreignKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
-import { currentTimestampSql } from "../../../lib/system-columns";
 import { isManagedIndexName } from "../pipeline/diff/index-util";
 import type { ColumnSpec, IndexSpec, TableSpec } from "../pipeline/diff/types";
-import { indexNameForColumns } from "../services/index-name";
+import { renderDialectTypeModifier } from "../services/field-column-descriptor";
+import {
+  checkConstraintName,
+  foreignKeyNameForColumns,
+  indexNameForColumns,
+} from "../services/index-name";
 import { buildUserDrizzleColumn } from "../services/runtime-schema-generator";
-import { quoteJsonSqlDefault, quoteSqlLiteral } from "../utils/sql-literal";
 
-import { toColumnDescriptor } from "./column-descriptor";
+import {
+  defaultSql,
+  toColumnDescriptor,
+  withDeclaredKeyAndDefault,
+} from "./column-descriptor";
 import { enumChecks } from "./enum-check";
 import type { ExtensionColumn, ExtensionIndex, ExtensionTable } from "./types";
 
@@ -47,38 +54,6 @@ function invalid(path: string, message: string): never {
 // Re-exported so every existing consumer keeps its import; it lives in its
 // own module to keep this file off the runtime generator's import path.
 export { toColumnDescriptor } from "./column-descriptor";
-
-/**
- * The DDL default for a column, or undefined.
- *
- * A token is rendered per dialect through the SAME helper the core system
- * columns use, so `created_at` on a plugin table and `created_at` on a core
- * table carry one spelling. Two spellings would read to the diff as a default
- * change on every single apply.
- */
-function defaultSql(
-  column: ExtensionColumn,
-  dialect: SupportedDialect
-): string | undefined {
-  const value = column.default;
-  if (value === undefined) return undefined;
-  // The tagged token, which is why it is tagged: a text column may hold the
-  // literal string "now", and that must render as a quoted value.
-  if (typeof value === "object") return currentTimestampSql(dialect);
-  if (typeof value === "string") {
-    // Through the shared quoter, never `'${value}'`. DDL is assembled as text
-    // before it reaches the driver, so an apostrophe — `O'Reilly` — closed the
-    // quote early and produced a migration that could not parse on any dialect.
-    // The helper also doubles backslashes for MySQL, which reads one as an
-    // escape introducer where the others store it verbatim; a JSON default
-    // would otherwise come back with a real newline in it and stop being JSON.
-    return column.kind === "json"
-      ? quoteJsonSqlDefault(value, dialect)
-      : quoteSqlLiteral(value, dialect);
-  }
-  if (typeof value === "boolean") return value ? "true" : "false";
-  return String(value);
-}
 
 /**
  * A column on a table this function did not compile, found by SQL name.
@@ -138,7 +113,44 @@ export function resolveIndexName(table: string, index: ExtensionIndex): string {
   return index.name;
 }
 
-/** The spec the diff engine compares against a live table. */
+/**
+ * One foreign key's name: the declared one, or the bounded derivation.
+ *
+ * One function for both consumers — the spec the diff compares and the SQLite
+ * kit table that creates the constraint — so the constraint is created under
+ * exactly the name the diff will look for.
+ */
+function resolveForeignKeyName(
+  table: ExtensionTable,
+  fk: NonNullable<ExtensionTable["foreignKeys"]>[number]
+): string {
+  return fk.name ?? foreignKeyNameForColumns(table.name, fk.columns);
+}
+
+/**
+ * Refuse two constraints on one table sharing a name.
+ *
+ * Declared checks and enum checks are named from different inputs — a check
+ * `status_enum` and an enum column `status` both derive `ck_<table>_status_enum`
+ * — and the database would refuse the second, or, where it is not asked to
+ * create both at once, the diff would compare two constraints under one key.
+ */
+function assertDistinctCheckNames(
+  table: ExtensionTable,
+  checks: readonly { name: string }[]
+): void {
+  const seen = new Set<string>();
+  for (const { name } of checks) {
+    if (seen.has(name)) {
+      invalid(
+        `${table.name}.checks`,
+        `Two check constraints on "${table.name}" resolve to the name "${name}"; rename the check or the enum.`
+      );
+    }
+    seen.add(name);
+  }
+}
+
 /**
  * One extension column as the diff engine compares it.
  *
@@ -155,9 +167,16 @@ export function toColumnSpec(
 ): ColumnSpec {
   const descriptor = toColumnDescriptor(column, dialect);
   const rendered = defaultSql(column, dialect);
+  // The width a type token such as PostgreSQL's `bpchar` does not carry, held
+  // where live introspection holds it so the migration renders `bpchar(n)` and
+  // the diff can see a width change.
+  const typeModifier = renderDialectTypeModifier(column.kind, dialect, {
+    ...(column.length !== undefined ? { length: column.length } : {}),
+  });
   return {
     name: descriptor.name,
     type: descriptor.dialectType,
+    ...(typeModifier !== undefined ? { typeModifier } : {}),
     nullable: descriptor.nullable,
     ...(rendered !== undefined ? { default: rendered } : {}),
     ...(column.primaryKey === true ? { primaryKey: true as const } : {}),
@@ -169,6 +188,7 @@ export function toColumnSpec(
   };
 }
 
+/** The spec the diff engine compares against a live table. */
 export function toTableSpec(
   table: ExtensionTable,
   dialect: SupportedDialect
@@ -190,7 +210,7 @@ export function toTableSpec(
   // comparison. An explicit name always wins.
   const foreignKeys = table.foreignKeys?.map(fk => ({
     ...fk,
-    name: fk.name ?? `fk_${table.name}_${fk.columns.join("_")}`,
+    name: resolveForeignKeyName(table, fk),
   }));
   // Declared checks, plus the one each enum column implies. Concatenated
   // rather than kept apart because they are the same thing to everything
@@ -198,10 +218,11 @@ export function toTableSpec(
   // a check whose expression the author did not have to write.
   const declared =
     table.checks?.map(ck => ({
-      name: `ck_${table.name}_${ck.name}`,
+      name: checkConstraintName(table.name, ck.name),
       sql: ck.sql,
     })) ?? [];
   const fromEnums = enumChecks(table.name, table.columns, dialect);
+  assertDistinctCheckNames(table, [...declared, ...fromEnums]);
   const checks =
     declared.length + fromEnums.length > 0
       ? [...declared, ...fromEnums]
@@ -242,36 +263,6 @@ export function referenceTableStub(
     stubColumns[name] = text(name);
   }
   return sqliteTable(tableName, stubColumns as never);
-}
-
-/**
- * A built column with the key and default its declaration carries.
- *
- * Both belong to the table the push creates rather than to statements added
- * after it, and nothing adds them later: left off, a fresh database had no
- * primary key on any dialect — so every foreign key pointing at the table was
- * refused for want of a unique target — and an insert omitting a defaulted
- * column failed NOT NULL. The default is the spec's own rendering, the text
- * the diff compares, so the table created here and the one the diff expects
- * are the same table.
- */
-function withDeclaredKeyAndDefault(
-  built: unknown,
-  column: ExtensionColumn,
-  dialect: SupportedDialect
-): unknown {
-  let result = built as DrizzleColumnBuilder;
-  const rendered = defaultSql(column, dialect);
-  if (rendered !== undefined) {
-    result = result.default(drizzleSql.raw(rendered)) as DrizzleColumnBuilder;
-  }
-  return column.primaryKey === true ? result.primaryKey() : result;
-}
-
-/** The two modifiers every dialect's column builder offers. */
-interface DrizzleColumnBuilder {
-  primaryKey(): unknown;
-  default(value: unknown): unknown;
 }
 
 /**
@@ -357,7 +348,7 @@ export function toDrizzleTable(
     )
       continue;
     foreignKeys.push({
-      name: fk.name ?? `fk_${table.name}_${fk.columns.join("_")}`,
+      name: resolveForeignKeyName(table, fk),
       localKeys,
       foreignColumns,
       onDelete: fk.onDelete,

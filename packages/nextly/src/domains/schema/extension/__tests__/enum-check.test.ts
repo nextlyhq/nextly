@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { normalizeCheckExpression } from "../../pipeline/diff/normalize-check";
 import { toTableSpec } from "../compile";
 import { col, defineTable } from "../dsl";
 import {
@@ -34,11 +35,16 @@ describe("an enum column's permitted values", () => {
     // One mechanism, three dialects. A native PostgreSQL enum type, MySQL's
     // inline ENUM and SQLite's nothing-at-all would be three lifecycles; the
     // pipeline already diffs, emits and introspects checks everywhere.
+    const quoted = {
+      postgresql: '"state"',
+      mysql: "`state`",
+      sqlite: '"state"',
+    };
     for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
       const spec = toTableSpec(table(["open", "closed"]), dialect);
       expect(spec.checks).toContainEqual({
         name: "ck_fx__orders_state_enum",
-        sql: "state IN ('open', 'closed')",
+        sql: `${quoted[dialect]} IN ('open', 'closed')`,
       });
     }
   });
@@ -50,9 +56,10 @@ describe("an enum column's permitted values", () => {
     expect(enumCheckName("fx__orders", { name: "state" })).toBe(
       "ck_fx__orders_state_enum"
     );
+    // An explicit name replaces the column's part, never the table's.
     expect(
       enumCheckName("fx__orders", { name: "state", enumName: "order_state" })
-    ).toBe("order_state");
+    ).toBe("ck_fx__orders_order_state");
   });
 
   it("escapes a value containing a quote", () => {
@@ -60,7 +67,7 @@ describe("an enum column's permitted values", () => {
     // still text somebody typed and this string becomes DDL.
     expect(
       enumCheckSql({ name: "s", enumValues: ["it's"] }, "postgresql")
-    ).toBe("s IN ('it''s')");
+    ).toBe(`"s" IN ('it''s')`);
   });
 
   it("writes a backslash value as hex on MySQL, and plainly elsewhere", () => {
@@ -70,10 +77,10 @@ describe("an enum column's permitted values", () => {
     // backslash as itself.
     const values = ["a", "back\\slash"];
     expect(enumCheckSql({ name: "s", enumValues: values }, "mysql")).toBe(
-      "s IN ('a', _utf8mb4 X'6261636b5c736c617368')"
+      "`s` IN ('a', _utf8mb4 X'6261636b5c736c617368')"
     );
     expect(enumCheckSql({ name: "s", enumValues: values }, "postgresql")).toBe(
-      "s IN ('a', 'back\\slash')"
+      `"s" IN ('a', 'back\\slash')`
     );
     expect(
       enumValuesIn(
@@ -87,7 +94,7 @@ describe("an enum column's permitted values", () => {
     // author reorders and the pipeline reports no change while the stored
     // constraint says something else.
     const spec = toTableSpec(table(["b", "a"]), "postgresql");
-    expect(spec.checks?.[0]?.sql).toBe("state IN ('b', 'a')");
+    expect(spec.checks?.[0]?.sql).toBe(`"state" IN ('b', 'a')`);
   });
 
   it("produces no check when the column is not an enum", () => {
@@ -162,5 +169,69 @@ describe("changing an enum's values", () => {
     // would report removals from a constraint that never listed values.
     expect(enumValuesIn("price > 0")).toBeNull();
     expect(removedEnumValues("price > 0", "price > 10")).toEqual([]);
+  });
+});
+
+describe("an enum check on a column named like a keyword", () => {
+  // Server output recorded from PostgreSQL 17 (`pg_get_constraintdef`, CHECK
+  // wrapper removed) and MySQL 8.0.46 (SHOW CREATE TABLE) for a column
+  // declared `user` / `order` with the values 'a' and 'b'.
+  const PG_QUOTED_USER = `(("user" = ANY (ARRAY['a'::text, 'b'::text])))`;
+  const MYSQL_ORDER = "((`order` in (_utf8mb4'a',_utf8mb4'b')))";
+
+  it("names the column on PostgreSQL, where bare `user` is CURRENT_USER", () => {
+    const declared = enumCheckSql(
+      { name: "user", enumValues: ["a", "b"] },
+      "postgresql"
+    );
+    expect(normalizeCheckExpression(declared ?? "")).toBe(
+      normalizeCheckExpression(PG_QUOTED_USER)
+    );
+  });
+
+  it("names the column on MySQL, where bare `order` does not parse", () => {
+    const declared = enumCheckSql(
+      { name: "order", enumValues: ["a", "b"] },
+      "mysql"
+    );
+    expect(declared?.startsWith("`order` IN")).toBe(true);
+    expect(normalizeCheckExpression(declared ?? "")).toBe(
+      normalizeCheckExpression(MYSQL_ORDER)
+    );
+  });
+
+  it("still reads the values back from the quoted form", () => {
+    expect(enumValuesIn(PG_QUOTED_USER)).toEqual(["a", "b"]);
+    expect(
+      enumValuesIn(
+        enumCheckSql({ name: "order", enumValues: ["a", "b"] }, "mysql") ?? ""
+      )
+    ).toEqual(["a", "b"]);
+  });
+});
+
+describe("an enum check's name", () => {
+  it("scopes an explicit name by its table, so two tables may share it", () => {
+    // MySQL check names are unique across the schema: one verbatim name on
+    // two tables fails the second CREATE TABLE.
+    const a = enumCheckName("fx__orders", { name: "s", enumName: "status" });
+    const b = enumCheckName("fx__invoices", { name: "s", enumName: "status" });
+    expect(a).toBe("ck_fx__orders_status");
+    expect(b).toBe("ck_fx__invoices_status");
+  });
+
+  it("fits every dialect and stays distinct when the table and column are long", () => {
+    // A plain truncation also fits 63 characters, and would give these two
+    // columns — which share their first 50 characters — the same name.
+    const tableName = `fx__${"t".repeat(55)}`;
+    const first = enumCheckName(tableName, { name: `${"c".repeat(50)}_one` });
+    const second = enumCheckName(tableName, { name: `${"c".repeat(50)}_two` });
+    expect(first.length).toBeLessThanOrEqual(63);
+    expect(second.length).toBeLessThanOrEqual(63);
+    expect(first).not.toBe(second);
+    // Deterministic: live introspection must be able to find it again.
+    expect(enumCheckName(tableName, { name: `${"c".repeat(50)}_one` })).toBe(
+      first
+    );
   });
 });

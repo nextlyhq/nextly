@@ -67,6 +67,61 @@ export function normalizeCheckExpression(expression: string): string {
   return print(canonical(tree), 0);
 }
 
+/**
+ * The canonical form of an index's key list, one key at a time.
+ *
+ * An expression index lists its keys separated by commas — `lower(email),
+ * status` — and introspection reports each key as the server prints it, joined
+ * the same way. A list is not one expression, so read whole it falls outside
+ * the grammar and was compared as raw text, which never matches PostgreSQL's
+ * `lower((email)::text), status`. Each key is canonicalised on its own instead,
+ * so one key the grammar does not know leaves the others comparable.
+ *
+ * A key the grammar cannot read is kept as its exact text. That is the fallback
+ * that can never make two different indexes compare equal: loosening it (by
+ * stripping parentheses or casts as text) would, since `a * (b + c)` and
+ * `a * b + c` differ only in a pair of parentheses.
+ */
+export function normalizeExpressionList(expressions: string): string {
+  return splitTopLevel(expressions)
+    .map(key => normalizeCheckExpression(key.trim()))
+    .join(", ");
+}
+
+/**
+ * The text split at every comma outside parentheses, brackets, string literals
+ * and quoted identifiers. Unbalanced text is returned whole, so a key list the
+ * splitter cannot read is compared exactly as it was before. Exported so the
+ * index renderer splits a key list by the same rule the comparison reads it by.
+ */
+export function splitTopLevel(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote !== null) {
+      // A backslash escapes the next character in MySQL's printed literals;
+      // a doubled quote closes and reopens, which the scan handles as two.
+      if (ch === "\\" && quote === "'") i += 1;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") quote = ch;
+    else if (ch === "(" || ch === "[") depth += 1;
+    else if (ch === ")" || ch === "]") depth -= 1;
+    else if (ch === "," && depth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+    if (depth < 0) return [text];
+  }
+  if (depth !== 0 || quote !== null) return [text];
+  parts.push(text.slice(start));
+  return parts;
+}
+
 // =============================================================================
 // Tokens
 // =============================================================================
@@ -83,6 +138,16 @@ type Token =
 // Longest first, so `<=` is never read as `<` followed by `=`.
 const PUNCTUATION = [
   "!~~",
+  "->>",
+  "#>>",
+  "->",
+  "#>",
+  "||",
+  "@>",
+  "<@",
+  "?|",
+  "?&",
+  "?",
   "::",
   "<=",
   ">=",
@@ -401,7 +466,141 @@ const RESERVED = new Set([
   "FALSE",
 ]);
 
+/**
+ * Words PostgreSQL will not read as a column name unless it is quoted: its
+ * RESERVED keywords and those reserved but usable as a function or type name
+ * (`pg_get_keywords()` categories R and T, PostgreSQL 17).
+ *
+ * This is what decides whether a quoted name and a bare one are the same
+ * column. `"status"` and `status` are; `"user"` and `user` are not, because
+ * bare `user` is CURRENT_USER. PostgreSQL's deparser quotes every one of these
+ * when it names a column, and MySQL backtick-quotes every identifier, so the
+ * declared and the reported spelling of a column meet under the same quotes.
+ */
+const KEYWORDS_NOT_NAMES = new Set([
+  "all",
+  "analyse",
+  "analyze",
+  "and",
+  "any",
+  "array",
+  "as",
+  "asc",
+  "asymmetric",
+  "authorization",
+  "binary",
+  "both",
+  "case",
+  "cast",
+  "check",
+  "collate",
+  "collation",
+  "column",
+  "concurrently",
+  "constraint",
+  "create",
+  "cross",
+  "current_catalog",
+  "current_date",
+  "current_role",
+  "current_schema",
+  "current_time",
+  "current_timestamp",
+  "current_user",
+  "default",
+  "deferrable",
+  "desc",
+  "distinct",
+  "do",
+  "else",
+  "end",
+  "except",
+  "false",
+  "fetch",
+  "for",
+  "foreign",
+  "freeze",
+  "from",
+  "full",
+  "grant",
+  "group",
+  "having",
+  "ilike",
+  "in",
+  "initially",
+  "inner",
+  "intersect",
+  "into",
+  "is",
+  "isnull",
+  "join",
+  "lateral",
+  "leading",
+  "left",
+  "like",
+  "limit",
+  "localtime",
+  "localtimestamp",
+  "natural",
+  "not",
+  "notnull",
+  "null",
+  "offset",
+  "on",
+  "only",
+  "or",
+  "order",
+  "outer",
+  "overlaps",
+  "placing",
+  "primary",
+  "references",
+  "returning",
+  "right",
+  "select",
+  "session_user",
+  "similar",
+  "some",
+  "symmetric",
+  "system_user",
+  "table",
+  "tablesample",
+  "then",
+  "to",
+  "trailing",
+  "true",
+  "union",
+  "unique",
+  "user",
+  "using",
+  "variadic",
+  "verbose",
+  "when",
+  "where",
+  "window",
+  "with",
+]);
+
 const COMPARISON = new Set(["=", "<>", "!=", "<", "<=", ">", ">="]);
+
+/**
+ * Operators at PostgreSQL's "any other operator" precedence that index
+ * expressions use: the JSON accessors (`->`, `->>`, `#>`, `#>>`), string
+ * concatenation (`||`) and the JSON containment and key tests. MySQL writes its
+ * JSON accessors as calls instead, which `canonicalCall` folds into these.
+ */
+const OTHER_OPERATORS: ReadonlySet<string> = new Set([
+  "->>",
+  "->",
+  "#>>",
+  "#>",
+  "||",
+  "@>",
+  "<@",
+  "?|",
+  "?&",
+  "?",
+]);
 
 /** PostgreSQL's operator spellings of LIKE and NOT LIKE. */
 const LIKE_OPERATORS = new Set(["~~", "!~~"]);
@@ -557,7 +756,7 @@ class Parser {
   }
 
   private parsePredicate(): Node | null {
-    const left = this.parseAdditive();
+    const left = this.parseOperator();
     if (left === null) return null;
     for (const form of this.predicateForms) {
       const node = form(left);
@@ -575,7 +774,7 @@ class Parser {
       this.position += 1;
       return this.parseQuantified(op, quantifier, left);
     }
-    const right = this.parseAdditive();
+    const right = this.parseOperator();
     return right === null ? null : { kind: "compare", op, left, right };
   }
 
@@ -583,7 +782,7 @@ class Parser {
   private parseLikeOperator(left: Node): Node | null | undefined {
     const op = this.takeOperator(LIKE_OPERATORS);
     if (op === undefined) return undefined;
-    const right = this.parseAdditive();
+    const right = this.parseOperator();
     return right === null
       ? null
       : { kind: "like", negated: op === "!~~", left, right };
@@ -614,14 +813,14 @@ class Parser {
   }
 
   private parseLike(negated: boolean, left: Node): Node | null {
-    const right = this.parseAdditive();
+    const right = this.parseOperator();
     return right === null ? null : { kind: "like", negated, left, right };
   }
 
   private parseBetween(negated: boolean, left: Node): Node | null {
-    const low = this.parseAdditive();
+    const low = this.parseOperator();
     if (low === null || !this.takeKeyword("AND")) return null;
-    const high = this.parseAdditive();
+    const high = this.parseOperator();
     return high === null
       ? null
       : { kind: "between", negated, expr: left, low, high };
@@ -636,6 +835,17 @@ class Parser {
     const right = this.parseExpression();
     if (right === null || !this.expectPunct(")")) return null;
     return { kind: "quantified", op, quantifier, left, right };
+  }
+
+  /**
+   * PostgreSQL's "any other operator" level — the JSON accessors, string
+   * concatenation, containment — which binds more weakly than `+` and `-`
+   * and more strongly than a comparison, left to right.
+   */
+  private parseOperator(): Node | null {
+    return this.parseArithmetic([...OTHER_OPERATORS], () =>
+      this.parseAdditive()
+    );
   }
 
   private parseAdditive(): Node | null {
@@ -788,6 +998,14 @@ class Parser {
     if (upper === "ARRAY") return this.parseArray();
     if (RESERVED.has(upper)) return null;
     if (this.expectPunct("(")) return this.parseCall(word);
+    // A bare keyword is not a name: `user` is CURRENT_USER. It is kept in
+    // upper case, which no canonical identifier is — an unquoted one is lower
+    // case and a quoted one keeps its quotes — so it can never compare equal
+    // to the column `"user"`.
+    const lower = word.toLowerCase();
+    if (KEYWORDS_NOT_NAMES.has(lower)) {
+      return { kind: "identifier", text: upper };
+    }
     // An unquoted name is case-insensitive in all three dialects, so its
     // case carries no meaning; PostgreSQL folds it to lower case.
     return {
@@ -804,10 +1022,43 @@ class Parser {
 
   /** A function call, its opening parenthesis already consumed. */
   private parseCall(name: string): Node | null {
+    if (name.toUpperCase() === "CAST") return this.parseCastCall();
     const args = this.parseList(")");
     return args === null
       ? null
       : { kind: "call", name: name.toLowerCase(), args };
+  }
+
+  /**
+   * `CAST(expr AS type)`, read as the `expr::type` PostgreSQL reports it as.
+   *
+   * MySQL prints a cast to a character type with the character set it was
+   * given — `cast(x as char(20) charset utf8mb4)` for a declared
+   * `CAST(x AS CHAR(20))` — naming utf8mb4, the default a declaration without
+   * one gets. That one is dropped; any other character set is kept as part of
+   * the type, since it changes the value.
+   */
+  private parseCastCall(): Node | null {
+    const expr = this.parseExpression();
+    if (expr === null || !this.takeKeyword("AS")) return null;
+    const type = this.parseTypeName();
+    if (type === null) return null;
+    let base = type.base;
+    if (this.takeKeyword("CHARSET") || this.takeCharacterSet()) {
+      const charset = this.take();
+      if (charset?.kind !== "word") return null;
+      const name = charset.text.toLowerCase();
+      if (name !== "utf8mb4") base = `${base} charset ${name}`;
+    }
+    if (!this.expectPunct(")")) return null;
+    return { kind: "cast", expr, ...type, base };
+  }
+
+  /** Consumes `CHARACTER SET` when it is next, reporting whether it was. */
+  private takeCharacterSet(): boolean {
+    if (!this.isKeyword("CHARACTER") || !this.isKeyword("SET", 1)) return false;
+    this.position += 2;
+    return true;
   }
 
   /** A comma-separated list up to `close`, which may be empty. */
@@ -827,10 +1078,15 @@ class Parser {
 /**
  * An identifier as it would be written with the fewest quotes: bare when that
  * names the same column, double-quoted otherwise. `"status"` and `status` are
- * one column; `"Status"` is a different one in PostgreSQL and keeps its quotes.
+ * one column; `"Status"` is a different one in PostgreSQL and keeps its quotes,
+ * and so does `"user"`, because bare `user` is not a column at all.
  */
 function canonicalIdentifier(name: string): string {
-  if (/^[a-z_][a-z0-9_$]*$/.test(name) && !RESERVED.has(name.toUpperCase())) {
+  if (
+    /^[a-z_][a-z0-9_$]*$/.test(name) &&
+    !RESERVED.has(name.toUpperCase()) &&
+    !KEYWORDS_NOT_NAMES.has(name)
+  ) {
     return name;
   }
   return `"${name.replace(/"/g, '""')}"`;
@@ -938,7 +1194,7 @@ function canonical(node: Node): Node {
 const CANONICALISERS: ByKind<Node> = {
   literal: node => node,
   identifier: node => node,
-  call: node => ({ ...node, args: node.args.map(canonical) }),
+  call: node => canonicalCall({ ...node, args: node.args.map(canonical) }),
   array: node => ({ ...node, items: node.items.map(canonical) }),
   cast: node => canonicalCast(canonical(node.expr), node),
   negate: canonicalNegate,
@@ -966,6 +1222,35 @@ const CANONICALISERS: ByKind<Node> = {
   not: node => canonicalNot(canonical(node.expr)),
   logical: canonicalLogical,
 };
+
+/**
+ * MySQL's JSON accessors in the operator spelling they were declared with.
+ *
+ * MySQL rewrites `data->'$.a'` to `json_extract(data, '$.a')` and
+ * `data->>'$.a'` to `json_unquote(json_extract(data, '$.a'))` — the forms its
+ * documentation defines the operators as — so the declaration and the index
+ * MySQL reports never read alike without folding one into the other.
+ */
+function canonicalCall(node: NodeOfKind["call"]): Node {
+  const [first, second] = node.args;
+  if (
+    node.name === "json_extract" &&
+    node.args.length === 2 &&
+    first &&
+    second
+  ) {
+    return { kind: "arithmetic", op: "->", left: first, right: second };
+  }
+  if (
+    node.name === "json_unquote" &&
+    node.args.length === 1 &&
+    first?.kind === "arithmetic" &&
+    first.op === "->"
+  ) {
+    return { ...first, op: "->>" };
+  }
+  return node;
+}
 
 /** `!=` and `<>` are one operator; `<>` is the standard spelling. */
 function canonicalOperator(op: string): string {
@@ -1146,11 +1431,12 @@ const OR = 1;
 const AND = 2;
 const NOT = 3;
 const PREDICATE = 4;
-const ADDITIVE = 5;
-const MULTIPLICATIVE = 6;
-const UNARY = 7;
-const POSTFIX = 8;
-const PRIMARY = 9;
+const OPERATOR = 5;
+const ADDITIVE = 6;
+const MULTIPLICATIVE = 7;
+const UNARY = 8;
+const POSTFIX = 9;
+const PRIMARY = 10;
 
 /** How strongly each node kind binds. */
 const PRECEDENCE: ByKind<number> = {
@@ -1163,7 +1449,11 @@ const PRECEDENCE: ByKind<number> = {
   isNull: () => PREDICATE,
   between: () => PREDICATE,
   arithmetic: node =>
-    node.op === "+" || node.op === "-" ? ADDITIVE : MULTIPLICATIVE,
+    OTHER_OPERATORS.has(node.op)
+      ? OPERATOR
+      : node.op === "+" || node.op === "-"
+        ? ADDITIVE
+        : MULTIPLICATIVE,
   negate: () => UNARY,
   cast: () => POSTFIX,
   // A negative literal behaves as a unary minus when something binds to it.
@@ -1199,19 +1489,19 @@ const PRINTERS: ByKind<string> = {
   arithmetic: node =>
     `${print(node.left, precedence(node))} ${node.op} ${print(node.right, precedence(node) + 1)}`,
   compare: node =>
-    `${print(node.left, ADDITIVE)} ${node.op} ${print(node.right, ADDITIVE)}`,
+    `${print(node.left, OPERATOR)} ${node.op} ${print(node.right, OPERATOR)}`,
   quantified: node =>
-    `${print(node.left, ADDITIVE)} ${node.op} ${node.quantifier} (${print(node.right, 0)})`,
+    `${print(node.left, OPERATOR)} ${node.op} ${node.quantifier} (${print(node.right, 0)})`,
   in: node =>
-    `${print(node.left, ADDITIVE)} ${node.negated ? "NOT IN" : "IN"} (${printList(node.items)})`,
+    `${print(node.left, OPERATOR)} ${node.negated ? "NOT IN" : "IN"} (${printList(node.items)})`,
   like: node =>
-    `${print(node.left, ADDITIVE)} ${node.negated ? "NOT LIKE" : "LIKE"} ${print(node.right, ADDITIVE)}`,
+    `${print(node.left, OPERATOR)} ${node.negated ? "NOT LIKE" : "LIKE"} ${print(node.right, OPERATOR)}`,
   isNull: node =>
-    `${print(node.expr, ADDITIVE)} ${node.negated ? "IS NOT NULL" : "IS NULL"}`,
+    `${print(node.expr, OPERATOR)} ${node.negated ? "IS NOT NULL" : "IS NULL"}`,
   // Rewritten into comparisons by `canonical`; printed only if reached
   // some other way, and then in its own spelling.
   between: node =>
-    `${print(node.expr, ADDITIVE)} ${node.negated ? "NOT BETWEEN" : "BETWEEN"} ${print(node.low, ADDITIVE)} AND ${print(node.high, ADDITIVE)}`,
+    `${print(node.expr, OPERATOR)} ${node.negated ? "NOT BETWEEN" : "BETWEEN"} ${print(node.low, OPERATOR)} AND ${print(node.high, OPERATOR)}`,
   not: node => `NOT ${print(node.expr, NOT)}`,
   logical: node => {
     const strength = node.op === "OR" ? OR : AND;

@@ -620,12 +620,14 @@ export function findUnexpectedDestructiveStatements(
     const alterDropColumn = s.match(
       /\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?[^;]*\bDROP\s+(?:COLUMN\s+)?[`"]?[A-Za-z0-9_]+[`"]?/i
     );
-    if (
-      alterDropColumn &&
-      !/\bDROP\s+(?:CONSTRAINT|INDEX|KEY|FOREIGN\s+KEY|PRIMARY\s+KEY|CHECK|DEFAULT|NOT\s+NULL)\b/i.test(
+    // Judged per DROP clause: one ALTER can drop a constraint AND a column,
+    // and excluding the whole statement for its constraint clause let the
+    // column drop through.
+    const dropsAColumn =
+      /\bDROP\s+(?!(?:CONSTRAINT|INDEX|KEY|FOREIGN\s+KEY|PRIMARY\s+KEY|CHECK|DEFAULT|NOT\s+NULL)\b)(?:COLUMN\b|[`"]?[A-Za-z0-9_]+)/i.test(
         s
-      )
-    ) {
+      );
+    if (alterDropColumn && dropsAColumn) {
       if (targetsManaged(alterDropColumn[1] ?? "")) offenders.push(statement);
       continue;
     }

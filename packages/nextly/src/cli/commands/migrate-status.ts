@@ -32,7 +32,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { scopeLedgerRows } from "../../domains/schema/events/ledger-scope";
-import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
+import {
+  SchemaEventsRepository,
+  type SchemaEventRow,
+} from "../../domains/schema/events/schema-events-repository";
 import { describeError } from "../../errors/index";
 import type {
   MigrationErrorJson,
@@ -53,6 +57,8 @@ import {
   selectVariant,
   getSortedBaseNames,
 } from "../utils/migration-discovery";
+
+import { PARTIAL_ROLLBACK_NOTE } from "./plugin-module-rollback";
 
 /**
  * Options specific to the migrate:status command
@@ -145,6 +151,8 @@ interface CollectionPendingChange {
  */
 interface MigrateStatusResult {
   migrations: MigrationStatus[];
+  /** Applied migrations whose latest rollback attempt failed. */
+  failedRollbacks: FailedRollback[];
   collections: CollectionPendingChange[];
   summary: {
     applied: number;
@@ -266,6 +274,16 @@ export async function runMigrateStatus(
       ? pluginRowsToStatuses(appliedMigrations)
       : buildMigrationStatuses(migrationFiles, appliedMigrations);
 
+    const failedRollbacks = failedRollbacksSinceApply(
+      appliedMigrations,
+      await new SchemaEventsRepository(
+        (adapter as unknown as DrizzleAdapter).getDrizzle(),
+        dialect
+      )
+        .listFailedRollbacks()
+        .catch(() => [])
+    );
+
     const pendingCollections = await getCollectionsWithPendingChanges(
       adapter as unknown as DrizzleAdapter,
       dialect
@@ -289,12 +307,14 @@ export async function runMigrateStatus(
     if (options.json) {
       const result: MigrateStatusResult = {
         migrations: migrationStatuses,
+        failedRollbacks,
         collections: pendingCollections,
         summary,
       };
       console.log(JSON.stringify(result, null, 2));
     } else {
       displayStatus(migrationStatuses, pendingCollections, summary, context);
+      displayFailedRollbacks(failedRollbacks, context);
     }
   } finally {
     await adapter.disconnect();
@@ -365,25 +385,99 @@ async function getAppliedMigrations(
 ): Promise<MigrationRecord[]> {
   try {
     const repo = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
-    // Plugin rows belong to their own migration stream: excluded unless
-    // `--plugin` names one, so the app's listing never reports them as
-    // "applied (file missing)".
-    const rows = scopeLedgerRows(await repo.listFileApplies(), plugin);
-    return rows
-      .filter(r => r.status === "applied" || r.status === "failed")
-      .map(r => ({
-        id: r.id,
-        filename: r.filename ?? "",
-        sha256: r.sha256 ?? "",
-        status: r.status === "failed" ? "failed" : "applied",
-        appliedBy: null,
-        durationMs: r.durationMs ?? null,
-        errorJson: null,
-        appliedAt: r.startedAt,
-      }));
+    return ledgerRecords(await repo.listFileApplies(), plugin);
   } catch {
     return [];
   }
+}
+
+/** An applied migration whose latest rollback attempt failed. */
+export interface FailedRollback {
+  filename: string;
+  failedAt: Date;
+  note: string | null;
+  /** On MySQL: the DOWN may have committed part of its statements. */
+  possiblyPartial: boolean;
+}
+
+/**
+ * The applied migrations whose most recent rollback failed after they were
+ * applied. The failure does not change the migration's applied state — on
+ * PostgreSQL and SQLite the DOWN was rolled back whole — but on MySQL part
+ * of it may have committed, and the operator needs to know either way that
+ * the schema was touched since.
+ */
+export function failedRollbacksSinceApply(
+  applied: readonly MigrationRecord[],
+  rollbacks: SchemaEventRow[]
+): FailedRollback[] {
+  const newestFailure = newestEventsByFilename(rollbacks);
+  const failures: FailedRollback[] = [];
+  for (const record of applied) {
+    if (record.status !== "applied") continue;
+    const failure = newestFailure.get(record.filename);
+    if (failure === undefined || failure.startedAt <= record.appliedAt) {
+      continue;
+    }
+    failures.push({
+      filename: record.filename,
+      failedAt: failure.startedAt,
+      note: failure.note,
+      possiblyPartial: failure.note?.startsWith(PARTIAL_ROLLBACK_NOTE) === true,
+    });
+  }
+  return failures;
+}
+
+/** Warns about each applied migration whose rollback failed. */
+function displayFailedRollbacks(
+  failures: readonly FailedRollback[],
+  context: CommandContext
+): void {
+  for (const failure of failures) {
+    context.logger.warn(
+      failure.possiblyPartial
+        ? `${failure.filename}: a rollback failed at ${formatDate(failure.failedAt)}, and MySQL may have committed part of its DOWN. It is still recorded as applied; compare the schema with the migration before running migrate or migrate:down again.`
+        : `${failure.filename}: a rollback failed at ${formatDate(failure.failedAt)} and was undone; it is still applied.`
+    );
+  }
+}
+
+/**
+ * Each migration's current state in the ledger: the NEWEST `file_apply`
+ * event per filename, kept when it is `applied` or `failed`.
+ *
+ * Newest per filename by `newestEventsByFilename`, the rule `migrate`,
+ * `migrate:down` and `plugins uninstall` read the ledger by. A rollback is
+ * recorded as a `rolled_back` event after the `applied` one, and the older
+ * `applied` row stays in the ledger, so only the newest event says whether a
+ * migration is applied now.
+ *
+ * Plugin rows belong to their own migration stream: excluded unless
+ * `plugin` names one, so the app's listing never reports them as
+ * "applied (file missing)".
+ */
+export function ledgerRecords(
+  rows: SchemaEventRow[],
+  plugin?: string
+): MigrationRecord[] {
+  const records: MigrationRecord[] = [];
+  for (const r of newestEventsByFilename(
+    scopeLedgerRows(rows, plugin)
+  ).values()) {
+    if (r.status !== "applied" && r.status !== "failed") continue;
+    records.push({
+      id: r.id,
+      filename: r.filename ?? "",
+      sha256: r.sha256 ?? "",
+      status: r.status === "failed" ? "failed" : "applied",
+      appliedBy: null,
+      durationMs: r.durationMs ?? null,
+      errorJson: null,
+      appliedAt: r.startedAt,
+    });
+  }
+  return records;
 }
 
 // F11: small coercion helpers for adapter-returned `Record<string, unknown>`.

@@ -32,6 +32,13 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { PluginDefinition } from "../../../plugins/plugin-context";
+import { getCoreSchema } from "../../../schemas";
+import {
+  coreContributions,
+  type EntityContributionSource,
+  onlyElements,
+  withEntityContributions,
+} from "../extension/entity-contributions";
 import type {
   ContributedElements,
   NextlySchemaSnapshot,
@@ -62,6 +69,18 @@ export interface AppStreamTables {
    * contributed table, including one the app has stopped contributing to.
    */
   baselines: Map<string, TableSpec>;
+  /**
+   * What hooks contributed to the app's ENTITY tables — collections, Singles
+   * and components — applied to each entity's spec by `appStreamSnapshots`.
+   *
+   * An entity table is the app's own, whole, in this stream, so whatever was
+   * contributed to it rides the app's migrations — whoever contributed it.
+   * Absent, the entities are compared as their fields alone describe them.
+   */
+  entityContributions?: {
+    source: EntityContributionSource;
+    dialect: SupportedDialect;
+  };
 }
 
 /** An empty stream, for a configuration that declares no extension schema. */
@@ -73,7 +92,13 @@ export const NO_APP_STREAM_TABLES: AppStreamTables = {
 
 /** Whether the stream has anything to emit at all. */
 export function hasAppStreamTables(tables: AppStreamTables): boolean {
-  return tables.owned.length > 0 || tables.contributed.size > 0;
+  const entities = tables.entityContributions?.source;
+  return (
+    tables.owned.length > 0 ||
+    tables.contributed.size > 0 ||
+    (entities !== undefined &&
+      (entities.entityColumns.size > 0 || entities.entityIndexes.size > 0))
+  );
 }
 
 interface ConfigLike {
@@ -105,7 +130,21 @@ export async function compileAppStreamTables(input: {
     config: input.config,
     logger: input.logger,
   });
-  if (!schema) return NO_APP_STREAM_TABLES;
+  // Nothing contributed now — but the entity pass still runs, because a
+  // contribution withdrawn since the last snapshot is removed by it: its
+  // column is dropped by the diff, and its CHECK only by that pass.
+  if (!schema) {
+    return {
+      ...NO_APP_STREAM_TABLES,
+      // And the core tables' baselines, for the same reason: a core-table
+      // element withdrawn since is diffed against them.
+      baselines: coreTableSpecs(input.dialect),
+      entityContributions: {
+        source: { entityColumns: new Map(), entityIndexes: new Map() },
+        dialect: input.dialect,
+      },
+    };
+  }
 
   const specByName = new Map(schema.specs.map(spec => [spec.name, spec]));
   // Read off the compiled ownership map, not off `schema.tables`: that list
@@ -157,11 +196,50 @@ export async function compileAppStreamTables(input: {
     if (!appOwned.has(spec.name)) baselines.set(spec.name, spec);
   }
 
+  // The extendable CORE tables hooks contributed to. Core tables are Nextly's
+  // and ride no app snapshot, so each is carried like any table another owner
+  // declares: its baseline is the bare core table, from the dialect bundle
+  // the runtime serves, and the elements are everything contributed — by the
+  // app or by a plugin, since a plugin's module cannot carry a core-table
+  // element either. The contributed side is built by the same helper that
+  // builds an entity's.
+  // Every core table gets its baseline, contributed to or not: one the app
+  // has just stopped contributing to still needs it, to diff the removal.
+  const coreSpecs = coreTableSpecs(input.dialect);
+  for (const [name, bare] of coreSpecs) baselines.set(name, bare);
+  for (const [name, { names }] of coreContributions(
+    [...coreSpecs.values()],
+    schema,
+    input.dialect
+  )) {
+    contributed.set(name, {
+      spec: withEntityContributions(
+        coreSpecs.get(name) ?? { name, columns: [] },
+        schema,
+        coreSpecs.get(name),
+        input.dialect
+      ),
+      elements: names,
+    });
+  }
+
   return {
     owned: schema.specs.filter(spec => appOwned.has(spec.name)),
     contributed,
     baselines,
+    entityContributions: { source: schema, dialect: input.dialect },
   };
+}
+
+/**
+ * Every core table as Nextly declares it, by name — `getCoreSchema`, the
+ * declaration the core reconcile compares a database against, so the app
+ * stream's baseline for a core table and the reconcile's are one table.
+ */
+function coreTableSpecs(dialect: SupportedDialect): Map<string, TableSpec> {
+  return new Map(
+    getCoreSchema(dialect).tables.map(table => [table.name, table])
+  );
 }
 
 /**
@@ -242,6 +320,28 @@ export function appStreamSnapshots(input: {
   const desired = new Map(
     input.desired.tables.map(table => [table.name, table])
   );
+
+  // The entity tables, with what hooks contributed to them — through the
+  // helper dev push applies them with, so a migration and a push describe the
+  // same table. Its checks are merged over the last snapshot's copy; that
+  // copy tracks no checks when none were ever recorded, and is made to track
+  // none rather than "unknown" so the first contributed CHECK is emitted.
+  const entities = tables.entityContributions;
+  if (entities !== undefined) {
+    for (const spec of input.desired.tables) {
+      const before = previous.get(spec.name);
+      const after = withEntityContributions(
+        spec,
+        entities.source,
+        before,
+        entities.dialect
+      );
+      desired.set(spec.name, after);
+      if (before !== undefined) {
+        previous.set(spec.name, tracking(before, after));
+      }
+    }
+  }
 
   // Appended rather than merged: an extension table is a table of its own, and
   // its name cannot collide with an entity's — the draft store refuses that at
@@ -343,23 +443,44 @@ export function foreignTableSides(input: {
 
     const recorded = input.previousContributions[name];
     const copy = input.previousCopies.get(name);
-    before.set(
-      name,
+    const previousSide =
       recorded !== undefined && copy !== undefined
         ? withElements(baseline, copy, recorded)
-        : baseline
-    );
+        : baseline;
 
     const current = input.contributed.get(name);
-    if (current !== undefined) {
-      after.set(name, current.spec);
-      contributions[name] = current.elements;
-    } else {
-      after.set(name, baseline);
-    }
+    const desiredSide = current !== undefined ? current.spec : baseline;
+    if (current !== undefined) contributions[name] = current.elements;
+    // Each side tracks what the other does, in both directions: a withdrawn
+    // contribution's CHECK is on the previous side only, and must be seen
+    // leaving.
+    after.set(name, tracking(desiredSide, previousSide));
+    before.set(name, tracking(previousSide, desiredSide));
   }
 
   return { before, after, gone, contributions };
+}
+
+/**
+ * `side`, tracking every constraint dimension `other` tracks.
+ *
+ * Both sides are built from the owner's COMPILED declaration, where an absent
+ * `checks` or `foreignKeys` means the owner declares none — not the "not
+ * tracked" a stored snapshot's absence means. The diff skips a dimension
+ * either side leaves untracked, so both sides are made to track it: a CHECK
+ * a contributor's `col.enum()` adds to a table with none of its own is then
+ * emitted, and dropped again when the contribution is withdrawn.
+ */
+function tracking(side: TableSpec, other: TableSpec): TableSpec {
+  return {
+    ...side,
+    ...(other.checks !== undefined && side.checks === undefined
+      ? { checks: [] }
+      : {}),
+    ...(other.foreignKeys !== undefined && side.foreignKeys === undefined
+      ? { foreignKeys: [] }
+      : {}),
+  };
 }
 
 /**
@@ -459,21 +580,6 @@ export function narrowToContributions(input: {
     before: narrow(input.before),
     target: narrow(input.target),
     live: narrow(input.live),
-  };
-}
-
-/** `table` with only the named elements, every dimension tracked. */
-function onlyElements(table: TableSpec, names: ContributedElements): TableSpec {
-  const keep = <T extends { name: string }>(
-    elements: readonly T[] | undefined,
-    wanted: readonly string[]
-  ): T[] => (elements ?? []).filter(element => wanted.includes(element.name));
-  return {
-    name: table.name,
-    columns: keep(table.columns, names.columns),
-    indexes: keep(table.indexes, names.indexes),
-    foreignKeys: keep(table.foreignKeys, names.foreignKeys),
-    checks: keep(table.checks, names.checks),
   };
 }
 

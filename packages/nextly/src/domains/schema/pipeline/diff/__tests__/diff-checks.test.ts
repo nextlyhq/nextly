@@ -287,8 +287,11 @@ describe("partial and expression indexes", () => {
     expect(generateSQL(op, "postgresql")).toBe(
       `CREATE INDEX IF NOT EXISTS "idx_fx__orders_open" ON "fx__orders" ((lower(email)))`
     );
+    // MySQL takes a functional key part only parenthesised: `(lower(email))`
+    // as the whole key list is a syntax error there (ER_PARSE_ERROR, measured
+    // on 8.0.46), so the expression carries its own parentheses as on PG.
     expect(generateSQL(op, "mysql")).toBe(
-      "CREATE INDEX `idx_fx__orders_open` ON `fx__orders` (lower(email))"
+      "CREATE INDEX `idx_fx__orders_open` ON `fx__orders` ((lower(email)))"
     );
   });
 

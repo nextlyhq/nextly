@@ -45,6 +45,20 @@ export function pluginOfLedgerRow(filename: string | null): string | null {
 }
 
 /**
+ * The key the ledger records a migration under, from the name a caller has.
+ *
+ * An app migration is a `.sql` file and is recorded with its extension, so a
+ * bare name gains it. A plugin module is recorded under its qualified name
+ * (`plugin:<name>/<module>`), which has no extension and is returned as it
+ * is: every event about a module — applied, rolled back, failed — has to land
+ * on the key its applied row carries for the newest-event rule to see it.
+ */
+export function ledgerFilename(name: string): string {
+  if (isPluginLedgerRow(name) || name.endsWith(".sql")) return name;
+  return `${name}.sql`;
+}
+
+/**
  * Keep only the rows a command should act on.
  *
  * `plugin` undefined means the app's own rows, which is every command's

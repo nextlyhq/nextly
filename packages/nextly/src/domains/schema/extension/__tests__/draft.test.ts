@@ -185,17 +185,22 @@ describe("extendTable ownership", () => {
     const s = store();
     const draft = createOwnerDraft(s, { kind: "plugin", id: "auth-plugin" });
     draft.extendTable("dc_posts", { indexes: [{ columns: ["title"] }] });
+    // Recorded with its contributor, as every element on a table the caller
+    // does not own is.
     expect(s.get("dc_posts")?.indexes).toEqual([
-      { columns: ["title"], unique: false },
+      {
+        columns: ["title"],
+        unique: false,
+        contributedBy: { kind: "plugin", id: "auth-plugin" },
+      },
     ]);
   });
 
   it("allows an index on an entity table whose columns are only seeded", () => {
-    // The real boot seeds an entity with NO columns — `publish.ts` says so in
-    // terms, because the field pipeline is what knows them. The store above
-    // seeds `dc_posts` WITH columns, so every other test here reaches a case
-    // production never has, and the refusal this guards against fired on the
-    // first plugin that indexed an entity table.
+    // A seed carrying NO columns supplied none, and the draft must not
+    // refuse an index over a column it simply was not told about — the
+    // refusal this guards against fired on the first plugin that indexed an
+    // entity table seeded that way.
     const seeded = new SchemaDraftStore({
       dialect: "postgresql",
       coreTableNames: ["users", "media"],
@@ -217,7 +222,11 @@ describe("extendTable ownership", () => {
       draft.extendTable("dc_posts", { indexes: [{ columns: ["created_at"] }] })
     ).not.toThrow();
     expect(seeded.get("dc_posts")?.indexes).toEqual([
-      { columns: ["created_at"], unique: false },
+      {
+        columns: ["created_at"],
+        unique: false,
+        contributedBy: { kind: "plugin", id: "auth-plugin" },
+      },
     ]);
   });
 

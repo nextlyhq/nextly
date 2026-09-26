@@ -78,6 +78,42 @@ describeMysql("mysql constraint introspection", () => {
     ]);
   });
 
+  it("leaves out the index MySQL created to back a foreign key, so a declared one is still added", async () => {
+    // The CREATE TABLE above declares no index on owner_id, so MySQL made one
+    // named after the constraint. Reported as an index, it shares its key with
+    // an index declared on the same column, and the diff never added that one.
+    const raw = (await query(
+      `SELECT INDEX_NAME FROM information_schema.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${TABLE}'
+         AND INDEX_NAME = 'fk_${TABLE}_owner'`
+    )) as unknown as [unknown[], unknown];
+    // The server really has it — without this the assertions below would
+    // pass on a table that never had the index to leave out.
+    expect(raw[0]).toHaveLength(1);
+
+    const snapshot = await introspectLiveSnapshot(db, "mysql", [TABLE]);
+    const live = snapshot.tables[0];
+    if (live === undefined) throw new Error("expected the table");
+    expect(live.indexes?.map(index => index.name)).not.toContain(
+      `fk_${TABLE}_owner`
+    );
+    const declaredIndex = {
+      name: `idx_${TABLE}_owner_id`,
+      columns: ["owner_id"],
+      unique: false,
+    };
+    expect(
+      diffSnapshots(
+        { tables: [live] },
+        {
+          tables: [
+            { ...live, indexes: [...(live.indexes ?? []), declaredIndex] },
+          ],
+        }
+      )
+    ).toEqual([{ type: "add_index", tableName: TABLE, index: declaredIndex }]);
+  });
+
   it("reads checks as MySQL printed them, information_schema's escaping undone", async () => {
     // CHECK_CLAUSE stores `(\`score\` >= 0)`; that is valid DDL as it stands,
     // so it is recorded as is rather than reshaped as text.

@@ -159,7 +159,7 @@ describe("row 5 — compound and unique indexes", () => {
 });
 
 describe("row 6 — partial indexes", () => {
-  it("C: a partial index is expressible, refused on MySQL, and re-diffs clean", async () => {
+  it("C: a partial index is refused at declaration, and its spec renders and re-diffs clean", async () => {
     const { col, defineTable } = await import("../dsl");
     const searched = defineTable(
       "psearched",
@@ -174,31 +174,40 @@ describe("row 6 — partial indexes", () => {
         ],
       }
     );
-    const built = await buildExtensionSchema(
-      input({
-        plugins: [
-          {
-            owner: { kind: "plugin" as const, id: "fx" },
-            tables: [searched],
-          },
-        ],
-      })
-    );
-    const spec = built.specs.find(t => t.name === "fx__psearched");
-    expect(spec?.indexes).toEqual([
-      {
-        name: "idx_psearched_open",
-        columns: ["status"],
-        unique: false,
-        where: "status = 'open'",
-      },
-    ]);
+    // Every declaration is checked against all three dialects, and MySQL has
+    // no partial indexes — so the declaration fails where it is written, not
+    // on the first MySQL deployment.
+    await expect(
+      buildExtensionSchema(
+        input({
+          plugins: [
+            {
+              owner: { kind: "plugin" as const, id: "fx" },
+              tables: [searched],
+            },
+          ],
+        })
+      )
+    ).rejects.toThrow(NextlyError);
 
+    // The spec shape the renderers and the diff still handle.
+    const spec = {
+      name: "fx__psearched",
+      columns: [],
+      indexes: [
+        {
+          name: "idx_psearched_open",
+          columns: ["status"],
+          unique: false,
+          where: "status = 'open'",
+        },
+      ],
+    };
     const { generateSQL } = await import("../../pipeline/sql-templates/index");
     const op = {
       type: "add_index",
       tableName: "fx__psearched",
-      index: spec!.indexes![0],
+      index: spec.indexes[0],
     } as never;
     // PostgreSQL and SQLite render the predicate...
     expect(generateSQL(op, "postgresql")).toBe(
@@ -214,8 +223,8 @@ describe("row 6 — partial indexes", () => {
     // and an unchanged one compares equal to itself.
     const { diffSnapshots } = await import("../../pipeline/diff/diff");
     const sameAgain = diffSnapshots(
-      { tables: [{ ...spec!, indexes: [...spec!.indexes!] }] },
-      { tables: [{ ...spec!, indexes: [...spec!.indexes!] }] }
+      { tables: [{ ...spec, indexes: [...spec.indexes] }] },
+      { tables: [{ ...spec, indexes: [...spec.indexes] }] }
     );
     expect(sameAgain).toEqual([]);
   });
@@ -407,7 +416,7 @@ describe("row 10 — enums", () => {
     // CREATE: the values are enforced, on every dialect, by the one mechanism
     // all three have. Payload reaches `pgEnum` and stops at PostgreSQL.
     const created = checkSql(["open"]);
-    expect(created).toBe("state IN (\'open\')");
+    expect(created).toBe(`"state" IN ('open')`);
 
     // ADD VALUE: an ordinary check change, which the diff already turns into
     // drop_check + add_check with no new machinery.
@@ -827,10 +836,7 @@ describe("row 23 — client-supplied id on create", () => {
 
     // Opted in: the caller's id is kept.
     expect(
-      resolveEntryId(
-        { db: { allowIdOnCreate: true, idType: "uuidv7" } },
-        chosen
-      )
+      resolveEntryId({ allowIdOnCreate: true, idType: "uuidv7" }, chosen)
     ).toBe(chosen);
 
     // Not opted in: ignored rather than refused, exactly as every other
@@ -840,7 +846,7 @@ describe("row 23 — client-supplied id on create", () => {
     // Opted in and malformed: refused, because the column is the primary key
     // and every relation resolves through it.
     expect(() =>
-      resolveEntryId({ db: { allowIdOnCreate: true } }, "not-a-uuid")
+      resolveEntryId({ allowIdOnCreate: true }, "not-a-uuid")
     ).toThrow(NextlyError);
   });
 });

@@ -14,11 +14,18 @@
  * @since v0.0.3-alpha (Plan C2)
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { getTableName, isTable } from "drizzle-orm";
 
 import { getDialectTablesForPush } from "../../../database/index";
 import { NextlyError } from "../../../errors";
 import { getCoreSchema, getCoreTableNames } from "../../../schemas";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
+import {
+  coreContributions,
+  type EntityContributionSource,
+  onlyElements,
+  withoutElements,
+} from "../extension/entity-contributions";
 import {
   classifyForMode,
   type ClassifierMode,
@@ -27,6 +34,7 @@ import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { freshPushSchema, type FreshPushDialect } from "../pipeline/fresh-push";
+import { coreTableWithLiveContributions } from "../services/core-table-contributions";
 
 import { resolveSafeNullabilityOps } from "./resolve-safe-nullability";
 
@@ -81,10 +89,22 @@ export interface ReconcileCoreDeps {
    * and for every caller with no database to ask.
    */
   fieldGroupRegistryTable?: string;
-  /** Injectable for tests. Default: freshPushSchema over the dialect bundle. */
+  /**
+   * What schema hooks contributed to the core tables — the compiled extension
+   * schema's `entityColumns` / `entityIndexes`. Those elements ride the app's
+   * migration stream, not this reconcile: they are set aside from the live
+   * side before comparing, and the ones the database already holds are part
+   * of the state the push reaches.
+   */
+  contributions?: EntityContributionSource;
+  /**
+   * Injectable for tests. Default: freshPushSchema over `schema` — the dialect
+   * bundle, with each core table's live contributions composed in.
+   */
   applyCore?: (
     dialect: FreshPushDialect,
-    db: unknown
+    db: unknown,
+    schema: Record<string, unknown>
   ) => Promise<{ statementsExecuted: string[] }>;
   /**
    * Bootstrap the `nextly_schema_events` ledger (out-of-band, idempotent).
@@ -109,13 +129,31 @@ export async function reconcileCore(
   const coreOptions = {
     fieldGroupRegistryTable: deps.fieldGroupRegistryTable,
   };
-  const applyCore =
-    deps.applyCore ??
-    ((d: FreshPushDialect, database: unknown) =>
-      freshPushSchema(d, database, getDialectTablesForPush(d, coreOptions)));
+  const applyCore = deps.applyCore ?? freshPushSchema;
 
   const desired = getCoreSchema(dialect, coreOptions);
-  const live = await introspect(db, dialect, getCoreTableNames(coreOptions));
+  // The elements hooks contributed to core tables, from the same derivation
+  // the app's migration stream creates them with. This reconcile judges the
+  // core tables on Nextly's own elements only: a contributed column is not a
+  // column the core declaration lost, and reading it as one proposed dropping
+  // it on every run after the app's migration added it.
+  const contributed = coreContributions(
+    desired.tables,
+    deps.contributions,
+    dialect
+  );
+  const introspected = await introspect(
+    db,
+    dialect,
+    getCoreTableNames(coreOptions)
+  );
+  const live: NextlySchemaSnapshot = {
+    ...introspected,
+    tables: introspected.tables.map(table => {
+      const own = contributed.get(table.name);
+      return own === undefined ? table : withoutElements(table, own.names);
+    }),
+  };
   const ops = diffSnapshots(live, desired);
 
   if (ops.length === 0) {
@@ -187,7 +225,22 @@ export async function reconcileCore(
     // 1. Apply the core schema first (drizzle-kit pushSchema over
     //    getDialectTables). The ledger is NOT in that set, so pushSchema sees
     //    a clean diff (no extraneous-table prompt on a fresh DB).
-    const result = await applyCore(dialect, db);
+    // The state the push reaches: Nextly's core tables, each with the
+    // contributions the database already holds composed in, so the kit
+    // plans nothing against them — no drop, and on SQLite a rebuild that
+    // copies them. What is not yet live stays out; adding it is the app
+    // migration stream's.
+    const result = await applyCore(
+      dialect,
+      db,
+      pushBundleWithLiveContributions(
+        getDialectTablesForPush(dialect, coreOptions),
+        contributed,
+        introspected,
+        deps.contributions,
+        dialect
+      )
+    );
 
     // 2. Bootstrap the ledger out-of-band, after applyCore and before
     //    recording, so recordStart has a table to write to.
@@ -295,4 +348,55 @@ async function executeRetiredDrops(
     );
     deps.logger?.warn?.(`Dropped retired auth table ${table}.`);
   }
+}
+
+/**
+ * The core push bundle, each contributed-to table replaced by its definition
+ * rebuilt with the contributions `live` holds (`coreTableWithLiveContributions`).
+ *
+ * "Live" is the intersection of what was contributed with what the database
+ * has, by element name — derived from the same `coreContributions` entry the
+ * comparison sets aside.
+ */
+function pushBundleWithLiveContributions(
+  bundle: Record<string, unknown>,
+  contributed: ReturnType<typeof coreContributions>,
+  live: NextlySchemaSnapshot,
+  source: EntityContributionSource | undefined,
+  dialect: Dialect
+): Record<string, unknown> {
+  if (contributed.size === 0 || source === undefined) return bundle;
+  const liveByName = new Map(live.tables.map(table => [table.name, table]));
+  const out: Record<string, unknown> = {};
+  for (const [key, table] of Object.entries(bundle)) {
+    const name = isTable(table) ? getTableName(table) : undefined;
+    const entry = name === undefined ? undefined : contributed.get(name);
+    const liveTable = name === undefined ? undefined : liveByName.get(name);
+    if (name === undefined || entry === undefined || liveTable === undefined) {
+      out[key] = table;
+      continue;
+    }
+    const present = (elements: readonly { name: string }[] | undefined) =>
+      (elements ?? []).map(element => element.name);
+    const liveElements = onlyElements(entry.elements, {
+      columns: entry.names.columns.filter(column =>
+        present(liveTable.columns).includes(column)
+      ),
+      indexes: entry.names.indexes.filter(index =>
+        present(liveTable.indexes).includes(index)
+      ),
+      foreignKeys: [],
+      checks: entry.names.checks.filter(check =>
+        present(liveTable.checks).includes(check)
+      ),
+    });
+    out[key] =
+      coreTableWithLiveContributions(
+        name,
+        liveElements,
+        source.entityColumns.get(name) ?? [],
+        dialect
+      ) ?? table;
+  }
+  return out;
 }

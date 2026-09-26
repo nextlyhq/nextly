@@ -12,20 +12,21 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import type { BuildColumns } from "drizzle-orm";
 import {
   mysqlTable,
   int,
   varchar,
   datetime,
-  index,
-  uniqueIndex,
   boolean,
   timestamp,
 } from "drizzle-orm/mysql-core";
 
-export const users = mysqlTable(
-  "users",
-  {
+import { USERS_INDEXES, mysqlIndexes } from "../_internal/core-indexes";
+
+/** `users` columns, a fresh builder record per call (see `core-table-contributions`). */
+export function usersColumns() {
+  return {
     // Auth.js adapters expect string ids; use varchar to ensure compatibility
     id: varchar("id", { length: 191 }).primaryKey(),
     name: varchar("name", { length: 255 }),
@@ -45,9 +46,14 @@ export const users = mysqlTable(
     lockedUntil: datetime("locked_until"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
-  },
-  t => [
-    uniqueIndex("users_email_unique").on(t.email),
-    index("users_created_at_idx").on(t.createdAt),
-  ]
-);
+  };
+}
+
+/** `users` indexes, from `USERS_INDEXES`. */
+export function usersExtraConfig(
+  t: BuildColumns<"users", ReturnType<typeof usersColumns>, "mysql">
+) {
+  return mysqlIndexes(USERS_INDEXES, t);
+}
+
+export const users = mysqlTable("users", usersColumns(), usersExtraConfig);

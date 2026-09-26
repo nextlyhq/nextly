@@ -29,6 +29,7 @@ import type { SupportedDialect } from "../../../../database/schema-registry";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { normalizeContributions } from "../../pipeline/diff/contributions";
 import type { ContributedElements, TableSpec } from "../../pipeline/diff/types";
+import { splitSqlStatements } from "../split-sql";
 
 /** The statements one dialect runs, in order. */
 export interface DialectStatements {
@@ -172,24 +173,45 @@ export function migrationChecksum(content: MigrationContent): string {
 }
 
 /**
- * One direction of a module on one dialect, as the SQL text an executor splits.
+ * The statements one direction of a module runs on one dialect, one per
+ * driver call.
  *
  * An entry of `dialects[dialect].up`/`.down` is one OPERATION's rendering, and
  * `generateSQL` does not promise that is one statement: a foreign-key action
- * change is a drop and an add in one entry. So no caller hands the entries to
- * a driver as they stand — a MySQL connection runs with `multipleStatements`
- * off and refuses the pair whole. Every path that runs a module (the apply,
- * `migrate:down --plugin`, `plugins uninstall`) reads this text and puts it
- * through the literal-aware `splitSqlStatements`, the splitter an app
- * migration file goes through, so a module runs as the same statements
- * whichever path runs it.
+ * change is a drop and an add in one entry. A MySQL connection runs with
+ * `multipleStatements` off and refuses such a pair whole, so every entry is
+ * put through `splitSqlStatements`, the splitter an app migration file goes
+ * through. Each entry is split on its own: joined first, an entry ending in a
+ * `-- comment` would swallow the separator after it and merge with the next.
+ *
+ * Every guard over a module reads this list, and every path that runs one —
+ * the apply, `migrate:down --plugin`, `plugins uninstall` — runs it.
+ */
+export function pluginModuleStatements(
+  migration: Pick<PluginMigration, "dialects">,
+  dialect: SupportedDialect,
+  direction: keyof DialectStatements
+): string[] {
+  return (migration.dialects[dialect]?.[direction] ?? []).flatMap(entry =>
+    splitSqlStatements(entry, dialect)
+  );
+}
+
+/**
+ * `pluginModuleStatements` as one SQL text, for the callers that take text
+ * and split it again (the reconcile's executor, the rollback planner). Each
+ * statement is followed by a newline before its `;`, so a statement ending
+ * in a line comment cannot swallow the separator; splitting this text gives
+ * back exactly `pluginModuleStatements`.
  */
 export function moduleSql(
   migration: Pick<PluginMigration, "dialects">,
   dialect: SupportedDialect,
   direction: keyof DialectStatements
 ): string {
-  return (migration.dialects[dialect]?.[direction] ?? []).join(";\n");
+  return pluginModuleStatements(migration, dialect, direction)
+    .map(statement => `${statement}\n;`)
+    .join("\n");
 }
 
 /** The ledger filename a plugin's migration is recorded under. */

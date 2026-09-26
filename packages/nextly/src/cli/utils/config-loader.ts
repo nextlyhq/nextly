@@ -597,13 +597,24 @@ async function loadConfigInternal(
       // start on.
       assertAdminWidgets(transformedConfig.plugins ?? []);
 
+      // The effective plugin list: the transformed one, resolved again by the
+      // same resolver and options the runtime boot re-resolves it with
+      // (`register.ts`), so a plugin a `setup` transformer added or replaced is
+      // version-checked, ordered and folded here exactly as it is at boot.
+      // Everything below reads this list; folding with the pre-transformer
+      // list would compile a different schema from the one the app boots.
+      const effectivePlugins = orderConfigPlugins(
+        (transformedConfig.plugins ?? []) as PluginDefinition[]
+      );
+      transformedConfig = { ...transformedConfig, plugins: effectivePlugins };
+
       // Fold plugin contributions. Extend targets that aren't code/plugin
       // entities are DEFERRED (candidate Builder/UI-schema targets) rather than
       // thrown, so a plugin may extend/relate to a Builder-made collection
       // (P8/D3/R2).
       const folded = applyPluginSchemaContributionsDeferred(
         transformedConfig,
-        plugins
+        effectivePlugins
       );
       config = applyFoldedToBase(config, folded.config, transformedConfig);
       deferredExtends = folded.deferredExtends;
@@ -613,7 +624,7 @@ async function loadConfigInternal(
       // storage primitive when reading ui-schema.json — parity with runtime boot
       // (di/register.ts). Clear-and-rebuild; ALL plugins (incl. disabled, per
       // D49) since field types are declarative + schema-affecting.
-      for (const fieldTypePlugin of plugins) {
+      for (const fieldTypePlugin of effectivePlugins) {
         for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
           registerFieldType(
             withoutDisabledBehavior(fieldType, fieldTypePlugin)
@@ -648,11 +659,11 @@ async function loadConfigInternal(
         ),
         builderCollectionSlugs(builderEntities)
       );
-      validateCrossPluginRelations(plugins);
+      validateCrossPluginRelations(effectivePlugins);
 
       // Fail fast on invalid plugin-declared custom permissions (D36) — same
       // collector the runtime boot runs (register.ts), so both paths agree (D50).
-      collectCustomPermissions(config, plugins);
+      collectCustomPermissions(config, effectivePlugins);
 
       debugLog(
         options,

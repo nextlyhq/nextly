@@ -9,7 +9,10 @@
 
 import { describe, expect, it } from "vitest";
 
-import { normalizeCheckExpression as n } from "../normalize-check";
+import {
+  normalizeCheckExpression as n,
+  normalizeExpressionList,
+} from "../normalize-check";
 
 /** Asserts the two spellings reduce to one canonical form. */
 function same(authored: string, reported: string): void {
@@ -126,6 +129,34 @@ describe("normalizeCheckExpression — hand-written checks on PostgreSQL", () =>
 
   it("keeps a quoted identifier whose case is significant", () => {
     expect(n(`"Status" = 'a'`)).not.toBe(n("status = 'a'"));
+  });
+
+  it("keeps the quotes that make a reserved word a column", () => {
+    // Recorded from PostgreSQL 17 for a table with a column named `user`:
+    // CHECK ("user" IN ('a')) and CHECK (user IN ('a')). The second compares
+    // CURRENT_USER, not the column, and the server says so by printing the
+    // keyword bare and upper-case.
+    const column = n(`("user" = ANY (ARRAY['a'::text, 'b'::text]))`);
+    expect(column).toBe(n(`"user" IN ('a', 'b')`));
+    expect(column).not.toBe(n("user IN ('a', 'b')"));
+    expect(n("(USER = 'a'::name)")).toBe(n("user = 'a'::name"));
+    expect(n("(USER = 'a'::name)")).not.toBe(n(`"user" = 'a'::name`));
+    // MySQL backtick-quotes every column, and `order` is reserved on both.
+    same("`order` IN ('x')", `"order" IN ('x')`);
+    expect(n("`order` = 'x'")).not.toBe(n("order = 'x'"));
+    // The canonical form still says what it means: bare `user` would read as
+    // the keyword, so the column keeps its quotes in it.
+    expect(n(`(("user")::text = 'a'::text)`)).toBe(`"user" = 'a'`);
+  });
+
+  it("drops quotes that change nothing, including around a non-reserved keyword", () => {
+    // `position` is a keyword PostgreSQL still accepts as a column name, and
+    // its deparser quotes it anyway: `("position" = ANY (...))` on PG 17.
+    same(
+      "position IN ('p', 'q')",
+      `("position" = ANY (ARRAY['p'::text, 'q'::text]))`
+    );
+    same("`key` = 'k'", "key = 'k'");
   });
 
   it("keeps a cast PostgreSQL would not have added", () => {
@@ -305,5 +336,74 @@ describe("normalizeCheckExpression — what it leaves alone", () => {
     );
     expect(n("s = 'A'")).not.toBe(n("s = 'a'"));
     expect(n("s = ' a'")).not.toBe(n("s = 'a'"));
+  });
+});
+
+describe("normalizeExpressionList — index expressions as the servers report them", () => {
+  // Each pair is the key list as declared and as introspection reports it:
+  // PostgreSQL 17 `pg_get_indexdef(indexrelid, key, false)` per key, and MySQL
+  // 8.0.46 SHOW INDEX `Expression` per key, joined with ", " the way
+  // introspection joins them. Recorded from the servers, not composed.
+  const list = normalizeExpressionList;
+  const sameIndex = (declared: string, reported: string): void => {
+    expect(list(reported)).toBe(list(declared));
+  };
+
+  it("reads PostgreSQL's JSON accessors and concatenation", () => {
+    sameIndex("data->>'x'", "((data ->> 'x'::text))");
+    sameIndex("data->'a'->>'b'", "(((data -> 'a'::text) ->> 'b'::text))");
+    sameIndex("data#>>'{a,b}'", "((data #>> '{a,b}'::text[]))");
+    sameIndex("data#>'{a}'", "((data #> '{a}'::text[]))");
+    sameIndex("data->>0", "((data ->> 0))");
+    sameIndex("data ? 'k'", "((data ? 'k'::text))");
+    sameIndex("status || 'x'", "((status || 'x'::text))");
+    sameIndex("lower(email) || status", "((lower((email)::text) || status))");
+    sameIndex("(data->>'n')::int", "(((data ->> 'n'::text))::integer)");
+    sameIndex("lower(data->>'e')", "lower((data ->> 'e'::text))");
+    sameIndex("coalesce(status, '')", "COALESCE(status, ''::text)");
+    sameIndex("date_trunc('day', ts)", "date_trunc('day'::text, ts)");
+  });
+
+  it("compares a multi-key list key by key", () => {
+    sameIndex("lower(email), status", "lower((email)::text), status");
+    sameIndex("n + 1, n * 2", "((n + 1)), ((n * 2))");
+    // MySQL, whose functional key parts are declared in parentheses.
+    sameIndex("(lower(email)), status", "lower(`email`), status");
+    sameIndex("(n + 1), (n * 2)", "(`n` + 1), (`n` * 2)");
+  });
+
+  it("reads MySQL's JSON calls and casts as the operators they were declared with", () => {
+    sameIndex(
+      "cast(data->>'$.x' as char(20))",
+      "cast(json_unquote(json_extract(`data`,_utf8mb4'$.x')) as char(20) charset utf8mb4)"
+    );
+    sameIndex(
+      "cast(data->'$.z' as char(10))",
+      "cast(json_extract(`data`,_utf8mb4'$.z') as char(10) charset utf8mb4)"
+    );
+    sameIndex("concat(status, 'x')", "concat(`status`,_utf8mb4'x')");
+    // A character set other than the default changes the value, so it stays.
+    expect(list("cast(a as char(10) charset latin1)")).not.toBe(
+      list("cast(a as char(10))")
+    );
+  });
+
+  it("still tells different expressions apart", () => {
+    expect(list("data->>'x'")).not.toBe(list("data->'x'"));
+    expect(list("data->>'x'")).not.toBe(list("data->>'y'"));
+    expect(list("lower(email), status")).not.toBe(list("status, lower(email)"));
+    expect(list("a || b")).not.toBe(list("b || a"));
+    // Precedence: the concatenation binds before the comparison.
+    expect(list("a || b = c")).toBe(list("(a || b) = c"));
+    expect(list("a || (b = c)")).not.toBe(list("a || b = c"));
+  });
+
+  it("keeps a key it cannot read as exact text, without disturbing the others", () => {
+    // Unreadable keys never compare equal to a different spelling: loosening
+    // the fallback is how two different indexes would come to match.
+    expect(list("weird!!key, lower(email)")).toBe("weird!!key, lower(email)");
+    expect(list("weird!!key, lower(email)")).toBe(
+      list("weird!!key, lower((email)::text)")
+    );
   });
 });

@@ -60,7 +60,16 @@ function deps(over: Partial<PluginLifecycleDeps> = {}): PluginLifecycleDeps {
     plugins: [plugin],
     logger: logger as never,
     applyMigrations: vi.fn(async () => {}),
+    // One prepared DOWN per module, carrying its name, in the order asked.
+    prepareDowns: vi.fn(async (_plugin, moduleNames: readonly string[]) =>
+      moduleNames.map(moduleName => ({
+        moduleName,
+        filename: `plugin:@acme/fx/${moduleName}`,
+        statements: [`DROP TABLE IF EXISTS fx__${moduleName}`],
+      }))
+    ),
     runDown: vi.fn(async () => 2),
+    underMigrateLock: async <T>(work: () => Promise<T>) => work(),
     runLifecycleHook: vi.fn(async () => {}),
     readAppliedModules: vi.fn(async () => new Set<string>()),
     ...over,
@@ -207,7 +216,9 @@ describe("plugins uninstall", () => {
 
     // Both modules, not just the newest: the log claims each one.
     expect(
-      runDown.mock.calls.map(c => (c as unknown as [unknown, string])[1])
+      runDown.mock.calls.map(
+        c => (c as unknown as [unknown, { moduleName: string }])[1].moduleName
+      )
     ).toEqual(["0002_more", "0001_init"]);
   });
 
@@ -315,5 +326,151 @@ describe("plugins uninstall", () => {
       .map(c => String(c[0]))
       .filter(line => line.startsWith("Reverted"));
     expect(reverted.every(line => line.includes("7 statement(s)"))).toBe(true);
+  });
+});
+
+describe("plugins uninstall decides before it takes the lock", () => {
+  // One table this plugin owns, so a full uninstall has something to drop
+  // and reaches the confirmation.
+  const owned = {
+    tableName: "fx__notes",
+    elementKind: "table",
+    elementName: "",
+    ownerKind: "plugin",
+    ownerId: "@acme/fx",
+    migratedBy: "plugin:@acme/fx",
+    ownerVersion: null,
+    schemaVersion: null,
+    state: "active",
+  };
+  const ownsTable = {
+    select: () => ({
+      from: () => Object.assign([owned], { where: () => [owned] }),
+    }),
+    update: () => ({
+      set: () => ({ where: () => Promise.resolve() }),
+    }),
+    insert: () => ({ values: () => Promise.resolve() }),
+  };
+
+  /** Deps whose lock, hook and DOWN runner record that they were reached. */
+  function watched(over: Partial<PluginLifecycleDeps> = {}) {
+    const reached: string[] = [];
+    return {
+      reached,
+      deps: deps({
+        db: ownsTable as never,
+        underMigrateLock: async <T>(work: () => Promise<T>) => {
+          reached.push("lock");
+          return work();
+        },
+        runLifecycleHook: vi.fn(async () => {
+          reached.push("hook");
+        }),
+        runDown: vi.fn(async () => {
+          reached.push("down");
+          return 1;
+        }),
+        ...over,
+      }),
+    };
+  }
+
+  it("refuses an unconfirmed drop without taking the lock", async () => {
+    // An exit inside the locked work skipped the lock's release; on
+    // PostgreSQL that left a lock row blocking every migration until it
+    // expired. The refusal is thrown, and before the lock.
+    const { reached, deps: d } = watched();
+    await expect(
+      runPluginUninstallCommand("@acme/fx", { keepData: false, yes: false }, d)
+    ).rejects.toMatchObject({ code: "PLUGIN_UNINSTALL_UNCONFIRMED" });
+    expect(reached).toEqual([]);
+  });
+
+  it("proceeds under the lock once confirmed", async () => {
+    // The control: the same fixture with --yes takes the lock and runs
+    // everything inside it.
+    const { reached, deps: d } = watched();
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: true },
+      d
+    );
+    expect(reached).toEqual(["lock", "hook", "down", "down"]);
+  });
+
+  it("refuses an unknown plugin without taking the lock", async () => {
+    const { reached, deps: d } = watched();
+    await expect(
+      runPluginUninstallCommand("@acme/nope", { keepData: false, yes: true }, d)
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      publicMessage: expect.stringContaining("Configured: @acme/fx"),
+    });
+    expect(reached).toEqual([]);
+  });
+
+  it("refuses tables no applied module can undo without taking the lock", async () => {
+    // A development push: owner rows, and no module in the ledger.
+    const { reached, deps: d } = watched({
+      plugins: [{ ...plugin, modules: [] }],
+    });
+    await expect(
+      runPluginUninstallCommand("@acme/fx", { keepData: false, yes: true }, d)
+    ).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "no-applied-module" },
+    });
+    expect(reached).toEqual([]);
+  });
+
+  it("judges every module's DOWN before the hook or any DOWN runs", async () => {
+    // The older module's DOWN is the refused one. Judged per module as it
+    // ran, the newer module's DOWN and the hook would already be done.
+    const prepareDowns = vi.fn(async () => {
+      throw Object.assign(new Error("refused"), {
+        code: "DROP_OF_FOREIGN_TABLE",
+      });
+    });
+    const { reached, deps: d } = watched({ prepareDowns });
+    await expect(
+      runPluginUninstallCommand("@acme/fx", { keepData: false, yes: true }, d)
+    ).rejects.toMatchObject({ code: "DROP_OF_FOREIGN_TABLE" });
+    expect(prepareDowns).toHaveBeenCalledWith(plugin, [
+      "0002_more",
+      "0001_init",
+    ]);
+    expect(reached).toEqual([]);
+  });
+
+  it("runs the decision made under the lock, from the plan re-read there", async () => {
+    // A module applied between the first decision and the lock is part of
+    // what the uninstall has to undo.
+    const target: LifecyclePlugin = {
+      ...plugin,
+      modules: [{ name: "0001_init", reversible: true }],
+    };
+    const runDown = vi.fn(async () => 1);
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: true },
+      deps({
+        db: ownsTable as never,
+        plugins: [target],
+        runDown,
+        underMigrateLock: async <T>(work: () => Promise<T>) => {
+          target.modules = [
+            { name: "0001_init", reversible: true },
+            { name: "0002_more", reversible: true },
+          ];
+          return work();
+        },
+      })
+    );
+    expect(
+      runDown.mock.calls.map(
+        c => (c as unknown as [unknown, { moduleName: string }])[1].moduleName
+      )
+    ).toEqual(["0002_more", "0001_init"]);
   });
 });

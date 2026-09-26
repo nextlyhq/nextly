@@ -15,10 +15,20 @@
  * construction describes the tables known at that moment; a reload can add
  * one, and a boundary that was true once is not a boundary.
  *
+ * One narrower reach exists beside that: on any table the caller does not own,
+ * the columns it CONTRIBUTED through `extendTable` are reachable by the row's
+ * key, and nothing more — which opens a column on a table otherwise refused
+ * (an entity or core table, or a plugin's table for the app) and gives a
+ * write path for a column on a dependency's table. See
+ * {@link assertContributedColumnAccess}.
+ *
  * @module plugins/database/access
  * @since 1.0.0
  */
-import type { SchemaOwner } from "../../domains/schema/extension/types";
+import type {
+  ExtensionColumn,
+  SchemaOwner,
+} from "../../domains/schema/extension/types";
 import { NextlyError } from "../../errors/nextly-error";
 
 export interface TableAccessRules {
@@ -114,4 +124,93 @@ export function canAccessTable(
   rules: TableAccessRules
 ): boolean {
   return denial(tableName, rules) === null;
+}
+
+/** One column contributed to a table the contributor does not own. */
+export interface ContributedColumn {
+  /** SQL column name. */
+  name: string;
+  /** The key the contributor declared it under. */
+  key: string;
+  /** Who contributed it; a column with none recorded is nobody's to reach. */
+  contributedBy: SchemaOwner | undefined;
+  /**
+   * The column as compiled, from which a query builds its handle on it. A core
+   * table's runtime definition is static and never carries contributions, so
+   * the handle cannot be looked up there.
+   */
+  spec: ExtensionColumn;
+}
+
+function sameOwner(a: SchemaOwner, b: SchemaOwner): boolean {
+  if (a.kind === "plugin" && b.kind === "plugin") return a.id === b.id;
+  return a.kind === "app" && b.kind === "app";
+}
+
+/**
+ * The contributed columns this caller may reach on `tableName`, or a refusal.
+ *
+ * The one rule for the columns a caller added to a table it does not own,
+ * whether or not {@link assertTableAccess} lets it reach that table:
+ *
+ * - A table it may NOT reach — a collection, Single or field-group table, an
+ *   extendable core table, or, for the app, a plugin's table — stays refused
+ *   as a table. Its rows belong to their owner; the contributor reaches the
+ *   storage it added, and only that.
+ * - A table it MAY reach — a declared dependency's — already grants every
+ *   column to the ordinary methods, so this is a narrower handle over the same
+ *   grant. It is the one that can write the caller's own column there, since
+ *   the owner's definition, which the ordinary methods write through, does not
+ *   declare it.
+ *
+ * Either way every column named must be one the CALLER contributed: another
+ * contributor's column and the table's own columns are refused alike,
+ * whichever method asked — the read's selection and the write's set are both
+ * judged here, before anything runs. A table the caller contributed nothing to
+ * therefore has no column to name, reachable or not.
+ */
+export function assertContributedColumnAccess(
+  tableName: string,
+  keys: readonly string[],
+  rules: TableAccessRules,
+  contributions: ReadonlyMap<string, readonly ContributedColumn[]>
+): ContributedColumn[] {
+  // Annotated so a call narrows like a `throw` does.
+  const refuse: (detail: Record<string, string>) => never = detail => {
+    throw NextlyError.forbidden({
+      logContext: {
+        table: tableName,
+        caller: describe(rules.owner),
+        ...detail,
+      },
+    });
+  };
+
+  if (keys.length === 0) {
+    throw NextlyError.invalidInput({
+      message: `Name at least one column you contributed to "${tableName}".`,
+      logContext: { reason: "no-contributed-columns-named", table: tableName },
+    });
+  }
+  const available = contributions.get(tableName) ?? [];
+  return keys.map(key => {
+    const column = available.find(candidate => candidate.key === key);
+    if (column === undefined) {
+      refuse({ reason: "column-not-contributed", column: key });
+    }
+    if (
+      column.contributedBy === undefined ||
+      !sameOwner(column.contributedBy, rules.owner)
+    ) {
+      refuse({
+        reason: "column-contributed-by-another-owner",
+        column: key,
+        contributor:
+          column.contributedBy === undefined
+            ? "unrecorded"
+            : describe(column.contributedBy),
+      });
+    }
+    return column;
+  });
 }

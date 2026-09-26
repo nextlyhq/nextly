@@ -22,11 +22,59 @@ import { NextlyError } from "../../../errors/nextly-error";
  * sharing a prefix stay distinct.
  */
 export function indexNameForColumn(tableName: string, column: string): string {
-  const full = `idx_${tableName}_${column}`;
-  if (full.length <= MAX_INDEX_NAME_LENGTH) return full;
+  return boundedIdentifier(`idx_${tableName}_${column}`);
+}
 
-  const suffix = fnv1a36(full);
+/**
+ * Any derived identifier, bounded so every dialect stores it whole.
+ *
+ * The one rule every derived schema-object name goes through — index, foreign key, check — so a
+ * constraint cannot be named by a spelling that one dialect refuses (MySQL, past 64) and another
+ * silently truncates (PostgreSQL, past 63). A truncated name no longer matches the name the desired
+ * schema declares, so the diff would propose dropping and re-adding the constraint on every
+ * comparison, and nothing that looks constraints up by name would ever find it.
+ *
+ * A name within the bound is returned unchanged; a longer one keeps as much of its readable prefix
+ * as fits and ends in a hash of the WHOLE name, so two long names sharing a prefix stay distinct.
+ */
+export function boundedIdentifier(full: string): string {
+  return fitWithSuffix(full, fnv1a36(full));
+}
+
+/**
+ * `full` unchanged when it fits, otherwise its prefix followed by `_<suffix>`.
+ *
+ * The truncation itself, shared by the two ways a suffix is chosen: a hash of the whole name, or
+ * the column-list digest a compound index name already carries.
+ */
+function fitWithSuffix(full: string, suffix: string): string {
+  if (full.length <= MAX_INDEX_NAME_LENGTH) return full;
   return `${full.slice(0, MAX_INDEX_NAME_LENGTH - suffix.length - 1)}_${suffix}`;
+}
+
+/**
+ * The name of a foreign key over these columns, when its declaration names none.
+ *
+ * Exported because two sides must derive it identically: the desired schema, and live
+ * introspection on SQLite, which stores no name for a foreign key and so has to derive the one
+ * the desired side declared.
+ */
+export function foreignKeyNameForColumns(
+  tableName: string,
+  columns: readonly string[]
+): string {
+  return boundedIdentifier(`fk_${tableName}_${columns.join("_")}`);
+}
+
+/**
+ * The SQL name of a check constraint, from the table and the check's own name.
+ *
+ * Scoped by the table because MySQL, unlike PostgreSQL, requires check names to be unique across
+ * the whole schema: two tables each declaring a check called `status` would otherwise collide on
+ * the second CREATE TABLE.
+ */
+export function checkConstraintName(tableName: string, name: string): string {
+  return boundedIdentifier(`ck_${tableName}_${name}`);
 }
 
 /**
@@ -83,10 +131,9 @@ export function indexNameForColumns(
   // NUL cannot appear in an identifier, so the digest distinguishes the
   // ORDER and the BOUNDARIES of the column list, not merely its letters.
   const digest = fnv1a36(columns.join("\u0000"));
-  const full = `${prefix}${tableName}_${columns.join("_")}_${digest}`;
-  if (full.length <= MAX_INDEX_NAME_LENGTH) return full;
-  return (
-    full.slice(0, MAX_INDEX_NAME_LENGTH - digest.length - 1) + `_${digest}`
+  return fitWithSuffix(
+    `${prefix}${tableName}_${columns.join("_")}_${digest}`,
+    digest
   );
 }
 

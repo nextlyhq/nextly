@@ -49,6 +49,7 @@ import {
   bytea as pgBytea,
 } from "drizzle-orm/pg-core";
 import {
+  check as sqliteCheck,
   sqliteTable,
   text as sqliteText,
   integer as sqliteInteger,
@@ -57,11 +58,16 @@ import {
   blob as sqliteBlob,
 } from "drizzle-orm/sqlite-core";
 
+import { sqliteTimestamp } from "../../../schemas/_internal/sqlite-timestamp";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type { LocalizedColumnSpec } from "../../i18n/migration/types";
 import { getActiveExtensionSchema } from "../extension/active-schema";
-import { toColumnDescriptor } from "../extension/column-descriptor";
+import {
+  toColumnDescriptor,
+  withDeclaredKeyAndDefault,
+} from "../extension/column-descriptor";
+import { enumChecks } from "../extension/enum-check";
 import type { ExtensionColumn } from "../extension/types";
 
 import {
@@ -326,11 +332,37 @@ export function addContributedDrizzleColumns(
 ): void {
   for (const column of contributed) {
     if (column.name in columns) continue;
-    columns[column.name] = buildUserDrizzleColumn(
-      toColumnDescriptor(column, dialect),
+    // With the declared default, through the one helper an extension table's
+    // own columns use. The desired spec keeps the default (`toColumnSpec`),
+    // so a builder without it described a different column: on the
+    // drizzle-kit route a NOT NULL contribution was added with no default —
+    // refused on a table that already has rows — or had its default removed,
+    // and an entry write omitting the hidden column then failed NOT NULL.
+    columns[column.name] = withDeclaredKeyAndDefault(
+      buildUserDrizzleColumn(toColumnDescriptor(column, dialect), dialect),
+      column,
       dialect
     );
   }
+}
+
+/**
+ * The enum checks of the columns contributed to a SQLite runtime table.
+ *
+ * SQLite accepts a check nowhere but `CREATE TABLE`, and a change to one is
+ * applied by rebuilding the table from its runtime definition — so a check
+ * the desired spec carries and this definition lacks is never created, and a
+ * rebuild for any other reason would remove it. From `enumChecks`, the one
+ * source of the names and SQL the diff compares; PostgreSQL and MySQL add
+ * them with statements of their own instead, as they do for extension tables.
+ */
+export function contributedSqliteChecks(
+  tableName: string,
+  contributed: readonly ExtensionColumn[]
+): ReturnType<typeof sqliteCheck>[] {
+  return enumChecks(tableName, contributed, "sqlite").map(spec =>
+    sqliteCheck(spec.name, sql.raw(spec.sql))
+  );
 }
 
 function generatePostgresSchema(
@@ -357,7 +389,11 @@ function generateSQLiteSchema(
   options: RuntimeSchemaOptions
 ): unknown {
   const columns = buildDrizzleColumnRecord(fields, "sqlite", options);
-  return sqliteTable(tableName, columns);
+  const checks = contributedSqliteChecks(
+    tableName,
+    options.extensionColumns ?? []
+  );
+  return sqliteTable(tableName, columns, () => checks);
 }
 
 /**
@@ -538,13 +574,11 @@ export function sqliteTimestampColumns(): {
   created_at: unknown;
   updated_at: unknown;
 } {
+  // The one builder for an application-stamped SQLite timestamp, shared with
+  // the core tables' own `created_at` / `updated_at`.
   return {
-    created_at: sqliteInteger("created_at", { mode: "timestamp" })
-      .notNull()
-      .$defaultFn(() => new Date()),
-    updated_at: sqliteInteger("updated_at", { mode: "timestamp" })
-      .notNull()
-      .$defaultFn(() => new Date()),
+    created_at: sqliteTimestamp("created_at"),
+    updated_at: sqliteTimestamp("updated_at"),
   };
 }
 

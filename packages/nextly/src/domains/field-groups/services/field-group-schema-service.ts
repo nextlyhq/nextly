@@ -63,7 +63,6 @@ import type {
 import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import { pluginEmptyColumnDefault } from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type { ExtensionColumn } from "../../schema/extension/types";
 import {
@@ -78,9 +77,11 @@ import {
 import {
   addContributedDrizzleColumns,
   contributedColumnsFor,
+  contributedSqliteChecks,
   sqliteTimestampColumns,
 } from "../../schema/services/runtime-schema-generator";
-import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
+import { backfillDefaultForType } from "../../schema/utils/backfill-default";
+import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
 import { componentFieldHasColumn } from "./field-group-utils";
 
@@ -678,6 +679,15 @@ export class FieldGroupSchemaService {
         parentIdx: sqliteIndex(
           `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`
         ).on(table._parent_id, table._parent_table, table._parent_field),
+        // The contributed enum checks, keyed by their names: SQLite creates
+        // a check only with the table, so the definition a rebuild uses
+        // must carry them — as an entity table's does.
+        ...Object.fromEntries(
+          contributedSqliteChecks(tableName, contributed).map(built => [
+            built.name,
+            built,
+          ])
+        ),
       })
     );
   }
@@ -1189,51 +1199,16 @@ export class FieldGroupSchemaService {
     return map;
   }
 
-  // Used when adding NOT NULL columns to existing tables.
+  // Used when adding NOT NULL columns to existing tables: the shared backfill
+  // decision, with no JSON-array types because this path stores none.
   private getDefaultValueForType(type: string, field?: FieldConfig): string {
-    // A contributed type states its own backfill before the primitive's is
-    // derived: `{}` satisfies a json column and then fails every read that
-    // expects the structure the type actually stores. Read from the field as
-    // DECLARED — `type` here may already be the storage primitive, under which
-    // the contributed type is not registered and states nothing.
-    const contributed = pluginEmptyColumnDefault(field ?? { type }, type, {
-      json: serialized => quoteJsonSqlDefault(serialized, this.dialect),
-      literal: (value, storageToken) =>
+    return backfillDefaultForType({
+      type,
+      field,
+      dialect: this.dialect,
+      formatDefaultValue: (value, storageToken) =>
         this.formatDefaultValue(value, storageToken),
     });
-    if (contributed !== undefined) return contributed;
-
-    switch (type) {
-      case "text":
-      case "textarea":
-      case "email":
-      case "password":
-      case "richText":
-      case "code":
-      case "select":
-      case "radio":
-        return "''";
-      case "number":
-        return "0";
-      case "checkbox":
-        return this.dialect === "sqlite" ? "0" : "FALSE";
-      case "date":
-        if (this.dialect === "sqlite") {
-          return String(Math.floor(Date.now() / 1000));
-        }
-        return "NOW()";
-      case "json":
-      case "repeater":
-      case "group":
-        // These share the blocks column type, so they share its restriction on
-        // how a default may be written.
-        return quoteJsonSqlDefault("{}", this.dialect);
-      case "relationship":
-      case "upload":
-        return "NULL";
-      default:
-        return "''";
-    }
   }
 
   private formatDefaultValue(value: unknown, type: string): string {
@@ -1259,7 +1234,7 @@ export class FieldGroupSchemaService {
       type === "group" ||
       type === "blocks"
     ) {
-      return quoteJsonSqlDefault(
+      return quoteExpressionSqlDefault(
         typeof value === "string" ? value : JSON.stringify(value),
         this.dialect
       );

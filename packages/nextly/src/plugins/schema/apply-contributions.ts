@@ -234,6 +234,10 @@ function applyTransforms(
     .map(plugin => ({
       source: `plugin:${plugin.name}`,
       transforms: plugin.contributes?.transforms ?? [],
+      // Run all the same, so disabling the plugin never changes a table;
+      // `runEntityTransforms` keeps its storage changes and drops its
+      // behaviour.
+      disabled: plugin.enabled === false,
     }));
   // Nothing to do, and nothing to rebuild: the arrays are returned untouched
   // so a config with no transforms is not re-created on every fold.

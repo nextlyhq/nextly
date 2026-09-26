@@ -12,31 +12,46 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { SupportedDialect } from "../../database/schema-registry";
-import { appliedFilenames } from "../../domains/schema/events/newest-event";
-import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
 import {
-  moduleSql,
+  appliedFilenames,
+  newestEventsByFilename,
+} from "../../domains/schema/events/newest-event";
+import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { executeTransaction } from "../../domains/schema/migrate/migration-transaction";
+import {
+  orderedMigrations,
+  pluginModuleStatements,
   qualifiedFilename,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
-import { assertNoForeignDrops } from "../../domains/schema/ownership/drop-guard";
+import { assertRunnableStatements } from "../../domains/schema/migrate/split-sql";
+import {
+  assertNoForeignDrops,
+  columnsAfter,
+  readLiveColumns,
+} from "../../domains/schema/ownership/drop-guard";
 import {
   SchemaOwnersRepository,
   tableOwnersByName,
 } from "../../domains/schema/ownership/schema-owners-repository";
+import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import type { CommandContext } from "../program";
 import { createCliAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 
-import { executeTransaction, splitSqlStatements } from "./migrate";
 import {
   runPluginInstallCommand,
   runPluginUninstallCommand,
   type LifecyclePlugin,
+  type PreparedModuleDown,
 } from "./plugin-lifecycle";
+import {
+  recordRollbackFailed,
+  verifiedPluginModule,
+} from "./plugin-module-rollback";
 
 interface RunnerOptions {
   config?: string;
@@ -66,10 +81,8 @@ function toLifecyclePlugins(
     ],
     requires: Object.keys(plugin.dependsOn ?? {}),
     optionallyRequires: Object.keys(plugin.optionalDependsOn ?? {}),
-    declaredModules: (plugin.contributes?.schema?.migrations ?? []).map(
-      module => module.name
-    ),
-    modules: (plugin.contributes?.schema?.migrations ?? []).map(module => ({
+    declaredModules: pluginModules(plugin).map(module => module.name),
+    modules: pluginModules(plugin).map(module => ({
       name: module.name,
       // A module with no DOWN on the live dialect cannot be undone. Checked
       // per dialect below, where the dialect is known.
@@ -79,20 +92,27 @@ function toLifecyclePlugins(
 }
 
 /**
- * The statements a module's DOWN runs on one dialect, one per driver call.
- *
- * The module's entries are per-operation renderings, and one of them can hold
- * two statements — a foreign-key action change is a drop and an add. MySQL
- * runs with `multipleStatements` off and refuses such an entry whole, so the
- * entries are split into single statements exactly as `migrate:down --plugin`
- * splits the same module, from the same text (`moduleSql`): the two rollback
- * paths run the same statements, and the drop guard judges the ones that run.
+ * A plugin's modules in apply order — the order `runPluginMigrations` applies
+ * them in, from the one function that decides it. An uninstall undoes them in
+ * the reverse of this, so a config listing them in another order cannot make
+ * it undo a module before a later one that depends on it.
+ */
+function pluginModules(
+  plugin: Pick<PluginDefinition, "contributes">
+): PluginMigration[] {
+  return orderedMigrations(plugin.contributes?.schema?.migrations ?? []);
+}
+
+/**
+ * The statements a module's DOWN runs on one dialect, one per driver call —
+ * the DOWN direction of `pluginModuleStatements`, which the apply path and
+ * `migrate:down --plugin` read the same module through.
  */
 export function pluginModuleDownStatements(
   module: Pick<PluginMigration, "dialects">,
   dialect: SupportedDialect
 ): string[] {
-  return splitSqlStatements(moduleSql(module, dialect, "down"), dialect);
+  return pluginModuleStatements(module, dialect, "down");
 }
 
 async function connect(options: RunnerOptions, context: CommandContext) {
@@ -146,8 +166,8 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const applied = await readAppliedModules();
     for (const plugin of plugins) {
       const source = definitions.find(d => d.name === plugin.name);
-      const modules = (source?.contributes?.schema?.migrations ?? []).filter(
-        module => applied.has(qualifiedFilename(plugin.name, module.name))
+      const modules = (source ? pluginModules(source) : []).filter(module =>
+        applied.has(qualifiedFilename(plugin.name, module.name))
       );
       plugin.modules = modules.map(module => ({
         name: module.name,
@@ -164,81 +184,190 @@ async function connect(options: RunnerOptions, context: CommandContext) {
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
 
   /**
-   * Undo one module, newest first, exactly as the apply path runs its UP —
-   * guarded like it, and recorded like it.
+   * Every module's DOWN for an uninstall, verified and judged before any of
+   * them runs.
    *
-   * Supplied rather than left undefined: the command calls this optionally,
-   * so an absent implementation made `uninstall` log every module as reverted
-   * and record the plugin uninstalled while its tables and their data stayed
-   * in the database. The statements come from the plugin's own definition —
-   * the lifecycle view carries module NAMES, not their SQL.
+   * The statements come from the plugin's own definition — the lifecycle
+   * view carries module NAMES, not their SQL — through the function
+   * `migrate:down --plugin` verifies a module with: the module must still
+   * match the checksum it was sealed with and the one its applied ledger row
+   * recorded, because the DOWN about to run is taken from the definition as
+   * it is now.
    *
-   * Three things happen around the execution, and leaving any of them out
-   * makes uninstall the one destructive path with weaker rules than `migrate`:
-   *
-   * 1. **The drop guard, before anything runs.** A plugin's DOWN is its own
-   *    code, and nothing constrains what it drops. Passing its statements
-   *    straight to the executor let a plugin's uninstall drop an app-owned or
-   *    another plugin's table — refused everywhere else, and here the data is
-   *    least recoverable. Judged for the module as a WHOLE so a refusal leaves
-   *    nothing partly undone.
-   * 2. **The ledger, after.** The module's latest entry stayed `applied`, so a
-   *    later `migrate:down --plugin` could select a module already reverted,
-   *    and a later `migrate` treated it as still applied.
-   * 3. **Recording inside the transaction.** If a later module fails, the
-   *    reversals that already ran are still recorded, because the ledger write
-   *    committed with the SQL that earned it.
+   * The drop guard judges each module's statements before the first one
+   * runs, so a refusal of an older module cannot come after a newer one's
+   * DOWN has committed. A plugin's DOWN is its own code, and nothing else
+   * constrains what it drops: unguarded, an uninstall could drop an
+   * app-owned or another plugin's table, which is where the data is least
+   * recoverable.
    */
-  const runDown = async (
+  const prepareDowns = async (
     plugin: LifecyclePlugin,
-    moduleName: string
-  ): Promise<number> => {
+    moduleNames: readonly string[]
+  ): Promise<PreparedModuleDown[]> => {
     const definition = definitions.find(d => d.name === plugin.name);
-    const module = (definition?.contributes?.schema?.migrations ?? []).find(
-      m => m.name === moduleName
+    const migrations = definition ? pluginModules(definition) : [];
+    const newest = newestEventsByFilename(
+      await new SchemaEventsRepository(
+        drizzleAdapter.getDrizzle(),
+        dialect
+      ).listFileApplies()
     );
-    const statements = module
-      ? pluginModuleDownStatements(module, dialect)
-      : [];
-    if (statements.length === 0) return 0;
+    const downs = moduleNames.map(moduleName => {
+      const filename = qualifiedFilename(plugin.name, moduleName);
+      const module = verifiedPluginModule({
+        pluginName: plugin.name,
+        migrations,
+        moduleName,
+        filename,
+        recordedSha: newest.get(filename)?.sha256,
+      });
+      return {
+        moduleName,
+        filename,
+        statements: pluginModuleStatements(module, dialect, "down"),
+      };
+    });
 
-    const filename = qualifiedFilename(plugin.name, moduleName);
     const owners = tableOwnersByName(
       await new SchemaOwnersRepository(
         drizzleAdapter.getDrizzle(),
         dialect
       ).read()
     );
-    assertNoForeignDrops({
-      statements,
-      stream: `plugin:${plugin.name}`,
-      owners,
-      dialect,
-      source: filename,
-    });
-
-    const repo = new SchemaEventsRepository(
+    // Rebuilds are judged against the columns their tables will have when
+    // each DOWN runs: live now, then as the DOWNs before it leave them.
+    let columns = await readLiveColumns(
       drizzleAdapter.getDrizzle(),
-      dialect
+      dialect,
+      downs.map(down => down.statements)
     );
-    // One transaction for the module, like the UP path: a module half undone
-    // is a state no snapshot describes.
-    await executeTransaction(drizzleAdapter, dialect, async () => {
-      for (const statement of statements) {
-        await drizzleAdapter.executeQuery(statement);
-      }
-      await resolveMigration({
-        mode: "rolled-back",
-        filename,
-        repo,
-        // rolled-back mode does not read these; provide inert resolvers.
-        fileExists: () => Promise.resolve(true),
-        loadTargetSnapshot: () => Promise.resolve(null),
-        introspectLive: () => Promise.resolve({ tables: [] }),
+    for (const down of downs) {
+      // A statement the runner's transaction cannot hold, refused with the
+      // rest before any module runs.
+      assertRunnableStatements(down.statements, dialect, down.filename);
+      assertNoForeignDrops({
+        liveColumns: columns,
+        statements: down.statements,
+        stream: `plugin:${plugin.name}`,
+        owners,
+        dialect,
+        source: down.filename,
       });
-    });
-    return statements.length;
+      columns = columnsAfter(down.statements, dialect, columns);
+    }
+    return downs;
   };
+
+  /**
+   * Undo one prepared module, exactly as the apply path runs its UP: in one
+   * transaction, recorded in the ledger.
+   *
+   * The ledger row is written inside the transaction, so a module whose
+   * reversal committed is recorded even when a later module fails — a module
+   * left `applied` after its DOWN ran would be selected again by
+   * `migrate:down --plugin` and skipped by `migrate` as still applied.
+   *
+   * A DOWN that fails is recorded `failed` under the module's own ledger key,
+   * as `migrate:down` records one, through the same helper.
+   */
+  const runDown = async (
+    _plugin: LifecyclePlugin,
+    down: PreparedModuleDown
+  ): Promise<number> => {
+    if (down.statements.length === 0) return 0;
+    try {
+      // One transaction for the module, like the UP path: a module half
+      // undone is a state no snapshot describes. The ledger row is written
+      // through the transaction's own handle, so it commits or rolls back
+      // with the statements it records.
+      await executeTransaction(drizzleAdapter, async tx => {
+        for (const statement of down.statements) {
+          await tx.execute(statement);
+        }
+        await resolveMigration({
+          mode: "rolled-back",
+          filename: down.filename,
+          repo: new SchemaEventsRepository(tx.db, dialect),
+          // rolled-back mode does not read these; provide inert resolvers.
+          fileExists: () => Promise.resolve(true),
+          loadTargetSnapshot: () => Promise.resolve(null),
+          introspectLive: () => Promise.resolve({ tables: [] }),
+        });
+      });
+    } catch (error) {
+      await recordRollbackFailed({
+        repo: new SchemaEventsRepository(drizzleAdapter.getDrizzle(), dialect),
+        filename: down.filename,
+        dialect,
+        note: `plugins uninstall failed: ${describeError(error, { context: false })}`,
+      });
+      throw error;
+    }
+    return down.statements.length;
+  };
+
+  /**
+   * Runs `work` under the migrate lock `migrate` takes, waiting for a
+   * migration that holds it, and refuses with a CONFLICT when the lock stayed
+   * held throughout — `notRun` says what did not happen, in the message
+   * "Another migration is holding the migrate lock, so <notRun>."
+   */
+  const withLockOrRefuse = async <T>(
+    work: () => Promise<T>,
+    notRun: string,
+    logContext: Record<string, unknown>
+  ): Promise<T> => {
+    const { withMigrateLock } = await import(
+      "../../domains/schema/pipeline/locks"
+    );
+    const outcome = await withMigrateLock(
+      drizzleAdapter.getDrizzle(),
+      dialect,
+      work,
+      {
+        mode: "wait",
+        logger: {
+          warn: m => context.logger.warn(m),
+          info: m => context.logger.info(m),
+        },
+      }
+    );
+    if (!outcome.ran) {
+      throw new NextlyError({
+        code: "CONFLICT",
+        publicMessage:
+          `Another migration is holding the migrate lock, so ${notRun}. ` +
+          "Nothing was changed — re-run once it finishes.",
+        statusCode: 409,
+        logContext: { ...logContext, reason: outcome.reason },
+      });
+    }
+    return outcome.value;
+  };
+
+  /**
+   * Runs `work` under the migrate lock `migrate` takes, after re-reading
+   * every plugin's module list from the ledger.
+   *
+   * The re-read is inside the lock because the plan taken at connect time
+   * predates it: a module applied in between would be missing from it, and
+   * the uninstall would then record the plugin uninstalled with that
+   * module's schema still in the database.
+   *
+   * `mode: "wait"`: nothing inside waits on an operator — every refusal is
+   * decided before this is called — so waiting for a running migration to
+   * finish is cheaper than telling the operator to try again.
+   */
+  const underMigrateLock = <T>(work: () => Promise<T>): Promise<T> =>
+    withLockOrRefuse(
+      async () => {
+        await refreshPlan();
+        return work();
+      },
+      "nothing was run",
+      {}
+    );
 
   /**
    * Apply this plugin's pending modules, through the phase `migrate` uses.
@@ -256,10 +385,6 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const { pluginMigrationSetsFrom } = await import(
       "../../domains/schema/migrate/plugin/run-plugin-migrations"
     );
-    const { withMigrateLock } = await import(
-      "../../domains/schema/pipeline/locks"
-    );
-
     // Under the SAME lock `migrate` takes, for the same reason.
     //
     // `runPluginPhase` is normally reached from inside `migrateCore`'s
@@ -331,9 +456,10 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       logger: { warn: m => context.logger.warn(m) },
     });
 
-    const outcome = await withMigrateLock(
-      drizzleAdapter.getDrizzle(),
-      dialect,
+    // Refused rather than swallowed when the lock was held throughout: the
+    // command goes on to record the plugin active, and doing that over
+    // migrations that never ran would report work that was not done.
+    await withLockOrRefuse(
       () =>
         runPluginPhase({
           extensionSchema,
@@ -345,28 +471,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
           pluginsWithMigrations: new Set([plugin.name]),
           pluginMigrationSets,
         }),
-      {
-        mode: "wait",
-        logger: {
-          warn: m => context.logger.warn(m),
-          info: m => context.logger.info(m),
-        },
-      }
+      `${plugin.name}'s migrations were not applied`,
+      { plugin: plugin.name }
     );
-
-    if (!outcome.ran) {
-      // Reported rather than swallowed: the command goes on to record the
-      // plugin active, and doing that over migrations that never ran is the
-      // "reports work it did not do" failure this whole path was fixed for.
-      throw new NextlyError({
-        code: "CONFLICT",
-        publicMessage:
-          `Another migration is holding the migrate lock, so ${plugin.name}'s migrations were not applied. ` +
-          `Nothing was changed — re-run once it finishes.`,
-        statusCode: 409,
-        logContext: { plugin: plugin.name, reason: outcome.reason },
-      });
-    }
   };
 
   /**
@@ -502,7 +609,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     runLifecycleHook,
     migrationsDir: config.db?.migrationsDir,
     logger: context.logger,
+    prepareDowns,
     runDown,
+    underMigrateLock,
   };
 }
 
@@ -526,56 +635,15 @@ export async function runPluginUninstall(
 ): Promise<void> {
   const deps = await connect(options, context);
   try {
-    const { withMigrateLock } = await import(
-      "../../domains/schema/pipeline/locks"
+    // The command takes the migrate lock itself, through `underMigrateLock`,
+    // once every refusal has been decided: the DOWNs, the ledger rows and the
+    // final owner state are one decision, and a racing writer between any
+    // two of them leaves a state no snapshot describes.
+    await runPluginUninstallCommand(
+      name,
+      { keepData: options.keepData, yes: options.yes },
+      deps
     );
-
-    // The WHOLE uninstall under the lock, not each module's DOWN.
-    //
-    // `runDown` already runs one module's statements and its ledger row in a
-    // transaction, but a transaction is not a lock: overlapping `nextly
-    // migrate` could apply a pending newer module between two DOWNs, and a
-    // second uninstall could act on the same one. On MySQL the earlier DDL of
-    // whichever loses is already committed and cannot be rolled back.
-    //
-    // Spanning the command is deliberate — the DOWNs, the ledger rows and the
-    // final owner state are one decision, and a racing writer between any two
-    // of them leaves a state no snapshot describes. Nothing here waits on an
-    // operator: a run without `--yes` refuses before any of it.
-    const outcome = await withMigrateLock(
-      (deps.adapter as unknown as DrizzleAdapter).getDrizzle(),
-      deps.dialect,
-      async () => {
-        // Re-read the ledger now that the lock is held. The plan taken at
-        // connect time predates it, so a module applied in between would be
-        // missing from it — and this command would then record the plugin
-        // uninstalled with that module's schema still in the database.
-        await deps.refreshPlan();
-        return runPluginUninstallCommand(
-          name,
-          { keepData: options.keepData, yes: options.yes },
-          deps
-        );
-      },
-      {
-        mode: "wait",
-        logger: {
-          warn: m => context.logger.warn(m),
-          info: m => context.logger.info(m),
-        },
-      }
-    );
-
-    if (!outcome.ran) {
-      throw new NextlyError({
-        code: "CONFLICT",
-        publicMessage:
-          `Another migration is holding the migrate lock, so ${name} was not uninstalled. ` +
-          `Nothing was changed — re-run once it finishes.`,
-        statusCode: 409,
-        logContext: { plugin: name, reason: outcome.reason },
-      });
-    }
   } finally {
     await deps.adapter.disconnect();
   }

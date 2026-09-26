@@ -15,11 +15,14 @@
  * @since 1.0.0
  */
 import { NextlyError } from "../../../errors/nextly-error";
+import { orderedOrClassedKey } from "../pipeline/sql-templates/create-index";
 import {
+  DEFAULT_DECIMAL_SCALE,
   ENUM_STORAGE_LENGTH,
   toSnakeCase,
 } from "../services/field-column-descriptor";
 
+import { assertExplicitIdentifier } from "./naming";
 import type {
   DeclaredCheck,
   DeclaredForeignKey,
@@ -58,7 +61,15 @@ export interface ColumnBuilder<
   readonly onUpdate?: "now";
   /** The permitted values, for the `enum` kind. */
   readonly enumValues?: readonly string[];
-  /** An explicit type name for a native PostgreSQL enum. */
+  /**
+   * The name of the enum's CHECK constraint, in place of the column's.
+   *
+   * Never a native PostgreSQL enum type — an enum is text plus a CHECK on
+   * every dialect — and always scoped by its table: the constraint is named
+   * `ck_<table>_<enumName>`, so the same name may be given to enums on
+   * several tables. MySQL requires a check name to be unique across the whole
+   * schema, which a name used verbatim could not survive.
+   */
   readonly enumName?: string;
   readonly length?: number;
   readonly precision?: number;
@@ -92,6 +103,19 @@ type NullableOf<O> = O extends { nullable: true } ? true : false;
 type HasDefaultOf<O> = O extends { default: string | number | boolean }
   ? true
   : false;
+
+/**
+ * How many digits a number has after the decimal point, as JavaScript writes
+ * it — including the exponent form it switches to for very small values, where
+ * `1e-7` has seven.
+ */
+function fractionalDigits(value: number): number {
+  const [mantissa = "", exponent = "0"] = String(value)
+    .toLowerCase()
+    .split("e");
+  const fraction = mantissa.split(".")[1] ?? "";
+  return Math.max(0, fraction.length - Number(exponent));
+}
 
 function build<TValue>(
   kind: ExtensionColumnKind,
@@ -478,7 +502,12 @@ export interface TableIndexInput {
   columns: string[];
   unique?: boolean;
   name?: string;
-  /** Partial-index predicate. PostgreSQL and SQLite only; MySQL is refused by its renderer. */
+  /**
+   * Partial-index predicate. Currently refused on every extension table:
+   * MySQL has no partial indexes, and every declaration is checked against
+   * all three dialects whichever one is live, so an index carrying `where`
+   * fails when the table is registered — on PostgreSQL and SQLite too.
+   */
   where?: string;
   /** Expression index, per-dialect SQL, in place of column names. */
   expression?: string;
@@ -491,13 +520,19 @@ export interface TableForeignKeyInput {
   references: { table: string; columns: string[] };
   onDelete?: "cascade" | "set null" | "restrict" | "no action" | "set default";
   onUpdate?: "cascade" | "set null" | "restrict" | "no action" | "set default";
-  /** Defaults to `fk_<table>_<cols>`. */
+  /**
+   * Used verbatim, so at most 63 characters. Defaults to `fk_<table>_<cols>`,
+   * shortened with a hash when that is longer.
+   */
   name?: string;
 }
 
 /** A check constraint; `sql` is the boolean expression over SQL column names. */
 export interface TableCheckInput {
-  /** Defaults to `ck_<table>_<name>`. */
+  /**
+   * The check's own name. The constraint is named `ck_<table>_<name>`,
+   * shortened with a hash when that is longer than 63 characters.
+   */
   name: string;
   sql: string;
 }
@@ -612,6 +647,33 @@ function toResolvedColumn(
   return resolved;
 }
 
+/**
+ * Refuse a decimal default finer than the column's scale.
+ *
+ * Not a value the column can hold. MySQL rounds it when the table is created
+ * (1.555 in DECIMAL(10,2) is stored as 1.56), so the live default never equals
+ * the declared one and every diff proposes changing it back; PostgreSQL keeps
+ * the declared text but rounds each row it fills. Refused on every dialect
+ * alike, so the declaration means the same wherever it is deployed. Checked
+ * here rather than in `col.decimal()` so the refusal can name the column.
+ */
+function assertDefaultFitsScale(
+  tableName: string,
+  key: string,
+  builder: ColumnBuilder
+): void {
+  if (builder.kind !== "decimal" || typeof builder.default !== "number") {
+    return;
+  }
+  const scale = builder.scale ?? DEFAULT_DECIMAL_SCALE;
+  if (fractionalDigits(builder.default) > scale) {
+    invalid(
+      `${tableName}.${key}`,
+      `The default of "${key}" has more fractional digits than its scale of ${String(scale)} allows; received ${String(builder.default)}.`
+    );
+  }
+}
+
 /** The resolved columns, and the key each SQL name came from. */
 function resolveColumns(
   tableName: string,
@@ -632,6 +694,7 @@ function resolveColumns(
       );
     }
     byName.set(sqlName, key);
+    assertDefaultFitsScale(tableName, key, builder);
     resolved.push(toResolvedColumn(key, sqlName, builder));
   }
 
@@ -653,6 +716,19 @@ function resolveIndexes(
       invalid(
         path,
         "An index must name at least one column or carry an expression."
+      );
+    }
+    // Refused here, where the table is declared, by the renderer's own rule:
+    // a key's ordering, collation or operator class is recorded by no
+    // introspection, so the index would be planned again on every push.
+    const refusedKey =
+      index.expression === undefined
+        ? undefined
+        : orderedOrClassedKey(index.expression);
+    if (refusedKey !== undefined) {
+      invalid(
+        path,
+        `Index ${index.name !== undefined ? `"${index.name}" ` : ""}on "${tableName}" declares the key "${refusedKey}", which orders or classes it. Ordering, collation and operator classes cannot be declared on an index key; index the expression itself.`
       );
     }
     const columns = index.columns.map(columnKey => {
@@ -701,6 +777,7 @@ function resolveForeignKeys(
         "A foreign key must reference exactly as many columns as it declares."
       );
     }
+    if (input.name !== undefined) assertExplicitIdentifier(input.name, path);
     return {
       // Derived at COMPILE time from the FINAL table name, because that is
       // the name live introspection also derives from — a name derived here

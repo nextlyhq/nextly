@@ -69,7 +69,7 @@ import {
   junctionTablesAmong,
   snapshotComparableTables,
 } from "../../domains/schema/pipeline/managed-tables";
-import { generateSQL } from "../../domains/schema/pipeline/sql-templates/index";
+import { generateStatements } from "../../domains/schema/pipeline/sql-templates/index";
 import { describeError, NextlyError } from "../../errors/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { createContext, type CommandContext } from "../program";
@@ -490,11 +490,17 @@ export async function baselineCore(
         junctionTables.size > 0
           ? await introspectLiveSnapshot(db, dialect, [...junctionTables])
           : { tables: [] };
-      const junctionSql = withCyclicForeignKeysSplit(
-        diffSnapshots(EMPTY_SNAPSHOT, junctionLive),
+      // Rendered as a list, not per operation: on SQLite a split-out foreign
+      // key becomes a rebuild of its table to what the database holds.
+      const junctionSql = generateStatements(
+        withCyclicForeignKeysSplit(
+          diffSnapshots(EMPTY_SNAPSHOT, junctionLive),
+          dialect,
+          []
+        ),
         dialect,
-        []
-      ).map(op => generateSQL(op, dialect));
+        junctionLive.tables
+      );
 
       // The companion's own columns, read from the database for the same
       // reason the junction's are: what is standing there is the schema being
@@ -529,8 +535,12 @@ export async function baselineCore(
       const sqlStatements = [
         // A foreign-key cycle standing in the database has one key split out
         // of the CREATE TABLEs, as every generated migration does.
-        ...withCyclicForeignKeysSplit(plan.operations, dialect, []).map(op =>
-          generateSQL(op, dialect)
+        // Rendered as a list, as every generated migration is: SQLite takes
+        // a split-out key as a rebuild of its table, to the adopted schema.
+        ...generateStatements(
+          withCyclicForeignKeysSplit(plan.operations, dialect, []),
+          dialect,
+          plan.snapshot.tables
         ),
         ...junctionSql,
         ...companionSql.statements,

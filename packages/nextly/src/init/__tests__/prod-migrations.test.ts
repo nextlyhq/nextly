@@ -6,9 +6,6 @@ import {
   openBootMigrationsGate,
 } from "../boot-migrations-gate";
 
-const shutdownServices = vi.fn();
-vi.mock("../../di", () => ({ shutdownServices: () => shutdownServices() }));
-
 /*
  * The registry reload is observed through its OWN module rather than through
  * the container, because what this file is about is WHEN the production path
@@ -68,7 +65,6 @@ describe("runProdMigrationsIfEnabled", () => {
     // Process-global by design — the refusal must outlive a request — so it has
     // to be cleared between cases or the first refusal fails every test after.
     _resetBootMigrationsGateForTest();
-    shutdownServices.mockClear();
   });
 
   /**
@@ -78,40 +74,14 @@ describe("runProdMigrationsIfEnabled", () => {
    * an up-to-date database, so the count cannot distinguish them.
    */
   /**
-   * The refusal has to outlive the request that raised it. Both entry points
-   * run migrations inside `if (!isServicesRegistered())`, and DI is already
-   * marked registered by the time this throws — so without stickiness the very
-   * next request skips migrations and serves the schema the process refused.
+   * The refusal has to outlive the request that raised it: a later boot
+   * attempt in the same process must refuse too rather than migrate afresh.
+   * Releasing what the refused boot acquired is `registerServices`'s job and
+   * is tested there (di/__tests__/boot-refusal-releases.test.ts).
    *
    * Second call passes a migrateCore that would SUCCEED, so this cannot pass by
    * the failure simply repeating.
    */
-  /**
-   * The sticky flag lives inside this helper, and both entry points call it
-   * only inside `if (!isServicesRegistered())` — which `registerServices()` has
-   * already made false by the time the refusal is thrown. Without reopening
-   * that gate the flag is unreachable: the next request skips this helper
-   * entirely, builds the dispatcher, and serves the unverified schema.
-   */
-  it("tears services down so the refusal is reachable without leaking a pool", async () => {
-    process.env.NODE_ENV = "production";
-    const a = args({
-      migrateCore: vi.fn(async () => ({
-        applied: 0,
-        coreChanged: false,
-        ran: false,
-      })),
-    });
-
-    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
-      code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
-    });
-
-    // `shutdownServices`, not `clearServices`: the latter leaves the adapter
-    // connected, so each retry would build another pool.
-    expect(shutdownServices).toHaveBeenCalled();
-  });
-
   it("keeps refusing on later calls, even when migrations would now succeed", async () => {
     process.env.NODE_ENV = "production";
     await expect(
@@ -185,17 +155,41 @@ describe("runProdMigrationsIfEnabled", () => {
   });
 
   /**
-   * `registerServices` opens the gate; this helper settles it. If the two ever
-   * disagree about the conditions, a gate opened and never settled hangs every
-   * consumer forever — a worse outage than the one being guarded against. So
-   * the helper closes it on the early exits too, where it was never opened.
+   * The helper opens the gate for the run it performs and settles it when the
+   * run ends. A consumer arriving mid-run waits for it; one arriving after is
+   * released. Opened anywhere else, the gate either misses the run — nothing
+   * held — or outlives it, which is the pending promise nothing settled.
+   */
+  it("holds the gate while its run is in flight and releases it after", async () => {
+    let heldDuringRun = false;
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        // Raced against a macrotask: a gate that is not pending resolves first.
+        heldDuringRun = await Promise.race([
+          awaitBootMigrations().then(() => false),
+          new Promise<boolean>(resolve => setTimeout(() => resolve(true), 0)),
+        ]);
+        return { applied: 0, coreChanged: false, ran: true };
+      }),
+    });
+
+    await runProdMigrationsIfEnabled(a as never);
+
+    expect(heldDuringRun).toBe(true);
+    await expect(awaitBootMigrations()).resolves.toBeUndefined();
+  });
+
+  /**
+   * This helper opens the gate and settles it. A gate some other path left
+   * pending would hang every consumer forever — a worse outage than the one
+   * being guarded against — so the early exits settle it too.
    */
   it("settles the gate even when it returns early", async () => {
     process.env.NODE_ENV = "production";
     const a = args();
     a.config.db.runMigrationsOnBoot = false;
 
-    openBootMigrationsGate(true);
+    openBootMigrationsGate();
     await runProdMigrationsIfEnabled(a as never);
 
     await expect(awaitBootMigrations()).resolves.toBeUndefined();
@@ -491,7 +485,7 @@ describe("the schema registry is reloaded before the gate opens", () => {
     // immediately when nothing is pending -- so without this the assertion
     // below is satisfied by there being no gate at all rather than by the
     // ordering it names.
-    openBootMigrationsGate(true);
+    openBootMigrationsGate();
 
     // The control for exactly that: the gate must be genuinely pending before
     // the run, or "not yet open during the reload" means nothing.

@@ -466,12 +466,11 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
  * @public
  */
 export async function getCachedNextly(): Promise<Nextly> {
-  // Before ANY return, including the cached one. This is the surface that could
-  // serve during another surface's migration wait: the request-path boot
-  // registers services and then waits for the lock, and everything below keys
-  // off `isServicesRegistered()`, which is true throughout that window. Awaiting
-  // rather than testing means a request racing a normal boot still waits for it,
-  // exactly as before — it only learns the answer once there is one.
+  // Before ANY return, including the cached one. Everything below keys off
+  // `isServicesRegistered()`, which says nothing about whether this process's
+  // boot migrations allowed it to serve. Awaiting rather than testing means a
+  // caller racing a boot that is still migrating waits for its answer, and a
+  // process that refused keeps refusing.
   await awaitBootMigrations();
 
   if (globalForInit.__nextly_cachedInstance) {

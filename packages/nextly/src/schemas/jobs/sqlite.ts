@@ -8,19 +8,16 @@
  * @module schemas/jobs/sqlite
  */
 
-import {
-  sqliteTable,
-  text,
-  integer,
-  index,
-  uniqueIndex,
-} from "drizzle-orm/sqlite-core";
+import type { BuildColumns } from "drizzle-orm";
+import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+
+import { NEXTLY_JOBS_INDEXES, sqliteIndexes } from "../_internal/core-indexes";
 
 import type { JobState } from "./types";
 
-export const nextlyJobsSqlite = sqliteTable(
-  "nextly_jobs",
-  {
+/** `nextly_jobs` columns, a fresh builder record per call (see `core-table-contributions`). */
+export function nextlyJobsSqliteColumns() {
+  return {
     id: text("id")
       .primaryKey()
       .notNull()
@@ -51,14 +48,24 @@ export const nextlyJobsSqlite = sqliteTable(
     updatedAt: integer("updated_at", { mode: "timestamp" })
       .$defaultFn(() => new Date())
       .notNull(),
-  },
-  table => [
-    index("nextly_jobs_due_idx").on(table.state, table.runAt),
-    // See `schemas/jobs/postgres.ts` for what this index is for and why a
-    // declaration alone does not put it on an existing database.
-    index("nextly_jobs_recent_idx").on(table.updatedAt),
-    uniqueIndex("nextly_jobs_dedupe_idx").on(table.dedupeKey),
-  ]
+  };
+}
+
+/** `nextly_jobs` indexes, from `NEXTLY_JOBS_INDEXES`. */
+export function nextlyJobsSqliteExtraConfig(
+  table: BuildColumns<
+    "nextly_jobs",
+    ReturnType<typeof nextlyJobsSqliteColumns>,
+    "sqlite"
+  >
+) {
+  return sqliteIndexes(NEXTLY_JOBS_INDEXES, table);
+}
+
+export const nextlyJobsSqlite = sqliteTable(
+  "nextly_jobs",
+  nextlyJobsSqliteColumns(),
+  nextlyJobsSqliteExtraConfig
 );
 
 export type NextlyJobSqlite = typeof nextlyJobsSqlite.$inferSelect;

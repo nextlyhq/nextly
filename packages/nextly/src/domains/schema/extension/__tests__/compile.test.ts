@@ -16,7 +16,10 @@ import type { SupportedDialect } from "../../../../database/schema-registry";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { drizzleTableToTableSpec } from "../../../../schemas/_internal/drizzle-to-tablespec";
 import { renderDialectType } from "../../services/field-column-descriptor";
+import { typesDiffer } from "../../pipeline/diff/declared-size";
+import { normalizeDefault } from "../../pipeline/diff/normalize-default";
 import { normalizeType } from "../../pipeline/diff/normalize-type";
+import { renderedType } from "../../pipeline/sql-templates/create-table-body";
 import {
   indexNameForColumn,
   indexNameForColumns,
@@ -383,4 +386,201 @@ describe("kit-table foreign keys on sqlite (bundle pass two)", () => {
       expect(config.foreignKeys[0]?.onDelete).toBe("cascade");
     }
   );
+});
+
+describe("derived constraint names on long tables", () => {
+  // A 59-character table and two 50-character columns sharing their first 46:
+  // the composed names run past 100 characters. A plain truncation also fits
+  // 63 characters and would give both columns the same constraint name, which
+  // is why DISTINCTNESS is asserted beside the bound.
+  const longTable = `fx__${"t".repeat(55)}`;
+  const first = `${"c".repeat(46)}_one`;
+  const second = `${"c".repeat(46)}_two`;
+  const longSpec = (dialect: SupportedDialect) =>
+    toTableSpec(
+      {
+        ...table,
+        name: longTable,
+        columns: [column(first, "shortText"), column(second, "shortText")],
+        foreignKeys: [
+          {
+            columns: [first],
+            referencesTable: "users",
+            referencesColumns: ["id"],
+            onDelete: "cascade",
+            onUpdate: "no action",
+          },
+          {
+            columns: [second],
+            referencesTable: "users",
+            referencesColumns: ["id"],
+            onDelete: "cascade",
+            onUpdate: "no action",
+          },
+        ],
+        checks: [
+          { name: `${first}_ok`, sql: `${first} <> ''` },
+          { name: `${second}_ok`, sql: `${second} <> ''` },
+        ],
+      },
+      dialect
+    );
+
+  it.each(DIALECTS)(
+    "bounds and separates foreign key and check names on %s",
+    dialect => {
+      const spec = longSpec(dialect);
+      const names = [
+        ...(spec.foreignKeys ?? []).map(fk => fk.name),
+        ...(spec.checks ?? []).map(ck => ck.name),
+      ];
+      expect(names).toHaveLength(4);
+      for (const name of names) expect(name.length).toBeLessThanOrEqual(63);
+      expect(new Set(names).size).toBe(4);
+      // Deterministic, because live introspection has to find them again.
+      expect(longSpec(dialect).foreignKeys?.map(fk => fk.name)).toEqual(
+        spec.foreignKeys?.map(fk => fk.name)
+      );
+    }
+  );
+
+  it("leaves a short name exactly as it was", () => {
+    const spec = toTableSpec(
+      {
+        ...table,
+        columns: [column("owner_id", "shortText")],
+        foreignKeys: [
+          {
+            columns: ["owner_id"],
+            referencesTable: "users",
+            referencesColumns: ["id"],
+            onDelete: "cascade",
+            onUpdate: "no action",
+          },
+        ],
+        checks: [{ name: "owner_set", sql: "owner_id <> ''" }],
+      },
+      "postgresql"
+    );
+    expect(spec.foreignKeys?.[0]?.name).toBe("fk_auth__identities_owner_id");
+    expect(spec.checks?.[0]?.name).toBe("ck_auth__identities_owner_set");
+  });
+
+  it("creates the SQLite foreign key under the name the spec compares", async () => {
+    const { getTableConfig } = await import("drizzle-orm/sqlite-core");
+    const long: ExtensionTable = {
+      ...table,
+      name: longTable,
+      columns: [column(first, "shortText")],
+      foreignKeys: [
+        {
+          columns: [first],
+          referencesTable: "users",
+          referencesColumns: ["id"],
+          onDelete: "cascade",
+          onUpdate: "no action",
+        },
+      ],
+    };
+    const { referenceTableStub } = await import("../compile");
+    const drizzleTable = toDrizzleTable(long, "sqlite", referenceTableStub);
+    const config = getTableConfig(drizzleTable as never);
+    expect(config.foreignKeys[0]?.getName()).toBe(
+      toTableSpec(long, "sqlite").foreignKeys?.[0]?.name
+    );
+    expect(config.foreignKeys[0]?.getName().length).toBeLessThanOrEqual(63);
+  });
+});
+
+describe("check names that collide", () => {
+  it("refuses a declared check and an enum check resolving to one name", () => {
+    const clash: ExtensionTable = {
+      ...table,
+      columns: [column("state", "enum", { enumValues: ["a", "b"] })],
+      checks: [{ name: "state_enum", sql: "state <> ''" }],
+    };
+    expect(() => toTableSpec(clash, "postgresql")).toThrow(NextlyError);
+    // The control: the same table with the check named otherwise compiles.
+    expect(() =>
+      toTableSpec(
+        { ...clash, checks: [{ name: "state_set", sql: "state <> ''" }] },
+        "postgresql"
+      )
+    ).not.toThrow();
+  });
+});
+
+describe("char width on PostgreSQL", () => {
+  // PostgreSQL 17 reports a `char(2)` column as udt_name `bpchar` with
+  // character_maximum_length 2, which introspection records as typeModifier.
+  const live = {
+    name: "code",
+    type: "bpchar",
+    typeModifier: "2",
+    nullable: false,
+  };
+  const charTable = (length: number): ExtensionTable => ({
+    ...table,
+    columns: [column("code", "char", { length })],
+  });
+
+  it("carries the width where introspection reports it", () => {
+    const spec = toTableSpec(charTable(2), "postgresql").columns[0];
+    expect(spec).toMatchObject({ type: "bpchar", typeModifier: "2" });
+    // What a migration writes: the bounded type, not an unbounded bpchar.
+    expect(renderedType(spec)).toBe("bpchar(2)");
+    expect(typesDiffer(live, spec)).toBe(false);
+  });
+
+  it("lets the diff see a width change", () => {
+    expect(
+      typesDiffer(live, toTableSpec(charTable(4), "postgresql").columns[0])
+    ).toBe(true);
+  });
+
+  it("adds no second width where the type already states one", () => {
+    const spec = toTableSpec(charTable(2), "mysql").columns[0];
+    expect(spec.type).toBe("char(2)");
+    expect(spec.typeModifier).toBeUndefined();
+  });
+});
+
+describe("a string default on a column MySQL stores as TEXT", () => {
+  const withDefault: ExtensionTable = {
+    ...table,
+    columns: [column("body", "longText", { default: "x" })],
+  };
+
+  it("is an expression default on MySQL, which refuses a literal there", () => {
+    // MySQL 8.0.46: `text DEFAULT 'x'` fails with error 1101;
+    // `DEFAULT (CONVERT(X'78' USING utf8mb4))` is accepted.
+    expect(toTableSpec(withDefault, "mysql").columns[0].default).toBe(
+      "(CONVERT(X'78' USING utf8mb4))"
+    );
+  });
+
+  it("compares equal to what MySQL reports for it", () => {
+    // information_schema reports the expression without its parentheses,
+    // and introspection restores them.
+    const declared = toTableSpec(withDefault, "mysql").columns[0];
+    expect(normalizeDefault("(convert(0x78 using utf8mb4))", "text")).toBe(
+      normalizeDefault(declared.default, declared.type)
+    );
+  });
+
+  it("stays a plain literal on the dialects that accept one", () => {
+    expect(toTableSpec(withDefault, "postgresql").columns[0].default).toBe(
+      "'x'"
+    );
+    expect(toTableSpec(withDefault, "sqlite").columns[0].default).toBe("'x'");
+  });
+
+  it("leaves a varchar column's default a literal on MySQL", () => {
+    // The control: only the TEXT family needs the expression form.
+    const varchar: ExtensionTable = {
+      ...table,
+      columns: [column("label", "text", { default: "x" })],
+    };
+    expect(toTableSpec(varchar, "mysql").columns[0].default).toBe("'x'");
+  });
 });

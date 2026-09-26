@@ -73,6 +73,9 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: 409,
   NEXTLY_MIGRATION_DRIFT: 409,
   NEXTLY_MIGRATION_APPLY_FAILED: 500,
+  // A SQLite migration unit would leave a row referencing a row that does
+  // not exist, or could not switch foreign-key enforcement off to run.
+  NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION: 409,
   // Plan C3 — migrate:resolve recovery command.
   NEXTLY_MIGRATION_FILE_MISSING: 404,
   NEXTLY_MIGRATION_SNAPSHOT_MISSING: 404,
@@ -104,6 +107,8 @@ export const NEXTLY_ERROR_STATUS = {
   PLUGIN_DEPENDENCY_NOT_INSTALLED: 409,
   PLUGIN_HAS_DEPENDENTS: 409,
   PLUGIN_UNINSTALL_IRREVERSIBLE: 409,
+  // A full uninstall that would drop tables, run without `--yes`.
+  PLUGIN_UNINSTALL_UNCONFIRMED: 409,
   PLUGIN_SCHEMA_BEHIND: 409,
   PLUGIN_SCHEMA_UNINSTALLED: 409,
   PLUGIN_SCHEMA_VERSION_NOT_ADVANCED: 409,

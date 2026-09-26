@@ -557,6 +557,134 @@ describe("drop guard in the runner", () => {
     expect(h.executed).toEqual([]);
     expect(h.started).toEqual([]);
   });
+
+  /** `legacy_cache` as the app's table, for the two tests below. */
+  const appOwnsLegacyCache = () =>
+    new Map([
+      [
+        "legacy_cache",
+        {
+          tableName: "legacy_cache",
+          ownerKind: "app" as const,
+          ownerId: "app",
+          migratedBy: "app",
+          ownerVersion: null,
+          schemaVersion: null,
+          state: "active" as const,
+        },
+      ],
+    ]) as never;
+
+  it("judges the statements the executor runs, not the module's raw entries", async () => {
+    // The splitter removes a `--> statement-breakpoint` marker and keeps the
+    // rest of its line as SQL. Read raw, the entry's drop sits behind `--`
+    // and is a comment; split, it is a statement of its own and runs.
+    const m = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec("fx__a", false)],
+      up: [
+        "CREATE INDEX i ON fx__a (label);--> statement-breakpoint DROP TABLE legacy_cache",
+      ],
+    });
+    const h = deps({ owners: appOwnsLegacyCache() });
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        h.deps
+      )
+    ).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+      logContext: { table: "legacy_cache", source: "plugin:a/001" },
+    });
+    expect(h.executed).toEqual([]);
+    expect(h.started).toEqual([]);
+  });
+
+  it("refuses a module holding a statement the runner's transaction cannot, before the ledger records an attempt", async () => {
+    const m = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec("fx__a", false)],
+      up: ["CREATE TABLE fx__a (id text)", "SET search_path TO other"],
+    });
+    const h = deps();
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        h.deps
+      )
+    ).rejects.toThrow(/plugin:a\/001 was refused/);
+    expect(h.executed).toEqual([]);
+    expect(h.started).toEqual([]);
+  });
+
+  it("judges a rebuild of another owner's table against the columns read before it runs", async () => {
+    // A contribution on SQLite: a check added to the app's `legacy_cache`
+    // renders as a rebuild of it.
+    const rebuild = [
+      'CREATE TABLE "__new_legacy_cache" ("id" TEXT, "v" TEXT, CONSTRAINT "c" CHECK ("v" <> \'\'))',
+      'INSERT INTO "__new_legacy_cache" ("id", "v") SELECT "id", "v" FROM "legacy_cache"',
+      'DROP TABLE "legacy_cache"',
+      'ALTER TABLE "__new_legacy_cache" RENAME TO "legacy_cache"',
+    ];
+    const m = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec("fx__a", false)],
+      up: rebuild,
+    });
+    const run = (columns: string[]) => {
+      const h = deps({
+        owners: appOwnsLegacyCache(),
+        liveColumns: async () => new Map([["legacy_cache", new Set(columns)]]),
+      });
+      return runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        h.deps
+      );
+    };
+    await expect(run(["id", "v"])).resolves.toMatchObject({ applied: 1 });
+    await expect(run(["id", "v", "owner_only"])).rejects.toThrow(
+      /different owner/i
+    );
+  });
+
+  it("does not judge a module already applied, which runs nothing", async () => {
+    // Applied when nobody owned `legacy_cache`; the app has claimed the name
+    // since. Judging the old SQL against today's owners would refuse every
+    // later migrate for a statement that is never run again.
+    const m = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec("fx__a", false)],
+      up: ["DROP TABLE IF EXISTS legacy_cache"],
+    });
+    const applied = deps({
+      owners: appOwnsLegacyCache(),
+      appliedShas: new Map([["plugin:a/001", m.checksum]]),
+    });
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        applied.deps
+      )
+    ).resolves.toEqual({ applied: 0, adopted: 0, skipped: 1 });
+
+    // The control: the same module and owners, pending, is refused — so the
+    // pass above is the ledger's doing, not a guard that reads nothing.
+    const pending = deps({ owners: appOwnsLegacyCache() });
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        pending.deps
+      )
+    ).rejects.toThrow(/different owner/i);
+  });
 });
 
 describe("contributed tables are judged on the plugin's own elements", () => {

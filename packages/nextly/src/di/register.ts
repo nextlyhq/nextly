@@ -45,10 +45,8 @@ import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
-import {
-  resolveDescription,
-  toPersistedAdmin,
-} from "../domains/collections/services/collection-sync-service";
+import { publishCollectionDbOptions } from "../domains/collections/services/collection-id";
+import { toCodeFirstCollectionConfig } from "../domains/collections/services/collection-sync-service";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
 import { emailRetentionAfterTransform } from "../domains/email/retention-config";
 import type { EmailDeliveryService } from "../domains/email/services/email-delivery-service";
@@ -124,7 +122,9 @@ import {
 import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
-import { openBootMigrationsGate } from "../init/boot-migrations-gate";
+import { bootApplyEnabled } from "../init/boot-apply";
+import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
+import type { RunProdMigrationsArgs } from "../init/prod-migrations";
 import { unwrittenSlugs } from "../init/sync-outcome";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
@@ -281,9 +281,10 @@ export interface NextlyServiceConfig {
    *
    * Forwarded because `registerServices` now runs pending migrations before
    * plugins initialise, and `runProdMigrationsIfEnabled` reads this whole
-   * block rather than the single `runMigrationsOnBoot` flag beside it. The
-   * nested config is destructured away in `buildServiceConfig`, so anything
-   * not named again never reaches the container.
+   * block — including `runMigrationsOnBoot`, the one place the decision to
+   * run is read from. The nested config is destructured away in
+   * `buildServiceConfig`, so anything not named again never reaches the
+   * container.
    */
   db?: {
     runMigrationsOnBoot?: boolean;
@@ -310,12 +311,10 @@ export interface NextlyServiceConfig {
   /** Optional directory for dynamic collection schemas. */
   schemasDir?: string;
   /**
-   * Whether this boot will run migrations, so registration can open the
-   * boot-migrations gate before it publishes the container.
-   *
-   * Carried on the SERVICE config rather than read from `db` — which this shape
-   * flattens away — because `buildServiceConfig` is the one builder both boot
-   * paths use, so threading it there reaches both without either remembering.
+   * @deprecated Ignored. Whether a boot migrates is read from
+   * `db.runMigrationsOnBoot` alone, by the migration phase itself, which also
+   * opens and settles the boot-migrations gate. Kept so a caller that still
+   * passes it type-checks; remove it from the call.
    */
   runMigrationsOnBoot?: boolean;
 
@@ -489,6 +488,8 @@ export interface ServiceMap {
 // Stored on globalThis to survive ESM module duplication in Next.js/Turbopack.
 const globalForReg = globalThis as unknown as {
   __nextly_isRegistered?: boolean;
+  /** The registration currently running, so a concurrent caller waits on it. */
+  __nextly_registrationInFlight?: Promise<void>;
   /** Resolved plugins + their contexts, for reverse-order destroy on shutdown (D4). */
   __nextly_pluginTeardown?: Array<{
     plugin: PluginDefinition;
@@ -565,12 +566,56 @@ export function registerDomainServices(ctx: RegistrationContext): void {
 export async function registerServices(
   config: NextlyServiceConfig
 ): Promise<void> {
+  // One registration at a time per process. Both boot paths — the
+  // instrumentation/Direct API boot and the request path — can arrive while
+  // the other is still inside this function, which now waits on the migrate
+  // lock before it marks itself registered; running twice would connect two
+  // adapters and initialise every plugin twice. A caller arriving mid-flight
+  // waits for that registration and returns if it succeeded; if it failed,
+  // this caller makes its own attempt, which meets any refusal the first one
+  // recorded.
+  const inFlight = globalForReg.__nextly_registrationInFlight;
+  if (inFlight) {
+    await inFlight.catch(() => undefined);
+    if (globalForReg.__nextly_isRegistered) return;
+  }
+
   if (globalForReg.__nextly_isRegistered) {
     throw new Error(
       "Services are already registered. Call clearServices() first if you need to re-register."
     );
   }
 
+  // A process that refused to serve after boot migrations keeps refusing, and
+  // checking it here — before an adapter is connected — means a refused
+  // process does not open a connection on every request only to reach the
+  // same refusal at the migration phase.
+  assertBootMigrationsNotRefused();
+
+  const registration = registerServicesOnce(config);
+  globalForReg.__nextly_registrationInFlight = registration;
+  try {
+    await registration;
+  } catch (error) {
+    // Anything that fails before registration completes leaves a connected
+    // adapter and a partly populated container that no `shutdownServices`
+    // call will release, because that function acts only on a registered
+    // container. Released here so each retry starts from nothing rather than
+    // leaking one pool per attempt. An adapter the caller supplied is the
+    // caller's to close, so it is left connected.
+    await releaseServices({ disconnectAdapter: config.adapter === undefined });
+    throw error;
+  } finally {
+    if (globalForReg.__nextly_registrationInFlight === registration) {
+      globalForReg.__nextly_registrationInFlight = undefined;
+    }
+  }
+}
+
+/** The registration itself; see `registerServices` for what surrounds it. */
+async function registerServicesOnce(
+  config: NextlyServiceConfig
+): Promise<void> {
   assertNoLegacyFieldGroupKey(config, "registerServices");
 
   // ----------------------------------------
@@ -864,7 +909,11 @@ export async function registerServices(
   if (bootDialect !== undefined) {
     bootExtensionSchema = await compileAndPublishExtensionSchema({
       dialect: bootDialect,
-      plugins: resolvedPlugins,
+      // The transformed list, like everything else from Layer 0b down: a
+      // plugin a `setup` transformer added declares tables too, and the
+      // development push, `ctx.db`, production migrations and the CLI must all
+      // see the same set.
+      plugins: transformedPlugins,
       config: transformedConfig,
       logger: resolvedLogger,
     });
@@ -1367,22 +1416,14 @@ export async function registerServices(
     "../init/prod-migrations"
   );
   if (config.db) {
-    await runProdMigrationsIfEnabled({
-      // `plugins` included: without them `pluginMigrationSetsFrom` sees an
-      // empty list, so boot migrations apply no plugin module and then reject
-      // every active plugin table as having no production migration path.
-      // Singles and field groups too: the extension schema is compiled from
-      // this config, and a schema hook may target either.
-      config: {
-        db: config.db,
-        collections: config.collections ?? [],
-        singles: config.singles ?? [],
-        fieldGroups: config.fieldGroups ?? [],
-        plugins: config.plugins ?? [],
-      },
-      adapter,
-      logger: resolvedLogger,
-    });
+    // The raw `db` block with the schema this boot actually runs; see
+    // `bootMigrationsArgs` for why the two come from different configs.
+    await runProdMigrationsIfEnabled(
+      bootMigrationsArgs(config.db, transformedConfig, deferredExtends, {
+        adapter,
+        logger: resolvedLogger,
+      })
+    );
   }
 
   // ----------------------------------------
@@ -1464,6 +1505,32 @@ export async function registerServices(
         );
       }
     }
+  }
+
+  // ----------------------------------------
+  // Layer 6.9: Missing extension tables (development), BEFORE plugins init
+  // ----------------------------------------
+  // The development counterpart of the migrations above. On an existing
+  // database a newly added plugin's tables have nothing to create them until
+  // the development push, which runs only after this function returns — after
+  // the plugin's `init()`. Gated by `bootApplyEnabled`, the same predicate as
+  // that push, so this creates exactly what it would, earlier; production
+  // creates them through migrations instead.
+  //
+  // After the schema-version gate, which refuses a plugin whose tables an
+  // uninstall removed: creating them first would put back the very tables
+  // that refusal exists to keep away.
+  if (bootApplyEnabled()) {
+    const { createMissingExtensionTables } = await import("../init/first-run");
+    await createMissingExtensionTables({
+      adapter,
+      logger: {
+        info: m => resolvedLogger.info?.(m),
+        warn: m => resolvedLogger.warn?.(m),
+        error: m => resolvedLogger.error?.(m),
+      },
+      extensionSchema: bootExtensionSchema,
+    });
   }
 
   // ----------------------------------------
@@ -1579,29 +1646,10 @@ export async function registerServices(
     container.register("nextlyDirectAPI", () => requireNextly());
   }
 
-  // Opened immediately BEFORE registration publishes, which is the last point
-  // that is both late enough and early enough.
-  //
-  // Early enough: the window this closes is "registered but schema unverified",
-  // and the flag below is what opens that window — so a consumer can never see
-  // registration without also seeing the gate.
-  //
-  // Late enough: everything that can abort a registration — adapter connection,
-  // schema synchronisation, plugin init — has already run. An abort therefore
-  // never leaves a gate open with nobody left to settle it, which would block
-  // every later retry forever on a gate whose owner died.
-  //
-  // No-op unless production boot migrations are configured, so the CLI and the
-  // test harness never open a gate nothing would close.
-  // The UNTRANSFORMED flag, matching what `runProdMigrationsIfEnabled` reads.
-  // `transformedConfig` is the config after plugin `setup` transformers have
-  // run, and that side decides from the nested `db` block, so reading the
-  // transformed value here lets a transformer make the two disagree — opening
-  // no gate while migrations run, or a gate nothing settles. No first-party
-  // transformer touches it today, which is a property of the current plugin set
-  // rather than of the code, and this PR exists because of a window nobody
-  // thought reachable.
-  openBootMigrationsGate(config.runMigrationsOnBoot === true);
+  // No boot-migrations gate is opened here. Migrations ran at Layer 6.5,
+  // before this flag, and `runProdMigrationsIfEnabled` opens and settles the
+  // gate itself — so by the time registration publishes, the gate is either
+  // settled or refused, never pending.
 
   globalForReg.__nextly_isRegistered = true;
 
@@ -1634,6 +1682,50 @@ export async function registerServices(
 // ============================================================
 // Orchestration Helpers
 // ============================================================
+
+/**
+ * What boot-time migrations are handed: the RAW run settings and the EFFECTIVE
+ * schema.
+ *
+ * - Whether to migrate on boot, where the migration files are and how long the
+ *   lock may be held come from the untransformed `db` block: whether a process
+ *   migrates on boot is a deployment decision, not one a plugin's `setup`
+ *   transformer makes.
+ * - Everything compiled and applied comes from the configuration the rest of
+ *   this boot runs: the `db` block's schema hooks as the transformers left
+ *   them (the same block `compileAndPublishExtensionSchema` compiled at boot),
+ *   the plugin list after `setup` transformers (re-resolved), the collections,
+ *   singles and field groups after plugin contributions were folded in, and
+ *   the extends deferred to Builder entities. The schema-version gate that
+ *   follows reads the same transformed list, and `nextly migrate` applies the
+ *   same set: the CLI's config loader runs the same transformers and fold.
+ */
+export function bootMigrationsArgs(
+  rawDb: NonNullable<NextlyServiceConfig["db"]>,
+  effective: Pick<
+    NextlyServiceConfig,
+    "collections" | "singles" | "fieldGroups" | "plugins" | "db"
+  >,
+  deferredExtends: readonly unknown[],
+  deps: Pick<RunProdMigrationsArgs, "adapter" | "logger">
+): RunProdMigrationsArgs {
+  return {
+    config: {
+      db: {
+        ...(effective.db ?? rawDb),
+        runMigrationsOnBoot: rawDb.runMigrationsOnBoot,
+        migrationsDir: rawDb.migrationsDir,
+        migrateLockTtlSeconds: rawDb.migrateLockTtlSeconds,
+      },
+      collections: effective.collections ?? [],
+      singles: effective.singles ?? [],
+      fieldGroups: effective.fieldGroups ?? [],
+      plugins: effective.plugins ?? [],
+    },
+    deferredExtends,
+    ...deps,
+  };
+}
 
 // eslint-disable-next-line @typescript-eslint/require-await
 async function applyPluginConfigTransformers(
@@ -2212,6 +2304,11 @@ async function syncCodeFirstCollections(
     !transformedConfig.collections ||
     transformedConfig.collections.length === 0
   ) {
+    // Published even with nothing to sync: the options are the config's, and
+    // a config with no code-first collections declares none. Returning first
+    // would leave whatever an earlier registration in this process published
+    // — an `allowIdOnCreate` a later collection of the same slug would inherit.
+    publishCollectionDbOptions([]);
     return;
   }
 
@@ -2246,42 +2343,20 @@ async function syncCodeFirstCollections(
     }
   }
 
+  // The projection every sync route shares, so what boot stores and publishes
+  // for a collection is what reload and `db:sync` store and publish for it.
   const codeFirstConfigs: CodeFirstCollectionConfig[] =
-    transformedConfig.collections.map(collection => ({
-      slug: collection.slug,
-      labels: {
-        singular: collection.labels?.singular ?? collection.slug,
-        plural: collection.labels?.plural ?? `${collection.slug}s`,
-      },
-      fields: collection.fields,
-      description: resolveDescription(collection),
-      tableName: collection.dbName,
-      timestamps: collection.timestamps,
-      // Through the SAME projection the CLI path uses. Forwarding the authored object
-      // instead would store whatever it holds — including a `preview.url` function that
-      // JSON.stringify drops silently, leaving a preview config that cannot work — and would
-      // put the primary write path outside the boundary that decides what `admin` may contain.
-      admin: toPersistedAdmin(collection.admin),
-      source: sourceBySlug.get(collection.slug) ?? "code",
-      // Forward Draft/Published flag from code-first config so the boot-time
-      // sync persists it to dynamic_collections.status.
-      status: collection.status === true,
-      // Resolve + forward the versioning config so it persists to
-      // dynamic_collections.versions. `status: true` aliases to a versioned
-      // config, so pass both to the resolver.
-      versions: resolveVersionsConfig(collection.versions, collection.status),
-      // Forward the cache-revalidation config verbatim so it persists to
-      // dynamic_collections.revalidate; the write path reads it to honor
-      // `disable` and merge extra `tags`.
-      revalidate: collection.revalidate,
-      // Mirror the recording opt-out onto the registry row so a code-first
-      // `webhooks: false` is visible to anything reading the row, not only to
-      // the in-process policy the config publisher populates.
-      webhooks: storedWebhookRecording(collection.webhooks),
-      // Forward the i18n master switch (mirrors status) so the boot sync persists
-      // dynamic_collections.localized — the read path keys companion resolution off it.
-      localized: collection.localized === true,
-    }));
+    transformedConfig.collections.map(collection =>
+      toCodeFirstCollectionConfig(
+        collection,
+        sourceBySlug.get(collection.slug) ?? "code"
+      )
+    );
+
+  // Boot's one publish of the collection db options, from the same projection
+  // the sync stores, and before it: they are the config's, not the
+  // database's, so they hold whatever the rows below do.
+  publishCollectionDbOptions(codeFirstConfigs);
 
   const syncResult =
     await collectionRegistry.syncCodeFirstCollections(codeFirstConfigs);
@@ -3626,12 +3701,23 @@ export async function shutdownServices(): Promise<void> {
   if (!globalForReg.__nextly_isRegistered) {
     return;
   }
+  await releaseServices({ disconnectAdapter: true });
+}
 
+/**
+ * Release everything a registration acquired: plugin teardown, the adapter's
+ * connection when `disconnectAdapter`, the container and the process-global
+ * state registration published. Shared by `shutdownServices` and by a
+ * registration that fails part way, so the two cannot release different sets.
+ */
+async function releaseServices(opts: {
+  disconnectAdapter: boolean;
+}): Promise<void> {
   // Before the adapter disconnects, so destroy can still use db.
   await destroyRegisteredPlugins();
 
   try {
-    if (container.has("adapter")) {
+    if (opts.disconnectAdapter && container.has("adapter")) {
       const adapter = container.get<DrizzleAdapter>("adapter");
       await adapter.disconnect();
     }
@@ -3649,6 +3735,9 @@ export async function shutdownServices(): Promise<void> {
     // registry; clear it so a later instance never resolves a dead one.
     resetWebhookActivation();
     publishRetentionPolicies(undefined);
+    // Collection db options are process-global too; a later registration must
+    // start from its own config's, not inherit this one's `allowIdOnCreate`.
+    publishCollectionDbOptions([]);
     // Hooks live in a registry that outlives the container. Registration runs
     // from config on every init, so leaving it populated means a second
     // instance in the same process appends a fresh copy of every handler and
@@ -3672,6 +3761,8 @@ export function clearServices(): void {
   // provider closes over this container's registry.
   resetWebhookActivation();
   publishRetentionPolicies(undefined);
+  // Cleared for the same reason as in `releaseServices`.
+  publishCollectionDbOptions([]);
   // Cleared with the container for the same reason: re-initializing would
   // otherwise register every configured hook a second time.
   clearActiveHookRegistry();

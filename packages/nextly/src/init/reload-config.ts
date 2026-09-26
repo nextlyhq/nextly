@@ -28,15 +28,21 @@ import { type SQL } from "drizzle-orm";
 import type { CollectionHooks } from "../collections/config/define-collection";
 import { type ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import {
-  asAdminOptions,
-  resolveDescription,
-  toPersistedAdmin,
-} from "../domains/collections/services/collection-sync-service";
+  type CollectionDbOptions,
+  publishCollectionDbOptions,
+  publishedCollectionDbOptions,
+} from "../domains/collections/services/collection-id";
+import { toCodeFirstCollectionConfig } from "../domains/collections/services/collection-sync-service";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
+import {
+  clearActiveExtensionSchema,
+  setActiveExtensionSchema,
+} from "../domains/schema/extension/active-schema";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
+import { compileAndPublishExtensionSchema } from "../domains/schema/extension/publish";
 import { registerExtensionTables } from "../domains/schema/extension/register-tables";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
@@ -99,6 +105,7 @@ import {
 } from "../hooks/register-single-hooks";
 import type { HookOwner } from "../hooks/types";
 import { getInitializedPlugins } from "../plugins/initialized-plugins";
+import type { PluginDefinition } from "../plugins/plugin-context";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
@@ -163,6 +170,8 @@ type CollectionDef = {
   webhooks?: boolean | { record?: boolean };
   /** Cache-revalidation config; persisted to dynamic_collections.revalidate. */
   revalidate?: RevalidateConfig;
+  /** Id generator and client-supplied ids; published in memory by the sync. */
+  db?: CollectionDbOptions;
 };
 
 type SingleDef = {
@@ -456,43 +465,10 @@ async function defaultResolver(name: string): Promise<unknown> {
 // registry-only metadata (versions/localized/status/labels/description) reaches
 // the registry too, not just schema (DDL) changes.
 function buildCollectionSyncPayload(collections: CollectionDef[]) {
+  // The projection every sync route shares; see `toCodeFirstCollectionConfig`.
   return collections
     .filter((c): c is CollectionDef & { slug: string } => !!c.slug)
-    .map(c => ({
-      slug: c.slug,
-      labels: {
-        singular: c.labels?.singular ?? c.slug,
-        plural: c.labels?.plural ?? `${c.slug}s`,
-      },
-      fields: c.fields ?? [],
-      description: resolveDescription(c),
-      tableName: c.dbName,
-      timestamps: c.timestamps,
-      // Same projection as boot and the CLI: one decision about what `admin` may contain,
-      // applied wherever a collection reaches the registry.
-      admin: toPersistedAdmin(asAdminOptions(c.admin)),
-      // Draft/Published flag + versioning persisted to dynamic_collections so a
-      // code-first toggle reaches the registry.
-      status: c.status === true,
-      // i18n: forward the localized master switch. The reload apply pipeline
-      // carries `localized` into buildDesiredTableFromFields, so a localized
-      // toggle produces a real schema diff (main table drops translatable cols,
-      // companion table is created) and reaches this sync only AFTER the DDL
-      // path ran. On the metadata-only path localized is unchanged from the
-      // physical schema. Omitting it here would write `localized === undefined
-      // === true = false`, flipping a localized collection's flag OFF on every
-      // reload and desyncing the registry from the companion table.
-      localized: c.localized === true,
-      versions: resolveVersionsConfig(c.versions, c.status),
-      // Forward the cache-revalidation config verbatim (no resolver — the
-      // authored `{ tags?, disable? }` shape is persisted as-is).
-      revalidate: c.revalidate,
-      // Mirror the recording opt-out onto the registry row. The live policy is
-      // published separately from config, but without this the row stays null
-      // and the read-only Builder shows recording enabled for a collection
-      // whose writes are actually suppressed.
-      webhooks: storedWebhookRecording(c.webhooks),
-    }));
+    .map(c => toCodeFirstCollectionConfig(c));
 }
 
 // Build the code-first registry-sync payload for singles (see above).
@@ -1450,7 +1426,9 @@ async function applyReload(opts?: {
          * apart from the app's own, since the loader folds contributed
          * collections and singles into the lists above.
          */
-        plugins?: unknown[];
+        plugins?: PluginDefinition[];
+        /** Read for `db.schema` (app-level hooks) when recompiling below. */
+        db?: unknown;
       }
     | undefined;
   /**
@@ -1524,7 +1502,8 @@ async function applyReload(opts?: {
           singles?: SingleDef[];
           fieldGroups?: ComponentDef[];
           webhookAuditEnabled?: boolean;
-          plugins?: unknown[];
+          plugins?: PluginDefinition[];
+          db?: unknown;
         };
       }
     ).config;
@@ -1635,12 +1614,21 @@ async function applyReload(opts?: {
   // and returns early -- which is why the commit has to sit on the no-change
   // paths as well as after a successful apply, not on the apply alone.
   const commitConfigHooks = stageConfigHooks(newConfig);
+  // Collection db options (`idType`, `allowIdOnCreate`) are published once, at
+  // commit, from the reloaded config — empty set included — and the set in
+  // force when the reload started is put back when it does not land, so
+  // nothing a refused reload did leaves its options live.
+  const previousDbOptions = publishedCollectionDbOptions();
+  reloadUndo.push(() => publishCollectionDbOptions(previousDbOptions));
   let committed = false;
   const commitReload = (): void => {
     if (committed) return;
     committed = true;
     commitConfigHooks();
     commitFieldFunctions?.();
+    publishCollectionDbOptions(
+      buildCollectionSyncPayload(newConfig.collections ?? [])
+    );
     // Published here rather than when the file is read. A reload that is later
     // refused still parsed a valid config, and publishing early would leave a
     // policy the process explicitly rejected in force — deleting on windows
@@ -1697,6 +1685,50 @@ async function applyReload(opts?: {
   // would crash at runtime).
   const dialect = adapter.dialect;
   const db = adapter.getDrizzle();
+
+  // Recompile the extension schema from the reloaded config, BEFORE anything
+  // diffs or registers tables. Boot compiles it once, and a reload that
+  // re-registered the boot-time schema never saw an edit to `db.schema.extend`
+  // or to a local plugin's tables: the push pipeline keys its cache on the
+  // compiled fingerprint, which did not move, so the change applied only after
+  // a restart. The loader already ran the `setup` transformers, so
+  // `newConfig.plugins` is the effective list, as it is at boot.
+  //
+  // Published optimistically like the field types above, and put back by the
+  // same undo when the reload does not land: a refused reload keeps the
+  // previous config, and its tables are what the database still has.
+  const previousExtensionSchema = getActiveExtensionSchema(dialect);
+  reloadUndo.push(() => {
+    if (previousExtensionSchema) {
+      setActiveExtensionSchema(dialect, previousExtensionSchema);
+    } else {
+      clearActiveExtensionSchema();
+    }
+  });
+  let extensionSchemaChanged: boolean;
+  try {
+    const reloadedExtensionSchema = await compileAndPublishExtensionSchema({
+      dialect,
+      plugins: newConfig.plugins ?? [],
+      config: newConfig,
+      logger: {
+        warn: m => logger?.warn(m),
+      },
+    });
+    // Compared on the fingerprint of what was compiled, the key the pipeline
+    // itself caches on, so "changed" here and "changed" there are one answer.
+    extensionSchemaChanged =
+      (previousExtensionSchema?.fingerprint ?? null) !==
+      (reloadedExtensionSchema?.fingerprint ?? null);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.error(
+      `[Nextly HMR] Could not compile the extension schema: ${msg}. ` +
+        `Keeping the previously-loaded config.`
+    );
+    undoOptimisticReloadWork();
+    return;
+  }
 
   // Normalize collections to (slug, tableName, fields, status) tuples. Drop
   // entries without a slug — they can't be addressed. `status` propagates so
@@ -1800,7 +1832,11 @@ async function applyReload(opts?: {
   if (
     targets.length === 0 &&
     singleTargets.length === 0 &&
-    componentTargets.length === 0
+    componentTargets.length === 0 &&
+    // An app with no code-first entities can still have plugin tables that
+    // changed. Those reach the database only through the pipeline apply
+    // below, so this shortcut is for a reload with nothing to apply at all.
+    !extensionSchemaChanged
   ) {
     // Nothing managed remains, but a reload that removed the LAST code-first
     // collection/single still has to reconcile the recording policy before
@@ -1892,7 +1928,10 @@ async function applyReload(opts?: {
   // into the new (e.g. single_*) tables — the false-positive rename prompt
   // the user sees on a first-install where collections are synced before
   // singles.
-  let hasChanges = false;
+  // An extension-only edit produces no entity diff, so it starts the reload
+  // off as a change: the pipeline apply below is what merges the recompiled
+  // extension tables into the desired schema and creates or alters them.
+  let hasChanges = extensionSchemaChanged;
   // True when a real schema diff existed but was NOT applied this cycle (an
   // unsafe change needing review, or a diff that threw). In that state the
   // registry's `fields` would disagree with the physical table, so the no-DDL

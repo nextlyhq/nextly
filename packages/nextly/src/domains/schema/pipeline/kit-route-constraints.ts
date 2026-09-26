@@ -18,12 +18,8 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { tableConstraintOps } from "./ddl-emitter";
-import type {
-  DropForeignKeyOp,
-  ForeignKeySpec,
-  Operation,
-  TableSpec,
-} from "./diff/types";
+import type { Operation, TableSpec } from "./diff/types";
+import { foreignKeysBlockingTypeChanges } from "./foreign-key-lift";
 import { generateSQL } from "./sql-templates";
 
 /** Statements to run before the kit's batch, and after it. */
@@ -76,107 +72,11 @@ export function kitRouteConstraintStatements(
   }
   if (dialect === "mysql") {
     const suspended = foreignKeysBlockingTypeChanges(ops, liveTables);
-    before.push(...suspended);
-    after.push(
-      ...suspended.map(op => ({
-        type: "add_foreign_key" as const,
-        tableName: op.tableName,
-        foreignKey: op.foreignKey,
-      }))
-    );
+    before.push(...suspended.map(lift => lift.drop));
+    after.push(...suspended.map(lift => lift.restore));
   }
   return {
     before: before.map(op => generateSQL(op, dialect)),
     after: after.map(op => generateSQL(op, dialect)),
   };
-}
-
-/**
- * The foreign keys a MySQL column-type change must lift for its duration:
- * those in the LIVE schema whose own columns or referenced columns include a
- * changed column. Read from what exists, because only an existing key can be
- * dropped — one this apply adds is created afterwards by its own operation.
- * A key the diff already drops is left to that drop, and to the add that
- * replaces it when it is being re-keyed. So is a key that will not survive the
- * apply at all — on a table it drops, or over a column it drops — since there
- * would be nothing to add it back to.
- */
-function foreignKeysBlockingTypeChanges(
-  ops: readonly Operation[],
-  liveTables: readonly TableSpec[]
-): DropForeignKeyOp[] {
-  const changed = keysOf(ops, "change_column_type", op =>
-    columnKey(op.tableName, op.columnName)
-  );
-  if (changed.size === 0) return [];
-  const survives = survivalCheck(ops);
-  return liveTables.flatMap(table =>
-    (table.foreignKeys ?? [])
-      .filter(
-        foreignKey =>
-          survives(table.name, foreignKey) &&
-          touchesChangedColumn(table.name, foreignKey, changed)
-      )
-      .map(foreignKey => ({
-        type: "drop_foreign_key" as const,
-        tableName: table.name,
-        foreignKey,
-      }))
-  );
-}
-
-/**
- * Whether a live key outlasts the apply untouched: not dropped (or re-keyed)
- * by the diff itself, and not on a table or over a column the apply drops.
- */
-function survivalCheck(
-  ops: readonly Operation[]
-): (tableName: string, foreignKey: ForeignKeySpec) => boolean {
-  const dropped = keysOf(ops, "drop_foreign_key", op =>
-    columnKey(op.tableName, op.foreignKey.name)
-  );
-  const droppedTables = keysOf(ops, "drop_table", op =>
-    op.tableName.toLowerCase()
-  );
-  const droppedColumns = keysOf(ops, "drop_column", op =>
-    columnKey(op.tableName, op.columnName)
-  );
-  return (tableName, foreignKey) =>
-    !droppedTables.has(tableName.toLowerCase()) &&
-    !dropped.has(columnKey(tableName, foreignKey.name)) &&
-    !foreignKey.columns.some(column =>
-      droppedColumns.has(columnKey(tableName, column))
-    );
-}
-
-/** The keys `keyOf` gives for every operation of one type. */
-function keysOf<T extends Operation["type"]>(
-  ops: readonly Operation[],
-  type: T,
-  keyOf: (op: Extract<Operation, { type: T }>) => string
-): Set<string> {
-  return new Set(
-    ops
-      .filter((op): op is Extract<Operation, { type: T }> => op.type === type)
-      .map(keyOf)
-  );
-}
-
-function touchesChangedColumn(
-  tableName: string,
-  foreignKey: ForeignKeySpec,
-  changed: ReadonlySet<string>
-): boolean {
-  return (
-    foreignKey.columns.some(column =>
-      changed.has(columnKey(tableName, column))
-    ) ||
-    foreignKey.referencesColumns.some(column =>
-      changed.has(columnKey(foreignKey.referencesTable, column))
-    )
-  );
-}
-
-function columnKey(tableName: string, name: string): string {
-  return `${tableName.toLowerCase()}\u0000${name.toLowerCase()}`;
 }

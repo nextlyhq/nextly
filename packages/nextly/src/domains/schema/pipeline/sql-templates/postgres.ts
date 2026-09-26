@@ -5,27 +5,16 @@
 // statements for migrate:create output).
 
 import type {
-  AddCheckOp,
-  AddForeignKeyOp,
-  AddColumnOp,
-  AddIndexOp,
-  AddTableOp,
   ChangeColumnDefaultOp,
   ChangeColumnNullableOp,
   ChangeColumnTypeOp,
-  ColumnSpec,
-  DropCheckOp,
-  DropForeignKeyOp,
-  DropColumnOp,
   DropIndexOp,
   DropTableOp,
-  IndexSpec,
   Operation,
-  RenameColumnOp,
-  RenameTableOp,
 } from "../diff/types";
 
-import { columnDefinition, createTableBody } from "./create-table-body";
+import { commonStatementSql, dropConstraintSql } from "./common-statements";
+import { createIndexSql } from "./create-index";
 import {
   changeForeignKeyActionSql,
   unsupportedOperation,
@@ -33,10 +22,6 @@ import {
 import { quoteIdent } from "./identifier-quoting";
 
 const q = (n: string) => quoteIdent(n, "postgresql");
-
-function columnDef(c: ColumnSpec): string {
-  return columnDefinition(c, q);
-}
 
 export function generatePgSQL(op: Operation): string {
   // The three dialect dispatchers are switches over the SAME `Operation`
@@ -52,17 +37,16 @@ export function generatePgSQL(op: Operation): string {
   // fallow-ignore-next-line code-duplication
   switch (op.type) {
     case "add_table":
-      return generateAddTable(op);
+    case "rename_table":
+    case "add_column":
+    case "drop_column":
+    case "rename_column":
+    case "add_check":
+    case "add_foreign_key":
+      // Rendered alike on every dialect but for the quote function.
+      return commonStatementSql(op, "postgresql", q);
     case "drop_table":
       return generateDropTable(op);
-    case "rename_table":
-      return generateRenameTable(op);
-    case "add_column":
-      return generateAddColumn(op);
-    case "drop_column":
-      return generateDropColumn(op);
-    case "rename_column":
-      return generateRenameColumn(op);
     case "change_column_type":
       return generateChangeColumnType(op);
     case "change_column_nullable":
@@ -70,15 +54,21 @@ export function generatePgSQL(op: Operation): string {
     case "change_column_default":
       return generateChangeColumnDefault(op);
     case "add_index":
-      return generateAddIndex(op);
-    case "add_check":
-      return generateAddCheck(op);
+      return createIndexSql(op.tableName, op.index, "postgresql", q);
     case "drop_check":
-      return generateDropCheck(op);
-    case "add_foreign_key":
-      return generateAddForeignKey(op);
+      return dropConstraintSql(
+        op.tableName,
+        op.check.name,
+        "DROP CONSTRAINT IF EXISTS",
+        q
+      );
     case "drop_foreign_key":
-      return generateDropForeignKey(op);
+      return dropConstraintSql(
+        op.tableName,
+        op.foreignKey.name,
+        "DROP CONSTRAINT IF EXISTS",
+        q
+      );
     case "drop_index":
       return generateDropIndex(op);
     case "change_foreign_key_action":
@@ -89,43 +79,6 @@ export function generatePgSQL(op: Operation): string {
     default:
       return unsupportedOperation("generatePgSQL", op);
   }
-}
-
-function createIndexStatement(tableName: string, index: IndexSpec): string {
-  // An expression index carries per-dialect SQL in place of column names;
-  // PG wants it double-parenthesized so the outer parens stay the index's
-  // own column list.
-  const cols = index.expression
-    ? `(${index.expression})`
-    : index.columns.map(q).join(", ");
-  const where = index.where ? ` WHERE ${index.where}` : "";
-  return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${q(index.name)} ON ${q(tableName)} (${cols})${where}`;
-}
-
-function generateAddCheck(op: AddCheckOp): string {
-  // IF NOT EXISTS is not offered for constraints; the diff never emits an add
-  // for a name the previous snapshot carried, so a collision is a real drift.
-  return `ALTER TABLE ${q(op.tableName)} ADD CONSTRAINT ${q(op.check.name)} CHECK (${op.check.sql})`;
-}
-
-function generateDropCheck(op: DropCheckOp): string {
-  return `ALTER TABLE ${q(op.tableName)} DROP CONSTRAINT IF EXISTS ${q(op.check.name)}`;
-}
-
-function generateAddForeignKey(op: AddForeignKeyOp): string {
-  const { foreignKey } = op;
-  const cols = foreignKey.columns.map(q).join(", ");
-  const refCols = foreignKey.referencesColumns.map(q).join(", ");
-  const actions = ` ON DELETE ${foreignKey.onDelete.toUpperCase()} ON UPDATE ${foreignKey.onUpdate.toUpperCase()}`;
-  return `ALTER TABLE ${q(op.tableName)} ADD CONSTRAINT ${q(foreignKey.name)} FOREIGN KEY (${cols}) REFERENCES ${q(foreignKey.referencesTable)} (${refCols})${actions}`;
-}
-
-function generateDropForeignKey(op: DropForeignKeyOp): string {
-  return `ALTER TABLE ${q(op.tableName)} DROP CONSTRAINT IF EXISTS ${q(op.foreignKey.name)}`;
-}
-
-function generateAddIndex(op: AddIndexOp): string {
-  return createIndexStatement(op.tableName, op.index);
 }
 
 function generateDropIndex(op: DropIndexOp): string {
@@ -155,38 +108,11 @@ function generateDropIndex(op: DropIndexOp): string {
   );
 }
 
-function generateAddTable(op: AddTableOp): string {
-  const cols = createTableBody(op.table, q, "  ", "postgresql");
-  const createTable = `CREATE TABLE ${q(op.table.name)} (\n${cols}\n)`;
-  // Render the table's tracked indexes as separate statements after CREATE
-  // TABLE. When `indexes` is undefined (pre-C1 sentinel) none are emitted.
-  const indexStmts = (op.table.indexes ?? []).map(i =>
-    createIndexStatement(op.table.name, i)
-  );
-  return [createTable, ...indexStmts].join(";\n");
-}
-
 // PG CASCADE drops FK references atomically. Mirrors pre-resolution
 // sql-templates behavior — the F11 sql-templates module is the single
 // source of truth post-PR-3.
 function generateDropTable(op: DropTableOp): string {
   return `DROP TABLE ${q(op.tableName)} CASCADE`;
-}
-
-function generateRenameTable(op: RenameTableOp): string {
-  return `ALTER TABLE ${q(op.fromName)} RENAME TO ${q(op.toName)}`;
-}
-
-function generateAddColumn(op: AddColumnOp): string {
-  return `ALTER TABLE ${q(op.tableName)} ADD COLUMN ${columnDef(op.column)}`;
-}
-
-function generateDropColumn(op: DropColumnOp): string {
-  return `ALTER TABLE ${q(op.tableName)} DROP COLUMN ${q(op.columnName)}`;
-}
-
-function generateRenameColumn(op: RenameColumnOp): string {
-  return `ALTER TABLE ${q(op.tableName)} RENAME COLUMN ${q(op.fromColumn)} TO ${q(op.toColumn)}`;
 }
 
 // Postgres performs an implicit cast only for a small set of type-family

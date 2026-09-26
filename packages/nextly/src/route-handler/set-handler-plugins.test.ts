@@ -191,10 +191,9 @@ describe("the handler config store", () => {
     const view = store.getHandlerConfig();
     expect(view?.collections?.map(c => c.slug)).toEqual(["reports"]);
     expect(view?.singles?.map(s => s.slug)).toEqual(["site"]);
-    // The DEFINITION, not a slug projection of it. `runProdMigrationsIfEnabled`
-    // reads this store and passes it to `resolveDeclaredSchema`, which resolves
-    // a table name from `dbName`; an earlier version rebuilt these entries as
-    // `{ slug }` and made drift verification look for a table that never
+    // The DEFINITION, not a slug projection of it. A reader of this store that
+    // resolves a table name needs `dbName`; an earlier version rebuilt these
+    // entries as `{ slug }` and made such a reader look for a table that never
     // existed. This assertion is what stops that returning.
     expect(view?.collections?.[0]).toMatchObject({ dbName: "acme_reports" });
   });

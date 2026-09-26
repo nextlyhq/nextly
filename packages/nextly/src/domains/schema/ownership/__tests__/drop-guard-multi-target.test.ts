@@ -18,6 +18,8 @@ import {
   tablesDroppedBy,
   UnparsableDropTarget,
 } from "../drop-guard";
+import { splitSqlStatements } from "../../migrate/split-sql";
+import { sqliteTableRebuildStatements } from "../../pipeline/sql-templates/sqlite-rebuild";
 import type { OwnerRecord } from "../owner-registry";
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
@@ -672,5 +674,298 @@ describe("refusing what it cannot read", () => {
       });
       expect(String(refusal.logContext?.reason)).toMatch(/executable comment/);
     }
+  });
+});
+
+/**
+ * A rename takes a table away from the name its owner row records. Once one
+ * module has renamed `app_notes` to `mine`, a later module — or the plugin's
+ * uninstall DOWN — dropping `mine` is judged by a name nobody claims, so the
+ * rename itself is what has to be refused.
+ */
+describe("renaming another owner's table", () => {
+  it.each<[SupportedDialect, string]>([
+    ["postgresql", "ALTER TABLE app_notes RENAME TO mine"],
+    ["sqlite", "ALTER TABLE app_notes RENAME TO mine"],
+    ["mysql", "ALTER TABLE app_notes RENAME TO mine"],
+    ["mysql", "RENAME TABLE app_notes TO mine"],
+    ["mysql", "ALTER TABLE app_notes RENAME AS mine"],
+    ["postgresql", "ALTER TABLE IF EXISTS ONLY public.app_notes SET SCHEMA x"],
+    // Behind a rename this stream is entitled to, in the same text.
+    [
+      "postgresql",
+      "ALTER TABLE fx__a RENAME TO fx__b; ALTER TABLE app_notes RENAME TO t1",
+    ],
+  ])("is refused on %s: %s", (dialect, statement) => {
+    try {
+      guard([statement], dialect);
+      expect.unreachable("must throw");
+    } catch (error) {
+      expect(NextlyError.is(error)).toBe(true);
+      const refusal = error as NextlyError;
+      expect(refusal.code).toBe("DROP_OF_FOREIGN_TABLE");
+      expect(refusal.logContext).toMatchObject({
+        table: "app_notes",
+        renamedBy: "plugin:fx",
+        belongsTo: "app",
+        source: "plugin:fx/001",
+      });
+    }
+  });
+
+  it.each<[SupportedDialect, string]>([
+    ["postgresql", "ALTER TABLE fx__notes RENAME TO fx__archive"],
+    ["sqlite", 'ALTER TABLE "__new_fx__notes" RENAME TO "fx__notes"'],
+    ["mysql", "RENAME TABLE fx__notes TO fx__archive"],
+    ["postgresql", "ALTER TABLE fx__notes SET SCHEMA archive"],
+    // Column and index renames on the foreign table rename no table.
+    ["postgresql", "ALTER TABLE app_notes RENAME COLUMN a TO b"],
+    ["mysql", "ALTER TABLE app_notes RENAME INDEX i1 TO i2"],
+  ])(
+    "leaves a rename that takes no foreign table alone on %s: %s",
+    (dialect, statement) => {
+      // The control: the same guard, owners and stream, with the renamed table
+      // one this stream owns or nobody claims.
+      expect(() => guard([statement], dialect)).not.toThrow();
+    }
+  );
+});
+
+/**
+ * PostgreSQL's DO runs its body. A dollar-quoted body is lexed as code; a
+ * string-literal body is skipped as data, so a drop inside it would pass
+ * unread.
+ */
+describe("a PostgreSQL DO block whose body is a string", () => {
+  it.each([
+    "DO 'BEGIN DROP TABLE app_notes; END'",
+    "DO LANGUAGE plpgsql 'BEGIN DROP TABLE app_notes; END'",
+    "DO E'BEGIN DROP TABLE app_notes; END'",
+    "SELECT 1; DO 'BEGIN DROP TABLE app_notes; END'",
+  ])("is refused: %s", statement => {
+    try {
+      tablesDroppedBy([statement], "postgresql");
+      expect.unreachable("must throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(UnparsableDropTarget);
+      expect((error as UnparsableDropTarget).reason).toMatch(
+        /body written as a string/
+      );
+    }
+  });
+
+  it.each([
+    "DO $$ BEGIN PERFORM 1; END $$",
+    "DO LANGUAGE plpgsql $body$ BEGIN PERFORM 1; END $body$",
+    "DO $$ BEGIN PERFORM 1; END $$ LANGUAGE plpgsql",
+  ])("reads a dollar-quoted body as before: %s", statement => {
+    expect(tablesDroppedBy([statement], "postgresql")).toEqual([]);
+  });
+
+  it("does not apply MySQL's DO, which evaluates expressions", () => {
+    expect(tablesDroppedBy(["DO RELEASE_LOCK('x')"], "mysql")).toEqual([]);
+  });
+});
+
+/**
+ * A routine's or trigger's body is code that runs later, when it is called
+ * or fires — read like a `DO` or function body: a drop inside it is judged
+ * as a drop by this migration.
+ */
+describe("drops inside a routine or trigger body", () => {
+  const procedure = (drop: string) =>
+    [
+      "CREATE PROCEDURE fx_reset()",
+      "BEGIN",
+      "  DELETE FROM fx__notes;",
+      `  ${drop};`,
+      "END;",
+    ].join("\n");
+
+  it("refuses a MySQL procedure whose body drops another owner's table", () => {
+    const statements = splitSqlStatements(
+      procedure("DROP TABLE app_notes"),
+      "mysql"
+    );
+    // One statement: the body is not split at its inner `;`.
+    expect(statements).toHaveLength(1);
+    expect(() => guard(statements, "mysql")).toThrow(/different owner/i);
+  });
+
+  it("allows one whose body drops only this stream's own table", () => {
+    // The control: the same definition, dropping a table nobody else owns.
+    const statements = splitSqlStatements(
+      procedure("DROP TABLE IF EXISTS fx__scratch"),
+      "mysql"
+    );
+    expect(() => guard(statements, "mysql")).not.toThrow();
+  });
+
+  it("refuses dynamic SQL inside a body, as anywhere else", () => {
+    const statements = splitSqlStatements(procedure("EXECUTE stmt"), "mysql");
+    expect(() => guard(statements, "mysql")).toThrow(UnparsableDropTarget);
+  });
+});
+
+/**
+ * SQLite changes a table's constraints by rebuilding it: a twin created,
+ * the rows copied, the table dropped and the twin renamed back. A contributor
+ * adding a check or a foreign key to a table it does not own emits exactly
+ * that, and the table and its rows survive under the owner's name — so a
+ * COMPLETE block is not a drop or rename of it. Anything less still is.
+ */
+describe("a complete SQLite rebuild of another owner's table", () => {
+  const create =
+    'CREATE TABLE "__new_app_notes" ("id" TEXT PRIMARY KEY NOT NULL, "body" TEXT, CONSTRAINT "c" CHECK ("body" <> \'\'))';
+  const copy =
+    'INSERT INTO "__new_app_notes" ("id", "body") SELECT "id", "body" FROM "app_notes"';
+  const drop = 'DROP TABLE "app_notes"';
+  const rename = 'ALTER TABLE "__new_app_notes" RENAME TO "app_notes"';
+  /** `app_notes` as the database holds it. */
+  const live = (...columns: string[]) =>
+    new Map([["app_notes", new Set(columns)]]);
+
+  function guardLive(
+    statements: string[],
+    liveColumns: ReturnType<typeof live> | undefined,
+    dialect: SupportedDialect = "sqlite"
+  ) {
+    assertNoForeignDrops({
+      statements,
+      stream: "plugin:fx",
+      owners,
+      dialect,
+      source: "plugin:fx/001",
+      liveColumns,
+    });
+  }
+
+  it("is not taken as a drop or a rename of it when the twin keeps every live column", () => {
+    expect(() =>
+      guardLive(
+        ["SELECT 1", create, copy, drop, rename, "SELECT 2"],
+        live("id", "body")
+      )
+    ).not.toThrow();
+  });
+
+  it("is recognised as the pipeline renders it", () => {
+    const statements = sqliteTableRebuildStatements({
+      name: "app_notes",
+      columns: [
+        { name: "id", type: "text", nullable: false, primaryKey: true },
+        { name: "status", type: "text", nullable: true },
+      ],
+      indexes: [],
+      checks: [{ name: "status_enum", expression: "\"status\" IN ('a', 'b')" }],
+    } as never);
+    expect(() => guardLive(statements, live("id", "status"))).not.toThrow();
+  });
+
+  it("follows a column dropped before the rebuild in the same list", () => {
+    // A contribution's DOWN: its column goes first, then the table is
+    // rebuilt without the column or its check.
+    expect(() =>
+      guardLive(
+        [
+          'ALTER TABLE "app_notes" DROP COLUMN "status"',
+          create,
+          copy,
+          drop,
+          rename,
+        ],
+        live("id", "body", "status")
+      )
+    ).not.toThrow();
+  });
+
+  it("refuses a narrow twin after a multi-clause ALTER it cannot follow", () => {
+    // The ALTER adds `x` and `y`; the twin declares neither. Were the ALTER
+    // skipped, the tracked columns would still be `id`, `body` and the block
+    // would pass while dropping both new columns with the old table.
+    expect(() =>
+      guardLive(
+        [
+          'ALTER TABLE "app_notes" ADD COLUMN "x" TEXT, ADD COLUMN "y" TEXT',
+          create,
+          copy,
+          drop,
+          rename,
+        ],
+        live("id", "body"),
+        "postgresql"
+      )
+    ).toThrow(/different owner/i);
+  });
+
+  it.each([
+    [
+      "an ADD of a constraint",
+      'ALTER TABLE "app_notes" ADD CONSTRAINT "k" UNIQUE ("id")',
+    ],
+    [
+      "an ALTER it does not follow",
+      'ALTER TABLE "app_notes" ALTER COLUMN "body" SET NOT NULL',
+    ],
+  ])("stops following the table after %s", (_shape, statement) => {
+    expect(() =>
+      guardLive(
+        [statement, create, copy, drop, rename],
+        live("id", "body"),
+        "postgresql"
+      )
+    ).toThrow(/different owner/i);
+  });
+
+  it("refuses a twin that leaves out a live column", () => {
+    // Everything the text shows is a complete block; only the live table
+    // shows the rebuild would drop `secret` with the old table.
+    expect(() =>
+      guardLive([create, copy, drop, rename], live("id", "body", "secret"))
+    ).toThrow(/different owner/i);
+  });
+
+  it("refuses a rebuild whose table's live columns were not read", () => {
+    expect(() => guardLive([create, copy, drop, rename], undefined)).toThrow(
+      /different owner/i
+    );
+  });
+
+  it.each([
+    ["a lone drop", [drop]],
+    ["a lone rename of the twin", [create, rename]],
+    ["a block without its copy", [create, drop, rename]],
+    ["a block out of order", [create, copy, rename, drop]],
+    [
+      "a copy that filters rows",
+      [create, `${copy} WHERE "body" IS NOT NULL`, drop, rename],
+    ],
+    [
+      "a copy that leaves a declared column empty",
+      [
+        create,
+        'INSERT INTO "__new_app_notes" ("id") SELECT "id" FROM "app_notes"',
+        drop,
+        rename,
+      ],
+    ],
+    [
+      "a copy from another table",
+      [
+        create,
+        'INSERT INTO "__new_app_notes" ("id", "body") SELECT "id", "body" FROM "fx__notes"',
+        drop,
+        rename,
+      ],
+    ],
+    [
+      "a twin renamed to another name",
+      [create, copy, drop, 'ALTER TABLE "__new_app_notes" RENAME TO "mine"'],
+    ],
+    ["a block sharing a statement", [create, copy, `${drop}; ${rename}`]],
+  ])("still refuses %s", (_shape, statements) => {
+    expect(() => guardLive(statements, live("id", "body"))).toThrow(
+      /different owner/i
+    );
   });
 });

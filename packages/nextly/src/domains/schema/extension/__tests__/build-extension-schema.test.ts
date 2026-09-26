@@ -235,7 +235,11 @@ describe("entity indexes", () => {
     // not own, and app migrations carry it.
     expect(schema.tables).toHaveLength(0);
     expect(schema.entityIndexes.get("dc_posts")).toEqual([
-      { columns: ["title"], unique: false },
+      {
+        columns: ["title"],
+        unique: false,
+        contributedBy: { kind: "plugin", id: "a" },
+      },
     ]);
   });
 });

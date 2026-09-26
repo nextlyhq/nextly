@@ -615,18 +615,22 @@ async function buildPluginDraft(args: {
   } catch (error) {
     const missing = missingExtendTarget(error);
     if (missing === undefined) throw error;
-    throw new NextlyError({
-      code: "INVALID_INPUT",
-      publicMessage:
+    // What happens to an element on an app's entity table is stated as the
+    // code does it: the app's migration stream carries every contribution to
+    // its collections, Singles and field groups (and to the extendable core
+    // tables), whoever made it — so the plugin's module never needs one, and
+    // the hook only has to tolerate the table's absence here.
+    throw NextlyError.invalidInput({
+      message:
         `Plugin "${args.pluginName}" has a schema.extend hook that extends "${missing}", ` +
         `which is not in the schema this command compiles. A plugin's migration module ships ` +
         `inside the plugin, so it is compiled from the plugin and its DECLARED DEPENDENCIES ` +
         `alone — never from the app's entity tables, which differ per installation. ` +
         `If "${missing}" belongs to a dependency, add that dependency to dependsOn and make sure ` +
-        `it is present in the config this command loads. If it is an entity table, contribute the ` +
-        `columns from the app instead: the app's migration stream owns elements on tables it does ` +
-        `not declare.`,
-      statusCode: 400,
+        `it is present in the config this command loads. If it is one of the app's collections, ` +
+        `Singles or field groups, what the hook adds to it is migrated by the APP: \`nextly migrate:create\` ` +
+        `in the app writes it, whoever contributed it. Guard the hook with ` +
+        `\`schema.getTable("${missing}")\` so it skips the table when compiled for this module.`,
     });
   }
 }
@@ -702,15 +706,23 @@ export function pluginDependencyClosure(
   };
 }
 
-/** The table a draft refusal says could not be extended, if that is what it says. */
-function missingExtendTarget(error: unknown): string | undefined {
+/**
+ * The table a draft refusal says could not be extended, if that is what it says.
+ *
+ * Exported so the recognition can be tested against the refusal the draft
+ * actually raises: this reads another module's message, and a change there
+ * turns the plugin's explanation back into a raw validation error silently.
+ */
+export function missingExtendTarget(error: unknown): string | undefined {
   if (!(error instanceof NextlyError)) return undefined;
   const errors = (
     error.publicData as { errors?: { message?: string }[] } | undefined
   )?.errors;
   for (const entry of errors ?? []) {
+    // Anchored at the start only: the refusal goes on to say which tables a
+    // hook can see, and that sentence is not part of what identifies it.
     const match =
-      /^Table "(.+)" does not exist, so it cannot be extended\.$/.exec(
+      /^Table "(.+?)" does not exist, so it cannot be extended\./.exec(
         entry.message ?? ""
       );
     if (match) return match[1];

@@ -3,10 +3,12 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type {
   AddCheckOp,
   AddForeignKeyOp,
+  IndexSpec,
   Operation,
   TableSpec,
 } from "../diff/types";
 import { generateSQL } from "../sql-templates";
+import { isMysqlTextOrBlobType } from "../sql-templates/create-index";
 
 import { emitAdditiveDdl } from "./additive";
 import { emitPostgresDdl } from "./postgres";
@@ -106,26 +108,23 @@ export function canEmitWithoutDrizzleKit(
     // prefix: there it changes only how much of the value is indexed, which
     // is exactly what the Builder's own DDL does for the same columns.
     if (dialect === "mysql" && op.type === "add_table") {
-      return !hasUniqueIndexOnTextColumn(op.table);
+      return uniqueIndexesOnTextColumns(op.table).length === 0;
     }
     return true;
   });
 }
 
-/** Whether a table spec declares a UNIQUE index covering a TEXT/BLOB column. */
-function hasUniqueIndexOnTextColumn(table: {
-  columns?: ReadonlyArray<{ name: string; type: string }>;
-  indexes?: ReadonlyArray<{ columns: readonly string[]; unique?: boolean }>;
-}): boolean {
-  const indexes = table.indexes;
-  if (!indexes || indexes.length === 0) return false;
+/**
+ * The UNIQUE indexes a table spec declares over a MySQL TEXT/BLOB column —
+ * the ones the emitter cannot spell, because a key prefix would constrain the
+ * data. The one answer both the routing decision and the kit-path stripping
+ * read, so they cannot disagree about which indexes those are.
+ */
+function uniqueIndexesOnTextColumns(table: TableSpec): IndexSpec[] {
   const textColumns = new Set(
-    (table.columns ?? [])
-      .filter(c => /\b(text|blob)\b/i.test(c.type))
-      .map(c => c.name)
+    table.columns.filter(c => isMysqlTextOrBlobType(c.type)).map(c => c.name)
   );
-  if (textColumns.size === 0) return false;
-  return indexes.some(
+  return (table.indexes ?? []).filter(
     index =>
       index.unique === true && index.columns.some(c => textColumns.has(c))
   );
@@ -153,19 +152,11 @@ export function withoutUnemittableIndexes(
   dialect: SupportedDialect
 ): Operation {
   if (op.type !== "add_table" || dialect !== "mysql") return op;
-  const indexes = op.table.indexes;
-  if (!indexes || indexes.length === 0) return op;
-  const textColumns = new Set(
-    (op.table.columns ?? [])
-      .filter(c => /\b(text|blob)\b/i.test(c.type))
-      .map(c => c.name)
+  const unemittable = new Set(uniqueIndexesOnTextColumns(op.table));
+  if (unemittable.size === 0) return op;
+  const safe = (op.table.indexes ?? []).filter(
+    index => !unemittable.has(index)
   );
-  if (textColumns.size === 0) return op;
-  const safe = indexes.filter(
-    index =>
-      !(index.unique === true && index.columns.some(c => textColumns.has(c)))
-  );
-  if (safe.length === indexes.length) return op;
   return { ...op, table: { ...op.table, indexes: safe } };
 }
 

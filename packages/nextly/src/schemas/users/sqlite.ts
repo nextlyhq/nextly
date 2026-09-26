@@ -12,17 +12,15 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
-import {
-  sqliteTable,
-  integer,
-  text,
-  index,
-  uniqueIndex,
-} from "drizzle-orm/sqlite-core";
+import type { BuildColumns } from "drizzle-orm";
+import { sqliteTable, integer, text } from "drizzle-orm/sqlite-core";
 
-export const users = sqliteTable(
-  "users",
-  {
+import { USERS_INDEXES, sqliteIndexes } from "../_internal/core-indexes";
+import { sqliteTimestamp } from "../_internal/sqlite-timestamp";
+
+/** `users` columns, a fresh builder record per call (see `core-table-contributions`). */
+export function usersColumns() {
+  return {
     id: text("id").primaryKey(),
     name: text("name"),
     email: text("email").notNull(),
@@ -41,15 +39,16 @@ export const users = sqliteTable(
     // Brute-force protection: tracks failed login attempts and account lockout
     failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
     lockedUntil: integer("locked_until", { mode: "timestamp" }),
-    createdAt: integer("created_at", { mode: "timestamp" })
-      .notNull()
-      .$defaultFn(() => new Date()),
-    updatedAt: integer("updated_at", { mode: "timestamp" })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  t => [
-    uniqueIndex("users_email_unique").on(t.email),
-    index("users_created_at_idx").on(t.createdAt),
-  ]
-);
+    createdAt: sqliteTimestamp("created_at"),
+    updatedAt: sqliteTimestamp("updated_at"),
+  };
+}
+
+/** `users` indexes, from `USERS_INDEXES`. */
+export function usersExtraConfig(
+  t: BuildColumns<"users", ReturnType<typeof usersColumns>, "sqlite">
+) {
+  return sqliteIndexes(USERS_INDEXES, t);
+}
+
+export const users = sqliteTable("users", usersColumns(), usersExtraConfig);

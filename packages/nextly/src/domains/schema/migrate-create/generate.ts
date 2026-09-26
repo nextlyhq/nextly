@@ -50,10 +50,11 @@ import type {
   RenameColumnOp,
   TableSpec,
 } from "../pipeline/diff/types";
+import { withForeignKeysLiftedForTypeChanges } from "../pipeline/foreign-key-lift";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
-import { generateSQL } from "../pipeline/sql-templates/index";
+import { generateStatements } from "../pipeline/sql-templates/index";
 
 import {
   appStreamSnapshots,
@@ -280,13 +281,27 @@ export async function generateMigration(
   }
 
   // 7. Generate UP SQL per op, a foreign-key cycle's keys split out of the
-  // table operations that cannot carry them (see `withCyclicForeignKeysSplit`).
+  // table operations that cannot carry them (see `withCyclicForeignKeysSplit`),
+  // and — on MySQL — every existing key a type change covers lifted around it,
+  // as dev push lifts them. The DOWN below inverts these ops, so it lifts the
+  // same keys around the reverse change.
   operations = withCyclicForeignKeysSplit(
-    operations,
+    withForeignKeysLiftedForTypeChanges(
+      operations,
+      previousSnapshot.tables,
+      args.dialect
+    ),
     args.dialect,
     previousSnapshot.tables
   );
-  const sqlStatements = operations.map(op => generateSQL(op, args.dialect));
+  // Rendered as a list, not one statement per operation: on SQLite a check
+  // or foreign-key change is a rebuild of its table to the schema the list
+  // leads to — the desired side for the UP, the previous side for the DOWN.
+  const sqlStatements = generateStatements(
+    operations,
+    args.dialect,
+    desiredSnapshot.tables
+  );
 
   // 7a. Generate DOWN SQL by inverting the RESOLVED ops (renames preserved).
   // Inverting the resolved ops — not re-diffing — keeps a forward rename as a
@@ -297,7 +312,11 @@ export async function generateMigration(
     args.dialect,
     desiredSnapshot.tables
   );
-  const downSqlStatements = inverseOps.map(op => generateSQL(op, args.dialect));
+  const downSqlStatements = generateStatements(
+    inverseOps,
+    args.dialect,
+    previousSnapshot.tables
+  );
 
   // 7b. Append UI metadata-row upserts for any touched UI-built table (§4.12.7).
   const touched = new Set(operations.map(operationTableName));

@@ -26,6 +26,7 @@
  */
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import { reconcileFile, type ReconcileRepo } from "../drift-reconcile";
+import { assertRunnableStatements } from "../split-sql";
 import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
 
 import {
@@ -33,11 +34,15 @@ import {
   assertModuleIntact,
   moduleSql,
   orderedMigrations,
+  pluginModuleStatements,
   qualifiedFilename,
   type PluginMigration,
 } from "./plugin-migration";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
-import { assertNoForeignDrops } from "../../ownership/drop-guard";
+import {
+  assertNoForeignDrops,
+  type LiveColumns,
+} from "../../ownership/drop-guard";
 import type { OwnerRecord } from "../../ownership/owner-registry";
 import {
   mergeContributions,
@@ -77,6 +82,12 @@ export interface RunPluginMigrationsDeps {
    * exactly the behaviour of a database predating the registry.
    */
   owners?: ReadonlyMap<string, OwnerRecord>;
+  /**
+   * The live columns of the tables a module's statements rebuild, read just
+   * before that module is judged (`readLiveColumns`). Absent, a rebuild is
+   * read as the drop it would otherwise be.
+   */
+  liveColumns?: (statements: readonly string[]) => Promise<LiveColumns>;
   /** Owner-registry upsert after a module lands or is adopted. */
   recordOwner: (args: {
     pluginName: string;
@@ -167,21 +178,34 @@ async function applyModule(
   assertModuleIntact(set.pluginName, migration);
 
   const filename = qualifiedFilename(set.pluginName, migration.name);
-  // Judged for the module as a whole, before anything executes: a module
-  // dropping another stream's table is refused with the ledger untouched,
-  // never partly applied.
-  assertNoForeignDrops({
-    statements: migration.dialects[deps.dialect]?.up ?? [],
-    stream: `plugin:${set.pluginName}`,
-    owners: deps.owners ?? new Map(),
-    dialect: deps.dialect,
-    source: filename,
-  });
   const recorded = deps.appliedShas.get(filename);
   if (recorded !== undefined) {
     assertAppliedUnchanged(set.pluginName, migration, recorded);
     return "skipped";
   }
+
+  // Judged for the module as a whole, before anything executes: a module
+  // dropping another stream's table is refused with the ledger untouched,
+  // never partly applied.
+  //
+  // Only a module about to run is judged. An applied module runs nothing
+  // here, and judging it against today's owners would refuse every later
+  // migrate once another stream came to own a name its old SQL dropped.
+  //
+  // The statements judged are the ones the executor runs: the same text
+  // (`moduleSql`, handed to `reconcileFile` below) through the same splitter.
+  // A statement the runner's transaction cannot hold is refused here too,
+  // before the ledger records an attempt.
+  const statements = pluginModuleStatements(migration, deps.dialect, "up");
+  assertNoForeignDrops({
+    statements,
+    stream: `plugin:${set.pluginName}`,
+    owners: deps.owners ?? new Map(),
+    dialect: deps.dialect,
+    source: filename,
+    liveColumns: await deps.liveColumns?.(statements),
+  });
+  assertRunnableStatements(statements, deps.dialect, filename);
 
   // Both sides include the FOREIGN tables this module contributes elements to,
   // so the reconcile compares against the shape the module's SQL actually

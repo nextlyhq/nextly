@@ -10,7 +10,7 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import type { AnyRelations } from "drizzle-orm";
+import { getTableName, type AnyRelations, type Table } from "drizzle-orm";
 
 import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import type { CollectionConfig } from "../collections/config/define-collection";
@@ -20,7 +20,10 @@ import {
   type JobsNamespace,
 } from "../direct-api/namespaces/jobs";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
-import type { SchemaOwner } from "../domains/schema/extension/types";
+import type {
+  ExtensionColumn,
+  SchemaOwner,
+} from "../domains/schema/extension/types";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
 import type { EventBus, EventHandler, EventName } from "../events/event-bus";
@@ -43,6 +46,7 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
+import type { ContributedColumn } from "./database/access";
 import {
   createPluginDatabase,
   type PluginDatabase,
@@ -1029,10 +1033,46 @@ function buildPluginDatabase(
     tables: () => ({
       ...(active()?.drizzle ?? {}),
       // Adopted tables are readable through the same owner check as any
-      // other: app-owned, so nextly.db reaches them and a plugin's check
-      // does not.
+      // other: app-owned, so the app's own `ctx.db` surface reaches them and a
+      // plugin's check does not.
       ...(active()?.adopted ?? {}),
     }),
+    // What `ctx.db.contributed` may reach: every column contributed to a
+    // table its contributor does not own, with the contributor each carries —
+    // the hidden columns on entity and extendable core tables, and those on
+    // extension tables (an app's on a plugin's table, a plugin's on a
+    // dependency's). The access rule decides which of them a caller may use.
+    contributions: () => {
+      const schema = active();
+      const byTable = new Map<string, ContributedColumn[]>();
+      const add = (table: string, column: ExtensionColumn): void => {
+        const list = byTable.get(table) ?? [];
+        list.push({
+          name: column.name,
+          key: column.key,
+          contributedBy: column.contributedBy,
+          spec: column,
+        });
+        byTable.set(table, list);
+      };
+      for (const [table, columns] of schema?.entityColumns ?? []) {
+        for (const column of columns) add(table, column);
+      }
+      for (const table of schema?.tables ?? []) {
+        for (const column of table.columns) {
+          if (column.contributedBy !== undefined) add(table.name, column);
+        }
+      }
+      return byTable;
+    },
+    // The runtime table an entity or core table queries through, found in
+    // the relations config the registry assembles from every registered
+    // table — keyed differently for core and dynamic tables, so matched by
+    // the table's SQL name rather than by key.
+    entityTable: tableName =>
+      Object.values(relations()).find(
+        entry => getTableName(entry.table as Table) === tableName
+      )?.table,
     tableList: () => [
       ...(active()?.tables ?? []).map(table => ({
         name: table.name,

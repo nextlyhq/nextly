@@ -21,7 +21,10 @@ import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../../plugins/plugin-slug";
 import { CORE_TABLE_NAMES } from "../../../schemas";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
-import { resolveComponentTableName } from "../utils/resolve-table-name";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../utils/resolve-table-name";
 
 import type { DrizzleSchemaHook } from "./after-drizzle";
 import {
@@ -31,6 +34,7 @@ import {
   setActiveExtensionSchema,
 } from "./build-extension-schema";
 import type { SeedEntityTable } from "./draft";
+import { entitySeedColumns } from "./entity-seed";
 import { pluginTablePrefix } from "./naming";
 import type { SchemaContribution } from "./run-hooks";
 
@@ -166,6 +170,13 @@ export async function compileAndPublishExtensionSchema(
   return schema;
 }
 
+/** What an entity's seed columns depend on, as the config carries it. */
+interface SeedFields {
+  fields?: { name: string; type: string }[];
+  status?: boolean;
+  localized?: boolean;
+}
+
 /**
  * Compile the extension schema WITHOUT making it the active one.
  *
@@ -207,41 +218,61 @@ export async function compileExtensionSchema(
   // Names come from the canonical resolvers rather than from a prefix spelled
   // here: a single may carry a `dbName`, and a field group's prefix is a
   // storage-format constant. Spelling either by hand is how the seed comes to
-  // disagree with the table the pipeline actually creates.
-  const collections = (input.config.collections ?? []) as {
-    slug: string;
-  }[];
-  const singles = (input.config.singles ?? []) as {
+  // disagree with the table the pipeline actually creates. A collection may
+  // carry a `dbName` too, and a hook targeting its physical table must find it.
+  const collections = (input.config.collections ?? []) as (SeedFields & {
     slug: string;
     dbName?: string;
-  }[];
-  const fieldGroups = (input.config.fieldGroups ?? []) as {
+  })[];
+  const singles = (input.config.singles ?? []) as (SeedFields & {
     slug: string;
-  }[];
+    dbName?: string;
+  })[];
+  const fieldGroups = (input.config.fieldGroups ?? []) as (SeedFields & {
+    slug: string;
+  })[];
 
-  // Columns are seeded empty for every kind: a hook looks a table UP to check
-  // it exists and to index it, and the diff derives the real columns from the
-  // fields. Listing them here would be a second derivation of the same thing,
-  // and the one that drifts is the one nobody reads.
+  // Seeded with their real columns — fields' and system — derived by the
+  // builders the diff describes each table with (`entitySeedColumns`). The
+  // draft judges a contribution against them: a contributed column reusing a
+  // name the table already has is refused, and so is an index over a column
+  // the table does not have or cannot index. Seeded empty, both passed, and a
+  // contributed `slug` silently displaced the real one.
+  const seed = (
+    entityKind: SeedEntityTable["entityKind"],
+    name: string,
+    entity: SeedFields & { slug: string }
+  ): SeedEntityTable => ({
+    name,
+    slug: entity.slug,
+    entityKind,
+    columns: entitySeedColumns(
+      {
+        entityKind,
+        tableName: name,
+        fields: entity.fields ?? [],
+        ...(entity.status !== undefined ? { status: entity.status } : {}),
+        ...(entity.localized !== undefined
+          ? { localized: entity.localized }
+          : {}),
+      },
+      input.dialect
+    ),
+  });
   const entities: SeedEntityTable[] = [
-    ...collections.map(collection => ({
-      name: `dc_${collection.slug}`,
-      slug: collection.slug,
-      entityKind: "collection" as const,
-      columns: [],
-    })),
-    ...singles.map(single => ({
-      name: resolveSingleTableName(single),
-      slug: single.slug,
-      entityKind: "single" as const,
-      columns: [],
-    })),
-    ...fieldGroups.map(group => ({
-      name: resolveComponentTableName(group.slug),
-      slug: group.slug,
-      entityKind: "component" as const,
-      columns: [],
-    })),
+    ...collections.map(collection =>
+      seed(
+        "collection",
+        resolveCollectionTableName(collection.slug, collection.dbName),
+        collection
+      )
+    ),
+    ...singles.map(single =>
+      seed("single", resolveSingleTableName(single), single)
+    ),
+    ...fieldGroups.map(group =>
+      seed("component", resolveComponentTableName(group.slug), group)
+    ),
   ];
 
   const schema = await buildExtensionSchema({

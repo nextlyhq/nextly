@@ -27,21 +27,16 @@
  * @module schemas/jobs/postgres
  */
 
-import {
-  pgTable,
-  text,
-  integer,
-  timestamp,
-  jsonb,
-  index,
-  uniqueIndex,
-} from "drizzle-orm/pg-core";
+import { pgTable, text, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
+import type { PgBuildExtraConfigColumns } from "drizzle-orm/pg-core";
+
+import { NEXTLY_JOBS_INDEXES, pgIndexes } from "../_internal/core-indexes";
 
 import type { JobState } from "./types";
 
-export const nextlyJobsPg = pgTable(
-  "nextly_jobs",
-  {
+/** `nextly_jobs` columns, a fresh builder record per call (see `core-table-contributions`). */
+export function nextlyJobsPgColumns() {
+  return {
     id: text("id")
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
@@ -85,29 +80,20 @@ export const nextlyJobsPg = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .$defaultFn(() => new Date())
       .notNull(),
-  },
-  table => [
-    // The due-job query reads exactly these two columns together.
-    index("nextly_jobs_due_idx").on(table.state, table.runAt),
-    // Ordering index for the recent-jobs read, which sorts the whole table by
-    // `updatedAt` before its small limit applies. Without it that is a full
-    // scan and sort on every monitoring request, and it degrades with queue
-    // volume rather than staying bounded — the due index above cannot serve it,
-    // because its leading column is `state`.
-    //
-    // A DECLARATION IS NOT AN UPGRADE PATH. A fresh install gets this index
-    // when the table is pushed; an existing one does not, because
-    // `drizzleTableToTableSpec` records only names and columns, so index-only
-    // drift produces no operations and `reconcileCore` returns early before the
-    // push that would create it. SQLite is repaired by the hand-written core
-    // DDL in `database/sqlite-core-tables.ts`, which re-runs idempotently;
-    // PostgreSQL and MySQL need a general core index-repair step in
-    // `nextly upgrade`, which is filed rather than built here — see
-    // `schemas/nextly-i18n-archive/ddl.ts` for the same problem solved for one
-    // table.
-    index("nextly_jobs_recent_idx").on(table.updatedAt),
-    uniqueIndex("nextly_jobs_dedupe_idx").on(table.dedupeKey),
-  ]
+  };
+}
+
+/** `nextly_jobs` indexes, from `NEXTLY_JOBS_INDEXES`. */
+export function nextlyJobsPgExtraConfig(
+  table: PgBuildExtraConfigColumns<ReturnType<typeof nextlyJobsPgColumns>>
+) {
+  return pgIndexes(NEXTLY_JOBS_INDEXES, table);
+}
+
+export const nextlyJobsPg = pgTable(
+  "nextly_jobs",
+  nextlyJobsPgColumns(),
+  nextlyJobsPgExtraConfig
 );
 
 export type NextlyJobPg = typeof nextlyJobsPg.$inferSelect;

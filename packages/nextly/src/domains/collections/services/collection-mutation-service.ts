@@ -197,7 +197,7 @@ import type {
   CollectionHookService,
   QueryDatabaseParams,
 } from "./collection-hook-service";
-import { resolveEntryId } from "./collection-id";
+import { collectionDbOptions, resolveEntryId } from "./collection-id";
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import {
   toCamelCase,
@@ -3474,7 +3474,10 @@ export class CollectionMutationService extends BaseService {
         // client-supplied id is accepted at all. Read BEFORE the strip below,
         // which removes `id` along with every other client-supplied system
         // column — that strip is what made `allowIdOnCreate` unexpressible.
-        id: resolveEntryId(collection, finalData.id),
+        id: resolveEntryId(
+          collectionDbOptions(params.collectionName),
+          finalData.id
+        ),
         // Strip client-supplied system columns (id / timestamps / created_by,
         // both snake and camel) so the generated id, stamped owner, and
         // timestamps below are authoritative — a stray `createdBy` alias can't
@@ -8751,7 +8754,10 @@ export class CollectionMutationService extends BaseService {
         // client-supplied id is accepted at all. Read BEFORE the strip below,
         // which removes `id` along with every other client-supplied system
         // column — that strip is what made `allowIdOnCreate` unexpressible.
-        id: resolveEntryId(collection, finalData.id),
+        id: resolveEntryId(
+          collectionDbOptions(params.collectionName),
+          finalData.id
+        ),
         // Strip client-supplied system columns (id / timestamps / created_by,
         // both snake and camel) so the generated id, stamped owner, and
         // timestamps below are authoritative — a stray `createdBy` alias can't
