@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (9893f4f4e34e8bd5). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (070631b23680f8e2). Edit that file, never this one. -->
 
 # packages/admin: Agent Guide
 

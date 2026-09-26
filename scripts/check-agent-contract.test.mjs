@@ -804,29 +804,26 @@ describe("analysing a real instruction file on disk", () => {
 
   const facts = { topLevel: new Set(["packages", "scripts", ".claude"]), basenames: new Set() };
 
+  // A package's override is read as its AGENTS.md is, since the harness takes it in that file's place.
+  const guides = ["packages/thing/AGENTS.md", "packages/thing/AGENTS.override.md"];
+
   it("reports a nested guide's relative path once the target is gone", () => {
     withRepo(base => {
       // The file is NOT created, which is the deletion being modelled.
-      const found = unresolvedIn({
-        base,
-        file: "packages/thing/AGENTS.md",
-        text: "The entry point is `src/config.ts`.",
-        ...facts,
-      });
-      expect(found).toEqual(["src/config.ts"]);
+      for (const file of guides) {
+        const found = unresolvedIn({ base, file, text: "The entry point is `src/config.ts`.", ...facts });
+        expect(found, file).toEqual(["src/config.ts"]);
+      }
     });
   });
 
   it("stays silent while that target exists", () => {
     withRepo(base => {
       writeFileSync(join(base, "packages", "thing", "src", "config.ts"), "");
-      const found = unresolvedIn({
-        base,
-        file: "packages/thing/AGENTS.md",
-        text: "The entry point is `src/config.ts`.",
-        ...facts,
-      });
-      expect(found).toEqual([]);
+      for (const file of guides) {
+        const found = unresolvedIn({ base, file, text: "The entry point is `src/config.ts`.", ...facts });
+        expect(found, file).toEqual([]);
+      }
     });
   });
 

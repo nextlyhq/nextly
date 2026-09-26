@@ -405,7 +405,8 @@ export function claimsBareFile(name, basenames) {
  */
 export function unresolvedIn({ file, text, base = root, topLevel, basenames }) {
   const near = dirname(join(base, file));
-  const nestedGuide = file.endsWith("/AGENTS.md");
+  // A package's override is the guide the AGENTS.md harness takes there, and cites the package's files as its AGENTS.md does.
+  const nestedGuide = /\/AGENTS(?:\.override)?\.md$/.test(file);
   return [...pathsIn(text)].filter(path => {
     if (existsSync(join(base, path)) || existsSync(join(near, path))) return false;
     return claimsFilePath(path, { topLevel, basenames, nestedGuide });

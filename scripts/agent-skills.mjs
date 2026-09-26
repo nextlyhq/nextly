@@ -267,12 +267,23 @@ function descriptionProblem(description) {
   return description.length > MAX_DESCRIPTION ? `has a description of ${description.length} characters, over the ${MAX_DESCRIPTION} a skill may have` : null;
 }
 
+/**
+ * The sync as a command, and its exit status. The new copy is kept either
+ * way, since it is right; but an old copy it set aside and could not remove is
+ * named for deletion and fails the command, so no caller takes the sync as
+ * clean while old copies pile up beside the one Claude Code reads.
+ */
+export function syncCommand(base = root, moves = {}, { log = console.log, error = console.error } = {}) {
+  const { leftover } = syncSkillCopy(base, moves);
+  log(`agent-skills: ${CLAUDE_COPY} rewritten from ${SKILLS_HOME}`);
+  if (!leftover) return 0;
+  error(`agent-skills: the old copy set aside at ${relative(base, leftover.path)} could not be removed (${leftover.error.message}); delete it, then sync again`);
+  return 1;
+}
+
 if (isCliEntry(import.meta.url)) {
   if (process.argv[2] === "sync") {
-    const { leftover } = syncSkillCopy();
-    console.log(`agent-skills: ${CLAUDE_COPY} rewritten from ${SKILLS_HOME}`);
-    // The copy is right, so the command succeeds; what it left behind is named for removal by hand.
-    if (leftover) console.error(`agent-skills: the old copy set aside at ${relative(root, leftover.path)} could not be removed (${leftover.error.message}); delete it by hand`);
+    process.exitCode = syncCommand();
   } else {
     console.error("usage: node scripts/agent-skills.mjs sync");
     process.exit(64);

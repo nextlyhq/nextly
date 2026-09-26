@@ -26,6 +26,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,33 +38,35 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SYNC = "run pnpm instructions:sync";
 
 /**
- * What the formatter that runs on every commit rewrites in Markdown without
- * changing what it says, each brought to one spelling, in this order: a
- * backslash escaping punctuation, a thematic break, the dashes of a table's
- * delimiter row, a table row's outer pipes, a bullet's marker, which of `*`
- * and `_` marks emphasis, the padding around a table's pipes, and whitespace,
- * so that rewrapping and re-indenting are no edit either. Every other
- * character counts, so `--no-verify` edited to `noverify` is an edit.
+ * The remedy for a copy that only looks edited: a formatter version that spells
+ * its text differently from the one that recorded its digest makes an untouched
+ * copy fail the test, and the sync refuses it rather than guess.
  */
-const FORMATTER_OWNED = [
-  [/\\(?=[!-/:-@[-`{-~])/g, ""],
-  [/^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/gm, "-"],
-  [/^(?=[^\n]*-)[ \t|:-]+$/gm, row => row.replace(/-+/g, "-")],
-  [/^[ \t]*\||\|[ \t]*$/gm, ""],
-  [/^([ \t]*)[*+-](?=[ \t])/gm, "$1-"],
-  [/(?<![\p{L}\p{N}\\])[*_]+(?=[^\s*_])|(?<=[^\s*_\\])[*_]+(?![\p{L}\p{N}])/gu, run => "*".repeat(run.length)],
-  [/[ \t]*\|[ \t]*/g, "|"],
-  [/\s+/g, " "],
-];
+const NOTHING_OF_ITS_OWN = "if it holds nothing of its own, which a new version of the formatter can make it look to, delete it and sync again";
+
+/** The formatter that runs on every commit, as a command, so its spelling of a text is asked for rather than predicted. */
+const PRETTIER = join(dirname(createRequire(import.meta.url).resolve("prettier/package.json")), "bin", "prettier.cjs");
 
 /**
- * A digest of a copy's text, blind to what the formatter rewrites and to
- * nothing else. The formatter rewrites a copy exactly as it rewrites its
- * source, and that is no edit; any other change is one.
+ * The formatter's own spelling of a Markdown text, with this repository's
+ * settings. It is idempotent, so a copy it already rewrote comes back as it
+ * is. A formatter that cannot run throws, and the sync then refuses rather than
+ * overwrites.
+ */
+const formatted = text =>
+  execFileSync(process.execPath, [PRETTIER, "--stdin-filepath", "CLAUDE.md"], { cwd: root, input: text, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+
+/**
+ * A digest of a copy's text as the formatter spells it, so it is blind to what
+ * the formatter rewrites and to nothing else: the formatter rewrites a copy
+ * exactly as it rewrites its source, and that is no edit, while anything it
+ * keeps apart, `\*literal\*` from `*emphasis*` or `--no-verify` from
+ * `noverify`, is. A list of its rewrites kept here would drift from what it
+ * does; its output cannot.
  */
 const digest = text =>
   createHash("sha256")
-    .update(FORMATTER_OWNED.reduce((out, [pattern, to]) => out.replace(pattern, to), text).trim())
+    .update(formatted(text).trim())
     .digest("hex")
     .slice(0, 16);
 
@@ -128,7 +131,7 @@ function driftOf(base, source, copy) {
 function textDrift(text, source, body, copy) {
   if (text === header(source, body) + body) return [];
   if (replaceable(text, source, body)) return [{ path: copy, problem: `differs from ${source}`, fix: SYNC }];
-  return [{ path: copy, problem: `holds text of its own that ${source} does not`, fix: `move that text into ${source}, then run pnpm instructions:sync` }];
+  return [{ path: copy, problem: `holds text of its own that ${source} does not`, fix: `move that text into ${source}, then run pnpm instructions:sync; ${NOTHING_OF_ITS_OWN}` }];
 }
 
 /**
@@ -149,7 +152,7 @@ function refusal(base, source, copy) {
   const entry = entryAt(join(base, copy));
   if (entry === null) return null;
   if (entry.isSymbolicLink()) return `${copy} is a symbolic link, which a write would follow to another file; replace it with a real file, then sync again`;
-  return replaceable(readFileSync(join(base, copy), "utf8"), source, readFileSync(join(base, source), "utf8")) ? null : `${copy} holds text of its own; move it into ${source}, then sync again`;
+  return replaceable(readFileSync(join(base, copy), "utf8"), source, readFileSync(join(base, source), "utf8")) ? null : `${copy} holds text of its own; move it into ${source}, then sync again; ${NOTHING_OF_ITS_OWN}`;
 }
 
 /** The files to copy from: tracked ones, and new ones git does not ignore, so a new AGENTS.md is copied before it is staged. */

@@ -35,6 +35,9 @@ function put(path, text) {
 const read = path => readFileSync(join(base, path), "utf8");
 const copyOf = (source, body) => `${header(source, body)}${body}`;
 
+/** What a refusal adds for a copy that holds nothing of its own, whose recorded digest a formatter update can leave behind. */
+const OWN_TEXT_REMEDY = "; if it holds nothing of its own, which a new version of the formatter can make it look to, delete it and sync again";
+
 describe("the copies Claude Code reads", () => {
   it("puts a CLAUDE.md beside each file the AGENTS.md harness takes, copying the override where there is one", () => {
     expect(copies(["AGENTS.md", "a/AGENTS.md", "a/AGENTS.override.md", "b/x.ts"])).toEqual([
@@ -102,6 +105,8 @@ describe("the copies Claude Code reads", () => {
       "",
       "A literal * star and an escaped \\_ underscore.",
       "",
+      ">quoted, with no space after its marker",
+      "",
     ].join("\n");
     const formatted = await format(written, { ...(await resolveConfig(join(REPO, "AGENTS.md"))), parser: "markdown" });
     expect(formatted).not.toBe(written);
@@ -119,6 +124,23 @@ describe("the copies Claude Code reads", () => {
     put("CLAUDE.md", `${header("AGENTS.md", body)}${body.replace("no-store", "nostore")}`);
     expect(() => syncCopies(base, ["AGENTS.md", "CLAUDE.md"])).toThrow("CLAUDE.md holds text of its own");
     expect(read("CLAUDE.md")).toContain("nostore");
+  });
+
+  // The formatter keeps an escaped star apart from emphasis, so an edit from one to the other is an edit.
+  it("refuses a copy whose escaped stars were edited into emphasis", () => {
+    const body = "Match the \\*literal\\* name, not a pattern.\n";
+    put("AGENTS.md", "rules written since\n");
+    put("CLAUDE.md", `${header("AGENTS.md", body)}${body.replaceAll("\\*", "*")}`);
+    expect(() => syncCopies(base, ["AGENTS.md", "CLAUDE.md"])).toThrow("CLAUDE.md holds text of its own");
+    expect(read("CLAUDE.md")).toContain("*literal*");
+  });
+
+  // A digest recorded under another formatter's spelling cannot be told from an edit, so the copy is refused, with the way out named.
+  it("refuses a copy whose digest another formatting recorded, naming what to do when it holds nothing of its own", () => {
+    put("AGENTS.md", "rules written since\n");
+    put("CLAUDE.md", "<!-- Generated from AGENTS.md by `pnpm instructions:sync` (0123456789abcdef). Edit that file, never this one. -->\n\nolder rules\n");
+    expect(() => syncCopies(base, ["AGENTS.md", "CLAUDE.md"])).toThrow(`CLAUDE.md holds text of its own; move it into AGENTS.md, then sync again${OWN_TEXT_REMEDY}`);
+    expect(read("CLAUDE.md")).toContain("older rules");
   });
 
   it("refuses to overwrite a CLAUDE.md holding text of its own, and leaves it as it was", () => {
@@ -176,7 +198,7 @@ describe("the copies Claude Code reads", () => {
     put("m/AGENTS.md", "m rules\n");
     put("q/CLAUDE.md", "Orphaned.\n");
     expect(copyDrift(base, ["AGENTS.md", "CLAUDE.md", "p/AGENTS.md", "p/CLAUDE.md", "m/AGENTS.md", "q/CLAUDE.md"])).toEqual([
-      { path: "CLAUDE.md", problem: "holds text of its own that AGENTS.md does not", fix: "move that text into AGENTS.md, then run pnpm instructions:sync" },
+      { path: "CLAUDE.md", problem: "holds text of its own that AGENTS.md does not", fix: `move that text into AGENTS.md, then run pnpm instructions:sync${OWN_TEXT_REMEDY}` },
       { path: "p/CLAUDE.md", problem: "differs from p/AGENTS.md", fix: "run pnpm instructions:sync" },
       { path: "m/CLAUDE.md", problem: "is missing, so Claude Code never reads m/AGENTS.md", fix: "run pnpm instructions:sync" },
       { path: "q/CLAUDE.md", problem: "copies no AGENTS.md beside it, so the AGENTS.md harness never reads its text", fix: "move its text into an AGENTS.md there, then run pnpm instructions:sync" },
@@ -197,7 +219,7 @@ describe("the copies Claude Code reads", () => {
     expect(copyDrift(base, files)).toEqual([]);
 
     put("CLAUDE.md", `${copyOf("AGENTS.md", "root rules, changed since\n")}A line of its own.\n`);
-    expect(copyDrift(base, files).map(finding => finding.fix)).toEqual(["move that text into AGENTS.md, then run pnpm instructions:sync"]);
+    expect(copyDrift(base, files).map(finding => finding.fix)).toEqual([`move that text into AGENTS.md, then run pnpm instructions:sync${OWN_TEXT_REMEDY}`]);
     expect(() => syncCopies(base, files)).toThrow("CLAUDE.md holds text of its own");
   });
 });
