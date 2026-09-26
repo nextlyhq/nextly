@@ -173,6 +173,14 @@ describe("where the bot's identity lives", () => {
     expect(JSON.stringify(jobs.review)).not.toContain("REVIEW_BOT_PRIVATE_KEY");
   });
 
+  it("runs a dispatch only from the default branch, before the paid agent starts", () => {
+    // The environment refuses other branches only once the post job starts; by
+    // then the agent has run, so the review job refuses them itself.
+    expect(jobs.review.if).toContain(
+      "(github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch) ||",
+    );
+  });
+
   it("takes the App identity only in a job after the agent's, which never runs the agent", () => {
     expect(jobs.post.environment).toBe("review-bot");
     expect(jobs.post.needs).toBe("review");

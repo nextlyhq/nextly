@@ -58,11 +58,13 @@ jobs:
     # Gates evaluated before a runner starts: a pull request conversation, the
     # review phrase, a trusted author (a stranger cannot spend the API budget or
     # prompt-inject the agent), and never another bot. A dispatch carries no
-    # comment to test, so it passes here and meets the same eligibility rules in
-    # the resolve step, which is also where draft/fork/base are checked for both
-    # paths.
+    # comment to test, so it passes here only from the default branch, as the
+    # `post` job's environment would admit it, and so is refused before the
+    # paid agent runs rather than after; it then meets the same eligibility
+    # rules in the resolve step, which is also where draft/fork/base are
+    # checked for both paths.
     if: >
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch) ||
       (github.event.issue.pull_request &&
       contains(github.event.comment.body, '@nextly-bot') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
