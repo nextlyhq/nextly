@@ -420,18 +420,14 @@ const startsCoAuthor = (part, last) => !last || JOINER.test(part) || last.group.
  * and either an address, a closing separator or a closed note, or a next line
  * that is an identity of its own where the lines before it are plain words
  * that are no name, or where it names a tool outright, which no name goes on
- * into. A next line that is more prose, even one opening with a tool's name,
- * goes on with an explanation as a mention.
+ * into. A line is an identity by the rule a list item's line is read by
+ * (`continuesValue`): a name alone before any note, or an address. More words
+ * after the name, behind a comma or a colon or not, are an explanation that
+ * mentions it, and go on with the explanation.
  */
 const ends = (text, next) => balanced(text) && (closed(text) || startsAnother(text, next));
 
-const startsAnother = (text, next) => identityLine(next) && (!namePending(text) || namesToolOutright(identityName(next), false));
-
-/** Whether a folded line is an identity: an address, or a name alone before any separator, colon or note. */
-const identityLine = line => ADDRESS.test(line) || nameAlone(identityName(line));
-
-/** A line's name: what comes before a note, a colon or a separator. */
-const identityName = line => namePart(line).split(/[,;]/)[0].trim();
+const startsAnother = (text, next) => continuesValue(next) && (!namePending(text) || namesToolOutright(withoutSeparator(beforeNote(next)), false));
 
 /**
  * Whether a co-author's lines so far are a name that may go on: a name alone,
@@ -517,8 +513,8 @@ function creditedByTrailer(value, whole) {
 /** A value's name, before any note: a bracket, a dash or a colon after it ends the name, and a separator after it is not part of it. */
 const namePart = value => withoutSeparator(value.split(/\s+(?:[(—]|-\s)|:/)[0].trim());
 
-/** A name without the comma or semicolon that may part it from the next. */
-const withoutSeparator = text => text.replace(/\s*[,;]$/, "");
+/** A name without the comma or semicolon that may part it from the next, or a colon ending it with nothing after. */
+const withoutSeparator = text => text.replace(/\s*[,;:]$/, "");
 
 function namesToolOutright(name, whole) {
   return (whole || !VENDOR_ALONE.test(name)) && namesATool(name, whole);
