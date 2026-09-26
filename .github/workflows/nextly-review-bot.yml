@@ -253,12 +253,17 @@ jobs:
           # either can be redirected off-host by a trailing flag. All GitHub
           # access therefore goes through review-bot-gh.sh, which builds each
           # request from a fixed endpoint and validated arguments, so the agent
-          # cannot choose where a request goes. Write is scoped to
+          # cannot choose where a request goes. Writing is scoped to
           # .nextly-review/ so the payload has somewhere to live while the
           # gateway stays out of reach: permission to write it is what would
-          # turn permission to run it into arbitrary execution. The git verbs
-          # are local-only, and there is no Edit and no bare Bash, so the agent
-          # cannot alter the tree.
+          # turn permission to run it into arbitrary execution. The grant is an
+          # Edit rule because Claude Code judges every file write against Edit
+          # and Read rules alone, the Write tool and a shell redirect's target
+          # included; a rule written for Write is accepted and never consulted,
+          # so it grants nothing. The leading `/` anchors it at the directory
+          # the agent starts in, the checkout. The git verbs are local-only,
+          # and there is no other Edit or Write rule and no bare Bash, so the
+          # agent cannot alter the tree.
           #
           # Keeping the model API key on the runner rests on two layers, not on
           # this list alone. Outbound: the gateway fixes the destination of
@@ -274,7 +279,7 @@ jobs:
           # it, the token is read-only, and the key should be a CI-dedicated one
           # that is rotated on suspicion.
           claude_args: |
-            --allowedTools "Read,Grep,Glob,Write(.nextly-review/**),Bash(${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(bash ${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(rg:*),Bash(ls:*)"
+            --allowedTools "Read,Grep,Glob,Edit(/.nextly-review/**),Bash(${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(bash ${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(rg:*),Bash(ls:*)"
             --disallowedTools "WebSearch,WebFetch,Read(//proc/**),Read(//sys/**),Grep(//proc/**),Grep(//sys/**)"
             --max-turns 150
 
