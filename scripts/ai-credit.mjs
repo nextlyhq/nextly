@@ -288,15 +288,18 @@ const continuesValue = text => JOINER.test(text) || ADDRESS.test(text) || nameAl
  */
 const nameAlone = text => NAME_WORDS.test(text) || isAiIdentity(text) || BARE_NAME.test(text);
 
+/** What follows a name word's first letter: letters and their marks, numbers, and the hyphen, apostrophe or dot a name may hold. */
+const NAME_REST = "[\\p{L}\\p{M}\\p{N}_.'’-]*";
 /** A word a name is made of: a capital, in any script that has them, or a number, and what follows it. */
-const NAME_WORD = "[\\p{Lu}\\p{Lt}\\p{N}][\\p{L}\\p{M}\\p{N}_.'’-]*";
+const NAME_WORD = `[\\p{Lu}\\p{Lt}\\p{N}]${NAME_REST}`;
 /** The lowercase particles a surname may carry, as `de`, `van` and `von` do. */
 const PARTICLE = "(?:da|das|de|del|della|der|des|di|do|dos|du|la|le|van|von|den|ter|ten|zu|af|al|bin|ibn|ben|y)";
 /**
  * Words that make a name: at least one capitalised, and a particle anywhere
  * among them, so `José de` goes on to its surname. A script without case
  * cannot show a name apart from prose, so its words make none, and a line of
- * them ends a co-author as an explanation does.
+ * them ends a co-author as an explanation does, unless a joining word brought
+ * them in (`namePending`).
  */
 const NAME_WORDS = new RegExp(`^(?:${PARTICLE}\\s+)*${NAME_WORD}(?:\\s+(?:${NAME_WORD}|${PARTICLE}))*$`, "u");
 
@@ -415,7 +418,19 @@ function coAuthors(parts, from) {
 const startsCoAuthor = (part, last) => !last || JOINER.test(part) || last.group.length >= IDENTITY_LINES || complete(last.group.join(" "));
 
 /** Whether a co-author's lines are complete: no note left open, and an address, a closing separator, a note, or words that are no name. */
-const complete = text => balanced(text) && (closed(text) || !nameAlone(withoutJoiner(text)));
+const complete = text => balanced(text) && (closed(text) || !namePending(text));
+
+/**
+ * Whether a co-author's lines so far are a name that may go on: a name alone,
+ * or words in a script without capitals after a joining word. Such a script
+ * cannot show a name apart from prose, but a joining word only ever brings in
+ * another co-author, so what follows one is read as that co-author's name;
+ * without one, the words go on with the value before them, as an explanation.
+ */
+const namePending = text => nameAlone(withoutJoiner(text)) || (JOINER.test(text) && CASELESS_WORDS.test(withoutJoiner(text)));
+
+/** Words in a script without capitals, as a name in Arabic or Chinese is written, each going on as any name word does. */
+const CASELESS_WORDS = new RegExp(`^\\p{Lo}${NAME_REST}(?:\\s+\\p{Lo}${NAME_REST})*$`, "u");
 
 /** Whether a co-author's lines end as an identity does: with an address, a closing separator or a note. */
 const closed = text => ADDRESS.test(text) || /[,;]\s*$/.test(text) || NOTE.test(text);

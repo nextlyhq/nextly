@@ -264,8 +264,12 @@ describe("a line a change adds", () => {
     // So do plain words that are no name, however many lines they take: a tool named after them is a co-author of its own.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  with a note", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
     expect(creditsIn(lines(trailer("Co-authored", spell("Anthro", "pic")), "  some", "  context", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ line: 1 }), expect.objectContaining({ from: 4, line: 4 })]);
-    // A script without capitals cannot show a name apart from prose, so its words end a co-author too.
+    // A script without capitals cannot show a name apart from prose, so its words end a co-author too,
+    // unless a joining word brought them in, which only ever brings in another co-author's name.
     expect(creditsIn(lines(trailer("Co-authored", spell("Anthro", "pic")), "  بعض السياق", spell("  Clau", "de")), "line")).toEqual([expect.objectContaining({ line: 1 }), expect.objectContaining({ from: 3, line: 3 })]);
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  and أحمد", spell("  Clau", "de")), "line")).toEqual([]);
+    // Its words hold what any name word may, a hyphen among them.
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  and عبد-الرحمن", spell("  Clau", "de")), "line")).toEqual([]);
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  (checked against the", spell("  ", CODE_TOOL, " docs)")), "line")).toEqual([]);
     // An address inside a note still open does not end it.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  (reviewed by Alice <alice@example.com>", spell("  ", CODE_TOOL, " docs)")), "line")).toEqual([]);
