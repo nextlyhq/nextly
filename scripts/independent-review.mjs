@@ -12,11 +12,15 @@
  * Codex review as well; this cannot tell that case apart, and says so here
  * rather than implying it can.
  *
- * Only an identity the change cannot use counts. The Nextly review bot, the
- * standby reviewer, posts as `github-actions[bot]`, the identity every
- * workflow here shares, and a workflow on any pushed branch can post a review
- * that reads exactly like one of its own. So its reviews are not counted: a
- * login that anything can post as says nothing about who reviewed.
+ * Only an identity the change cannot use counts. `github-actions[bot]` is the
+ * identity every workflow here shares, and a workflow on any pushed branch can
+ * post a review that reads exactly like any reviewer's, so nothing under it is
+ * counted: a login that anything can post as says nothing about who reviewed.
+ * The Nextly review bot, the standby reviewer, posts as its own GitHub App,
+ * `nextly-review-bot[bot]`, whose key only `main`'s workflow can reach. Its
+ * review of the revision counts in Codex's place while Codex is held up by its
+ * usage limit, and at no other time: the policy names Codex, and the standby
+ * stands in only for a reviewer that cannot review.
  *
  * Coverage means the revision being merged. A review of an earlier head read
  * a different change, and so did one made before the pull request was moved
@@ -44,6 +48,10 @@ import { countRewriteEvents } from "./verify-merge.mjs";
 import { commandText, eventPayload, queuedCommitSubjects, readGit } from "./workflow-context.mjs";
 
 export const CODEX = "chatgpt-codex-connector[bot]";
+/** The standby reviewer's own App login, which no workflow shares. */
+export const REVIEW_BOT = "nextly-review-bot[bot]";
+/** Codex's notice, posted in place of a review, that its review quota is spent. */
+const CODEX_LIMIT_NOTICE = /reached your Codex usage limits/;
 const QUEUED_NUMBER = /\(#([1-9]\d*)\)$/;
 const MAX_PAGES = 10;
 
@@ -60,9 +68,30 @@ export function queuedPullNumbers(subjects) {
 }
 
 /**
+ * Whether Codex is held up by its usage limit: its latest word on the pull
+ * request is the notice it posts in place of a review, newer than any review
+ * it submitted and any update to its comments. Once it reviews again, its
+ * summary or its review is newer, and it is no longer held up.
+ */
+export function codexHeldUp(reviews, comments) {
+  const at = value => Date.parse(value ?? "") || 0;
+  const codexComments = (comments ?? []).filter(comment => comment?.user?.login === CODEX);
+  const isNotice = comment => CODEX_LIMIT_NOTICE.test(comment?.body ?? "");
+  const notices = codexComments.filter(isNotice).map(comment => at(comment.created_at));
+  if (notices.length === 0) return false;
+  const since = [
+    ...codexComments.filter(comment => !isNotice(comment)).map(comment => at(comment.updated_at ?? comment.created_at)),
+    ...(reviews ?? []).filter(review => review?.user?.login === CODEX).map(review => at(review.submitted_at)),
+  ];
+  return Math.max(...notices) > Math.max(0, ...since);
+}
+
+/**
  * The verdict for one queued pull request, from its evidence: whether Codex
  * reviewed the revision it lands, since the pull request last moved to another
- * base branch. `resolved` holds what GitHub resolved each abbreviation to.
+ * base branch, or, while Codex is held up by its usage limit, whether the
+ * standby reviewer did. `resolved` holds what GitHub resolved each
+ * abbreviation to.
  */
 export function coverage({ number, pr, reviews, comments, commits, timeline, resolved = {} }) {
   const head = pr.head.sha;
@@ -72,8 +101,10 @@ export function coverage({ number, pr, reviews, comments, commits, timeline, res
     historyRewritten: countRewriteEvents(timeline) > 0,
     resolvedRevisions: resolved,
   };
-  const covered = reviewersCovering(reviews, comments, head, options).includes(CODEX);
-  return { number, head, covered, by: covered ? "Codex" : null };
+  const reviewers = reviewersCovering(reviews, comments, head, options);
+  if (reviewers.includes(CODEX)) return { number, head, covered: true, by: "Codex" };
+  const standby = reviewers.includes(REVIEW_BOT) && codexHeldUp(reviews, comments);
+  return { number, head, covered: standby, by: standby ? "the Nextly review bot, while Codex is held up by its usage limit" : null };
 }
 
 /** A GitHub API resource, or undefined where GitHub answers one of the `absentOn` statuses; any other failure throws. */
@@ -178,7 +209,7 @@ export async function main(env = process.env, { git = readGit, fetchImpl = fetch
 function report(verdicts) {
   for (const verdict of verdicts) console.log(verdictLine(verdict));
   if (verdicts.every(verdict => verdict.covered)) return 0;
-  console.error("Codex reviews each push. When it has not reviewed the revision named above, comment `@codex review` on that pull request to ask for one, then queue it again.");
+  console.error("Codex reviews each push. When it has not reviewed the revision named above, comment `@codex review` on that pull request to ask for one, then queue it again. While Codex is held up by its usage limit, comment `@nextly-bot review` instead: the Nextly review bot's review of that revision counts in its place.");
   return 1;
 }
 

@@ -4,14 +4,14 @@
  * and the command end to end over a real repository's queued commits.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CODEX, coverage, main, queuedPullNumbers } from "./independent-review.mjs";
+import { CODEX, REVIEW_BOT, codexHeldUp, coverage, main, queuedPullNumbers } from "./independent-review.mjs";
 import { readGit } from "./workflow-context.mjs";
 
 const HEAD = "a".repeat(40);
@@ -26,13 +26,20 @@ const summary = (sha, login = CODEX) => ({
   created_at: AFTER,
   body: `<!-- codex-pull-request-review-summary -->\n\n| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n| 📝 **Code Review** | ✅ **Completed** ${AFTER} | \`${sha.slice(0, 7)}\` | New commits |\n`,
 });
-/** A review exactly as the Nextly review bot writes one, posted under the workflows' shared login. */
-const botReview = sha => ({
-  user: { login: WORKFLOWS },
+/** A review exactly as the Nextly review bot writes one, posted under the workflows' shared login unless another is named. */
+const botReview = (sha, login = WORKFLOWS) => ({
+  user: { login },
   commit_id: sha,
   state: "COMMENTED",
   submitted_at: AFTER,
   body: `## Nextly Review Bot: round 1 - approve\n\n<!-- pr-review-agent round:1 head:${sha} -->\n\nNo findings.`,
+});
+/** The notice Codex posts in place of a review once its quota is spent, as it wrote it on 2026-09-12. */
+const limitNotice = (created_at = "2026-09-25T03:00:00Z", login = CODEX) => ({
+  user: { login },
+  created_at,
+  updated_at: created_at,
+  body: "You have reached your Codex usage limits for code reviews. You can see your limits in the [Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage).",
 });
 const baseMovedAt = at => [[{ event: "base_ref_changed", created_at: at }]];
 
@@ -96,6 +103,63 @@ describe("coverage of one queued pull request", () => {
 
   it("is missing when the pull request moved to another base branch after the only review", () => {
     expect(coverage(evidence({ reviews: [codexReview(HEAD, "2026-09-25T01:00:00Z")], timeline: baseMovedAt("2026-09-25T01:30:00Z") })).covered).toBe(false);
+  });
+
+  /*
+   * The standby stands in for a reviewer that cannot review, and only then:
+   * its review counts while Codex's latest word is its usage-limit notice, and
+   * only under the bot's own App login, which no workflow shares.
+   */
+  it("is the review bot's, under its own App login, while Codex is held up by its usage limit", () => {
+    const result = coverage(evidence({ reviews: [botReview(HEAD, REVIEW_BOT)], comments: [limitNotice()] }));
+    expect(result).toEqual({ number: 7, head: HEAD, covered: true, by: "the Nextly review bot, while Codex is held up by its usage limit" });
+  });
+
+  it("is missing when the review bot reviewed but Codex is not held up", () => {
+    expect(coverage(evidence({ reviews: [botReview(HEAD, REVIEW_BOT)] })).covered).toBe(false);
+  });
+
+  it("never counts the login every workflow shares, even while Codex is held up", () => {
+    expect(coverage(evidence({ reviews: [botReview(HEAD)], comments: [limitNotice()] })).covered).toBe(false);
+  });
+
+  it("is missing when the review bot reviewed only an earlier revision while Codex is held up", () => {
+    expect(coverage(evidence({ reviews: [botReview(OLD, REVIEW_BOT)], comments: [limitNotice()] })).covered).toBe(false);
+  });
+
+  it("is Codex's again once Codex reviews the head after its notice", () => {
+    const result = coverage(evidence({ reviews: [botReview(HEAD, REVIEW_BOT), codexReview(HEAD, "2026-09-25T04:00:00Z")], comments: [limitNotice()] }));
+    expect(result.by).toBe("Codex");
+  });
+});
+
+/*
+ * The bot's login is written in three places: here, in the gateway that finds
+ * the reviews its run posted, and in the protocol that finds its earlier
+ * rounds. Were one to drift, the gateway would report no review posted, or the
+ * bot would lose its rounds, while this check still counted.
+ */
+it("names the login the review bot's gateway and protocol look for", () => {
+  const gateway = readFileSync(join(SCRIPTS, "..", ".github", "scripts", "review-bot-gh.sh"), "utf8");
+  const protocol = readFileSync(join(SCRIPTS, "..", ".github", "review-prompt.md"), "utf8");
+  expect(gateway).toContain(`select(.user.login == \\"${REVIEW_BOT}\\"`);
+  expect(protocol).toContain(`filter author login \`${REVIEW_BOT}\``);
+  expect(gateway).not.toContain(`"${WORKFLOWS}\\"`);
+});
+
+describe("whether Codex is held up by its usage limit", () => {
+  it("is so while its usage-limit notice is its latest word", () => {
+    expect(codexHeldUp([codexReview(OLD, "2026-09-25T01:00:00Z")], [summary(OLD), limitNotice()])).toBe(true);
+  });
+
+  it("is not once it has reviewed or updated its summary since the notice", () => {
+    expect(codexHeldUp([codexReview(OLD, "2026-09-25T04:00:00Z")], [limitNotice()])).toBe(false);
+    expect(codexHeldUp([], [limitNotice(), { ...summary(OLD), updated_at: "2026-09-25T04:00:00Z" }])).toBe(false);
+  });
+
+  it("is not with no notice, or with the notice's words under another login", () => {
+    expect(codexHeldUp([], [summary(OLD)])).toBe(false);
+    expect(codexHeldUp([], [limitNotice(undefined, WORKFLOWS)])).toBe(false);
   });
 });
 
@@ -239,6 +303,15 @@ describe("the command", () => {
     expect(await main(env, deps)).toBe(0);
     expect(printed()).toMatch(/#11 at 111111111 was reviewed by Codex/);
     expect(printed()).toMatch(/#12 at 222222222 was reviewed by Codex/);
+  });
+
+  it("passes a pull request the review bot reviewed at its head while Codex was held up, and says so", async () => {
+    const { env, deps } = queueOf((number, head) => (number === 11 ? [codexReview(head)] : [botReview(head, REVIEW_BOT)]), {
+      commentsFor: number => (number === 12 ? [limitNotice()] : []),
+    });
+    expect(await main(env, deps)).toBe(0);
+    expect(printed()).toMatch(/#11 at 111111111 was reviewed by Codex/);
+    expect(printed()).toMatch(/#12 at 222222222 was reviewed by the Nextly review bot, while Codex is held up by its usage limit/);
   });
 
   it("fails naming the member of a group with no review of its head", async () => {
