@@ -118,7 +118,7 @@ pnpm lint
 pnpm test
 
 # Run the playground boot E2E smoke test (requires `npx playwright install chromium` once)
-pnpm test:e2e
+pnpm --filter @nextlyhq/e2e test:e2e
 ```
 
 For per-package commands, use `pnpm --filter <package-name> <script>`. For example: `pnpm --filter @nextlyhq/admin test`.
@@ -244,7 +244,7 @@ CI will catch any MySQL or SQLite failures on your PR.
 
 ### Writing a new integration test
 
-1. Name the file `<basename>.integration.test.ts`. Example: `query-builder.integration.test.ts`.
+1. Name the file `<basename>.integration.test.ts`. Example: `transaction-read-your-writes.integration.test.ts`.
 2. Use the helper:
 
    ```ts
@@ -276,12 +276,12 @@ CI will catch any MySQL or SQLite failures on your PR.
 
 ### CI test workflows
 
-Two GitHub Actions workflows run on every PR:
+The tests run in two GitHub Actions workflows on every PR:
 
-- [`ci.yml`](.github/workflows/ci.yml) — lint, typecheck, build, and unit test suite
-- [`test-integration.yml`](.github/workflows/test-integration.yml) — the 4-dialect matrix (PG 15, PG 17, MySQL 8, SQLite). Any failure blocks merge.
+- [`ci.yml`](.github/workflows/ci.yml) — lint, typecheck, build, and the unit test suite. Its `CI gate` job is the check `main` requires.
+- [`integration.yml`](.github/workflows/integration.yml) — the integration suite, one job per dialect: Postgres 17, MySQL 8.4 and SQLite. Postgres 15 runs locally only, with `pnpm test:integration:postgres15`.
 
-A PR is mergeable when all jobs are green.
+`CI gate` does not cover the integration jobs or the secret scan yet, so before a PR merges, `node scripts/verify-merge.mjs <pr-number>` checks those too.
 
 ---
 
@@ -405,7 +405,7 @@ Merges go through GitHub's merge queue once it is switched on for `main`: it run
 
 ## Release process
 
-> **Status:** Nextly's release pipeline uses [Changesets](https://github.com/changesets/changesets) for versioning and [`changesets/action`](https://github.com/changesets/action) for the version-PR + publish flow. This is being initialized as part of the v1.0 launch — once `.changeset/config.json` lands in the repo, the steps below describe the steady-state flow.
+> **Status:** Nextly's release pipeline uses [Changesets](https://github.com/changesets/changesets) for versioning and [`changesets/action`](https://github.com/changesets/action) for the version-PR + publish flow, and publishes from CI through npm trusted publishing. The steps below are how releases run today.
 
 All publishable `@nextlyhq/*` packages are kept in lockstep (same version at all times) via the `fixed` array in `.changeset/config.json` — this matches Payload CMS's unified-versioning style.
 
@@ -413,7 +413,7 @@ All publishable `@nextlyhq/*` packages are kept in lockstep (same version at all
 
 You **must** add a changeset if your PR touches any publishable package under `packages/*` (excluding `@nextlyhq/eslint-config`, `@nextlyhq/prettier-config`, `@nextlyhq/tsconfig`, and the `playground` app, which are in the changeset `ignore` list).
 
-The `changeset-check` CI job fails PRs that modify a publishable package without a changeset.
+No CI job requires a changeset to be there, so reviewers check it. CI's `Changeset covers the lockstep group` step checks each changeset a PR adds or edits: it must name every package in the lockstep group.
 
 ✅ **DO create a changeset for**: user-facing features, bug fixes, breaking changes, performance work, deprecations.
 
@@ -524,7 +524,7 @@ packages/admin/src/components/
 ```
 
 - **Directories**: kebab-case (`user-dialog/`, `media-library/`)
-- **Files**: PascalCase for components (`UserDialog.tsx`), `index.ts` for barrel exports
+- **Files**: PascalCase for components (`RevokeApiKeyDialog.tsx`), `index.ts` for barrel exports
 - **Exports**: named exports preferred
 
 When creating a new component, pick the appropriate tier, create a kebab-case directory with an `index.ts` barrel, and use path aliases for internal imports.
@@ -536,15 +536,15 @@ Services in the core package follow these conventions:
 - **File size**: keep service files under ~500 lines. Split large services into focused sub-services and compose.
 - **Single responsibility**: e.g. `services/users/` splits into `user-query-service.ts`, `user-mutation-service.ts`, `user-account-service.ts` rather than one monolithic file.
 - **Database access**: services access Drizzle ORM directly (no repository layer). Transactions are managed at the service level.
-- **Error handling**: throw `ServiceError` from `@nextly/services/lib/errors`:
+- **Error handling**: throw `NextlyError` from `packages/nextly/src/errors`, through its static factories (`notFound`, `forbidden`, `validation`, `conflict`, ...), never a bare `Error`:
 
   ```ts
-  import { ServiceError, ServiceErrorCode } from "@nextly/services/lib/errors";
+  import { NextlyError } from "../errors";
 
   async findById(id: string): Promise<User> {
-    const user = await this.db.select().from(users).where(eq(users.id, id));
+    const [user] = await this.db.select().from(users).where(eq(users.id, id));
     if (!user) {
-      throw new ServiceError(ServiceErrorCode.NOT_FOUND, "User not found");
+      throw NextlyError.notFound({ logContext: { userId: id } });
     }
     return user;
   }

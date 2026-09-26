@@ -32,6 +32,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { load } from "js-yaml";
+
 import { SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems } from "./agent-skills.mjs";
 import { copies, copyDrift, repositoryFiles } from "./agent-instructions.mjs";
 
@@ -48,7 +50,16 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  */
 export const REVIEW_PROMPT = ".github/review-prompt.md";
 
-export const ANCHORS = ["AGENTS.md", ".claude/rules", SKILLS_HOME, REVIEW_PROMPT];
+/**
+ * The contributor guide. It names commands and paths as the agent guidance
+ * does, and they rot the same way: it linked an integration workflow by a name
+ * the workflow no longer had, and ran a script from the root that only one
+ * workspace declares. An anchor like the others, so a rename cannot drop it
+ * from the set while the check stays green.
+ */
+export const CONTRIBUTING = "CONTRIBUTING.md";
+
+export const ANCHORS = ["AGENTS.md", ".claude/rules", SKILLS_HOME, REVIEW_PROMPT, CONTRIBUTING];
 
 /**
  * The rule AGENTS.md names in `.claude/rules`, by name.
@@ -260,19 +271,35 @@ export function namesAWorkspace(filter) {
   return /^@?[a-z0-9][a-z0-9@/._-]*$/.test(filter);
 }
 
+/**
+ * The workspace directories `pnpm-workspace.yaml` declares, the list pnpm
+ * itself resolves `--filter` against. A list kept here instead missed `e2e`,
+ * so every command filtered to `@nextlyhq/e2e` read as naming no workspace. A
+ * pattern is an exact directory or every directory under one (`apps/*`); any
+ * other shape is refused rather than read as matching nothing.
+ */
+function workspaceDirs(base) {
+  const file = join(base, "pnpm-workspace.yaml");
+  if (!existsSync(file)) return [];
+  return (load(readFileSync(file, "utf8"))?.packages ?? []).flatMap(pattern => {
+    const found = /^([\w.-]+(?:\/[\w.-]+)*)(\/\*)?$/.exec(pattern);
+    if (!found) throw new Error(`agent-contract: cannot read the workspace pattern ${JSON.stringify(pattern)} in pnpm-workspace.yaml`);
+    const [, dir, everyUnder] = found;
+    if (!everyUnder) return [dir];
+    return existsSync(join(base, dir)) ? readdirSync(join(base, dir)).map(entry => `${dir}/${entry}`) : [];
+  });
+}
+
+/** Each workspace's scripts, by package name and by directory name. */
 export function workspaceScripts(base = root) {
   const byName = new Map();
-  for (const dir of ["packages", "apps"]) {
-    const full = join(base, dir);
-    if (!existsSync(full)) continue;
-    for (const entry of readdirSync(full)) {
-      const manifest = join(full, entry, "package.json");
-      if (!existsSync(manifest)) continue;
-      const pkg = JSON.parse(readFileSync(manifest, "utf8"));
-      const names = new Set(Object.keys(pkg.scripts ?? {}));
-      byName.set(pkg.name, names);
-      byName.set(entry, names);
-    }
+  for (const dir of workspaceDirs(base)) {
+    const manifest = join(base, dir, "package.json");
+    if (!existsSync(manifest)) continue;
+    const pkg = JSON.parse(readFileSync(manifest, "utf8"));
+    const names = new Set(Object.keys(pkg.scripts ?? {}));
+    byName.set(pkg.name, names);
+    byName.set(dir.split("/").pop(), names);
   }
   return byName;
 }
@@ -445,6 +472,7 @@ export function instructionFiles(base = root) {
   // any of those left this check green while the review bot pointed at
   // nothing — a blind spot inside the coverage the check claims.
   if (existsSync(join(base, REVIEW_PROMPT))) files.push(REVIEW_PROMPT);
+  if (existsSync(join(base, CONTRIBUTING))) files.push(CONTRIBUTING);
   for (const dir of ["packages", "apps"]) {
     const full = join(base, dir);
     if (!existsSync(full)) continue;
