@@ -30,6 +30,8 @@ const runOf = name => steps.find(step => step.name === name).run;
 /** The one directory the agent writes to, and where the post step reads what it wrote. */
 const PAYLOAD_DIR = ".nextly-review";
 
+/** The action revision whose Claude Code (2.1.222) the rules here were measured against. */
+const ACTION = "anthropics/claude-code-action@9db594c7a0e82298c121c18b7f08aa1579ce7341";
 /** The action's inputs as reviewed. One that carries permissions, such as `settings`, would sidestep the allowlist. */
 const INPUTS = ["anthropic_api_key", "claude_args", "github_token", "prompt", "track_progress"];
 /** The agent's flags as reviewed, each set once. A second `--allowedTools`, or a permission mode, widens the grant unseen. */
@@ -53,6 +55,8 @@ const ALLOWED = [
   "Bash(rg:*)",
   "Bash(ls:*)",
 ];
+/** The denylist as reviewed. A denial wins over a grant, so an added one can cancel the payload's; a removed one lifts a boundary. */
+const DISALLOWED = ["WebSearch", "WebFetch", "Read(//proc/**)", "Read(//sys/**)", "Grep(//proc/**)", "Grep(//sys/**)"];
 
 /** The path rules Claude Code accepts and never consults when it decides a file permission. */
 const neverConsulted = rules => rules.filter(rule => /^(Write|MultiEdit|NotebookEdit|Glob)\(/.test(rule));
@@ -60,10 +64,16 @@ const neverConsulted = rules => rules.filter(rule => /^(Write|MultiEdit|Notebook
 /** Every flag an argument string sets. Quoted values are blanked first, so a rule's own text is never read as a flag. */
 const flagsOf = args => args.replace(/"[^"]*"/g, '""').match(/(?<=^|\s)--?[A-Za-z][\w-]*/g) ?? [];
 
-/** How often a text names a payload file inside the payload directory, and how often anywhere else. */
+/**
+ * How often a text names a payload file inside the payload directory, and how
+ * often anywhere else. The path counts only as a whole one: `/tmp/.nextly-review/`
+ * or `other.nextly-review/` merely contain its spelling, and the Edit rule,
+ * anchored at the checkout, grants neither.
+ */
 function placesOf(text, file) {
-  const parts = text.split(`${PAYLOAD_DIR}/${file}`);
-  return { inside: parts.length - 1, elsewhere: parts.join("\n").split(file).length - 1 };
+  const path = `${PAYLOAD_DIR}/${file}`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const whole = new RegExp(`(?<![\\w./-])${path}(?![\\w-]|\\.\\w)`, "g");
+  return { inside: (text.match(whole) ?? []).length, elsewhere: text.replace(whole, "").split(file).length - 1 };
 }
 
 /**
@@ -123,6 +133,10 @@ describe("the files the review agent may write", () => {
 });
 
 describe("what else could widen the agent's grant", () => {
+  it("runs the action revision the rules were measured against", () => {
+    expect(agent.uses).toBe(ACTION);
+  });
+
   it("passes the action only the inputs reviewed", () => {
     expect(Object.keys(agent.with).sort()).toEqual(INPUTS);
   });
@@ -139,5 +153,9 @@ describe("what else could widen the agent's grant", () => {
 
   it("grants exactly the allowlist reviewed", () => {
     expect(rulesOf("allowedTools")).toEqual(ALLOWED);
+  });
+
+  it("denies exactly the denylist reviewed", () => {
+    expect(rulesOf("disallowedTools")).toEqual(DISALLOWED);
   });
 });
