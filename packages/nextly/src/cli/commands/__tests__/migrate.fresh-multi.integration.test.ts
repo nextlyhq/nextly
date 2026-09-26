@@ -8,6 +8,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { SqliteAdapter } from "@nextlyhq/adapter-sqlite";
+import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import Database from "better-sqlite3";
 import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
@@ -25,6 +27,7 @@ const HASH = "a".repeat(64); // valid 64-char hex; reconcile uses snapshots, not
 
 let dir: string;
 let sqlite: Database.Database;
+let adapter: SqliteAdapter;
 let db: ReturnType<typeof drizzle>;
 
 const logger = {
@@ -34,21 +37,15 @@ const logger = {
 } as unknown as Parameters<typeof runFileMigrations>[0]["logger"];
 
 // Minimal CLI-adapter surface runFileMigrations touches.
+/**
+ * The runner's adapter: a real SQLite adapter on the same database file the
+ * test reads directly. Migrations run through its single-connection
+ * transaction, which a hand-built stand-in cannot provide.
+ */
 function makeAdapter() {
-  return {
-    listTables: () =>
-      Promise.resolve(
-        sqlite
-          .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-          .all()
-          .map(r => (r as { name: string }).name)
-      ),
-    executeQuery: (q: string) => {
-      sqlite.exec(q);
-      return Promise.resolve([]);
-    },
-    getDrizzle: () => db,
-  } as unknown as Parameters<typeof runFileMigrations>[0]["adapter"];
+  return adapter as unknown as Parameters<
+    typeof runFileMigrations
+  >[0]["adapter"];
 }
 
 function snapshotFile(snapshot: unknown): string {
@@ -58,7 +55,7 @@ function snapshotFile(snapshot: unknown): string {
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), "nextly-fresh-multi-"));
   mkdirSync(join(dir, "meta"), { recursive: true });
-  sqlite = new Database(":memory:");
+  sqlite = new Database(join(dir, "test.sqlite"));
   db = drizzle({ client: sqlite });
 
   // Bootstrap the ledger (what migrate Phase 1 does out-of-band).
@@ -83,9 +80,13 @@ beforeEach(async () => {
     join(dir, "meta", "0002_add_author.snapshot.json"),
     snapshotFile(snap2)
   );
+
+  adapter = createSqliteAdapter({ url: `file:${join(dir, "test.sqlite")}` });
+  await adapter.connect();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await adapter.disconnect();
   sqlite.close();
   rmSync(dir, { recursive: true, force: true });
 });
