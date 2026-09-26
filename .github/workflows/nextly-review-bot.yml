@@ -12,9 +12,11 @@
 # key the `review-bot` environment holds for `main` alone. Only this workflow as
 # `main` has it can reach that environment, so nothing a branch runs can post as
 # the bot, which is what lets the merge queue count its review as the standby's
-# when Codex is held up. For the same reason a mention inside a review thread
-# does not start a review: that event runs the pull request's own copy of this
-# workflow. Ask in the pull request's conversation instead.
+# when Codex is held up. The agent itself never holds a token that can write: it
+# writes the review, and this job posts it with the App's token once the agent
+# has finished. A mention inside a review thread does not start a review, since
+# that event runs the pull request's own copy of this workflow; ask in the pull
+# request's conversation instead.
 name: Nextly Review Bot
 
 on:
@@ -176,6 +178,11 @@ jobs:
           # Every gateway reference must now point at the runnable copy; a stray
           # in-repo path left behind would fail mid-review instead of here.
           ! grep -q "\.github/scripts/review-bot-gh\.sh" "$TOOLING/review-prompt.md"
+          # The agent's one writable directory starts empty. A pull request can
+          # commit files there, and what this job posts as the bot must only
+          # ever be what this run's agent wrote.
+          rm -rf .nextly-review
+          mkdir .nextly-review
 
       # What already exists at this head, so the confirmation below can require
       # something NEW rather than accepting a review from an earlier request.
@@ -192,20 +199,6 @@ jobs:
             "${{ steps.pr.outputs.number }}" "${{ steps.pr.outputs.sha }}" \
             > "${RUNNER_TEMP}/ids-before.txt"
           echo "reviews already at this head: $(wc -l < "${RUNNER_TEMP}/ids-before.txt")"
-
-      # The bot's own identity, minted as late as possible and revoked when the
-      # job ends. The agent posts with it, the review through the gateway and
-      # the progress comment through the action, both of which read the token
-      # the action is given.
-      - name: Take the review bot's App identity
-        id: app
-        if: steps.ask.outputs.run == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.REVIEW_BOT_CLIENT_ID }}
-          private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
-          permission-contents: read
-          permission-pull-requests: write
 
       - name: Run review agent
         if: steps.ask.outputs.run == 'true'
@@ -226,16 +219,15 @@ jobs:
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
         with:
           anthropic_api_key: ${{ secrets.ZAI_API_KEY }}
-          # The review bot's own App token. An explicit token also skips the
-          # Anthropic GitHub App / OIDC exchange, which is not needed with a
-          # third-party provider.
-          github_token: ${{ steps.app.outputs.token }}
-          # The progress comment needs an event that carries a conversation to
-          # post into, and a dispatch has none — the action refuses the whole
-          # run rather than skipping the comment. The review itself is posted
-          # through the gateway either way, so a dispatch simply runs without
-          # the running commentary.
-          track_progress: ${{ github.event_name != 'workflow_dispatch' }}
+          # The workflow's own token, which only reads here. The action writes
+          # the token it is given into the checkout's git remote, where the
+          # agent can read it, so the agent is given none that can write; the
+          # review is posted after it finishes, as the bot. An explicit token
+          # also skips the Anthropic GitHub App / OIDC exchange, which is not
+          # needed with a third-party provider.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # No progress comment: writing one needs a token that can write.
+          track_progress: false
           prompt: |
             Read the file ${{ runner.temp }}/nextly-review-bot/review-prompt.md
             and execute it exactly, phase by phase. That copy, and the gateway
@@ -249,11 +241,12 @@ jobs:
             - Head SHA this run was triggered for: ${{ steps.pr.outputs.sha }}
             - Base branch: ${{ steps.pr.outputs.base }}
 
-            Write the review payload under .nextly-review/ (the only directory
-            you may write to), then post it with exactly one call, run from the
-            repository root. A `gh api` call of your own is not permitted:
-              ${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh post-review ${{ steps.pr.outputs.number }} .nextly-review/review.json ${{ steps.pr.outputs.sha }}
-            Do not approve, request changes, merge, close, or push.
+            Write the review payload to .nextly-review/review.json, and any
+            replies to earlier findings to .nextly-review/replies.json (the only
+            directory you may write to). Do not post them: once you finish, the
+            workflow posts both as the review bot, and a `post-review` or `reply`
+            call of your own is refused. A `gh api` call of your own is not
+            permitted. Do not approve, request changes, merge, close, or push.
           # Allowlist entries match a command prefix, so every entry has to be
           # safe under ANY arguments appended to it. No raw `gh` qualifies:
           # `gh api` takes `--hostname` and `gh pr` takes `--repo HOST/O/R`, so
@@ -284,6 +277,57 @@ jobs:
             --allowedTools "Read,Grep,Glob,Write(.nextly-review/**),Bash(${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(bash ${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(rg:*),Bash(ls:*)"
             --disallowedTools "WebSearch,WebFetch,Read(//proc/**),Read(//sys/**),Grep(//proc/**),Grep(//sys/**)"
             --max-turns 150
+
+      # The bot's own identity, minted only now that the agent has finished,
+      # and revoked when the job ends. Minted before the agent, it would sit in
+      # the checkout's git remote for the agent to read, and a review running
+      # past the hour an App token lasts would find it expired at posting time.
+      - name: Take the review bot's App identity
+        id: app
+        if: steps.ask.outputs.run == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.REVIEW_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
+          permission-contents: read
+          permission-pull-requests: write
+
+      # What the agent wrote is posted as it wrote it, except that it can only
+      # ever be a comment on the reviewed head: the event is set to COMMENT, so
+      # the bot never approves or requests changes whatever the payload says,
+      # the commit is the one reviewed, and the gateway refuses to post once
+      # the branch has moved. Each reply's body goes through a file, so no
+      # comment text passes through the shell.
+      - name: Post the review as the review bot
+        if: steps.ask.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+          SHA: ${{ steps.pr.outputs.sha }}
+        run: |
+          set -euo pipefail
+          gateway="${RUNNER_TEMP}/nextly-review-bot/review-bot-gh.sh"
+          out="${RUNNER_TEMP}/nextly-review-post"
+          mkdir -p "$out"
+          test -s .nextly-review/review.json || { echo "::error::the agent wrote no review payload for $SHA"; exit 1; }
+          jq --arg sha "$SHA" '.event = "COMMENT" | .commit_id = $sha' .nextly-review/review.json > "$out/review.json"
+          # One inline comment GitHub cannot anchor refuses the whole review
+          # with a 422. The comments then move into the summary, where the
+          # protocol puts what it cannot anchor, and the review posts once more.
+          if ! result=$("$gateway" post-review "$NUMBER" "$out/review.json" "$SHA" 2>&1); then
+            echo "$result"
+            grep -q "HTTP 422" <<<"$result" || exit 1
+            jq '.body += "\n\n**Not inline-anchorable (GitHub refused an anchor, so every inline comment moved here):**\n" + ([.comments[]? | "- `\(.path):\(.line)`: \(.body)"] | join("\n")) | .comments = []' \
+              "$out/review.json" > "$out/review-folded.json"
+            "$gateway" post-review "$NUMBER" "$out/review-folded.json" "$SHA"
+          fi
+          if [ -f .nextly-review/replies.json ]; then
+            count=$(jq 'length' .nextly-review/replies.json)
+            for i in $(seq 0 $((count - 1))); do
+              jq -r ".[$i].body" .nextly-review/replies.json > "$out/reply-$i.md"
+              "$gateway" reply "$NUMBER" "$(jq -r ".[$i].in_reply_to" .nextly-review/replies.json)" "$out/reply-$i.md"
+            done
+          fi
 
       # A run that finishes without posting is the failure mode that looks most
       # like success: the job is green, the agent spent its budget, and the pull
