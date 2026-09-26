@@ -172,11 +172,14 @@ describe("the Claude Code copy of the skills", () => {
 
   /*
    * Two syncs in one checkout overlap for as long as one holds a staging copy.
-   * That copy is in use, not left behind, until its process is gone.
+   * That copy is in use, not left behind, until its process is gone. The exit
+   * is awaited from the moment of the spawn, so a child that dies early
+   * cannot leave the wait hanging.
    */
   it("leaves a copy a running sync owns unreported, and names it once that sync is gone", async () => {
     skill(SKILLS_HOME, "a");
     const other = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+    const exited = once(other, "exit");
     const inUse = `.skills-sync-${other.pid}-abc123`;
     try {
       mkdirSync(join(base, ".claude", inUse, "a"), { recursive: true });
@@ -185,11 +188,38 @@ describe("the Claude Code copy of the skills", () => {
       expect(said).toEqual([]);
     } finally {
       other.kill();
-      await once(other, "exit");
+      await exited;
     }
     const said = [];
     expect(syncCommand(base, {}, { log: () => {}, error: line => said.push(line) })).toBe(1);
     expect(said).toEqual([`agent-skills: .claude/${inUse} was left by another sync; delete it, then sync again`]);
+  });
+
+  // A process that syncs more than once is using none of its earlier staging copies by the time it lists them.
+  it("names a staging copy this process left from an earlier sync", () => {
+    skill(SKILLS_HOME, "a");
+    const earlier = `.skills-sync-${process.pid}-abc123`;
+    mkdirSync(join(base, ".claude", earlier, "a"), { recursive: true });
+    const said = [];
+    expect(syncCommand(base, {}, { log: () => {}, error: line => said.push(line) })).toBe(1);
+    expect(said).toEqual([`agent-skills: .claude/${earlier} was left by another sync; delete it, then sync again`]);
+  });
+
+  // An old copy whose removal failed is left behind whatever its process does next, so a live process does not hide it.
+  it("names an old copy another sync set aside even while that sync's process runs on", async () => {
+    skill(SKILLS_HOME, "a");
+    const other = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+    const exited = once(other, "exit");
+    const aside = `.skills-sync-${other.pid}-abc123-old`;
+    try {
+      mkdirSync(join(base, ".claude", aside, "a"), { recursive: true });
+      const said = [];
+      expect(syncCommand(base, {}, { log: () => {}, error: line => said.push(line) })).toBe(1);
+      expect(said).toEqual([`agent-skills: .claude/${aside} was left by another sync; delete it, then sync again`]);
+    } finally {
+      other.kill();
+      await exited;
+    }
   });
 
   // A sync killed before its cleanup leaves its staging copy, which no later run would remove or report. This one's name carries no process, as copies made before names did.
