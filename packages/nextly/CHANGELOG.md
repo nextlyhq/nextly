@@ -1,5 +1,112 @@
 # nextly
 
+## 0.0.2-alpha.67
+
+### Patch Changes
+
+- [#1874](https://github.com/nextlyhq/nextly/pull/1874) [`ce962c7`](https://github.com/nextlyhq/nextly/commit/ce962c7c0eda26659674261f544ea545e48afa2e) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A class whose id was `__proto__` could not be renamed again after a refused
+  save. The class manager records which rename of each class is the live one, and
+  it kept that record on a plain object keyed by class id, where `__proto__` reads
+  back an inherited object and a write to it stores nothing. The refused rename
+  never released its pending name, so retrying the same name was taken as no
+  change at all.
+
+  The record is now a `Map`, and the pending names are read as the record's own
+  entries in both the editor and the class manager panel, so a class behaves the
+  same whatever id it carries.
+
+- [#1876](https://github.com/nextlyhq/nextly/pull/1876) [`14f98f7`](https://github.com/nextlyhq/nextly/commit/14f98f7c1d0444330509289895c22140b82a2425) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A link saved in a pattern now points at the element the page actually shows.
+  When a selection held a visible renamed element and a hidden copy with the
+  same id (hidden by a visibility condition), a link from an unrelated block could
+  keep the old id, which nothing renders once the hidden copy is left off the
+  page. The visible element now decides where such a link points. A hidden
+  element decides only when nothing visible carries that id, so a link and its
+  target stay together when the condition later shows it. Hidden elements still
+  get their own ids put back.
+
+- [#1890](https://github.com/nextlyhq/nextly/pull/1890) [`9225d83`](https://github.com/nextlyhq/nextly/commit/9225d83bcf412df81cda8b841fceb3725e13c6d6) Thanks [@muzzamil-rx](https://github.com/muzzamil-rx)! - Three field-editor fixes:
+
+  The form builder's field list was keyed by the field's name, and the Field
+  Name input rewrites that name on every keystroke — so each character
+  unmounted the card being edited and focus fell out of the input, forcing the
+  author to click back in before every next character. Card keys are now minted
+  by the list and follow the field through a rename, so renaming a field keeps
+  its card, and the input's focus, in place.
+
+  The Schema Builder translated a Label into its auto-derived Name one
+  character at a time: every space, apostrophe, period or colon became its own
+  underscore, so a label of "phone no." named the field `phone_no_`. The
+  derivation now follows the formatting rule the builder's other name and slug
+  derivations already apply — a run of anything that is not a letter or a digit
+  collapses to one underscore, and nothing dangles at either end. The rule is
+  for labels only: a stored name the server already accepts passes through
+  every save untouched (its legal underscore runs and trailing underscore are
+  identity, not noise), a name minted under the previous rule still follows its
+  label, and renaming a form field keeps the card open through the empty
+  intermediate value of a clear-and-retype.
+
+  A Code field's content could overflow its box: field rows lay fields on
+  proportional grid tracks, and a bare `Nfr` track honors an item's
+  min-content — which a Code field makes as wide as its longest unwrapped
+  line, since CodeMirror draws its document with `white-space: pre`. Each row
+  item's automatic minimum is now zeroed, so tracks keep their proportional
+  width and a long line scrolls inside CodeMirror's own scroller instead of
+  widening the page.
+
+- [#1891](https://github.com/nextlyhq/nextly/pull/1891) [`04ac714`](https://github.com/nextlyhq/nextly/commit/04ac7145684096ed3887fe6c2faf0dffb740f5b0) Thanks [@muzzamil-rx](https://github.com/muzzamil-rx)! - QA round: builder layout and editor fixes.
+
+  The schema builder's Advanced tab offered the Localized switch on component
+  references, where it could only save a flag storage cannot honour — the
+  reference holds no value of its own, so toggling it read as Apply being
+  broken. The switch is now disabled there and names where component
+  localization actually lives: the fields inside the component.
+
+  The builder pages render standalone, and the breadcrumb above the entity
+  name was plain text — on a phone there was no way back to the list after
+  saving. It is now a link home. The field editor sheet no longer pushes its
+  left edge off narrow screens, select popups clamp to a scrollable height
+  even where the positioning variable is absent, the list-view card title and
+  value cells can shrink so long text truncates inside the card instead of
+  painting over it, and plugin route URLs wrap within their card instead of
+  overflowing past it.
+
+- [#1893](https://github.com/nextlyhq/nextly/pull/1893) [`95a3318`](https://github.com/nextlyhq/nextly/commit/95a3318f5278a49fb82a5fa4ccd3093ef8f75ae8) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The development toolchain moves to Node 24.21.0 and pnpm 12.5.1. Nothing
+  about the published packages changes: `engines.node` still reads
+  `^20.19.0 || ^22.12.0 || >=24.0.0`, so Node 20 and 22 remain supported, and the
+  version legs `package-smoke` derives from that range still test their floors.
+  What moved is what contributors and CI run.
+
+  The pnpm upgrade is the part with teeth, because modern pnpm reads its settings
+  from one place and silently ignores the others. The `pnpm.overrides` block in
+  `package.json` and `link-workspace-packages` in `.npmrc` were both being read
+  by pnpm 9 and would both have been dropped without a word — the overrides are
+  security floors, so losing them would have been quiet rather than loud. They now
+  live in `pnpm-workspace.yaml` as `overrides` and `linkWorkspacePackages`,
+  entry for entry, alongside an `allowBuilds` allowlist that replaces the
+  `onlyBuiltDependencies` spelling pnpm deprecated.
+
+  Two dependencies the root had been getting by accident are now declared. pnpm 9
+  linked `@nextlyhq/eslint-config` and `@nextlyhq/prettier-config` into the
+  workspace root even though nothing asked for them; pnpm 10 stopped, and the root
+  `eslint.config.mjs` — which imports the first — could no longer be loaded, so
+  every package without its own config failed to lint. `typescript-eslint` was
+  reaching the plugin template the same way. A dependency that resolves because of
+  a hoisting accident is a dependency that disappears without its manifest ever
+  changing, which is what happened here.
+
+- [#1888](https://github.com/nextlyhq/nextly/pull/1888) [`109ff0a`](https://github.com/nextlyhq/nextly/commit/109ff0ac4fe2f3b238c7afcf7e47068eb892f3bd) Thanks [@muzzamil-rx](https://github.com/muzzamil-rx)! - User emails are lowercased when an account is created, so an address typed
+  with any capital letter is now findable at sign-in instead of permanently
+  failing with "Invalid email or password". Creating an account whose email
+  matches an existing one is now rejected as a duplicate — including
+  repeating an address an earlier version stored with uppercase letters — and
+  findByEmail keeps finding those legacy accounts by their stored spelling.
+- Updated dependencies [[`ce962c7`](https://github.com/nextlyhq/nextly/commit/ce962c7c0eda26659674261f544ea545e48afa2e), [`14f98f7`](https://github.com/nextlyhq/nextly/commit/14f98f7c1d0444330509289895c22140b82a2425), [`9225d83`](https://github.com/nextlyhq/nextly/commit/9225d83bcf412df81cda8b841fceb3725e13c6d6), [`04ac714`](https://github.com/nextlyhq/nextly/commit/04ac7145684096ed3887fe6c2faf0dffb740f5b0), [`95a3318`](https://github.com/nextlyhq/nextly/commit/95a3318f5278a49fb82a5fa4ccd3093ef8f75ae8), [`109ff0a`](https://github.com/nextlyhq/nextly/commit/109ff0ac4fe2f3b238c7afcf7e47068eb892f3bd)]:
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.67
+  - @nextlyhq/adapter-mysql@0.0.2-alpha.67
+  - @nextlyhq/adapter-postgres@0.0.2-alpha.67
+  - @nextlyhq/adapter-sqlite@0.0.2-alpha.67
+  - @nextlyhq/blocks-engine@0.0.2-alpha.67
+
 ## 0.0.2-alpha.66
 
 ### Patch Changes
