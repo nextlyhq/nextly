@@ -827,8 +827,10 @@ describe("who owns what the required checks run", () => {
   // definition too, wherever it sits.
   it("owns every manifest, task graph, and test, compiler, lint and build configuration in the repository", () => {
     const definitions = trackedFiles().filter(path => LANE_DEFINITIONS.test(path));
-    // The control: the walk finds the repository's manifests and configurations, not nothing.
+    // The control: the walk finds the repository's manifests and configurations, not nothing,
+    // and a Rollup configuration by its name alone, as `rollup -c` finds one without being told.
     expect(definitions.length).toBeGreaterThan(50);
+    expect(definitions).toContain("packages/nextly/rollup.dts.config.ts");
     for (const path of definitions) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -844,6 +846,107 @@ describe("who owns what the required checks run", () => {
     // And a relative import, as the nextly package's lint configuration makes of its own rule.
     expect(shared.some(path => path.startsWith("packages/nextly/"))).toBe(true);
     for (const path of new Set(shared)) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // A package's build can run a script or a configuration of its own, named
+  // only in its manifest, and what that file does is part of what the check
+  // decides.
+  it("owns every file a package's own scripts run for the tasks the required checks run", () => {
+    const tasks = tasksRequiredChecksRun();
+    // The control: the lanes' tasks, and what the task graph adds to them, but no task only a developer runs.
+    expect([...tasks]).toEqual(expect.arrayContaining(["build", "lint", "check-types", "test", "test:integration", "build:surface-declarations"]));
+    expect(tasks.has("dev")).toBe(false);
+    // Every task reached is one the task graph defines: a dependency on
+    // another package's task (`^build`) or a named package's (`nextly#build`)
+    // is that task, never a name of its own that no script answers to.
+    const graph = parsedJsonc(readRepositoryFile("turbo.jsonc")).tasks;
+    expect([...tasks].filter(task => !Object.hasOwn(graph, task))).toEqual([]);
+    const files = trackedFiles();
+    const tracked = new Set(files);
+    const run = files.filter(path => WORKSPACE_MANIFEST.test(path)).flatMap(manifest => filesTasksRun(manifest, tracked, tasks));
+    // The control: the build steps a package runs from its own directory, directly and through `pnpm run`.
+    expect(run).toEqual(expect.arrayContaining(["packages/nextly/scripts/postbuild.cjs", "packages/nextly/rollup.dts.config.ts", "packages/ui/scripts/check-server-safe-artifacts.ts"]));
+    for (const path of new Set(run)) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // An owned lint rule can import another module, or read a file beside it,
+  // and a change there changes what the rule reports as much as a change to
+  // the rule itself.
+  it("owns every file an owned lint configuration loads, however deep the chain goes", () => {
+    const files = trackedFiles();
+    const tracked = new Set(files);
+    const loaded = loadedThrough(files.filter(path => LINT_CONFIGURATION.test(path)), tracked);
+    // The control: the nextly package's rule, the rule it imports and the allowlist it reads.
+    expect(loaded).toEqual(expect.arrayContaining(["packages/nextly/eslint-bare-error-rule.js", "packages/nextly/eslint-api-key-scope-rule.js", "packages/nextly/eslint-bare-error-allowlist.json"]));
+    for (const path of loaded) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // A setup module runs before every test in its lane, so it can decide what
+  // the tests pass on.
+  it("owns every setup module a test configuration loads", () => {
+    const files = trackedFiles();
+    const tracked = new Set(files);
+    const setups = files.filter(path => TEST_CONFIGURATION.test(path)).flatMap(path => setupModulesOf(path, tracked));
+    // The control: a package's own setup module, the shared one at the root, a
+    // global setup, and the one the browser tests' Playwright configuration runs.
+    expect(setups).toEqual(expect.arrayContaining(["packages/nextly/src/__tests__/setup.ts", "scripts/vitest-dom-setup.ts", "packages/blocks-react/vitest.global-setup.ts", "e2e/global-setup.ts"]));
+    for (const path of new Set(setups)) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // The readers behind the tests above take forms this repository does not use
+  // today, so those tests cannot fail on them; each form is held here instead.
+  it("follows a root script through the root scripts it runs, to the Turbo tasks at the end", () => {
+    const scripts = { "ci:generate": "pnpm generate --force", generate: "turbo run generate", unrelated: "turbo run dev" };
+    expect([...commandsRunBy(["pnpm ci:generate"], scripts)].flatMap(turboTasksIn)).toEqual(["generate"]);
+  });
+
+  it("reads a task's package-scoped definitions as well as its shared one", () => {
+    const graph = { test: { dependsOn: ["^build"] }, "some-package#test": { dependsOn: ["generate"] }, "other#lint": { dependsOn: ["format"] } };
+    expect(dependenciesOf(graph, "test").sort()).toEqual(["build", "generate"]);
+  });
+
+  it("reads every form in which a module loads a file beside it", () => {
+    const text = [
+      'import rule from "./rule.js";',
+      'import "./side-effect.js";',
+      'export { other } from "./re-export.js";',
+      'const required = require("./required.cjs");',
+      'const dynamic = await import("./dynamic.mjs");',
+      'const list = readFileSync(new URL("./list.json", import.meta.url), "utf8");',
+      'import shared from "@scope/shared";',
+    ].join("\n");
+    const loads = ["dynamic.mjs", "list.json", "re-export.js", "required.cjs", "rule.js", "side-effect.js"].map(file => `packages/a/${file}`);
+    expect(loadsIn(text, "packages/a/eslint.config.mjs").sort()).toEqual(loads);
+  });
+
+  it("reads a setup key given a string or strings, and refuses any other form rather than read it as naming nothing", () => {
+    const config = "packages/a/vitest.config.ts";
+    expect(setupModulesIn('test: { setupFiles: ["./setup.ts", "../shared.ts"], globalSetup: "./global.ts" }', config)).toEqual(["packages/a/setup.ts", "packages/shared.ts", "packages/a/global.ts"]);
+    expect(setupModulesIn('globalTeardown: "./teardown.ts",', "e2e/playwright.config.ts")).toEqual(["e2e/teardown.ts"]);
+    for (const unread of ["setupFiles: [setup]", 'globalSetup: require.resolve("./global.ts")', "test: { setupFiles }", "setupFiles: setups,"]) {
+      expect(() => setupModulesIn(unread, config), unread).toThrow(/cannot read/);
+    }
+  });
+
+  it("names a program a package script runs in any JavaScript or TypeScript form", () => {
+    const named = script => [...script.matchAll(LOCAL_FILE)].map(([, file]) => file);
+    expect(named("tsx scripts/generate.mts && node ./bin/run.cts && tsx src/cli.tsx --check scripts/x.js")).toEqual(["scripts/generate.mts", "./bin/run.cts", "src/cli.tsx", "scripts/x.js"]);
+  });
+
+  it("reads a step's shell and the inputs it hands an action, not its name or a whole-line comment", () => {
+    expect(stepTexts({ name: "turbo run dev", run: "# turbo run dev\npnpm test" })).toEqual(["\npnpm test"]);
+    expect(stepTexts({ uses: "actions/github-script@v7", with: { script: "require('./scripts/x.cjs')" } })).toEqual(["", "require('./scripts/x.cjs')"]);
+  });
+
+  it("reads what a local action's steps run, never the prose around them", () => {
+    const integration = read(".github/workflows/integration.yml");
+    const { actions, texts } = runBy(integration, requiredJobs(integration, QUEUE_CHECKS[".github/workflows/integration.yml"]));
+    const setup = ".github/actions/integration-setup/action.yml";
+    const action = load(readRepositoryFile(setup));
+    // The control: the jobs use the action, and what its steps run is read.
+    expect(actions).toContain(setup);
+    expect(texts).toEqual(expect.arrayContaining(action.runs.steps.filter(step => step.run).map(step => step.run)));
+    expect(texts.some(text => text.includes(action.description.slice(0, 40)))).toBe(false);
   });
 
   // The control: the walk reaches the scripts a required job runs, named
@@ -927,12 +1030,139 @@ function ownersOf(rules, path) {
 }
 
 /** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
-const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|(?:vitest|playwright|eslint|tsup)[^/]*\.config\.[^/]+)$/;
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|(?:vitest|playwright|eslint|tsup|rollup)[^/]*\.config\.[^/]+)$/;
+
+/** A workspace package's manifest, whose scripts Turbo runs. */
+const WORKSPACE_MANIFEST = /^(?:packages|apps)\/[^/]+\/package\.json$|^e2e\/package\.json$/;
+const LINT_CONFIGURATION = /(?:^|\/)eslint[^/]*\.config\.[^/]+$/;
+const TEST_CONFIGURATION = /(?:^|\/)(?:vitest|playwright)[^/]*\.config\.[^/]+$/;
+/** A file a package script names from the package's own directory, as a program in any JavaScript or TypeScript form, a shell script or data. */
+const LOCAL_FILE = /(?:^|[\s="'])(\.{0,2}\/?[\w./-]+\.(?:[cm]?js|jsx|[cm]?ts|tsx|sh|json))(?=$|[\s"';&|)])/g;
+
+/** A JSONC text as data: comments outside strings removed, and trailing commas. */
+function parsedJsonc(text) {
+  const withoutComments = text.replace(/("(?:\\.|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (match, string) => string ?? "");
+  return JSON.parse(withoutComments.replace(/,(\s*[}\]])/g, "$1"));
+}
+
+/**
+ * The Turbo tasks the required checks run: each `turbo run <task>` in the
+ * required jobs, directly or through the root script a step names, with the
+ * tasks those depend on in the task graph. A task only a developer runs, such
+ * as `dev`, is left out, so what it names is not held to an owner.
+ */
+function tasksRequiredChecksRun() {
+  const texts = Object.entries(QUEUE_CHECKS).flatMap(([path, checks]) => {
+    const workflow = read(path);
+    return runBy(workflow, requiredJobs(workflow, checks)).texts;
+  });
+  const named = [...commandsRunBy(texts)].flatMap(turboTasksIn);
+  const graph = parsedJsonc(readRepositoryFile("turbo.jsonc")).tasks;
+  return reachable(named, task => dependenciesOf(graph, task));
+}
+
+/** The tasks a command runs through Turbo: `turbo build` and `turbo run build` alike, each task it lists before its first flag. */
+function turboTasksIn(text) {
+  return [...text.matchAll(/\bturbo (?:run )?((?:\w[\w:-]*[ \t]*)+)/g)].flatMap(match => match[1].trim().split(/\s+/));
+}
+
+/**
+ * The tasks one task depends on in the task graph: through its shared
+ * definition and through each package's own (`<package>#<task>`), which can add
+ * dependencies of its own. A dependency's `^` and `<package>#` prefixes are set
+ * aside, since what is reached is the task.
+ */
+function dependenciesOf(graph, task) {
+  const definitions = Object.entries(graph).filter(([name]) => name === task || name.endsWith(`#${task}`));
+  return definitions.flatMap(([, definition]) => definition.dependsOn ?? []).map(dependency => dependency.replace(/^\^/, "").replace(/^.*#/, ""));
+}
+
+/**
+ * Everything reachable from `starts` by following `next`, the starts
+ * included, each item visited once: the one walk the task graph, a package's
+ * scripts and a module's imports are each followed with.
+ */
+function reachable(starts, next) {
+  const seen = new Set();
+  const pending = [...starts];
+  while (pending.length > 0) {
+    const item = pending.pop();
+    if (seen.has(item)) continue;
+    seen.add(item);
+    pending.push(...next(item));
+  }
+  return seen;
+}
+
+/**
+ * The repository files a package's scripts name for the given tasks,
+ * following `pnpm run <script>` to the scripts those call in the same package.
+ */
+function filesTasksRun(manifest, tracked, tasks) {
+  const directory = posix.dirname(manifest);
+  const scripts = JSON.parse(readRepositoryFile(manifest)).scripts ?? {};
+  const run = reachable([...tasks].filter(task => task in scripts), name => scriptsCalledBy(scripts, name));
+  const named = [...run].flatMap(name => [...scripts[name].matchAll(LOCAL_FILE)].map(([, file]) => posix.normalize(posix.join(directory, file))));
+  return named.filter(path => tracked.has(path));
+}
+
+/** The scripts of the same package that one script runs with `pnpm run` or `npm run`. */
+function scriptsCalledBy(scripts, name) {
+  return [...scripts[name].matchAll(/\b(?:pnpm|npm)\s+(?:run\s+)?([\w:-]+)/g)].map(([, called]) => called).filter(called => called in scripts);
+}
+
+/**
+ * The repository files a set of modules loads, however deep: each relative
+ * import, resolved as a configuration's imports are, and each file a module
+ * reads with `readFileSync`, which is how a rule reads its allowlist. A file
+ * that is not a module, such as that allowlist, is reached but not read.
+ */
+function loadedThrough(roots, tracked) {
+  const reached = reachable(roots, path => (/\.(?:[cm]?js|ts)$/.test(path) ? loadedBy(path, tracked) : []));
+  return [...reached].filter(path => !roots.includes(path));
+}
+
+function loadedBy(path, tracked) {
+  return loadsIn(readRepositoryFile(path), path).filter(target => tracked.has(target));
+}
+
+/** The files beside it a module's text loads: a relative import in any form, and a file it reads with `readFileSync`. */
+function loadsIn(text, path) {
+  const imported = [...text.matchAll(CONFIGURATION_IMPORT)].map(match => match[1]).filter(specifier => specifier.startsWith("."));
+  const read = [...text.matchAll(/readFileSync\(([^;]*?)["']utf-?8["']/g)].flatMap(match => [...match[1].matchAll(/["']([^"']+)["']/g)].map(literal => `./${literal[1]}`));
+  return [...imported, ...read].map(specifier => repositoryPathOf(specifier, path, new Map()));
+}
+
+/** The modules a test configuration's setup keys name, as repository paths. */
+function setupModulesOf(path, tracked) {
+  return setupModulesIn(readRepositoryFile(path), path).filter(module => tracked.has(module));
+}
+
+/**
+ * The modules `setupFiles`, `globalSetup` and `globalTeardown` name in a
+ * configuration's text. Only a string, or an array of strings, can be read
+ * from the text; a key given a variable, a call or anything else is refused
+ * rather than read as naming nothing, which would leave its module unowned.
+ */
+function setupModulesIn(text, path) {
+  const shorthand = SETUP_SHORTHAND.exec(text);
+  if (shorthand) throw new Error(`${path} gives ${shorthand[1]} a variable, which this test cannot read`);
+  return [...text.matchAll(SETUP_KEY)].flatMap(key => {
+    const value = SETUP_VALUE.exec(text.slice(key.index + key[0].length));
+    if (!value) throw new Error(`${path} declares ${key[1]} in a form this test cannot read: ${text.slice(key.index, key.index + 80)}`);
+    return [...value[0].matchAll(/["']([^"']+)["']/g)].map(match => posix.normalize(posix.join(posix.dirname(path), match[1])));
+  });
+}
+
+const SETUP_KEY = /\b(setupFiles|globalSetup|globalTeardown)\s*:\s*/g;
+const SETUP_SHORTHAND = /\b(setupFiles|globalSetup|globalTeardown)\s*[,}]/;
+const SETUP_VALUE = /^(?:\[\s*(?:["'][^"'\n]+["']\s*,?\s*)*\]|["'][^"'\n]+["'])/;
 
 /** Compiler and lint configuration, which may extend or import shared configuration. */
 const SHARING_CONFIGURATION = /(?:^|\/)(?:tsconfig[^/]*\.json|eslint[^/]*\.config\.[^/]+)$/;
 const EXTENDS = /"extends"\s*:\s*(\[[^\]]*\]|"[^"]*")/;
-const CONFIGURATION_IMPORT = /(?:\bfrom\s+|\brequire\(\s*|\bimport\(\s*)["']([^"']+)["']/g;
+/** A module another loads: `import … from`, `export … from`, a bare `import` for its side effects, `require()` and `import()`. */
+const CONFIGURATION_IMPORT = /(?:\bfrom\s+|\bimport\s+|\brequire\(\s*|\bimport\(\s*)["']([^"']+)["']/g;
 
 function readRepositoryFile(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -966,15 +1196,49 @@ function trackedFiles() {
 const PACKAGE_SCRIPTS = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts;
 const SCRIPT_PATH = /\bscripts\/[\w./-]+\.(?:mjs|cjs|js|sh)\b/g;
 
+/** What a set of jobs runs: the local actions it uses, however nested, and what each of its steps and theirs runs. */
+function runBy(workflow, ids) {
+  const steps = ids.flatMap(id => workflow.jobs[id].steps ?? []);
+  const actions = [...reachable(localActionsOf(steps), action => localActionsOf(actionSteps(action)))];
+  return { actions, texts: [...steps, ...actions.flatMap(actionSteps)].flatMap(stepTexts) };
+}
+
+/** The local actions a list of steps uses, as the paths of their definitions. */
+function localActionsOf(steps) {
+  return steps.map(step => String(step.uses ?? "")).filter(uses => uses.startsWith("./")).map(uses => `${uses.slice(2)}/action.yml`);
+}
+
+/** A composite action's steps, read from its definition, so its name and descriptions are never taken for commands. */
+function actionSteps(path) {
+  return load(readRepositoryFile(path))?.runs?.steps ?? [];
+}
+
+/**
+ * What one step runs: its shell, and the inputs it hands an action, which can
+ * be code, as the script `actions/github-script` runs is. A whole-line comment
+ * in either runs nothing, so prose there that mentions a command is dropped.
+ */
+function stepTexts(step) {
+  return [step.run ?? "", ...Object.values(step.with ?? {})].map(value => String(value).replace(/^[ \t]*#.*$/gm, ""));
+}
+
 /** The local actions a set of jobs uses, and the scripts their steps name, directly or through a package script. */
 function pathsRunBy(workflow, ids) {
-  const steps = ids.flatMap(id => workflow.jobs[id].steps ?? []);
-  const actions = steps.map(step => String(step.uses ?? "")).filter(uses => uses.startsWith("./")).map(uses => `${uses.slice(2)}/action.yml`);
-  const texts = [...steps.map(step => String(step.run ?? "")), ...actions.map(action => readFileSync(new URL(`../${action}`, import.meta.url), "utf8"))];
-  return [...new Set([...actions, ...texts.flatMap(scriptsNamedIn)])];
+  const { actions, texts } = runBy(workflow, ids);
+  return [...new Set([...actions, ...[...commandsRunBy(texts)].flatMap(scriptsNamedIn)])];
+}
+
+/** Each command step texts run: the texts themselves, and every root script they name, followed through the root scripts it names in turn. */
+function commandsRunBy(texts, scripts = PACKAGE_SCRIPTS) {
+  return reachable(texts, text => rootScriptsNamedIn(text, scripts));
+}
+
+/** The root package scripts a command runs with `pnpm <script>`, as their commands. */
+function rootScriptsNamedIn(text, scripts = PACKAGE_SCRIPTS) {
+  return [...text.matchAll(/\bpnpm (?:run )?([\w:-]+)/g)].map(match => scripts[match[1]]).filter(Boolean);
 }
 
 function scriptsNamedIn(text) {
-  const viaPackage = [...text.matchAll(/\bpnpm (?:run )?([\w:-]+)/g)].map(match => PACKAGE_SCRIPTS[match[1]]).filter(Boolean);
+  const viaPackage = rootScriptsNamedIn(text);
   return [...[text, ...viaPackage].flatMap(source => [...source.matchAll(SCRIPT_PATH)].map(match => match[0])), ...(viaPackage.length > 0 ? ["package.json"] : [])];
 }
