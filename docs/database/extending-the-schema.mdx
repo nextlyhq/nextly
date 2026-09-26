@@ -365,16 +365,28 @@ The contributor reads and writes its own columns through
 contribution declared, and it is typed from it:
 
 ```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { col } from "@nextlyhq/plugin-sdk/schema";
+
 const columns = { searchVector: col.text({ nullable: true }) };
 
-// In the schema hook
-schema.extendTable("dc_posts", { columns });
-
-// Anywhere the plugin (or the app) holds `ctx.db`
-const posts = ctx.db.contributed("dc_posts", columns);
-await posts.set(postId, { searchVector: "…" });
-const row = await posts.get(postId); // { id, searchVector } or null
-const rows = await posts.getMany([a, b]);
+export default definePlugin({
+  name: "@acme/search",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.63",
+  contributes: {
+    schema: {
+      extend: [({ schema }) => schema.extendTable("dc_posts", { columns })],
+    },
+  },
+  async init(ctx) {
+    const posts = ctx.db.contributed("dc_posts", columns);
+    await posts.set("post-1", { searchVector: "…" });
+    const row = await posts.get("post-1"); // { id, searchVector } or null
+    const rows = await posts.getMany(["post-1", "post-2"]);
+    ctx.logger.info(`indexed ${rows.length} posts, first: ${row?.id}`);
+  },
+});
 ```
 
 It reaches the row's id and the columns the CALLER contributed, and nothing
