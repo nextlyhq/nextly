@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (d021bfebb04ec474). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (50a89ba1d4c8ee1c). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -325,10 +325,11 @@ Why, as measured, and how to recover a file once it has been clobbered: the
 ## Code Review Rules
 
 For the automatic reviewer. CI already decides formatting, types, lint, the
-comment convention, changeset presence, design tokens and bare `Error` in
-product code, so none of those belong here — a reviewer relitigating a
-mechanical check costs a round and settles nothing. What follows is the
-consequential behaviour no check in this repository can judge.
+comment convention, design tokens and bare `Error` in product code, so none of
+those belong here — a reviewer relitigating a mechanical check costs a round
+and settles nothing. Whether a changeset is present is not among them: no CI
+job requires one, so the reviewer checks it. What follows is the consequential
+behaviour no check in this repository can judge.
 
 ### Published surface is a compatibility contract
 
