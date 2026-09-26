@@ -60,6 +60,19 @@ const neverConsulted = rules => rules.filter(rule => /^(Write|MultiEdit|Notebook
 /** Every flag an argument string sets. Quoted values are blanked first, so a rule's own text is never read as a flag. */
 const flagsOf = args => args.replace(/"[^"]*"/g, '""').match(/(?<=^|\s)--?[A-Za-z][\w-]*/g) ?? [];
 
+/** How often a text names a payload file inside the payload directory, and how often anywhere else. */
+function placesOf(text, file) {
+  const parts = text.split(`${PAYLOAD_DIR}/${file}`);
+  return { inside: parts.length - 1, elsewhere: parts.join("\n").split(file).length - 1 };
+}
+
+/**
+ * The post step as it reads the agent's payload. Its own validated copy under
+ * `$out`, and a warning that names a file without reading it, are set aside.
+ */
+const postReads = () =>
+  runOf("Post the review as the review bot").replaceAll('"$out/review.json"', '"$out/"').replace("::warning::replies.json", "::warning::");
+
 /** Every rule one `--flag "a,b(c)"` of the agent's arguments lists, each read whole. */
 function rulesOf(flag) {
   const found = new RegExp(`--${flag} "([^"]*)"`).exec(agent.with.claude_args);
@@ -85,12 +98,27 @@ describe("the files the review agent may write", () => {
     expect(writes).toEqual([`Edit(/${PAYLOAD_DIR}/**)`]);
   });
 
-  it("names one payload directory wherever the payload passes", () => {
-    const lines = text => text.split("\n").map(line => line.trim());
-    expect(lines(runOf("Materialize the reviewer's tooling outside the tree"))).toContain(`mkdir ${PAYLOAD_DIR}`);
-    expect(agent.with.prompt).toContain(`${PAYLOAD_DIR}/review.json`);
-    expect(read(".github/review-prompt.md")).toContain(`${PAYLOAD_DIR}/review.json`);
-    expect(runOf("Post the review as the review bot")).toContain(`test -s ${PAYLOAD_DIR}/review.json`);
+  it("empties the payload directory before the agent runs", () => {
+    // A pull request can commit files there, and a review.json it left would be
+    // posted as the bot's own; so the directory is removed, then made afresh.
+    const materialize = steps.findIndex(step => step.name === "Materialize the reviewer's tooling outside the tree");
+    const lines = steps[materialize].run.split("\n").map(line => line.trim());
+    const emptied = lines.indexOf(`rm -rf ${PAYLOAD_DIR}`);
+    expect(emptied, "the payload directory removed").toBeGreaterThanOrEqual(0);
+    expect(lines.indexOf(`mkdir ${PAYLOAD_DIR}`), "then made afresh").toBe(emptied + 1);
+    expect(materialize, "before the agent runs").toBeLessThan(steps.indexOf(agent));
+  });
+
+  it.each(["review.json", "replies.json"])("names the payload directory for %s wherever it passes", file => {
+    for (const [where, text] of [
+      ["the agent's prompt", agent.with.prompt],
+      ["the review prompt", read(".github/review-prompt.md")],
+      ["the post step", postReads()],
+    ]) {
+      const { inside, elsewhere } = placesOf(text, file);
+      expect(inside, `${file} in ${where}`).toBeGreaterThan(0);
+      expect(elsewhere, `${file} outside ${PAYLOAD_DIR} in ${where}`).toBe(0);
+    }
   });
 });
 
