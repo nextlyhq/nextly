@@ -8,8 +8,11 @@
  * by that shape keeps the next instance next to its siblings instead of filed
  * under whichever function happened to grow it.
  */
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -17,8 +20,8 @@ import {
   ADVISORY_REVIEWERS,
   CODERABBIT,
   advisoryExemptions,
-  bareComparisonInObject,
   ghText,
+  ghVersionProblem,
   REVIEW_THREAD_NODE_FIELDS,
   assertCompleteFileList,
   flatPages,
@@ -54,6 +57,8 @@ import {
   workflowPathsIgnore,
 } from "./verify-merge.mjs";
 
+const POSIX = process.platform !== "win32";
+const SCRIPT = fileURLToPath(new URL("./verify-merge.mjs", import.meta.url));
 const forcePush = { event: "head_ref_force_pushed" };
 const commented = { event: "commented" };
 const green = name => ({ name, status: "completed", conclusion: "success" });
@@ -1554,27 +1559,72 @@ describe("advisory review threads do not block the merge gate", () => {
   });
 });
 
-describe("a filter gh's own jq cannot parse", () => {
+describe("a gh too old for the filters this gate writes", () => {
   /*
-   * gh evaluates `--jq` with its built-in jq, not the jq on PATH, and some
-   * versions of it reject a comparison written bare as an object value. The
-   * call itself refuses such a filter, whatever form it was written in, before
-   * gh runs: the refusal names the filter, where gh's own error would not.
+   * gh evaluates `--jq` with a jq built into it, and before 2.75.0 that jq
+   * refuses any binary operator written bare as an object's value. The gate
+   * asks for the version it needs instead of scanning filters for what an older
+   * jq refuses: a scan misses a comparison beside a nested object, and refuses a
+   * `>` inside a string that every version accepts.
    */
-  it("refuses at the call a filter with a comparison bare inside an object, however it was written", () => {
-    const field = "state";
-    for (const filter of ["{cross:.a!=.b,repo:.x}", `{open:.${field}=="open"}`, ["{merged:", ".merged", " and ", ".draft}"].join("")]) {
-      expect(() => ghText(["api", "repos/o/r/pulls/1", "--jq", filter]), filter).toThrow(/refusing a --jq filter some versions of gh's jq cannot parse/);
-    }
+  it("refuses every gh before 2.75.0 and a version it cannot read, and accepts 2.75.0 and later", () => {
+    expect(ghVersionProblem("gh version 2.74.2 (2025-06-23)\nhttps://github.com/cli/cli/releases/tag/v2.74.2\n")).toMatch(/^gh 2\.74\.2 is older than 2\.75\.0/);
+    expect(ghVersionProblem("gh version 2.46.0 (2024-03-26)")).toMatch(/^gh 2\.46\.0 is older than 2\.75\.0/);
+    // Compared as numbers: as text, 2.9.0 sorts after 2.75.0.
+    expect(ghVersionProblem("gh version 2.9.0")).toMatch(/^gh 2\.9\.0 is older than 2\.75\.0/);
+    expect(ghVersionProblem("gh version 2.75.0 (2025-07-09)")).toBeNull();
+    expect(ghVersionProblem("gh version 2.101.0 (2026-09-15)")).toBeNull();
+    expect(ghVersionProblem("gh version 3.0.0")).toBeNull();
+    expect(ghVersionProblem("zsh: command not found")).toMatch(/^cannot read a version from gh --version/);
   });
 
-  it("tells a bare comparison from one in parentheses, or one outside an object", () => {
-    expect(bareComparisonInObject("{cross:.a!=.b,repo:.x}")).toBe(true);
-    expect(bareComparisonInObject("{open:.state==\"open\"}")).toBe(true);
-    expect(bareComparisonInObject("{cross:(.a!=.b),repo:.x}")).toBe(false);
-    expect(bareComparisonInObject("{nested:((.a|length)>1)}")).toBe(false);
-    expect(bareComparisonInObject("[.check_runs[] | select(.status != \"completed\")] | length")).toBe(false);
-    expect(bareComparisonInObject(".state == \"open\"")).toBe(false);
+  /*
+   * A directory holding a gh that prints the version it is given and, for
+   * anything else, each argument on a line of its own: what reaches it is then
+   * visible, and a call refused before it ran prints nothing.
+   */
+  function fakeGh(version) {
+    const bin = mkdtempSync(join(tmpdir(), "fake-gh-"));
+    writeFileSync(join(bin, "gh"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "gh version ${version} (2026-01-01)"; exit 0; fi\nprintf '%s\\n' "$@"\n`);
+    chmodSync(join(bin, "gh"), 0o755);
+    return bin;
+  }
+
+  /* A fresh process with the fake gh first on PATH, so the version is read anew. */
+  function runUnderGh(version, args) {
+    const bin = fakeGh(version);
+    try {
+      return spawnSync(process.execPath, args, { env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` }, encoding: "utf8" });
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  }
+
+  it.runIf(POSIX)("refuses at the first call, before gh runs it, under a gh older than 2.75.0", () => {
+    const code = `import { ghText } from ${JSON.stringify(pathToFileURL(SCRIPT).href)};\nconsole.log(ghText(["api", "repos/o/r/pulls/1"]));`;
+    const run = runUnderGh("2.74.2", ["--input-type=module", "-e", code]);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/gh 2\.74\.2 is older than 2\.75\.0/);
+    expect(run.stdout).toBe("");
+  });
+
+  it.runIf(POSIX)("stops the gate with no verdict, exit 2, under a gh older than 2.75.0", () => {
+    const run = runUnderGh("2.74.2", [SCRIPT, "1927"]);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toMatch(/could not complete the check — gh 2\.74\.2 is older than 2\.75\.0/);
+  });
+
+  it.runIf(POSIX)("passes a filter to gh as written under a gh from 2.75.0 on", () => {
+    const filter = '{msg:"n > 10",outer:{x:.x},cross:.a!=.b}';
+    const bin = fakeGh("2.75.0");
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}${delimiter}${path}`;
+    try {
+      expect(ghText(["api", "repos/o/r/pulls/1", "--jq", filter]).split("\n")).toContain(filter);
+    } finally {
+      process.env.PATH = path;
+      rmSync(bin, { recursive: true, force: true });
+    }
   });
 });
 

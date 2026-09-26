@@ -124,6 +124,26 @@ function entryAt(path) {
 }
 
 /**
+ * How a sync names what it puts beside the copy Claude Code reads: its staging
+ * copy, and the old copy it sets aside, which is the staging name plus `-old`.
+ */
+const STAGING_PREFIX = ".skills-sync-";
+
+/**
+ * What syncs left beside the copy Claude Code reads: a staging copy or an old
+ * copy set aside, which nothing but a sync makes. `.claude/` is git-ignored, so
+ * neither git nor the contract check would show one.
+ */
+function leftoverCopies(base = root) {
+  const home = dirname(join(base, CLAUDE_COPY));
+  if (!existsSync(home)) return [];
+  return readdirSync(home)
+    .filter(name => name.startsWith(STAGING_PREFIX))
+    .sort()
+    .map(name => join(home, name));
+}
+
+/**
  * Rewrites the Claude Code copy from the skills: every file copied, with its
  * mode, and anything else removed. The new copy is built beside the old one
  * and swapped in, so a sync that fails part-way — the skills missing or
@@ -143,7 +163,7 @@ function entryAt(path) {
 export function syncSkillCopy(base = root, { rename = renameSync, remove = rmSync } = {}) {
   const copy = join(base, CLAUDE_COPY);
   mkdirSync(dirname(copy), { recursive: true });
-  const staging = mkdtempSync(join(dirname(copy), ".skills-sync-"));
+  const staging = mkdtempSync(join(dirname(copy), STAGING_PREFIX));
   try {
     cpSync(join(base, SKILLS_HOME), staging, { recursive: true, dereference: true });
     return { leftover: swapIn(staging, copy, { rename, remove }) };
@@ -269,16 +289,31 @@ function descriptionProblem(description) {
 
 /**
  * The sync as a command, and its exit status. The new copy is kept either
- * way, since it is right; but an old copy it set aside and could not remove is
- * named for deletion and fails the command, so no caller takes the sync as
- * clean while old copies pile up beside the one Claude Code reads.
+ * way, since it is right; but every copy a sync left beside it — the old copy
+ * this run could not remove, or one an earlier run left — is named for
+ * deletion and fails the command, so no caller takes the sync as clean while
+ * old copies pile up beside the one Claude Code reads. A retry succeeds only
+ * once they are gone.
  */
 export function syncCommand(base = root, moves = {}, { log = console.log, error = console.error } = {}) {
   const { leftover } = syncSkillCopy(base, moves);
   log(`agent-skills: ${CLAUDE_COPY} rewritten from ${SKILLS_HOME}`);
-  if (!leftover) return 0;
-  error(`agent-skills: the old copy set aside at ${relative(base, leftover.path)} could not be removed (${leftover.error.message}); delete it, then sync again`);
-  return 1;
+  const problems = leftoverProblems(base, leftover);
+  for (const problem of problems) error(`agent-skills: ${problem}`);
+  return problems.length > 0 ? 1 : 0;
+}
+
+/**
+ * What to say about each copy a sync left beside the one Claude Code reads:
+ * the old copy this run could not remove, with why, or one another run left.
+ * Both come from the one listing of what is there.
+ */
+function leftoverProblems(base, leftover) {
+  return leftoverCopies(base).map(path =>
+    path === leftover?.path
+      ? `the old copy set aside at ${relative(base, path)} could not be removed (${leftover.error.message}); delete it, then sync again`
+      : `${relative(base, path)} was left by another sync; delete it, then sync again`
+  );
 }
 
 if (isCliEntry(import.meta.url)) {

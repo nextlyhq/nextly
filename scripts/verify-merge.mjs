@@ -952,36 +952,49 @@ let BASE_REMOTE = "origin";
  * with no review verdict yet.
  */
 export function ghText(args) {
-  refuseUnportableJq(args);
-  return execFileSync("gh", args, {
+  return gh(args, {
     encoding: "utf8",
     maxBuffer: 32 * 1024 * 1024,
   }).trim();
 }
 
 /**
- * Whether a jq filter holds a comparison bare as an object's value. gh
- * evaluates `--jq` with its own built-in jq, not the jq on PATH, and some
- * versions of it reject that: under gh 2.46.0, `{cross:.a!=.b}` failed every
- * run with `unexpected token "!="` before anything was checked, where gh
- * 2.101.0 and jq 1.8 accept it. Every gh parses the comparison in parentheses.
+ * The oldest gh this gate runs under. gh evaluates `--jq` with a jq built into
+ * it, not the jq on PATH, and before 2.75.0 that jq (gojq 0.12.15 and older)
+ * refuses any binary operator written bare as an object's value —
+ * `{cross:.a!=.b}`, `{next:.n+1}`, `{name:.a//"none"}` — before anything is
+ * checked, where 2.75.0 (gojq 0.12.17) and later parse every one of them.
+ * Measured with gh 2.46.0, 2.74.2, 2.75.0 and 2.101.0. Requiring the version
+ * makes every filter it parses safe here, which a scan of filters for what an
+ * older jq refuses could never promise. The pages this gate reads also need
+ * `gh api --slurp`, which 2.48.0 added.
  */
-export function bareComparisonInObject(filter) {
-  let flat = filter;
-  while (/\([^()]*\)/.test(flat)) flat = flat.replace(/\([^()]*\)/g, "_");
-  return [...flat.matchAll(/\{[^{}]*\}/g)].some(([object]) => /!=|==|<=|>=|[<>]|\band\b|\bor\b/.test(object));
+const MIN_GH = [2, 75, 0];
+
+/** Why the gh that printed this `gh --version` cannot run this gate, or null when it can. */
+export function ghVersionProblem(versionText) {
+  const found = /^gh version (\d+)\.(\d+)\.(\d+)/m.exec(versionText);
+  if (!found)
+    return `cannot read a version from gh --version: ${JSON.stringify(versionText.trim().split("\n")[0])}`;
+  const version = found.slice(1).map(Number);
+  const differs = version.findIndex((part, at) => part !== MIN_GH[at]);
+  if (differs === -1 || version[differs] > MIN_GH[differs]) return null;
+  return `gh ${version.join(".")} is older than ${MIN_GH.join(".")}, the first whose built-in jq parses every filter this gate writes; update gh`;
 }
 
+/** Why this process's gh cannot run the gate, or null; read at the first call. */
+let ghProblem;
+
 /**
- * Refuses a gh call whose `--jq` filter some gh cannot parse, at the call
- * itself, so the rule holds however the filter was written: a constant, a
- * template or a literal.
+ * Every gh call this gate makes. The first reads `gh --version` and refuses a
+ * gh older than `MIN_GH`, so no call runs under a gh that would fail it later
+ * and part-way.
  */
-function refuseUnportableJq(args) {
-  args.forEach((arg, at) => {
-    if (arg === "--jq" && bareComparisonInObject(String(args[at + 1] ?? "")))
-      throw new Error(`refusing a --jq filter some versions of gh's jq cannot parse; put each comparison inside an object in parentheses: ${args[at + 1]}`);
-  });
+function gh(args, options) {
+  if (ghProblem === undefined)
+    ghProblem = ghVersionProblem(execFileSync("gh", ["--version"], { encoding: "utf8" }));
+  if (ghProblem !== null) throw new Error(ghProblem);
+  return execFileSync("gh", args, options);
 }
 
 /** `gh api` where the result really is JSON. Empty output is a failure, not an empty value. */
@@ -1007,8 +1020,7 @@ function timelinePages(pr) {
   // therefore counts zero force-pushes — a false clean produced by the check
   // that exists to refuse them.
   return JSON.parse(
-    execFileSync(
-      "gh",
+    gh(
       [
         "api",
         "--paginate",
@@ -1120,10 +1132,6 @@ export function main(argv) {
     return 2;
   }
 
-  // gh evaluates `--jq` with its own built-in jq, not the jq on PATH, and
-  // some versions of it reject a comparison written bare as an object value:
-  // gh 2.46.0 fails with `unexpected token "!="`, where gh 2.101.0 and jq 1.8
-  // accept it. Parenthesized, it parses in every version.
   const meta = ghJson([
     "api",
     `repos/${REPO}/pulls/${pr}`,

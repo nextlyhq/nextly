@@ -155,7 +155,26 @@ describe("the Claude Code copy of the skills", () => {
     expect(readFileSync(join(base, CLAUDE_COPY, "a/SKILL.md"), "utf8")).toContain("the new text");
     const aside = readdirSync(join(base, ".claude")).find(name => name.endsWith("-old"));
     expect(said.join("\n")).toMatch(new RegExp(`the old copy set aside at \\.claude/${aside} could not be removed \\(the removal was refused\\); delete it`));
+
+    // A retry that removes its own old copy still fails while the first run's remains, and names it.
+    const retried = [];
+    expect(syncCommand(base, {}, { log: () => {}, error: line => retried.push(line) })).toBe(1);
+    expect(retried).toEqual([`agent-skills: .claude/${aside} was left by another sync; delete it, then sync again`]);
+
+    // Once it is deleted, the sync is clean again.
+    rmSync(join(base, ".claude", aside), { recursive: true, force: true });
     expect(syncCommand(base, {}, { log: () => {}, error: () => {} })).toBe(0);
+    expect(readdirSync(join(base, ".claude"))).toEqual(["skills"]);
+  });
+
+  // A sync killed before its cleanup leaves its staging copy, which no later run would remove or report.
+  it("fails the sync command, naming it, while a staging copy an interrupted sync left remains", () => {
+    skill(SKILLS_HOME, "a");
+    mkdirSync(join(base, ".claude", ".skills-sync-interrupted", "a"), { recursive: true });
+    const said = [];
+    expect(syncCommand(base, {}, { log: () => {}, error: line => said.push(line) })).toBe(1);
+    expect(said).toEqual(["agent-skills: .claude/.skills-sync-interrupted was left by another sync; delete it, then sync again"]);
+    expect(skillCopyDrift(base)).toEqual([]);
   });
 
   /*
