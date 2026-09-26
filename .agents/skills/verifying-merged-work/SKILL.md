@@ -21,11 +21,13 @@ them, and reports a second reviewer that never ran as distinct from one that
 found nothing. A gate typed out again by hand is a second implementation of the
 same question, which this repository has a rule about.
 
-**It needs gh 2.48 or later**, the release that added `gh api --slurp`, which
-it pages with. Older ones stop at the first paged request with
-`unknown flag: --slurp` and exit 2, which is no verdict: `gh --version` says
-which one is on PATH. A distribution's package can lag well behind; gh 2.46.0
-from Ubuntu's archive is one that stops.
+**It needs gh 2.75 or later**, and refuses an older one before its first
+request, exiting 2, which is no verdict. gh evaluates `--jq` with a jq built
+into it, and before 2.75.0 that jq refuses any operator written bare as an
+object's value, such as `{cross:.a!=.b}`; gh 2.75.0 and later parse it. Paging
+with `gh api --slurp` needs 2.48 as well. `gh --version` says which one is on
+PATH, and a distribution's package can lag well behind: gh 2.46.0 from
+Ubuntu's archive is one it refuses.
 
 **It answers a different question before and after the merge**, because the two
 questions have different subjects. Open, it judges the branch tip — the thing
