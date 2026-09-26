@@ -295,7 +295,7 @@ function skipFound(tokens, condition, readings) {
 }
 
 /**
- * A condition that calls one of `TRANSFORMS` on an unknown, when no value
+ * A condition that calls a function that `transforms` on an unknown, when no value
  * tried for the unknown skips the queue. The call may still make a value no
  * value tried makes it make, as `format('x{0}', v)` makes `xa` only from `a`,
  * so it is tried again with each call's result as an unknown of its own, which
@@ -318,8 +318,8 @@ function skipsUnder(tokens, condition, readings, values) {
   return PULL_REQUEST_EVENTS.some(event => outcome("pull request", event) !== false) && outcome("queue", QUEUE_EVENT) === false;
 }
 
-/** The functions that test text, for which one value may have to pass several tests at once. */
-const TEXT_TESTS = new Set(["contains", "startswith", "endswith"]);
+/** Whether a function tests text (`FUNCTIONS`), so that one value may have to pass several of its tests at once. */
+const testsText = name => Object.hasOwn(FUNCTIONS, name) && FUNCTIONS[name].tests === true;
 
 /**
  * Refuses a condition that holds one unknown to more text tests than its
@@ -337,7 +337,7 @@ function textTestsDecidable(tokens, condition) {
 /** Each unknown a text test reads, once for every test that reads it. */
 const textTestOperands = tokens => tokens.flatMap((token, at) => (isTextTest(tokens, at) ? [...new Set(argumentsOf(tokens, at).filter(isUnknownName).map(nameOf))] : []));
 
-const isTextTest = (tokens, at) => TEXT_TESTS.has(nameOf(tokens[at])) && tokens[at + 1] === "(";
+const isTextTest = (tokens, at) => testsText(nameOf(tokens[at])) && tokens[at + 1] === "(";
 
 /** What one run reads under an assignment: each unknown's value there, fixed or the one its choice was given. */
 function knownIn(run, readings, values) {
@@ -452,18 +452,18 @@ const unknownName = (tokens, at) => isUnknownName(tokens[at]);
 /** Whether the token at `at` is read as an unknown where a call's result may be any value: an unknown name, or a call that makes something of one. */
 const readsAnUnknown = (tokens, at) => unknownName(tokens, at) || transformsAnUnknown(tokens, at);
 
-/** The functions this evaluator runs that make text or a value of their arguments, where the others test them. */
-const TRANSFORMS = new Set(["format", "join", "tojson", "fromjson"]);
+/** Whether a function this evaluator runs makes text or a value of its arguments: every one of `FUNCTIONS` that does not test them. */
+const transforms = name => Object.hasOwn(FUNCTIONS, name) && FUNCTIONS[name].tests !== true;
 
 /**
- * Whether the token at `at` calls one of `TRANSFORMS` on an argument that
+ * Whether the token at `at` calls a function that `transforms` on an argument that
  * holds an unknown. The values an unknown is tried with give every comparison
  * of that unknown each outcome it can have, but not every comparison of what a
  * function makes of it: `format('x{0}', v) == 'xa'` holds only where `v` is
  * `a`, and no value tried is (`skipsThroughATransform`). On arguments it
  * knows, such as the event's name, the call is only ever run.
  */
-const transformsAnUnknown = (tokens, at) => TRANSFORMS.has(nameOf(tokens[at])) && tokens[at + 1] === "(" && argumentsOf(tokens, at).some(isUnknownName);
+const transformsAnUnknown = (tokens, at) => transforms(nameOf(tokens[at])) && tokens[at + 1] === "(" && argumentsOf(tokens, at).some(isUnknownName);
 
 /**
  * A call's key and reading, for a call read as an unknown. Its result is read
@@ -516,16 +516,23 @@ const TOKEN = /\s*(?:('(?:[^']|'')*')|(\d+(?:\.\d+)?)|(==|!=|<=|>=|&&|\|\||[!<>(
 const LITERALS = { true: true, false: false, null: null };
 const RELATIONS = { "<": (a, b) => a < b, "<=": (a, b) => a <= b, ">": (a, b) => a > b, ">=": (a, b) => a >= b };
 
-/** The expression functions a condition can be decided by; any other, such as `success()`, is unknown, and so is one of `TRANSFORMS` on an unknown. */
+/**
+ * The expression functions a condition can be decided by, each with how it
+ * runs and whether it tests text (`tests`); every other one makes a value of
+ * its arguments (`transforms`), which is also what one added without saying
+ * is taken to do, the reading that refuses rather than passes. Any function
+ * not here, such as `success()`, is unknown, and so is one that transforms an
+ * unknown.
+ */
 const FUNCTIONS = {
-  always: () => true,
-  contains: (within, item) => (Array.isArray(within) ? within.some(entry => looseEqual(entry, item)) : lower(within).includes(lower(item))),
-  startswith: (text, prefix) => lower(text).startsWith(lower(prefix)),
-  endswith: (text, suffix) => lower(text).endsWith(lower(suffix)),
-  fromjson: text => parsed(textOf(text)),
-  format: (template, ...values) => formatted(textOf(template), values),
-  join: (array, separator = ",") => (Array.isArray(array) ? array.map(textOf).join(textOf(separator)) : textOf(array)),
-  tojson: value => JSON.stringify(value, null, 2),
+  always: { run: () => true },
+  contains: { tests: true, run: (within, item) => (Array.isArray(within) ? within.some(entry => looseEqual(entry, item)) : lower(within).includes(lower(item))) },
+  startswith: { tests: true, run: (text, prefix) => lower(text).startsWith(lower(prefix)) },
+  endswith: { tests: true, run: (text, suffix) => lower(text).endsWith(lower(suffix)) },
+  fromjson: { run: text => parsed(textOf(text)) },
+  format: { run: (template, ...values) => formatted(textOf(template), values) },
+  join: { run: (array, separator = ",") => (Array.isArray(array) ? array.map(textOf).join(textOf(separator)) : textOf(array)) },
+  tojson: { run: value => JSON.stringify(value, null, 2) },
 };
 
 /**
@@ -664,7 +671,7 @@ function lookUp(name, known) {
 function call(name, values, known, key) {
   if (Object.hasOwn(known, key)) return known[key];
   const fn = name.toLowerCase();
-  return Object.hasOwn(FUNCTIONS, fn) && !values.includes(UNKNOWN) ? FUNCTIONS[fn](...values) : UNKNOWN;
+  return Object.hasOwn(FUNCTIONS, fn) && !values.includes(UNKNOWN) ? FUNCTIONS[fn].run(...values) : UNKNOWN;
 }
 
 /** `&&` with an unknown side: false when the other side is, since either way the result is. */

@@ -408,17 +408,30 @@ function coAuthors(parts, from) {
 
 /**
  * Whether a folded line starts a co-author of its own: the first, one after a
- * joining word, or one after a co-author already complete, with an address, a
- * closing separator or a closed note, or as long as an identity gets. A name
- * in progress goes on onto the next line, as a first name does onto a surname
- * and address, and so does a note still open; plain words that are no name,
- * as an explanation's are, go on no further, so a tool named after them is
- * read on its own.
+ * joining word, one after a co-author already ended (`ends`), or one past as
+ * long as an identity gets. A name in progress goes on onto the next line, as
+ * a first name does onto a surname and address, and so does a note still open
+ * and an explanation running on.
  */
-const startsCoAuthor = (part, last) => !last || JOINER.test(part) || last.group.length >= IDENTITY_LINES || complete(last.group.join(" "));
+const startsCoAuthor = (part, last) => !last || JOINER.test(part) || last.group.length >= IDENTITY_LINES || ends(last.group.join(" "), part);
 
-/** Whether a co-author's lines are complete: no note left open, and an address, a closing separator, a note, or words that are no name. */
-const complete = text => balanced(text) && (closed(text) || !namePending(text));
+/**
+ * Whether a co-author's lines end before the next line: no note left open,
+ * and either an address, a closing separator or a closed note, or a next line
+ * that is an identity of its own where the lines before it are plain words
+ * that are no name, or where it names a tool outright, which no name goes on
+ * into. A next line that is more prose, even one opening with a tool's name,
+ * goes on with an explanation as a mention.
+ */
+const ends = (text, next) => balanced(text) && (closed(text) || startsAnother(text, next));
+
+const startsAnother = (text, next) => identityLine(next) && (!namePending(text) || namesToolOutright(identityName(next), false));
+
+/** Whether a folded line is an identity: an address, or a name alone before any separator, colon or note. */
+const identityLine = line => ADDRESS.test(line) || nameAlone(identityName(line));
+
+/** A line's name: what comes before a note, a colon or a separator. */
+const identityName = line => namePart(line).split(/[,;]/)[0].trim();
 
 /**
  * Whether a co-author's lines so far are a name that may go on: a name alone,
