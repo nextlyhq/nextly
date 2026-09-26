@@ -251,7 +251,7 @@ is in, not after the merge:
 ```sh
 git status --porcelain                                    # must print nothing
 git rev-parse HEAD                                        # must equal the next line
-git ls-remote <remote> refs/heads/<branch>                # the pull request's branch
+git ls-remote <remote> refs/heads/<branch> | cut -f1     # the pull request's branch: its SHA alone
 gh pr diff <N> | grep -F -e '<a line only the fix adds>'  # must find it
 ```
 

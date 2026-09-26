@@ -273,7 +273,9 @@ exclusive create, which fails on any link at the path; `noclobber`'s is bash's,
 and POSIX lets another shell follow a dangling link and create its target. And an exclusive create does not keep a NEW file inside the tree:
 through a linked directory above the path, an absent `linkdir/new.txt` is
 created as `real/new.txt` by both. That is containment, which neither form
-provides; where writing outside the tree matters, resolve the directory first.
+provides; where writing outside the tree matters, resolve the directory first
+and refuse the write when it lies outside the tree, since resolving it alone
+only tells you where the write will land.
 
 That conservatism has one cost worth stating: a deliberate write through a
 dangling symlink is refused too, because the link entry exists. Take that with

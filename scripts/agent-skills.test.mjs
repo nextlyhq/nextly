@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { CLAUDE_COPY, SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems, syncSkillCopy } from "./agent-skills.mjs";
+import { CLAUDE_COPY, SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems, syncCommand, syncSkillCopy } from "./agent-skills.mjs";
 
 const POSIX = process.platform !== "win32";
 const SCRIPT = fileURLToPath(new URL("./agent-skills.mjs", import.meta.url));
@@ -139,6 +139,23 @@ describe("the Claude Code copy of the skills", () => {
     expect(leftover?.error.message).toBe("the removal was refused");
     expect(readFileSync(join(leftover.path, "a/SKILL.md"), "utf8")).toContain("the old text");
     expect(readdirSync(join(base, ".claude")).sort()).toEqual([basename(leftover.path), "skills"].sort());
+  });
+
+  // The copy is kept, but the command fails and names what to delete, so old copies cannot pile up behind a clean exit.
+  it("fails the sync command, naming the old copy to delete, when only removing that fails", () => {
+    skill(SKILLS_HOME, "a", "---\nname: a\ndescription: the new text\n---\n");
+    skill(CLAUDE_COPY, "a", "---\nname: a\ndescription: the old text\n---\n");
+    const remove = (path, options) => {
+      if (path.endsWith("-old")) throw new Error("the removal was refused");
+      rmSync(path, options);
+    };
+    const said = [];
+    const status = syncCommand(base, { remove }, { log: line => said.push(line), error: line => said.push(line) });
+    expect(status).toBe(1);
+    expect(readFileSync(join(base, CLAUDE_COPY, "a/SKILL.md"), "utf8")).toContain("the new text");
+    const aside = readdirSync(join(base, ".claude")).find(name => name.endsWith("-old"));
+    expect(said.join("\n")).toMatch(new RegExp(`the old copy set aside at \\.claude/${aside} could not be removed \\(the removal was refused\\); delete it`));
+    expect(syncCommand(base, {}, { log: () => {}, error: () => {} })).toBe(0);
   });
 
   /*

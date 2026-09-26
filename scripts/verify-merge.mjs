@@ -951,11 +951,37 @@ let BASE_REMOTE = "origin";
  * as JSON therefore fails on exactly the case that matters — a pull request
  * with no review verdict yet.
  */
-function ghText(args) {
+export function ghText(args) {
+  refuseUnportableJq(args);
   return execFileSync("gh", args, {
     encoding: "utf8",
     maxBuffer: 32 * 1024 * 1024,
   }).trim();
+}
+
+/**
+ * Whether a jq filter holds a comparison bare as an object's value. gh
+ * evaluates `--jq` with its own built-in jq, not the jq on PATH, and some
+ * versions of it reject that: under gh 2.46.0, `{cross:.a!=.b}` failed every
+ * run with `unexpected token "!="` before anything was checked, where gh
+ * 2.101.0 and jq 1.8 accept it. Every gh parses the comparison in parentheses.
+ */
+export function bareComparisonInObject(filter) {
+  let flat = filter;
+  while (/\([^()]*\)/.test(flat)) flat = flat.replace(/\([^()]*\)/g, "_");
+  return [...flat.matchAll(/\{[^{}]*\}/g)].some(([object]) => /!=|==|<=|>=|[<>]|\band\b|\bor\b/.test(object));
+}
+
+/**
+ * Refuses a gh call whose `--jq` filter some gh cannot parse, at the call
+ * itself, so the rule holds however the filter was written: a constant, a
+ * template or a literal.
+ */
+function refuseUnportableJq(args) {
+  args.forEach((arg, at) => {
+    if (arg === "--jq" && bareComparisonInObject(String(args[at + 1] ?? "")))
+      throw new Error(`refusing a --jq filter some versions of gh's jq cannot parse; put each comparison inside an object in parentheses: ${args[at + 1]}`);
+  });
 }
 
 /** `gh api` where the result really is JSON. Empty output is a failure, not an empty value. */
