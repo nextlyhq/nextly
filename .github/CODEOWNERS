@@ -35,16 +35,31 @@ turbo.jsonc                  @mobeenabdullah
 tsconfig*.json               @mobeenabdullah
 eslint*.config.*             @mobeenabdullah
 tsup*.config.*               @mobeenabdullah
+rollup*.config.*             @mobeenabdullah
 /.nvmrc                      @mobeenabdullah
 
-# The shared configuration those extend and import, and the lockfile that
-# fixes the exact version of every tool a check runs.
+# The shared configuration those extend and import, with everything an owned
+# lint rule imports or reads in turn, and the lockfile that fixes the exact
+# version of every tool a check runs.
 /packages/eslint-config/     @mobeenabdullah
 /packages/eslint-plugin/     @mobeenabdullah
 /packages/prettier-config/   @mobeenabdullah
 /packages/tsconfig/          @mobeenabdullah
 /packages/nextly/eslint-bare-error-rule.js @mobeenabdullah
+/packages/nextly/eslint-api-key-scope-rule.js @mobeenabdullah
+/packages/nextly/eslint-bare-error-allowlist.json @mobeenabdullah
 /pnpm-lock.yaml              @mobeenabdullah
+
+# What a package's own build runs, named in its manifest, and the modules a
+# test configuration loads before every test: each changes what a check
+# decides as much as the configuration that names it.
+/packages/admin/scripts/     @mobeenabdullah
+/packages/nextly/scripts/    @mobeenabdullah
+/packages/ui/scripts/        @mobeenabdullah
+vitest.global-setup.*        @mobeenabdullah
+/packages/admin/src/__tests__/setup.ts @mobeenabdullah
+/packages/nextly/src/__tests__/setup.ts @mobeenabdullah
+/packages/plugin-form-builder/src/__tests__/setup.ts @mobeenabdullah
 
 # The configuration the checks read.
 /.changeset/config.json      @mobeenabdullah
