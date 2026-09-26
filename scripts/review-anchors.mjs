@@ -93,7 +93,18 @@ export function splitComments(review, files) {
   for (const comment of review.comments) checkComment(comment, shownByPath);
   const inline = review.comments.filter(comment => anchors(comment, shownByPath));
   const elsewhere = review.comments.filter(comment => !inline.includes(comment));
-  return { review: { ...review, comments: inline }, fileComments: elsewhere.map(fileComment) };
+  return { review: { ...review, comments: inline.map(withSides) }, fileComments: elsewhere.map(fileComment) };
+}
+
+/**
+ * An inline comment with the sides it was checked on written out. Left out,
+ * they would be GitHub's to supply, and GitHub documents no default for them,
+ * so the comment could be refused, or placed on a side it was not checked on.
+ * A range that anchors starts on the side it ends on.
+ */
+function withSides(comment) {
+  const side = sideOf(comment);
+  return comment.start_line === undefined ? { ...comment, side } : { ...comment, side, start_side: side };
 }
 
 /** Whether a payload entry has the two fields every comment needs. */

@@ -109,6 +109,22 @@ describe("the review posted, and its file-level comments", () => {
     ]);
   });
 
+  it("posts each comment kept inline with the sides it was checked on, a range's start side included", () => {
+    const review = {
+      body: "summary",
+      comments: [
+        { path: "src/a.ts", line: 2, body: "no side" },
+        { path: "src/a.ts", start_line: 9, line: 11, body: "a range with no side" },
+        { path: "src/a.ts", start_line: 9, line: 10, side: "LEFT", body: "a range on the old side" },
+      ],
+    };
+    expect(splitComments(review, FILES).review.comments).toEqual([
+      { path: "src/a.ts", line: 2, side: "RIGHT", body: "no side" },
+      { path: "src/a.ts", start_line: 9, start_side: "RIGHT", line: 11, side: "RIGHT", body: "a range with no side" },
+      { path: "src/a.ts", start_line: 9, start_side: "LEFT", line: 10, side: "LEFT", body: "a range on the old side" },
+    ]);
+  });
+
   it("refuses a comment on a file the diff does not change, since it could open no thread", () => {
     const review = { body: "summary", comments: [{ path: "src/b.ts", line: 1, body: "elsewhere" }] };
     expect(() => splitComments(review, FILES)).toThrow("a comment is on src/b.ts, which the diff does not change");

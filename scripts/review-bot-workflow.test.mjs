@@ -25,7 +25,7 @@
  * posting, so the post and confirm steps are run here as GitHub runs them, and
  * the calls they make are what is asserted.
  */
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
@@ -42,6 +42,8 @@ const postSteps = jobs.post.steps;
 const agent = steps.find(step => step.uses?.startsWith("anthropics/claude-code-action@"));
 const usesOf = (list, action) => list.filter(step => step.uses?.startsWith(`${action}@`));
 const named = (list, name) => list.find(step => step.name === name);
+/** The step that gives the agent its protocol and gateway. */
+const MATERIALIZE = "Materialize the reviewer's tooling outside the tree";
 
 /** The one directory the agent writes to, and the two files it hands on from there. */
 const PAYLOAD_DIR = ".nextly-review";
@@ -144,7 +146,7 @@ describe("the files the review agent may write", () => {
   it("empties the payload directory before the agent runs", () => {
     // A pull request can commit files there, and a review.json it left would be
     // posted as the bot's own; so the directory is removed, then made afresh.
-    const materialize = steps.findIndex(step => step.name === "Materialize the reviewer's tooling outside the tree");
+    const materialize = steps.findIndex(step => step.name === MATERIALIZE);
     const lines = steps[materialize].run.split("\n").map(line => line.trim());
     const emptied = lines.indexOf(`rm -rf ${PAYLOAD_DIR}`);
     expect(emptied, "the payload directory removed").toBeGreaterThanOrEqual(0);
@@ -223,6 +225,15 @@ describe("where the bot's identity lives", () => {
     expect(named(postSteps, "Post the review as the review bot").run).toContain("gateway=.github/scripts/review-bot-gh.sh\n");
   });
 
+  it("gives the agent its tooling from the commit the post job checks out", () => {
+    // A run can wait in the queue while the default branch moves on. The
+    // protocol the agent follows must stay the one the post job's code was
+    // written for, or the agent can write a payload that code refuses.
+    const revision = usesOf(postSteps, "actions/checkout")[0].with.ref;
+    expect(usesOf(steps, "actions/checkout")[0].with.ref, "the command parser's checkout").toBe(revision);
+    expect(named(steps, MATERIALIZE).env.REVISION, "the protocol and gateway the agent runs").toBe(revision);
+  });
+
   it("checks out every module the post job runs, and each module that one imports", () => {
     // The job checks out only what it names, so a module missing from the
     // list, or one a listed module imports, fails the post when it runs.
@@ -264,6 +275,51 @@ describe("what else could widen the agent's grant", () => {
 
   it("denies exactly the denylist reviewed", () => {
     expect(rulesOf("disallowedTools")).toEqual(DISALLOWED);
+  });
+});
+
+describe.runIf(process.platform !== "win32")("the tooling step, run as GitHub runs it", () => {
+  let dir;
+  const commits = {};
+
+  // A variable git reads from the environment, such as GIT_DIR inside a hook,
+  // would point these commands at another repository.
+  const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
+  const git = (...args) => execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args], { cwd: dir, encoding: "utf8", env: cleanEnv() }).trim();
+
+  /** Commits a protocol and a gateway that each name the commit they are read from. */
+  function commitTooling(name) {
+    writeFileSync(join(dir, ".github", "review-prompt.md"), `The protocol at ${name}. Run .github/scripts/review-bot-gh.sh.\n`);
+    writeFileSync(join(dir, ".github", "scripts", "review-bot-gh.sh"), `# The gateway at ${name}.\n`);
+    git("add", "-A");
+    git("commit", "-q", "-m", name);
+    return git("rev-parse", "HEAD");
+  }
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "review-bot-tooling-"));
+    mkdirSync(join(dir, ".github", "scripts"), { recursive: true });
+    git("init", "-q", "-b", "main");
+    // The commit the event names, the default branch once it has moved on,
+    // and the head under review, which the job has checked out by then.
+    commits.event = commitTooling("the event's commit");
+    git("update-ref", "refs/remotes/origin/main", commitTooling("the default branch's newer commit"));
+    commitTooling("the pull request's head");
+  });
+
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("reads the protocol and the gateway from the event's commit, not the default branch or the checkout", () => {
+    const step = named(steps, MATERIALIZE);
+    // GitHub fills in each expression before the step runs.
+    const values = { "github.sha": commits.event, "runner.temp": join(dir, "temp") };
+    const resolve = text => text.replace(/\$\{\{ (.+?) \}\}/g, (_, expression) => values[expression]);
+    const env = Object.fromEntries(Object.entries(step.env).map(([name, value]) => [name, resolve(value)]));
+    writeFileSync(join(dir, "step.sh"), resolve(step.run));
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], { cwd: dir, encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir, ...env } });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(readFileSync(join(env.TOOLING, "review-prompt.md"), "utf8")).toBe(`The protocol at the event's commit. Run ${env.TOOLING}/review-bot-gh.sh.\n`);
+    expect(readFileSync(join(env.TOOLING, "review-bot-gh.sh"), "utf8")).toBe("# The gateway at the event's commit.\n");
   });
 });
 
