@@ -3,10 +3,21 @@
 **Experimental.** This is the package that exposes a Nextly install to AI agents
 over the [Model Context Protocol](https://modelcontextprotocol.io), read-only.
 
-This release adds the endpoint and its first tool. A client that connects finds
-a server advertising `tools` and nothing else: no resource and no prompt, and no
-tool that writes. The one tool is `get_initial_context`, which answers what the
-connecting credential may read and how this CMS expects to be asked.
+A client that connects finds a server advertising `tools` and nothing else: no
+resource, no prompt, and no tool that writes.
+
+## Tools
+
+| Tool                    | Answers                                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------------------- |
+| `get_initial_context`   | What the connecting credential may read, and how this CMS expects to be asked. Call it first. |
+| `get_collection_schema` | The declared fields of one collection.                                                        |
+| `get_single_schema`     | The declared fields of one single.                                                            |
+
+Each answers for the CALLER. An entity the credential may not read is absent
+from the first and refused by the other two, and the refusal is worded the same
+whether the entity is forbidden or absent entirely, so an install's shape cannot
+be mapped by guessing.
 
 The surface lands in small reviewable pieces. Reads of actual documents are the
 next one; until they arrive an agent can learn the shape of an install and not
@@ -114,8 +125,8 @@ proposals a person reviews rather than as direct edits.
 
 ## Related packages
 
-- [`@nextlyhq/plugin-sdk`](../plugin-sdk) — the SDK this plugin is built on
-- [`nextly`](../nextly) — the core whose schema and content this exposes
+- [`@nextlyhq/plugin-sdk`](../plugin-sdk): the SDK this plugin is built on
+- [`nextly`](../nextly): the core whose schema and content this exposes
 
 ## Licence
 
