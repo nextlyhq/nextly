@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Narrow gateway to the GitHub API for the review bot.
+# Narrow gateway to the GitHub API, and to the local history, for the review bot.
 #
-# The agent is allowed to run this script instead of `gh api` directly. Every
-# request here is built from a fixed endpoint template plus validated
-# arguments, so nothing the agent passes can redirect a call to another host:
-# `gh api` reads the target host from `--hostname`/`GH_HOST`, and neither is
-# reachable through this interface. That closes the outbound half of the
-# posture -- the agent cannot choose where a request goes -- which is one layer
-# of the threat model set out in .github/workflows/nextly-review-bot.yml, not
-# the whole of it.
+# The agent is allowed to run this script instead of `gh api` or `git`
+# directly. Every request here is built from a fixed endpoint template plus
+# validated arguments, so nothing the agent passes can redirect a call to
+# another host: `gh api` reads the target host from `--hostname`/`GH_HOST`, and
+# neither is reachable through this interface. The git commands are fixed the
+# same way, so no flag the agent appends can make one write a file or run a
+# program. That closes the outbound half of the posture -- the agent cannot
+# choose where a request goes -- which is one layer of the threat model set out
+# in .github/workflows/nextly-review-bot.yml, not the whole of it.
 set -euo pipefail
 
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
@@ -33,6 +34,20 @@ require_file() {
 require_sha() {
   [[ "${1:-}" =~ ^[0-9a-fA-F]{7,40}$ ]] || die "expected a commit sha, got '${1:-}'"
 }
+
+# A path inside the checkout. It is always passed joined to a revision or a
+# line range, so it can never stand alone as an option; this refuses what
+# could still change its meaning, a leading dash or a line break.
+require_path() {
+  [[ -n "${1:-}" && "${1:0:1}" != "-" && "$1" != *$'\n'* ]] || die "expected a path, got '${1:-}'"
+}
+
+# The local history the review reads, with every flag fixed here. `git diff`,
+# `git show` and `git log` take `--output=<file>` among their options, which
+# writes anywhere the runner can, so the agent is given these commands rather
+# than a prefix of git it could append a flag to. `--no-ext-diff` and
+# `--no-textconv` keep a configured diff driver from running anything.
+GIT_READ=(git --no-pager)
 
 command="${1:-}"
 shift || true
@@ -96,6 +111,29 @@ case "$command" in
     require_number "${1:-}"
     exec gh api "repos/$REPO/pulls/$1" --jq '.head.sha'
     ;;
+  base-file)
+    # One file as `main` has it: `git show origin/main:<path>`, from the local
+    # clone, which the workflow fetches whole.
+    require_path "${1:-}"
+    exec "${GIT_READ[@]}" show --no-ext-diff --no-textconv "origin/main:$1"
+    ;;
+  delta)
+    # What changed since an earlier reviewed commit: `git diff <sha>..HEAD`.
+    require_sha "${1:-}"
+    exec "${GIT_READ[@]}" diff --no-ext-diff --no-textconv "$1..HEAD"
+    ;;
+  line-history)
+    # How lines came to be: `git log -L <start>,<end>:<path>`, on HEAD unless
+    # `main` is asked for.
+    [[ "${1:-}" =~ ^[0-9]+,[0-9]+$ ]] || die "expected <start>,<end>, got '${1:-}'"
+    require_path "${2:-}"
+    case "${3:-HEAD}" in
+      HEAD) rev=HEAD ;;
+      main) rev=origin/main ;;
+      *) die "expected HEAD or main, got '${3:-}'" ;;
+    esac
+    exec "${GIT_READ[@]}" log --no-ext-diff --no-textconv -L "$1:$2" "$rev"
+    ;;
   review-ids-at)
     # One id per line for this bot's reviews at one commit, sorted so the set
     # can be differenced. The bot posts as its own GitHub App, so its reviews
@@ -137,6 +175,6 @@ case "$command" in
       -F in_reply_to="$2" -F body=@"$3"
     ;;
   *)
-    die "usage: review-bot-gh.sh {pr|head-sha|diff|reviews|review-ids-at|review-comments|issue-comments|files|threads|file-at|post-review|reply} ..."
+    die "usage: review-bot-gh.sh {pr|head-sha|diff|reviews|review-ids-at|review-comments|issue-comments|files|threads|file-at|base-file|delta|line-history|post-review|reply} ..."
     ;;
 esac
