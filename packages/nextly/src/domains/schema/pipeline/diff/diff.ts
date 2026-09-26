@@ -116,7 +116,8 @@ export function diffSnapshots(
         name,
         prevT.indexes,
         curT.indexes,
-        textColumnsOf(prevT.columns, curT.columns)
+        textColumnsOf(prevT.columns),
+        textColumnsOf(curT.columns)
       );
       const rekeyedNames = new Set(
         indexOps
@@ -284,12 +285,15 @@ function diffIndexes(
   tableName: string,
   prev: IndexSpec[] | undefined,
   cur: IndexSpec[] | undefined,
-  columns: ColumnCastContext
+  prevColumns: ColumnCastContext,
+  curColumns: ColumnCastContext
 ): Operation[] {
   if (prev === undefined || cur === undefined) return [];
   const ops: Operation[] = [];
-  const prevByKey = new Map(prev.map(i => [indexKey(i, columns), i]));
-  const curByKey = new Map(cur.map(i => [indexKey(i, columns), i]));
+  // Each side is read against its OWN column types: a column changing from
+  // text to integer keeps its authored `::text` on the new side.
+  const prevByKey = new Map(prev.map(i => [indexKey(i, prevColumns), i]));
+  const curByKey = new Map(cur.map(i => [indexKey(i, curColumns), i]));
   for (const [key, idx] of curByKey) {
     if (!prevByKey.has(key)) {
       ops.push({ type: "add_index", tableName, index: idx });

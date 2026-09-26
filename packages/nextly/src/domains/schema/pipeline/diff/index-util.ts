@@ -54,23 +54,19 @@ function canonical(
 }
 
 /**
- * The cast context for a table's index expressions: its text-like columns,
- * the only ones PostgreSQL wraps in an inserted `::text` cast. A column counts
- * when either side of the comparison types it as text, so a column whose type
- * is changing from varchar is still read as the server printed it.
+ * The cast context for one side's index expressions: its text-like columns,
+ * the only ones PostgreSQL wraps in an inserted `::text` cast.
  */
 export function textColumnsOf(
-  ...sides: readonly (readonly ColumnSpec[])[]
+  columns: readonly ColumnSpec[]
 ): ColumnCastContext {
-  const textColumns = new Set<string>();
-  for (const columns of sides) {
-    for (const column of columns) {
-      if (TEXT_LIKE.test(column.type)) {
-        textColumns.add(column.name.toLowerCase());
-      }
-    }
-  }
-  return { textColumns };
+  return {
+    textColumns: new Set(
+      columns
+        .filter(column => TEXT_LIKE.test(column.type))
+        .map(column => column.name.toLowerCase())
+    ),
+  };
 }
 
 const TEXT_LIKE =

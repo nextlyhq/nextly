@@ -272,7 +272,12 @@ describe("a declared check on a column a hook removed", () => {
 describe("an expression index on a column a hook removed", () => {
   const searched = defineTable(
     "app_searched",
-    { id: col.id(), email: col.shortText(), code: col.shortText() },
+    {
+      id: col.id(),
+      email: col.shortText(),
+      code: col.shortText(),
+      lower: col.shortText(),
+    },
     {
       indexes: [
         { columns: [], expression: "lower(email)", name: "idx_searched_email" },
@@ -316,6 +321,12 @@ describe("an expression index on a column a hook removed", () => {
   it("goes with the column, as a plain index does", async () => {
     // Kept, it would reach the migration as an index on a missing column.
     expect((await without("email")).indexes?.map(i => i.name)).toEqual([]);
+  });
+
+  it("stays when the removed column shares a name with a function it calls", async () => {
+    expect((await without("lower")).indexes?.map(i => i.name)).toEqual([
+      "idx_searched_email",
+    ]);
   });
 
   it("stays when the hook removed a column it does not read", async () => {

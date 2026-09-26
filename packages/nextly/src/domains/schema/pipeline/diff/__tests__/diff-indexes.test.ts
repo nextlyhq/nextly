@@ -139,6 +139,27 @@ describe("a text cast in an expression index", () => {
     expect(ops("n", "(n)::text").sort()).toEqual(["add_index", "drop_index"]);
   });
 
+  it("is read against each side's own column type", () => {
+    // `n` was text and is now an integer: the new side's cast is authored.
+    const side = (type: string, expression: string) => ({
+      tables: [
+        {
+          ...table(expression),
+          columns: [
+            { name: "id", type: "text", nullable: false },
+            { name: "n", type, nullable: false },
+          ],
+        },
+      ],
+    });
+    expect(
+      diffSnapshots(side("text", "n"), side("integer", "(n)::text"))
+        .map(op => op.type)
+        .filter(type => type.endsWith("_index"))
+        .sort()
+    ).toEqual(["add_index", "drop_index"]);
+  });
+
   it("is PostgreSQL's own on a text-like column, so it changes nothing", () => {
     expect(ops("(label)::text", "label")).toEqual([]);
   });

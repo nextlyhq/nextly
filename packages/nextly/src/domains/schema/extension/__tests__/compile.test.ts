@@ -635,3 +635,50 @@ describe("an extension table's checks and foreign keys", () => {
     expect(ops.filter(op => op.type === "drop_check")).toHaveLength(1);
   });
 });
+
+/** The validation messages a refusal carries. */
+function refusal(run: () => unknown): string {
+  try {
+    run();
+  } catch (error) {
+    const data = (error as NextlyError).publicData as
+      | { errors?: { message: string }[] }
+      | undefined;
+    return data?.errors?.map(entry => entry.message).join(" ") ?? "";
+  }
+  return "";
+}
+
+describe("an index declaration", () => {
+  it("is refused when it declares both columns and an expression", () => {
+    expect(
+      refusal(() =>
+        defineTable(
+          "app_both",
+          { id: col.id(), email: col.shortText() },
+          {
+            indexes: [
+              {
+                columns: ["email"],
+                expression: "lower(email)",
+                name: "idx_both",
+              },
+            ],
+          }
+        )
+      )
+    ).toMatch(/either columns or an expression, not both/);
+  });
+
+  it("is refused when its explicit name is longer than every dialect keeps", () => {
+    const name = `idx_${"x".repeat(60)}`;
+    const table = defineTable(
+      "app_long",
+      { id: col.id(), email: col.shortText() },
+      { indexes: [{ columns: ["email"], name }] }
+    );
+    expect(refusal(() => toTableSpec(table as never, "postgresql"))).toMatch(
+      /at most 63 characters/
+    );
+  });
+});

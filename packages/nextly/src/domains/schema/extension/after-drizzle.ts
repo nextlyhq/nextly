@@ -401,7 +401,9 @@ export function specAfterHook(args: {
     .filter(name => !present.has(name));
   const survives = (index: IndexSpec): boolean => {
     if (index.expression === undefined) return covers(index.columns);
-    const named = checkIdentifiers(index.expression, args.dialect);
+    const named = checkIdentifiers(index.expression, args.dialect, {
+      calls: false,
+    });
     return !removed.some(name => named.has(name.toLowerCase()));
   };
 
@@ -472,12 +474,21 @@ export function specAfterHook(args: {
  *
  * Read through the shared SQL scanner, so text inside a string literal or a
  * comment is not mistaken for a column and a quoted name is read whole. Every
- * word of the code is taken, keywords and function names included: one that
- * happens to equal a removed column's name only makes the check refusal
- * conservative, and drops an index the column's removal would have left
- * unusable anyway only when the two share a name.
+ * word of the code is taken, keywords included; function names are taken
+ * only when `calls` is left on, as the check refusal leaves it.
  */
-function checkIdentifiers(sql: string, dialect: SupportedDialect): Set<string> {
+function checkIdentifiers(
+  sql: string,
+  dialect: SupportedDialect,
+  { calls = true }: { calls?: boolean } = {}
+): Set<string> {
+  // A word directly followed by `(` is a function being called, not a column.
+  // Leaving calls out lets `lower(email)` survive the removal of a column
+  // that happens to be named `lower`; the check refusal keeps them, where
+  // erring towards a refusal is the safe direction.
+  const wordPattern = calls
+    ? /[A-Za-z_][\w$]*/g
+    : /[A-Za-z_][\w$]*(?![\w$]|\s*\()/g;
   const names = new Set<string>();
   for (const segment of scanSql(sql, dialect)) {
     if (segment.kind === "quoted-name") {
@@ -485,7 +496,7 @@ function checkIdentifiers(sql: string, dialect: SupportedDialect): Set<string> {
     } else if (segment.kind === "code") {
       for (const word of sql
         .slice(segment.start, segment.end)
-        .match(/[A-Za-z_][\w$]*/g) ?? []) {
+        .match(wordPattern) ?? []) {
         names.add(word.toLowerCase());
       }
     }

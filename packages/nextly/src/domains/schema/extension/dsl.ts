@@ -718,6 +718,16 @@ function resolveIndexes(
         "An index must name at least one column or carry an expression."
       );
     }
+    // An expression index is keyed by its expression IN PLACE of columns:
+    // the renderer writes only the expression and introspection reports the
+    // index with no columns, so an index declaring both would never compare
+    // equal to itself and be planned again on every push.
+    if (index.columns.length > 0 && index.expression) {
+      invalid(
+        path,
+        "An index declares either columns or an expression, not both; list the columns inside the expression."
+      );
+    }
     // Refused here, where the table is declared, by the renderer's own rule:
     // a key's ordering, collation or operator class is recorded by no
     // introspection, so the index would be planned again on every push.

@@ -352,6 +352,22 @@ describe("withContributedEnumChecks", () => {
     ]);
   });
 
+  it("keeps a value-set check managed outside the contributions' namespace", () => {
+    const plain = { ...enumColumn, enumValues: undefined } as ExtensionColumn;
+    const out = withContributedEnumChecks(
+      spec,
+      [plain],
+      {
+        ...spec,
+        checks: [
+          { name: "chk_dc_posts_review", sql: "review_state IN ('a', 'b')" },
+        ],
+      },
+      "postgresql"
+    );
+    expect(out.checks).toBeUndefined();
+  });
+
   it("keeps a value-set check on a column the contributions do not own", () => {
     const out = withContributedEnumChecks(
       spec,

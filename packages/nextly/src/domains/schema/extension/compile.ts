@@ -43,6 +43,7 @@ import {
   withDeclaredKeyAndDefault,
 } from "./column-descriptor";
 import { enumChecks } from "./enum-check";
+import { assertExplicitIdentifier } from "./naming";
 import type { ExtensionColumn, ExtensionIndex, ExtensionTable } from "./types";
 
 function invalid(path: string, message: string): never {
@@ -110,6 +111,10 @@ export function resolveIndexName(table: string, index: ExtensionIndex): string {
       `An explicit index name must start with "idx_" or "uq_"; "${index.name}" would never be reconciled by the diff engine.`
     );
   }
+  assertExplicitIdentifier(
+    index.name,
+    `${table}.indexes[${index.columns.join(",")}]`
+  );
   return index.name;
 }
 

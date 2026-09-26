@@ -200,8 +200,11 @@ export function withContributedEnumChecks(
   // it constrains, not by its name, because `col.enum(values, { name })`
   // names it freely — and the name it had is not recoverable from the column
   // once the column stops declaring it.
+  // Only checks in the namespace `checkConstraintName` writes (`ck_…`) are
+  // candidates: one managed elsewhere — the Schema Builder's `chk_…`, or a
+  // hand-written constraint — is never taken for a contribution's.
   const isStale = (check: CheckSpec): boolean => {
-    if (ownNames.has(check.name)) return false;
+    if (ownNames.has(check.name) || !check.name.startsWith("ck_")) return false;
     const read = readEnumCheck(check.sql);
     return read !== null && answeredFor.has(read.column);
   };
