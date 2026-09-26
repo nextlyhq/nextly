@@ -327,7 +327,10 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            scripts/cli-entry.mjs
+            scripts/review-anchors.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -353,15 +356,19 @@ jobs:
       # the reviewed head: the review is rebuilt from the payload's body and
       # comments alone, the event set to COMMENT so the bot never approves or
       # requests changes whatever the payload says, and the commit the one
-      # reviewed; the gateway refuses to post once the branch has moved. One
-      # inline comment GitHub cannot anchor refuses the whole review with a
-      # 422, and then nothing is posted and the run fails: a review whose
-      # findings sat only in its body would open no thread to resolve, yet the
-      # merge queue counts the bot's review while Codex is held up. Replies
+      # reviewed; the gateway refuses to post once the branch has moved. GitHub
+      # refuses a whole review with a 422 when one inline comment names a line
+      # the diff does not show, so each comment is checked against the changed
+      # files first (`scripts/review-anchors.mjs`): one that does not anchor is
+      # posted as a file-level comment on its file, which opens a thread as an
+      # inline one does, and one on a file the change does not touch stops the
+      # post, since it could open no thread and the merge queue counts the bot's
+      # review while Codex is held up. A file-level comment that cannot post
+      # fails the step for the same reason, and a re-run posts it. Replies
       # follow the review, each body through a file so no comment text passes
       # through the shell; one that cannot post, to a thread removed since,
       # say, is reported without undoing the review. Each post names this run,
-      # and a reply its place in the payload, so re-running this job after a
+      # and a reply or a file-level comment its place, so re-running this job after a
       # failure posts only what the earlier attempt did not: the gateway tags
       # every post with them and skips one this run already made.
       - name: Post the review as the review bot
@@ -381,7 +388,14 @@ jobs:
             then {commit_id: $sha, event: "COMMENT", body, comments: (.comments // [])}
             else error("the payload is not a review: an object with a string body and a comments array")
             end' "$PAYLOAD/review.json" > "$out/review.json"
-          "$gateway" post-review "$NUMBER" "$out/review.json" "$SHA" "$GITHUB_RUN_ID"
+          "$gateway" files "$NUMBER" | jq -s 'add // []' > "$out/files.json"
+          node scripts/review-anchors.mjs "$out/review.json" "$out/files.json" "$out/inline.json" "$out/file-comments.json"
+          "$gateway" post-review "$NUMBER" "$out/inline.json" "$SHA" "$GITHUB_RUN_ID"
+          count=$(jq length "$out/file-comments.json")
+          for i in $(seq 0 $((count - 1))); do
+            jq -r ".[$i].body" "$out/file-comments.json" > "$out/file-$i.md"
+            "$gateway" post-file-comment "$NUMBER" "$SHA" "$(jq -r ".[$i].path" "$out/file-comments.json")" "$out/file-$i.md" "$GITHUB_RUN_ID" "$i"
+          done
           if [ -f "$PAYLOAD/replies.json" ]; then
             if ! count=$(jq -e 'if type == "array" then length else error("not an array") end' "$PAYLOAD/replies.json"); then
               echo "::warning::replies.json is not a JSON array, so no reply was posted"

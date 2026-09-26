@@ -43,14 +43,15 @@ require_path() {
 }
 
 # The tag the post job ends everything it posts with: the workflow run that
-# posted it and, for a reply, the reply's place in the payload. Re-running a
+# posted it and, for a reply or a file-level comment, its place in the payload
+# (`reply:<n>`, `file:<n>`). Re-running a
 # failed job re-runs the same run with the same payload, so the tag is how a
 # re-run tells what an earlier attempt already posted; a new request is a new
 # run, and posts afresh. The tag is appended after the agent's text, so only a
 # tag that ENDS a body counts: one the agent wrote into that text, naming some
 # other run, is never the last line.
 posted_tag() {
-  printf '<!-- nextly-review-bot run:%s%s -->' "$1" "${2:+ reply:$2}"
+  printf '<!-- nextly-review-bot run:%s%s -->' "$1" "${2:+ $2}"
 }
 
 # Ids of what this bot posted at an endpoint whose last line is a tag, one per
@@ -208,7 +209,7 @@ case "$command" in
     require_file "${3:-}"
     require_number "${4:-}"
     require_number "${5:-}"
-    tag=$(posted_tag "$4" "$5")
+    tag=$(posted_tag "$4" "reply:$5")
     posted=$(posted_ids "repos/$REPO/pulls/$1/comments" "$tag" in_reply_to_id "$2") ||
       die "could not read the review comments, so cannot tell whether run $4 already replied; not posting"
     if [ -n "$posted" ]; then
@@ -218,7 +219,34 @@ case "$command" in
     reply=$(jq -n --rawfile body "$3" --arg tag "$tag" --argjson to "$2" '{in_reply_to: $to, body: ($body + "\n\n" + $tag)}')
     exec gh api --method POST "repos/$REPO/pulls/$1/comments" --input - <<<"$reply"
     ;;
+  post-file-comment)
+    # A finding no line of the diff shows, posted as a file-level comment on
+    # its file so that it opens a thread as an inline one would. GitHub takes
+    # such a comment only on a file the change touches, and asking first is
+    # what names the file when one is refused. It goes on the head reviewed,
+    # once per run, as a review does.
+    require_number "${1:-}"
+    require_sha "${2:-}"
+    require_path "${3:-}"
+    require_file "${4:-}"
+    require_number "${5:-}"
+    require_number "${6:-}"
+    current=$(gh api "repos/$REPO/pulls/$1" --jq '.head.sha')
+    [ "$current" = "$2" ] || die "head moved to $current since $2 was reviewed; not posting"
+    changed=$(gh api --paginate "repos/$REPO/pulls/$1/files?per_page=100" | jq -r '.[].filename') ||
+      die "could not read the changed files, so cannot tell whether $3 is one; not posting"
+    grep -qxF -- "$3" <<<"$changed" || die "$3 is not among the files the change touches; not posting"
+    tag=$(posted_tag "$5" "file:$6")
+    posted=$(posted_ids "repos/$REPO/pulls/$1/comments" "$tag" path "$3") ||
+      die "could not read the review comments, so cannot tell whether run $5 already posted it; not posting"
+    if [ -n "$posted" ]; then
+      echo "review-bot-gh: run $5 already posted file comment $6 as comment ${posted//$'\n'/, }; not posting it again" >&2
+      exit 0
+    fi
+    comment=$(jq -n --rawfile body "$4" --arg tag "$tag" --arg sha "$2" --arg path "$3" '{commit_id: $sha, path: $path, subject_type: "file", body: ($body + "\n\n" + $tag)}')
+    exec gh api --method POST "repos/$REPO/pulls/$1/comments" --input - <<<"$comment"
+    ;;
   *)
-    die "usage: review-bot-gh.sh {pr|head-sha|diff|reviews|review-ids-at|review-comments|issue-comments|files|threads|file-at|base-file|delta|line-history|post-review|reply} ..."
+    die "usage: review-bot-gh.sh {pr|head-sha|diff|reviews|review-ids-at|review-comments|issue-comments|files|threads|file-at|base-file|delta|line-history|post-review|reply|post-file-comment} ..."
     ;;
 esac

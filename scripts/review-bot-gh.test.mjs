@@ -147,6 +147,7 @@ describe.runIf(process.platform !== "win32")("posting once per run", () => {
     for (const name of ["calls", "posted", "unreadable"]) rmSync(join(fake, name), { force: true });
     listed("reviews");
     listed("comments");
+    listed("files", [{ filename: "src/a.ts" }]);
     writeFileSync(join(fake, "head"), `${HEAD}\n`);
   });
 
@@ -251,6 +252,48 @@ describe.runIf(process.platform !== "win32")("posting once per run", () => {
     expect(posts()).toEqual([]);
   });
 
+  /** Posts file-level comment `place` of `run` on `path`, requiring that it was sent. */
+  function filedBy(run, place, path = "src/a.ts") {
+    const file = join(fake, "finding.md");
+    writeFileSync(file, "the finding\n");
+    const before = posts().length;
+    const result = api("post-file-comment", "7", HEAD, path, file, run, String(place));
+    expect(result.status, result.stderr).toBe(0);
+    const sent = posts().slice(before);
+    expect(sent, `file comment ${place} of run ${run} is posted`).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ commit_id: HEAD, path, subject_type: "file" });
+    return { id: 31, user: { login: BOT }, path, body: sent[0].body };
+  }
+
+  it("posts a file-level comment on a changed file, once per run and place in the payload", () => {
+    const comment = filedBy(RUN, 0);
+    expect(comment.body.startsWith("the finding\n")).toBe(true);
+    listed("comments", [comment]);
+    const again = api("post-file-comment", "7", HEAD, "src/a.ts", join(fake, "finding.md"), RUN, "0");
+    expect(again.status, again.stderr).toBe(0);
+    expect(again.stderr).toContain("already posted file comment 0 as comment 31");
+    expect(posts()).toHaveLength(1);
+    filedBy(RUN, 1);
+    filedBy(NEXT_RUN, 0);
+  });
+
+  it("refuses a file-level comment on a file the change does not touch, and posts nothing", () => {
+    writeFileSync(join(fake, "finding.md"), "the finding\n");
+    const result = api("post-file-comment", "7", HEAD, "src/b.ts", join(fake, "finding.md"), RUN, "0");
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("src/b.ts is not among the files the change touches");
+    expect(posts()).toEqual([]);
+  });
+
+  it("refuses a file-level comment once the head has moved, and posts nothing", () => {
+    writeFileSync(join(fake, "finding.md"), "the finding\n");
+    writeFileSync(join(fake, "head"), `${"b".repeat(40)}\n`);
+    const result = api("post-file-comment", "7", HEAD, "src/a.ts", join(fake, "finding.md"), RUN, "0");
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("head moved");
+    expect(posts()).toEqual([]);
+  });
+
   it("posts a reply once per run and place in the payload", () => {
     const reply = repliedBy(RUN, 0);
     expect(reply.body.startsWith("the reply\n")).toBe(true);
@@ -281,6 +324,7 @@ describe.runIf(process.platform !== "win32")("posting once per run", () => {
     ["post-review", "7", "review.json", "a".repeat(40), "--run"],
     ["reply", "7", "101", "reply.md", "424242", "--place"],
     ["review-ids-at", "7", "a".repeat(40), "--run"],
+    ["post-file-comment", "7", "a".repeat(40), "src/a.ts", "reply.md", "424242", "--place"],
   ])("refuses %s given anything but a number for the run or place, and asks GitHub nothing", (command, ...args) => {
     writeFileSync(join(fake, "review.json"), "{}");
     writeFileSync(join(fake, "reply.md"), "the reply\n");
