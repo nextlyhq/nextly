@@ -57,6 +57,9 @@ const RESERVED_EVENT_PREFIXES = [
   "auth.",
   "document.",
   "media.",
+  // Core emits `user.created` and `user.deleted`; a plugin declaring its own
+  // event under this prefix would be indistinguishable from them.
+  "user.",
 ];
 
 export class EventBus {

@@ -205,6 +205,10 @@ export class AuthService extends BaseService {
         email: userData.email,
         name: userData.name ?? "User",
         password: userData.password,
+        // Self-registration: the person supplied this address and nothing has
+        // established it is theirs. The verification email sent below is what
+        // proves it, and until then the account stays unverified.
+        emailVerification: "pending",
       });
     } catch (error) {
       if (NextlyError.is(error)) {

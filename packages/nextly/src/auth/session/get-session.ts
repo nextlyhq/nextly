@@ -1,7 +1,6 @@
 import { readAccessTokenCookie } from "../cookies/access-token-cookie";
 import { JWT_INTERNAL_CLAIMS, type NextlyJwtPayload } from "../jwt/claims";
 import { verifyAccessToken, type VerifyResult } from "../jwt/verify";
-import { PENDING_AUTH_TYP } from "../pipeline/pending-token";
 
 import type { SessionUser } from "./session-types";
 
@@ -33,12 +32,9 @@ export async function getSession(
 
   // A single-purpose pending-auth token (issued mid-challenge, D71) is a valid
   // JWT but must NEVER establish a full session — it only authorizes
-  // /auth/challenge/resolve. Reject it here so every session-resolution path
-  // (requireAuth, /auth/session, determineUser fallthrough) is covered.
-  if (result.payload.typ === PENDING_AUTH_TYP) {
-    return { authenticated: false, reason: "invalid" };
-  }
-
+  // /auth/challenge/resolve. The refusal now lives in the verifier, which is
+  // reached by every session-resolution path (requireAuth, /auth/session,
+  // determineUser fallthrough) rather than only by the ones that remembered.
   const user = payloadToSessionUser(result.payload);
   return { authenticated: true, user };
 }

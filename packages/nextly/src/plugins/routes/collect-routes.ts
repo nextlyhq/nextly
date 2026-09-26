@@ -1,4 +1,5 @@
 import type { PluginDefinition } from "../plugin-context";
+import { resolutionError } from "../resolution-error";
 
 import { rootMountUnreachableReason } from "./root-mount-reach";
 import {
@@ -7,6 +8,7 @@ import {
   routeInvalidPathError,
   routeUnreachableRootError,
 } from "./route-error";
+import { validateRouteOptions } from "./route-options";
 import { pluginRouteFullPath } from "./route-path";
 import { literalCount, patternsOverlap, splitPath } from "./route-pattern";
 import type { PluginRoute, PluginRouteMount } from "./route-types";
@@ -128,6 +130,17 @@ export function collectPluginRoutes(
     if (plugin.enabled === false) continue;
     for (const route of plugin.contributes?.routes ?? []) {
       assertPathUsable(plugin.name, route);
+      // Before the route is registered. A combination that cannot mean what it
+      // says — CSRF on a public route — would otherwise look like protection
+      // while protecting nothing.
+      const optionProblem = validateRouteOptions(route);
+      if (optionProblem) {
+        throw resolutionError(
+          "invalid-route-options",
+          `Plugin "${plugin.name}" route ${route.method} ${route.path}: ${optionProblem}.`,
+          { plugin: plugin.name, path: route.path, problem: optionProblem }
+        );
+      }
       // Resolved once, so the claim is checked against the same mount the
       // registry will file it under.
       const mount = route.mount ?? "plugin";

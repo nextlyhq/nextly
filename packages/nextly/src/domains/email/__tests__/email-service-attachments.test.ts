@@ -41,8 +41,7 @@ function makeAdapter(): DrizzleAdapter {
     connect: async () => {},
     disconnect: async () => {},
     executeQuery: async () => [],
-    transaction: async <T>(fn: (tx: never) => Promise<T>) =>
-      fn({} as never),
+    transaction: async <T>(fn: (tx: never) => Promise<T>) => fn({} as never),
   } as unknown as DrizzleAdapter;
 }
 
@@ -69,17 +68,19 @@ function buildSend() {
     getLayout: vi.fn(),
   } as unknown as EmailTemplateService;
 
-  const findMedia = vi.fn<
-    (id: string) => Promise<{
-      filename: string;
-      originalFilename: string;
-      mimeType: string;
-    } | null>
-  >().mockResolvedValue({
-    filename: "storage/invoice.pdf",
-    originalFilename: "invoice.pdf",
-    mimeType: "application/pdf",
-  });
+  const findMedia = vi
+    .fn<
+      (id: string) => Promise<{
+        filename: string;
+        originalFilename: string;
+        mimeType: string;
+      } | null>
+    >()
+    .mockResolvedValue({
+      filename: "storage/invoice.pdf",
+      originalFilename: "invoice.pdf",
+      mimeType: "application/pdf",
+    });
   const readBytes = vi
     .fn<(path: string) => Promise<Buffer>>()
     .mockResolvedValue(Buffer.from("PDF-CONTENT"));

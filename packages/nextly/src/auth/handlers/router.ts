@@ -6,6 +6,7 @@ import { authRateLimiter } from "../middleware/rate-limiter";
 import type { ChallengeRegistry } from "../pipeline/challenge";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import type { AuthStrategy } from "../pipeline/types";
+import type { AccountState } from "../session/account-state";
 
 import { handleAcceptInvite } from "./accept-invite";
 import { handleAuthUi, type AuthUiMeta } from "./auth-ui";
@@ -15,6 +16,7 @@ import { handleCsrf } from "./csrf";
 import { handleForgotPassword } from "./forgot-password";
 import { handleLogin } from "./login";
 import { handleLogout } from "./logout";
+import { handlePending } from "./pending";
 import { handleRefresh } from "./refresh";
 import { handleRegister } from "./register";
 import { handleResetPassword } from "./reset-password";
@@ -129,7 +131,8 @@ export interface AuthRouterDeps {
     email: string;
     name: string;
     image: string | null;
-    passwordHash: string;
+    /** Null for an account that authenticates through an external provider. */
+    passwordHash: string | null;
     emailVerified: Date | null;
     isActive: boolean;
     mustChangePassword: boolean | null;
@@ -144,6 +147,12 @@ export interface AuthRouterDeps {
     isActive: boolean;
     mustChangePassword: boolean | null;
   } | null>;
+  /**
+   * The account facts the shared session gate decides on, read fresh at the
+   * moment a session is issued rather than carried from whichever strategy
+   * authenticated the user.
+   */
+  fetchAccountState: (userId: string) => Promise<AccountState | null>;
 
   incrementFailedAttempts: (userId: string) => Promise<void>;
   lockAccount: (userId: string, lockedUntil: Date) => Promise<void>;
@@ -252,6 +261,11 @@ async function dispatchAuthRequest(
       case "ui":
         // Public (pre-auth): the login screen fetches the auth-page UI config.
         return handleAuthUi(request, deps);
+      case "pending":
+        // Public (pre-auth): the login page asks which challenge, if any, an
+        // interrupted login left outstanding. Answers from the HttpOnly
+        // cookie and never returns the token itself.
+        return handlePending(request, deps);
       default:
         return null;
     }

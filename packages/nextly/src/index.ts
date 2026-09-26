@@ -456,6 +456,14 @@ export {
 export type { BlockDocument } from "@nextlyhq/blocks-engine";
 
 // Plugin System - Types and helpers for creating plugins
+// One implementation of "is this a safe place to send a finished login". A
+// plugin keeping its own copy is a second answer to a question with one right
+// answer, and the copy is the one that gets it wrong.
+export {
+  DEFAULT_ADMIN_PATH,
+  sanitizeAdminPath,
+} from "./auth/redirect/sanitize-admin-path";
+
 export {
   AdminPlacement,
   collectDeclarations,

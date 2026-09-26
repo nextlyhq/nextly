@@ -1,4 +1,6 @@
 import type { NextlyError } from "../../errors";
+import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
+import { validateCsrf } from "../csrf/validate";
 
 /**
  * Create a JSON Response with the given status and body.
@@ -83,4 +85,33 @@ export async function parseJsonBody(
   } catch {
     return null;
   }
+}
+
+/**
+ * The CSRF refusal a pending-token exchange answers with, or null when the
+ * request is allowed to proceed.
+ *
+ * Returning the response rather than throwing keeps the caller's stall in its
+ * own hands: every refusal on these paths takes the same minimum time, so a
+ * rejected CSRF token cannot be told from a rejected code by how long it took.
+ */
+export function csrfRefusal(
+  request: Request,
+  body: Record<string, unknown>,
+  deps: { allowedOrigins: string[] },
+  requestId: string
+): Response | null {
+  const result = validateCsrf(
+    request,
+    readCsrfCookie(request),
+    readCsrfFromRequest(body, request),
+    deps.allowedOrigins
+  );
+  return result.valid
+    ? null
+    : jsonResponse(
+        403,
+        { error: { code: "CSRF_FAILED", message: result.error } },
+        { "x-request-id": requestId }
+      );
 }

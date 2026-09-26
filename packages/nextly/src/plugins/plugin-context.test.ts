@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { publishHookPoints } from "./hook-points";
 import { EventBus } from "../events/event-bus";
 
 import { getCoreVersion } from "./core-version";
 import { createPluginContext } from "./plugin-context";
 
-function makeCtx() {
+function makeCtx(plugin?: unknown) {
   const db = { __db: true };
   const logger = {
     info: vi.fn(),
@@ -49,15 +50,82 @@ function makeCtx() {
     registerBeforeOperation: vi.fn(),
     unregisterBeforeOperation: vi.fn(),
   };
-  const ctx = createPluginContext(getServiceFn, hookRegistry);
+  const ctx = createPluginContext(getServiceFn, hookRegistry, plugin as never);
   return { ctx, db, logger, collections, email };
 }
 
 describe("createPluginContext (P1 reshape)", () => {
   it("exposes db and logger at the top level", () => {
-    const { ctx, db, logger } = makeCtx();
-    expect(ctx.db).toBe(db);
+    const { ctx, logger } = makeCtx();
+    // Not the live instance: a plugin that did not declare `db.rawSql` gets a
+    // surface carrying only the fluent methods, so `execute` and `run` are not
+    // reachable however the plugin is written.
+    expect(ctx.db).toBeDefined();
+    expect(Object.keys(ctx.db as object).sort()).toEqual([
+      "delete",
+      "insert",
+      "select",
+      "update",
+    ]);
     expect(ctx.logger).toBe(logger);
+  });
+
+  it("hands the live instance to a plugin that declared rawSql", () => {
+    // The control: a wrapper applied unconditionally would make the declared
+    // capability buy nothing.
+    const { ctx, db } = makeCtx({
+      name: "@test/raw",
+      version: "1.0.0",
+      nextly: "*",
+      capabilities: { db: { rawSql: true } },
+    });
+    expect(ctx.db).toBe(db);
+  });
+
+  it("checks a filter payload against the schema its point declared", async () => {
+    // The declarations were collected at resolve and discarded, so
+    // `contributes.hookPoints[].payload` checked nothing and the documented
+    // development-time warning could never arrive. Asserted at the SEAM
+    // because that is where a payload exists to be checked.
+    publishHookPoints(
+      new Map([
+        [
+          "acme.seam",
+          {
+            name: "acme.seam",
+            kind: "filter" as const,
+            owner: "@acme/p",
+            payload: { safeParse: () => ({ success: false }) },
+          },
+        ],
+      ])
+    );
+    const { ctx, logger } = makeCtx();
+    await ctx.filters.apply("acme.seam", { wrong: true }, {} as never);
+    expect(logger.warn).toHaveBeenCalled();
+    publishHookPoints(new Map());
+  });
+
+  it("stays silent at a seam whose payload matches", async () => {
+    // The control. A checker that warned unconditionally would satisfy the
+    // test above while burying the log for every correct plugin.
+    publishHookPoints(
+      new Map([
+        [
+          "acme.ok",
+          {
+            name: "acme.ok",
+            kind: "filter" as const,
+            owner: "@acme/p",
+            payload: { safeParse: () => ({ success: true }) },
+          },
+        ],
+      ])
+    );
+    const { ctx, logger } = makeCtx();
+    await ctx.filters.apply("acme.ok", { fine: true }, {} as never);
+    expect(logger.warn).not.toHaveBeenCalled();
+    publishHookPoints(new Map());
   });
 
   it("exposes the event bus and the core version", () => {

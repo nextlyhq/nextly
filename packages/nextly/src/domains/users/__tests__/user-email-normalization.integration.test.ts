@@ -37,10 +37,7 @@ import {
   emailVerificationTokens as emailVerificationTokensSqlite,
   refreshTokens as refreshTokensSqlite,
 } from "../../../schemas/auth-tokens/sqlite";
-import {
-  accounts as accountsSqlite,
-  users as usersSqlite,
-} from "../../../schemas/users/sqlite";
+import { users as usersSqlite } from "../../../schemas/users/sqlite";
 import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
 import { AuthService } from "../../auth/services/auth-service";
 import { UserMutationService } from "../services/user-mutation-service";
@@ -64,7 +61,6 @@ async function ddl(): Promise<string[]> {
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
       users: usersSqlite,
-      accounts: accountsSqlite,
       userInviteTokens: userInviteTokensSqlite,
       passwordResetTokens: passwordResetTokensSqlite,
       emailVerificationTokens: emailVerificationTokensSqlite,

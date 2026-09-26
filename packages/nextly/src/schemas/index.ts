@@ -55,6 +55,7 @@ import { jobsTables } from "./jobs";
 import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
+import { PLUGIN_SETTINGS_TABLE, pluginSettingsTables } from "./plugin-settings";
 import { rbacTables } from "./rbac";
 import { RBAC_EPOCH_TABLE, rbacEpochTables } from "./rbac-epoch";
 import { releasesTables } from "./releases";
@@ -182,6 +183,11 @@ export function getCoreSchema(
     // created on a real installation, however completely its own module
     // declares it.
     ...Object.values(rbacEpochTables(dialect)),
+    // `nextly_plugin_settings` — where a plugin's configuration lives, with
+    // the keys it declared as secrets encrypted at rest. Declared here for the
+    // same reason as its neighbours: a table outside this set is never created
+    // on a real installation, however completely its own module declares it.
+    ...Object.values(pluginSettingsTables(dialect)),
     ...Object.values(apiKeyTables(dialect)),
     // `nextly_schema_events` (the migration ledger) is a first-class managed
     // table. It is still bootstrapped out-of-band via `getSchemaEventsDdl` so
@@ -279,8 +285,6 @@ export function getCoreSchema(
 /** Snake-case names of every core table the framework manages. */
 export const CORE_TABLE_NAMES: readonly string[] = [
   "users",
-  "accounts",
-  "sessions",
   "password_reset_tokens",
   "user_invite_tokens",
   "email_verification_tokens",
@@ -303,6 +307,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_field_group_lock",
   "nextly_document_lock",
   RBAC_EPOCH_TABLE,
+  PLUGIN_SETTINGS_TABLE,
   "nextly_widget_layout",
   "dynamic_collections",
   "dynamic_singles",
@@ -343,7 +348,7 @@ export * from "./_zod"; // Zod-only validators (user, rbac, validation)
 
 // Plan A Task 5 — user identity tables. PG re-exports here for direct-query
 // callers. Other dialects accessible via getCoreSchema(dialect).
-export { users, accounts, sessions } from "./users/postgres";
+export { users } from "./users/postgres";
 
 // Plan A Task 6 — auth-token tables. PG re-exports for direct-query callers.
 export {

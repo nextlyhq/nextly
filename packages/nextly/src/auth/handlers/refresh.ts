@@ -24,6 +24,10 @@ import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import {
+  assertAccountUsable,
+  type AccountState,
+} from "../session/account-state";
+import {
   hashRefreshToken,
   generateRefreshToken,
   generateRefreshTokenId,
@@ -63,6 +67,10 @@ export interface RefreshHandlerDeps {
   } | null>;
   fetchRoleIds: (userId: string) => Promise<string[]>;
   fetchCustomFields: (userId: string) => Promise<Record<string, unknown>>;
+  /** Reads the account state the shared session gate decides on. */
+  fetchAccountState: (userId: string) => Promise<AccountState | null>;
+  /** Whether an unverified email blocks a rotation (mirrors the password path). */
+  requireEmailVerification: boolean;
   /** Gate XFF parsing on this. Default false. */
   trustProxy: boolean;
   /** CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
@@ -155,9 +163,28 @@ export async function handleRefresh(
     // ...) would leave the user with no refresh token if any lookup
     // failed, permanently breaking the session.
     const user = await deps.findUserById(tokenRecord.userId);
-    if (!user || !user.isActive) {
+    if (!user) {
       await deps.deleteRefreshToken(tokenRecord.id);
-      return clearAndDeny("User not found or inactive");
+      return clearAndDeny("User not found");
+    }
+    // The same gate every session-issuing path uses, so an account deactivated
+    // mid-session loses it at the next rotation instead of surviving for as
+    // long as it keeps refreshing. Refused here rather than by the generic
+    // catch below, which would answer 401 and leave both the refresh row and
+    // the cookies alive.
+    const accountState = await deps.fetchAccountState(user.id);
+    try {
+      if (!accountState) throw NextlyError.invalidCredentials();
+      assertAccountUsable(accountState, {
+        requireEmailVerification: deps.requireEmailVerification,
+        // A refresh is not a password attempt. A lockout triggered by someone
+        // else guessing passwords must not end a session already established.
+        enforcePasswordLockout: false,
+      });
+    } catch (error) {
+      if (!NextlyError.is(error)) throw error;
+      await deps.deleteRefreshToken(tokenRecord.id);
+      return clearAndDeny("Account may no longer hold a session");
     }
     const [roleIds, customFields] = await Promise.all([
       deps.fetchRoleIds(user.id),

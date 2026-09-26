@@ -39,6 +39,52 @@ function deps(over: Record<string, unknown> = {}) {
   };
 }
 
+describe("what migrateCore hands the core reconcile", () => {
+  /*
+   * OBSERVED on the real call rather than reconstructed. The retired-table
+   * cleanup guards on these three operations and returns without them, so a
+   * caller that omits one drops nothing and says nothing — which is exactly
+   * what production did while the flow was documented as working. Asserting
+   * the arguments is what makes the omission visible; asserting the outcome
+   * cannot, because "nothing dropped" is also the correct answer for a
+   * database with no retired tables.
+   */
+  it("passes the operations the retired-table drop needs", async () => {
+    const d = deps({
+      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
+    });
+    await migrateCore(d as never);
+
+    const passed = (d.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as Record<string, unknown>;
+    expect(typeof passed.tableExists).toBe("function");
+    expect(typeof passed.countRows).toBe("function");
+    expect(typeof passed.executeSql).toBe("function");
+  });
+
+  it("forwards the non-empty flag only when the operator set it", async () => {
+    // Two decisions, not one: accepting a schema change is not accepting the
+    // loss of rows nothing can recreate, so this must not ride along with
+    // `allowDestructive`.
+    const off = deps({
+      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
+    });
+    await migrateCore(off as never);
+    const withoutFlag = (off.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as Record<string, unknown>;
+    expect(withoutFlag.allowDropNonEmptyRetired).toBeUndefined();
+
+    const on = deps({
+      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
+      allowDropNonEmptyRetired: true,
+    });
+    await migrateCore(on as never);
+    const withFlag = (on.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as Record<string, unknown>;
+    expect(withFlag.allowDropNonEmptyRetired).toBe(true);
+  });
+});
+
 describe("migrateCore", () => {
   it("runs reconcile + file migrations, returns a result, never process.exit", async () => {
     const d = deps();
@@ -166,5 +212,33 @@ describe("migrateCore", () => {
       }),
     });
     await expect(migrateCore(d as never)).rejects.toThrow(/apply failed/);
+  });
+
+  it("omits them when the adapter cannot supply them", async () => {
+    // The dev-boot path wraps the Drizzle adapter in a small object carrying
+    // `executeQuery` and nothing else. Asserting the shape instead of
+    // detecting it produced a call on `undefined`, and the TypeError was
+    // caught by the boot handler — which silently skipped the WHOLE migration
+    // phase on every project with a migrations directory. Omitted, the
+    // cleanup reports itself as skipped instead.
+    const d = deps({ adapter: { executeQuery: vi.fn() } });
+
+    await expect(migrateCore(d as never)).resolves.toBeDefined();
+
+    const passed = (d.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as Record<string, unknown>;
+    expect(passed).toBeDefined();
+    expect(passed.tableExists).toBeUndefined();
+    expect(passed.executeSql).toBeUndefined();
+    expect(passed.countRows).toBeUndefined();
+  });
+
+  it("omits them for an adapter with neither operation", async () => {
+    const d = deps({ adapter: {} });
+    await expect(migrateCore(d as never)).resolves.toBeDefined();
+
+    const passed = (d.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as Record<string, unknown>;
+    expect(passed.tableExists).toBeUndefined();
   });
 });

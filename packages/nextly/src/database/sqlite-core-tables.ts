@@ -50,30 +50,6 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "users_created_at_idx"
       ON "users" ("created_at")`,
-    `CREATE TABLE IF NOT EXISTS "accounts" (
-      "id" INTEGER PRIMARY KEY AUTOINCREMENT,
-      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
-      "type" TEXT NOT NULL,
-      "provider" TEXT NOT NULL,
-      "provider_account_id" TEXT NOT NULL,
-      "refresh_token" TEXT,
-      "access_token" TEXT,
-      "expires_at" INTEGER,
-      "token_type" TEXT,
-      "scope" TEXT,
-      "id_token" TEXT,
-      "session_state" TEXT,
-      UNIQUE("provider", "provider_account_id")
-    )`,
-    `CREATE INDEX IF NOT EXISTS "accounts_user_id_idx"
-      ON "accounts" ("user_id")`,
-    `CREATE TABLE IF NOT EXISTS "sessions" (
-      "session_token" TEXT PRIMARY KEY,
-      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
-      "expires" INTEGER NOT NULL
-    )`,
-    `CREATE INDEX IF NOT EXISTS "sessions_user_id_idx"
-      ON "sessions" ("user_id")`,
     `CREATE TABLE IF NOT EXISTS "password_reset_tokens" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "identifier" TEXT NOT NULL,
@@ -512,6 +488,18 @@ export function generateSqliteCoreTableStatements(): string[] {
     // `freshPushSchema` cannot run -- the non-TTY path -- and a table missing
     // from it is a table every read and write fails against, on exactly the
     // installs where nobody is watching the boot.
+    // Keyed by (owner, key) so a plugin cannot hold two values for one
+    // setting, and one plugin's settings can never be written under another's
+    // name.
+    `CREATE TABLE IF NOT EXISTS "nextly_plugin_settings" (
+      "owner" TEXT NOT NULL,
+      "key" TEXT NOT NULL,
+      "value" TEXT NOT NULL,
+      "is_secret" INTEGER NOT NULL DEFAULT 0,
+      "updated_at" INTEGER NOT NULL,
+      "updated_by" TEXT,
+      PRIMARY KEY ("owner", "key")
+    )`,
     `CREATE TABLE IF NOT EXISTS "nextly_widget_layout" (
       "id" TEXT PRIMARY KEY NOT NULL,
       "scope_kind" TEXT NOT NULL,

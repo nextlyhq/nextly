@@ -34,10 +34,7 @@ import {
   roles as rolesSqlite,
   userRoles as userRolesSqlite,
 } from "../../../schemas/rbac/sqlite";
-import {
-  accounts as accountsSqlite,
-  users as usersSqlite,
-} from "../../../schemas/users/sqlite";
+import { users as usersSqlite } from "../../../schemas/users/sqlite";
 import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
 import { UserMutationService } from "../../users/services/user-mutation-service";
@@ -66,7 +63,6 @@ async function ddl(): Promise<string[]> {
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
       users: usersSqlite,
-      accounts: accountsSqlite,
       roles: rolesSqlite,
       userRoles: userRolesSqlite,
       // The mutation service records user.deleted to the outbox whenever

@@ -1,5 +1,10 @@
 import { respondAction } from "../../api/response-shapes";
-import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import {
+  isStrategyName,
+  type AuditLogWriter,
+} from "../../domains/audit/audit-log-writer";
+import { auditReason } from "../../domains/audit/audit-reasons";
+import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
@@ -8,6 +13,11 @@ import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
 import { buildClaims } from "../jwt/claims";
 import { signAccessTokenWithExpiry } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
+import { sanitizeAdminPath } from "../redirect/sanitize-admin-path";
+import {
+  assertAccountUsable,
+  type AccountState,
+} from "../session/account-state";
 import {
   generateRefreshToken,
   hashRefreshToken,
@@ -28,6 +38,13 @@ export interface IssueSessionDeps {
   refreshTokenTTL: number;
   trustProxy: boolean;
   trustedProxyIps: string[];
+  /** Whether an unverified email blocks sign-in (mirrors the password path). */
+  requireEmailVerification: boolean;
+  /**
+   * Reads the account state the gate needs. Loaded here rather than trusted
+   * from the caller, because the caller may be any strategy or a plugin.
+   */
+  fetchAccountState: (userId: string) => Promise<AccountState | null>;
   fetchRoleIds: (userId: string) => Promise<string[]>;
   fetchCustomFields: (userId: string) => Promise<Record<string, unknown>>;
   storeRefreshToken: (record: {
@@ -66,12 +83,69 @@ export interface IssueSessionDeps {
  * decides whether the trail can contradict itself, which is not something three
  * copies should each be trusted to get right.
  */
-export async function issueSession(
+export interface IssueSessionOptions {
+  /**
+   * The strategy that authenticated this login, recorded on the audit row.
+   * Absent means the password path, which is the only one that predates this.
+   */
+  strategy?: string;
+  /**
+   * Where the client should land. Set when a login was interrupted by a
+   * challenge and is now resuming, so the answer returns the destination the
+   * login was originally headed for.
+   */
+  next?: string;
+}
+
+/** A minted session: the cookies to set, and the body a login response returns. */
+export interface MintedSession {
+  cookies: string[];
+  body: {
+    user: {
+      id: string;
+      email: string;
+      name: string | null;
+      image: string | null;
+      roleIds: string[];
+    };
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: string;
+  };
+}
+
+/**
+ * Mint a session: run the account-state gate, build and sign the claims,
+ * rotate in a refresh token, run the post-login hooks and record the success.
+ *
+ * Separated from the response so the JSON reply and the redirect a plugin
+ * needs are two thin wrappers over ONE implementation, rather than two paths
+ * that agree until one of them is edited.
+ */
+export async function mintSession(
   user: AuthUser,
   deps: IssueSessionDeps,
   request: Request,
-  requestId: string
-): Promise<Response> {
+  opts?: IssueSessionOptions
+): Promise<MintedSession> {
+  // Preconditions run first, before any token or refresh row exists. Every
+  // strategy reaches a session through here, so this is the one place that can
+  // refuse an account no matter which path authenticated it.
+  const state = await deps.fetchAccountState(user.id);
+  if (!state) {
+    throw NextlyError.invalidCredentials({
+      logContext: { userId: user.id, reason: auditReason("user-not-found") },
+    });
+  }
+  assertAccountUsable(state, {
+    requireEmailVerification: deps.requireEmailVerification,
+    // The lockout guards the password strategy. A session finished by any
+    // other strategy must not be blockable by someone typing wrong passwords
+    // at an address they do not own.
+    enforcePasswordLockout:
+      opts?.strategy === undefined || opts.strategy === "password",
+  });
+
   const [roleIds, customFields] = await Promise.all([
     deps.fetchRoleIds(user.id),
     deps.fetchCustomFields(user.id),
@@ -130,6 +204,11 @@ export async function issueSession(
       trustedProxyIps: deps.trustedProxyIps,
     }),
     userAgent: request.headers.get("user-agent"),
+    // Which method signed this person in. Success metadata is stored as given
+    // rather than projected, so the shape is checked here instead.
+    ...(isStrategyName(opts?.strategy)
+      ? { metadata: { strategy: opts.strategy } }
+      : {}),
   });
 
   const cookies = [
@@ -141,9 +220,9 @@ export async function issueSession(
     ),
   ];
 
-  return respondAction(
-    "Logged in.",
-    {
+  return {
+    cookies,
+    body: {
       user: {
         id: user.id,
         email: user.email,
@@ -157,11 +236,32 @@ export async function issueSession(
       // write above are awaited, and a plugin hook is arbitrary code.
       expiresAt: accessTokenExpiresAt.toISOString(),
     },
-    {
-      status: 200,
-      headers: buildCookieHeaders(cookies, { "x-request-id": requestId }),
-    }
-  );
+  };
+}
+
+/**
+ * Issue a session and answer the login request with it.
+ *
+ * The JSON half of {@link mintSession}: the canonical login body plus the
+ * HttpOnly cookies (spec §7.6).
+ */
+export async function issueSession(
+  user: AuthUser,
+  deps: IssueSessionDeps,
+  request: Request,
+  requestId: string,
+  opts?: IssueSessionOptions
+): Promise<Response> {
+  const minted = await mintSession(user, deps, request, opts);
+  const body = opts?.next
+    ? // Re-sanitized on the way out as well as before it was signed: this
+      // value decides a navigation, and it costs nothing to check twice.
+      { ...minted.body, next: sanitizeAdminPath(opts.next) }
+    : minted.body;
+  return respondAction("Logged in.", body, {
+    status: 200,
+    headers: buildCookieHeaders(minted.cookies, { "x-request-id": requestId }),
+  });
 }
 
 /**

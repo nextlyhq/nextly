@@ -70,6 +70,51 @@ export async function GET(req: Request) {
 }
 ```
 
+## When an account may hold a session
+
+Every path that ends in a session asks the same question first, whether it is a
+password login, a second factor being answered, a forced password change, a
+token refresh, or a plugin finishing an external sign-in. An account is refused
+when it is deactivated, when its address is unverified and verification is
+required, or when it is locked by failed password attempts.
+
+Each refusal answers identically. Only the server log records which of the
+three it was, so the response cannot be used to tell a locked account from one
+that does not exist.
+
+The lockout is the exception to "every path": it applies to password attempts
+only. A refresh is not a password attempt, and neither is an external sign-in —
+otherwise anyone who knew an address could lock its owner out of their provider
+by typing five wrong passwords.
+
+An account deactivated mid-session loses it at the next token refresh, which
+also deletes the refresh token and clears the cookies rather than leaving them
+to be retried.
+
+## What a token is for
+
+Every token Nextly signs carries a `typ` header naming its purpose, and is
+verified for one purpose only. A token minted for a second-factor exchange
+cannot be presented as a session, whatever else it carries.
+
+This release still accepts a session token with no `typ` header, so tokens
+already in circulation keep working. A later release will require it, which
+will stop Direct API tokens minted before this change; browser sessions are
+unaffected, because access tokens rotate every fifteen minutes.
+
+## Signing in with an external provider
+
+A plugin that has authenticated someone elsewhere finishes the login through
+core rather than assembling a session itself, using `ctx.auth.completeLogin`.
+It applies the same account-state rules, hooks and audit trail as a password
+login, so a plugin cannot grant a session core would have refused.
+
+A sign-in interrupted by a second factor resumes on the login page without a
+token ever appearing in a URL: the pending token travels in an HttpOnly cookie
+and the page asks the server which challenge is outstanding.
+
+See [plugin authentication](/docs/plugins/auth) for the full flow.
+
 ## Super-admin setup
 
 The first time someone visits `/admin`, the panel redirects them to `/admin/setup` (driven by `GET /api/auth/setup-status`). The form creates the first user, assigns the built-in `Super Admin` role, seeds the core permission rows, and logs the new admin in -- all in a single CSRF-protected request.
@@ -283,6 +328,7 @@ openssl rand -base64 32
 | GET    | `/api/auth/setup-status`       | Has the first user been created?             |
 | GET    | `/api/auth/session`            | Get the current session.                     |
 | GET    | `/api/auth/csrf`               | Mint a CSRF token.                           |
+| GET    | `/api/auth/pending`            | Which second factor an interrupted sign-in left outstanding. Never returns the token itself. |
 | POST   | `/api/auth/setup`              | Create the first super-admin (auto-logs in). |
 | POST   | `/api/auth/login`              | Email + password login.                      |
 | POST   | `/api/auth/logout`             | Revoke the current session.                  |

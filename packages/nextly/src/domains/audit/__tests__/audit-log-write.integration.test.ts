@@ -206,6 +206,24 @@ describe("projectAuditMetadata", () => {
     ).toEqual({ reason: "strategy-fail" });
   });
 
+  it("keeps a strategy name, so a failure says which method was tried", () => {
+    expect(projectAuditMetadata({ strategy: "oauth-google" })).toEqual({
+      strategy: "oauth-google",
+    });
+  });
+
+  it("drops a strategy name that is not a bounded identifier", () => {
+    // Strategy names come from application and plugin code, so the SHAPE is
+    // bounded rather than the value enumerated: anything that could carry a
+    // person's details in it is not a name.
+    expect(projectAuditMetadata({ strategy: "x".repeat(65) })).toEqual({});
+    expect(projectAuditMetadata({ strategy: "has space" })).toEqual({});
+    expect(
+      projectAuditMetadata({ strategy: "no account for ada@example.com" })
+    ).toEqual({});
+    expect(projectAuditMetadata({ strategy: 42 })).toEqual({});
+  });
+
   it("keeps nothing when the context is only identifiers", () => {
     // Default-deny: a key nobody listed is dropped, so a field added for
     // logging cannot silently become a new column of the audit trail.

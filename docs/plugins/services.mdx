@@ -239,4 +239,9 @@ for things the services layer doesn't cover yet (aggregations beyond `count`). I
 find yourself needing it often, that's a signal worth raising — the goal (D56) is that
 most plugins never touch it.
 
+It is the live Drizzle instance for the configured dialect, so use its fluent
+API (`select`, `insert`, `update`, `delete`). There is no relational `query`
+namespace: the one that used to exist named a few core tables, so it could
+never answer about a plugin's own tables.
+
 See also: [Permissions](/docs/plugins/permissions) · [HTTP routes](/docs/plugins/routes).

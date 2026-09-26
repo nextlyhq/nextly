@@ -1,7 +1,7 @@
 /**
  * User identity tables — SQLite.
  *
- * Tables: users, accounts, sessions.
+ * Tables: users.
  * Moved verbatim from packages/nextly/src/database/schema/sqlite.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
@@ -52,39 +52,4 @@ export const users = sqliteTable(
     uniqueIndex("users_email_unique").on(t.email),
     index("users_created_at_idx").on(t.createdAt),
   ]
-);
-
-export const accounts = sqliteTable(
-  "accounts",
-  {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    userId: text("user_id").notNull(),
-    type: text("type").notNull(),
-    provider: text("provider").notNull(),
-    providerAccountId: text("provider_account_id").notNull(),
-    refresh_token: text("refresh_token"),
-    access_token: text("access_token"),
-    expires_at: integer("expires_at"),
-    token_type: text("token_type"),
-    scope: text("scope"),
-    id_token: text("id_token"),
-    session_state: text("session_state"),
-  },
-  t => [
-    uniqueIndex("accounts_provider_providerAccountId_unique").on(
-      t.provider,
-      t.providerAccountId
-    ),
-    index("accounts_user_id_idx").on(t.userId),
-  ]
-);
-
-export const sessions = sqliteTable(
-  "sessions",
-  {
-    sessionToken: text("session_token").primaryKey(),
-    userId: text("user_id").notNull(),
-    expires: integer("expires", { mode: "timestamp" }).notNull(),
-  },
-  t => [index("sessions_user_id_idx").on(t.userId)]
 );

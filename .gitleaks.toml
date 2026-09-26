@@ -35,4 +35,10 @@ paths = [
   # generic-api-key entropy rule. Not real secrets.
   '''packages/nextly/src/auth/session/__tests__/get-session-pending-token\.test\.ts$''',
   '''packages/nextly/src/auth/pipeline/__tests__/pending-token\.test\.ts$''',
+  # The plugin-settings tests encrypt and rotate fixture credentials, so they
+  # carry a deliberately long plaintext and two 32-character keys. The length
+  # is load-bearing rather than incidental: a short plaintext can appear
+  # inside ciphertext by chance, and a test passing for that reason proves
+  # nothing about encryption. Fixtures only — no real entropy, no real key.
+  '''packages/nextly/src/domains/plugins/__tests__/settings-service\.test\.ts$''',
 ]

@@ -358,8 +358,14 @@ export class InMemoryRateLimitStore implements RateLimitStore {
 
 /**
  * Default configuration values.
+ *
+ * Exported because the plugin-route limiter answers to the same defaults:
+ * a general-limited plugin route with no configured limits is limited by
+ * THESE numbers or by nothing — a second copy of them would drift the day
+ * one side is tuned and the other is not, silently giving plugin routes a
+ * different allowance than the REST surface beside them.
  */
-const DEFAULTS = {
+export const RATE_LIMIT_DEFAULTS = {
   readLimit: 600, // 10 req/s burst — admin UI makes many parallel GETs on load
   writeLimit: 120,
   windowMs: 60000, // 1 minute
@@ -384,8 +390,12 @@ function buildDefaultKeyGenerator(
 
 /**
  * Determine if the request is a read (GET) or write (POST/PATCH/PUT/DELETE) operation.
+ *
+ * Exported because the read/write split of the configured budgets has one
+ * owner: any second list of which methods spend from which allowance drifts
+ * the day a method joins one side here and not there.
  */
-function isReadOperation(method: string): boolean {
+export function isReadOperation(method: string): boolean {
   return method === "GET" || method === "HEAD" || method === "OPTIONS";
 }
 
@@ -448,9 +458,9 @@ export function createRateLimiter(config: RateLimitConfig) {
   const store = config.store ?? new InMemoryRateLimitStore();
 
   // Merge with defaults
-  const readLimit = config.readLimit ?? DEFAULTS.readLimit;
-  const writeLimit = config.writeLimit ?? DEFAULTS.writeLimit;
-  const windowMs = config.windowMs ?? DEFAULTS.windowMs;
+  const readLimit = config.readLimit ?? RATE_LIMIT_DEFAULTS.readLimit;
+  const writeLimit = config.writeLimit ?? RATE_LIMIT_DEFAULTS.writeLimit;
+  const windowMs = config.windowMs ?? RATE_LIMIT_DEFAULTS.windowMs;
   const keyGenerator =
     config.keyGenerator ??
     buildDefaultKeyGenerator(

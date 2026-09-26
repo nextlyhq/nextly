@@ -35,10 +35,7 @@ import {
   roles as rolesSqlite,
   userRoles as userRolesSqlite,
 } from "../../../schemas/rbac/sqlite";
-import {
-  accounts as accountsSqlite,
-  users as usersSqlite,
-} from "../../../schemas/users/sqlite";
+import { users as usersSqlite } from "../../../schemas/users/sqlite";
 import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
 import { ActivityLogService } from "../../../services/dashboard/activity-log-service";
 import { allResources } from "../../../services/dashboard/readable-resources";
@@ -63,7 +60,6 @@ async function ddl(): Promise<string[]> {
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
       users: usersSqlite,
-      accounts: accountsSqlite,
       roles: rolesSqlite,
       userRoles: userRolesSqlite,
       activityLog: activityLogSqlite,

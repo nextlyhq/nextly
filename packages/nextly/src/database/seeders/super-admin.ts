@@ -107,6 +107,10 @@ export async function seedSuperAdmin(
         name,
         password: password, // Will be hashed by createLocalUser
         isActive: true,
+        // The operator running the seeder chose this address and password, so
+        // the account is vouched for in the same sense as an admin-created
+        // one. The explicit verification below then makes it usable at once.
+        emailVerification: "admin-vouched",
       });
 
       userId = String(newUser.id);
