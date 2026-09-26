@@ -79,17 +79,20 @@ jobs:
       run: ${{ steps.ask.outputs.run }}
       sha: ${{ steps.pr.outputs.sha }}
     steps:
-      # Only the command parser, from the default branch, so the decision below
-      # can be made before anything is cloned. The full checkout follows once we
-      # know a review was actually asked for.
+      # Only the command parser, from the workflow's own commit, so the decision
+      # below can be made before anything is cloned. The full checkout follows
+      # once we know a review was actually asked for.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Pinned to the default branch, whatever ref started the run. The
-          # candidate's copy of the parser must never run here: it would run
-          # before the fork check below, and a script that executes this early
-          # sits next to `GH_TOKEN` and can persist itself into later steps
-          # through `$GITHUB_ENV`.
-          ref: ${{ github.event.repository.default_branch }}
+          # The workflow's own commit is the default branch's: a comment runs
+          # the default branch's workflow, and a dispatch from anywhere else is
+          # refused above. Every file this workflow runs comes from that one
+          # commit, however long the run waited in the queue. The candidate's
+          # copy of the parser must never run here: it would run before the
+          # fork check below, and a script that executes this early sits next
+          # to `GH_TOKEN` and can persist itself into later steps through
+          # `$GITHUB_ENV`.
+          ref: ${{ github.sha }}
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
@@ -161,6 +164,11 @@ jobs:
       # file, and one that edits them must not get to rewrite the review it is
       # about to receive.
       #
+      # Both are read from the workflow's own commit, which the post job checks
+      # out too, and not from the default branch's tip. The branch can move on
+      # while a run waits in the queue, and a protocol newer than the code that
+      # posts could have the agent write a payload that code refuses.
+      #
       # They are materialized OUTSIDE the working tree. Writing them over the
       # checkout would work for running, but it would also replace the very
       # files under review with the base versions, so a change to the protocol
@@ -169,17 +177,17 @@ jobs:
         if: steps.ask.outputs.run == 'true'
         env:
           TOOLING: ${{ runner.temp }}/nextly-review-bot
+          REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail
           mkdir -p "$TOOLING"
-          base="origin/${{ github.event.repository.default_branch || 'main' }}"
-          git show "$base:.github/scripts/review-bot-gh.sh" > "$TOOLING/review-bot-gh.sh"
+          git show "$REVISION:.github/scripts/review-bot-gh.sh" > "$TOOLING/review-bot-gh.sh"
           chmod +x "$TOOLING/review-bot-gh.sh"
           # The protocol names the gateway by its in-repo path, which is the
           # right thing for a human reading the file and the wrong thing for the
           # agent: only the copy here is allowlisted. Rewrite the references in
           # the trusted copy so the instructions and the permissions agree.
-          git show "$base:.github/review-prompt.md" |
+          git show "$REVISION:.github/review-prompt.md" |
             sed "s|\.github/scripts/review-bot-gh\.sh|$TOOLING/review-bot-gh.sh|g" \
             > "$TOOLING/review-prompt.md"
           test -s "$TOOLING/review-prompt.md"
