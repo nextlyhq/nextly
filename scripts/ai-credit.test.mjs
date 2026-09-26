@@ -264,6 +264,14 @@ describe("a line a change adds", () => {
     // So do plain words that are no name, however many lines they take: a tool named after them is a co-author of its own.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  with a note", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
     expect(creditsIn(lines(trailer("Co-authored", spell("Anthro", "pic")), "  some", "  context", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ line: 1 }), expect.objectContaining({ from: 4, line: 4 })]);
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  context", spell("  ", CODE_TOOL, ", the CLI")), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
+    // Only a line that is an identity of its own starts one: more prose, even opening with a tool's name, goes on with the explanation.
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  with a note", spell("  ", CODE_TOOL, " reads this file")), "line")).toEqual([]);
+    // A tool's full name is no one's surname, so it is read on its own after a capitalised word; an ambiguous name there is a person's.
+    for (const word of ["Résumé", "Summary"]) {
+      expect(creditsIn(lines(trailer("Co-authored", spell("Anthro", "pic")), `  ${word}`, `  ${CODE_TOOL}`), "line"), word).toEqual([expect.objectContaining({ line: 1 }), expect.objectContaining({ from: 3, line: 3 })]);
+    }
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  and Jean", spell("  Clau", "de")), "line")).toEqual([]);
     // A script without capitals cannot show a name apart from prose, so its words end a co-author too,
     // unless a joining word brought them in, which only ever brings in another co-author's name.
     expect(creditsIn(lines(trailer("Co-authored", spell("Anthro", "pic")), "  بعض السياق", spell("  Clau", "de")), "line")).toEqual([expect.objectContaining({ line: 1 }), expect.objectContaining({ from: 3, line: 3 })]);
@@ -605,6 +613,12 @@ describe("the command in CI", () => {
     const before = lines(trailer("Co-authored", spell("Anthro", "pic")), "  context");
     expect(decide(change(lines(before, ""), lines(before, `  ${CODE_TOOL}`, "")))).toBe(1);
     expect(printed()).toMatch(/file=notes\.md,line=3,title=AI credit::notes\.md:3 names it in a Co-authored-by trailer/);
+  });
+
+  // An explanation that runs on and mentions a tool names no co-author.
+  it("does not refuse an explanation line that mentions a tool, added under a note already there", () => {
+    const before = lines(trailer("Co-authored", "Jane Doe"), "  with a note");
+    expect(decide(change(lines(before, ""), lines(before, spell("  ", CODE_TOOL, " reads this file"), "")))).toBe(0);
   });
 
   it("refuses a tool added after a note under a vendor's name that was already there", () => {
