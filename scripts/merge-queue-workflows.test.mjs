@@ -831,6 +831,8 @@ describe("who owns what the required checks run", () => {
     // and a Rollup configuration by its name alone, as `rollup -c` finds one without being told.
     expect(definitions.length).toBeGreaterThan(50);
     expect(definitions).toContain("packages/nextly/rollup.dts.config.ts");
+    // And the Next.js configuration the required build builds the playground with.
+    expect(definitions).toContain("apps/playground/next.config.ts");
     for (const path of definitions) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -891,6 +893,27 @@ describe("who owns what the required checks run", () => {
     // global setup, and the one the browser tests' Playwright configuration runs.
     expect(setups).toEqual(expect.arrayContaining(["packages/nextly/src/__tests__/setup.ts", "scripts/vitest-dom-setup.ts", "packages/blocks-react/vitest.global-setup.ts", "e2e/global-setup.ts"]));
     for (const path of new Set(setups)) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // A package script or a setup module can import a helper, and a change to
+  // that helper changes what the check decides as much as one to the file
+  // that imports it. Only test and tooling files are followed: a product
+  // module keeps the review its package gives it.
+  it("owns every test or tooling file a package script or setup module imports", () => {
+    const files = trackedFiles();
+    const tracked = new Set(files);
+    const tasks = tasksRequiredChecksRun();
+    const entries = [
+      ...files.filter(path => WORKSPACE_MANIFEST.test(path)).flatMap(manifest => filesTasksRun(manifest, tracked, tasks)),
+      ...files.filter(path => TEST_CONFIGURATION.test(path)).flatMap(path => setupModulesOf(path, tracked)),
+    ];
+    const imported = toolingImportedBy(entries, tracked);
+    // The control: the guard the UI surface check's build script imports from
+    // a test directory, as `.js` for its `.ts` source.
+    expect(imported).toContain("packages/ui/src/__tests__/ensure-declarations.ts");
+    // The boundary: the product module the nextly setup imports is not followed.
+    expect(imported).not.toContain("packages/nextly/src/plugins/aborted-transaction-sightings.ts");
+    for (const path of new Set(imported)) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
   // The readers behind the tests above take forms this repository does not use
@@ -1030,7 +1053,7 @@ function ownersOf(rules, path) {
 }
 
 /** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
-const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|(?:vitest|playwright|eslint|tsup|rollup)[^/]*\.config\.[^/]+)$/;
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|tsup|rollup)[^/]*\.config\.[^/]+)$/;
 
 /** A workspace package's manifest, whose scripts Turbo runs. */
 const WORKSPACE_MANIFEST = /^(?:packages|apps)\/[^/]+\/package\.json$|^e2e\/package\.json$/;
@@ -1123,7 +1146,34 @@ function loadedThrough(roots, tracked) {
 }
 
 function loadedBy(path, tracked) {
-  return loadsIn(readRepositoryFile(path), path).filter(target => tracked.has(target));
+  return loadsIn(readRepositoryFile(path), path)
+    .map(target => resolvedModule(target, tracked))
+    .filter(Boolean);
+}
+
+/**
+ * The tracked file an import names, resolved as TypeScript and Node resolve
+ * it: as written, a TypeScript source for a JavaScript extension (`./x.js`
+ * compiles from `./x.ts`), or with an extension or an index file added.
+ */
+function resolvedModule(path, tracked) {
+  const typescript = [path.replace(/\.([cm]?)js$/, ".$1ts"), path.replace(/\.js$/, ".tsx")];
+  const added = [".ts", ".tsx", ".mts", ".js", ".mjs", "/index.ts", "/index.js"].map(extension => `${path}${extension}`);
+  return [path, ...typescript, ...added].find(candidate => tracked.has(candidate)) ?? null;
+}
+
+/**
+ * A test or tooling file: one under a `scripts/` or `__tests__/` directory.
+ * What a check's own code imports from these is part of the check. A product
+ * module it imports keeps the review its package gives it, and is not walked
+ * through.
+ */
+const TOOLING = /(?:^|\/)(?:scripts|__tests__)\//;
+
+/** The test and tooling files a set of modules imports, however deep, the modules themselves left out. */
+function toolingImportedBy(roots, tracked) {
+  const reached = reachable(roots, path => (/\.(?:[cm]?[jt]sx?)$/.test(path) ? loadedBy(path, tracked).filter(target => TOOLING.test(target)) : []));
+  return [...reached].filter(path => !roots.includes(path));
 }
 
 /** The files beside it a module's text loads: a relative import in any form, and a file it reads with `readFileSync`. */
