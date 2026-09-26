@@ -32,7 +32,7 @@ import {
 } from "@admin/hooks/queries/useOnboardingSteps";
 import { cn } from "@admin/lib/utils";
 
-interface StepPresentation {
+export interface StepPresentation {
   label: string;
   /** Absent where the step cannot be acted on, which is the granted one. */
   href?: string;
@@ -48,8 +48,14 @@ interface StepPresentation {
  *
  * The copy lives here rather than in core because it is UI text pointing at
  * admin routes, and core renders neither.
+ *
+ * Exported so the empty dashboard sends a reader to the same place, under the
+ * same name, for the same step.
  */
-const PRESENTATION: Record<OnboardingStepId, StepPresentation> = {
+export const ONBOARDING_STEP_PRESENTATION: Record<
+  OnboardingStepId,
+  StepPresentation
+> = {
   // No link: it is already done by everyone who can read this, and a call to
   // action on a finished step sends the reader somewhere with nothing to do.
   account: { label: "Create your account" },
@@ -65,7 +71,7 @@ const PRESENTATION: Record<OnboardingStepId, StepPresentation> = {
 };
 
 function StepRow({ step }: { step: OnboardingStepState }) {
-  const { label, href } = PRESENTATION[step.id];
+  const { label, href } = ONBOARDING_STEP_PRESENTATION[step.id];
 
   return (
     <li className="flex items-center justify-between py-3.5 group transition-colors px-2 rounded-md hover:bg-primary/[0.03]">

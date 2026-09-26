@@ -5,12 +5,40 @@
  * behind them: what a set of widgets ASKS about, and which of them to keep once
  * the answers are in. A test that stood up a install to observe the same two
  * would be slower and would confirm the read rather than the rule.
+ *
+ * The layout read's composition of the two is asked the same way, with the
+ * probe replaced so a case can state what the count answered -- including a
+ * count that FAILED, which a real install cannot be made to produce on demand.
  */
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { conditionsNeeded, widgetsHeldByVerdict } from "../conditions";
+import type { ReadCaller } from "../../../services/dashboard/readable-resources";
+import {
+  conditionsNeeded,
+  layoutConditions,
+  widgetsHeldByVerdict,
+} from "../conditions";
 import type { WidgetCondition } from "../lifecycle";
+
+const hasContent = vi.hoisted(() => vi.fn());
+
+// Only `content:empty` is asked of the probe here. Every other read rejects, so
+// a condition that reached one would have no verdict rather than an answer this
+// file never stated.
+vi.mock("../condition-probe", () => {
+  const unexpected = () => Promise.reject(new Error("not asked in this file"));
+  return {
+    conditionProbe: (caller: unknown) => ({
+      caller,
+      hasContent,
+      readableSlugs: unexpected,
+      readableSingles: unexpected,
+      mayCreateEntry: unexpected,
+      mayCreateCollection: unexpected,
+    }),
+  };
+});
 
 /**
  * The shape the filter actually receives: a canonical widget carries an id and
@@ -190,5 +218,57 @@ describe("which widgets are kept", () => {
       "core/get-started",
       "core/third",
     ]);
+  });
+});
+
+describe("what the layout read learns", () => {
+  const reader: ReadCaller = { user: { id: "user-1", roles: ["editor"] } };
+
+  beforeEach(() => {
+    hasContent.mockReset();
+  });
+
+  it("asks whether the reader has content even when no widget names it", async () => {
+    hasContent.mockResolvedValue(false);
+
+    const result = await layoutConditions([permanent], reader);
+
+    expect(result.contentEmpty).toBe(true);
+    expect(result.widgets).toEqual([permanent]);
+    expect(hasContent).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports content once the reader can see a row", async () => {
+    hasContent.mockResolvedValue(true);
+
+    const result = await layoutConditions([permanent], reader);
+
+    expect(result.contentEmpty).toBe(false);
+  });
+
+  it("does not call an install empty because the count FAILED", async () => {
+    // The empty state is drawn in place of every card, so it may only follow
+    // an answer. A failed count read as empty would blank a full dashboard.
+    hasContent.mockRejectedValue(new Error("count failed"));
+
+    const result = await layoutConditions([permanent, transient], reader);
+
+    expect(result.contentEmpty).toBe(false);
+    // The same missing verdict hides the card that named the condition, so
+    // one failure is not read two ways.
+    expect(result.widgets).toEqual([permanent]);
+  });
+
+  it("answers the dashboard and a card naming the condition from ONE count", async () => {
+    // Two counts could straddle the reader's first entry and disagree: the
+    // empty state drawn while the card that shows only on an empty install
+    // has been dropped, or the reverse.
+    hasContent.mockResolvedValue(false);
+
+    const result = await layoutConditions([permanent, transient], reader);
+
+    expect(result.contentEmpty).toBe(true);
+    expect(result.widgets).toEqual([permanent, transient]);
+    expect(hasContent).toHaveBeenCalledTimes(1);
   });
 });

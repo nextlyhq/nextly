@@ -8,8 +8,8 @@
  * reads to an author as a broken card rather than as a missing feature. The
  * exhaustive `Record` below is what makes that a compile error instead.
  *
- * Evaluated ONCE per request, for the conditions some widget actually declares.
- * A dashboard whose cards are all permanent asks nothing and pays nothing.
+ * Evaluated ONCE per request, for the conditions some widget declares and for
+ * the one the layout read asks itself, `content:empty`.
  *
  * @module domains/widgets/conditions
  */
@@ -116,8 +116,8 @@ const EVALUATORS: Record<
 /**
  * Whether each of the given conditions holds for this reader.
  *
- * Takes the set a dashboard actually needs, so a condition nothing declares is
- * never evaluated. The answers are returned together because a caller filtering
+ * Takes the set the caller needs, so a condition nobody asks about is never
+ * evaluated. The answers are returned together because a caller filtering
  * a widget list needs them all before it can decide anything, and resolving
  * them one at a time inside that filter would serialise reads that have no
  * reason to wait for each other.
@@ -172,10 +172,11 @@ interface ConditionalDeclaration {
 /**
  * The conditions this set of widgets actually asks about.
  *
- * Pure, and exported so the "asks nothing" case can be asserted directly: a
- * dashboard of permanent cards must issue no reads at all, and the only way to
- * see that from outside is to observe the empty set rather than to watch for
- * absent database traffic.
+ * Pure, and exported so the "asks nothing" case can be asserted directly: a set
+ * of permanent cards adds no condition of its own, and the only way to see that
+ * from outside is to observe the empty set rather than to watch for absent
+ * database traffic -- which a layout read would not show anyway, because it
+ * asks `content:empty` for itself.
  */
 export function conditionsNeeded<T extends ConditionalDeclaration>(
   widgets: readonly T[]
@@ -225,8 +226,22 @@ export function widgetsHeldByVerdict<T extends ConditionalDeclaration>(
   });
 }
 
+/** What a layout read learns from one evaluation of the conditions. */
+export interface LayoutConditions<T> {
+  /** The widgets whose condition currently holds, permanent ones untouched. */
+  widgets: T[];
+  /**
+   * Whether this reader can see no content at all.
+   *
+   * `true` only on a verdict that said so. A count that failed leaves no
+   * verdict, and reading that as empty would draw the first-run empty state
+   * over the cards of a reader whose install is full of content.
+   */
+  contentEmpty: boolean;
+}
+
 /**
- * The widgets whose condition currently holds, with permanent ones untouched.
+ * The widgets worth showing now, and whether there is any content to show.
  *
  * A SEPARATE pass from the permission gate, deliberately. The two look alike —
  * both remove widgets from a list — and they answer different questions: the
@@ -235,16 +250,23 @@ export function widgetsHeldByVerdict<T extends ConditionalDeclaration>(
  * onboarding card indistinguishable from a refusal, and the next person
  * reading the filter would have no way to tell which rule dropped a card.
  *
- * Nothing is evaluated unless some widget asks for it: a dashboard of
- * permanent cards resolves an empty set and issues no reads at all.
+ * `content:empty` is evaluated whether or not a widget names it, because the
+ * dashboard itself asks it: a reader who can see no content is shown what to
+ * do next rather than a grid of cards about nothing. Both answers come from
+ * ONE evaluation, so the dashboard and a card naming the condition cannot
+ * disagree about it. The count is memoised by the probe, so another condition
+ * asking the same question shares it, and a reader who may read no collection
+ * is answered without issuing one.
  */
-export async function widgetsWhoseConditionHolds<
-  T extends ConditionalDeclaration,
->(widgets: readonly T[], caller: ReadCaller): Promise<T[]> {
+export async function layoutConditions<T extends ConditionalDeclaration>(
+  widgets: readonly T[],
+  caller: ReadCaller
+): Promise<LayoutConditions<T>> {
   const needed = conditionsNeeded(widgets);
-  if (needed.size === 0) return [...widgets];
-  return widgetsHeldByVerdict(
-    widgets,
-    await evaluateConditions(needed, caller)
-  );
+  needed.add("content:empty");
+  const verdicts = await evaluateConditions(needed, caller);
+  return {
+    widgets: widgetsHeldByVerdict(widgets, verdicts),
+    contentEmpty: verdicts.get("content:empty") === true,
+  };
 }
