@@ -55,10 +55,17 @@ interface SqliteRunHandle {
 export async function executePreResolutionOps(
   txOrDb: unknown,
   ops: Operation[],
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /**
+   * Statements that must precede every rename and drop here — the apply's
+   * check and foreign-key drops, which would otherwise block dropping or
+   * retyping a column they name. Run after the refusals below, so a refused
+   * apply has changed nothing even on MySQL, where DDL commits as it runs.
+   */
+  leadingStatements: readonly string[] = []
 ): Promise<number> {
   const preOps = ops.filter(isPreResolutionOp);
-  if (preOps.length === 0) return 0;
+  if (preOps.length === 0 && leadingStatements.length === 0) return 0;
 
   const ordered = orderForExecution(preOps);
 
@@ -69,6 +76,10 @@ export async function executePreResolutionOps(
   // run, and the column is left renamed and unconverted with nothing able to take it back. The only
   // safe moment to discover that the data will not convert is before the first statement.
   await assertConversionsAreSafe(txOrDb, ordered, dialect);
+
+  for (const statement of leadingStatements) {
+    await runRaw(txOrDb, statement, dialect);
+  }
 
   for (const op of ordered) {
     const sqlString = sqlForOp(op, dialect);

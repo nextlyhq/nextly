@@ -4,7 +4,7 @@
  * @packageDocumentation
  */
 
-import type { SQL } from "drizzle-orm";
+import type { AnyRelations, SQL } from "drizzle-orm";
 
 import type { SqlParam } from "./core";
 import type {
@@ -82,6 +82,37 @@ export interface TransactionContext {
    * @returns Array of result rows
    */
   execute<T = unknown>(sql: string, params?: SqlParam[]): Promise<T[]>;
+
+  /**
+   * The Drizzle handle BOUND TO THIS TRANSACTION.
+   *
+   * `getDrizzle()` wraps the pool and would run on a different connection, so
+   * a caller that builds its own queries needs this one or its writes are not
+   * part of the transaction at all — they commit on their own and a later
+   * rollback leaves them behind.
+   *
+   * Exposed because `ctx.db.transaction()` hands plugins a query surface, and
+   * that surface has to be built over the transaction's handle. The adapters
+   * already construct it for their own delegated CRUD; this returns that
+   * same memoized instance rather than a second one.
+   */
+  drizzle<T = unknown>(): T;
+
+  /**
+   * An instance bound to the SAME transaction client with the relational
+   * query API (`db.query.*`) enabled — the transaction's counterpart of
+   * `getDrizzle(relations)`.
+   *
+   * The bare `drizzle()` instance has an empty `query` namespace, so a
+   * relational read inside the transaction needs this one; the pooled
+   * `getDrizzle(relations)` would read on a different connection and miss the
+   * transaction's uncommitted writes. Memoized per relations object, as
+   * `getDrizzle` is, so repeated calls with an unchanged config share one
+   * instance.
+   *
+   * @param relations - drizzle v1 relations config (defineRelations output)
+   */
+  drizzleWithRelations<T = unknown>(relations: AnyRelations): T;
 
   /**
    * Run a Drizzle-built statement within the transaction, for its effect.

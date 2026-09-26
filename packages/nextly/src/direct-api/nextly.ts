@@ -701,10 +701,10 @@ const globalForDirectApi = globalThis as unknown as {
  * ```
  */
 export function requireNextly(config?: DirectAPIConfig): Nextly {
-  // Registration is not readiness. A production boot publishes services and
-  // THEN waits for the migrate lock, so this flag is true throughout a window
-  // in which the schema is unverified — and this getter is synchronous, so it
-  // cannot wait for the answer the way the async surfaces do.
+  // Registered is not the same as allowed to serve: a process whose boot
+  // migrations refused must not serve, and a boot still migrating has not
+  // answered yet. This getter is synchronous, so it cannot wait for that
+  // answer the way the async surfaces do; it refuses instead.
   assertBootMigrationsSettled();
 
   if (!isServicesRegistered()) {

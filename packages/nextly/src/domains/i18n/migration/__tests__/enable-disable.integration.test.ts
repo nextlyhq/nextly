@@ -2,6 +2,8 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { SqliteAdapter } from "@nextlyhq/adapter-sqlite";
+import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -14,6 +16,7 @@ import type { CompanionMigrationSpec } from "../types";
 
 let dir: string;
 let sqlite: Database.Database;
+let adapter: SqliteAdapter;
 let db: ReturnType<typeof drizzle>;
 
 const logger = {
@@ -22,21 +25,15 @@ const logger = {
   success: () => {},
 } as unknown as Parameters<typeof runFileMigrations>[0]["logger"];
 
+/**
+ * The runner's adapter: a real SQLite adapter on the same database file the
+ * test reads directly. Migrations run through its single-connection
+ * transaction, which a hand-built stand-in cannot provide.
+ */
 function makeAdapter() {
-  return {
-    listTables: () =>
-      Promise.resolve(
-        sqlite
-          .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-          .all()
-          .map(r => (r as { name: string }).name)
-      ),
-    executeQuery: (q: string) => {
-      sqlite.exec(q);
-      return Promise.resolve([]);
-    },
-    getDrizzle: () => db,
-  } as unknown as Parameters<typeof runFileMigrations>[0]["adapter"];
+  return adapter as unknown as Parameters<
+    typeof runFileMigrations
+  >[0]["adapter"];
 }
 
 const spec: CompanionMigrationSpec = {
@@ -62,10 +59,10 @@ async function apply() {
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), "i18n-e2e-"));
   mkdirSync(join(dir, "meta"), { recursive: true });
-  sqlite = new Database(":memory:");
+  sqlite = new Database(join(dir, "test.sqlite"));
   sqlite.pragma("foreign_keys = ON");
   db = drizzle({ client: sqlite });
 
@@ -78,9 +75,13 @@ beforeEach(() => {
   );
   sqlite.exec(`INSERT INTO "dc_pages" VALUES ('p1','Hello','World',99)`);
   sqlite.exec(`INSERT INTO "dc_pages" VALUES ('p2','Hi','There',5)`);
+
+  adapter = createSqliteAdapter({ url: `file:${join(dir, "test.sqlite")}` });
+  await adapter.connect();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await adapter.disconnect();
   sqlite.close();
   rmSync(dir, { recursive: true, force: true });
 });

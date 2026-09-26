@@ -1,4 +1,5 @@
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
+import { SCHEMA_OWNERS_TABLE } from "../schemas/schema-owners/table-name";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 // Raw CREATE TABLE IF NOT EXISTS DDL for all Nextly core SQLite tables.
@@ -230,6 +231,32 @@ export function generateSqliteCoreTableStatements(): string[] {
       "revision" INTEGER NOT NULL,
       "generation" TEXT NOT NULL,
       "updated_at" INTEGER NOT NULL
+    )`,
+    // Bootstrapped rather than exempted. A database built from this fallback
+    // without it has no ownership record at all, and the rule that keeps
+    // data — "a table with no owner row is never dropped" — would then be
+    // true of EVERY table, which quietly disables the protection rather than
+    // failing.
+    // The primary key is COMPOSITE, matching the canonical schema: ownership
+    // became element-granular, so one table can carry a row for itself and a
+    // row per column or index somebody else contributed. Declared here as a
+    // lone `table_name PRIMARY KEY` — which it was — a database created from
+    // this DDL rejected the second row for any table with a contributed
+    // element, and the element columns were absent entirely, so every insert
+    // naming them failed on a fresh SQLite database.
+    `CREATE TABLE IF NOT EXISTS "${SCHEMA_OWNERS_TABLE}" (
+      "table_name" TEXT NOT NULL,
+      "element_kind" TEXT NOT NULL DEFAULT 'table',
+      "element_name" TEXT NOT NULL DEFAULT '',
+      "owner_kind" TEXT NOT NULL,
+      "owner_id" TEXT NOT NULL,
+      "migrated_by" TEXT NOT NULL,
+      "owner_version" TEXT,
+      "schema_version" INTEGER,
+      "state" TEXT NOT NULL,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL,
+      PRIMARY KEY ("table_name", "element_kind", "element_name")
     )`,
     `CREATE TABLE IF NOT EXISTS "content_schema_events" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,

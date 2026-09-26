@@ -26,6 +26,7 @@
  * lockstep automatically.
  */
 
+import { isVirtualField } from "../../../collections/fields/virtual";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   SYSTEM_COLUMNS,
@@ -84,6 +85,17 @@ export interface ColumnDescriptor {
   kind: ColumnKind;
 }
 
+/**
+ * The widest value an `enum` column stores.
+ *
+ * MySQL renders an enum as `varchar` of this width rather than `text`: a TEXT
+ * column cannot be keyed without a prefix length, and an enum is exactly the
+ * kind of column an index is declared on. One constant so the rendered type,
+ * the Drizzle column, the MySQL key-width check and the DSL's refusal of a
+ * longer value cannot disagree about the width.
+ */
+export const ENUM_STORAGE_LENGTH = 255;
+
 /** Default DECIMAL(precision, scale) when a decimal number field omits them. */
 export const DEFAULT_DECIMAL_PRECISION = 10;
 export const DEFAULT_DECIMAL_SCALE = 2;
@@ -109,7 +121,19 @@ export type ColumnKind =
   | "timestamp" // PG/MySQL: timestamp, SQLite: integer(timestamp mode)
   | "json" // PG: jsonb, MySQL: json, SQLite: text
   | "fkSingle" // single-target foreign key — text/varchar(36)
-  | "skip"; // the field keeps its values in another table — no column emitted
+  | "skip" // the field keeps its values in another table — no column emitted
+  // Kinds below are reachable only from an extension table's DSL. No
+  // collection field produces one, so every existing entity's columns are
+  // unchanged — which is the point: a new kind must not alter a table that
+  // already exists.
+  | "bigint" // PG/MySQL: bigint; SQLite: integer
+  | "smallint" // PG/MySQL: smallint; SQLite: integer
+  | "serial" // PG: serial; MySQL: int AUTO_INCREMENT; SQLite: integer
+  | "char" // fixed width (uses `length`); SQLite: text
+  | "uuid" // PG: uuid; MySQL: char(36); SQLite: text
+  | "real" // PG/SQLite: real; MySQL: float
+  | "bytes" // PG: bytea; MySQL: longblob; SQLite: blob
+  | "enum"; // PG/SQLite: text; MySQL: varchar(ENUM_STORAGE_LENGTH) — plus a CHECK on every dialect
 
 /**
  * The columns a row of this table could plausibly have left empty.
@@ -192,8 +216,14 @@ export function columnsDeclaredBy(
 export function fieldProducesColumn(field: {
   type?: unknown;
   options?: unknown;
+  /** The root-level `virtual` flag every field type accepts. */
+  virtual?: unknown;
 }): boolean {
   if (typeof field.type !== "string") return true;
+  // A virtual field stores nothing: no column, no insert, no select. Both
+  // spellings of the flag are read by the one predicate the localization
+  // classifier also asks.
+  if (isVirtualField(field)) return false;
   // Field-group and component values live in their own dedicated tables (fg_{slug} or
   // comp_{slug}) and are stripped from the parent row on write, so the parent needs no column.
   if (isFieldGroupFieldType(field.type)) return false;
@@ -548,7 +578,7 @@ export function classifyFieldKind(
  * `length` is honored for varchar (MySQL); ignored for other kinds
  * since their dialect tokens don't carry length.
  */
-function renderDialectType(
+export function renderDialectType(
   kind: ColumnKind,
   dialect: SupportedDialect,
   opts: { length?: number; precision?: number; scale?: number }
@@ -619,8 +649,89 @@ function renderDialectType(
     if (dialect === "mysql") return "varchar(36)";
     return "text"; // sqlite
   }
+  // Extension-only kinds. Rendered HERE rather than in the extension module
+  // so the desired spec and the collection pipeline keep asking one function
+  // what a kind looks like — a second renderer is how the two sides of a diff
+  // come to disagree about a column that never changed.
+  if (kind === "bigint") {
+    if (dialect === "postgresql") return "int8";
+    if (dialect === "mysql") return "bigint";
+    return "integer"; // sqlite
+  }
+  if (kind === "smallint") {
+    if (dialect === "postgresql") return "int2";
+    if (dialect === "mysql") return "smallint";
+    return "integer"; // sqlite
+  }
+  if (kind === "serial") {
+    // What each dialect INTROSPECTS a generated integer key as, not what the
+    // DDL word was: PostgreSQL's `serial` is `int4` with a sequence default,
+    // and saying "serial" on the desired side would report a type change on
+    // every diff of a column nobody touched.
+    if (dialect === "postgresql") return "int4";
+    if (dialect === "mysql") return "int";
+    return "integer"; // sqlite
+  }
+  if (kind === "char") {
+    // PostgreSQL introspects `char(n)` as `bpchar`, so that is what the
+    // desired side must say or every diff reports a type change.
+    if (dialect === "postgresql") return "bpchar";
+    if (dialect === "mysql") return `char(${length ?? 1})`;
+    return "text"; // sqlite
+  }
+  if (kind === "uuid") {
+    if (dialect === "postgresql") return "uuid";
+    if (dialect === "mysql") return "char(36)";
+    return "text"; // sqlite
+  }
+  if (kind === "real") {
+    if (dialect === "postgresql") return "float4";
+    if (dialect === "mysql") return "float";
+    return "real"; // sqlite
+  }
+  if (kind === "bytes") {
+    if (dialect === "postgresql") return "bytea";
+    if (dialect === "mysql") return "longblob";
+    return "blob"; // sqlite
+  }
+  if (kind === "enum") {
+    // Text-family storage plus a CHECK, never a native enum type: a
+    // PostgreSQL native enum introspects as its own TYPE NAME, which this
+    // function cannot know — the name lives on the column — so rendering it
+    // would produce a token that matches nothing. MySQL gets a bounded
+    // varchar, as the `text` kind does, so the column can be indexed and the
+    // Drizzle column built for it declares the same type.
+    if (dialect === "mysql") return `varchar(${ENUM_STORAGE_LENGTH})`;
+    return "text";
+  }
   // Unreachable: skip is filtered out before this is called.
   return "text";
+}
+
+/**
+ * The size a kind declares that its introspected type token leaves out.
+ *
+ * PostgreSQL introspects `char(n)` as the bare `bpchar`, which is why
+ * `renderDialectType` answers `bpchar` for it — and PostgreSQL introspection
+ * reports the width separately, as `character_maximum_length`, in the column's
+ * `typeModifier`. The desired side has to carry the width the same way: without
+ * it the migration renders an unbounded `bpchar` where a push creates
+ * `char(n)`, and a later width change is invisible to the diff, which compares
+ * sizes only when both sides state one.
+ *
+ * Every other kind either states its size inside the type (`varchar(n)`,
+ * `numeric(p, s)`, MySQL's `char(n)`) or has none, so undefined.
+ */
+export function renderDialectTypeModifier(
+  kind: ColumnKind,
+  dialect: SupportedDialect,
+  opts: { length?: number }
+): string | undefined {
+  if (kind === "char" && dialect === "postgresql") {
+    // The same default width the MySQL rendering and the runtime builder use.
+    return String(opts.length ?? 1);
+  }
+  return undefined;
 }
 
 /**

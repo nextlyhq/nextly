@@ -62,7 +62,9 @@ describe("queryLiveColumnTypes - mysql", () => {
 
     const result = await queryLiveColumnTypes(db, "mysql", ["dc_posts"]);
 
-    expect(execute).toHaveBeenCalledTimes(1);
+    // The columns, then the PRIMARY index: the types come from the same
+    // reading of a live column the diff makes, which asks both.
+    expect(execute).toHaveBeenCalledTimes(2);
     expect(result.get("dc_posts")?.get("title")).toBe("text");
     expect(result.get("dc_posts")?.get("id")).toBe("int(11)");
   });
@@ -122,9 +124,11 @@ describe("queryLiveColumnTypes - sqlite", () => {
     ]);
 
     expect(all).toHaveBeenCalledTimes(2);
-    expect(result.get("dc_posts")?.get("title")).toBe("TEXT");
-    expect(result.get("dc_posts")?.get("id")).toBe("INTEGER");
-    expect(result.get("dc_users")?.get("id")).toBe("INTEGER");
+    // Lower-cased, as the diff reads a SQLite type: the engine treats type
+    // names case-insensitively, and one reading serves both.
+    expect(result.get("dc_posts")?.get("title")).toBe("text");
+    expect(result.get("dc_posts")?.get("id")).toBe("integer");
+    expect(result.get("dc_users")?.get("id")).toBe("integer");
   });
 
   it("skips tables with empty PRAGMA result (table doesn't exist)", async () => {

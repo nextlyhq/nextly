@@ -6,6 +6,8 @@
  * database are in Phase 5.
  */
 
+import { defineRelations } from "drizzle-orm";
+import { integer, pgTable } from "drizzle-orm/pg-core";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import {
@@ -199,6 +201,25 @@ describe("PostgresAdapter", () => {
       expect(caps.maxParamsPerQuery).toBe(65535);
       expect(caps.maxIdentifierLength).toBe(63);
     });
+  });
+
+  describe("getConfiguredSchema()", () => {
+    // The report is only useful if it is the schema the connections actually
+    // use, so each case reads it beside the `search_path` the pool was given.
+    it.each([
+      [{ schema: "cms" }, "cms", "-c search_path=cms"],
+      [{}, undefined, undefined],
+      [{ schema: "" }, undefined, undefined],
+    ])(
+      "reports %j as %s, matching the pool's search_path",
+      async (extra, reported, options) => {
+        const configured = new PostgresAdapter({ ...testConfig, ...extra });
+        await configured.connect();
+
+        expect(configured.getConfiguredSchema()).toBe(reported);
+        expect(MockPool.lastConfig?.options).toBe(options);
+      }
+    );
   });
 
   describe("isConnected()", () => {
@@ -647,6 +668,33 @@ describe("PostgresAdapter", () => {
         expect(typeof ctx.upsert).toBe("function");
         expect(typeof ctx.execute).toBe("function");
         expect(typeof ctx.insert).toBe("function");
+      });
+    });
+
+    // `ctx.db.transaction` hands a plugin's `query` reads this handle. The bare
+    // `drizzle()` is built without relations, so its `query` namespace is
+    // empty; the pooled `getDrizzle(relations)` is a different connection and
+    // cannot see the transaction's uncommitted writes.
+    it("drizzleWithRelations is a relations-enabled instance on the transaction's client, memoized per relations object", async () => {
+      const notes = pgTable("notes", { id: integer("id").primaryKey() });
+      const first = defineRelations({ notes });
+      const second = defineRelations({ notes });
+      type Handle = { query: Record<string, unknown>; $client: unknown };
+
+      await adapter.transaction(async ctx => {
+        const bare = ctx.drizzle<Handle>();
+        const relational = ctx.drizzleWithRelations<Handle>(first);
+
+        expect(relational.query.notes).toBeDefined();
+        expect(bare.query?.notes).toBeUndefined();
+        // The leased client, not the pool.
+        expect(relational.$client).toBe(mockClient);
+        expect(relational.$client).toBe(bare.$client);
+
+        expect(ctx.drizzleWithRelations(first)).toBe(relational);
+        expect(ctx.drizzleWithRelations(second)).not.toBe(relational);
+        // The bare instance the delegated CRUD uses is unchanged.
+        expect(ctx.drizzle()).toBe(bare);
       });
     });
 

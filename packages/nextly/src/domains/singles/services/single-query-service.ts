@@ -85,6 +85,7 @@ import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
+  stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
@@ -1095,13 +1096,16 @@ export class SingleQueryService extends BaseService {
         await this.attachTranslationOverview(slug, singleMeta, doc);
       }
 
-      // Redact password hashes BEFORE any afterRead hook runs (a hook could
-      // copy the hash elsewhere); the final redaction below is defense in
-      // depth.
+      // Redact password hashes and the columns that never leave the server
+      // BEFORE any afterRead hook runs (a hook could copy either elsewhere);
+      // the final redaction below is defense in depth. The server-only set
+      // includes any column a schema hook contributed to this Single's table:
+      // it is a real column, so the row read above carries it.
       const singleHasPassword = hasPasswordField(singleMeta.fields);
       if (singleHasPassword) {
         stripPasswordFieldValues(doc, singleMeta.fields);
       }
+      stripServerOnlyColumns(doc, singleMeta.tableName);
 
       // 8. Execute afterRead hooks
       if (this.hookRegistry.hasHooks("afterRead", hookCollection)) {
@@ -1167,10 +1171,12 @@ export class SingleQueryService extends BaseService {
 
       // Defense in depth, after every user callback on this document: hooks,
       // access rules and field rules are all app code, and this is the last
-      // point at which a password value could still be put back.
+      // point at which a password value or a server-only column could still be
+      // put back.
       if (singleHasPassword) {
         stripPasswordFieldValues(doc, singleMeta.fields);
       }
+      stripServerOnlyColumns(doc, singleMeta.tableName);
 
       return {
         success: true,
@@ -1934,7 +1940,7 @@ export class SingleQueryService extends BaseService {
             parentRow[name] = value;
           }
         }
-        applyReadShape(parentRow, singleMeta.fields);
+        applyReadShape(parentRow, singleMeta.fields, singleMeta.tableName);
         await captureInTx(tx, this.versionCapture, {
           ref: {
             scopeKind: "single",

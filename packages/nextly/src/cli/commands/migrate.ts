@@ -47,15 +47,33 @@ import {
   type LocalizationMigrationIntent,
 } from "../../domains/i18n/migration/migration-intent";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
+import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import {
   SchemaEventsRepository,
   truncateErrorMessage,
 } from "../../domains/schema/events/schema-events-repository";
+import type { ExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
+import { compileExtensionSchema } from "../../domains/schema/extension/publish";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
+import { executeTransaction } from "../../domains/schema/migrate/migration-transaction";
+import { pluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
+import {
+  pluginMigrationSetsFrom,
+  runPluginMigrations,
+  type PluginMigrationSet,
+} from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
+import {
+  assertRunnableStatements,
+  splitSqlStatements,
+} from "../../domains/schema/migrate/split-sql";
+import {
+  mergeContributions,
+  narrowToContributions,
+} from "../../domains/schema/migrate-create/app-stream";
 import {
   ENTITY_HEADER_GUIDANCE,
   parseEntityHeaders,
@@ -63,15 +81,24 @@ import {
 import {
   EMPTY_SNAPSHOT,
   parseSnapshotFile,
+  type SnapshotFile,
 } from "../../domains/schema/migrate-create/snapshot-io";
+import {
+  assertNoForeignDrops,
+  readLiveColumns,
+} from "../../domains/schema/ownership/drop-guard";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
-import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
+import type {
+  ContributedElements,
+  NextlySchemaSnapshot,
+} from "../../domains/schema/pipeline/diff/types";
 import {
   forceUnlock,
   withMigrateLock,
 } from "../../domains/schema/pipeline/locks";
 import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
 import { NextlyError, describeError } from "../../errors";
+import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners/table-name";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -311,12 +338,26 @@ export async function runMigrate(
     // extraneous table) and BEFORE the event is recorded; idempotent. A thrown
     // error here maps to a non-zero CLI exit (the core itself never exits).
     try {
+      const pluginMigrationSets = await pluginMigrationSetsFrom(
+        configResult.config.plugins ?? []
+      );
+      const extensionSchema = await compileExtensionSchema({
+        dialect,
+        plugins: configResult.config.plugins ?? [],
+        config: configResult.config,
+        logger: { warn: m => logger.warn(m) },
+      });
       const { applied, metadata } = await migrateCore({
+        extensionSchema,
         dialect,
         db,
         adapter,
         migrationsDir: appMigrationsDir,
         logger,
+        pluginMigrationSets,
+        pluginsWithMigrations: new Set(
+          pluginMigrationSets.map(set => set.pluginName)
+        ),
         lockMode: "fail-fast",
         ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
         // A custom `options.junctionTable` name cannot be inferred from any
@@ -426,6 +467,31 @@ export async function runMigrate(
  * tests.
  */
 export interface MigrateCoreDeps {
+  /**
+   * The extension schema compiled from the caller's config, or `undefined`
+   * when nothing declares one.
+   *
+   * REQUIRED, and passed rather than read from the process-wide active
+   * schema: only a server boot publishes that, so the CLI saw none. The
+   * plugin-table refusal then passed a plugin that ships no migrations, and
+   * no element ownership was recorded — a run that reported success while
+   * skipping exactly what those checks protect. Required so a new entry point
+   * cannot forget it; compile with `compileExtensionSchema`.
+   */
+  extensionSchema: ExtensionSchema | undefined;
+  /**
+   * Plugin ids that ship migration modules.
+   *
+   * A plugin here is applied by the plugin phase; one declaring tables and
+   * absent from this set has no path to production and is refused.
+   */
+  pluginsWithMigrations?: ReadonlySet<string>;
+  /**
+   * The migration modules to run, in resolver order. Phase 1.5 applies them
+   * between the core reconcile and the app's files; the first failure stops
+   * the run. Omitted by callers with no plugin migrations to run.
+   */
+  pluginMigrationSets?: readonly PluginMigrationSet[];
   dialect: SupportedDialect;
   db: unknown;
   adapter: CLIDatabaseAdapter;
@@ -452,6 +518,11 @@ export interface MigrateCoreDeps {
   withLock?: typeof withMigrateLock;
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
+  /**
+   * Seam for tests; defaults to recording and retiring element owner rows
+   * against the database.
+   */
+  syncElementOwnersFn?: (deps: MigrateCoreDeps) => Promise<void>;
 }
 
 export interface MigrateCoreResult {
@@ -526,6 +597,376 @@ export function installRegistryResolver(
   });
   adapter.setTableResolver(schemaRegistry);
   return schemaRegistry;
+}
+
+/**
+ * One SQL executor for every phase: split, run in one transaction, count.
+ *
+ * Shared by the app files and the plugin modules so the two paths cannot
+ * drift about what "executed as one unit" means.
+ */
+function buildSqlExecutor(
+  dz: DrizzleAdapter,
+  dialect: SupportedDialect
+): (sqlText: string) => Promise<number> {
+  return async sqlText => {
+    const statements = splitSqlStatements(sqlText, dialect);
+    await executeTransaction(dz, async tx => {
+      for (const statement of statements) {
+        await tx.execute(statement);
+      }
+    });
+    return statements.length;
+  };
+}
+
+/**
+ * Per-element owner rows for elements the APP contributed to tables a
+ * plugin owns (its indexes riding the app migration stream). Table-level
+ * rows are written by the streams that carry the tables; these say who
+ * owns the ELEMENT, so a plugin's reconcile can exclude it.
+ */
+async function recordElementOwners(deps: MigrateCoreDeps): Promise<void> {
+  const elementOwners = deps.extensionSchema?.elementOwners;
+  if (elementOwners === undefined || elementOwners.size === 0) return;
+  const { SchemaOwnersRepository: OwnersRepo } = await import(
+    "../../domains/schema/ownership/schema-owners-repository"
+  );
+  const owners = new OwnersRepo(deps.db, deps.dialect);
+  // A plugin's applied schema version is the highest on any of its rows, and
+  // a plugin that only contributes elements has no rows but these. Written as
+  // `null`, its version never existed — the boot gate judged it behind after
+  // a migration that applied — and every run overwrote whatever version had
+  // been recorded. Read from the ledger by the rule `migrate:down` uses, so
+  // both agree on what a plugin has applied.
+  const ledger = await new SchemaEventsRepository(
+    deps.db,
+    deps.dialect
+  ).listFileApplies();
+  const pluginVersion = (pluginId: string) => {
+    const set = deps.pluginMigrationSets?.find(
+      candidate => candidate.pluginName === pluginId
+    );
+    return {
+      ownerVersion: set?.pluginVersion ?? null,
+      schemaVersion: set
+        ? pluginSchemaVersionFromLedger(ledger, pluginId, set.migrations)
+        : null,
+    };
+  };
+  for (const [tableName, elements] of elementOwners) {
+    await owners.upsert(
+      elements.map(element => ({
+        tableName,
+        elementKind: element.elementKind,
+        elementName: element.elementName,
+        ownerKind: element.owner.kind,
+        ownerId: element.owner.kind === "app" ? "app" : element.owner.id,
+        // The stream that carries the element, which is the CONTRIBUTOR's.
+        //
+        // Hard-coding "app" mis-filed every plugin contribution. A later
+        // module from that plugin changing or dropping its own index found the
+        // live index attributed to another stream, so `runPluginPhase`
+        // excluded it from the snapshot it compares — which then matched
+        // neither the module's `before` nor its target, and the upgrade
+        // stopped as drift over an element the plugin owns.
+        migratedBy:
+          element.owner.kind === "app" ? "app" : `plugin:${element.owner.id}`,
+        ...(element.owner.kind === "app"
+          ? { ownerVersion: null, schemaVersion: null }
+          : pluginVersion(element.owner.id)),
+        state: "active" as const,
+      }))
+    );
+  }
+}
+
+/** Record the current element owner rows, and retire the stale ones. */
+export async function syncElementOwners(deps: MigrateCoreDeps): Promise<void> {
+  await recordElementOwners(deps);
+  await retireElementOwners(deps);
+}
+
+/**
+ * Table-level owner rows for the tables the APP declares.
+ *
+ * Plugin tables get theirs from the plugin phase and core tables from the core
+ * reconcile; an app table declared through `db.schema.extend` or produced by
+ * `afterDrizzle` got none. The drop guard reads a table with no owner row as
+ * nobody's and allows the drop, so a plugin migration dropping one of them —
+ * the app's own data — was waved through.
+ *
+ * Written BEFORE the plugin phase, whose drop guard is what these rows are
+ * for: recorded after it, the first run after the table appeared still let a
+ * plugin module drop it. A row for a declared table not yet created is still
+ * true — the name is the app's, and a plugin dropping it is still foreign.
+ */
+export async function recordAppTableOwners(
+  deps: MigrateCoreDeps
+): Promise<void> {
+  const appTables = [...(deps.extensionSchema?.owners.entries() ?? [])]
+    .filter(([, owner]) => owner.kind === "app")
+    .map(([name]) => name);
+  if (appTables.length === 0) return;
+  const { SchemaOwnersRepository: OwnersRepo } = await import(
+    "../../domains/schema/ownership/schema-owners-repository"
+  );
+  await new OwnersRepo(deps.db, deps.dialect).upsert(
+    appTables.map(tableName => ({
+      tableName,
+      ownerKind: "app" as const,
+      ownerId: "app",
+      migratedBy: "app",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active" as const,
+    }))
+  );
+}
+
+/**
+ * Delete element owner rows whose element is gone from the config AND the
+ * database; see `retiredElementRows` for why both must hold.
+ */
+async function retireElementOwners(deps: MigrateCoreDeps): Promise<void> {
+  const { SchemaOwnersRepository: OwnersRepo } = await import(
+    "../../domains/schema/ownership/schema-owners-repository"
+  );
+  const { retiredElementRows } = await import(
+    "../../domains/schema/ownership/retired-elements"
+  );
+  const owners = new OwnersRepo(deps.db, deps.dialect);
+  const elementRows = (await owners.read()).filter(
+    row => (row.elementKind ?? "table") !== "table"
+  );
+  if (elementRows.length === 0) return;
+  const tables = [...new Set(elementRows.map(row => row.tableName))];
+  const live = await introspectLiveSnapshot(deps.db, deps.dialect, tables);
+  const retired = retiredElementRows({
+    rows: elementRows,
+    declared: deps.extensionSchema?.elementOwners ?? new Map(),
+    live,
+  });
+  for (const row of retired) {
+    await owners.deleteElement(
+      row.tableName,
+      row.elementKind,
+      row.elementName ?? ""
+    );
+  }
+}
+
+/**
+ * Phase 1.5 — plugin migration modules, between core and the app's files,
+ * under the caller's lock. Plugins run first because an app migration may
+ * index an entity table a plugin contributes. The first failure propagates
+ * and stops Phase 2: later migrations assume a database state that was never
+ * reached.
+ */
+export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
+  if (!deps.pluginMigrationSets || deps.pluginMigrationSets.length === 0) {
+    return;
+  }
+  deps.logger.info("Phase 1.5: applying plugin migrations...");
+  const dz = deps.adapter as unknown as DrizzleAdapter;
+  const eventsRepo = new SchemaEventsRepository(deps.db, deps.dialect);
+  // Applied plugin modules, keyed by qualified filename, with the sha256 that
+  // ran. The NEWEST event per filename decides it — a rolled_back event
+  // INSERTED after an applied one (the shape `migrate:down` records) means the
+  // module is not applied, however many older applied rows exist — through
+  // the one helper every ledger reader shares, so this phase cannot disagree
+  // with `migrate:down` or `plugins uninstall` about the same row set.
+  const appliedShas = new Map<string, string | null>();
+  for (const [filename, newest] of newestEventsByFilename(
+    await eventsRepo.listFileApplies()
+  )) {
+    if (filename.startsWith("plugin:") && newest.status === "applied") {
+      appliedShas.set(filename, newest.sha256);
+    }
+  }
+
+  // Loaded here rather than imported at the top: both modules sit on cycles
+  // that close through this command, and the file's existing convention for
+  // that is a dynamic import at the point of use.
+  const { SchemaOwnersRepository: OwnersRepo } = await import(
+    "../../domains/schema/ownership/schema-owners-repository"
+  );
+  const owners = new OwnersRepo(deps.db, deps.dialect);
+  // Table-level rows only: an element row shares its table's name, and in a
+  // name-keyed map it would shadow the table row the drop guard compares.
+  const ownerRows = new Map(
+    (await owners.read())
+      .filter(record => (record.elementKind ?? "table") === "table")
+      .map(record => [record.tableName, record])
+  );
+  // Per-element ownership for the reconcile exclusion: a live element whose
+  // row names a different stream is not this stream's business, and reading
+  // it as drift would refuse an adoption over an index the plugin never
+  // declared.
+  const allRows = await owners.read();
+  const elementStream = new Map<string, string>();
+  for (const record of allRows) {
+    const kind = record.elementKind ?? "table";
+    if (kind === "table") continue;
+    // Keyed by KIND as well as name: a column and an index on one table can
+    // share a name, and a kind-blind key would let one decide the other's
+    // stream.
+    elementStream.set(
+      `${record.tableName}\u0000${kind}\u0000${record.elementName ?? ""}`,
+      record.migratedBy
+    );
+  }
+  const pluginOutcome = await runPluginMigrations(deps.pluginMigrationSets, {
+    dialect: deps.dialect,
+    appliedShas,
+    owners: ownerRows,
+    liveColumns: statements =>
+      readLiveColumns(deps.db, deps.dialect, [statements]),
+    introspect: async (names, stream) => {
+      const liveTables = await safeListTables(deps.adapter);
+      const managed = snapshotComparableTables(
+        liveTables,
+        new Set(names),
+        new Set()
+      );
+      const live = await introspectLiveSnapshot(deps.db, deps.dialect, managed);
+      // Drop live elements another stream owns, so this plugin's comparison
+      // sees only what its own stream claims.
+      //
+      // COLUMNS as well as indexes. When another plugin or the app contributes
+      // a column to this plugin's table, the plugin's own module has
+      // before/target snapshots that do not mention it while introspection
+      // still returns it — so the live table matched neither side and a valid
+      // upgrade was refused as drift. The registry has recorded
+      // `elementKind: "column"` all along; this simply asks it.
+      const ownedByAnother = (
+        kind: "column" | "index",
+        tableName: string,
+        elementName: string
+      ): boolean => {
+        const owner = elementStream.get(
+          `${tableName}\u0000${kind}\u0000${elementName}`
+        );
+        return owner !== undefined && owner !== stream;
+      };
+
+      for (const table of live.tables) {
+        table.columns = table.columns.filter(
+          column => !ownedByAnother("column", table.name, column.name)
+        );
+        if (table.indexes === undefined) continue;
+        table.indexes = table.indexes.filter(
+          index => !ownedByAnother("index", table.name, index.name)
+        );
+      }
+      return live;
+    },
+    executeSql: buildSqlExecutor(dz, deps.dialect),
+    repo: eventsRepo,
+    recordOwner: async ({
+      pluginName,
+      pluginVersion,
+      schemaVersion,
+      tables,
+    }) => {
+      // A module that leaves this plugin owning NOTHING still moved its
+      // schema version.
+      //
+      // `upsert([])` returns early, so a migration removing a plugin's last
+      // table left its existing rows at the old version — and the production
+      // boot gate then reads that stale number and rejects the configured
+      // plugin as behind, permanently, over a migration that applied
+      // correctly. The rows are carried forward rather than deleted: they are
+      // what records that the tables were this plugin's, which the drop guard
+      // and a later uninstall both still need.
+      if (tables.length === 0) {
+        const existing = (await owners.read()).filter(
+          row => row.ownerId === pluginName
+        );
+        if (existing.length > 0) {
+          await owners.upsert(
+            existing.map(row => ({
+              ...row,
+              ownerVersion: pluginVersion,
+              schemaVersion,
+            }))
+          );
+        }
+        return;
+      }
+
+      const recorded = tables.map(tableName => ({
+        tableName,
+        ownerKind: "plugin" as const,
+        ownerId: pluginName,
+        migratedBy: `plugin:${pluginName}`,
+        ownerVersion: pluginVersion,
+        schemaVersion,
+        state: "active" as const,
+      }));
+      await owners.upsert(recorded);
+      // The drop guard reads `ownerRows` before every module, so it has to
+      // learn what each module created as the run goes. Read once before the
+      // phase, it did not know a table a dependency's module had just made,
+      // and a later module in the same run could drop that table unchallenged.
+      for (const row of recorded) ownerRows.set(row.tableName, row);
+    },
+  });
+  if (pluginOutcome.applied > 0 || pluginOutcome.adopted > 0) {
+    deps.logger.success(
+      `Plugin migrations: ${pluginOutcome.applied} applied, ${pluginOutcome.adopted} adopted, ${pluginOutcome.skipped} already recorded.`
+    );
+  }
+}
+
+/**
+ * Refuse to migrate a plugin's tables when that plugin ships no migrations.
+ *
+ * A plugin that DOES ship migration modules is applied by the plugin phase.
+ * One that declares tables and ships nothing to create them has no path to
+ * production, and a run that proceeded would report success having created
+ * none of them — the first sign being a query against a table nothing made.
+ *
+ * Narrowed from refusing every plugin table: that was correct while no plugin
+ * could ship migrations at all, and became wrong the moment one could.
+ */
+function assertPluginTablesAreMigratable(
+  extensionSchema: ExtensionSchema | undefined,
+  pluginsWithMigrations: ReadonlySet<string>
+): void {
+  if (!extensionSchema) return;
+
+  // Tables a plugin owns, and elements a plugin added to somebody else's
+  // table. The second counts as much as the first: a plugin that only extends
+  // a dependency's table owns no table of its own, so a table-only check let
+  // it through and its column or index reached development through push and
+  // production never.
+  const unmigratable = [
+    ...[...extensionSchema.owners.entries()]
+      .filter(
+        ([, owner]) =>
+          owner.kind === "plugin" && !pluginsWithMigrations.has(owner.id)
+      )
+      .map(([name]) => name),
+    ...[...extensionSchema.elementOwners.entries()].flatMap(
+      ([table, elements]) =>
+        elements
+          .filter(
+            element =>
+              element.owner.kind === "plugin" &&
+              !pluginsWithMigrations.has(element.owner.id)
+          )
+          .map(element => `${table}.${element.elementName}`)
+    ),
+  ];
+  if (unmigratable.length === 0) return;
+
+  throw new NextlyError({
+    code: "PLUGIN_MIGRATIONS_UNAVAILABLE",
+    publicMessage:
+      "A plugin declares tables or table elements but ships no migrations to create them. They exist in development through push; generate the plugin's migrations before deploying.",
+    logContext: { tables: unmigratable },
+  });
 }
 
 /**
@@ -607,6 +1048,16 @@ function reportMetadataOutcome(
 export async function migrateCore(
   deps: MigrateCoreDeps
 ): Promise<MigrateCoreResult> {
+  // Refused HERE rather than in `runMigrate`, because this function is also
+  // reached from `runMigrationsOnBoot` and from boot-apply. A refusal in the
+  // command alone would let a production boot apply migrations that silently
+  // skip every plugin-owned table, and the first failure would be a query
+  // against a table nothing created.
+  assertPluginTablesAreMigratable(
+    deps.extensionSchema,
+    new Set(deps.pluginsWithMigrations ?? [])
+  );
+
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
   const reconcileMetadata =
@@ -655,6 +1106,12 @@ export async function migrateCore(
         db: deps.db,
         dialect: deps.dialect,
         fieldGroupRegistryTable,
+        // What hooks contributed to the core tables: carried by the app's
+        // migrations, so the reconcile sets them aside when comparing, and
+        // its push reaches a state that includes the ones already live.
+        ...(deps.extensionSchema !== undefined
+          ? { contributions: deps.extensionSchema }
+          : {}),
         logger: {
           info: m => deps.logger.debug(m),
           warn: m => deps.logger.warn(m),
@@ -694,6 +1151,9 @@ export async function migrateCore(
       });
       coreChanged = r.changed;
 
+      await recordAppTableOwners(deps);
+      await runPluginPhase(deps);
+
       deps.logger.info("Phase 2: applying user migrations...");
       applied = await runFiles({
         adapter: deps.adapter,
@@ -704,6 +1164,14 @@ export async function migrateCore(
         logger: deps.logger,
         knownJunctions: deps.knownJunctions,
       });
+
+      // Element rows for contributed elements: written AFTER every stream has
+      // applied, so a row exists exactly when the element does — then rows
+      // whose element is gone from both the config and the database are
+      // retired, so a reused name is never attributed to a stream that no
+      // longer holds it. Each stream's reconcile ignores elements it does not
+      // own, which is what these rows say.
+      await (deps.syncElementOwnersFn ?? syncElementOwners)(deps);
 
       /*
        * Phase 3 — make the registry agree with the tables Phase 2 just created.
@@ -801,7 +1269,7 @@ async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
 async function loadTargetSnapshot(
   metaDir: string,
   name: string
-): Promise<NextlySchemaSnapshot | null> {
+): Promise<SnapshotFile | null> {
   const file = `${name}.snapshot.json`;
   const filePath = resolve(metaDir, file);
 
@@ -836,8 +1304,10 @@ async function loadTargetSnapshot(
     return null;
   }
 
-  // Otherwise, parse as a drift snapshot
-  return parseSnapshotFile(content, file).snapshot;
+  // Otherwise, parse as a drift snapshot. The whole file, because its
+  // `contributions` say which parts of a foreign table the drift check may
+  // judge.
+  return parseSnapshotFile(content, file);
 }
 
 /**
@@ -874,30 +1344,59 @@ export async function runFileMigrations(args: {
   const metaDir = resolve(migrationsDir, "meta");
 
   const dz = adapter as unknown as DrizzleAdapter;
-  const executeSql = async (sqlText: string): Promise<number> => {
-    const statements = splitSqlStatements(sqlText, dialect);
-    await executeTransaction(dz, dialect, async () => {
-      for (const statement of statements) {
-        await dz.executeQuery(statement);
-      }
-    });
-    return statements.length;
-  };
+  const executeSql = buildSqlExecutor(dz, dialect);
+
+  // Owner rows for the drop guard: an app file dropping a plugin-migrated
+  // table is refused whole, before its first statement. Read once; an absent
+  // registry reads as "nothing is claimed" and refuses nothing, which is a
+  // database predating the registry. Absent only when the listing says so: a
+  // listing that fails stops the run rather than disabling the guard.
+  const { SchemaOwnersRepository: OwnersRepoForFiles, tableOwnersByName } =
+    await import("../../domains/schema/ownership/schema-owners-repository");
+  const registryExists = (
+    await (
+      adapter as unknown as { listTables: () => Promise<string[]> }
+    ).listTables()
+  ).includes(SCHEMA_OWNERS_TABLE);
+  const fileOwners = tableOwnersByName(
+    registryExists ? await new OwnersRepoForFiles(db, dialect).read() : []
+  );
 
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;
+  let beforeContributions: Record<string, ContributedElements> = {};
   let applied = 0;
   let remaining =
     args.step && args.step > 0 ? args.step : Number.POSITIVE_INFINITY;
 
   for (const m of all) {
     const filename = `${m.name}.sql`;
-    const target = await loadTargetSnapshot(metaDir, m.name);
+    const targetFile = await loadTargetSnapshot(metaDir, m.name);
+    const target = targetFile?.snapshot ?? null;
 
     if (await repo.isFileApplied(filename)) {
-      if (target) before = target; // advance baseline past applied files
+      // Advance the baseline past applied files.
+      if (targetFile) {
+        before = targetFile.snapshot;
+        beforeContributions = targetFile.contributions ?? {};
+      }
       continue;
     }
     if (remaining <= 0) break;
+
+    // Both apply routes run the same whole-file judgement, so a foreign drop
+    // — or a statement the runner's transaction cannot hold — is refused
+    // identically with or without a paired snapshot, before the ledger
+    // records an attempt.
+    const upStatements = splitSqlStatements(m.upSql, dialect);
+    assertNoForeignDrops({
+      statements: upStatements,
+      stream: "app",
+      owners: fileOwners,
+      dialect,
+      source: filename,
+      liveColumns: await readLiveColumns(db, dialect, [upStatements]),
+    });
+    assertRunnableStatements(upStatements, dialect, filename);
 
     if (!target) {
       // No paired snapshot (hand-written migration): run verbatim + record.
@@ -968,16 +1467,27 @@ export async function runFileMigrations(args: {
       declared,
       args.knownJunctions
     );
-    const live = await introspectLiveSnapshot(db, dialect, managed);
-    await reconcileFile({
-      file: { filename, sql: m.upSql, path: m.filePath, sha256: m.checksum },
+    // Tables the app only contributes to are judged on the app's elements
+    // alone; see `narrowToContributions`.
+    const sides = narrowToContributions({
       before,
       target,
-      live,
+      live: await introspectLiveSnapshot(db, dialect, managed),
+      contributions: mergeContributions(
+        beforeContributions,
+        targetFile?.contributions ?? {}
+      ),
+    });
+    await reconcileFile({
+      file: { filename, sql: m.upSql, path: m.filePath, sha256: m.checksum },
+      before: sides.before,
+      target: sides.target,
+      live: sides.live,
       repo,
       executeSql,
     });
     before = target;
+    beforeContributions = targetFile?.contributions ?? {};
     applied++;
     remaining--;
     logger.success(`Applied ${filename}`);
@@ -1124,404 +1634,12 @@ export function parseSqlSections(content: string): {
   };
 }
 
-export async function executeTransaction(
-  adapter: DrizzleAdapter,
-  dialect: SupportedDialect,
-  fn: () => Promise<void>
-): Promise<void> {
-  const beginSql =
-    dialect === "mysql" ? "START TRANSACTION" : "BEGIN TRANSACTION";
-  const commitSql = "COMMIT";
-  const rollbackSql = "ROLLBACK";
-
-  try {
-    await adapter.executeQuery(beginSql);
-    await fn();
-    await adapter.executeQuery(commitSql);
-  } catch (error) {
-    try {
-      await adapter.executeQuery(rollbackSql);
-    } catch {
-      // Ignore rollback errors
-    }
-    throw error;
-  }
-}
-
 /**
- * Whether a `--` line comment begins at `index`.
- *
- * MySQL is the odd one out: it starts a comment at `--` only when the next
- * character is whitespace or a control character, so `n--1` is `n - -1` rather
- * than a comment. Postgres and SQLite comment on any `--`. Treating MySQL like
- * the others would swallow the rest of that line, take its semicolon with it,
- * and hand the driver two statements in one string.
- *
- * One predicate rather than two, because the line filter and the character scan
- * both need this answer and a second copy would drift from this one.
+ * The splitter lives with the migration domain, where the plugin runner and
+ * the drop guard read it; re-exported for the command modules and tests that
+ * import it from here.
  */
-function isLineCommentAt(
-  text: string,
-  index: number,
-  dialect?: SupportedDialect
-): boolean {
-  if (text[index] !== "-" || text[index + 1] !== "-") return false;
-  if (dialect !== "mysql") return true;
-  const next = text[index + 2];
-  // End of input closes the statement anyway, so `--` with nothing after it is
-  // a comment for this purpose.
-  if (next === undefined) return true;
-  // Whitespace or a control character, which is MySQL's rule verbatim. Written as
-  // a code-point comparison rather than a regex range: a control character inside
-  // a pattern is unreadable in source and `no-control-regex` rejects it.
-  // A third `-` does NOT qualify — `n---1` is arithmetic rather than a comment.
-  return /\s/.test(next) || next.charCodeAt(0) <= 0x1f;
-}
-
-/**
- * The character that CLOSES the quoted region this character opens, or
- * undefined when it opens none.
- *
- * `'` and `"` close with themselves everywhere. The identifier forms are
- * dialect-specific: SQLite reads `[...]` as a quoted identifier while Postgres
- * reads `[` as an array subscript, and MySQL uses backticks where Postgres has
- * no such form.
- */
-function quoteOpenerAt(
-  char: string | undefined,
-  dialect?: SupportedDialect
-): string | undefined {
-  if (char === "'" || char === '"') return char;
-  if (dialect === "sqlite" && char === "[") return "]";
-  if (dialect === "mysql" && char === "`") return "`";
-  return undefined;
-}
-
-/**
- * Whether a string literal opening at `index` honours backslash escapes.
- *
- * 🔴 A PROPERTY OF THE LITERAL, not of the dialect alone. MySQL escapes with
- * backslashes in every string; SQLite never does; PostgreSQL does so only in an
- * `E'...'` escape string and treats a backslash in an ordinary literal as an
- * ordinary character. Deciding by dialect alone is wrong in both directions --
- * it mis-splits a valid PostgreSQL escape string, and applying parity to every
- * dialect mis-splits an ordinary value ending in a backslash.
- */
-function opensBackslashEscapedString(
-  text: string,
-  index: number,
-  opener: string,
-  dialect: SupportedDialect | undefined
-): boolean {
-  // A quoted IDENTIFIER never escapes — a backtick or a bracket delimits a name,
-  // not a literal — so only the two literal quotes are candidates.
-  if (opener !== "'" && opener !== '"') return false;
-  // 🔴 MySQL escapes in BOTH literal quotes. Under its default SQL mode a
-  // double quote also delimits a string, so backslash handling has to apply to
-  // whichever of the two opened the region. Gating on the single quote alone
-  // leaves `SELECT "left \"; right"` splitting at the semicolon INSIDE the
-  // value.
-  if (dialect === "mysql") return true;
-  if (dialect !== "postgresql") return false;
-  // PostgreSQL's escape strings are single-quoted only: `E"…"` is not one.
-  if (opener !== "'") return false;
-  const prev = text[index - 1];
-  if (prev !== "E" && prev !== "e") return false;
-  // Not part of a longer word: `VALUES (E'x')` opens an escape string, while an
-  // identifier merely ending in `e` before a literal does not.
-  const before = text[index - 2];
-  return before === undefined || !/[A-Za-z0-9_$]/.test(before);
-}
-
-/**
- * Whether a quote at `index` CLOSES the literal it appears in.
- *
- * The two questions — does this literal escape at all, and is this particular
- * quote escaped — are answered here rather than in the scanning loop, which is
- * long enough that one more condition inside it is one more thing to read past.
- */
-function closesLiteral(
-  text: string,
-  index: number,
-  escapesWithBackslash: boolean
-): boolean {
-  return !(escapesWithBackslash && precededByOddBackslashes(text, index));
-}
-
-/**
- * Whether the character at `index` is escaped by the backslash run before it.
- *
- * 🔴 PARITY, not the single preceding character. A doubled backslash is one
- * LITERAL backslash — which is how MySQL string escaping writes it — so a value
- * ending in a backslash puts `\\` immediately before its closing quote.
- * Reading only that last character calls the quote escaped, leaves the splitter
- * inside a string it has actually left, swallows the statement's semicolon, and
- * concatenates the next statement onto it. A driver with multi-statements
- * disabled then rejects the pair, after earlier statements in the same file
- * have already run.
- *
- * An EVEN run means the backslashes escape each other and the character stands
- * on its own; an odd run means the last one escapes it.
- */
-function precededByOddBackslashes(text: string, index: number): boolean {
-  let run = 0;
-  for (let k = index - 1; k >= 0 && text[k] === "\\"; k -= 1) run += 1;
-  return run % 2 === 1;
-}
-
-/** Where a scan currently stands with respect to an open string literal. */
-type LiteralState = {
-  inString: boolean;
-  stringChar: string;
-  escapesWithBackslash: boolean;
-};
-
-/**
- * Advance `state` across the character at `index`.
- *
- * The splitter and the line pre-scan both have to agree about where a literal
- * begins and ends; two copies of this decision would drift, and the drift would
- * be silent because each looks correct beside its own caller.
- */
-function advanceLiteralState(
-  text: string,
-  index: number,
-  dialect: SupportedDialect | undefined,
-  state: LiteralState
-): number {
-  const char = text[index];
-  if (!state.inString) {
-    const opener = quoteOpenerAt(char, dialect);
-    if (opener) {
-      state.inString = true;
-      state.stringChar = opener;
-      // Recorded when the literal OPENS: the `E` prefix is only visible here,
-      // and by the closing quote it is long past.
-      state.escapesWithBackslash = opensBackslashEscapedString(
-        text,
-        index,
-        opener,
-        dialect
-      );
-    }
-    return 1;
-  }
-
-  if (char !== state.stringChar) return 1;
-
-  // Backslash-escaped: an ordinary character that happens to be the delimiter.
-  if (!closesLiteral(text, index, state.escapesWithBackslash)) return 1;
-
-  // 🔴 A DOUBLED delimiter escapes the delimiter and does NOT leave the
-  // literal. Closing on the first and reopening on the second looks harmless
-  // -- the state toggles twice and comes back correct -- but the REOPENED
-  // literal is a different one: `escapesWithBackslash` is recorded from the
-  // prefix at the opening quote, and the second quote of a pair is no longer
-  // adjacent to the `E` of a Postgres escape string. The mode is silently
-  // lost, so a later `\'` reads as the closing quote and the statement is cut
-  // at the next semicolon INSIDE the value.
-  if (text[index + 1] === state.stringChar) return 2;
-
-  state.inString = false;
-  return 1;
-}
-
-/**
- * End index (exclusive) of the comment beginning at `index`, or -1 if none.
- *
- * Both comment forms in one place because a scan that knows about `--` and not
- * about a block comment disagrees with one that knows about both -- and an
- * apostrophe inside `/* it's a note *\/` then reads as an opening quote,
- * putting the rest of the file "inside a literal" for that scan alone.
- */
-function commentEndAt(
-  text: string,
-  index: number,
-  dialect?: SupportedDialect
-): number {
-  if (isLineCommentAt(text, index, dialect)) {
-    const lineEnd = text.indexOf("\n", index);
-    return lineEnd === -1 ? text.length : lineEnd;
-  }
-  if (text[index] === "/" && text[index + 1] === "*") {
-    const close = text.indexOf("*/", index + 2);
-    return close === -1 ? text.length : close + 2;
-  }
-  return -1;
-}
-
-/**
- * For every character of `sql`, whether it sits inside a string literal.
- *
- * 🔴 The cleanup below both DROPS lines and REWRITES them, and each is an edit
- * to whatever it touches. A description carrying a comment marker or a
- * breakpoint marker is data, and editing it stores a silently truncated value
- * in the replayed database -- the migration still succeeds, so nothing reports
- * it. A per-LINE answer is not enough: a literal can open midway through a line
- * that began as ordinary SQL.
- */
-function literalMask(sql: string, dialect?: SupportedDialect): boolean[] {
-  const mask: boolean[] = new Array(sql.length).fill(false);
-  const state: LiteralState = {
-    inString: false,
-    stringChar: "",
-    escapesWithBackslash: false,
-  };
-
-  for (let i = 0; i < sql.length; i++) {
-    if (!state.inString) {
-      const commentEnd = commentEndAt(sql, i, dialect);
-      if (commentEnd !== -1) {
-        i = commentEnd - 1;
-        continue;
-      }
-    }
-    const consumed = advanceLiteralState(sql, i, dialect, state);
-    mask[i] = state.inString;
-    if (consumed === 2) {
-      mask[i + 1] = state.inString;
-      i += 1;
-    }
-  }
-
-  return mask;
-}
-
-/** Remove breakpoint markers that lie OUTSIDE a literal, leaving data intact. */
-function stripMarkersOutsideLiterals(
-  line: string,
-  lineStart: number,
-  mask: boolean[]
-): string {
-  const MARKER = "--> statement-breakpoint";
-  let out = "";
-  for (let i = 0; i < line.length; i++) {
-    if (!mask[lineStart + i] && line.startsWith(MARKER, i)) {
-      i += MARKER.length - 1;
-      continue;
-    }
-    out += line[i];
-  }
-  return out;
-}
-
-export function splitSqlStatements(
-  sql: string,
-  dialect?: SupportedDialect
-): string[] {
-  // Remove Drizzle's statement breakpoint markers and SQL comments.
-  // drizzle-kit uses two marker patterns in generated migration SQL:
-  //   1. Standalone: `--> statement-breakpoint` on its own line (between CREATE TABLE blocks)
-  //   2. Inline: `SQL_STATEMENT;--> statement-breakpoint` on the same line (after CREATE INDEX/ALTER)
-  // Both must be cleaned out before executing, otherwise the marker text
-  // ends up as invalid SQL in the next statement.
-  // Where every literal sits, so neither half of the cleanup edits data.
-  const mask = literalMask(sql, dialect);
-  let lineStart = 0;
-  const cleanedSql = sql
-    .split("\n")
-    .map(line => {
-      const entry = { line, start: lineStart };
-      lineStart += line.length + 1;
-      return entry;
-    })
-    .filter(({ line, start }) => {
-      // A line that BEGINS inside a literal is a continuation of a value.
-      if (mask[start]) return true;
-      const trimmed = line.trim();
-      if (trimmed.startsWith("--> statement-breakpoint")) return false;
-      // Remove pure SQL comment lines (but keep lines that have SQL after comments)
-      if (
-        isLineCommentAt(trimmed, 0, dialect) &&
-        !trimmed.includes("CREATE") &&
-        !trimmed.includes("ALTER") &&
-        !trimmed.includes("DROP") &&
-        !trimmed.includes("INSERT")
-      )
-        return false;
-      return true;
-    })
-    // Strip inline markers (pattern 2) that appear after semicolons on the
-    // same line, e.g. `CREATE INDEX ...;--> statement-breakpoint`. Without
-    // this, the text after the semicolon pollutes the next accumulated
-    // statement and causes a MySQL syntax error. Per OCCURRENCE rather than
-    // per line: a literal can open midway through a line of ordinary SQL, and
-    // rewriting the whole line edits the value inside it.
-    .map(({ line, start }) => stripMarkersOutsideLiterals(line, start, mask))
-    .join("\n");
-
-  const statements: string[] = [];
-  let current = "";
-  const state: LiteralState = {
-    inString: false,
-    stringChar: "",
-    escapesWithBackslash: false,
-  };
-
-  for (let i = 0; i < cleanedSql.length; i++) {
-    const char = cleanedSql[i];
-
-    // Comments are copied through verbatim without being scanned, because the
-    // characters inside one are prose rather than SQL. An apostrophe in a
-    // retained comment ("SQLite doesn't support ...") would otherwise open a
-    // string that never closes, and every semicolon after it stops separating
-    // statements — the whole file then reaches the driver as one statement.
-    if (!state.inString && isLineCommentAt(cleanedSql, i, dialect)) {
-      const lineEnd = cleanedSql.indexOf("\n", i);
-      const end = lineEnd === -1 ? cleanedSql.length : lineEnd;
-      current += cleanedSql.slice(i, end);
-      i = end - 1;
-      continue;
-    }
-    if (!state.inString && char === "/" && cleanedSql[i + 1] === "*") {
-      const close = cleanedSql.indexOf("*/", i + 2);
-      const end = close === -1 ? cleanedSql.length : close + 2;
-      current += cleanedSql.slice(i, end);
-      i = end - 1;
-      continue;
-    }
-
-    // Quoted IDENTIFIERS count as quoted regions too, not just string literals.
-    // SQLite accepts `[a--b]` and MySQL accepts a backtick-quoted `a--b`; with
-    // only ' and " tracked, the dashes inside one read as a comment opener and
-    // the statement's semicolon disappears into it.
-    //
-    // The bracket and backtick forms are applied per dialect rather than
-    // everywhere: `[` is not a quote in Postgres, where it subscripts an array,
-    // so treating it as one there would swallow ordinary SQL.
-    const consumed = advanceLiteralState(cleanedSql, i, dialect, state);
-    if (consumed === 2) {
-      current += cleanedSql[i] + cleanedSql[i + 1];
-      i += 1;
-      continue;
-    }
-
-    if (char === ";" && !state.inString) {
-      const statement = current.trim();
-      const hasSQL =
-        /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|SELECT|TRUNCATE|GRANT|REVOKE)\b/i.test(
-          statement
-        );
-      if (statement && hasSQL) {
-        statements.push(statement);
-      }
-      current = "";
-    } else {
-      current += char;
-    }
-  }
-
-  const finalStatement = current.trim();
-  const hasFinalSQL =
-    /\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|SELECT|TRUNCATE|GRANT|REVOKE)\b/i.test(
-      finalStatement
-    );
-  if (finalStatement && hasFinalSQL) {
-    statements.push(finalStatement);
-  }
-
-  return statements;
-}
+export { splitSqlStatements };
 
 // F11: dropped local generateUUID() in favor of node:crypto's randomUUID,
 // which is what the rest of the codebase uses (matches schema/migration-journal

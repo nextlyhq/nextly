@@ -48,6 +48,12 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
+import {
+  appStreamSnapshots,
+  compileAppStreamTables,
+  NO_APP_STREAM_TABLES,
+  type AppStreamTables,
+} from "../../domains/schema/migrate-create/app-stream";
 import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
 import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-create/generate";
 import {
@@ -249,9 +255,21 @@ export async function runMigrateCheck(
     dialect
   );
 
+  // The app stream's extension schema, compiled exactly as `migrate:create`
+  // compiles it. Without it every table an app declared through
+  // `db.schema.extend` was in the latest snapshot and absent from this side,
+  // so the check reported a drop of each one — on every run, for every app
+  // that used the documented hook.
+  const appStream = await compileAppStreamTables({
+    config: configResult.config,
+    dialect,
+    logger: { warn: m => logger.warn(m) },
+  });
+
   await runChecks({
     migrationsDir,
     desiredSnapshot,
+    appStream,
     logger,
   });
 }
@@ -267,10 +285,13 @@ export async function runMigrateCheck(
  */
 export async function runChecks(args: {
   migrationsDir: string;
+  /** What the entities alone describe; the extension schema is `appStream`. */
   desiredSnapshot: NextlySchemaSnapshot;
+  /** The app stream's extension schema. Omitted, there is none. */
+  appStream?: AppStreamTables;
   logger: CommandContext["logger"];
 }): Promise<void> {
-  const { migrationsDir, desiredSnapshot, logger } = args;
+  const { migrationsDir, logger } = args;
   const metaDir = resolve(migrationsDir, "meta");
 
   let sqlFiles: string[];
@@ -352,10 +373,22 @@ export async function runChecks(args: {
   }
 
   // Check 4: schema drift (config vs latest snapshot).
+  //
+  // Both sides come from `appStreamSnapshots`, the function `migrate:create`
+  // diffs through, so a change the generator has written is never reported
+  // here as pending.
   let previousSnapshot: NextlySchemaSnapshot;
+  let desiredSnapshot: NextlySchemaSnapshot;
   try {
     const latest = await loadLatestSnapshot(metaDir);
-    previousSnapshot = latest?.data.snapshot ?? EMPTY_SNAPSHOT;
+    const stream = appStreamSnapshots({
+      previous: latest?.data.snapshot ?? EMPTY_SNAPSHOT,
+      previousContributions: latest?.data.contributions ?? {},
+      desired: args.desiredSnapshot,
+      tables: args.appStream ?? NO_APP_STREAM_TABLES,
+    });
+    previousSnapshot = stream.previous;
+    desiredSnapshot = stream.desired;
   } catch (err) {
     // F11 PR 4 review fix #3: see INVALID_SNAPSHOT comment above.
     if (err instanceof SnapshotFileError) {
@@ -421,6 +454,14 @@ function describeOp(op: Operation): string {
       return `add_index ${op.index.name} on ${op.tableName}`;
     case "drop_index":
       return `drop_index ${op.index.name} on ${op.tableName}`;
+    case "add_check":
+      return `add_check ${op.check.name} on ${op.tableName}`;
+    case "drop_check":
+      return `drop_check ${op.check.name} on ${op.tableName}`;
+    case "add_foreign_key":
+      return `add_foreign_key ${op.foreignKey.name} on ${op.tableName}`;
+    case "drop_foreign_key":
+      return `drop_foreign_key ${op.foreignKey.name} on ${op.tableName}`;
     case "change_foreign_key_action":
       return (
         `change_foreign_key_action ${op.tableName}.${op.columnName} ` +

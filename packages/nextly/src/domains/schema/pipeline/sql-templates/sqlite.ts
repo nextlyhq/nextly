@@ -18,29 +18,14 @@
 // Pure functions. No I/O. No semicolons.
 
 import { NextlyError } from "../../../../errors/nextly-error";
-import type {
-  AddColumnOp,
-  AddIndexOp,
-  AddTableOp,
-  ColumnSpec,
-  DropColumnOp,
-  DropIndexOp,
-  DropTableOp,
-  IndexSpec,
-  Operation,
-  RenameColumnOp,
-  RenameTableOp,
-} from "../diff/types";
+import type { DropIndexOp, DropTableOp, Operation } from "../diff/types";
 
-import { columnDefinition, createTableBody } from "./create-table-body";
+import { commonStatementSql } from "./common-statements";
+import { createIndexSql } from "./create-index";
 import { unsupportedOperation } from "./foreign-key-action";
 import { quoteIdent } from "./identifier-quoting";
 
 const q = (n: string) => quoteIdent(n, "sqlite");
-
-function columnDef(c: ColumnSpec): string {
-  return columnDefinition(c, q);
-}
 
 /**
  * What SQLite cannot do in place, refused with the codebase's own error.
@@ -82,11 +67,11 @@ export class SqliteUnsupportedOperationError extends NextlyError {
  * operation from the one that was asked for and one this pipeline does not
  * perform on the author's behalf.
  *
- * The foreign-key entry is the one with teeth. Automating that rebuild has
- * caused real data loss in three independent tools that tried it, because an
- * unrelated table's cascade can fire during the window where the constraint
- * is gone — so refusing is the answer here, not a limitation to be worked
- * around later.
+ * The foreign-key entry is refused only when the operation is rendered on
+ * its own. `generateStatements` folds a referential-action change, like every
+ * other check or foreign-key change, into a rebuild of the whole table under
+ * the runner's foreign-keys-off contract (`sqlite-rebuild.ts`), where no
+ * other table's cascade can fire.
  */
 const RECREATE_TABLE_HINTS: Record<
   | "change_column_type"
@@ -119,17 +104,14 @@ export function generateSqliteSQL(op: Operation): string {
   // fallow-ignore-next-line code-duplication
   switch (op.type) {
     case "add_table":
-      return generateAddTable(op);
+    case "rename_table":
+    case "add_column":
+    case "drop_column":
+    case "rename_column":
+      // Rendered alike on every dialect but for the quote function.
+      return commonStatementSql(op, "sqlite", q);
     case "drop_table":
       return generateDropTable(op);
-    case "rename_table":
-      return generateRenameTable(op);
-    case "add_column":
-      return generateAddColumn(op);
-    case "drop_column":
-      return generateDropColumn(op);
-    case "rename_column":
-      return generateRenameColumn(op);
     case "change_column_type":
     case "change_column_nullable":
     case "change_column_default":
@@ -139,52 +121,28 @@ export function generateSqliteSQL(op: Operation): string {
         RECREATE_TABLE_HINTS[op.type]
       );
     case "add_index":
-      return generateAddIndex(op);
+      return createIndexSql(op.tableName, op.index, "sqlite", q);
     case "drop_index":
       return generateDropIndex(op);
+    case "add_check":
+    case "drop_check":
+    case "add_foreign_key":
+    case "drop_foreign_key":
+      // SQLite cannot add or drop a CHECK or a FOREIGN KEY in place, and the
+      // operation alone does not carry the table it would take to rebuild.
+      // `generateStatements` folds these into a rebuild of the whole table
+      // from its target spec; reaching this arm means a caller rendered the
+      // operation on its own.
+      return unsupportedOperation("generateSqliteSQL", op);
     default:
       return unsupportedOperation("generateSqliteSQL", op);
   }
-}
-
-function createIndexStatement(tableName: string, index: IndexSpec): string {
-  const cols = index.columns.map(q).join(", ");
-  return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${q(index.name)} ON ${q(tableName)} (${cols})`;
-}
-
-function generateAddIndex(op: AddIndexOp): string {
-  return createIndexStatement(op.tableName, op.index);
 }
 
 function generateDropIndex(op: DropIndexOp): string {
   return `DROP INDEX IF EXISTS ${q(op.index.name)}`;
 }
 
-function generateAddTable(op: AddTableOp): string {
-  const cols = createTableBody(op.table, q);
-  const createTable = `CREATE TABLE ${q(op.table.name)} (\n${cols}\n)`;
-  const indexStmts = (op.table.indexes ?? []).map(i =>
-    createIndexStatement(op.table.name, i)
-  );
-  return [createTable, ...indexStmts].join(";\n");
-}
-
 function generateDropTable(op: DropTableOp): string {
   return `DROP TABLE ${q(op.tableName)}`;
-}
-
-function generateRenameTable(op: RenameTableOp): string {
-  return `ALTER TABLE ${q(op.fromName)} RENAME TO ${q(op.toName)}`;
-}
-
-function generateAddColumn(op: AddColumnOp): string {
-  return `ALTER TABLE ${q(op.tableName)} ADD COLUMN ${columnDef(op.column)}`;
-}
-
-function generateDropColumn(op: DropColumnOp): string {
-  return `ALTER TABLE ${q(op.tableName)} DROP COLUMN ${q(op.columnName)}`;
-}
-
-function generateRenameColumn(op: RenameColumnOp): string {
-  return `ALTER TABLE ${q(op.tableName)} RENAME COLUMN ${q(op.fromColumn)} TO ${q(op.toColumn)}`;
 }

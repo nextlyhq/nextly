@@ -138,6 +138,23 @@ export function toDbError(
  * looking in a different set of properties and disagree on exactly the drivers
  * whose codes are hardest to find.
  */
+/**
+ * Whether an error is a duplicate-key rejection.
+ *
+ * Exposed because a plugin inserting into a table with a unique index has to
+ * tell "this row already exists" from "the database is broken", and the two
+ * arrive as the same thrown object. Derived from the existing SQLSTATE
+ * classification rather than by matching driver messages: those differ per
+ * driver and per version, and a plugin re-deriving it would be a second
+ * implementation of a question this module already answers.
+ */
+export function isUniqueViolation(
+  dialect: SupportedDialect,
+  error: unknown
+): boolean {
+  return toDbError(dialect, error).kind === "unique-violation";
+}
+
 export function safeCode(error: unknown): string | undefined {
   if (!error || typeof error !== "object") return undefined;
   // Cast to Record to defensively probe common DB driver error properties.

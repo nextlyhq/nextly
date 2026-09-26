@@ -122,6 +122,22 @@ function invertOne(op: Operation, prev: NextlySchemaSnapshot): Operation {
       return { type: "drop_index", tableName: op.tableName, index: op.index };
     case "drop_index":
       return { type: "add_index", tableName: op.tableName, index: op.index };
+    case "add_check":
+      return { type: "drop_check", tableName: op.tableName, check: op.check };
+    case "drop_check":
+      return { type: "add_check", tableName: op.tableName, check: op.check };
+    case "add_foreign_key":
+      return {
+        type: "drop_foreign_key",
+        tableName: op.tableName,
+        foreignKey: op.foreignKey,
+      };
+    case "drop_foreign_key":
+      return {
+        type: "add_foreign_key",
+        tableName: op.tableName,
+        foreignKey: op.foreignKey,
+      };
     default: {
       const _exhaustive: never = op;
       throw new Error(`down-generator: unhandled op ${String(_exhaustive)}`);

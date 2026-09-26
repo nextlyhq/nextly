@@ -355,6 +355,26 @@ describe("emitAdditiveDdl — indexes and contracts", () => {
         fromDefault: undefined,
         toDefault: "'x'",
       },
+      add_check: {
+        type: "add_check",
+        tableName: "dc_a",
+        check: { name: "ck_dc_a_status", sql: "status IN (1)" },
+      },
+      add_foreign_key: {
+        type: "add_foreign_key",
+        tableName: "dc_a",
+        foreignKey: { name: "fk_dc_a_author_id", columns: ["author_id"], referencesTable: "dc_authors", referencesColumns: ["id"], onDelete: "cascade", onUpdate: "no action" },
+      },
+      drop_foreign_key: {
+        type: "drop_foreign_key",
+        tableName: "dc_a",
+        foreignKey: { name: "fk_dc_a_old", columns: ["old_id"], referencesTable: "dc_old", referencesColumns: ["id"], onDelete: "restrict", onUpdate: "no action" },
+      },
+      drop_check: {
+        type: "drop_check",
+        tableName: "dc_a",
+        check: { name: "ck_dc_a_old", sql: "score >= 0" },
+      },
       change_foreign_key_action: {
         type: "change_foreign_key_action",
         tableName: "dc_a",

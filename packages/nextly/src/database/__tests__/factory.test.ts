@@ -105,3 +105,54 @@ describe("createAdapter — env-driven pool config", () => {
     ).toBe(12345);
   });
 });
+
+describe("createAdapter — a PostgreSQL schema other than public", () => {
+  const originalEnv = { ...process.env };
+  beforeEach(() => {
+    delete process.env.DB_DIALECT;
+    process.env.DATABASE_URL = "postgres://u:p@localhost:5432/db";
+    vi.resetModules();
+  });
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  function mockPostgres() {
+    const connect = vi.fn().mockResolvedValue(undefined);
+    const createPostgresAdapter = vi.fn().mockReturnValue({ connect });
+    vi.doMock("@nextlyhq/adapter-postgres", () => ({ createPostgresAdapter }));
+    return { createPostgresAdapter, connect };
+  }
+
+  it("is refused before an adapter is built or connected", async () => {
+    // Connecting with a schema runs CREATE SCHEMA, so a refusal after connect
+    // would already have changed the database it is refusing to use.
+    const { createPostgresAdapter, connect } = mockPostgres();
+    const { createAdapterFromEnv } = await import("../factory");
+    const { NextlyError } = await import("../../errors/nextly-error");
+
+    const error = await createAdapterFromEnv({ schema: "cms" }).catch(
+      (caught: unknown) => caught
+    );
+
+    expect(
+      NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED")
+    ).toBe(true);
+    expect(createPostgresAdapter).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it.each([["public"], [undefined]])(
+    "still builds the adapter for %s",
+    async schema => {
+      // The control: the refusal is about the name, not about the option
+      // being present at all.
+      const { createPostgresAdapter } = mockPostgres();
+      const { createAdapterFromEnv } = await import("../factory");
+
+      await createAdapterFromEnv(schema === undefined ? undefined : { schema });
+
+      expect(createPostgresAdapter).toHaveBeenCalledTimes(1);
+    }
+  );
+});

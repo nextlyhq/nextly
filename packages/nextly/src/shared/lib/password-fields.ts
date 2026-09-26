@@ -15,6 +15,7 @@
  */
 
 import { hashPassword } from "../../auth/password";
+import { hiddenColumnNames } from "../../domains/schema/extension/active-schema";
 import { systemColumnNames } from "../../lib/system-columns";
 
 import { toCamelCase, toSnakeCase } from "./case-conversion";
@@ -210,16 +211,59 @@ const RESPONSE_STRIPPED_KEYS: readonly string[] = systemColumnNames(
 );
 
 /**
- * Remove the system owner column (`created_by`) from a response row, in place.
+ * Remove every column that must not leave the server from a response row, in
+ * place: the system owner column, and any column a schema hook contributed to
+ * this table.
  *
  * The owner column holds the creator's stable user id. Owner-only access
  * filters on it in SQL, so its value never needs to leave the server; returning
  * it would leak a stable user id to any caller who can read a collection whose
  * rows were created by other users. Callers strip it on the read/mutation
  * response boundary, the same place password values are cleared.
+ *
+ * Contributed columns are stripped at the same boundary because they arrive
+ * the same way: a column `extendTable` added to an entity is a real column on
+ * a real table, so `db.select()` returns it in every row. It is on the table
+ * deliberately — absent, the next push would propose dropping it — and it is
+ * no field of the entity, so it belongs in no response, no version snapshot
+ * and no webhook payload.
+ *
+ * Takes the TABLE, which is why this is not a list of its own: a contributed
+ * name is not namespaced, and a global set would strip a legitimate field
+ * from a different entity that happened to share the name.
  */
-export function stripSystemOwnerField(entry: Record<string, unknown>): void {
+export function stripServerOnlyColumns(
+  entry: Record<string, unknown>,
+  /** The SQL table this row was read from. */
+  tableName: string
+): void {
   for (const key of RESPONSE_STRIPPED_KEYS) {
     if (key in entry) delete entry[key];
   }
+  const isHidden = hiddenColumnMatcher(tableName);
+  for (const key of Object.keys(entry)) {
+    if (isHidden(key)) delete entry[key];
+  }
+}
+
+/**
+ * Whether a key names a column a schema hook contributed to `tableName` as
+ * hidden, in either spelling.
+ *
+ * The one answer both directions of the entry API use: responses remove what
+ * it matches, and writes drop what it matches before the row is built, so a
+ * column cannot be hidden from reads yet writable, or the reverse.
+ *
+ * Either spelling because a row reaches the response boundary snake_cased from
+ * some paths and camelCased from others, and a write payload is snake_cased
+ * before the drop on some paths and after it on others. The hidden list holds
+ * SQL names, so a key matches when its snake_case form is one.
+ */
+export function hiddenColumnMatcher(
+  /** The SQL table the row is read from or written to. */
+  tableName: string
+): (key: string) => boolean {
+  const hidden = new Set(hiddenColumnNames(tableName));
+  if (hidden.size === 0) return () => false;
+  return key => hidden.has(key) || hidden.has(toSnakeCase(key));
 }

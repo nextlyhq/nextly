@@ -1,6 +1,14 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import type { Operation } from "../diff/types";
+import type {
+  AddCheckOp,
+  AddForeignKeyOp,
+  IndexSpec,
+  Operation,
+  TableSpec,
+} from "../diff/types";
+import { generateSQL } from "../sql-templates";
+import { isMysqlTextOrBlobType } from "../sql-templates/create-index";
 
 import { emitAdditiveDdl } from "./additive";
 import { emitPostgresDdl } from "./postgres";
@@ -100,26 +108,23 @@ export function canEmitWithoutDrizzleKit(
     // prefix: there it changes only how much of the value is indexed, which
     // is exactly what the Builder's own DDL does for the same columns.
     if (dialect === "mysql" && op.type === "add_table") {
-      return !hasUniqueIndexOnTextColumn(op.table);
+      return uniqueIndexesOnTextColumns(op.table).length === 0;
     }
     return true;
   });
 }
 
-/** Whether a table spec declares a UNIQUE index covering a TEXT/BLOB column. */
-function hasUniqueIndexOnTextColumn(table: {
-  columns?: ReadonlyArray<{ name: string; type: string }>;
-  indexes?: ReadonlyArray<{ columns: readonly string[]; unique?: boolean }>;
-}): boolean {
-  const indexes = table.indexes;
-  if (!indexes || indexes.length === 0) return false;
+/**
+ * The UNIQUE indexes a table spec declares over a MySQL TEXT/BLOB column —
+ * the ones the emitter cannot spell, because a key prefix would constrain the
+ * data. The one answer both the routing decision and the kit-path stripping
+ * read, so they cannot disagree about which indexes those are.
+ */
+function uniqueIndexesOnTextColumns(table: TableSpec): IndexSpec[] {
   const textColumns = new Set(
-    (table.columns ?? [])
-      .filter(c => /\b(text|blob)\b/i.test(c.type))
-      .map(c => c.name)
+    table.columns.filter(c => isMysqlTextOrBlobType(c.type)).map(c => c.name)
   );
-  if (textColumns.size === 0) return false;
-  return indexes.some(
+  return (table.indexes ?? []).filter(
     index =>
       index.unique === true && index.columns.some(c => textColumns.has(c))
   );
@@ -147,19 +152,11 @@ export function withoutUnemittableIndexes(
   dialect: SupportedDialect
 ): Operation {
   if (op.type !== "add_table" || dialect !== "mysql") return op;
-  const indexes = op.table.indexes;
-  if (!indexes || indexes.length === 0) return op;
-  const textColumns = new Set(
-    (op.table.columns ?? [])
-      .filter(c => /\b(text|blob)\b/i.test(c.type))
-      .map(c => c.name)
+  const unemittable = new Set(uniqueIndexesOnTextColumns(op.table));
+  if (unemittable.size === 0) return op;
+  const safe = (op.table.indexes ?? []).filter(
+    index => !unemittable.has(index)
   );
-  if (textColumns.size === 0) return op;
-  const safe = indexes.filter(
-    index =>
-      !(index.unique === true && index.columns.some(c => textColumns.has(c)))
-  );
-  if (safe.length === indexes.length) return op;
   return { ...op, table: { ...op.table, indexes: safe } };
 }
 
@@ -171,9 +168,43 @@ export function withoutUnemittableIndexes(
  * run each op through `withoutUnemittableIndexes`.
  */
 export function emitDdl(ops: Operation[], dialect: SupportedDialect): string[] {
-  if (dialect === "postgresql") {
-    return ops.flatMap(op => emitPostgresDdl(op));
-  }
-  // `dialect` is narrowed to "mysql" | "sqlite" here — exactly AdditiveDialect.
-  return ops.flatMap(op => emitAdditiveDdl(op, dialect));
+  const statements =
+    dialect === "postgresql"
+      ? ops.flatMap(op => emitPostgresDdl(op))
+      : // `dialect` is narrowed to "mysql" | "sqlite" here — exactly AdditiveDialect.
+        ops.flatMap(op => emitAdditiveDdl(op, dialect));
+  // A new table's checks and foreign keys, after EVERY statement above: a
+  // foreign key may point at a table this same apply creates later in the
+  // list. SQLite declared them inside its CREATE TABLE, the only place it
+  // accepts them.
+  if (dialect === "sqlite") return statements;
+  const constraints = ops.flatMap(op =>
+    op.type === "add_table" ? tableConstraintOps(op.table) : []
+  );
+  return [...statements, ...constraints.map(op => generateSQL(op, dialect))];
+}
+
+/**
+ * The checks and foreign keys a table declares, as the operations that add
+ * them to a table that already exists.
+ *
+ * One list for everything that creates a table without them in its CREATE
+ * statement: this emitter on PostgreSQL and MySQL, and first-run setup, whose
+ * drizzle-kit push leaves them off there. Checks first, then foreign keys.
+ */
+export function tableConstraintOps(
+  table: Pick<TableSpec, "name" | "checks" | "foreignKeys">
+): Array<AddCheckOp | AddForeignKeyOp> {
+  return [
+    ...(table.checks ?? []).map(check => ({
+      type: "add_check" as const,
+      tableName: table.name,
+      check,
+    })),
+    ...(table.foreignKeys ?? []).map(foreignKey => ({
+      type: "add_foreign_key" as const,
+      tableName: table.name,
+      foreignKey,
+    })),
+  ];
 }

@@ -30,6 +30,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { BaseAdapterConfig } from "@nextlyhq/adapter-drizzle/types";
 
+import { assertSupportedPostgresSchema } from "../domains/schema/services/postgres-schema";
 import { env } from "../lib/env";
 
 /**
@@ -56,6 +57,99 @@ export interface AdapterConfig extends BaseAdapterConfig {
    * or DATABASE_URL protocol.
    */
   type?: AdapterType;
+}
+
+/**
+ * The caller's adapter config with the environment's pool and timeout values
+ * layered underneath it.
+ */
+function mergedAdapterConfig(
+  config: AdapterConfig | undefined,
+  url: string | undefined
+) {
+  // Merge configuration with defaults, layering env-driven pool/timeouts
+  // underneath any explicit config the caller passed. The DB_POOL_* env
+  // vars have always been declared in env.ts but were never plumbed
+  // through to the adapter — this restores the documented contract.
+  // Caller-supplied `config.pool` / `config.queryTimeout` win.
+  //
+  // env values fall through to `undefined` when the operator hasn't set
+  // the corresponding env var (the schemas are `.optional()` — see
+  // shared/lib/env.ts). That lets the adapter's `??` cascade keep its
+  // own dialect-specific defaults intact (e.g. the Postgres adapter's
+  // `min: 0` cold-start-friendly default for Neon).
+  const explicit = config ?? {};
+  return {
+    ...explicit,
+    url,
+    pool: overEnvDefaults(explicit.pool ?? {}, {
+      max: env.DB_POOL_MAX,
+      min: env.DB_POOL_MIN,
+      idleTimeoutMs: env.DB_POOL_IDLE_TIMEOUT,
+    }),
+    queryTimeout: overEnvDefaults(
+      { value: (explicit as { queryTimeout?: number }).queryTimeout },
+      { value: env.DB_QUERY_TIMEOUT }
+    ).value,
+  };
+}
+
+/**
+ * `defaults` with every key the caller set (neither `undefined` nor `null`)
+ * taken from `explicit` instead — the `explicit ?? default` rule applied key by
+ * key, with the caller's other keys kept.
+ */
+function overEnvDefaults<T extends Record<string, unknown>>(
+  explicit: Partial<T>,
+  defaults: T
+): T {
+  const out: Record<string, unknown> = { ...defaults };
+  for (const [key, value] of Object.entries(explicit)) {
+    if (value !== undefined && value !== null) out[key] = value;
+  }
+  return out as T;
+}
+
+/**
+ * Import the dialect's adapter package and construct its adapter, not yet
+ * connected. A literal specifier per dialect, so bundlers can resolve each
+ * branch (see the note in `createAdapter`).
+ */
+async function loadAdapter(
+  type: "postgresql" | "mysql" | "sqlite",
+  adapterConfig: ReturnType<typeof mergedAdapterConfig>,
+  url: string | undefined
+): Promise<DrizzleAdapter> {
+  const pkgName =
+    type === "postgresql"
+      ? "@nextlyhq/adapter-postgres"
+      : type === "mysql"
+        ? "@nextlyhq/adapter-mysql"
+        : "@nextlyhq/adapter-sqlite";
+
+  try {
+    if (type === "postgresql") {
+      const mod = await import("@nextlyhq/adapter-postgres");
+      return mod.createPostgresAdapter(adapterConfig);
+    } else if (type === "mysql") {
+      const mod = await import("@nextlyhq/adapter-mysql");
+      return mod.createMySqlAdapter(adapterConfig);
+    } else {
+      const mod = await import("@nextlyhq/adapter-sqlite");
+      const sqliteConfig = {
+        ...adapterConfig,
+        url: url ?? "file:./data/nextly.db",
+      };
+      return mod.createSqliteAdapter(sqliteConfig);
+    }
+  } catch (error) {
+    throw new Error(
+      `Failed to load database adapter for "${type}". ` +
+        `Make sure ${pkgName} is installed:\n\n` +
+        `  npm install ${pkgName}\n\n` +
+        `Original error: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 }
 
 /**
@@ -107,30 +201,7 @@ export async function createAdapter(
     );
   }
 
-  // Merge configuration with defaults, layering env-driven pool/timeouts
-  // underneath any explicit config the caller passed. The DB_POOL_* env
-  // vars have always been declared in env.ts but were never plumbed
-  // through to the adapter — this restores the documented contract.
-  // Caller-supplied `config.pool` / `config.queryTimeout` win.
-  //
-  // env values fall through to `undefined` when the operator hasn't set
-  // the corresponding env var (the schemas are `.optional()` — see
-  // shared/lib/env.ts). That lets the adapter's `??` cascade keep its
-  // own dialect-specific defaults intact (e.g. the Postgres adapter's
-  // `min: 0` cold-start-friendly default for Neon).
-  const adapterConfig = {
-    ...config,
-    url,
-    pool: {
-      ...(config?.pool ?? {}),
-      max: config?.pool?.max ?? env.DB_POOL_MAX,
-      min: config?.pool?.min ?? env.DB_POOL_MIN,
-      idleTimeoutMs: config?.pool?.idleTimeoutMs ?? env.DB_POOL_IDLE_TIMEOUT,
-    },
-    queryTimeout:
-      (config as { queryTimeout?: number } | undefined)?.queryTimeout ??
-      env.DB_QUERY_TIMEOUT,
-  };
+  const adapterConfig = mergedAdapterConfig(config, url);
 
   // Load the matching adapter via a literal-string dynamic import per
   // dialect. The previous shape used a runtime variable specifier
@@ -153,38 +224,14 @@ export async function createAdapter(
     const unknownType: string = String(type);
     throw new Error(`Unsupported database type: ${unknownType}`);
   }
-  const pkgName =
-    type === "postgresql"
-      ? "@nextlyhq/adapter-postgres"
-      : type === "mysql"
-        ? "@nextlyhq/adapter-mysql"
-        : "@nextlyhq/adapter-sqlite";
-
-  let adapter: DrizzleAdapter;
-  try {
-    if (type === "postgresql") {
-      const mod = await import("@nextlyhq/adapter-postgres");
-      adapter = mod.createPostgresAdapter(adapterConfig);
-    } else if (type === "mysql") {
-      const mod = await import("@nextlyhq/adapter-mysql");
-      adapter = mod.createMySqlAdapter(adapterConfig);
-    } else {
-      const mod = await import("@nextlyhq/adapter-sqlite");
-      const sqliteConfig = {
-        ...adapterConfig,
-        url: url ?? "file:./data/nextly.db",
-      };
-      adapter = mod.createSqliteAdapter(sqliteConfig);
-    }
-  } catch (error) {
-    throw new Error(
-      `Failed to load database adapter for "${type}". ` +
-        `Make sure ${pkgName} is installed:\n\n` +
-        `  npm install ${pkgName}\n\n` +
-        `Original error: ${error instanceof Error ? error.message : String(error)}`
-    );
+  // Before the adapter exists: connecting one with a schema runs
+  // `CREATE SCHEMA`, so refusing afterwards would already have changed the
+  // database. Every adapter built from config comes through here — the
+  // server's and each CLI command's — so this is where they all refuse.
+  if (type === "postgresql" && config?.schema) {
+    assertSupportedPostgresSchema(config.schema);
   }
-
+  const adapter = await loadAdapter(type, adapterConfig, url);
   await adapter.connect();
   return adapter;
 }
@@ -209,8 +256,18 @@ export async function createAdapter(
  *
  * @public
  */
-export async function createAdapterFromEnv(): Promise<DrizzleAdapter> {
-  return createAdapter();
+export async function createAdapterFromEnv(
+  /**
+   * Config-declared options the environment cannot carry.
+   *
+   * `db.postgres.schema` is the first: it comes from `nextly.config.ts`, not
+   * from an env var, and the adapter is the thing that has to apply it.
+   */
+  options?: { schema?: string }
+): Promise<DrizzleAdapter> {
+  return createAdapter(
+    options?.schema !== undefined ? { schema: options.schema } : undefined
+  );
 }
 
 /**

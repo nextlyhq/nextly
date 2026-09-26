@@ -1,0 +1,309 @@
+/**
+ * The wire between a resolved config and every consumer of the schema.
+ *
+ * This exists because the rest of the extension surface has no way to run
+ * itself. The compiler, the draft, the naming rules and the pipeline merge are
+ * all correct in isolation, and every one of them reads
+ * `getActiveExtensionSchema` — so until something CALLS the compiler and
+ * publishes the result, the entire feature compiles, validates, records
+ * ownership and creates nothing.
+ *
+ * It did exactly that. Unit tests all passed because each one built a schema
+ * and passed it in; not one asked whether boot does. The first integration
+ * test failed with `no such table` on all three dialects.
+ *
+ * @module domains/schema/extension/publish
+ * @since 1.0.0
+ */
+import type { SupportedDialect } from "../../../database/schema-registry";
+import { NextlyError } from "../../../errors/nextly-error";
+import type { PluginDefinition } from "../../../plugins/plugin-context";
+import { pluginAdminSlug } from "../../../plugins/plugin-slug";
+import { CORE_TABLE_NAMES } from "../../../schemas";
+import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../utils/resolve-table-name";
+
+import type { DrizzleSchemaHook } from "./after-drizzle";
+import {
+  buildExtensionSchema,
+  clearActiveExtensionSchema,
+  type ExtensionSchema,
+  setActiveExtensionSchema,
+} from "./build-extension-schema";
+import type { SeedEntityTable } from "./draft";
+import { entitySeedColumns } from "./entity-seed";
+import { pluginTablePrefix } from "./naming";
+import type { SchemaContribution } from "./run-hooks";
+
+interface PublishInput {
+  dialect: SupportedDialect;
+  /** Enabled and disabled alike; a disabled plugin still contributes storage. */
+  plugins: readonly PluginDefinition[];
+  /**
+   * The transformed service config.
+   *
+   * Read structurally rather than typed against `NextlyServiceConfig`: this
+   * module needs two fields from it, and naming the whole type here would
+   * couple the schema layer to the container's config shape.
+   */
+  config: {
+    collections?: readonly unknown[];
+    // Seeded alongside collections, because a hook may target any entity
+    // table and the draft accepts all three kinds.
+    singles?: readonly unknown[];
+    fieldGroups?: readonly unknown[];
+    db?: unknown;
+  };
+  logger: { warn: (message: string) => void; debug?: (m: string) => void };
+}
+
+/**
+ * The prefix each enabled plugin's tables carry.
+ *
+ * Resolved once here rather than per table, because the prefix must be unique
+ * across plugins and that is a property of the SET — asking per table would
+ * never see the collision.
+ */
+function resolvePrefixes(
+  plugins: readonly PluginDefinition[]
+): Map<string, string> {
+  const prefixes = new Map<string, string>();
+  const claimed = new Map<string, string>();
+
+  for (const plugin of plugins) {
+    // Disabled plugins included, deliberately — see `contributionsOf` below.
+    // Prefixes must be resolved for them too, or their tables would be named
+    // by a different rule than the one that checks for collisions.
+    if (!plugin.contributes?.schema) continue;
+
+    const prefix = pluginTablePrefix(
+      plugin.name,
+      plugin.contributes.schema.prefix,
+      pluginAdminSlug
+    );
+    const existing = claimed.get(prefix);
+    if (existing !== undefined && existing !== plugin.name) {
+      // Named on both sides. A collision reported against one plugin leaves
+      // the operator guessing which other one took the name.
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `plugin.${plugin.name}.schema.prefix`,
+            code: "INVALID",
+            message: `Plugins "${existing}" and "${plugin.name}" both claim the schema prefix "${prefix}". Declare contributes.schema.prefix on one of them.`,
+          },
+        ],
+      });
+    }
+    claimed.set(prefix, plugin.name);
+    prefixes.set(plugin.name, prefix);
+  }
+  return prefixes;
+}
+
+/**
+ * What each plugin contributes, in the order the resolver placed it.
+ *
+ * DISABLED plugins included. `enabled: false` is a behaviour switch, not a
+ * storage one, and the rest of the runtime already treats it that way: a
+ * disabled plugin's collections and fields stay folded into the config so the
+ * schema is deterministic, and `registerServices` skips only its runtime hooks.
+ *
+ * Filtering its tables out here broke that contract in both directions. In
+ * development the retained collections were still built, so an entity could
+ * reference an extension table the pipeline had just been told not to compile;
+ * in production the same filter in `pluginMigrationSetsFrom` meant its shipped
+ * modules never ran, so disabling a plugin quietly changed the database rather
+ * than quietly stopping its code.
+ *
+ * Turning a plugin off should stop it DOING things, not make its tables and
+ * their data disappear from the schema that describes them.
+ */
+function contributionsOf(
+  plugins: readonly PluginDefinition[]
+): SchemaContribution[] {
+  const out: SchemaContribution[] = [];
+  for (const plugin of plugins) {
+    const schema = plugin.contributes?.schema;
+    if (!schema) continue;
+
+    out.push({
+      owner: { kind: "plugin", id: plugin.name },
+      ...(schema.tables ? { tables: schema.tables } : {}),
+      ...(schema.extend ? { extend: schema.extend } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * Compile the extension schema and make it the active one.
+ *
+ * Called at boot before the schema syncs, and again on every HMR reload — the
+ * compiled result is what the push pipeline merges, so a stale one describes a
+ * schema the config no longer asks for.
+ */
+export async function compileAndPublishExtensionSchema(
+  input: PublishInput
+): Promise<ExtensionSchema | undefined> {
+  const schema = await compileExtensionSchema(input);
+  if (schema === undefined) {
+    // Nothing declares a schema. Cleared rather than left alone, so a reload
+    // that REMOVES the last plugin does not leave its tables in the desired
+    // set — which would keep re-creating them.
+    clearActiveExtensionSchema();
+    return undefined;
+  }
+
+  setActiveExtensionSchema(input.dialect, schema);
+  input.logger.debug?.(
+    `[nextly] extension schema: ${String(schema.tables.length)} table(s) from ${String(contributionsOf(input.plugins).length)} plugin(s).`
+  );
+  // RETURNED as well as published, so a caller in the same boot can hand it
+  // to first-run directly. The module-level map is reached through a dynamic
+  // import there, and a bundler may resolve that to a second instance of this
+  // module — whose map is empty. Measured: publish logged two tables and
+  // first-run read none, in one process, microseconds apart.
+  return schema;
+}
+
+/** What an entity's seed columns depend on, as the config carries it. */
+interface SeedFields {
+  fields?: { name: string; type: string }[];
+  status?: boolean;
+  localized?: boolean;
+}
+
+/**
+ * Compile the extension schema WITHOUT making it the active one.
+ *
+ * For callers that need the compiled result and serve nothing: the migration
+ * commands compile the app's schema twice — once as configured, once without
+ * the app's hooks — and publishing either would leave the process holding
+ * whichever ran last. `undefined` when nothing declares a schema.
+ */
+export async function compileExtensionSchema(
+  input: PublishInput
+): Promise<ExtensionSchema | undefined> {
+  const plugins = contributionsOf(input.plugins);
+  const schemaConfig = (
+    input.config.db as
+      | { schema?: { extend?: unknown[]; afterDrizzle?: DrizzleSchemaHook[] } }
+      | undefined
+  )?.schema;
+  const appHooks = schemaConfig?.extend ?? [];
+  // Counted in the early return below: an app that declares ONLY afterDrizzle
+  // still has something to compile, and clearing the schema there would drop
+  // the tables its hook was written to reshape.
+  const afterDrizzle = schemaConfig?.afterDrizzle ?? [];
+
+  if (
+    plugins.length === 0 &&
+    appHooks.length === 0 &&
+    afterDrizzle.length === 0
+  ) {
+    return undefined;
+  }
+
+  // All three entity kinds, not collections alone. A hook may index or extend
+  // a single or a field group exactly as it may a collection — the draft
+  // accepts `single_*` and `comp_*` as entity targets, and the desired-spec
+  // side carries contributed columns for all three — but a table absent from
+  // this seed is one `getTable` cannot find, so the hook failed at boot with
+  // "Table ... does not exist" before any of that could run.
+  //
+  // Names come from the canonical resolvers rather than from a prefix spelled
+  // here: a single may carry a `dbName`, and a field group's prefix is a
+  // storage-format constant. Spelling either by hand is how the seed comes to
+  // disagree with the table the pipeline actually creates. A collection may
+  // carry a `dbName` too, and a hook targeting its physical table must find it.
+  const collections = (input.config.collections ?? []) as (SeedFields & {
+    slug: string;
+    dbName?: string;
+  })[];
+  const singles = (input.config.singles ?? []) as (SeedFields & {
+    slug: string;
+    dbName?: string;
+  })[];
+  const fieldGroups = (input.config.fieldGroups ?? []) as (SeedFields & {
+    slug: string;
+  })[];
+
+  // Seeded with their real columns — fields' and system — derived by the
+  // builders the diff describes each table with (`entitySeedColumns`). The
+  // draft judges a contribution against them: a contributed column reusing a
+  // name the table already has is refused, and so is an index over a column
+  // the table does not have or cannot index. Seeded empty, both passed, and a
+  // contributed `slug` silently displaced the real one.
+  const seed = (
+    entityKind: SeedEntityTable["entityKind"],
+    name: string,
+    entity: SeedFields & { slug: string }
+  ): SeedEntityTable => ({
+    name,
+    slug: entity.slug,
+    entityKind,
+    columns: entitySeedColumns(
+      {
+        entityKind,
+        tableName: name,
+        fields: entity.fields ?? [],
+        ...(entity.status !== undefined ? { status: entity.status } : {}),
+        ...(entity.localized !== undefined
+          ? { localized: entity.localized }
+          : {}),
+      },
+      input.dialect
+    ),
+  });
+  const entities: SeedEntityTable[] = [
+    ...collections.map(collection =>
+      seed(
+        "collection",
+        resolveCollectionTableName(collection.slug, collection.dbName),
+        collection
+      )
+    ),
+    ...singles.map(single =>
+      seed("single", resolveSingleTableName(single), single)
+    ),
+    ...fieldGroups.map(group =>
+      seed("component", resolveComponentTableName(group.slug), group)
+    ),
+  ];
+
+  const schema = await buildExtensionSchema({
+    dialect: input.dialect,
+    coreTableNames: CORE_TABLE_NAMES,
+    entities,
+    pluginPrefixes: resolvePrefixes(input.plugins),
+    // Who may index whose tables: hard and optional dependencies both count,
+    // because both let the resolver order the pair and refuse an
+    // incompatible version. Derived here from the definitions the resolver
+    // already accepted.
+    dependencies: new Map(
+      input.plugins.map(plugin => [
+        plugin.name,
+        new Set([
+          ...Object.keys(plugin.dependsOn ?? {}),
+          ...Object.keys(plugin.optionalDependsOn ?? {}),
+        ]),
+      ])
+    ),
+    plugins,
+    afterDrizzle,
+    ...(appHooks.length > 0
+      ? {
+          app: {
+            owner: { kind: "app" as const },
+            extend: appHooks as SchemaContribution["extend"],
+          },
+        }
+      : {}),
+  });
+
+  return schema;
+}

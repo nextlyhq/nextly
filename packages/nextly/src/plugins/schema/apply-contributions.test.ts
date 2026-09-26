@@ -706,3 +706,254 @@ describe("finalizeDeferredExtendTargets — runtime existence check", () => {
     ).not.toThrow();
   });
 });
+
+/**
+ * The wiring, not the module.
+ *
+ * `entity-transforms.ts` was written once with no `transforms` key to supply
+ * it and no caller to run it, and was deleted for exactly that reason. A test
+ * that calls `runEntityTransforms` directly would have passed the whole time
+ * it was dead code, so these go through the fold — the one point every
+ * runtime and CLI path reaches.
+ */
+describe("applyPluginSchemaContributions (transforms — C11)", () => {
+  it("runs a plugin's transform over ANOTHER plugin's collection", () => {
+    // The gap `extend` cannot close: adding fields to someone else's
+    // collection was always possible, changing one was not, because
+    // `setup(config)` runs before the merge and never sees it.
+    const config = cfg({ collections: [] });
+    const plugins = [
+      plugin("plugin-a", { collections: [coll("a-forms")] }),
+      plugin("plugin-b", {
+        transforms: [
+          {
+            target: "a-forms",
+            transform: entity => ({ ...entity, internal: true }),
+          },
+        ],
+      }),
+    ];
+
+    const result = applyPluginSchemaContributions(config, plugins);
+
+    expect(result.collections?.[0]).toMatchObject({
+      slug: "a-forms",
+      internal: true,
+    });
+  });
+
+  it("refuses a transform naming an entity nothing declares", () => {
+    // Doing nothing silently means the plugin appears installed and simply
+    // has no effect, which is the hardest kind of "working" to diagnose.
+    const plugins = [
+      plugin("plugin-b", {
+        transforms: [{ target: "nope", transform: e => e }],
+      }),
+    ];
+
+    expect(() =>
+      applyPluginSchemaContributions(cfg({ collections: [] }), plugins)
+    ).toThrow(NextlyError);
+  });
+
+  it("hands each transform a FROZEN definition", () => {
+    // Mutating instead of returning would make the result depend on whether a
+    // later transform read a field before or after an earlier one wrote it —
+    // an ordering invisible in the config, so the bug would present as a
+    // plugin that works until another is installed.
+    let frozen: boolean | undefined;
+    const plugins = [
+      plugin("plugin-a", { collections: [coll("a-forms")] }),
+      plugin("plugin-b", {
+        transforms: [
+          {
+            target: "a-forms",
+            transform: entity => {
+              frozen = Object.isFrozen(entity);
+              return { ...entity };
+            },
+          },
+        ],
+      }),
+    ];
+
+    applyPluginSchemaContributions(cfg({ collections: [] }), plugins);
+
+    expect(frozen).toBe(true);
+  });
+
+  it("leaves the arrays untouched when no plugin declares one", () => {
+    // The control: the fold runs on every path, so a transform step that
+    // rebuilt the entity arrays unconditionally would churn them for every
+    // config that has no transforms at all.
+    const collections = [coll("a-forms")];
+    const result = applyPluginSchemaContributions(cfg({ collections }), []);
+
+    expect(result.collections?.[0]).toBe(collections[0]);
+  });
+});
+
+/**
+ * A disabled plugin keeps its storage and runs none of its behaviour. A
+ * transform can carry both at once, so a disabled plugin's transform still
+ * runs — turning a plugin off must not change a table — and every function it
+ * sets is put back to what the entity had.
+ */
+describe("applyPluginSchemaContributions (a disabled plugin's transforms)", () => {
+  const existingHook = (): void => undefined;
+  const pluginHook = (): void => undefined;
+  const pluginValidate = (): true => true;
+
+  /** `a-forms`, owned by plugin-a, with a hook the app already relies on. */
+  const owner = () =>
+    plugin("plugin-a", {
+      collections: [
+        {
+          slug: "a-forms",
+          fields: [{ name: "title", type: "text" }],
+          hooks: { beforeChange: [existingHook] },
+        } as unknown as CollectionConfig,
+      ],
+    });
+
+  /** plugin-b's transform: adds a validated field, swaps the hooks. */
+  const transformer = (enabled: boolean) =>
+    plugin(
+      "plugin-b",
+      {
+        transforms: [
+          {
+            target: "a-forms",
+            transform: entity => ({
+              ...entity,
+              fields: [
+                ...((entity.fields as unknown[]) ?? []),
+                { name: "flag", type: "checkbox", validate: pluginValidate },
+              ],
+              hooks: { beforeChange: [pluginHook] },
+            }),
+          },
+        ],
+      },
+      enabled
+    );
+
+  const formsOf = (enabled: boolean) =>
+    applyPluginSchemaContributions(cfg({ collections: [] }), [
+      owner(),
+      transformer(enabled),
+    ]).collections?.[0] as unknown as {
+      fields: { name: string; validate?: unknown }[];
+      hooks?: { beforeChange?: unknown[] };
+    };
+
+  it("keeps the field it adds, so disabling the plugin changes no table", () => {
+    expect(formsOf(false).fields.map(f => f.name)).toEqual(["title", "flag"]);
+  });
+
+  it("drops the behaviour it adds and restores the behaviour it replaces", () => {
+    const forms = formsOf(false);
+    expect(forms.fields[1]).not.toHaveProperty("validate");
+    expect(forms.hooks?.beforeChange).toEqual([existingHook]);
+  });
+
+  it("applies everything when the plugin is enabled", () => {
+    // The control: the stripping is the disabled plugin's, not the fold's.
+    const forms = formsOf(true);
+    expect(forms.fields[1]?.validate).toBe(pluginValidate);
+    expect(forms.hooks?.beforeChange).toEqual([pluginHook]);
+  });
+});
+
+describe("applyPluginSchemaContributions (behaviour a disabled plugin's transform removes)", () => {
+  const h1 = (): void => undefined;
+  const h2 = (): void => undefined;
+  const readRule = (): boolean => false;
+
+  const owner = () =>
+    plugin("plugin-a", {
+      collections: [
+        {
+          slug: "a-forms",
+          fields: [{ name: "title", type: "text" }],
+          hooks: { beforeChange: [h1, h2] },
+          access: { read: readRule },
+        } as unknown as CollectionConfig,
+      ],
+    });
+
+  const disabledTransform = (
+    change: (entity: Record<string, unknown>) => Record<string, unknown>
+  ) =>
+    applyPluginSchemaContributions(cfg({ collections: [] }), [
+      owner(),
+      plugin(
+        "plugin-b",
+        { transforms: [{ target: "a-forms", transform: change }] },
+        false
+      ),
+    ]).collections?.[0] as unknown as {
+      hooks?: { beforeChange?: unknown[] };
+      access?: { read?: unknown };
+      fields: Record<string, unknown>[];
+    };
+
+  it("restores a hook list it emptied", () => {
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      hooks: { beforeChange: [] },
+    }));
+    expect(forms.hooks?.beforeChange).toEqual([h1, h2]);
+  });
+
+  it("restores a hook list it removed one entry from, not the entries shifted", () => {
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      hooks: { beforeChange: [h2] },
+    }));
+    expect(forms.hooks?.beforeChange).toEqual([h1, h2]);
+  });
+
+  it("keeps an access rule it replaced with a boolean", () => {
+    // `read: true` opens reads as surely as a function would.
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      access: { read: true },
+    }));
+    expect(forms.access?.read).toBe(readRule);
+  });
+
+  it("adds no field access rule, boolean or function", () => {
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        ...((entity.fields as unknown[]) ?? []),
+        { name: "flag", type: "checkbox", access: { read: false } },
+      ],
+    }));
+    expect(forms.fields.map(f => f.name)).toEqual(["title", "flag"]);
+    expect(forms.fields[1]).not.toHaveProperty("access");
+  });
+});
+
+describe("applyPluginSchemaContributions (a transform naming a Builder entity)", () => {
+  it("is refused with a message that says what to use instead", () => {
+    // A Builder slug is the one a correct-looking target most often is: it
+    // exists, just not in the config transforms run over.
+    let message = "";
+    try {
+      applyPluginSchemaContributions(cfg({ collections: [] }), [
+        plugin("plugin-b", {
+          transforms: [{ target: "builder-made", transform: e => e }],
+        }),
+      ]);
+    } catch (error) {
+      message =
+        (error as { publicData?: { errors?: { message: string }[] } })
+          .publicData?.errors?.[0]?.message ?? "";
+    }
+    expect(message).toContain("builder-made");
+    expect(message).toMatch(/Schema Builder/);
+    expect(message).toMatch(/extend/);
+  });
+});

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { migrateDownCore, selectAppliedTargets } from "../migrate-down";
+import { recordPluginSchemaVersionFromLedger } from "../../../domains/schema/migrate/plugin/plugin-schema-version";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
+import type { OwnerRecord } from "../../../domains/schema/ownership/owner-registry";
 import { createLogger } from "../../utils/logger";
 
 function row(
@@ -61,9 +63,9 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
       listFileApplies: async () => [row("a.sql", "applied", 1000)],
       fileExists: async () => true,
       readDownSql: async () => 'ALTER TABLE "t" DROP COLUMN "c";',
-      execDown: async (sql: string) => {
-        executed.push(sql);
-        return 1;
+      execDown: async (statements: readonly string[]) => {
+        executed.push(statements.join(";\n"));
+        return statements.length;
       },
       recordRolledBack: async (filename: string) => {
         recorded.push(filename);
@@ -105,6 +107,134 @@ describe("migrateDownCore", () => {
   it("requires --allow-data-loss when DOWN drops a column", async () => {
     const { deps } = baseDeps();
     await expect(migrateDownCore(deps)).rejects.toThrow(/allow-data-loss/);
+  });
+
+  it.each([
+    ['ALTER TABLE "t" DROP "c"', "postgresql"],
+    ["ALTER TABLE `t` DROP `c`", "mysql"],
+    ['TRUNCATE "t"', "postgresql"],
+    // A column drop beside a constraint drop, in one ALTER.
+    ['ALTER TABLE "t" DROP COLUMN "c", DROP CONSTRAINT "t_k"', "postgresql"],
+  ] as const)(
+    "requires --allow-data-loss for %s on %s",
+    async (downSql, dialect) => {
+      // PostgreSQL and MySQL drop a column without the COLUMN keyword; each of
+      // these loses data as surely as `DROP COLUMN` does.
+      const { deps, executed } = baseDeps({
+        dialect,
+        readDownSql: async () => downSql,
+      });
+      await expect(migrateDownCore(deps)).rejects.toThrow(/allow-data-loss/);
+      expect(executed).toEqual([]);
+    }
+  );
+
+  it("does not require --allow-data-loss for a complete SQLite table rebuild", async () => {
+    // A constraint-only DOWN on SQLite rebuilds the table: the rows are
+    // copied into the twin before the original is dropped.
+    const rebuild = [
+      'CREATE TABLE "__new_t" ("id" TEXT PRIMARY KEY, "a" TEXT)',
+      'INSERT INTO "__new_t" ("id", "a") SELECT "id", "a" FROM "t"',
+      'DROP TABLE "t"',
+      'ALTER TABLE "__new_t" RENAME TO "t"',
+    ];
+    const { deps, executed } = baseDeps({
+      dialect: "sqlite",
+      readDownSql: async () => `${rebuild.join(";\n")};`,
+      // The table as the database holds it: the twin declares every column.
+      readLiveColumns: async () => new Map([["t", new Set(["id", "a"])]]),
+    });
+    await migrateDownCore(deps);
+    expect(executed).toEqual([rebuild.join(";\n")]);
+
+    // A twin that leaves out a live column loses that column's data.
+    const narrow = baseDeps({
+      dialect: "sqlite",
+      readDownSql: async () => `${rebuild.join(";\n")};`,
+      readLiveColumns: async () =>
+        new Map([["t", new Set(["id", "a", "secret"])]]),
+    });
+    await expect(migrateDownCore(narrow.deps)).rejects.toThrow(
+      /allow-data-loss/
+    );
+
+    // The control: the same DROP without the copy before it loses the rows.
+    const bare = baseDeps({
+      dialect: "sqlite",
+      readDownSql: async () => 'DROP TABLE "t";',
+    });
+    await expect(migrateDownCore(bare.deps)).rejects.toThrow(/allow-data-loss/);
+  });
+
+  it("does not require --allow-data-loss for a DOWN that drops no data", async () => {
+    // The control: the same path, with a DOWN that drops a constraint and an
+    // index — schema only.
+    const { deps, executed } = baseDeps({
+      readDownSql: async () =>
+        'ALTER TABLE "t" DROP CONSTRAINT "t_c_check";\nDROP INDEX "t_idx";',
+    });
+    await migrateDownCore(deps);
+    expect(executed.length).toBe(1);
+  });
+
+  describe("a dry run reports what a real run would refuse, without throwing", () => {
+    it("for a DOWN that cannot be read", async () => {
+      const unreadable = Object.assign(
+        new Error("module changed after sealing"),
+        {
+          code: "MIGRATION_CHECKSUM_MISMATCH",
+        }
+      );
+      const lines: string[] = [];
+      const { deps, executed } = baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: true },
+        logger: {
+          ...createLogger({ quiet: true }),
+          info: (m: string) => lines.push(m),
+        },
+        readDownSql: async () => {
+          throw unreadable;
+        },
+      });
+      await expect(migrateDownCore(deps)).resolves.toEqual({ rolledBack: [] });
+      expect(lines.join("\n")).toMatch(
+        /a real run would be refused: .*module changed after sealing/
+      );
+      expect(executed).toEqual([]);
+
+      // The same target, for real: the refusal the preview reported.
+      const real = baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: false },
+        readDownSql: async () => {
+          throw unreadable;
+        },
+      });
+      await expect(migrateDownCore(real.deps)).rejects.toBe(unreadable);
+      expect(real.executed).toEqual([]);
+    });
+
+    it("for a statement the runner's transaction cannot hold", async () => {
+      const lines: string[] = [];
+      const { deps } = baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: true },
+        logger: {
+          ...createLogger({ quiet: true }),
+          info: (m: string) => lines.push(m),
+        },
+        readDownSql: async () => 'DROP TABLE "t";\nROLLBACK;',
+      });
+      await expect(migrateDownCore(deps)).resolves.toEqual({ rolledBack: [] });
+      expect(lines.join("\n")).toMatch(
+        /a real run would be refused: .*ROLLBACK/
+      );
+
+      const real = baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: false },
+        readDownSql: async () => 'DROP TABLE "t";\nROLLBACK;',
+      });
+      await expect(migrateDownCore(real.deps)).rejects.toThrow(/ROLLBACK/);
+      expect(real.executed).toEqual([]);
+    });
   });
 
   it("requires --yes in production", async () => {
@@ -162,5 +292,212 @@ describe("migrateDownCore", () => {
     });
     await expect(migrateDownCore(deps)).rejects.toThrow(/boom/);
     expect(failures).toEqual(["a.sql"]);
+  });
+
+  describe("ledger scoping (plugin rows)", () => {
+    it("never selects a plugin's row by default", async () => {
+      // The newest applied row of ANY kind would be the plugin's, so without
+      // scoping `migrate:down` reverts a plugin's migration while reporting
+      // an app rollback.
+      const { deps, executed, recorded } = baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: false },
+        listFileApplies: async () => [
+          row("a.sql", "applied", 1000),
+          row("plugin:auth/001_init.sql", "applied", 9000),
+        ],
+      });
+      const res = await migrateDownCore(deps);
+      expect(res.rolledBack).toEqual(["a.sql"]);
+      expect(recorded).toEqual(["a.sql"]);
+      expect(executed.length).toBe(1);
+    });
+
+    it("selects only the named plugin's rows under --plugin", async () => {
+      const { deps, recorded } = baseDeps({
+        options: {
+          step: 1,
+          allowDataLoss: true,
+          yes: false,
+          dryRun: false,
+          plugin: "auth",
+        },
+        listFileApplies: async () => [
+          row("a.sql", "applied", 1000),
+          row("plugin:auth/001_init.sql", "applied", 2000),
+          row("plugin:billing/001_init.sql", "applied", 3000),
+        ],
+      });
+      const res = await migrateDownCore(deps);
+      expect(res.rolledBack).toEqual(["plugin:auth/001_init.sql"]);
+      expect(recorded).toEqual(["plugin:auth/001_init.sql"]);
+    });
+
+    it("never returns the union under --plugin", async () => {
+      // A run scoped to a plugin must not touch the app's rows even when the
+      // step budget would allow more targets.
+      const { deps, recorded } = baseDeps({
+        options: {
+          step: 5,
+          allowDataLoss: true,
+          yes: false,
+          dryRun: false,
+          plugin: "auth",
+        },
+        listFileApplies: async () => [
+          row("a.sql", "applied", 1000),
+          row("plugin:auth/001_init.sql", "applied", 2000),
+          row("plugin:billing/001_init.sql", "applied", 3000),
+        ],
+      });
+      const res = await migrateDownCore(deps);
+      expect(res.rolledBack).toEqual(["plugin:auth/001_init.sql"]);
+      expect(recorded).toEqual(["plugin:auth/001_init.sql"]);
+    });
+
+    it("reports nothing to roll back for a plugin with no rows", async () => {
+      const { deps, executed } = baseDeps({
+        options: {
+          step: 1,
+          allowDataLoss: true,
+          yes: false,
+          dryRun: false,
+          plugin: "nobody",
+        },
+        listFileApplies: async () => [row("a.sql", "applied", 1000)],
+      });
+      const res = await migrateDownCore(deps);
+      expect(res.rolledBack).toEqual([]);
+      expect(executed).toEqual([]);
+    });
+  });
+});
+
+describe("plugin schema version after a rollback", () => {
+  // `auth` shipped two modules; both are applied and its owner rows say 2.
+  const migrations = [
+    { name: "001_init", schemaVersion: 1 },
+    { name: "002_more", schemaVersion: 2 },
+  ];
+  const ownerRow: OwnerRecord = {
+    tableName: "auth__identities",
+    ownerKind: "plugin",
+    ownerId: "auth",
+    migratedBy: "plugin:auth",
+    ownerVersion: "1.0.0",
+    schemaVersion: 2,
+    state: "active",
+  };
+
+  it("recomputes the version from the modules still applied", async () => {
+    // One ledger shared by the rollback and the recompute, the way the real
+    // command shares the repository: `recordRolledBack` INSERTS a
+    // `rolled_back` event after the `applied` one, and the recompute reads it
+    // back. A recompute that filtered for `applied` rows would still see
+    // `002_more` and leave the rows claiming version 2.
+    const ledger: SchemaEventRow[] = [
+      row("plugin:auth/001_init", "applied", 1000),
+      row("plugin:auth/002_more", "applied", 2000),
+    ];
+    let clock = 3000;
+    let owners: OwnerRecord[] = [ownerRow];
+
+    const { deps } = baseDeps({
+      options: {
+        step: 1,
+        allowDataLoss: true,
+        yes: false,
+        dryRun: false,
+        plugin: "auth",
+      },
+      listFileApplies: async () => [...ledger],
+      recordRolledBack: async (filename: string) => {
+        ledger.push(row(filename, "rolled_back", clock++));
+      },
+      recordPluginSchemaVersion: () =>
+        recordPluginSchemaVersionFromLedger({
+          plugin: "auth",
+          migrations,
+          listFileApplies: async () => [...ledger],
+          owners: {
+            read: async () => owners,
+            upsert: async rows => {
+              owners = [...rows];
+            },
+          },
+        }),
+    });
+
+    const result = await migrateDownCore(deps);
+
+    expect(result.rolledBack).toEqual(["plugin:auth/002_more"]);
+    expect(owners.map(o => o.schemaVersion)).toEqual([1]);
+  });
+
+  it("recomputes the version when a later module's DOWN fails", async () => {
+    // Two modules roll back: 003 succeeds and is recorded, 002 then fails.
+    // 003's rollback is committed, so the rows must stop claiming 3 even
+    // though the command as a whole failed.
+    const three = [...migrations, { name: "003_last", schemaVersion: 3 }];
+    const ledger: SchemaEventRow[] = [
+      row("plugin:auth/001_init", "applied", 1000),
+      row("plugin:auth/002_more", "applied", 2000),
+      row("plugin:auth/003_last", "applied", 3000),
+    ];
+    let clock = 4000;
+    let owners: OwnerRecord[] = [{ ...ownerRow, schemaVersion: 3 }];
+    let calls = 0;
+
+    const { deps } = baseDeps({
+      options: {
+        step: 2,
+        allowDataLoss: true,
+        yes: false,
+        dryRun: false,
+        plugin: "auth",
+      },
+      listFileApplies: async () => [...ledger],
+      execDown: async () => {
+        calls += 1;
+        if (calls === 2) throw new Error("DOWN of 002 failed");
+        return 1;
+      },
+      recordRolledBack: async (filename: string) => {
+        ledger.push(row(filename, "rolled_back", clock++));
+      },
+      recordPluginSchemaVersion: () =>
+        recordPluginSchemaVersionFromLedger({
+          plugin: "auth",
+          migrations: three,
+          listFileApplies: async () => [...ledger],
+          owners: {
+            read: async () => owners,
+            upsert: async rows => {
+              owners = [...rows];
+            },
+          },
+        }),
+    });
+
+    await expect(migrateDownCore(deps)).rejects.toThrow(/DOWN of 002 failed/);
+    expect(owners.map(o => o.schemaVersion)).toEqual([2]);
+  });
+
+  it("records null once no module of the plugin remains applied", async () => {
+    let owners: OwnerRecord[] = [ownerRow];
+    await recordPluginSchemaVersionFromLedger({
+      plugin: "auth",
+      migrations,
+      listFileApplies: async () => [
+        row("plugin:auth/001_init", "applied", 1000),
+        row("plugin:auth/001_init", "rolled_back", 2000),
+      ],
+      owners: {
+        read: async () => owners,
+        upsert: async rows => {
+          owners = [...rows];
+        },
+      },
+    });
+    expect(owners.map(o => o.schemaVersion)).toEqual([null]);
   });
 });

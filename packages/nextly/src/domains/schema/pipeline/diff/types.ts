@@ -35,6 +35,21 @@ export interface ColumnSpec {
   // costs the nullability exemption the diff grants primary keys — never a
   // wrong op.
   primaryKey?: boolean;
+  // `true` when the DATABASE assigns this column's value — `col.serial()`.
+  //
+  // Carried separately from `type` because the two answer different
+  // questions. `type` is what introspection REPORTS (`int4` on PostgreSQL,
+  // `int` on MySQL) so the desired and live sides compare equal; this is what
+  // the DDL has to SAY so the sequence or AUTO_INCREMENT exists at all.
+  // Without it the generated migration produced a plain integer key, and every
+  // insert that omitted the column failed after the module applied — while dev
+  // push, which builds from Drizzle's own serial builders, worked.
+  //
+  // Recorded only on the desired side. Introspection reports the mechanism
+  // through `ownedSequenceDefault` (PostgreSQL) or the column's EXTRA
+  // (MySQL), and the diff must not read this field for the same reason it
+  // must not read `typeModifier`.
+  autoIncrement?: boolean;
   // `true` when the live default is a `nextval()` over the sequence this
   // column OWNS — what PostgreSQL materialises for a `serial` declaration.
   // Recorded only when true, and only by PostgreSQL introspection: no other
@@ -67,13 +82,73 @@ export interface ColumnSpec {
 
 export interface IndexSpec {
   name: string;
+  /** Empty when `expression` is set. Order is significant. */
   columns: string[];
   unique: boolean;
+  /**
+   * A partial-index predicate, stored per dialect in canonical form.
+   *
+   * PostgreSQL and SQLite only. MySQL has no partial indexes, so an index
+   * carrying this is REFUSED there rather than created without the predicate —
+   * a "unique" index over more rows than intended enforces a constraint
+   * nobody asked for, and silently.
+   */
+  where?: string;
+  /**
+   * An expression index, as per-dialect SQL.
+   *
+   * Carried separately from `columns` because the converter reports an
+   * expression index with an EMPTY column list: a comparison that counted
+   * indexes would find the right number and the wrong ones.
+   */
+  expression?: string;
+}
+
+/**
+ * A foreign key the database enforces.
+ *
+ * Distinct from `ExtensionColumn.references`, which records a target for
+ * documentation and validation and creates nothing. This is the constraint
+ * itself, and it is only representable now that the diff can see one.
+ */
+export interface ForeignKeySpec {
+  /** `fk_<table>_<cols>`, hashed past 63 exactly as index names are. */
+  name: string;
+  columns: string[];
+  referencesTable: string;
+  referencesColumns: string[];
+  onDelete: ReferentialAction;
+  onUpdate: ReferentialAction;
+}
+
+export type ReferentialAction =
+  | "cascade"
+  | "set null"
+  | "restrict"
+  | "no action"
+  | "set default";
+
+/** A check constraint, as SQL the dialect evaluates. */
+export interface CheckSpec {
+  name: string;
+  /** Per-dialect SQL, because the expression languages differ. */
+  sql: string;
 }
 
 export interface TableSpec {
   name: string;
   columns: ColumnSpec[];
+  /**
+   * Foreign keys, when the table's source tracked them.
+   *
+   * `undefined` means "not tracked", exactly as `indexes` does, so a snapshot
+   * written before this field existed skips the dimension rather than being
+   * read as "this table has none" — which would propose dropping every
+   * constraint on every existing database.
+   */
+  foreignKeys?: ForeignKeySpec[];
+  /** Check constraints, with the same `undefined` meaning as `foreignKeys`. */
+  checks?: CheckSpec[];
   // undefined = "no index data tracked" (pre-C1 snapshots) — the diff/drift
   // index dimension is SKIPPED for such tables. [] = tracked, none.
   indexes?: IndexSpec[];
@@ -99,6 +174,20 @@ export interface TableSpec {
   localizedColumns?: string[];
 }
 
+/**
+ * Names of the elements a contributor added to a table another owner declares.
+ *
+ * Recorded beside a stored copy of that table, because the copy alone cannot
+ * say which of its parts were the contributor's: an element the owner has
+ * since removed looks exactly like one the contributor added.
+ */
+export interface ContributedElements {
+  columns: string[];
+  indexes: string[];
+  foreignKeys: string[];
+  checks: string[];
+}
+
 // A snapshot of either the live DB state or the desired state. Only includes
 // MANAGED tables (filtered by MANAGED_TABLE_PREFIXES_REGEX from F3).
 export interface NextlySchemaSnapshot {
@@ -121,6 +210,10 @@ export type Operation =
   | ChangeColumnDefaultOp
   | AddIndexOp
   | DropIndexOp
+  | AddCheckOp
+  | DropCheckOp
+  | AddForeignKeyOp
+  | DropForeignKeyOp
   | ChangeForeignKeyActionOp;
 
 export interface AddTableOp {
@@ -226,6 +319,43 @@ export interface DropIndexOp {
   type: "drop_index";
   tableName: string;
   index: IndexSpec;
+}
+
+/**
+ * A check constraint is added and dropped by NAME. The expression itself is
+ * per-dialect SQL and is compared textually: a changed expression becomes a
+ * drop plus an add under the same name, because no dialect edits a check's
+ * expression in place.
+ */
+export interface AddCheckOp {
+  type: "add_check";
+  tableName: string;
+  check: CheckSpec;
+}
+
+export interface DropCheckOp {
+  type: "drop_check";
+  tableName: string;
+  check: CheckSpec;
+}
+
+/**
+ * A foreign key is added and dropped whole. Compared STRUCTURALLY (columns,
+ * target, actions) rather than textually, because introspection reports those
+ * reliably on every dialect; a changed action alone arrives as a
+ * `change_foreign_key_action` from the column-level diff when the name and
+ * shape are unchanged.
+ */
+export interface AddForeignKeyOp {
+  type: "add_foreign_key";
+  tableName: string;
+  foreignKey: ForeignKeySpec;
+}
+
+export interface DropForeignKeyOp {
+  type: "drop_foreign_key";
+  tableName: string;
+  foreignKey: ForeignKeySpec;
 }
 
 /**

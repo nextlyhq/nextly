@@ -5,6 +5,8 @@ import { getDialectTables } from "../../../../database/index";
 import {
   drizzleTableNames,
   filterUnsafeStatements,
+  findUnexpectedDestructiveStatements,
+  stripKitDropsOfDeclaredConstraints,
   stripKitDropsOfDeclaredIndexes,
 } from "../filter-unsafe-statements";
 
@@ -75,6 +77,66 @@ describe("filterUnsafeStatements — internal nextly_ table allowlist", () => {
     const out = filterUnsafeStatements(['DROP TABLE "dc_orphan"'], []);
     expect(out).toEqual([]);
     expect(warn).toHaveBeenCalledOnce();
+  });
+});
+
+describe("stripKitDropsOfDeclaredConstraints", () => {
+  const desired = {
+    tables: [
+      {
+        name: "ck__items",
+        checks: [
+          { name: "ck_ck__items_quantity" },
+          { name: "ck_ck__items_status_enum" },
+        ],
+        foreignKeys: [{ name: "fk_ck__items_shelf_id" }],
+      },
+      { name: "ck__shelves" },
+    ],
+  };
+
+  // What drizzle-kit rc.4 emitted, verbatim, when handed these tables after a
+  // fresh boot had created their constraints.
+  it("strips the kit's drops of declared checks and foreign keys (PostgreSQL)", () => {
+    const out = stripKitDropsOfDeclaredConstraints(
+      [
+        'ALTER TABLE "ck__items" DROP CONSTRAINT "fk_ck__items_shelf_id";',
+        'ALTER TABLE "ck__items" DROP CONSTRAINT "ck_ck__items_quantity";',
+        'ALTER TABLE "ck__items" DROP CONSTRAINT "ck_ck__items_status_enum";',
+      ],
+      desired
+    );
+    expect(out).toEqual({ kept: [], strippedCount: 3 });
+  });
+
+  it("strips them and the index backing the foreign key (MySQL)", () => {
+    const out = stripKitDropsOfDeclaredConstraints(
+      [
+        "ALTER TABLE `ck__items` DROP CONSTRAINT `fk_ck__items_shelf_id`;",
+        "DROP INDEX `fk_ck__items_shelf_id` ON `ck__items`",
+        "ALTER TABLE `ck__items` DROP CONSTRAINT `ck_ck__items_quantity`;",
+        "ALTER TABLE `ck__items` DROP CONSTRAINT `ck_ck__items_status_enum`;",
+      ],
+      desired
+    );
+    expect(out).toEqual({ kept: [], strippedCount: 4 });
+  });
+
+  it("keeps drops the desired schema does not declare", () => {
+    const keep = [
+      // Undeclared on this table.
+      'ALTER TABLE "ck__items" DROP CONSTRAINT "ck_ck__items_legacy";',
+      // Declared, but on a different table: names are per table on MySQL.
+      "ALTER TABLE `ck__shelves` DROP CONSTRAINT `ck_ck__items_quantity`;",
+      // An index that shares no foreign key's name.
+      "DROP INDEX `idx_ck__items_status` ON `ck__items`",
+      // Not a constraint at all.
+      'ALTER TABLE "ck__items" DROP COLUMN "quantity";',
+    ];
+    expect(stripKitDropsOfDeclaredConstraints(keep, desired)).toEqual({
+      kept: keep,
+      strippedCount: 0,
+    });
   });
 });
 
@@ -169,5 +231,119 @@ describe("stripKitDropsOfDeclaredIndexes", () => {
     const out = stripKitDropsOfDeclaredIndexes([exotic], desired);
     expect(out.kept).toEqual([exotic]);
     expect(out.strippedCount).toBe(0);
+  });
+});
+
+describe("filterUnsafeStatements: plugin-migrated tables", () => {
+  const pluginSet = new Set(["auth__identities", "billing__x"]);
+
+  it("blocks an in-desired drop of a plugin-migrated table", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const kept = filterUnsafeStatements(
+      ['DROP TABLE "auth__identities"', "CREATE TABLE t (id INT)"],
+      ["auth__identities", "t"],
+      pluginSet,
+      "postgresql"
+    );
+    expect(kept).toEqual(["CREATE TABLE t (id INT)"]);
+  });
+
+  it("keeps the rebuild drop for tables no plugin stream claims", () => {
+    const kept = filterUnsafeStatements(
+      ["DROP TABLE dc_posts", "DROP TABLE __new_dc_posts"],
+      ["dc_posts", "__new_dc_posts"],
+      pluginSet,
+      "sqlite"
+    );
+    expect(kept).toEqual(["DROP TABLE dc_posts", "DROP TABLE __new_dc_posts"]);
+  });
+
+  it("resolves a SQLite rebuild twin to the table it rebuilds", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const kept = filterUnsafeStatements(
+      ["DROP TABLE __new_billing__x"],
+      ["__new_billing__x"],
+      pluginSet,
+      "sqlite"
+    );
+    expect(kept).toEqual([]);
+  });
+
+  it("gives the fast path's answer for drops its own pattern cannot see", () => {
+    // The question is answered by `dropsPluginMigratedTable`, the reader the
+    // fast path uses. The filter's own leading-DROP pattern read only the
+    // first name, and nothing behind a comment.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const kept = filterUnsafeStatements(
+      [
+        "DROP TABLE t, auth__identities",
+        '/* rebuild */ DROP TABLE "billing__x"',
+      ],
+      ["t", "auth__identities", "billing__x"],
+      pluginSet,
+      "postgresql"
+    );
+    expect(kept).toEqual([]);
+  });
+
+  it("keeps a statement that only mentions a plugin table's drop in a string", () => {
+    const insert =
+      "INSERT INTO t VALUES ('how to drop table auth__identities')";
+    expect(
+      filterUnsafeStatements([insert], ["t"], pluginSet, "postgresql")
+    ).toEqual([insert]);
+  });
+
+  it("without the set, keeps today's behaviour exactly", () => {
+    const kept = filterUnsafeStatements(
+      ['DROP TABLE "auth__identities"'],
+      ["auth__identities"]
+    );
+    expect(kept).toEqual(['DROP TABLE "auth__identities"']);
+  });
+});
+
+describe("DROP SCHEMA", () => {
+  // drizzle-kit emits one when the schema it reconciles holds nothing it
+  // recognises as wanted. Executed, every later statement resolves nowhere.
+  const spellings = [
+    'DROP SCHEMA "cms";',
+    "DROP SCHEMA IF EXISTS cms CASCADE",
+    "  drop schema public",
+    "DROP DATABASE `nextly`",
+  ];
+
+  it.each(spellings)("is blocked by the unsafe-statement filter: %s", stmt => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // `cms` and `public` in the desired set as well: no table name makes a
+    // schema drop intended, and a check keyed on the set would let these by.
+    const out = filterUnsafeStatements(
+      [stmt, 'CREATE TABLE "users" ("id" text)'],
+      ["users", "cms", "public", "nextly"]
+    );
+    expect(out).toEqual(['CREATE TABLE "users" ("id" text)']);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("drops a schema")
+    );
+  });
+
+  it.each(spellings)("is an offender for the destructive scan: %s", stmt => {
+    // Scoped to a managed-table set that names no schema, which is how the
+    // pipeline calls it — a table-membership test alone would pass these.
+    expect(
+      findUnexpectedDestructiveStatements([stmt], undefined, new Set(["users"]))
+    ).toEqual([stmt]);
+  });
+
+  it("leaves statements that only mention a schema alone", () => {
+    // The control: the filter must not become a blanket refusal of anything
+    // naming a schema, which would stop ordinary creates.
+    const kept = [
+      'CREATE SCHEMA IF NOT EXISTS "cms"',
+      'CREATE TABLE "cms"."users" ("id" text)',
+      'ALTER TABLE "users" ADD COLUMN "drop_schema" text',
+    ];
+    expect(filterUnsafeStatements(kept, ["users"])).toEqual(kept);
+    expect(findUnexpectedDestructiveStatements(kept)).toEqual([]);
   });
 });

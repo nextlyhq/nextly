@@ -92,6 +92,7 @@ import {
   getFieldType,
   isPluginFieldTypeOnSurface,
 } from "../../schema/field-types/field-type-registry";
+import { sqliteTimestampColumns } from "../../schema/services/runtime-schema-generator";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
 import type { UserFieldDefinitionService } from "./user-field-definition-service";
@@ -857,12 +858,7 @@ export class UserExtSchemaService {
     const columns: Record<string, unknown> = {
       id: sqliteText("id").primaryKey(),
       user_id: sqliteText("user_id").notNull(),
-      created_at: sqliteInteger("created_at", { mode: "timestamp" })
-        .notNull()
-        .$defaultFn(() => new Date()),
-      updated_at: sqliteInteger("updated_at", { mode: "timestamp" })
-        .notNull()
-        .$defaultFn(() => new Date()),
+      ...sqliteTimestampColumns(),
     };
 
     for (const field of fields) {

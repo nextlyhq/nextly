@@ -3,6 +3,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
   getColumnDescriptor,
+  type ColumnKind,
   type ColumnOrigin,
 } from "../../schema/services/field-column-descriptor";
 
@@ -13,6 +14,34 @@ interface FieldLike {
   name: string;
   type: string;
   length?: number;
+}
+
+/** The kinds a localized companion column can be, which is every FIELD kind. */
+function isLocalizableKind(
+  kind: ColumnKind
+): kind is Exclude<
+  ColumnKind,
+  | "skip"
+  | "bigint"
+  | "smallint"
+  | "serial"
+  | "char"
+  | "uuid"
+  | "real"
+  | "bytes"
+  | "enum"
+> {
+  return ![
+    "skip",
+    "bigint",
+    "smallint",
+    "serial",
+    "char",
+    "uuid",
+    "real",
+    "bytes",
+    "enum",
+  ].includes(kind);
 }
 
 /**
@@ -31,6 +60,11 @@ export function fieldToLocalizedColumnSpec(
 ): LocalizedColumnSpec | null {
   const desc = getColumnDescriptor(field as FieldDefinition, dialect, builtBy);
   if (!desc || desc.kind === "skip") return null;
+  // Extension-only kinds cannot reach here: a companion column mirrors a
+  // FIELD's column, and no collection field produces one. Narrowed explicitly
+  // rather than widening `LocalizedColumnSpec`, which would claim the
+  // companion machinery understands kinds it has never rendered.
+  if (!isLocalizableKind(desc.kind)) return null;
   const kind = desc.kind === "varchar" ? "text" : desc.kind;
   return {
     name: desc.name,

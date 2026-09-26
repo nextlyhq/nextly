@@ -61,15 +61,13 @@ export function recordableActor(
   // A SYSTEM write is refused, and the reason is an ORDERING one rather than
   // anything about the actor itself.
   //
-  // `registerServices` awaits `initializePlugins` before `init.ts` reaches
-  // `runProdMigrationsIfEnabled`, so a plugin's `init()` hook writing content
-  // runs BEFORE pending migrations do. On an upgraded database that has not
-  // migrated yet, `activity_log` is still on its old shape, and an insert
-  // naming a column it does not have fails — a failure this recorder
-  // PROPAGATES, so it would take the plugin's init, and the boot, with it.
-  //
-  // The hazard belongs to any core column added to this table rather than to
-  // this one, so it is recorded here and fixed where the ordering is decided.
+  // The ORDERING hazard this once described has been closed:
+  // `registerServices` now runs pending migrations before `initializePlugins`,
+  // so a plugin's `init()` hook no longer writes content against a database
+  // that has not migrated. Recorded rather than deleted because the refusal
+  // below is still correct on its own terms — a SYSTEM actor has no identity
+  // worth attributing — and because the ordering it depended on is the kind
+  // that gets reverted by someone who does not know it is load-bearing.
   //
   // A key is not exposed to it: it arrives on a request, over a transport,
   // against a database that has finished booting.

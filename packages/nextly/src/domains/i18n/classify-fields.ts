@@ -6,11 +6,16 @@
  * @module domains/i18n/classify-fields
  */
 
+import { isVirtualField } from "../../collections/fields/virtual";
+
 /** Minimal field shape this module needs (avoids importing the full FieldConfig union). */
 interface ClassifiableField {
   type: string;
   name: string;
   localized?: boolean;
+  /** The root virtual flag; see `isVirtualField` for both spellings. */
+  virtual?: boolean;
+  options?: unknown;
 }
 
 /** Text-like field types that default to localized when a collection opts in. */
@@ -28,7 +33,8 @@ export function defaultLocalizedForType(type: string): boolean {
  * Whether a field is localized, given its collection's master switch.
  *
  * Precedence: collection off → false; never-localizable type → false;
- * explicit `localized` flag → honored; else the per-type smart default.
+ * virtual → false; explicit `localized` flag → honored; else the per-type
+ * smart default.
  */
 export function isFieldLocalized(
   field: ClassifiableField,
@@ -36,6 +42,11 @@ export function isFieldLocalized(
 ): boolean {
   if (!collectionLocalized) return false;
   if (NEVER_LOCALIZABLE.has(field.type)) return false;
+  // A virtual field has no storage in any language: the companion table is
+  // generated without a column for it, so classifying it as translatable would
+  // route its value to a companion column that does not exist, on reads as
+  // well as writes.
+  if (isVirtualField(field)) return false;
   if (typeof field.localized === "boolean") return field.localized;
   return defaultLocalizedForType(field.type);
 }

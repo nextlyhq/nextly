@@ -2218,3 +2218,65 @@ describe("fast DDL emitter routing (Phase 4 Task 3)", () => {
     expect(passed).not.toContain("SHOULD_NOT_RUN");
   });
 });
+
+describe("PushSchemaPipeline - a refused pre-cleanup", () => {
+  // Pre-cleanup's refusals are asked before the first statement: on MySQL a
+  // rename, a drop or a lifted foreign key commits as it runs, so a refusal
+  // found after them would leave them behind a failed apply.
+  it("stops the apply before any statement runs", async () => {
+    const event = {
+      kind: "add_not_null_with_nulls" as const,
+      id: "add_not_null_with_nulls:dc_posts.summary",
+      tableName: "dc_posts",
+      columnName: "summary",
+      nullCount: 20_000,
+      tableRowCount: 20_000,
+      applicableResolutions: ["delete_nonconforming" as const],
+    };
+    const { pipeline, mocks } = makePipeline({
+      classifier: {
+        classify: vi
+          .fn<Classifier["classify"]>()
+          .mockResolvedValue({ level: "interactive", events: [event] }),
+      },
+      promptDispatcher: {
+        dispatch: vi.fn<PromptDispatcher["dispatch"]>().mockResolvedValue({
+          confirmedRenames: [],
+          // Over the delete threshold, so pre-cleanup refuses it.
+          resolutions: [{ kind: "delete_nonconforming", eventId: event.id }],
+          proceed: true,
+        }),
+      },
+      resolvedOpsOverride: [
+        {
+          type: "drop_column",
+          tableName: "dc_posts",
+          columnName: "legacy",
+          columnType: "text",
+        },
+        {
+          type: "change_column_nullable",
+          tableName: "dc_posts",
+          columnName: "summary",
+          fromNullable: true,
+          toNullable: false,
+        },
+      ],
+    });
+
+    const result = await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "mysql",
+      source: "code",
+      promptChannel: "terminal",
+      databaseName: "nextly_test",
+    });
+
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result)).toContain("DELETE_THRESHOLD_EXCEEDED");
+    // Nothing reached the database: no pre-resolution drop, no statement.
+    expect(mocks.executePreRes).not.toHaveBeenCalled();
+    expect(mocks.executor.executeStatements).not.toHaveBeenCalled();
+  });
+});

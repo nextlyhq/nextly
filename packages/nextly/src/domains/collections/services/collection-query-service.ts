@@ -104,7 +104,7 @@ import {
   hasPasswordField,
   isPasswordFieldName,
   stripPasswordFieldValues,
-  stripSystemOwnerField,
+  stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import {
   buildPaginatedResponse,
@@ -183,7 +183,7 @@ import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import {
-  getTableName,
+  collectionTableName,
   getSearchableFields,
   getMinSearchLength,
   decodeJsonFieldValues,
@@ -1744,7 +1744,10 @@ export class CollectionQueryService extends BaseService {
 
     const componentCondition = this.buildComponentFieldConditions(
       componentFilters,
-      getTableName(params.collectionName),
+      // Components record their parent under the physical table the write
+      // resolved, so the filter must name the same one for a `dbName`
+      // collection or it matches no component row.
+      collectionTableName(collection, params.collectionName),
       params.schema.id,
       this.queryDialect,
       componentTables,
@@ -1961,12 +1964,14 @@ export class CollectionQueryService extends BaseService {
    */
   private redactServerOnlyFields(
     rows: Record<string, unknown>[],
-    fields: FieldDefinition[]
+    fields: FieldDefinition[],
+    /** The SQL table the rows came from, for its contributed columns. */
+    tableName: string
   ): void {
     const clearsPasswords = hasPasswordField(fields);
     for (const row of rows) {
       if (clearsPasswords) stripPasswordFieldValues(row, fields);
-      stripSystemOwnerField(row);
+      stripServerOnlyColumns(row, tableName);
     }
   }
 
@@ -2026,6 +2031,14 @@ export class CollectionQueryService extends BaseService {
      */
     single?: boolean;
     collectionName: string;
+    /**
+     * The physical table the rows were read from, resolved by the caller from
+     * the same collection record the read used. Handed in rather than rebuilt
+     * from `collectionName`: contributed hidden columns are keyed by the
+     * physical name, which for a `dbName` collection is not `dc_<slug>`, and a
+     * rebuilt name would match none of them and leave them in the response.
+     */
+    tableName: string;
     fields: FieldDefinition[];
     storedHooks: ReturnType<CollectionHookService["getStoredHooks"]>;
     sharedContext: Record<string, unknown>;
@@ -2046,13 +2059,13 @@ export class CollectionQueryService extends BaseService {
     richTextFormat?: RichTextOutputFormat;
     locale?: string;
   }): Promise<Record<string, unknown>[]> {
-    const { rows, collectionName, fields } = params;
+    const { rows, collectionName, tableName, fields } = params;
 
     // (1) Before any afterRead hook — collection, stored, or field-level — so a
     // hook receiving the hash cannot copy it into an allowed property the later
     // redaction does not look at. The final strip below stays as defense in
     // depth.
-    this.redactServerOnlyFields(rows, fields);
+    this.redactServerOnlyFields(rows, fields, tableName);
 
     // (2) On SQLite these columns come back as strings, and a hook is
     // documented against the configured value.
@@ -2161,7 +2174,7 @@ export class CollectionQueryService extends BaseService {
     // path already did both here while the list path did only the password —
     // the stricter of the two is kept, so a field-level hook below cannot
     // observe an owner id on either path.
-    this.redactServerOnlyFields(finalData, fields);
+    this.redactServerOnlyFields(finalData, fields, tableName);
 
     // A stored hook may likewise have reintroduced a denied related field;
     // sanitize before the field-level hooks read the assembled document.
@@ -2229,7 +2242,7 @@ export class CollectionQueryService extends BaseService {
     // Final owner-column strip at the response boundary — after every afterRead
     // hook, field-level read access and transform — so nothing downstream can
     // re-expose the creator's user id.
-    for (const row of finalData) stripSystemOwnerField(row);
+    for (const row of finalData) stripServerOnlyColumns(row, tableName);
 
     return finalData;
   }
@@ -2937,7 +2950,8 @@ export class CollectionQueryService extends BaseService {
         expandedEntries =
           await this.fieldGroupDataService.populateComponentDataMany({
             entries: expandedEntries,
-            parentTable: getTableName(params.collectionName),
+            // The physical table, as the write recorded it in `_parent_table`.
+            parentTable: collectionTableName(collection, params.collectionName),
             fields: fields as FieldConfig[],
             depth: params.depth,
             select: params.select,
@@ -3027,6 +3041,9 @@ export class CollectionQueryService extends BaseService {
       const finalData = await this.finalizeReadRows({
         rows: expandedEntries,
         collectionName: params.collectionName,
+        // The collection record this read was planned from, so a `dbName`
+        // collection's contributed columns are found under its real table.
+        tableName: collectionTableName(collection, params.collectionName),
         fields,
         storedHooks,
         sharedContext,
@@ -4078,7 +4095,8 @@ export class CollectionQueryService extends BaseService {
       if (this.fieldGroupDataService) {
         expandedEntry = await this.fieldGroupDataService.populateComponentData({
           entry: expandedEntry,
-          parentTable: getTableName(params.collectionName),
+          // The physical table, as the write recorded it in `_parent_table`.
+          parentTable: collectionTableName(collection, params.collectionName),
           fields: fields as FieldConfig[],
           depth: params.depth,
           select: params.select,
@@ -4357,6 +4375,8 @@ export class CollectionQueryService extends BaseService {
         // afterRead handlers on a read by id receive the document itself.
         single: true,
         collectionName: params.collectionName,
+        // See the listing: the physical table, not one rebuilt from the slug.
+        tableName: collectionTableName(collection, params.collectionName),
         fields,
         storedHooks,
         sharedContext,

@@ -116,3 +116,87 @@ describe("diffIndexes", () => {
     );
   });
 });
+
+describe("a text cast in an expression index", () => {
+  const table = (expression: string) => ({
+    name: "fx__scores",
+    columns: [
+      { name: "id", type: "text", nullable: false },
+      { name: "n", type: "integer", nullable: false },
+      { name: "label", type: "varchar(64)", nullable: false },
+    ],
+    indexes: [
+      { name: "idx_fx__scores_key", columns: [], unique: false, expression },
+    ],
+  });
+  const ops = (before: string, after: string) =>
+    diffSnapshots({ tables: [table(before)] }, { tables: [table(after)] }).map(
+      op => op.type
+    );
+
+  it("is the author's on a non-text column, so adding one re-keys the index", () => {
+    // `n::text` sorts as text, `n` as a number: two different indexes.
+    expect(ops("n", "(n)::text").sort()).toEqual(["add_index", "drop_index"]);
+  });
+
+  it("is read against each side's own column type", () => {
+    // `n` was text and is now an integer: the new side's cast is authored.
+    const side = (type: string, expression: string) => ({
+      tables: [
+        {
+          ...table(expression),
+          columns: [
+            { name: "id", type: "text", nullable: false },
+            { name: "n", type, nullable: false },
+          ],
+        },
+      ],
+    });
+    expect(
+      diffSnapshots(side("text", "n"), side("integer", "(n)::text"))
+        .map(op => op.type)
+        .filter(type => type.endsWith("_index"))
+        .sort()
+    ).toEqual(["add_index", "drop_index"]);
+  });
+
+  it("is PostgreSQL's own on a text-like column, so it changes nothing", () => {
+    expect(ops("(label)::text", "label")).toEqual([]);
+  });
+});
+
+describe("expression index key lists compare by what each key computes", () => {
+  it("PostgreSQL's spelling of a two-key list equals its declaration", () => {
+    const table = (expression: string) => ({
+      name: "fx__users",
+      columns: [
+        { name: "id", type: "text", nullable: false },
+        { name: "email", type: "varchar(255)", nullable: false },
+        { name: "status", type: "varchar(32)", nullable: false },
+      ],
+      indexes: [
+        {
+          name: "idx_fx__users_email_status",
+          columns: [],
+          unique: false,
+          expression,
+        },
+      ],
+    });
+    expect(
+      diffSnapshots(
+        { tables: [table("lower((email)::text), status")] },
+        { tables: [table("lower(email), status")] }
+      )
+    ).toEqual([]);
+    // The control: a different second key is a different index.
+    expect(
+      diffSnapshots(
+        { tables: [table("lower((email)::text), status")] },
+        { tables: [table("lower(email), state")] }
+      )
+        .map(op => op.type)
+        .sort()
+    ).toEqual(["add_index", "drop_index"]);
+  });
+});

@@ -23,6 +23,7 @@ import { buildDrizzleOrderBy } from "./drizzle-order";
 import { buildDrizzleWhere } from "./drizzle-where";
 import {
   createTransactionForwarders,
+  transactionDrizzleHandles,
   type TransactionCrudForwarders,
 } from "./transaction-forwarders";
 import type {
@@ -391,6 +392,24 @@ export abstract class DrizzleAdapter {
    * @returns Database capability flags
    */
   abstract getCapabilities(): DatabaseCapabilities;
+
+  /**
+   * The schema this adapter's connections resolve unqualified names in.
+   *
+   * @remarks
+   * Read-only, and optional because only PostgreSQL has a schema namespace:
+   * MySQL's "schema" is its database and SQLite has one file. An adapter that
+   * sets no `search_path` of its own answers `undefined`, meaning the server's
+   * default applies.
+   *
+   * Exposed so the caller that built its own adapter can be held to the same
+   * schema the rest of the application assumes. The value lives in the
+   * adapter's config, and a mismatch is not an error anywhere below: every
+   * query succeeds, in a namespace nothing else is looking at.
+   *
+   * @returns The configured schema name, or `undefined` when none is set
+   */
+  getConfiguredSchema?(): string | undefined;
 
   /**
    * Get the raw Drizzle ORM instance for direct queries.
@@ -2284,6 +2303,23 @@ export abstract class DrizzleAdapter {
     txDb: () => unknown
   ): TransactionCrudForwarders {
     return createTransactionForwarders(this, txDb);
+  }
+
+  /**
+   * The Drizzle handles one transaction hands out; see
+   * `transactionDrizzleHandles`. `build` makes an instance on the
+   * transaction's own connection, with the relations config when given one.
+   *
+   * @protected
+   */
+  protected transactionDrizzleHandles<TBare>(
+    build: (relations?: AnyRelations) => TBare
+  ): {
+    bare: () => TBare;
+    withRelations: <T = unknown>(relations: AnyRelations) => T;
+    context: Pick<TransactionContext, "drizzle" | "drizzleWithRelations">;
+  } {
+    return transactionDrizzleHandles(build);
   }
 
   /**

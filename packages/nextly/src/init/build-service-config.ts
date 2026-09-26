@@ -70,15 +70,6 @@ export function buildServiceConfig(
     const { config: nextlyConfig, ...rest } = providedConfig;
     Object.assign(serviceConfig, rest);
 
-    // AFTER the caller spread, and derived only from the nested config, so a
-    // caller cannot set it directly. It is internal wiring, not an option: the
-    // gate it opens must match what `runProdMigrationsIfEnabled` will actually
-    // do, and that reads `config.db.runMigrationsOnBoot`. A caller passing a
-    // conflicting top-level value would open no gate while migrations ran
-    // anyway — the exact unguarded window this exists to close.
-    serviceConfig.runMigrationsOnBoot =
-      nextlyConfig?.db?.runMigrationsOnBoot === true;
-
     // Forwarded from the nested config for the same reason as the fields below:
     // the nested object is destructured away here, so anything not named again
     // never reaches the container. The minting endpoint reads this to learn
@@ -86,6 +77,13 @@ export function buildServiceConfig(
     // non-default mount silently hands out links to `/api/preview`.
     if (serviceConfig.preview === undefined && nextlyConfig?.preview) {
       serviceConfig.preview = nextlyConfig.preview;
+    }
+
+    // Forwarded for the same reason, and needed now that `registerServices`
+    // runs pending migrations before plugins initialise: that phase reads the
+    // whole db block, including whether to run at all.
+    if (nextlyConfig?.db) {
+      serviceConfig.db = nextlyConfig.db;
     }
 
     // If storagePlugins not explicitly provided, use from nextly.config.ts

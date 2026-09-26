@@ -54,6 +54,33 @@ describe("classify-fields", () => {
     ).toBe(false);
   });
 
+  it("a virtual field is never localized, in either spelling, even if flagged", () => {
+    // It has no storage in any language, so the companion table carries no
+    // column for it; classifying it as translatable routes its value to one.
+    // The same text field without the flag is the control.
+    expect(isFieldLocalized({ type: "text", name: "t" }, true)).toBe(true);
+    expect(
+      isFieldLocalized({ type: "text", name: "t", virtual: true }, true)
+    ).toBe(false);
+    expect(
+      isFieldLocalized(
+        { type: "text", name: "t", virtual: true, localized: true },
+        true
+      )
+    ).toBe(false);
+    expect(
+      isFieldLocalized(
+        {
+          type: "group",
+          name: "g",
+          localized: true,
+          options: { virtual: true },
+        },
+        true
+      )
+    ).toBe(false);
+  });
+
   it("resolveLocalizedFieldNames returns the localized subset", () => {
     const fields = [
       { type: "text", name: "title" },

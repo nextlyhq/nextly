@@ -104,6 +104,9 @@ them with `plugin.rename({...})` (D54). Read the resolved slug from `ctx.self`:
 ```ts
 const slug = ctx.self.collections.redirects; // resolved, post-rename
 await ctx.services.collections.listEntries(slug, {}, { as: "system" });
+
+declare const ctx: PluginContext;
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 ```
 
 ## Provenance (D14)
@@ -136,3 +139,229 @@ is why declaring everything through `contributes` (rather than hand-writing tabl
 > behind on uninstall — document it, or avoid it.
 
 See also: [Data access](/docs/plugins/services) · [Testing](/docs/plugins/testing).
+
+## Tables of your own
+
+A collection gives you REST routes, admin screens, validation and access
+control. Sometimes you want none of that — a join table, a cache, a log a user
+never sees — and a collection is the wrong shape for it.
+
+Declare a table instead:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { col, defineTable } from "@nextlyhq/plugin-sdk/schema";
+
+const identities = defineTable(
+  "identities",
+  {
+    id: col.id(),
+    provider: col.shortText(),
+    providerAccountId: col.shortText(),
+    userId: col.ref("users"),
+    lastSeenAt: col.timestamp({ nullable: true }),
+    ...col.timestamps(),
+  },
+  {
+    indexes: [
+      { columns: ["provider", "providerAccountId"], unique: true },
+      { columns: ["userId"] },
+    ],
+  }
+);
+
+definePlugin({
+  name: "@acme/nextly-plugin-auth",
+  version: "1.0.0",
+  nextly: ">=0.1.0",
+  contributes: {
+    schema: { prefix: "auth", tables: [identities] },
+  },
+});
+```
+
+That table is created as `auth__identities`. The prefix is yours; declare it,
+or let it default to your plugin's admin slug.
+
+### The column kinds
+
+`text`, `shortText`, `longText`, `varchar(n)`, `boolean`, `integer`, `double`,
+`decimal(p, s)`, `timestamp`, `json<T>()`, plus two conveniences: `col.id()` (a
+`varchar(36)` filled with a UUIDv7) and `col.timestamps()` (`created_at` and
+`updated_at`, both maintained for you).
+
+The list is deliberately short. Every kind here renders on PostgreSQL, MySQL
+and SQLite, so a table you declare works on all three — what cannot be
+expressed cannot drift between them.
+
+## Reading and writing
+
+`ctx.db` is typed from your declaration. No codegen step, and a renamed column
+is a compile error rather than an `undefined` at runtime.
+
+```ts
+import { eq } from "drizzle-orm";
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import { col, defineTable } from "@nextlyhq/plugin-sdk/schema";
+
+// The table declared above, and the scope a handler runs in.
+const identities = defineTable("identities", {
+  id: col.id(),
+  provider: col.shortText(),
+  providerAccountId: col.shortText(),
+  userId: col.ref("users"),
+});
+declare const ctx: PluginContext;
+declare const user: { id: string };
+
+await ctx.db.insert(identities, {
+  provider: "github",
+  providerAccountId: "12345",
+  userId: user.id,
+});
+
+const existing = await ctx.db
+  .select(identities)
+  .where(eq(ctx.db.table(identities).provider, "github"))
+  .first();
+```
+
+`id` is filled when you omit it, and `updated_at` is refreshed on every
+update. Insert and read back in one step with `insertReturning`, which works
+the same on all three dialects — MySQL has no `RETURNING`, so the portable
+path is the only path.
+
+Use `isUniqueViolation(ctx.dialect, err)` to tell "this row already exists"
+from "the database is broken". Both arrive as the same thrown object.
+
+```ts
+import { isUniqueViolation } from "@nextlyhq/plugin-sdk/schema";
+
+try {
+  await ctx.db.insert(identities, {
+    provider: "github",
+    userId: "usr_1",
+    providerAccountId: "12345",
+  });
+} catch (err) {
+  // Anything else is a real failure and must not be swallowed.
+  if (!isUniqueViolation(ctx.dialect, err)) throw err;
+  ctx.logger.info("identity already linked");
+}
+```
+
+The dialect is a parameter rather than something the helper works out: the
+classification falls back to matching driver messages for MySQL and SQLite,
+and those patterns are only meaningful for the dialect that produced the
+error. A helper guessing across all three would report a MySQL phrase found
+in a PostgreSQL message as a duplicate key. `ctx.dialect` is the answer, and
+the plugin already has it.
+
+## Hooks, when a declaration is not enough
+
+`contributes.schema.extend` runs after every plugin before you in dependency
+order, so you can react to what they declared:
+
+```ts
+contributes: {
+  schema: {
+    extend: [
+      ({ schema }) => {
+        schema.extendTable("dc_posts", {
+          indexes: [{ columns: ["authorId", "publishedAt"] }],
+        });
+      },
+    ],
+  },
+}
+```
+
+The declarative `tables` form is sugar for a hook calling `addTable`. They
+produce identical output.
+
+## What you may change
+
+| Target | Columns | Indexes |
+| --- | --- | --- |
+| Your own tables | yes | yes |
+| A plugin you name in `dependsOn` / `optionalDependsOn` | yes, hidden | yes |
+| Any other plugin's tables | no | no |
+| Entity tables (`dc_*`, `single_*`, `comp_*`) | yes, hidden | yes |
+| Extendable core tables (`users`, `media`, `nextly_jobs`, `audit_log`, `activity_log`) | yes, hidden | yes |
+| Every other core table | no | no |
+
+The app may add columns and indexes to any plugin's table, under the same
+rules.
+
+Which migrations carry what you add depends on the table. On your own tables
+and on a dependency's, your plugin's own migration modules carry it. On an
+entity table or an extendable core table — whether a plugin or the app added
+it — the APP's migrations carry it: `nextly migrate:create` in the app writes
+the statement, so it reaches a database with the app's next migration.
+
+A column added to a table you do not own is **hidden**: it exists on the table,
+so migrations and dev push keep it, and on an entity table it is stripped
+from every REST response, Direct API read, version snapshot and webhook
+payload, and a value sent for it through the entry API is dropped. The column
+must be nullable or have a default, since the table may already have rows.
+
+You read and write a column you added to an entity or core table through
+`ctx.db.contributed(table, columns)`, keyed by row id — see
+[Columns on a table you do not own](/docs/database/extending-the-schema#columns-on-a-table-you-do-not-own).
+It reaches only your own contributed columns and the row's id; the table's
+other columns, other plugins' contributions, inserts and deletes are refused.
+
+A hidden column is storage for your plugin's own bookkeeping, not a field. To
+give a collection a field that editors and API callers see, with validation and
+access control, use `contributes.extend`.
+
+## What is deliberately unsupported
+
+Views, native enums, and partial indexes: an index with a `where` predicate is
+refused on every dialect, because declarations are checked against all three
+and MySQL has none. Checks, foreign keys, and expression indexes ARE
+supported: declare them on `defineTable` and they travel through
+dev push, plugin migrations and drift checks on every dialect — inline in the
+table's `CREATE TABLE` on its first migration, and through the table rebuild
+where a dialect cannot add one in place. An expression index key must compute a
+value: `DESC`, `ASC`, `NULLS FIRST/LAST`, `COLLATE` and operator classes such as
+`text_pattern_ops` are refused at `defineTable`, because no dialect reports them
+back and the index would be planned again on every push. `col.ref()` alone records a reference
+for documentation and validation; a constraint comes from the `foreignKeys`
+option.
+
+Drizzle relational queries (`ctx.db.query.<table>.findMany({ with })`) work
+over extension tables you may reach: a `ref()` column carries its one-edge
+automatically, and more can be declared through the `relations` option. The
+edge a `ref()` to a core table carries (`userId: col.ref("users")` above) is
+declared but not followed — see [Access rules](#access-rules).
+
+## Access rules
+
+You may reach your own tables and the tables of plugins you named in
+`dependsOn`. Nothing else. Core tables stay behind `ctx.services`, where access
+control, validation and hooks apply.
+
+The rule covers `ctx.db.query` as well as the other methods: the relational
+namespace only names tables you may reach, and `ctx.db.query.users` throws the
+same refusal `ctx.db.select` would. It covers every table a relational query
+REACHES, too, not only the one it starts from: an include in `with` and a
+relation filter in `where` are refused, at any depth, when their target — or a
+many-to-many junction — is a table you may not reach. The refusal names the
+relation and the table it was followed from. Read a core table's rows through
+`ctx.services` and join on the id your column holds.
+
+`dependsOn` is what makes a cross-plugin read legitimate rather than
+incidental: it lets the resolver order the two plugins and refuse an
+incompatible version.
+
+## Production
+
+A plugin that declares tables ships **migration modules**
+(`contributes.schema.migrations`) and a `schemaVersion`. Generate them with
+`nextly migrate:create --plugin ./src/index.ts`, bumping `schemaVersion` each
+time; `nextly migrate` applies them in dependency order under the migrate lock,
+before any plugin initialises. The ledger records them under qualified names
+(`plugin:<name>/<file>`), an app rollback never touches them, and a production
+boot refuses a plugin whose declared version the database has not applied
+(`PLUGIN_SCHEMA_BEHIND`).

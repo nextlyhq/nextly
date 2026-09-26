@@ -172,6 +172,59 @@ export function registerPluginsCommand(program: Command): void {
     });
 
   plugins
+    .command("install <name>")
+    .description("Apply a plugin's migrations and run its onInstall hook")
+    .action(async (name: string, _cmdOptions: unknown, cmd: Command) => {
+      const globalOpts = cmd.optsWithGlobals();
+      const context = createContext(globalOpts);
+      try {
+        const { runPluginInstall } = await import("./plugin-lifecycle-runner");
+        await runPluginInstall(
+          name,
+          { config: globalOpts.config, cwd: globalOpts.cwd },
+          context
+        );
+      } catch (error) {
+        context.logger.error(describeError(error));
+        process.exit(1);
+      }
+    });
+
+  plugins
+    .command("uninstall <name>")
+    .description("Undo a plugin's schema and run its onUninstall hook")
+    .option("--keep-data", "Leave the plugin's tables in place", false)
+    .option("--yes", "Skip the confirmation before dropping tables", false)
+    .action(
+      async (
+        name: string,
+        cmdOptions: { keepData?: boolean; yes?: boolean },
+        cmd: Command
+      ) => {
+        const globalOpts = cmd.optsWithGlobals();
+        const context = createContext(globalOpts);
+        try {
+          const { runPluginUninstall } = await import(
+            "./plugin-lifecycle-runner"
+          );
+          await runPluginUninstall(
+            name,
+            {
+              config: globalOpts.config,
+              cwd: globalOpts.cwd,
+              keepData: cmdOptions.keepData === true,
+              yes: cmdOptions.yes === true,
+            },
+            context
+          );
+        } catch (error) {
+          context.logger.error(describeError(error));
+          process.exit(1);
+        }
+      }
+    );
+
+  plugins
     .command("info <name>")
     .description(
       "Show one plugin's details (collections, permissions, routes, admin)"

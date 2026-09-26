@@ -3,8 +3,18 @@ name: CI
 on:
   push:
     branches: [main]
+  # The integration branches are gated too, not just `main`. A staging branch
+  # that collects several plans before they reach `main` accumulates work
+  # nothing has checked: P1 merged into `platform-extensibility-integration`
+  # without a single CI run, and P2 was about to. The delta then arrives at
+  # `main` all at once, which is the least useful moment to discover it.
+  #
+  # The INTEGRATION lane is deliberately not widened with it — those suites
+  # need database services and currently carry failures older than any of
+  # this. Adding them here would make the gate red on arrival and teach
+  # everyone to ignore it.
   pull_request:
-    branches: [main]
+    branches: [main, "feat/nextly/platform-extensibility-integration"]
 
 # Every job only reads the repo; nothing here writes, comments, or tags.
 # Restricting the token caps what a compromised dependency or action

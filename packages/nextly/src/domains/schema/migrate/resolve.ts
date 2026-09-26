@@ -19,6 +19,7 @@
  * @since v0.0.3-alpha (Plan C3)
  */
 import { NextlyError } from "../../../errors";
+import { ledgerFilename } from "../events/ledger-scope";
 import { newestEvent } from "../events/newest-event";
 import type { SchemaEventRow } from "../events/schema-events-repository";
 import { diffSnapshots } from "../pipeline/diff/diff";
@@ -59,10 +60,6 @@ export type ResolveResult =
 
 const NOTE = "manual-resolve";
 
-function withSqlExt(name: string): string {
-  return name.endsWith(".sql") ? name : `${name}.sql`;
-}
-
 function equiv(a: NextlySchemaSnapshot, b: NextlySchemaSnapshot): boolean {
   return diffSnapshots(a, b).length === 0;
 }
@@ -70,7 +67,7 @@ function equiv(a: NextlySchemaSnapshot, b: NextlySchemaSnapshot): boolean {
 export async function resolveMigration(
   args: ResolveMigrationArgs
 ): Promise<ResolveResult> {
-  const filename = withSqlExt(args.filename);
+  const filename = ledgerFilename(args.filename);
 
   switch (args.mode) {
     case "applied":
@@ -124,7 +121,6 @@ async function resolveApplied(
     status: "applied",
     source: "cli-migrate",
     filename,
-    startedAt: new Date(),
     endedAt: new Date(),
     statementsExecuted: 0,
     note: NOTE,
@@ -170,7 +166,6 @@ async function resolveRolledBack(
     status: "rolled_back",
     source: "cli-migrate",
     filename,
-    startedAt: new Date(),
     endedAt: new Date(),
     note: NOTE,
   });

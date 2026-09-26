@@ -1,4 +1,5 @@
 import { collectPluginAuditKinds } from "../domains/audit/plugin-audit";
+import { assertSchemaVersionDeclarable } from "../domains/schema/ownership/schema-version-check";
 
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
@@ -107,5 +108,26 @@ export function resolvePlugins(
 ): PluginDefinition[] {
   validatePluginVersions(plugins, opts.coreVersion);
   assertPluginManifests(plugins);
+  // Last, because it reads what the earlier validators already accepted: a
+  // declared schemaVersion must be one the plugin's own migrations reach.
+  validateSchemaVersionDeclarations(plugins);
   return topoSortPlugins(plugins);
+}
+
+/**
+ * A declared `schemaVersion` must be one its own migrations can reach, or the
+ * boot check could never pass — caught where the manifest is read so the
+ * failure names the declaration rather than arriving later as a production
+ * boot refusal nothing explains.
+ */
+function validateSchemaVersionDeclarations(plugins: PluginDefinition[]): void {
+  for (const plugin of plugins) {
+    assertSchemaVersionDeclarable({
+      pluginName: plugin.name,
+      declaredVersion: plugin.schemaVersion,
+      migrationVersions:
+        plugin.contributes?.schema?.migrations?.map(m => m.schemaVersion) ??
+        [],
+    });
+  }
 }

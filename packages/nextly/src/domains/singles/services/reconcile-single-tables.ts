@@ -42,6 +42,29 @@ export interface SingleTableReconciler {
 }
 
 /**
+ * The two reads every caller supplies the same way: the registry's Singles and
+ * the live table names. Built here once so boot and `db:sync` cannot come to
+ * disagree about what counts as registered or as existing.
+ */
+export function singleTableSources(
+  registry: {
+    getAllSingles(): Promise<
+      ReadonlyArray<{ slug: string; tableName: string }>
+    >;
+  },
+  listTables: () => Promise<readonly string[]>
+): Pick<SingleTableReconciler, "registeredSingles" | "existingTableNames"> {
+  return {
+    registeredSingles: async () =>
+      (await registry.getAllSingles()).map(r => ({
+        slug: r.slug,
+        tableName: r.tableName,
+      })),
+    existingTableNames: async () => new Set(await listTables()),
+  };
+}
+
+/**
  * Walk the registry, create any physical tables that are missing.
  *
  * Idempotent: tables that already exist are left alone. Errors from

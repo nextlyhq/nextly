@@ -44,6 +44,14 @@ export interface PendingChangeParts {
  */
 export function splitPendingChange(
   snapshot: unknown,
+  /** The Single's main table, which the returned `main` values are written to. */
+  tableName: string,
+  /**
+   * The Single's declared fields. A pending change is stored in read shape, so
+   * it can carry a virtual field an afterRead hook computed; it has no column
+   * on the main row and is dropped with the rest of what the row cannot take.
+   */
+  fields: Parameters<typeof stripImmutableSystemFields>[3],
   companion: CompanionSchema | null,
   overrides?: Record<string, unknown>
 ): PendingChangeParts {
@@ -52,7 +60,9 @@ export function splitPendingChange(
       ...(keysToSnakeCase(snapshot) as Record<string, unknown>),
       ...(overrides ?? {}),
     },
-    "single"
+    "single",
+    tableName,
+    fields
   );
   if (!companion) return { main: payload, companion: {} };
   const { main, companion: companionValues } = splitLocalizedWrite(

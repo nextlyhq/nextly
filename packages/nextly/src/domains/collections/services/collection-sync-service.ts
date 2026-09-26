@@ -59,7 +59,9 @@ import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { ZodGenerator, TypeGenerator } from "../../schema";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
 // (parity with the boot/HMR registry sync).
+import { resolveCollectionTableName } from "../../schema/utils/resolve-table-name";
 import { resolveVersionsConfig } from "../../versions/resolve-config";
+import { storedWebhookRecording } from "../../webhooks/builder-webhooks";
 
 import {
   CollectionRegistryService,
@@ -391,6 +393,79 @@ export function resolveDescription(config: {
     return undefined;
   const description = (config.admin as { description?: unknown }).description;
   return typeof description === "string" ? description : undefined;
+}
+
+/**
+ * The subset of a code-first collection config the registry sync reads.
+ *
+ * Structural rather than `CollectionConfig`, because the HMR reload reads a
+ * config that has crossed a module reload and carries loose types; the field
+ * list keeps whatever element type the caller holds.
+ */
+export interface CodeFirstCollectionSource<TField> {
+  slug: string;
+  labels?: { singular?: string; plural?: string };
+  fields?: TField[];
+  description?: string;
+  admin?: unknown;
+  dbName?: string;
+  timestamps?: boolean;
+  status?: boolean;
+  localized?: boolean;
+  versions?: Parameters<typeof resolveVersionsConfig>[0];
+  revalidate?: CodeFirstCollectionConfig["revalidate"];
+  webhooks?: Parameters<typeof storedWebhookRecording>[0];
+  db?: CodeFirstCollectionConfig["db"];
+}
+
+/**
+ * The registry-sync payload for one code-first collection.
+ *
+ * The one projection boot, HMR reload and `db:sync` all build their payload
+ * with, so a config option cannot reach the registry on one route and be
+ * dropped on another — which is how per-route copies of this mapping had come
+ * to disagree about webhooks, labels and table names. Each value is either
+ * stored on the registry row or, for `db`, published in memory by the sync.
+ */
+export function toCodeFirstCollectionConfig<TField>(
+  collection: CodeFirstCollectionSource<TField>,
+  /** Provenance; the registry defaults an absent one to `code`. */
+  source?: CodeFirstCollectionConfig["source"]
+): Omit<CodeFirstCollectionConfig, "fields"> & { fields: TField[] } {
+  return {
+    slug: collection.slug,
+    labels: {
+      singular: collection.labels?.singular ?? collection.slug,
+      plural: collection.labels?.plural ?? `${collection.slug}s`,
+    },
+    fields: collection.fields ?? [],
+    description: resolveDescription(collection),
+    // The physical table the schema pipeline creates for this collection,
+    // from the one resolver every route uses. Left to the registry, an absent
+    // `dbName` was derived with a normalisation of its own that collapses runs
+    // of `-` and `_` and trims them at the ends, so a slug such as `a__b`
+    // pointed the registry row at `dc_a_b` while the table was `dc_a__b`.
+    tableName: resolveCollectionTableName(collection.slug, collection.dbName),
+    // The documented default stated here rather than left undefined: an update
+    // reads undefined as "leave the stored value", so a config that stopped
+    // saying `timestamps: false` would otherwise keep the old value.
+    timestamps: collection.timestamps ?? true,
+    // One decision about what `admin` may contain, applied wherever a
+    // collection reaches the registry; a function-valued option such as
+    // `preview.url` never reaches the stored JSON.
+    admin: toPersistedAdmin(asAdminOptions(collection.admin)),
+    ...(source !== undefined ? { source } : {}),
+    status: collection.status === true,
+    localized: collection.localized === true,
+    // `status: true` alone aliases to a versioned config, so both are read.
+    versions: resolveVersionsConfig(collection.versions, collection.status),
+    // The authored `{ tags?, disable? }` shape is stored as written.
+    revalidate: collection.revalidate,
+    // Mirrors the recording opt-out onto the row, so anything reading the row
+    // sees it, not only the in-process policy.
+    webhooks: storedWebhookRecording(collection.webhooks),
+    db: collection.db,
+  };
 }
 
 /**
@@ -806,29 +881,8 @@ export class CollectionSyncService extends BaseService {
   private convertToCodeFirstConfigs(
     collections: CollectionConfig[]
   ): CodeFirstCollectionConfig[] {
-    return collections.map(config => ({
-      slug: config.slug,
-      labels: {
-        singular: config.labels?.singular ?? toSingularLabel(config.slug),
-        plural: config.labels?.plural ?? toPluralLabel(config.slug),
-      },
-      fields: config.fields,
-      description: resolveDescription(config),
-      tableName: config.dbName ?? config.slug.replace(/-/g, "_"),
-      timestamps: config.timestamps ?? true,
-      // Persist Draft/Published, i18n, and the resolved versioning config through
-      // `db:sync` (status:true also aliases to a versioned config), matching the
-      // boot/HMR registry sync. status/localized must be forwarded too, else the
-      // sync would register status-enabled collections with status=0 (or toggle
-      // existing ones off) since it reads these off the payload.
-      status: config.status === true,
-      localized: config.localized === true,
-      versions: resolveVersionsConfig(config.versions, config.status),
-      // Forward the cache-revalidation config verbatim (no resolver — the
-      // authored `{ tags?, disable? }` shape is persisted as-is).
-      revalidate: config.revalidate,
-      admin: toPersistedAdmin(config.admin),
-    }));
+    // The shared projection boot and HMR reload use too.
+    return collections.map(config => toCodeFirstCollectionConfig(config));
   }
 
   private async handleRemovedCollections(

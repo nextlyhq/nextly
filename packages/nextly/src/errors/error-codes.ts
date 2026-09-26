@@ -73,6 +73,9 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: 409,
   NEXTLY_MIGRATION_DRIFT: 409,
   NEXTLY_MIGRATION_APPLY_FAILED: 500,
+  // A SQLite migration unit would leave a row referencing a row that does
+  // not exist, or could not switch foreign-key enforcement off to run.
+  NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION: 409,
   // Plan C3 — migrate:resolve recovery command.
   NEXTLY_MIGRATION_FILE_MISSING: 404,
   NEXTLY_MIGRATION_SNAPSHOT_MISSING: 404,
@@ -98,6 +101,23 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
+  // Plugin platform (P2) — plugin schema lifecycle. All 409: each is a state
+  // the database and the config disagree about, which retrying cannot change
+  // and an operator command resolves.
+  PLUGIN_DEPENDENCY_NOT_INSTALLED: 409,
+  PLUGIN_HAS_DEPENDENTS: 409,
+  PLUGIN_UNINSTALL_IRREVERSIBLE: 409,
+  // A full uninstall that would drop tables, run without `--yes`.
+  PLUGIN_UNINSTALL_UNCONFIRMED: 409,
+  PLUGIN_SCHEMA_BEHIND: 409,
+  PLUGIN_SCHEMA_UNINSTALLED: 409,
+  PLUGIN_SCHEMA_VERSION_NOT_ADVANCED: 409,
+  PLUGIN_MIGRATIONS_UNAVAILABLE: 409,
+  // A migration would drop a table another owner holds, or names a drop
+  // target the guard cannot read — refused for the same reason.
+  DROP_OF_FOREIGN_TABLE: 409,
+  // A plugin migration module whose content no longer matches its checksum.
+  MIGRATION_CHECKSUM_MISMATCH: 409,
   // Plugin platform (P4) — contributes.routes collection (D25).
   NEXTLY_ROUTE_COLLISION: 409,
   NEXTLY_ROUTE_INVALID_PATH: 400,
@@ -118,6 +138,15 @@ export const NEXTLY_ERROR_STATUS = {
   // transport above: nothing is broken and the request is not malformed, the
   // install simply cannot carry it out until one command is run.
   NEXTLY_CONFIG_TOOLING_UNAVAILABLE: 503,
+  // `db.postgres.schema` names one schema and the adapter the application
+  // supplied writes to another. 500 like the other boot-time configuration
+  // refusals: no request caused it, and the fix is a change to the server's
+  // own configuration.
+  NEXTLY_POSTGRES_SCHEMA_MISMATCH: 500,
+  // `db.postgres.schema` names a schema other than `public`, which the schema
+  // push cannot yet create tables in. 500 for the same reason as the mismatch
+  // above: a boot-time refusal of the server's own configuration.
+  NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED: 500,
 } as const;
 
 export type NextlyErrorCode = keyof typeof NEXTLY_ERROR_STATUS;

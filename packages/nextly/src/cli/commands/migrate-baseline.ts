@@ -49,6 +49,7 @@ import {
   resolveDeclaredSchema,
   type ResolvedEntity,
 } from "../../domains/schema/migrate/resolved-schema";
+import { withCyclicForeignKeysSplit } from "../../domains/schema/migrate-create/cyclic-foreign-keys";
 import {
   formatMigrationFile,
   formatTimestamp,
@@ -68,7 +69,7 @@ import {
   junctionTablesAmong,
   snapshotComparableTables,
 } from "../../domains/schema/pipeline/managed-tables";
-import { generateSQL } from "../../domains/schema/pipeline/sql-templates/index";
+import { generateStatements } from "../../domains/schema/pipeline/sql-templates/index";
 import { describeError, NextlyError } from "../../errors/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { createContext, type CommandContext } from "../program";
@@ -489,8 +490,16 @@ export async function baselineCore(
         junctionTables.size > 0
           ? await introspectLiveSnapshot(db, dialect, [...junctionTables])
           : { tables: [] };
-      const junctionSql = diffSnapshots(EMPTY_SNAPSHOT, junctionLive).map(op =>
-        generateSQL(op, dialect)
+      // Rendered as a list, not per operation: on SQLite a split-out foreign
+      // key becomes a rebuild of its table to what the database holds.
+      const junctionSql = generateStatements(
+        withCyclicForeignKeysSplit(
+          diffSnapshots(EMPTY_SNAPSHOT, junctionLive),
+          dialect,
+          []
+        ),
+        dialect,
+        junctionLive.tables
       );
 
       // The companion's own columns, read from the database for the same
@@ -524,7 +533,15 @@ export async function baselineCore(
       // Companions carry a foreign key to their main table, so every main
       // table has to exist before any of them runs.
       const sqlStatements = [
-        ...plan.operations.map(op => generateSQL(op, dialect)),
+        // A foreign-key cycle standing in the database has one key split out
+        // of the CREATE TABLEs, as every generated migration does.
+        // Rendered as a list, as every generated migration is: SQLite takes
+        // a split-out key as a rebuild of its table, to the adopted schema.
+        ...generateStatements(
+          withCyclicForeignKeysSplit(plan.operations, dialect, []),
+          dialect,
+          plan.snapshot.tables
+        ),
         ...junctionSql,
         ...companionSql.statements,
       ];
