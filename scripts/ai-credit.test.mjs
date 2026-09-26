@@ -264,9 +264,13 @@ describe("a line a change adds", () => {
     // So do plain words that are no name, however many lines they take: a tool named after them is a co-author of its own.
     expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  with a note", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
     expect(creditsIn(lines(trailer("Co-authored", spell("Anthro", "pic")), "  some", "  context", `  ${CODE_TOOL}`), "line")).toEqual([expect.objectContaining({ line: 1 }), expect.objectContaining({ from: 4, line: 4 })]);
-    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  context", spell("  ", CODE_TOOL, ", the CLI")), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
-    // Only a line that is an identity of its own starts one: more prose, even opening with a tool's name, goes on with the explanation.
-    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  with a note", spell("  ", CODE_TOOL, " reads this file")), "line")).toEqual([]);
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  context", spell("  ", CODE_TOOL, " (the CLI)")), "line")).toEqual([expect.objectContaining({ from: 3, line: 3 })]);
+    // Only a line that is an identity of its own starts one, read as a list item's line is: more words after a tool's name,
+    // behind a comma or a colon or not, are an explanation that mentions it, after plain words or a capitalised one alike.
+    const mentions = ["  with a note", "  Summary"].flatMap(before => [" reads this file", ": reads this file", ", the tool reviewed this file"].map(mention => [before, mention]));
+    for (const [before, mention] of mentions) expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), before, spell("  ", CODE_TOOL, mention)), "line"), before + mention).toEqual([]);
+    // An AI tool's own address is its identity, so it credits the co-author it closes, whatever words stand before it.
+    expect(creditsIn(lines(trailer("Co-authored", "Jane Doe"), "  Summary", `  See the bot <${VENDOR_ADDRESS}>`), "line")).toEqual([expect.objectContaining({ line: 3 })]);
     // A tool's full name is no one's surname, so it is read on its own after a capitalised word; an ambiguous name there is a person's.
     for (const word of ["Résumé", "Summary"]) {
       expect(creditsIn(lines(trailer("Co-authored", spell("Anthro", "pic")), `  ${word}`, `  ${CODE_TOOL}`), "line"), word).toEqual([expect.objectContaining({ line: 1 }), expect.objectContaining({ from: 3, line: 3 })]);
