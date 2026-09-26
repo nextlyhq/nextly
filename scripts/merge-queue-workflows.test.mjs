@@ -831,8 +831,9 @@ describe("who owns what the required checks run", () => {
     // and a Rollup configuration by its name alone, as `rollup -c` finds one without being told.
     expect(definitions.length).toBeGreaterThan(50);
     expect(definitions).toContain("packages/nextly/rollup.dts.config.ts");
-    // And the Next.js configuration the required build builds the playground with.
-    expect(definitions).toContain("apps/playground/next.config.ts");
+    // And every Next.js configuration, wherever it sits: the playground's,
+    // which the required build builds, and each template's.
+    expect(definitions).toEqual(expect.arrayContaining(["apps/playground/next.config.ts", "templates/base/next.config.ts", "templates/plugin/dev/next.config.ts"]));
     for (const path of definitions) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -940,6 +941,35 @@ describe("who owns what the required checks run", () => {
     ].join("\n");
     const loads = ["dynamic.mjs", "list.json", "re-export.js", "required.cjs", "rule.js", "side-effect.js"].map(file => `packages/a/${file}`);
     expect(loadsIn(text, "packages/a/eslint.config.mjs").sort()).toEqual(loads);
+  });
+
+  it.each([
+    ["a JavaScript import of its TypeScript source", "d/x.js", "d/x.ts"],
+    ["a JavaScript import of its TSX source", "d/x.js", "d/x.tsx"],
+    ["a JSX import of its TSX source", "d/x.jsx", "d/x.tsx"],
+    ["an ES module import of its TypeScript source", "d/x.mjs", "d/x.mts"],
+    ["a CommonJS import of its TypeScript source", "d/x.cjs", "d/x.cts"],
+    ["an import with no extension, of a JSX file", "d/x", "d/x.jsx"],
+    ["an import with no extension, of a CommonJS TypeScript file", "d/x", "d/x.cts"],
+    ["a directory's TSX index", "d/x", "d/x/index.tsx"],
+    ["a directory's ES module index", "d/x", "d/x/index.mjs"],
+  ])("resolves %s", (_, imported, file) => {
+    expect(resolvedModule(imported, new Set([file]))).toBe(file);
+  });
+
+  it("follows a test or tooling file's imports into the ones it imports in turn, and never through a product module", () => {
+    // No such chain is in the repository today, so the files are given here:
+    // the entry imports a helper, which alone imports the guard, and a product
+    // module, which alone imports another test file.
+    const files = {
+      "packages/x/scripts/build.ts": 'import { helper } from "./helper.js";',
+      "packages/x/scripts/helper.ts": 'import { guard } from "../src/__tests__/guard.js";\nimport { product } from "../src/product.js";',
+      "packages/x/src/__tests__/guard.tsx": "",
+      "packages/x/src/product.ts": 'import { other } from "./__tests__/other.js";',
+      "packages/x/src/__tests__/other.ts": "",
+    };
+    const imported = toolingImportedBy(["packages/x/scripts/build.ts"], new Set(Object.keys(files)), path => files[path]);
+    expect(imported.sort()).toEqual(["packages/x/scripts/helper.ts", "packages/x/src/__tests__/guard.tsx"]);
   });
 
   it("reads a setup key given a string or strings, and refuses any other form rather than read it as naming nothing", () => {
@@ -1145,20 +1175,27 @@ function loadedThrough(roots, tracked) {
   return [...reached].filter(path => !roots.includes(path));
 }
 
-function loadedBy(path, tracked) {
-  return loadsIn(readRepositoryFile(path), path)
+/** The files a module loads, as tracked paths; `readFile` reads its text, the repository's copy unless told otherwise. */
+function loadedBy(path, tracked, readFile = readRepositoryFile) {
+  return loadsIn(readFile(path), path)
     .map(target => resolvedModule(target, tracked))
     .filter(Boolean);
 }
 
+/** The TypeScript sources a JavaScript extension compiles from: `./x.js` is written for `./x.ts` or `./x.tsx`. */
+const SOURCES_OF = { ".js": [".ts", ".tsx"], ".jsx": [".tsx"], ".mjs": [".mts"], ".cjs": [".cts"] };
+/** Every extension a module is written with here, and so every one an import can leave out. */
+const MODULE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+
 /**
  * The tracked file an import names, resolved as TypeScript and Node resolve
- * it: as written, a TypeScript source for a JavaScript extension (`./x.js`
- * compiles from `./x.ts`), or with an extension or an index file added.
+ * it: as written, from the TypeScript source a JavaScript extension names,
+ * or with an extension or an index file added, in any module extension.
  */
 function resolvedModule(path, tracked) {
-  const typescript = [path.replace(/\.([cm]?)js$/, ".$1ts"), path.replace(/\.js$/, ".tsx")];
-  const added = [".ts", ".tsx", ".mts", ".js", ".mjs", "/index.ts", "/index.js"].map(extension => `${path}${extension}`);
+  const [, stem, written] = /^(.*?)(\.[cm]?jsx?)?$/.exec(path);
+  const typescript = (SOURCES_OF[written] ?? []).map(extension => `${stem}${extension}`);
+  const added = [...MODULE_EXTENSIONS, ...MODULE_EXTENSIONS.map(extension => `/index${extension}`)].map(extension => `${path}${extension}`);
   return [path, ...typescript, ...added].find(candidate => tracked.has(candidate)) ?? null;
 }
 
@@ -1171,8 +1208,8 @@ function resolvedModule(path, tracked) {
 const TOOLING = /(?:^|\/)(?:scripts|__tests__)\//;
 
 /** The test and tooling files a set of modules imports, however deep, the modules themselves left out. */
-function toolingImportedBy(roots, tracked) {
-  const reached = reachable(roots, path => (/\.(?:[cm]?[jt]sx?)$/.test(path) ? loadedBy(path, tracked).filter(target => TOOLING.test(target)) : []));
+function toolingImportedBy(roots, tracked, readFile = readRepositoryFile) {
+  const reached = reachable(roots, path => (/\.(?:[cm]?[jt]sx?)$/.test(path) ? loadedBy(path, tracked, readFile).filter(target => TOOLING.test(target)) : []));
   return [...reached].filter(path => !roots.includes(path));
 }
 
