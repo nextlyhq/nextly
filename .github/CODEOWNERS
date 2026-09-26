@@ -36,6 +36,7 @@ tsconfig*.json               @mobeenabdullah
 eslint*.config.*             @mobeenabdullah
 tsup*.config.*               @mobeenabdullah
 rollup*.config.*             @mobeenabdullah
+next.config.*                @mobeenabdullah
 /.nvmrc                      @mobeenabdullah
 
 # The shared configuration those extend and import, with everything an owned
@@ -50,12 +51,14 @@ rollup*.config.*             @mobeenabdullah
 /packages/nextly/eslint-bare-error-allowlist.json @mobeenabdullah
 /pnpm-lock.yaml              @mobeenabdullah
 
-# What a package's own build runs, named in its manifest, and the modules a
-# test configuration loads before every test: each changes what a check
-# decides as much as the configuration that names it.
+# What a package's own build runs, named in its manifest, the modules a test
+# configuration loads before every test, and the test or tooling modules
+# either imports: each changes what a check decides as much as the file that
+# names it.
 /packages/admin/scripts/     @mobeenabdullah
 /packages/nextly/scripts/    @mobeenabdullah
 /packages/ui/scripts/        @mobeenabdullah
+/packages/ui/src/__tests__/ensure-declarations.ts @mobeenabdullah
 vitest.global-setup.*        @mobeenabdullah
 /e2e/global-setup.ts         @mobeenabdullah
 /packages/admin/src/__tests__/setup.ts @mobeenabdullah
