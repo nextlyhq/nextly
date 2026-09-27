@@ -288,15 +288,19 @@ describe("ctx.fetch", () => {
  * a bodyless GET.
  */
 describe("a redirect hop", () => {
-  /** Redirect once, answer on the second, keeping every init handed over. */
-  function hopping(status: number) {
+  /**
+   * Redirect once, answer on the second, keeping every init handed over.
+   * Same-origin unless `location` says otherwise: what a hop does to the body
+   * across an origin is its own rule, tested below.
+   */
+  function hopping(status: number, location = "https://api.example.com/next") {
     const seen: RequestInit[] = [];
     const send = async (request: SendArgs): Promise<Response> => {
       seen.push(request.init);
       if (seen.length === 1) {
         return new Response(null, {
           status,
-          headers: { location: "https://a.provider.example/next" },
+          headers: { location },
         });
       }
       return new Response("ok", { status: 200 });
@@ -347,6 +351,60 @@ describe("a redirect hop", () => {
         })
       )
     ).toBe("outbound-unreplayable-redirect-body");
+  });
+
+  /**
+   * A body is never carried to another origin.
+   *
+   * The credential headers are already dropped there, and a body can carry a
+   * credential as surely as a header: an OAuth token exchange posts its
+   * `client_secret` in the form. Replaying it to the redirect's origin handed
+   * the secret to a host it was never sent to.
+   */
+  it.each([307, 308])(
+    "refuses a %i that would carry the body to another origin",
+    async status => {
+      const { seen, d } = hopping(status, "https://a.provider.example/next");
+      expect(
+        await refusalOf(() =>
+          createPluginFetch(d)("https://api.example.com/token", {
+            method: "POST",
+            body: new URLSearchParams({ client_secret: "shhh" }),
+          })
+        )
+      ).toBe("outbound-cross-origin-redirect-body");
+      // Refused before the second hop: the secret was sent once, to the
+      // origin it was meant for.
+      expect(seen).toHaveLength(1);
+    }
+  );
+
+  it("refuses a PUT whose body a cross-origin 301 would keep", async () => {
+    const { seen, d } = hopping(301, "https://a.provider.example/next");
+    expect(
+      await refusalOf(() =>
+        createPluginFetch(d)("https://api.example.com/x", {
+          method: "PUT",
+          body: new URLSearchParams({ a: "1" }),
+        })
+      )
+    ).toBe("outbound-cross-origin-redirect-body");
+    expect(seen).toHaveLength(1);
+  });
+
+  it("still follows a cross-origin redirect that sends no body", async () => {
+    // The control. Refusing every cross-origin redirect would satisfy the
+    // tests above while breaking the ordinary 302 after a POST, which becomes
+    // a bodyless GET and so replays nothing.
+    const { seen, d } = hopping(302, "https://a.provider.example/next");
+    await createPluginFetch(d)("https://api.example.com/token", {
+      method: "POST",
+      body: new URLSearchParams({ client_secret: "shhh" }),
+    });
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1].method).toBe("GET");
+    expect(seen[1].body).toBeUndefined();
   });
 });
 

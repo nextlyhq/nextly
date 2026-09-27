@@ -413,7 +413,7 @@ return ctx.auth.completeLogin(user.id, {
 });
 ```
 
-Also `ctx.auth.currentUser(request)` and `ctx.auth.verifyCsrf(request)`.
+Also `ctx.auth.currentUser(request)` and `ctx.auth.verifyCsrf(request)`. `verifyCsrf` accepts the token in the `x-csrf-token` header or as `csrfToken` in a JSON body; it reads at most 64 KB of a body looking for it, and refuses a larger one with `reason: "body-too-large"`, so a large request sends the token in the header.
 
 ### `ctx.filters.decide`
 

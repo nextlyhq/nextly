@@ -97,14 +97,55 @@ async function materializeBody(
     duplex: "half",
   } as RequestInit & { duplex: "half" });
 
-  const body = Buffer.from(await probe.arrayBuffer());
+  // Every other body shape is read through the probe's STREAM, and so
+  // through the same bounded reader as a stream body. `arrayBuffer()` would
+  // materialize the whole value before any size is known: a plugin route
+  // forwarding a large `Blob` or `FormData` buffered all of it, and the cap
+  // held only for streams.
+  const body = probe.body
+    ? await drainStream(probe.body, signal)
+    : Buffer.alloc(0);
   const contentType = probe.headers.get("content-type");
   return {
     body,
-    // Only what the body itself implies. A caller's explicit content-type is
-    // spread after this at the call site and still wins — except for
-    // multipart, where the boundary is part of the bytes just produced.
+    // Only what the body itself implies. `requestHeaders` decides which of
+    // this and the caller's own content type is sent.
     headers: contentType ? { "content-type": contentType } : {},
+  };
+}
+
+/**
+ * The headers a request is sent with.
+ *
+ * `bodyHeaders` first, so a caller's explicit content type wins over the one
+ * inferred from the body — spread after, a JSON string sent with
+ * `application/json` went out as `text/plain;charset=UTF-8` and providers
+ * rejected it.
+ *
+ * Except for a `FormData` body. Its boundary is generated with the bytes
+ * `materializeBody` produced, so the generated content type is the only one
+ * that describes them: a caller's `multipart/form-data` without that boundary,
+ * or with one of its own, names a boundary the body does not contain. A body
+ * the caller built itself — a `Blob` or string of `multipart/related`, say —
+ * keeps the caller's header, which carries the boundary the caller wrote.
+ *
+ * `host` is written last, after the caller's: spread first, a plugin could
+ * send `Host: internal.example` to an allowlisted address, and a reverse proxy
+ * there would route to a virtual host the manifest never declared. DNS and TLS
+ * are still checked against the declared name, so nothing else catches it.
+ */
+function requestHeaders(
+  bodyHeaders: Record<string, string>,
+  init: RequestInit,
+  url: URL
+): Record<string, string> {
+  const generated = bodyHeaders["content-type"];
+  const formData = init.body instanceof FormData && generated !== undefined;
+  return {
+    ...bodyHeaders,
+    ...toHeaders(init),
+    ...(formData ? { "content-type": generated } : {}),
+    host: url.host,
   };
 }
 
@@ -329,17 +370,7 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
         port: url.port || (url.protocol === "https:" ? 443 : 80),
         path: `${url.pathname}${url.search}`,
         method: init.method ?? "GET",
-        // Written AFTER the caller's, not before: spread first, a plugin
-        // could send `Host: internal.example` to an allowlisted address, and
-        // a reverse proxy there would route to a virtual host the manifest
-        // never declared. DNS and TLS are still checked against the declared
-        // name, so nothing else catches it.
-        // `bodyHeaders` FIRST, so a caller's explicit content type wins over
-        // the one inferred from the body — spread after, a JSON string sent
-        // with `application/json` went out as `text/plain;charset=UTF-8` and
-        // providers rejected it. `host` stays last: that one is not the
-        // caller's to choose.
-        headers: { ...bodyHeaders, ...toHeaders(init), host: url.host },
+        headers: requestHeaders(bodyHeaders, init, url),
         // The whole point: connect to the address already judged, and never
         // consult the resolver a second time.
         lookup: (_hostname, options, callback) => {

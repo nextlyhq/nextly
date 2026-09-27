@@ -5,8 +5,17 @@
  *        forgotPassword, resetPassword, verifyEmail
  */
 
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterAll,
+  vi,
+} from "vitest";
 
+import { hashPassword } from "../../auth/password";
 import { NextlyError } from "../../errors/nextly-error";
 import type { Nextly } from "../nextly";
 
@@ -42,46 +51,121 @@ describe("Direct API - Auth Operations", () => {
   });
 
   describe("login()", () => {
-    it("should return user, token, and exp on valid credentials", async () => {
-      // PR 4 (unified-error-system): verifyCredentials returns the user
-      // directly and throws NextlyError on failure.
-      const mockUser = {
+    // `login` signs a 30-day session, so it signs in exactly as the login
+    // endpoint does: the real `verifyCredentials`, over the auth router's
+    // lookup and lockout dependencies. The tests decide what the stored
+    // account looks like and watch what the sign-in records.
+    const PASSWORD = "password123";
+    let passwordHash: string;
+    beforeAll(async () => {
+      passwordHash = await hashPassword(PASSWORD);
+    });
+
+    /** A stored account the sign-in admits; each case changes one fact. */
+    function storedUser(change: Record<string, unknown> = {}) {
+      return {
         id: "user-1",
         email: "test@example.com",
         name: "Test",
+        image: null,
+        passwordHash,
+        emailVerified: new Date("2026-01-01T00:00:00Z"),
+        isActive: true,
+        mustChangePassword: false,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+        ...change,
       };
-      mocks.authService.verifyCredentials.mockResolvedValue(mockUser);
+    }
+
+    function refusalOf(password: string) {
+      return nextly.login({ email: "test@example.com", password }).then(
+        () => null,
+        (err: unknown) => err
+      );
+    }
+
+    it("returns the user, a token and its expiry", async () => {
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(storedUser());
 
       const result = await nextly.login({
         email: "test@example.com",
-        password: "password123",
+        password: PASSWORD,
       });
 
-      expect(result.user).toEqual(mockUser);
-      // Token is a real JWT signed with jose (3 dot-separated parts)
-      expect(result.token).toBeDefined();
+      // The shape `login` has always returned.
+      expect(result.user).toEqual({
+        id: "user-1",
+        email: "test@example.com",
+        name: "Test",
+        image: null,
+        emailVerified: new Date("2026-01-01T00:00:00Z"),
+        passwordHash: null,
+      });
       expect(result.token.split(".")).toHaveLength(3);
       expect(result.exp).toBeGreaterThan(Math.floor(Date.now() / 1000));
-      expect(mocks.authService.verifyCredentials).toHaveBeenCalledWith(
-        "test@example.com",
-        "password123"
+    });
+
+    it("counts a wrong password toward the lockout", async () => {
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(storedUser());
+
+      const refusal = await refusalOf("wrong");
+
+      expect((refusal as NextlyError).code).toBe("AUTH_INVALID_CREDENTIALS");
+      expect(mocks.credentialDeps.incrementFailedAttempts).toHaveBeenCalledWith(
+        "user-1"
       );
     });
 
-    it("should propagate NextlyError on invalid credentials", async () => {
-      // PR 4: invalid creds throw NextlyError(AUTH_INVALID_CREDENTIALS)
-      // from the service. The login() namespace lets it propagate.
-      mocks.authService.verifyCredentials.mockRejectedValue(
-        new NextlyError({
-          code: "AUTH_REQUIRED",
-          publicMessage: "Invalid email or password",
-          statusCode: 401,
-        })
+    it("locks the account on the attempt that reaches the limit", async () => {
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(
+        storedUser({ failedLoginAttempts: 4 })
       );
 
-      await expect(
-        nextly.login({ email: "bad@test.com", password: "wrong" })
-      ).rejects.toThrow(NextlyError);
+      await refusalOf("wrong");
+
+      expect(mocks.credentialDeps.lockAccount).toHaveBeenCalledWith(
+        "user-1",
+        expect.any(Date)
+      );
+    });
+
+    // Each is refused with the error a wrong password gets, so the Direct
+    // API cannot tell a caller which of them applied.
+    it.each([
+      ["unverified", { emailVerified: null }],
+      ["deactivated", { isActive: false }],
+      ["locked", { lockedUntil: new Date(Date.now() + 60_000) }],
+      // The endpoint answers this with the forced-change step, which a
+      // server-side call cannot complete; a token would skip it.
+      ["must-change-password", { mustChangePassword: true }],
+    ])("refuses a %s account with a correct password", async (_, change) => {
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(
+        storedUser(change)
+      );
+
+      const refusal = await refusalOf(PASSWORD);
+
+      expect(NextlyError.is(refusal)).toBe(true);
+      expect((refusal as NextlyError).code).toBe("AUTH_INVALID_CREDENTIALS");
+    });
+
+    it("reports a failed lookup as itself, not as a wrong password", async () => {
+      // `login` passes a failed lookup through. That the lookup itself does
+      // not turn a database error into "no such user" is pinned beside it,
+      // in `auth/credentials/__tests__/credential-deps.test.ts`.
+      const outage = new Error("connection refused");
+      mocks.credentialDeps.findUserByEmail.mockRejectedValue(outage);
+
+      expect(await refusalOf(PASSWORD)).toBe(outage);
+    });
+
+    it("refuses an unknown email", async () => {
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(null);
+
+      expect(await refusalOf(PASSWORD)).toMatchObject({
+        code: "AUTH_INVALID_CREDENTIALS",
+      });
     });
   });
 
@@ -127,9 +211,12 @@ describe("Direct API - Auth Operations", () => {
       });
       mocks.userAccountService.getCurrentUser.mockRejectedValue(notFound);
 
-      await expect(nextly.me({ user: { id: "missing" } })).rejects.toMatchObject(
-        { code: "NOT_FOUND", logContext: { userId: "missing" } }
-      );
+      await expect(
+        nextly.me({ user: { id: "missing" } })
+      ).rejects.toMatchObject({
+        code: "NOT_FOUND",
+        logContext: { userId: "missing" },
+      });
     });
 
     it("should propagate other NextlyError failures", async () => {

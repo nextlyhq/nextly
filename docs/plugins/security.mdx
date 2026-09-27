@@ -70,7 +70,12 @@ Refused by construction:
   6to4 are each judged as the IPv4 address they carry;
 - a name that answers with one public address and one internal one;
 - a redirect to anything the rules above refuse — each hop is re-checked;
-- more than three redirects, a response over 10 MB, or 30 seconds.
+- a redirect that would send the request body to a different origin (a 307 or
+  308, or a 301 or 302 that keeps its method). A body can carry a credential
+  as surely as a header, so it never crosses an origin; send the request again
+  to the new address if that is what you meant;
+- a request body over 10 MB, more than three redirects, a response over 10 MB,
+  or 30 seconds.
 
 ## Route protections
 

@@ -26,6 +26,7 @@ import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
 
 import { setPendingCookie } from "./cookies/pending-cookie";
 import { readCsrfCookie, readCsrfFromRequest } from "./csrf/csrf-cookie";
+import { readCsrfBody } from "./csrf/read-csrf-body";
 import { validateCsrf } from "./csrf/validate";
 import { mintSession, type IssueSessionDeps } from "./handlers/issue-session";
 import type { AuthHookRegistry } from "./pipeline/hooks";
@@ -396,30 +397,28 @@ export function createPluginAuthApi(
     },
 
     async verifyCsrf(request) {
-      // The BODY is read from a clone, because the caller still needs the
-      // original to read its own fields, and the token can arrive either
-      // way: core admin requests carry csrfToken in the JSON body, and a
-      // plugin form posting the same shape was refused here for lacking the
-      // header it never needed on core routes.
-      let body: Record<string, unknown> = {};
-      try {
-        const parsed: unknown = await request.clone().json();
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          body = parsed as Record<string, unknown>;
-        }
-      } catch {
-        // A body that is not JSON carries no token; the header is still
-        // checked.
-      }
+      // The token can arrive in the header or as `csrfToken` in a JSON body:
+      // core admin requests carry it in the body, and a plugin form posting
+      // the same shape was refused for lacking a header it never needed on
+      // core routes. The body is read by the same bounded reader the route
+      // option uses — from a clone, so the handler still gets its body, not
+      // at all when the header is present, and never past its cap — because
+      // this runs before the token is known to be valid.
+      const { body, tooLarge } = await readCsrfBody(request);
       const result = validateCsrf(
         request,
         readCsrfCookie(request),
-        readCsrfFromRequest(body, request),
+        readCsrfFromRequest(body ?? {}, request),
         env.NEXTLY_ALLOWED_ORIGINS_PARSED ?? []
       );
-      return result.valid
-        ? { valid: true }
-        : { valid: false, reason: result.error ?? "csrf-failed" };
+      if (result.valid) return { valid: true };
+      // Named apart: the one refusal where a token may well have been sent
+      // in a body too large to look inside. Such a caller sends the token in
+      // the `x-csrf-token` header instead.
+      return {
+        valid: false,
+        reason: tooLarge ? "body-too-large" : (result.error ?? "csrf-failed"),
+      };
     },
 
     async currentUser(request) {

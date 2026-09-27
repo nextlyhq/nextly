@@ -28,6 +28,7 @@ import {
 } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
 import { readProxyTrustSettings } from "../../utils/proxy-trust";
+import { passwordCredentialDeps } from "../credentials/credential-deps";
 import { verifyCredentials } from "../credentials/verify-credentials";
 import { ChallengeRegistry } from "../pipeline/challenge";
 import { AuthHookRegistry } from "../pipeline/hooks";
@@ -47,6 +48,7 @@ export function buildAuthRouterDeps(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getService: (name: string) => any
 ): AuthRouterDeps {
+  const credentialDeps = passwordCredentialDeps(() => getService("adapter"));
   const base: Omit<
     AuthRouterDeps,
     | "authStrategies"
@@ -57,14 +59,19 @@ export function buildAuthRouterDeps(
     | "maxChallengeAttempts"
     | "authUi"
   > = {
+    // The password sign-in's lookup, attempt counting and limits — shared
+    // with the Direct API's `login`, so the two count and refuse alike.
+    ...credentialDeps,
+    // The router's OTHER handlers (the session check, dev auto-login,
+    // password reset) treat an unreadable user as an absent one and degrade
+    // quietly; only the sign-in itself surfaces the failure.
+    findUserByEmail: (email: string) =>
+      credentialDeps.findUserByEmail(email).catch(() => null),
     secret: env.NEXTLY_SECRET || "",
     isProduction: env.NODE_ENV === "production",
     accessTokenTTL: 900, // 15 minutes
     refreshTokenTTL: 7 * 24 * 60 * 60, // 7 days
-    maxLoginAttempts: 5,
-    lockoutDurationSeconds: 15 * 60, // 15 minutes
     loginStallTimeMs: 500,
-    requireEmailVerification: true,
     // Spec §13.2: read the host-app's auth.revealRegistrationConflict flag
     // from the registered NextlyConfig. Defaults to false (silent-success on
     // email conflict) when config is not yet initialised or the flag is
@@ -75,23 +82,6 @@ export function buildAuthRouterDeps(
     ...readProxyTrustSettings(() => getService("config")),
     authRateLimit: readAuthRateLimit(getService),
     auditLog: buildAuditLogWriter(getService),
-
-    findUserByEmail: async (email: string) => {
-      try {
-        const adapter = getService("adapter");
-        const db = adapter.getDrizzle();
-        const schema = getDialectTables();
-        const { eq } = await import("drizzle-orm");
-        const result = await db
-          .select()
-          .from(schema.users)
-          .where(eq(schema.users.email, email.trim().toLowerCase()))
-          .limit(1);
-        return result[0] || null;
-      } catch {
-        return null;
-      }
-    },
 
     findUserById: async (userId: string) => {
       // Errors propagate intentionally. The refresh handler relies on this
@@ -132,41 +122,6 @@ export function buildAuthRouterDeps(
         .where(eq(schema.users.id, userId))
         .limit(1);
       return result[0] || null;
-    },
-
-    incrementFailedAttempts: async (userId: string) => {
-      const adapter = getService("adapter");
-      const db = adapter.getDrizzle();
-      const schema = getDialectTables();
-      const { eq, sql } = await import("drizzle-orm");
-      await db
-        .update(schema.users)
-        .set({
-          failedLoginAttempts: sql`${schema.users.failedLoginAttempts} + 1`,
-        })
-        .where(eq(schema.users.id, userId));
-    },
-
-    lockAccount: async (userId: string, lockedUntil: Date) => {
-      const adapter = getService("adapter");
-      const db = adapter.getDrizzle();
-      const schema = getDialectTables();
-      const { eq } = await import("drizzle-orm");
-      await db
-        .update(schema.users)
-        .set({ lockedUntil, failedLoginAttempts: 0 })
-        .where(eq(schema.users.id, userId));
-    },
-
-    resetFailedAttempts: async (userId: string) => {
-      const adapter = getService("adapter");
-      const db = adapter.getDrizzle();
-      const schema = getDialectTables();
-      const { eq } = await import("drizzle-orm");
-      await db
-        .update(schema.users)
-        .set({ failedLoginAttempts: 0, lockedUntil: null })
-        .where(eq(schema.users.id, userId));
     },
 
     fetchRoleIds: async (userId: string) => {
@@ -438,18 +393,7 @@ export function buildAuthRouterDeps(
   // deps so the legacy login behavior is preserved exactly (zero-regression).
   const passwordStrategy = createPasswordStrategy({
     verify: async ({ email, password }) => {
-      const u = await verifyCredentials(
-        { email, password },
-        {
-          findUserByEmail: base.findUserByEmail,
-          incrementFailedAttempts: base.incrementFailedAttempts,
-          lockAccount: base.lockAccount,
-          resetFailedAttempts: base.resetFailedAttempts,
-          maxLoginAttempts: base.maxLoginAttempts,
-          lockoutDurationSeconds: base.lockoutDurationSeconds,
-          requireEmailVerification: base.requireEmailVerification,
-        }
-      );
+      const u = await verifyCredentials({ email, password }, credentialDeps);
       return {
         id: u.id as AuthUser["id"],
         email: u.email,

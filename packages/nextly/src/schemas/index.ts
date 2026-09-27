@@ -9,7 +9,7 @@
  *   - getCoreSchema(dialect) → NextlySchemaSnapshot
  *   - CORE_TABLE_NAMES: readonly string[]
  *   - CORE_TABLE_PREFIXES: readonly string[]
- *   - Named Drizzle table re-exports (users, accounts, roles, etc.) under their
+ *   - Named Drizzle table re-exports (users, roles, etc.) under their
  *     canonical names.
  *
  * @module schemas

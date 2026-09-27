@@ -166,6 +166,112 @@ describe("request bodies", () => {
   });
 });
 
+describe("the request-body cap", () => {
+  const CAP = 10 * 1024 * 1024;
+
+  it("refuses a non-stream body over the cap before any request is sent", async () => {
+    // Every body shape is held to the cap, not only a stream, and the refusal
+    // comes before the socket, so the server sees nothing. What this pins is
+    // the refusal; that the read is bounded rather than whole is the shared
+    // stream reader's, tested with the stream bodies below.
+    let requests = 0;
+    const url = await listen((_req, res) => {
+      requests += 1;
+      res.end();
+    });
+
+    const refusal = await send(url, {
+      method: "POST",
+      body: new Blob([new Uint8Array(CAP + 1)]),
+    }).then(
+      () => null,
+      (err: unknown) => err
+    );
+
+    expect(refusal).toMatchObject({
+      logContext: { reason: "outbound-request-body-too-large" },
+    });
+    expect(requests).toBe(0);
+  });
+
+  it("still sends a non-stream body within the cap", async () => {
+    // The control: bounding the read must not stop an ordinary body.
+    const url = await listen((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        res.end(JSON.stringify({ bytes: [...Buffer.concat(chunks)] }));
+      });
+    });
+
+    const response = await send(url, {
+      method: "POST",
+      body: new Blob([new Uint8Array([7, 8, 9])]),
+    });
+
+    expect(await response.json()).toEqual({ bytes: [7, 8, 9] });
+  });
+});
+
+describe("a multipart body", () => {
+  it("is sent with the boundary its bytes were written with", async () => {
+    // A caller's `multipart/form-data` names no boundary — or its own — and
+    // the one in the body is generated. Letting the caller's header win sent
+    // a content type describing a boundary the body does not contain.
+    const url = await listen((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        res.end(
+          JSON.stringify({
+            type: req.headers["content-type"],
+            body: Buffer.concat(chunks).toString(),
+          })
+        );
+      });
+    });
+    const form = new FormData();
+    form.append("file", new Blob(["hello"]), "a.txt");
+
+    const response = await send(url, {
+      method: "POST",
+      headers: { "Content-Type": "multipart/form-data" },
+      body: form,
+    });
+    const { type, body } = (await response.json()) as {
+      type: string;
+      body: string;
+    };
+
+    const boundary = /boundary=(.+)$/.exec(type)?.[1];
+    expect(boundary).toBeTruthy();
+    expect(body).toContain(`--${boundary}`);
+  });
+});
+
+describe("a multipart body the caller built", () => {
+  it("keeps the caller's content type, which names the boundary it wrote", async () => {
+    // The control for the FormData case: only a boundary the transport
+    // generated is the transport's to state. A `multipart/related` Blob was
+    // written by the caller, whose header carries the boundary in its bytes.
+    const url = await listen((req, res) => {
+      res.end(JSON.stringify({ type: req.headers["content-type"] }));
+    });
+
+    const response = await send(url, {
+      method: "POST",
+      headers: { "content-type": "multipart/related; boundary=abc" },
+      body: new Blob(["--abc\r\n\r\nx\r\n--abc--"], {
+        type: "multipart/related",
+      }),
+    });
+
+    expect(await response.json()).toEqual({
+      type: "multipart/related; boundary=abc",
+    });
+  });
+});
+
 describe("the deadline", () => {
   it("fires on a server that TRICKLES, which an idle timeout never sees", async () => {
     // The separating property. `req.setTimeout` measures inactivity on one

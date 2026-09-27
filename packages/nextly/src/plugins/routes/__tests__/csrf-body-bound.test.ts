@@ -33,6 +33,12 @@ vi.mock("../../../utils/get-trusted-client-ip", () => ({
   getTrustedClientIp: () => "1.2.3.4",
 }));
 
+import {
+  CHUNK,
+  countingBody,
+  MAX_CSRF_BODY_BYTES,
+  PRIMED,
+} from "../../../auth/csrf/__tests__/counting-body";
 import type { PluginContext } from "../../plugin-context";
 
 import { runPluginRoute } from "../dispatch";
@@ -41,17 +47,6 @@ import type { PluginRoute } from "../route-types";
 
 const ORIGIN = "http://localhost";
 const URL_ = `${ORIGIN}/admin/api/plugins/@a/x/r`;
-
-/** The cap the CSRF read stops at, and a chunk small enough to see it. */
-const MAX_CSRF_BODY_BYTES = 64 * 1024;
-const CHUNK = 4 * 1024;
-
-/**
- * What a stream costs before anyone reads it on purpose: undici primes the
- * body when the Request is constructed, and primes the second tee branch when
- * it is cloned. Measured, not assumed — see the assertions below.
- */
-const PRIMED = 2 * CHUNK;
 
 const baseCtx = {
   self: { name: "@a/x", collections: {}, singles: {} },
@@ -66,32 +61,6 @@ const csrfRoute = (
   baseCtx,
   params: {},
 });
-
-/**
- * A body that COUNTS what is taken from it.
- *
- * The defect is invisible in the response — a forged request is refused
- * either way — so the measurement has to be of the reading itself.
- */
-function countingBody(chunks: number): {
-  stream: ReadableStream<Uint8Array>;
-  read: () => number;
-} {
-  let sent = 0;
-  let bytes = 0;
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (sent >= chunks) {
-        controller.close();
-        return;
-      }
-      sent += 1;
-      bytes += CHUNK;
-      controller.enqueue(new Uint8Array(CHUNK).fill(0x20));
-    },
-  });
-  return { stream, read: () => bytes };
-}
 
 function post(body: BodyInit, headers: Record<string, string>): Request {
   return new Request(URL_, {

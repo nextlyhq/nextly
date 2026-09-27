@@ -116,7 +116,8 @@ export interface PluginFetchDeps {
  * What a redirect does to the method and body is not a detail: 301, 302 and
  * 303 turn the follow-up into a bodyless GET, which is what keeps a credential
  * posted to one host from being posted again to another. 307 and 308 preserve
- * both by definition, which is what they are for.
+ * both by definition, which is what they are for — within one origin. A hop
+ * that would carry a body to a different origin is refused.
  */
 function nextHop(
   current: RequestInit,
@@ -150,6 +151,22 @@ function nextHop(
         : method === "POST";
 
   if (!rewritesToGet) {
+    // The body is sent again, and a body can carry credentials as surely as
+    // a header — an OAuth token exchange posts `client_secret` in its form.
+    // The credential headers are already dropped at an origin change, so the
+    // body never crosses one either: the redirect is refused, and a caller
+    // that meant to follow it re-sends deliberately to the address it now
+    // knows. Judged by presence rather than length — an empty body refused
+    // costs a caller a re-send, while measuring every `BodyInit` shape here
+    // would duplicate what the transport reads.
+    const hasBody = current.body !== undefined && current.body !== null;
+    if (hasBody && from.origin !== to.origin) {
+      refuse("cross-origin-redirect-body", {
+        from: from.origin,
+        to: to.origin,
+        status,
+      });
+    }
     // The body is sent again, so it has to be replayable. A stream is consumed
     // by the first hop and would arrive empty at the second — refused rather
     // than silently truncated to nothing.

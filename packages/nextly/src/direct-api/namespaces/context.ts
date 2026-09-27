@@ -14,6 +14,7 @@
  * @packageDocumentation
  */
 
+import type { PasswordCredentialDeps } from "../../auth/credentials/credential-deps";
 import type { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import type { AuthService } from "../../domains/auth/services/auth-service";
 import type { PermissionService } from "../../domains/auth/services/permission-service";
@@ -48,6 +49,7 @@ export interface NextlyContext {
   /** @internal */ readonly singleEntryService: SingleEntryService;
   /** @internal */ readonly singleRegistryService: SingleRegistryService;
   /** @internal */ readonly authService: AuthService;
+  /** @internal */ readonly passwordCredentialDeps: PasswordCredentialDeps;
   /** @internal */ readonly userAccountService: UserAccountService;
   /** @internal */ readonly userService: UserService;
   /** @internal */ readonly mediaService: MediaService;

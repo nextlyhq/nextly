@@ -319,13 +319,11 @@
     "digests": ["09db9bb23ff09965", "6e9fd7109cc9fc33", "94ff8525e044b8a0"]
   },
   "packages/nextly/src/direct-api/__tests__/auth.test.ts": {
-    "count": 10,
+    "count": 8,
     "digests": [
       "05268e3a30c83f33",
       "072a512bdacac7fb",
       "1572252e05cc138a",
-      "2f77258d87fe2311",
-      "41feae1cea0304a9",
       "44519882ef8f5264",
       "867a92ea0ea57e9a",
       "8803535024a474f9",
@@ -334,12 +332,11 @@
     ]
   },
   "packages/nextly/src/direct-api/namespaces/auth.ts": {
-    "count": 5,
+    "count": 4,
     "digests": [
       "39d114adc4e0ca3e",
       "b2e0f30cfdc4774b",
       "cb849a09b49a9cb0",
-      "d2f077ca3570fd83",
       "dcf49dbd7b270e57"
     ]
   },
@@ -385,9 +382,8 @@
     "digests": ["3ebf8a8d220b1238"]
   },
   "packages/nextly/src/domains/auth/services/auth-service.ts": {
-    "count": 5,
+    "count": 4,
     "digests": [
-      "445bf7e553d11d28",
       "498d0681437dadc5",
       "9ba269bff8220b6d",
       "a872b4a1b09ec8d6",

@@ -111,12 +111,40 @@ export function mapSecrets(
  * What the admin is shown. A secret never leaves the server, so the only thing
  * the UI can truthfully say about one is whether it has a value — which is
  * exactly what an operator needs to know to decide whether to replace it.
+ *
+ * `value` gives the shape: every secret it holds is replaced. `stored` answers
+ * whether each one has been SAVED, at the same path. The two differ when
+ * `value` has been through the plugin's schema, which fills in defaults: a
+ * secret with a non-empty default that was never written reported
+ * `{ set: true }`, and an operator could skip configuring a credential that
+ * no stored setting holds.
+ *
+ * Paths are matched as they appear in `value`. A schema that MOVES a stored
+ * key (a `preprocess` or `transform` from an older layout) has no stored value
+ * at the new path, and such a secret reads as not set.
  */
 export function redactSecrets(
   value: unknown,
-  patterns: readonly string[]
+  patterns: readonly string[],
+  stored: unknown = value
 ): unknown {
-  return mapSecrets(value, patterns, secret => ({
-    set: secret !== undefined && secret !== null && secret !== "",
-  }));
+  return mapSecrets(value, patterns, (_secret, path) => {
+    const saved = valueAtPath(stored, path);
+    return { set: saved !== undefined && saved !== null && saved !== "" };
+  });
+}
+
+/** The value at `path` in `root`, through objects and arrays alike. */
+function valueAtPath(root: unknown, path: readonly string[]): unknown {
+  let current = root;
+  for (const segment of path) {
+    if (Array.isArray(current)) {
+      current = current[Number(segment)];
+    } else if (isPlainObject(current)) {
+      current = Object.hasOwn(current, segment) ? current[segment] : undefined;
+    } else {
+      return undefined;
+    }
+  }
+  return current;
 }

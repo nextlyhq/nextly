@@ -246,8 +246,10 @@ export class AuthService extends BaseService {
    *   canonical "Invalid email or password." message comes from the
    *   factory and never reveals which leg failed (§13.8).
    *
-   * NOTE: Per the migration spec, account-state checks (locked / disabled
-   * accounts, etc.) move to PR 5 — this method preserves today's behavior.
+   * Checks the password only: it neither counts a failed attempt nor decides
+   * whether the account may hold a session (locked, deactivated,
+   * unverified). Anything that issues a session signs in through
+   * `auth/credentials/verify-credentials`, which does all three.
    */
   async verifyCredentials(
     email: string,

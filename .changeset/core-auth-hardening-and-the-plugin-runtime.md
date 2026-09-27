@@ -39,7 +39,15 @@ account the password path would have refused. Three handlers re-checked
 
 One gate now decides whether an account may hold a session, and every path that
 ends in one asks it: password login, challenge resolution, the forced
-first-sign-in password change, refresh, and the plugin path that follows. Each
+first-sign-in password change, refresh, the plugin path that follows, and the
+Direct API's `nextly.login()`. That last one signs a 30-day token from a
+password, so it now checks credentials through the login endpoint's own
+check: a wrong password counts toward the lockout, and a locked, deactivated
+or unverified account is refused as the endpoint refuses it. An account that
+must replace an admin-set password is refused too, since the forced change
+is a step only the login page can complete. It runs no plugin login hooks
+and no second-factor challenge, so it is for trusted server code rather than
+for signing a person in. Each
 refusal carries the same public error, so the gate cannot be used to tell a
 locked account from an unknown one.
 
@@ -171,7 +179,11 @@ prevent server-side request forgery, so names are resolved here, every answer
 is vetted, and the request is sent to the address that was vetted — closing the
 window in which a name resolves differently for the check than for the request.
 Private, loopback, link-local and metadata addresses are refused, including the
-IPv6 ways of writing them, and every redirect is re-checked.
+IPv6 ways of writing them, and every redirect is re-checked. A redirect
+that would send the request body to a different origin is refused: a body can
+carry a credential — an OAuth `client_secret`, say — as surely as a header,
+and the headers are already dropped at that boundary. A request body over
+10 MB is refused, whatever its type.
 
 **`ctx.audit`**, which writes only the kinds a plugin declared, namespaced
 under its own slug, with metadata keys allowlisted per kind.
@@ -193,7 +205,11 @@ inside the process.
 **SDK additions**: `sanitizeAdminPath`, `ctx.auth.verifyCsrf`,
 `collectDeclarations`, and `@nextlyhq/plugin-sdk/db` — Drizzle's query
 operators re-exported through core, so a plugin shares core's instance rather
-than a second copy whose internal symbols match nothing.
+than a second copy whose internal symbols match nothing. `ctx.auth.verifyCsrf`
+reads the token from the `x-csrf-token` header or a JSON body's `csrfToken`,
+through the same bounded reader as the route option: it reads at most 64 KB of
+a body looking for it and refuses a larger one with `reason: "body-too-large"`,
+so a large request carries the token in the header.
 
 **Breaking.** The account-link endpoints are removed:
 `GET /api/users/{id}/accounts` and
@@ -227,6 +243,13 @@ loss of rows nothing can recreate.
 
 Both names stay reserved, so a collection cannot take a name that an existing
 database still has a table under.
+
+The `accounts` and `sessions` Drizzle tables are no longer exported from
+`nextly/schemas` either, and their definitions are gone from every dialect: a
+table Nextly neither creates nor writes has no schema object to offer. Code
+that still reads one of them on an existing database declares the table
+itself, with Drizzle's `pgTable`, `mysqlTable` or `sqliteTable` and only the
+columns it reads.
 
 A login provider button can now carry an `href`, and the login page renders it
 as a link. Previously a provider that did not ship its own React component

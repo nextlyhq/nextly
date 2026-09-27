@@ -220,6 +220,42 @@ describe("PluginSettingsService", () => {
 });
 
 /**
+ * Whether a secret is set is a fact about what was SAVED.
+ *
+ * `getRedacted` parses the stored settings to give the admin every declared
+ * key, and parsing fills in defaults. Judging presence on the parse reported
+ * a secret with a non-empty default as `{ set: true }` before anything had
+ * been saved, and an operator could skip a credential nothing stores.
+ */
+describe("a secret with a schema default", () => {
+  const defaulted = z.object({
+    apiKey: z.string().default("sk-placeholder"),
+  });
+  const svc = (store: PluginSettingsStore) =>
+    new PluginSettingsService({
+      owner: "@test/p",
+      schema: defaulted,
+      secretPaths: ["apiKey"],
+      store,
+      secrets: () => [KEY_A],
+    });
+
+  it("is reported as not set until it has been saved", async () => {
+    expect(await svc(memoryStore()).getRedacted()).toEqual({
+      apiKey: { set: false },
+    });
+  });
+
+  it("is reported as set once saved", async () => {
+    // The control: judging presence on the stored value must not stop a
+    // saved secret from being reported.
+    const store = memoryStore();
+    await svc(store).set({ apiKey: SECRET_VALUE });
+    expect(await svc(store).getRedacted()).toEqual({ apiKey: { set: true } });
+  });
+});
+
+/**
  * A patch touching one field of a nested group keeps the rest of it.
  *
  * `{ ...current, ...patch }` replaces a nested object wholesale, so patching

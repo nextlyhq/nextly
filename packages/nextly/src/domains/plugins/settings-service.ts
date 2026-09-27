@@ -163,11 +163,14 @@ export class PluginSettingsService {
    * and anything it receives can be read by anything else on the page.
    */
   async getRedacted(): Promise<unknown> {
-    // Parsed first, so the admin sees every declared key rather than only the
-    // ones written so far — a secret that has never been set still has to
-    // appear, as `{ set: false }`, or the form has nothing to render.
-    const parsed = this.deps.schema.parse(await this.readStored());
-    return redactSecrets(parsed, this.deps.secretPaths);
+    // Parsed for the SHAPE, so the admin sees every declared key rather than
+    // only the ones written so far — a secret that has never been set still
+    // has to appear, as `{ set: false }`, or the form has nothing to render.
+    // Whether a secret is set is read from what is STORED, not the parse:
+    // a schema default is not a saved credential.
+    const stored = await this.readStored();
+    const parsed = this.deps.schema.parse(stored);
+    return redactSecrets(parsed, this.deps.secretPaths, stored);
   }
 
   /**
