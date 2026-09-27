@@ -178,8 +178,9 @@ A secret is never returned to the browser: the admin sees `{ set }`.
 prevent server-side request forgery, so names are resolved here, every answer
 is vetted, and the request is sent to the address that was vetted — closing the
 window in which a name resolves differently for the check than for the request.
-Private, loopback, link-local and metadata addresses are refused, including the
-IPv6 ways of writing them, and every redirect is re-checked. A redirect
+Private, loopback, link-local, metadata, documentation (TEST-NET) and other
+reserved addresses are refused, including the IPv6 ways of writing them, and
+every redirect is re-checked. A redirect
 that would send the request body to a different origin is refused: a body can
 carry a credential — an OAuth `client_secret`, say — as surely as a header,
 and the headers are already dropped at that boundary. A request body over

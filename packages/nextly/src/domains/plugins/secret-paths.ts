@@ -112,30 +112,28 @@ export function mapSecrets(
  * the UI can truthfully say about one is whether it has a value — which is
  * exactly what an operator needs to know to decide whether to replace it.
  *
- * `value` gives the shape: every secret it holds is replaced. `stored` answers
- * whether each one has been SAVED, at the same path. The two differ when
- * `value` has been through the plugin's schema, which fills in defaults: a
- * secret with a non-empty default that was never written reported
- * `{ set: true }`, and an operator could skip configuring a credential that
- * no stored setting holds.
- *
- * Paths are matched as they appear in `value`. A schema that MOVES a stored
- * key (a `preprocess` or `transform` from an older layout) has no stored value
- * at the new path, and such a secret reads as not set.
+ * `value` gives the shape: every secret it holds is replaced. `isSet` decides
+ * what each one reports, and defaults to whether it holds a value. A caller
+ * whose `value` has been through a schema passes its own answer, because a
+ * schema default is a value nothing saved.
  */
 export function redactSecrets(
   value: unknown,
   patterns: readonly string[],
-  stored: unknown = value
+  isSet: (secret: unknown, path: string[]) => boolean = hasSecretValue
 ): unknown {
-  return mapSecrets(value, patterns, (_secret, path) => {
-    const saved = valueAtPath(stored, path);
-    return { set: saved !== undefined && saved !== null && saved !== "" };
-  });
+  return mapSecrets(value, patterns, (secret, path) => ({
+    set: isSet(secret, path),
+  }));
+}
+
+/** Whether a secret holds a value: anything but absent, null or empty. */
+export function hasSecretValue(secret: unknown): boolean {
+  return secret !== undefined && secret !== null && secret !== "";
 }
 
 /** The value at `path` in `root`, through objects and arrays alike. */
-function valueAtPath(root: unknown, path: readonly string[]): unknown {
+export function valueAtPath(root: unknown, path: readonly string[]): unknown {
   let current = root;
   for (const segment of path) {
     if (Array.isArray(current)) {

@@ -13,6 +13,8 @@
  * @module domains/plugins/settings-service
  * @since 1.0.0
  */
+import { isDeepStrictEqual } from "node:util";
+
 import type { ZodObject, ZodRawShape, ZodType } from "zod";
 
 import { NextlyError } from "../../errors/nextly-error";
@@ -21,9 +23,11 @@ import { secretGenerations } from "../../shared/lib/secret-generations";
 import { decrypt, encrypt } from "../../utils/encryption";
 
 import {
+  hasSecretValue,
   mapSecrets,
   redactSecrets,
   topLevelKeyHoldsSecret,
+  valueAtPath,
 } from "./secret-paths";
 import { OWNER_LOCK_KEY } from "./settings-store";
 
@@ -166,11 +170,54 @@ export class PluginSettingsService {
     // Parsed for the SHAPE, so the admin sees every declared key rather than
     // only the ones written so far — a secret that has never been set still
     // has to appear, as `{ set: false }`, or the form has nothing to render.
-    // Whether a secret is set is read from what is STORED, not the parse:
-    // a schema default is not a saved credential.
     const stored = await this.readStored();
     const parsed = this.deps.schema.parse(stored);
-    return redactSecrets(parsed, this.deps.secretPaths, stored);
+    return redactSecrets(
+      parsed,
+      this.deps.secretPaths,
+      this.savedSecretCheck(stored)
+    );
+  }
+
+  /**
+   * Whether the secret the schema placed at a path came from a saved value.
+   *
+   * Saved when the stored settings hold a value at that path. Also saved when
+   * the schema READ it from somewhere else: a `preprocess` or `transform` from
+   * an older layout moves a stored key, so nothing is stored at the new path
+   * although the credential there is a saved one. What is not saved is a
+   * schema default, which the plugin runs with but no one configured.
+   *
+   * The defaults are what the schema makes of empty settings, parsed twice: a
+   * default that differs between the two is generated, and a value read from
+   * storage is instead the same on every parse of it. When empty settings do
+   * not parse there is nothing to tell a default from a saved value, so only
+   * a value stored at the path counts — reporting a saved key unset costs the
+   * operator a re-entry, while reporting a default set lets them skip a
+   * credential nothing configured.
+   */
+  private savedSecretCheck(
+    stored: Record<string, unknown>
+  ): (secret: unknown, path: string[]) => boolean {
+    const { schema } = this.deps;
+    const empty = [schema.safeParse({}), schema.safeParse({})];
+    const reread = schema.safeParse(stored);
+
+    return (secret, path) => {
+      if (hasSecretValue(valueAtPath(stored, path))) return true;
+      if (!hasSecretValue(secret)) return false;
+      const [first, second] = empty;
+      if (!first.success || !second.success) return false;
+
+      const fallback = valueAtPath(first.data, path);
+      if (isDeepStrictEqual(fallback, valueAtPath(second.data, path))) {
+        return !isDeepStrictEqual(secret, fallback);
+      }
+      return (
+        reread.success &&
+        isDeepStrictEqual(secret, valueAtPath(reread.data, path))
+      );
+    };
   }
 
   /**

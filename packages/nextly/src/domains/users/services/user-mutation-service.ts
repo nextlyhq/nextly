@@ -384,6 +384,30 @@ interface MediaRow {
   [column: string]: unknown;
 }
 
+/**
+ * The validation refusal for a user input that failed its schema: one error
+ * per issue, at the field it names — or `input` for an issue about the whole
+ * value. One spelling for every user write, so a client reads the same shape
+ * whichever write it made.
+ */
+function userValidationError(
+  issues: ReadonlyArray<{
+    path: readonly PropertyKey[];
+    code: string;
+    message: string;
+  }>,
+  logContext: Record<string, unknown>
+): NextlyError {
+  return NextlyError.validation({
+    errors: issues.map(i => ({
+      path: i.path.join(".") || "input",
+      code: i.code.toUpperCase(),
+      message: i.message,
+    })),
+    logContext,
+  });
+}
+
 export class UserMutationService extends BaseService {
   private readonly userConfig?: UserConfig;
   private readonly userExtSchemaService?: UserExtSchemaService;
@@ -781,13 +805,9 @@ export class UserMutationService extends BaseService {
       isActive: true,
     });
     if (!validation.success) {
-      throw NextlyError.validation({
-        errors: validation.error.issues.map(i => ({
-          path: i.path.join(".") || "input",
-          code: i.code.toUpperCase(),
-          message: i.message,
-        })),
-        logContext: { entity: "user", email: input.email },
+      throw userValidationError(validation.error.issues, {
+        entity: "user",
+        email: input.email,
       });
     }
     const email = validation.data.email;
@@ -1065,14 +1085,10 @@ export class UserMutationService extends BaseService {
       // Validate input (merged schema includes custom field validators when configured)
       const validation = this.getCreateSchema().safeParse(userData);
       if (!validation.success) {
-        throw NextlyError.validation({
-          errors: validation.error.issues.map(i => ({
-            path: i.path.join(".") || "input",
-            code: i.code.toUpperCase(),
-            message: i.message,
-          })),
-          // Email goes to logContext only — never echoed in the public message.
-          logContext: { entity: "user", email: userData.email },
+        // Email goes to logContext only — never echoed in the public message.
+        throw userValidationError(validation.error.issues, {
+          entity: "user",
+          email: userData.email,
         });
       }
 
@@ -1445,13 +1461,9 @@ export class UserMutationService extends BaseService {
       // Validate input (merged schema includes custom field validators when configured)
       const validation = this.getUpdateSchema().safeParse(changes);
       if (!validation.success) {
-        throw NextlyError.validation({
-          errors: validation.error.issues.map(i => ({
-            path: i.path.join(".") || "input",
-            code: i.code.toUpperCase(),
-            message: i.message,
-          })),
-          logContext: { entity: "user", userId },
+        throw userValidationError(validation.error.issues, {
+          entity: "user",
+          userId,
         });
       }
 

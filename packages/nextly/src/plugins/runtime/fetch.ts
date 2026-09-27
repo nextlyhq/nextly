@@ -135,47 +135,8 @@ function nextHop(
       ? current.headers
       : stripCredentialHeaders(current.headers);
 
-  const method = (current.method ?? "GET").toUpperCase();
-
-  // Which methods a redirect rewrites is per STATUS, and there are three
-  // cases rather than two. 307 and 308 exist precisely to preserve the
-  // request, so they rewrite nothing. 303 means "fetch the result by GET", so
-  // it rewrites whatever the request was. 301 and 302 rewrite only POST, for
-  // historical compatibility — rewriting PUT, PATCH or DELETE as well turned
-  // the caller's operation into a different one and dropped its body.
-  const rewritesToGet =
-    status === 307 || status === 308
-      ? false
-      : status === 303
-        ? method !== "HEAD"
-        : method === "POST";
-
-  if (!rewritesToGet) {
-    // The body is sent again, and a body can carry credentials as surely as
-    // a header — an OAuth token exchange posts `client_secret` in its form.
-    // The credential headers are already dropped at an origin change, so the
-    // body never crosses one either: the redirect is refused, and a caller
-    // that meant to follow it re-sends deliberately to the address it now
-    // knows. Judged by presence rather than length — an empty body refused
-    // costs a caller a re-send, while measuring every `BodyInit` shape here
-    // would duplicate what the transport reads.
-    const hasBody = current.body !== undefined && current.body !== null;
-    if (hasBody && from.origin !== to.origin) {
-      refuse("cross-origin-redirect-body", {
-        from: from.origin,
-        to: to.origin,
-        status,
-      });
-    }
-    // The body is sent again, so it has to be replayable. A stream is consumed
-    // by the first hop and would arrive empty at the second — refused rather
-    // than silently truncated to nothing.
-    if (current.body instanceof ReadableStream) {
-      refuse("unreplayable-redirect-body", {
-        host: to.hostname,
-        status,
-      });
-    }
+  if (!redirectRewritesToGet(status, current.method)) {
+    assertBodyReplayable(current.body, status, from, to);
     return { ...current, headers };
   }
 
@@ -184,6 +145,60 @@ function nextHop(
   // `Content-Length` or `Content-Type` onto a bodyless GET leaves the framing
   // disagreeing with the request.
   return { ...rest, headers: stripEntityHeaders(headers), method: "GET" };
+}
+
+/**
+ * Whether a redirect turns the next hop into a bodyless GET.
+ *
+ * Per STATUS, and there are three cases rather than two. 307 and 308 exist
+ * precisely to preserve the request, so they rewrite nothing. 303 means "fetch
+ * the result by GET", so it rewrites whatever the request was. 301 and 302
+ * rewrite only POST, for historical compatibility — rewriting PUT, PATCH or
+ * DELETE as well turns the caller's operation into a different one and drops
+ * its body.
+ */
+function redirectRewritesToGet(
+  status: number,
+  method: string | undefined
+): boolean {
+  const verb = (method ?? "GET").toUpperCase();
+  if (status === 307 || status === 308) return false;
+  if (status === 303) return verb !== "HEAD";
+  return verb === "POST";
+}
+
+/**
+ * Refuse a hop that would send `body` again where it must not go.
+ *
+ * A body can carry credentials as surely as a header — an OAuth token exchange
+ * posts `client_secret` in its form. The credential headers are already
+ * dropped at an origin change, so the body never crosses one either: the
+ * redirect is refused, and a caller that meant to follow it re-sends
+ * deliberately to the address it now knows. Judged by presence rather than
+ * length — an empty body refused costs a caller a re-send, while measuring
+ * every `BodyInit` shape here would duplicate what the transport reads.
+ *
+ * Within one origin the body is sent again, so it has to be replayable: a
+ * stream is consumed by the first hop and would arrive empty at the second,
+ * so it is refused rather than silently truncated to nothing.
+ */
+function assertBodyReplayable(
+  body: RequestInit["body"],
+  status: number,
+  from: URL,
+  to: URL
+): void {
+  if (body === undefined || body === null) return;
+  if (from.origin !== to.origin) {
+    refuse("cross-origin-redirect-body", {
+      from: from.origin,
+      to: to.origin,
+      status,
+    });
+  }
+  if (body instanceof ReadableStream) {
+    refuse("unreplayable-redirect-body", { host: to.hostname, status });
+  }
 }
 
 /** The headers that describe a body, dropped when the body is. */

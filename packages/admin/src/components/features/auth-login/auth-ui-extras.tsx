@@ -1,27 +1,15 @@
 "use client";
 
+import type { AuthUiMeta, AuthUiProvider } from "nextly/api/auth-ui-types";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { useApi } from "@admin/hooks/useApi";
 
-/** A provider button on the login screen (D57). */
-export interface AuthUiProvider {
-  strategy: string;
-  label: string;
-  icon?: string;
-  component?: string;
-  /** A same-origin path the button navigates to, when it has no component. */
-  href?: string;
-}
-
-/** The public auth-page UI contract served by `GET /auth/ui` (D57). */
-export interface AuthUiMeta {
-  providers: AuthUiProvider[];
-  challengeViews: Record<string, string>;
-  slots: { beforeForm: string[]; afterForm: string[]; branding: string[] };
-}
+// The `GET /auth/ui` contract (D57), imported from the server that serves it
+// rather than restated, and re-exported for this feature's consumers.
+export type { AuthUiMeta, AuthUiProvider };
 
 const EMPTY: AuthUiMeta = {
   providers: [],

@@ -63,8 +63,8 @@ Refused by construction:
   production, so a fake provider can be used in tests);
 - a host not on the allowlist, matched on whole labels — `*.example.com` covers
   `a.example.com` and not `example.com.evil.com`;
-- private, loopback, link-local, carrier-NAT, benchmark, multicast and reserved
-  addresses, including `169.254.169.254`, which on most cloud providers answers
+- private, loopback, link-local, carrier-NAT, benchmark, documentation
+  (TEST-NET), multicast and reserved addresses, including `169.254.169.254`, which on most cloud providers answers
   with the instance's own credentials;
 - the IPv6 ways of writing those — IPv4-mapped, IPv4-compatible, NAT64 and
   6to4 are each judged as the IPv4 address they carry;

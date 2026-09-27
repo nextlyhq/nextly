@@ -8,11 +8,20 @@
  * no-diff path returned before the cleanup — so the documented
  * `NEXTLY_ALLOW_CORE_DESTRUCTIVE` flow dropped nothing and reported nothing.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { getCoreSchema } from "../../../../schemas";
 import { reconcileCore } from "../core-reconcile";
+
+// The ledger write that follows a successful apply. Stubbed so the apply path
+// can run without a database; nothing here is about what the ledger records.
+vi.mock("../../events/schema-events-repository", () => ({
+  SchemaEventsRepository: class {
+    recordStart = () => Promise.resolve("event-1");
+    markApplied = () => Promise.resolve();
+  },
+}));
 
 /** The retired names, as the production planner knows them. */
 const RETIRED = ["accounts", "sessions"];
@@ -109,5 +118,46 @@ describe("a retired-table drop the operator asked for", () => {
     });
     await reconcileCore(args as never);
     expect(executed).toHaveLength(2);
+  });
+
+  describe("when the core schema also needs changing", () => {
+    // An empty live snapshot diffs as "create every core table", so these take
+    // the apply path rather than the "up to date" one above.
+    const needsApply = { introspect: () => Promise.resolve({ tables: [] }) };
+
+    it("drops only after the core apply has run", async () => {
+      const order: string[] = [];
+      const { args } = deps({
+        ...needsApply,
+        applyCore: () => {
+          order.push("apply");
+          return Promise.resolve({ statementsExecuted: [] as string[] });
+        },
+        executeSql: (sql: string) => {
+          order.push(sql.startsWith("DROP") ? "drop" : sql);
+          return Promise.resolve(undefined);
+        },
+      });
+
+      await expect(reconcileCore(args as never)).resolves.toEqual({
+        changed: true,
+      });
+      expect(order).toEqual(["apply", "drop", "drop"]);
+    });
+
+    it("leaves the retired tables in place when the core apply fails", async () => {
+      // The drop cannot be undone and the apply can fail. Dropping first, a
+      // failed apply leaves the database without those rows and without the
+      // core update.
+      const { args, executed } = deps({
+        ...needsApply,
+        applyCore: () => Promise.reject(new Error("push failed")),
+      });
+
+      await expect(reconcileCore(args as never)).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_APPLY_FAILED",
+      });
+      expect(executed).toEqual([]);
+    });
   });
 });

@@ -81,6 +81,14 @@ describe("auth.* post-commit lifecycle events", () => {
       name: "Login User",
     });
     const userId = (registered.user as { id: string }).id;
+    // A self-registered account cannot sign in until its verification link is
+    // followed, which is also what activates it.
+    const authService: AuthService = current.nextly.authService;
+    const { token } = await authService.generateEmailVerificationToken(
+      "login@example.com",
+      { disableEmail: true }
+    );
+    await authService.verifyEmail(token as string);
 
     const events: Array<Record<string, unknown>> = [];
     current.events.on<Record<string, unknown>>("auth.loggedIn", e => {

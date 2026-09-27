@@ -49,6 +49,10 @@ describe("address rules — IPv4", () => {
     ["100.64.0.1", "carrier-nat"],
     ["192.0.0.1", "reserved"],
     ["198.18.0.1", "benchmark"],
+    ["192.0.2.1", "documentation"],
+    ["198.51.100.1", "documentation"],
+    ["203.0.113.1", "documentation"],
+    ["192.88.99.1", "reserved"],
     ["224.0.0.1", "multicast"],
     ["255.255.255.255", "broadcast"],
   ])("refuses %s as %s", (address, rule) => {
@@ -57,14 +61,22 @@ describe("address rules — IPv4", () => {
     expect(verdict.allowed === false && verdict.reason).toBe(rule);
   });
 
-  it.each([["93.184.216.34"], ["8.8.8.8"], ["172.32.0.1"], ["172.15.0.1"]])(
-    "allows the public address %s",
-    address => {
-      // The positive control: without it, a rule that refused everything
-      // would pass every test above.
-      expect(judgeIpv4(address).allowed).toBe(true);
-    }
-  );
+  it.each([
+    ["93.184.216.34"],
+    ["8.8.8.8"],
+    ["172.32.0.1"],
+    ["172.15.0.1"],
+    // The neighbours of the documentation and relay ranges, so a rule written
+    // one octet too wide shows up here.
+    ["192.0.3.1"],
+    ["198.51.101.1"],
+    ["203.0.114.1"],
+    ["192.88.98.1"],
+  ])("allows the public address %s", address => {
+    // The positive control: without it, a rule that refused everything
+    // would pass every test above.
+    expect(judgeIpv4(address).allowed).toBe(true);
+  });
 });
 
 describe("address rules — IPv6", () => {
@@ -74,6 +86,14 @@ describe("address rules — IPv6", () => {
     ["fc00::1", "unique-local"],
     ["fe80::1", "link-local"],
     ["ff02::1", "multicast"],
+    ["2001:db8::1", "documentation"],
+    ["3fff:fff::1", "documentation"],
+    ["100::1", "reserved"],
+    ["100:0:0:1::1", "reserved"],
+    ["2001:2::1", "benchmark"],
+    ["2001::1", "reserved"],
+    ["2001:1ff::1", "reserved"],
+    ["5f00::1", "reserved"],
   ])("refuses %s as %s", (address, rule) => {
     const verdict = judgeIpv6(address);
     expect(verdict.allowed === false && verdict.reason).toBe(rule);
@@ -114,8 +134,16 @@ describe("address rules — IPv6", () => {
     expect(judgeIpv6("64:ff9b:1:5db8:d8:2200::").allowed).toBe(true);
   });
 
-  it("allows a public IPv6 address", () => {
-    expect(judgeIpv6("2606:2800:220:1:248:1893:25c8:1946").allowed).toBe(true);
+  it.each([
+    ["2606:2800:220:1:248:1893:25c8:1946"],
+    // The neighbours of the documentation, protocol-assignment and SRv6
+    // prefixes.
+    ["2001:db9::1"],
+    ["3fff:1000::1"],
+    ["2001:200::1"],
+    ["5f01::1"],
+  ])("allows the public IPv6 address %s", address => {
+    expect(judgeIpv6(address).allowed).toBe(true);
   });
 
   it("refuses a mapped address carrying a private IPv4", () => {

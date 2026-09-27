@@ -256,6 +256,96 @@ describe("a secret with a schema default", () => {
 });
 
 /**
+ * A secret the schema READS from an older layout is still a saved one.
+ *
+ * A field can reshape its own stored value: a flat `auth: "<key>"` read by a
+ * newer schema as `auth: { apiKey }`. Nothing is stored at `auth.apiKey`, yet
+ * the credential there is the saved one, and reporting it unset invites an
+ * operator to replace a key that works.
+ */
+describe("a secret the schema moves from an older layout", () => {
+  const current = z.object({
+    auth: z.preprocess(
+      stored => (typeof stored === "string" ? { apiKey: stored } : stored),
+      z
+        .object({ apiKey: z.string().default("sk-placeholder") })
+        .default({ apiKey: "sk-placeholder" })
+    ),
+  });
+  const reading = (store: PluginSettingsStore) =>
+    new PluginSettingsService({
+      owner: "@test/p",
+      schema: current,
+      secretPaths: ["auth.apiKey"],
+      store,
+      secrets: () => [KEY_A],
+    });
+
+  it("is reported as set when the older layout saved it", async () => {
+    const store = memoryStore();
+    // Saved by the plugin's earlier manifest, as a flat secret.
+    await new PluginSettingsService({
+      owner: "@test/p",
+      schema: z.object({ auth: z.string() }),
+      secretPaths: ["auth"],
+      store,
+      secrets: () => [KEY_A],
+    }).set({ auth: SECRET_VALUE });
+
+    expect(await reading(store).getRedacted()).toEqual({
+      auth: { apiKey: { set: true } },
+    });
+  });
+
+  it("is still reported as not set when only its default fills it", async () => {
+    // The control: the new rule must not make a default look saved.
+    expect(await reading(memoryStore()).getRedacted()).toEqual({
+      auth: { apiKey: { set: false } },
+    });
+  });
+
+  it("is not reported as set when its default is generated", async () => {
+    // A generated default differs on every parse, so it never equals the one
+    // compared against — and still is not something anyone saved.
+    let n = 0;
+    const generated = new PluginSettingsService({
+      owner: "@test/p",
+      schema: z.object({
+        token: z.string().default(() => `generated-${++n}`),
+      }),
+      secretPaths: ["token"],
+      store: memoryStore(),
+      secrets: () => [KEY_A],
+    });
+
+    expect(await generated.getRedacted()).toEqual({ token: { set: false } });
+  });
+
+  it("is not reported as set by a default when empty settings do not parse", async () => {
+    // A required sibling leaves nothing to compare the default against, and
+    // the default must still not read as a saved credential.
+    const store = memoryStore();
+    const schema = z.object({
+      region: z.string(),
+      apiKey: z.string().default("sk-placeholder"),
+    });
+    const service = new PluginSettingsService({
+      owner: "@test/p",
+      schema,
+      secretPaths: ["apiKey"],
+      store,
+      secrets: () => [KEY_A],
+    });
+    await service.set({ region: "eu" });
+
+    expect(await service.getRedacted()).toEqual({
+      region: "eu",
+      apiKey: { set: false },
+    });
+  });
+});
+
+/**
  * A patch touching one field of a nested group keeps the rest of it.
  *
  * `{ ...current, ...patch }` replaces a nested object wholesale, so patching

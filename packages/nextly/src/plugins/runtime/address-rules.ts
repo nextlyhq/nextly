@@ -26,6 +26,7 @@ export type AddressRefusal =
   | "link-local"
   | "carrier-nat"
   | "benchmark"
+  | "documentation"
   | "multicast"
   | "broadcast"
   | "reserved"
@@ -56,13 +57,6 @@ function ipv4Octets(address: string): number[] | null {
 }
 
 /**
- * Whether an IPv4 address is one a plugin may reach.
- *
- * Every refused range is a place a request can do damage while looking like an
- * ordinary fetch. `169.254.169.254` is the one worth naming: on most cloud
- * providers it answers with the instance's own credentials.
- */
-/**
  * The ranges a plugin may not reach, as data rather than a branch chain.
  *
  * A table because the list is the specification: each entry reads as the rule
@@ -92,6 +86,27 @@ const REFUSED_IPV4: ReadonlyArray<{
   {
     reason: "benchmark",
     matches: ([a, b]) => a === 198 && (b === 18 || b === 19),
+  },
+  // TEST-NET-1, -2 and -3 (RFC 5737). Never assigned on the public internet,
+  // so a name that resolves into one is pointing somewhere a network has
+  // chosen to route privately.
+  {
+    reason: "documentation",
+    matches: ([a, b, c]) => a === 192 && b === 0 && c === 2,
+  },
+  {
+    reason: "documentation",
+    matches: ([a, b, c]) => a === 198 && b === 51 && c === 100,
+  },
+  {
+    reason: "documentation",
+    matches: ([a, b, c]) => a === 203 && b === 0 && c === 113,
+  },
+  // The retired 6to4 relay anycast range (RFC 7526), which operators may still
+  // route to a relay of their own.
+  {
+    reason: "reserved",
+    matches: ([a, b, c]) => a === 192 && b === 88 && c === 99,
   },
   { reason: "multicast", matches: ([a]) => a >= 224 && a <= 239 },
   { reason: "broadcast", matches: o => o.every(part => part === 255) },
@@ -212,21 +227,65 @@ export function judgeIpv6(address: string): AddressVerdict {
   const embedded = embeddedIpv4(bytes);
   if (embedded !== null) return judgeIpv4(embedded.join("."));
 
-  if ((bytes[0] & 0xfe) === 0xfc) return refuse("unique-local");
-  if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) {
-    return refuse("link-local");
-  }
+  const hit = REFUSED_IPV6.find(rule => rule.matches(bytes));
+  return hit ? refuse(hit.reason) : ALLOWED;
+}
+
+/** The IPv6 prefixes a plugin may not reach, as data like the IPv4 table. */
+const REFUSED_IPV6: ReadonlyArray<{
+  reason: AddressRefusal;
+  matches: (bytes: number[]) => boolean;
+}> = [
+  { reason: "unique-local", matches: ([a]) => (a & 0xfe) === 0xfc },
+  {
+    reason: "link-local",
+    matches: ([a, b]) => a === 0xfe && (b & 0xc0) === 0x80,
+  },
   // fec0::/10 — site-local, deprecated since 2004 but still routed on
   // networks that predate the deprecation. Internal-only by design, like the
   // unique-local range above it, and falling through as public let a
   // declared host reach internal v6 services through the vetted address.
-  if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0xc0) {
-    return refuse("site-local");
-  }
-  if (bytes[0] === 0xff) return refuse("multicast");
-
-  return ALLOWED;
-}
+  {
+    reason: "site-local",
+    matches: ([a, b]) => a === 0xfe && (b & 0xc0) === 0xc0,
+  },
+  { reason: "multicast", matches: ([a]) => a === 0xff },
+  // 2001:db8::/32 (RFC 3849) and 3fff::/20 (RFC 9637), the IPv6 counterparts
+  // of the IPv4 TEST-NETs.
+  {
+    reason: "documentation",
+    matches: ([a, b, c, d]) =>
+      a === 0x20 && b === 0x01 && c === 0x0d && d === 0xb8,
+  },
+  {
+    reason: "documentation",
+    matches: ([a, b, c]) => a === 0x3f && b === 0xff && (c & 0xf0) === 0,
+  },
+  // 2001:2::/48 — the IPv6 benchmarking range (RFC 5180), like 198.18/15.
+  // Before the block below, which contains it, so it is named for itself.
+  {
+    reason: "benchmark",
+    matches: ([a, b, c, d, e, f]) =>
+      a === 0x20 && b === 0x01 && c === 0 && d === 0x02 && e === 0 && f === 0,
+  },
+  // 2001::/23 — IETF protocol assignments (RFC 2928), Teredo among them.
+  // Not globally reachable as a block; the few anycast services inside it
+  // are nothing a plugin's declared host resolves to.
+  {
+    reason: "reserved",
+    matches: ([a, b, c]) => a === 0x20 && b === 0x01 && (c & 0xfe) === 0,
+  },
+  // 100::/64 discard-only (RFC 6666) and 100:0:0:1::/64 dummy (RFC 9780):
+  // traffic to either is meant to go nowhere.
+  {
+    reason: "reserved",
+    matches: b =>
+      b[0] === 0x01 && b.slice(1, 7).every(x => x === 0) && (b[7] & 0xfe) === 0,
+  },
+  // 5f00::/16 — segment-routing SIDs (RFC 9602), internal to the network
+  // that assigns them.
+  { reason: "reserved", matches: ([a, b]) => a === 0x5f && b === 0x00 },
+];
 
 /**
  * The IPv4 an IPv6 address embeds, as its four octets — or null when it

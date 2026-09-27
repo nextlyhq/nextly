@@ -1,11 +1,9 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
-import { auditFailureMetadata } from "../../domains/audit/audit-log-writer";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { AuthUser } from "../../types/auth";
-import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import {
   clearPendingCookie,
   readPendingCookie,
@@ -23,8 +21,9 @@ import {
   stallResponse,
   buildAuthErrorResponse,
   csrfRefusal,
+  recordLoginFailure,
 } from "./handler-utils";
-import { issueSession, type IssueSessionDeps } from "./issue-session";
+import { finishResumedSignIn, type IssueSessionDeps } from "./issue-session";
 
 export interface ChallengeResolveDeps extends IssueSessionDeps {
   challengeRegistry: ChallengeRegistry;
@@ -428,31 +427,17 @@ export async function handleChallengeResolve(
       name: u.name,
       image: u.image,
     };
-    // The strategy the pending token carries, not this handler's own: the
-    // method that signed the person in is the one that authenticated them,
-    // not the one that answered the challenge.
-    const response = await issueSession(user, deps, request, requestId, {
-      strategy: pending.strategy,
-      // Where the login was headed before the challenge interrupted it. It was
-      // sanitized before being signed into the token, so it is a safe path.
-      next: pending.next,
-    });
-    // The challenge is settled either way, so the pending cookie has no reason
-    // to survive it; leaving it would let a stale token be replayed.
-    response.headers.append("Set-Cookie", clearPendingCookie());
-    await stallResponse(startTime, deps.loginStallTimeMs);
-    return response;
+    return await finishResumedSignIn(
+      user,
+      deps,
+      request,
+      requestId,
+      pending,
+      startTime
+    );
   } catch (err) {
     await stallResponse(startTime, deps.loginStallTimeMs);
-    await deps.auditLog.write({
-      kind: "login-failed",
-      ipAddress: getTrustedClientIp(request, {
-        trustProxy: deps.trustProxy,
-        trustedProxyIps: deps.trustedProxyIps,
-      }),
-      userAgent: request.headers.get("user-agent"),
-      metadata: auditFailureMetadata(err, requestId),
-    });
+    await recordLoginFailure(deps, request, err, requestId);
     return challengeErrorResponse(err, requestId, usedCookie);
   }
 }

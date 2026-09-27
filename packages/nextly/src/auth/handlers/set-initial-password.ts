@@ -13,16 +13,12 @@
  * collapses to a generic invalid-credentials response.
  */
 import { readOrGenerateRequestId } from "../../api/request-id";
-import { auditFailureMetadata } from "../../domains/audit/audit-log-writer";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
-import {
-  clearPendingCookie,
-  readPendingCookie,
-} from "../cookies/pending-cookie";
+import { readPendingCookie } from "../cookies/pending-cookie";
 import {
   MUST_CHANGE_PASSWORD_CHALLENGE,
   verifyPendingToken,
@@ -30,10 +26,12 @@ import {
 
 import {
   stallResponse,
-  buildAuthErrorResponse,
   csrfRefusal,
+  loginFailureResponse,
+  readJsonObjectBody,
+  recordLoginFailure,
 } from "./handler-utils";
-import { issueSession, type IssueSessionDeps } from "./issue-session";
+import { finishResumedSignIn, type IssueSessionDeps } from "./issue-session";
 
 export interface SetInitialPasswordDeps extends IssueSessionDeps {
   allowedOrigins: string[];
@@ -65,11 +63,7 @@ export async function handleSetInitialPassword(
   const requestId = readOrGenerateRequestId(request);
 
   try {
-    const raw: unknown = await request.json().catch(() => null);
-    const body: Record<string, unknown> =
-      raw !== null && typeof raw === "object" && !Array.isArray(raw)
-        ? (raw as Record<string, unknown>)
-        : {};
+    const body = await readJsonObjectBody(request);
 
     const refusal = csrfRefusal(request, body, deps, requestId);
     if (refusal) {
@@ -169,33 +163,17 @@ export async function handleSetInitialPassword(
       userAgent: request.headers.get("user-agent"),
     });
 
-    // The strategy the pending token carries, not this handler's own: the
-    // method that signed the person in is the one that authenticated them,
-    // not the one that answered the challenge.
-    const response = await issueSession(user, deps, request, requestId, {
-      strategy: pending.strategy,
-      next: pending.next,
-    });
-    response.headers.append("Set-Cookie", clearPendingCookie());
-    await stallResponse(startTime, deps.loginStallTimeMs);
-    return response;
+    return await finishResumedSignIn(
+      user,
+      deps,
+      request,
+      requestId,
+      pending,
+      startTime
+    );
   } catch (err) {
     await stallResponse(startTime, deps.loginStallTimeMs);
-    await deps.auditLog.write({
-      kind: "login-failed",
-      ipAddress: getTrustedClientIp(request, {
-        trustProxy: deps.trustProxy,
-        trustedProxyIps: deps.trustedProxyIps,
-      }),
-      userAgent: request.headers.get("user-agent"),
-      metadata: auditFailureMetadata(err, requestId),
-    });
-    if (NextlyError.is(err)) {
-      return buildAuthErrorResponse(err, requestId);
-    }
-    return buildAuthErrorResponse(
-      NextlyError.internal({ cause: err as Error }),
-      requestId
-    );
+    await recordLoginFailure(deps, request, err, requestId);
+    return loginFailureResponse(err, requestId);
   }
 }

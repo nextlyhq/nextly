@@ -20,6 +20,39 @@ export interface VerifiedUser {
 }
 
 /**
+ * The user row a password sign-in reads: the widest shape any auth handler
+ * needs from a lookup by email, so the router's lookup is typed by it too.
+ */
+export interface CredentialUserRow {
+  id: string;
+  email: string;
+  name: string;
+  image: string | null;
+  /**
+   * NULLABLE, because an account can exist without one: a user created
+   * through an external identity provider is stored with no password at all.
+   * Typed non-null, the passwordless case reaches `verifyPassword` unexamined.
+   */
+  passwordHash: string | null;
+  emailVerified: Date | null;
+  isActive: boolean;
+  mustChangePassword: boolean | null;
+  failedLoginAttempts: number;
+  lockedUntil: Date | null;
+}
+
+/** What a password sign-in needs from the database, and its limits. */
+export interface CredentialDeps {
+  findUserByEmail: (email: string) => Promise<CredentialUserRow | null>;
+  incrementFailedAttempts: (userId: string) => Promise<void>;
+  lockAccount: (userId: string, lockedUntil: Date) => Promise<void>;
+  resetFailedAttempts: (userId: string) => Promise<void>;
+  maxLoginAttempts: number;
+  lockoutDurationSeconds: number;
+  requireEmailVerification: boolean;
+}
+
+/**
  * Stable decoy bcrypt hash used to keep timing constant when the lookup
  * misses. Generated once locally with bcryptjs at cost 12 and baked in —
  * MUST NOT be rotated. Rotating it would change the time bcrypt.compare
@@ -47,32 +80,7 @@ const DUMMY_HASH =
  */
 export async function verifyCredentials(
   input: CredentialVerifyInput,
-  deps: {
-    findUserByEmail: (email: string) => Promise<{
-      id: string;
-      email: string;
-      name: string;
-      image: string | null;
-      /**
-       * NULLABLE, because an account can exist without one: a user created
-       * through an external identity provider is stored with no password at
-       * all. Declared as `string` here while the column was nullable, which
-       * is how the passwordless case reached `verifyPassword` unexamined.
-       */
-      passwordHash: string | null;
-      emailVerified: Date | null;
-      isActive: boolean;
-      mustChangePassword: boolean | null;
-      failedLoginAttempts: number;
-      lockedUntil: Date | null;
-    } | null>;
-    incrementFailedAttempts: (userId: string) => Promise<void>;
-    lockAccount: (userId: string, lockedUntil: Date) => Promise<void>;
-    resetFailedAttempts: (userId: string) => Promise<void>;
-    maxLoginAttempts: number;
-    lockoutDurationSeconds: number;
-    requireEmailVerification: boolean;
-  }
+  deps: CredentialDeps
 ): Promise<VerifiedUser> {
   const user = await deps.findUserByEmail(input.email);
 

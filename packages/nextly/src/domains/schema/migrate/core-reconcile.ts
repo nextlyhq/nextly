@@ -180,8 +180,6 @@ export async function reconcileCore(
     }
   }
 
-  await dropRetiredAuthTablesIfAllowed(deps);
-
   const repo = new SchemaEventsRepository(db, dialect);
   try {
     // 1. Apply the core schema first (drizzle-kit pushSchema over
@@ -205,7 +203,6 @@ export async function reconcileCore(
     logger?.info?.(
       `Core schema reconciled (${result.statementsExecuted.length} statements).`
     );
-    return { changed: true };
   } catch (err) {
     // applyCore/bootstrap may have failed before the ledger exists, so we
     // can't reliably record a failed event — surface the error instead.
@@ -215,6 +212,14 @@ export async function reconcileCore(
       publicMessage: `Core schema apply failed: ${message}`,
     });
   }
+
+  // Only once the core apply has succeeded. The drop is irreversible and the
+  // apply is not guaranteed: dropping first, a failed apply would leave a
+  // database without the retired tables' rows AND without the core update,
+  // with no way back to where it started. Outside the `try`, so a failed drop
+  // is reported as itself rather than as a failed apply.
+  await dropRetiredAuthTablesIfAllowed(deps);
+  return { changed: true };
 }
 
 /**

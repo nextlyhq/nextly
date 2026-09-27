@@ -2,6 +2,7 @@ import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { PluginContext } from "../../plugins/plugin-context";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
+import type { CredentialUserRow } from "../credentials/verify-credentials";
 import { authRateLimiter } from "../middleware/rate-limiter";
 import type { ChallengeRegistry } from "../pipeline/challenge";
 import type { AuthHookRegistry } from "../pipeline/hooks";
@@ -14,6 +15,7 @@ import { handleChallengeResolve } from "./challenge-resolve";
 import { handleChangePassword } from "./change-password";
 import { handleCsrf } from "./csrf";
 import { handleForgotPassword } from "./forgot-password";
+import type { RefreshTokenRecord } from "./issue-session";
 import { handleLogin } from "./login";
 import { handleLogout } from "./logout";
 import { handlePending } from "./pending";
@@ -126,19 +128,7 @@ export interface AuthRouterDeps {
   authUi: AuthUiMeta;
 
   // User lookups (widest return type to satisfy all handlers)
-  findUserByEmail: (email: string) => Promise<{
-    id: string;
-    email: string;
-    name: string;
-    image: string | null;
-    /** Null for an account that authenticates through an external provider. */
-    passwordHash: string | null;
-    emailVerified: Date | null;
-    isActive: boolean;
-    mustChangePassword: boolean | null;
-    failedLoginAttempts: number;
-    lockedUntil: Date | null;
-  } | null>;
+  findUserByEmail: (email: string) => Promise<CredentialUserRow | null>;
   findUserById: (userId: string) => Promise<{
     id: string;
     email: string;
@@ -161,14 +151,7 @@ export interface AuthRouterDeps {
   fetchRoleIds: (userId: string) => Promise<string[]>;
   fetchCustomFields: (userId: string) => Promise<Record<string, unknown>>;
 
-  storeRefreshToken: (record: {
-    id: string;
-    userId: string;
-    tokenHash: string;
-    userAgent: string | null;
-    ipAddress: string | null;
-    expiresAt: Date;
-  }) => Promise<void>;
+  storeRefreshToken: (record: RefreshTokenRecord) => Promise<void>;
   findRefreshTokenByHash: (tokenHash: string) => Promise<{
     id: string;
     userId: string;

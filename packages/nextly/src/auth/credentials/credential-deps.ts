@@ -15,10 +15,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { getDialectTables } from "../../database/index";
 import type { DatabaseAdapter } from "../../shared/types/database-adapter";
 
-import type { verifyCredentials } from "./verify-credentials";
-
-/** What `verifyCredentials` is handed alongside the email and password. */
-export type PasswordCredentialDeps = Parameters<typeof verifyCredentials>[1];
+import type { CredentialDeps } from "./verify-credentials";
 
 /**
  * The credential dependencies over `adapter`.
@@ -28,7 +25,7 @@ export type PasswordCredentialDeps = Parameters<typeof verifyCredentials>[1];
  */
 export function passwordCredentialDeps(
   adapter: () => DrizzleAdapter
-): PasswordCredentialDeps {
+): CredentialDeps {
   // The same typing `BaseService.db` reads the handle with.
   const db = () => adapter().getDrizzle<DatabaseAdapter["db"]>();
   return {

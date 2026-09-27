@@ -1,4 +1,9 @@
-import type { NextlyError } from "../../errors";
+import {
+  auditFailureMetadata,
+  type AuditLogWriter,
+} from "../../domains/audit/audit-log-writer";
+import { NextlyError } from "../../errors/nextly-error";
+import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 
@@ -88,12 +93,79 @@ export async function parseJsonBody(
 }
 
 /**
- * The CSRF refusal a pending-token exchange answers with, or null when the
- * request is allowed to proceed.
+ * The request body as a JSON object, or `{}` for anything else.
+ *
+ * For a handler that checks its own fields. A body that is not an object —
+ * `null`, an array, a number, or not JSON at all — must not reach a
+ * destructure, where it throws an internal error, so it is read as a body
+ * with no fields and the handler's own field checks refuse it.
+ */
+export async function readJsonObjectBody(
+  request: Request
+): Promise<Record<string, unknown>> {
+  const raw: unknown = await request.json().catch(() => null);
+  return raw !== null && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : {};
+}
+
+/** What recording a failed sign-in needs. */
+export interface LoginFailureDeps {
+  auditLog: AuditLogWriter;
+  trustProxy: boolean;
+  trustedProxyIps: string[];
+}
+
+/**
+ * Record a failed sign-in as one `login-failed` event.
+ *
+ * Every path that ends a sign-in attempt in failure records it the same way,
+ * and none splits by reason: that would re-introduce the account-state leak
+ * the single error wire shape collapses. The row keeps only values this
+ * package controls, and names no actor — a failure must not say which
+ * account was reached — so nothing links it to a person. The specific cause
+ * reaches the operator through the log instead.
+ */
+export async function recordLoginFailure(
+  deps: LoginFailureDeps,
+  request: Request,
+  err: unknown,
+  requestId: string
+): Promise<void> {
+  await deps.auditLog.write({
+    kind: "login-failed",
+    ipAddress: getTrustedClientIp(request, {
+      trustProxy: deps.trustProxy,
+      trustedProxyIps: deps.trustedProxyIps,
+    }),
+    userAgent: request.headers.get("user-agent"),
+    metadata: auditFailureMetadata(err, requestId),
+  });
+}
+
+/**
+ * The response a failed sign-in answers with. A `NextlyError` serialises as
+ * itself; anything else collapses to one internal error, so no internals
+ * reach the wire.
+ */
+export function loginFailureResponse(
+  err: unknown,
+  requestId: string
+): Response {
+  return buildAuthErrorResponse(
+    NextlyError.is(err) ? err : NextlyError.internal({ cause: err as Error }),
+    requestId
+  );
+}
+
+/**
+ * The CSRF refusal a state-changing auth request answers with, or null when
+ * the request is allowed to proceed.
  *
  * Returning the response rather than throwing keeps the caller's stall in its
- * own hands: every refusal on these paths takes the same minimum time, so a
- * rejected CSRF token cannot be told from a rejected code by how long it took.
+ * own hands: on a path that stalls, every refusal takes the same minimum time,
+ * so a rejected CSRF token cannot be told from a rejected code by how long it
+ * took.
  */
 export function csrfRefusal(
   request: Request,

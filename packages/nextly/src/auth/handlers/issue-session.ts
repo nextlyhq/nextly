@@ -9,10 +9,12 @@ import type { PluginContext } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { setAccessTokenCookie } from "../cookies/access-token-cookie";
+import { clearPendingCookie } from "../cookies/pending-cookie";
 import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
 import { buildClaims } from "../jwt/claims";
 import { signAccessTokenWithExpiry } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
+import type { PendingClaims } from "../pipeline/pending-token";
 import { sanitizeAdminPath } from "../redirect/sanitize-admin-path";
 import {
   assertAccountUsable,
@@ -24,7 +26,17 @@ import {
   generateRefreshTokenId,
 } from "../session/refresh";
 
-import { buildCookieHeaders } from "./handler-utils";
+import { buildCookieHeaders, stallResponse } from "./handler-utils";
+
+/** A refresh token as stored: its hash, never the token itself. */
+export interface RefreshTokenRecord {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  userAgent: string | null;
+  ipAddress: string | null;
+  expiresAt: Date;
+}
 
 /**
  * The slice of login/challenge deps needed to mint a session. Shared by the
@@ -47,14 +59,7 @@ export interface IssueSessionDeps {
   fetchAccountState: (userId: string) => Promise<AccountState | null>;
   fetchRoleIds: (userId: string) => Promise<string[]>;
   fetchCustomFields: (userId: string) => Promise<Record<string, unknown>>;
-  storeRefreshToken: (record: {
-    id: string;
-    userId: string;
-    tokenHash: string;
-    userAgent: string | null;
-    ipAddress: string | null;
-    expiresAt: Date;
-  }) => Promise<void>;
+  storeRefreshToken: (record: RefreshTokenRecord) => Promise<void>;
   /** Auth-flow hooks; `customizeClaims` runs over the claims before signing. */
   authHooks: AuthHookRegistry;
   /** The plugin context handed to auth hooks. */
@@ -289,4 +294,33 @@ export function challengeResponse(
       },
     }
   );
+}
+
+/**
+ * Finish a sign-in a pending step interrupted — a challenge answered, or a
+ * forced password change completed.
+ *
+ * The session records the strategy the pending token carries, not the
+ * handler's own: the method that signed the person in is the one that
+ * authenticated them, not the one that answered the step. `next` is where the
+ * sign-in was headed before it was interrupted, sanitized before it was
+ * signed into the token. The pending cookie is cleared, because the step is
+ * settled and a stale token must not be replayed, and the response takes the
+ * sign-in's minimum time like every other outcome.
+ */
+export async function finishResumedSignIn(
+  user: AuthUser,
+  deps: IssueSessionDeps & { loginStallTimeMs: number },
+  request: Request,
+  requestId: string,
+  pending: Pick<PendingClaims, "strategy" | "next">,
+  startTime: number
+): Promise<Response> {
+  const response = await issueSession(user, deps, request, requestId, {
+    strategy: pending.strategy,
+    next: pending.next,
+  });
+  response.headers.append("Set-Cookie", clearPendingCookie());
+  await stallResponse(startTime, deps.loginStallTimeMs);
+  return response;
 }

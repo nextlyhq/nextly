@@ -10,10 +10,8 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
-import { validateCsrf } from "../csrf/validate";
 
-import { jsonResponse } from "./handler-utils";
+import { csrfRefusal, readJsonObjectBody } from "./handler-utils";
 
 export interface AcceptInviteHandlerDeps {
   allowedOrigins: string[];
@@ -92,30 +90,12 @@ export async function handleAcceptInvite(
   const requestId = readOrGenerateRequestId(request);
 
   try {
-    // Untrusted input: a non-object body (null, an array, a number) must not
-    // reach the destructure below, where it would throw an internal 500, and a
-    // non-string token or password must not reach the service.
-    const raw: unknown = await request.json().catch(() => null);
-    const body: Record<string, unknown> =
-      raw !== null && typeof raw === "object" && !Array.isArray(raw)
-        ? (raw as Record<string, unknown>)
-        : {};
+    // Untrusted input: a non-string token or password must not reach the
+    // service, which the field checks below refuse.
+    const body = await readJsonObjectBody(request);
 
-    const csrfCookie = readCsrfCookie(request);
-    const csrfToken = readCsrfFromRequest(body, request);
-    const csrfResult = validateCsrf(
-      request,
-      csrfCookie,
-      csrfToken,
-      deps.allowedOrigins
-    );
-    if (!csrfResult.valid) {
-      return jsonResponse(
-        403,
-        { error: { code: "CSRF_FAILED", message: csrfResult.error } },
-        { "x-request-id": requestId }
-      );
-    }
+    const refusal = csrfRefusal(request, body, deps, requestId);
+    if (refusal) return refusal;
 
     const { token, newPassword } = body;
     const tokenMissing = typeof token !== "string" || token.length === 0;

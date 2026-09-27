@@ -1,10 +1,8 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
-import { auditFailureMetadata } from "../../domains/audit/audit-log-writer";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import type { AuthUser } from "../../types/auth";
-import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 import type { AuthHookRegistry } from "../pipeline/hooks";
@@ -23,7 +21,8 @@ import {
 import {
   jsonResponse,
   stallResponse,
-  buildAuthErrorResponse,
+  loginFailureResponse,
+  recordLoginFailure,
 } from "./handler-utils";
 import {
   issueSession,
@@ -304,30 +303,10 @@ export async function handleLogin(
     // response so we never leak internals to the wire.
     await stallResponse(startTime, deps.loginStallTimeMs);
     // Every login failure (bad password, locked, unverified, inactive,
-    // internal) records a single 'login-failed' event. We deliberately do
-    // not split by reason here; that would re-introduce the account-state
-    // leak the unified error wire shape collapses. The row keeps only values
-    // this package controls — a failure is recorded with no actor precisely so
-    // it cannot say which account was reached, which also means nothing links
-    // it to a person and no later deletion can find it, so an identifier must
-    // not enter rather than be erased afterwards. The specific cause reaches
-    // the operator through the log instead.
-    await deps.auditLog.write({
-      kind: "login-failed",
-      ipAddress: getTrustedClientIp(request, {
-        trustProxy: deps.trustProxy,
-        trustedProxyIps: deps.trustedProxyIps,
-      }),
-      userAgent: request.headers.get("user-agent"),
-      metadata: auditFailureMetadata(err, requestId),
-    });
-    if (NextlyError.is(err)) {
-      return buildAuthErrorResponse(err, requestId);
-    }
-    return buildAuthErrorResponse(
-      NextlyError.internal({ cause: err as Error }),
-      requestId
-    );
+    // internal) records one 'login-failed' event, the same way every other
+    // sign-in path records it.
+    await recordLoginFailure(deps, request, err, requestId);
+    return loginFailureResponse(err, requestId);
   }
 }
 
