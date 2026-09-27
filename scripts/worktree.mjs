@@ -22,7 +22,9 @@
  * Anything that ALLOCATES has a teardown path in the same file: `new` takes a
  * checkout, a block of ports and a database on each running container, and
  * `remove` gives them back. A create with no matching remove leaks whatever is
- * scarce, and slots are a small pool.
+ * scarce, and slots are a small pool. The same goes for what a checkout causes
+ * to be allocated elsewhere: `remove` also takes the base snapshot fallow's
+ * audit keeps for the checkout, and `sweep` takes any whose checkout is gone.
  *
  * Usage:
  *   node scripts/worktree.mjs new <branch> [--from <ref>] [--root <dir>]
@@ -37,12 +39,16 @@ import { execFileSync } from "node:child_process";
 import {
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -448,6 +454,133 @@ export function teardownIncomplete(results, provisioned = null) {
   });
 }
 
+/**
+ * The base snapshots fallow's audit keeps, and the checkout each belongs to.
+ *
+ * `fallow audit` keeps a copy of the base in the system temporary directory
+ * for each checkout it audits, about 230 MB for this repository, and reuses it
+ * while that checkout lives. fallow reclaims one whose checkout is gone only
+ * after `audit.cacheMaxAgeDays` without use: 30 days by default, counted in
+ * whole days. A worktree per pull request outruns that. Where `/tmp` is a
+ * 4.9 GB tmpfs, eighteen snapshots filled it in an afternoon: shell writes
+ * failed, and the snapshot being written was cut short, so the verdict read
+ * from it could not be trusted.
+ *
+ * The owner is read from the record fallow writes beside each snapshot, a
+ * `.last-used` file holding the checkout's path. The snapshot's own name is a
+ * hash fallow chose, and its shape has changed between fallow's versions, so
+ * recomputing it here would be a second copy of fallow's rule, free to drift
+ * from the first.
+ */
+export const FALLOW_SNAPSHOT_PREFIX = "fallow-audit-base-cache-";
+const OWNER_RECORD = ".last-used";
+
+/** Every snapshot in `tempDir` that records an owner, with that owner. */
+export function fallowSnapshots(tempDir) {
+  let names;
+  try {
+    names = readdirSync(tempDir);
+  } catch {
+    return [];
+  }
+  return names
+    .filter(name => name.startsWith(FALLOW_SNAPSHOT_PREFIX) && name.endsWith(OWNER_RECORD))
+    .map(name => ({
+      path: join(tempDir, name.slice(0, -OWNER_RECORD.length)),
+      owner: recordedOwner(join(tempDir, name)),
+    }))
+    .filter(snapshot => snapshot.owner !== null);
+}
+
+/**
+ * The path a snapshot's record names, or null: for a record written by a
+ * fallow too old to name its owner, one that is not a plain file of this
+ * user's, or one that cannot be read. fallow applies the same trust rule to
+ * the record before believing it, and nothing here removes a snapshot whose
+ * owner it cannot name.
+ */
+function recordedOwner(file) {
+  try {
+    if (!trustedRecord(lstatSync(file))) return null;
+    return readFileSync(file, "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** A plain file, owned by this user where the platform has users to own it. */
+function trustedRecord(info) {
+  return info.isFile() && (typeof process.getuid !== "function" || info.uid === process.getuid());
+}
+
+/**
+ * The snapshots `checkout` owns. Both paths are compared resolved, so a
+ * checkout reached through a link still finds its own; ask while the checkout
+ * exists, since a path that is gone can no longer be resolved.
+ */
+export function snapshotsOwnedBy(snapshots, checkout) {
+  const wanted = canonical(checkout);
+  return snapshots.filter(snapshot => canonical(snapshot.owner) === wanted);
+}
+
+/**
+ * The snapshots whose checkout no longer exists, whichever repository it was
+ * a checkout of. Nothing can use one again: fallow reclaims the same ones
+ * itself, only 30 days later.
+ */
+export function abandonedSnapshots(snapshots, exists = existsSync) {
+  return snapshots.filter(snapshot => !exists(snapshot.owner));
+}
+
+function canonical(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/**
+ * Remove one snapshot in the order fallow rebuilds one. The `.sha` record that
+ * marks it ready goes first, so an interrupted removal is never taken for a
+ * usable snapshot; then the snapshot, then its owner record.
+ *
+ * The snapshot links the checkout's `node_modules` into itself. `rmSync`
+ * removes a link without following it, and a test holds that, because
+ * following it would empty a live checkout's dependencies.
+ *
+ * The empty `.lock` beside it stays, as fallow leaves it. Another process may
+ * hold a lock on that file, and removing it would let the next one lock a new
+ * file at the same path, so two processes would each hold "the" lock.
+ */
+export function removeSnapshot(snapshot) {
+  rmSync(`${snapshot.path}.sha`, { force: true });
+  rmSync(snapshot.path, { recursive: true, force: true });
+  rmSync(`${snapshot.path}${OWNER_RECORD}`, { force: true });
+}
+
+/**
+ * Remove each snapshot and report each one, or print `none` when there are
+ * none, so the output says the question was asked. Returns how many could not
+ * be removed.
+ */
+function removeSnapshots(snapshots, indent, none) {
+  if (snapshots.length === 0) console.log(`${indent}${none}`);
+  return snapshots.filter(snapshot => !removedAndReported(snapshot, indent)).length;
+}
+
+/** Remove one snapshot and say so; returns whether it is gone. */
+function removedAndReported(snapshot, indent) {
+  try {
+    removeSnapshot(snapshot);
+    console.log(`${indent}fallow base snapshot removed: ${snapshot.path}`);
+    return true;
+  } catch (error) {
+    console.log(`${indent}fallow base snapshot NOT removed: ${snapshot.path} (${error.code ?? error.message})`);
+    return false;
+  }
+}
+
 /** Merge the slot's env into a checkout's local settings, keeping the rest. */
 export function settingsWithEnv(existing, env) {
   const current = existing ?? {};
@@ -620,6 +753,11 @@ function commandRemove(target, { keepBranch, force }) {
     writeFileSync(file, `${JSON.stringify({ ...claim, pendingCleanup: true }, null, 2)}\n`);
   }
 
+  // Chosen before git removes the checkout, since a path that is gone can no
+  // longer be resolved to compare with the one fallow recorded. Removed only
+  // once git has removed the checkout, so a refused removal changes nothing.
+  const snapshots = snapshotsOwnedBy(fallowSnapshots(tmpdir()), match.path);
+
   const removeArgs = ["worktree", "remove", match.path];
   if (force) removeArgs.splice(2, 0, "--force");
   try {
@@ -658,6 +796,7 @@ function commandRemove(target, { keepBranch, force }) {
   console.log(`worktree: removed ${match.path}`);
   report(dropped);
   console.log(`  branch ${match.branch ?? "(detached)"}: ${branchState}`);
+  removeSnapshots(snapshots, "  ", "fallow base snapshot: none recorded for this checkout");
 
   if (!file) {
     console.log(`  no slot claim recorded for this checkout; nothing to release`);
@@ -713,32 +852,51 @@ function commandProvision() {
   }
 }
 
-/** Release slots whose databases could not be dropped at removal time. */
+/** Clear what outlived its checkout: fallow base snapshots, and slots whose databases survived removal. */
 function commandSweep() {
+  const unremoved = sweepSnapshots();
+  const stuck = sweepSlots();
+  if (unremoved > 0 || stuck > 0) process.exit(1);
+}
+
+/**
+ * Remove the fallow base snapshots whose checkout is gone, however it went:
+ * `remove` takes a checkout's own, but a checkout deleted any other way leaves
+ * its snapshot behind. Returns how many could not be removed.
+ */
+function sweepSnapshots() {
+  const abandoned = abandonedSnapshots(fallowSnapshots(tmpdir()));
+  return removeSnapshots(abandoned, "", "worktree: no fallow base snapshot has outlived its checkout");
+}
+
+/** Release slots whose databases could not be dropped at removal time; returns how many stay reserved. */
+function sweepSlots() {
   const dir = claimDir(commonDir());
   const pending = readClaims(dir).filter(claim => claim.pendingCleanup);
   if (pending.length === 0) {
     console.log("worktree: no slot is waiting on database cleanup");
-    return;
+    return 0;
   }
-  let stuck = 0;
-  for (const claim of pending) {
-    const results = dropDatabases(claim.slot);
-    console.log(`slot ${claim.slot} (${databaseFor(claim.slot)}):`);
-    report(results, "  ");
-    if (teardownIncomplete(results, claim.provisioned ?? null)) {
-      stuck += 1;
-      console.log(`  still reserved`);
-      continue;
-    }
-    try {
-      unlinkSync(join(dir, `${claim.slot}.json`));
-    } catch {
-      // Already gone is the outcome we wanted.
-    }
-    console.log(`  released`);
+  // One at a time, in order, as each prints its own report.
+  return pending.filter(claim => stillReserved(dir, claim)).length;
+}
+
+/** Drop one reserved slot's databases, and release the slot once none is left; returns whether it stays reserved. */
+function stillReserved(dir, claim) {
+  const results = dropDatabases(claim.slot);
+  console.log(`slot ${claim.slot} (${databaseFor(claim.slot)}):`);
+  report(results, "  ");
+  if (teardownIncomplete(results, claim.provisioned ?? null)) {
+    console.log(`  still reserved`);
+    return true;
   }
-  if (stuck > 0) process.exit(1);
+  try {
+    unlinkSync(join(dir, `${claim.slot}.json`));
+  } catch {
+    // Already gone is the outcome we wanted.
+  }
+  console.log(`  released`);
+  return false;
 }
 
 function commandList() {
