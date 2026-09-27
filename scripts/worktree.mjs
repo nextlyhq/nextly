@@ -478,19 +478,30 @@ const OWNER_RECORD = ".last-used";
 /**
  * The directory fallow puts its snapshots in, which is Rust's
  * `std::env::temp_dir()` and not Node's `os.tmpdir()`: on Unix Rust reads
- * `TMPDIR` alone and falls back to `/tmp`, while Node also reads `TMP` and
- * `TEMP`, so with only those set the two name different directories. On
+ * `TMPDIR` alone, while Node also reads `TMP` and `TEMP`, so with only those
+ * set the two name different directories. Without `TMPDIR`, Rust falls back to
+ * `/tmp`, except on macOS, where it asks the system for the user's own
+ * temporary directory, the one `getconf DARWIN_USER_TEMP_DIR` prints. On
  * Windows Rust asks `GetTempPath2`, which reads `TMP`, then `TEMP`, then
- * `USERPROFILE`. One case is left out: on macOS with `TMPDIR` unset, Rust asks
- * the system for the user's own temporary directory, which only a native call
- * returns; a login session always sets `TMPDIR` there.
+ * `USERPROFILE`.
  */
-export function fallowTempDir(env = process.env, platform = process.platform) {
-  return platform === "win32" ? windowsTempDir(env) : env.TMPDIR || "/tmp";
+export function fallowTempDir(env = process.env, platform = process.platform, darwinTemp = darwinTempDir) {
+  if (platform === "win32") return windowsTempDir(env);
+  return env.TMPDIR || (platform === "darwin" ? darwinTemp() : "/tmp");
 }
 
 function windowsTempDir(env) {
   return env.TMP || env.TEMP || env.USERPROFILE || tmpdir();
+}
+
+/** What Rust falls back to on macOS, or `/tmp` where the system cannot say, as Rust does. */
+function darwinTempDir() {
+  try {
+    const dir = execFileSync("getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return dir.trim() || "/tmp";
+  } catch {
+    return "/tmp";
+  }
 }
 
 /** Every snapshot in `tempDir` that records an owner, with that owner. */

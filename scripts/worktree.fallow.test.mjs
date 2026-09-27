@@ -252,10 +252,11 @@ describe.runIf(process.platform !== "win32")("fallow base snapshots and the chec
   /*
    * Node's `os.tmpdir()` also reads `TMP` and `TEMP`, and fallow does not: with
    * only those set, fallow still writes to `/tmp`, so the script has to look
-   * there. This leaves a snapshot of a scratch repository in the real `/tmp`,
-   * and removes it afterwards. Any other snapshot there belongs to a real
-   * checkout, so the test also holds that none of them is removed: a broken
-   * selection shows as a failure here rather than as caches quietly gone.
+   * there. This leaves snapshots of a scratch repository in the real `/tmp`,
+   * and removes them afterwards. The bystander is the other checkout's
+   * snapshot that `remove` must leave: the machine's own snapshots there are
+   * not asserted on, since a concurrent run may remove one of those in the
+   * meantime, rightly.
    */
   it.runIf(process.platform === "linux")("looks where fallow writes when only TMP and TEMP are set", () => {
     const world = scratch();
@@ -271,14 +272,13 @@ describe.runIf(process.platform !== "win32")("fallow base snapshots and the chec
     const checkout = auditedCheckout(world, "tmp-only");
     locksOutside.push(`${checkout.snapshot}.lock`);
     expect(fallowSnapshots(world.temp)).toEqual([]);
-    const others = fallowSnapshots("/tmp").filter(snapshot => snapshot.path !== checkout.snapshot);
-    expect(others.map(snapshot => snapshot.path)).toContain(bystander.snapshot);
-
     const { code, stdout } = worktreeCommand(world, "remove", "tmp-only");
 
     expect(code, stdout).toBe(0);
     expect(snapshotRemains(checkout.snapshot)).toBe(false);
-    expect(others.filter(snapshot => !existsSync(snapshot.path))).toEqual([]);
+    expect(snapshotsOwnedBy(fallowSnapshots("/tmp"), bystander.path)).toEqual([
+      { path: bystander.snapshot, owner: bystander.path },
+    ]);
   }, 60_000);
 });
 
@@ -286,6 +286,19 @@ describe("where fallow puts its snapshots", () => {
   it("reads TMPDIR alone on Unix, as Rust's temp_dir does", () => {
     expect(fallowTempDir({ TMPDIR: "/a", TMP: "/b" }, "linux")).toBe("/a");
     expect(fallowTempDir({ TMP: "/b", TEMP: "/c" }, "linux")).toBe("/tmp");
+  });
+
+  it("asks macOS for the user's temporary directory only when TMPDIR is unset", () => {
+    const asked = [];
+    const darwinTemp = () => {
+      asked.push("getconf");
+      return "/var/folders/xy/T/";
+    };
+    expect(fallowTempDir({ TMPDIR: "/a" }, "darwin", darwinTemp)).toBe("/a");
+    expect(asked).toEqual([]);
+    expect(fallowTempDir({ TMP: "/b" }, "darwin", darwinTemp)).toBe("/var/folders/xy/T/");
+    expect(fallowTempDir({}, "linux", darwinTemp)).toBe("/tmp");
+    expect(asked).toEqual(["getconf"]);
   });
 
   it("reads TMP, then TEMP, then USERPROFILE on Windows, as GetTempPath2 does", () => {
