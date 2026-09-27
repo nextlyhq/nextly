@@ -17,9 +17,9 @@ per-checkout.
 ```
 pnpm worktree new <branch> [--from <ref>]   # create, claim a slot, report it
 pnpm worktree list                          # who holds which slot
-pnpm worktree remove <branch|path>          # give the slot, ports and databases back
+pnpm worktree remove <branch|path>          # give the slot, ports, databases and fallow snapshot back
 pnpm worktree provision                     # create this slot's databases, after docker start
-pnpm worktree sweep                         # release slots whose databases outlived them
+pnpm worktree sweep                         # clear slots and fallow snapshots that outlived their checkout
 pnpm worktree env --slot <n>                # the exports, for a plain shell
 ```
 
@@ -35,6 +35,17 @@ refuses to remove — one holding uncommitted work — keeps its databases as we
 The slot is marked for cleanup before either step, so a later `new` cannot
 take it in between, and it stays RESERVED when its databases could not all be
 dropped. It never touches slot 0, which is the shared default.
+
+**Removal also takes the checkout's fallow snapshot.** `fallow audit` keeps a
+copy of the base, about 230 MB here, in the system temporary directory for
+each checkout it audits, and reclaims one whose checkout is gone only after 30
+days. Where `/tmp` is a tmpfs, as on WSL, eighteen of them filled it in an
+afternoon. So `remove` deletes the snapshot whose record names the removed
+checkout, once git has removed it, and `sweep` deletes any whose checkout is
+gone however it went (a plain `git worktree remove`, say). What stays in the
+temporary directory is one snapshot per live checkout, and the empty `.lock`
+files fallow never removes. Both read `TMPDIR` as fallow does, so run them with
+the value the audits ran with.
 
 A slot owns a contiguous BLOCK of ports and one database. Slot 0 is the
 documented defaults — `PORT` 3000, `E2E_PORT` 3100, `E2E_PROD_PORT` 3101 — and
