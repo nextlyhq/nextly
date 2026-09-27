@@ -17,6 +17,7 @@
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -32,7 +33,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { fallowSnapshots, removeSnapshot, snapshotsOwnedBy } from "./worktree.mjs";
+import { fallowSnapshots, fallowTempDir, removeSnapshot, snapshotsOwnedBy } from "./worktree.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FALLOW = join(HERE, "..", "node_modules", "fallow", "bin", "fallow");
@@ -52,18 +53,38 @@ const isolatedEnv = temp => ({
 });
 
 const scratchDirs = [];
+// Directories outside the scratch one that a test let fallow write to, each
+// with the scratch directory whose checkouts own what it wrote there. Cleared
+// by owner, so a test that fails before finding its snapshot still clears it.
+const writtenOutside = [];
+// The lock a removal keeps, as fallow does, once no record is left to find it by.
+const locksOutside = [];
 afterEach(() => {
+  writtenOutside.splice(0).forEach(clearWrittenOutside);
+  for (const lock of locksOutside.splice(0)) rmSync(lock, { force: true });
   for (const dir of scratchDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+/** Remove every snapshot in `snapshotDir` that a checkout inside `under` owns, with its lock. */
+function clearWrittenOutside({ snapshotDir, under }) {
+  for (const snapshot of fallowSnapshots(snapshotDir).filter(entry => entry.owner.startsWith(`${under}/`))) {
+    removeSnapshot(snapshot);
+    rmSync(`${snapshot.path}.lock`, { force: true });
+  }
+}
+
 /**
  * A repository holding a copy of the script, and an empty temporary
- * directory standing in for the machine's.
+ * directory standing in for the machine's. `env` is what git, fallow and the
+ * script run with, and `snapshotDir` is where fallow is expected to put its
+ * snapshots under it.
  */
 function scratch() {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "worktree-fallow-")));
   scratchDirs.push(dir);
   const world = { dir, repo: join(dir, "repo"), temp: join(dir, "tmp") };
+  world.env = isolatedEnv(world.temp);
+  world.snapshotDir = world.temp;
   mkdirSync(join(world.repo, "src"), { recursive: true });
   mkdirSync(join(world.repo, "scripts"));
   mkdirSync(world.temp);
@@ -81,7 +102,7 @@ function git(world, cwd, ...args) {
   return execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args], {
     cwd,
     encoding: "utf8",
-    env: isolatedEnv(world.temp),
+    env: world.env,
   }).trim();
 }
 
@@ -101,7 +122,7 @@ function auditedCheckout(world, branch) {
   try {
     execFileSync(process.execPath, [FALLOW, "audit", "--base", "main", "--format", "json", "--quiet"], {
       cwd: path,
-      env: isolatedEnv(world.temp),
+      env: world.env,
       stdio: "ignore",
     });
   } catch (error) {
@@ -109,7 +130,7 @@ function auditedCheckout(world, branch) {
     // needs. Anything else is fallow not running at all.
     if (error.status !== 1) throw error;
   }
-  const [snapshot] = snapshotsOwnedBy(fallowSnapshots(world.temp), path);
+  const [snapshot] = snapshotsOwnedBy(fallowSnapshots(world.snapshotDir), path);
   // The positive control: without it, every assertion that a snapshot is
   // gone would pass on a fallow that never made one.
   expect(snapshot, `fallow made no snapshot for ${path}`).toBeDefined();
@@ -122,7 +143,7 @@ function worktreeCommand(world, ...args) {
   const run = spawnSync(process.execPath, [join(world.repo, "scripts", "worktree.mjs"), ...args], {
     cwd: world.repo,
     encoding: "utf8",
-    env: isolatedEnv(world.temp),
+    env: world.env,
   });
   return { code: run.status, stdout: `${run.stdout}${run.stderr}` };
 }
@@ -199,4 +220,77 @@ describe.runIf(process.platform !== "win32")("fallow base snapshots and the chec
     expect(snapshotRemains(live.snapshot)).toBe(false);
     expect(existsSync(join(live.path, "node_modules", "keep-me"))).toBe(true);
   }, 60_000);
+
+  /*
+   * A snapshot that cannot be removed is reported with the way to retry, and
+   * `remove` still exits 0, as it does for a slot whose databases cannot be
+   * dropped: the checkout is gone either way. `sweep` is the retry, and exits 1
+   * while the snapshot stays. Read-only permissions stop no one running as root.
+   */
+  it.runIf(process.getuid?.() !== 0)("reports a snapshot it cannot remove, and sweep retries it", () => {
+    const world = scratch();
+    const stuck = auditedCheckout(world, "stuck");
+    chmodSync(world.temp, 0o555);
+    try {
+      const removal = worktreeCommand(world, "remove", "stuck");
+      expect(removal.code, removal.stdout).toBe(0);
+      expect(existsSync(stuck.path)).toBe(false);
+      expect(removal.stdout).toContain(`fallow base snapshot NOT removed: ${stuck.snapshot} (EACCES)`);
+      expect(removal.stdout).toContain("`pnpm worktree sweep` removes it");
+      expect(snapshotRemains(stuck.snapshot)).toBe(true);
+
+      expect(worktreeCommand(world, "sweep").code).toBe(1);
+      expect(snapshotRemains(stuck.snapshot)).toBe(true);
+    } finally {
+      chmodSync(world.temp, 0o755);
+    }
+    const retry = worktreeCommand(world, "sweep");
+    expect(retry.code, retry.stdout).toBe(0);
+    expect(snapshotRemains(stuck.snapshot)).toBe(false);
+  }, 60_000);
+
+  /*
+   * Node's `os.tmpdir()` also reads `TMP` and `TEMP`, and fallow does not: with
+   * only those set, fallow still writes to `/tmp`, so the script has to look
+   * there. This leaves a snapshot of a scratch repository in the real `/tmp`,
+   * and removes it afterwards. Any other snapshot there belongs to a real
+   * checkout, so the test also holds that none of them is removed: a broken
+   * selection shows as a failure here rather than as caches quietly gone.
+   */
+  it.runIf(process.platform === "linux")("looks where fallow writes when only TMP and TEMP are set", () => {
+    const world = scratch();
+    world.env = {
+      ...Object.fromEntries(Object.entries(world.env).filter(([name]) => name !== "TMPDIR")),
+      TMP: world.temp,
+      TEMP: world.temp,
+    };
+    world.snapshotDir = fallowTempDir(world.env);
+    expect(world.snapshotDir).toBe("/tmp");
+    writtenOutside.push({ snapshotDir: world.snapshotDir, under: world.dir });
+    const bystander = auditedCheckout(world, "bystander");
+    const checkout = auditedCheckout(world, "tmp-only");
+    locksOutside.push(`${checkout.snapshot}.lock`);
+    expect(fallowSnapshots(world.temp)).toEqual([]);
+    const others = fallowSnapshots("/tmp").filter(snapshot => snapshot.path !== checkout.snapshot);
+    expect(others.map(snapshot => snapshot.path)).toContain(bystander.snapshot);
+
+    const { code, stdout } = worktreeCommand(world, "remove", "tmp-only");
+
+    expect(code, stdout).toBe(0);
+    expect(snapshotRemains(checkout.snapshot)).toBe(false);
+    expect(others.filter(snapshot => !existsSync(snapshot.path))).toEqual([]);
+  }, 60_000);
+});
+
+describe("where fallow puts its snapshots", () => {
+  it("reads TMPDIR alone on Unix, as Rust's temp_dir does", () => {
+    expect(fallowTempDir({ TMPDIR: "/a", TMP: "/b" }, "linux")).toBe("/a");
+    expect(fallowTempDir({ TMP: "/b", TEMP: "/c" }, "linux")).toBe("/tmp");
+  });
+
+  it("reads TMP, then TEMP, then USERPROFILE on Windows, as GetTempPath2 does", () => {
+    expect(fallowTempDir({ TMP: "C:\\a", TEMP: "C:\\b" }, "win32")).toBe("C:\\a");
+    expect(fallowTempDir({ TEMP: "C:\\b", USERPROFILE: "C:\\u" }, "win32")).toBe("C:\\b");
+    expect(fallowTempDir({ USERPROFILE: "C:\\u" }, "win32")).toBe("C:\\u");
+  });
 });

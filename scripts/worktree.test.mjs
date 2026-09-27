@@ -27,6 +27,7 @@ import {
   provisionAndRecord,
   provisionDatabases,
   readClaims,
+  releaseReservedSlots,
   settingsWithEnv,
   slotEnv,
   teardownIncomplete,
@@ -515,5 +516,53 @@ describe("the provisioning wiring, through the function both commands call", () 
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("sweep releasing the slots a removal left reserved", () => {
+  let dir;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "worktree-sweep-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const claim = (slot, extra) =>
+    writeFileSync(join(dir, `${slot}.json`), JSON.stringify({ slot, path: `/gone/${slot}`, branch: `b${slot}`, ...extra }));
+
+  /*
+   * The databases are stood in for, so no container is asked: a real drop
+   * against slot numbers a developer's own checkouts may hold is exactly what
+   * a test must not do.
+   */
+  it("drops each reserved slot's databases, and releases only those with nothing left", () => {
+    claim(5, { pendingCleanup: true, provisioned: [] });
+    claim(6, { pendingCleanup: true, provisioned: ["nextly-postgres17-test"] });
+    claim(7, { pendingCleanup: true, provisioned: [] });
+    claim(8, {});
+    const asked = [];
+    const drop = slot => {
+      asked.push(slot);
+      return TEST_DATABASES.map(({ container }) => ({
+        container,
+        state: slot === 7 && container === "nextly-mysql-test" ? "failed" : "skipped",
+      }));
+    };
+
+    expect(releaseReservedSlots(dir, { drop })).toBe(2);
+    // 5 never received a database, so skipping every container leaves nothing;
+    // 6 did on a container that was skipped, and 7's drop failed. 8 is live.
+    expect(asked).toEqual([5, 6, 7]);
+    expect(readdirSync(dir).sort()).toEqual(["6.json", "7.json", "8.json"]);
+  });
+
+  it("drops nothing when no slot is reserved", () => {
+    claim(8, {});
+    const asked = [];
+    const drop = slot => {
+      asked.push(slot);
+      return [];
+    };
+    expect(releaseReservedSlots(dir, { drop })).toBe(0);
+    expect(asked).toEqual([]);
   });
 });

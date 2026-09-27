@@ -475,6 +475,24 @@ export function teardownIncomplete(results, provisioned = null) {
 export const FALLOW_SNAPSHOT_PREFIX = "fallow-audit-base-cache-";
 const OWNER_RECORD = ".last-used";
 
+/**
+ * The directory fallow puts its snapshots in, which is Rust's
+ * `std::env::temp_dir()` and not Node's `os.tmpdir()`: on Unix Rust reads
+ * `TMPDIR` alone and falls back to `/tmp`, while Node also reads `TMP` and
+ * `TEMP`, so with only those set the two name different directories. On
+ * Windows Rust asks `GetTempPath2`, which reads `TMP`, then `TEMP`, then
+ * `USERPROFILE`. One case is left out: on macOS with `TMPDIR` unset, Rust asks
+ * the system for the user's own temporary directory, which only a native call
+ * returns; a login session always sets `TMPDIR` there.
+ */
+export function fallowTempDir(env = process.env, platform = process.platform) {
+  return platform === "win32" ? windowsTempDir(env) : env.TMPDIR || "/tmp";
+}
+
+function windowsTempDir(env) {
+  return env.TMP || env.TEMP || env.USERPROFILE || tmpdir();
+}
+
 /** Every snapshot in `tempDir` that records an owner, with that owner. */
 export function fallowSnapshots(tempDir) {
   let names;
@@ -549,9 +567,18 @@ function canonical(path) {
  * removes a link without following it, and a test holds that, because
  * following it would empty a live checkout's dependencies.
  *
- * The empty `.lock` beside it stays, as fallow leaves it. Another process may
- * hold a lock on that file, and removing it would let the next one lock a new
- * file at the same path, so two processes would each hold "the" lock.
+ * fallow takes that `.lock` before it reuses, rebuilds or reclaims a snapshot,
+ * and this does not, because the only audit that uses a snapshot is one of the
+ * checkout it is named for: fallow keys the snapshot by that checkout's root.
+ * It is removed only once that checkout is gone, `remove` after git has
+ * removed it and `sweep` when its path no longer exists, so an audit still
+ * running there has already lost its own files. A fallow sweep reclaiming the
+ * same snapshot at once is harmless, since each tolerates the other's
+ * deletions. Node also has no portable way to take the lock.
+ *
+ * The empty `.lock` stays, as fallow leaves it. Another process may hold a
+ * lock on that file, and removing it would let the next one lock a new file at
+ * the same path, so two processes would each hold "the" lock.
  */
 export function removeSnapshot(snapshot) {
   rmSync(`${snapshot.path}.sha`, { force: true });
@@ -577,6 +604,7 @@ function removedAndReported(snapshot, indent) {
     return true;
   } catch (error) {
     console.log(`${indent}fallow base snapshot NOT removed: ${snapshot.path} (${error.code ?? error.message})`);
+    console.log(`${indent}  once the cause is fixed, \`pnpm worktree sweep\` removes it`);
     return false;
   }
 }
@@ -756,7 +784,10 @@ function commandRemove(target, { keepBranch, force }) {
   // Chosen before git removes the checkout, since a path that is gone can no
   // longer be resolved to compare with the one fallow recorded. Removed only
   // once git has removed the checkout, so a refused removal changes nothing.
-  const snapshots = snapshotsOwnedBy(fallowSnapshots(tmpdir()), match.path);
+  // One that cannot be removed is reported and left for `sweep`, as a slot
+  // whose databases cannot be dropped is: the checkout is gone either way, and
+  // `sweep` is the command that retries, and exits 1 while something is left.
+  const snapshots = snapshotsOwnedBy(fallowSnapshots(fallowTempDir()), match.path);
 
   const removeArgs = ["worktree", "remove", match.path];
   if (force) removeArgs.splice(2, 0, "--force");
@@ -855,7 +886,7 @@ function commandProvision() {
 /** Clear what outlived its checkout: fallow base snapshots, and slots whose databases survived removal. */
 function commandSweep() {
   const unremoved = sweepSnapshots();
-  const stuck = sweepSlots();
+  const stuck = releaseReservedSlots(claimDir(commonDir()));
   if (unremoved > 0 || stuck > 0) process.exit(1);
 }
 
@@ -865,25 +896,28 @@ function commandSweep() {
  * its snapshot behind. Returns how many could not be removed.
  */
 function sweepSnapshots() {
-  const abandoned = abandonedSnapshots(fallowSnapshots(tmpdir()));
+  const abandoned = abandonedSnapshots(fallowSnapshots(fallowTempDir()));
   return removeSnapshots(abandoned, "", "worktree: no fallow base snapshot has outlived its checkout");
 }
 
-/** Release slots whose databases could not be dropped at removal time; returns how many stay reserved. */
-function sweepSlots() {
-  const dir = claimDir(commonDir());
+/**
+ * Release the slots in `dir` whose databases could not be dropped at removal
+ * time, dropping them with `drop`; returns how many stay reserved. `drop` is a
+ * parameter so a test can stand in for the containers.
+ */
+export function releaseReservedSlots(dir, { drop = dropDatabases } = {}) {
   const pending = readClaims(dir).filter(claim => claim.pendingCleanup);
   if (pending.length === 0) {
     console.log("worktree: no slot is waiting on database cleanup");
     return 0;
   }
   // One at a time, in order, as each prints its own report.
-  return pending.filter(claim => stillReserved(dir, claim)).length;
+  return pending.filter(claim => stillReserved(dir, claim, drop)).length;
 }
 
 /** Drop one reserved slot's databases, and release the slot once none is left; returns whether it stays reserved. */
-function stillReserved(dir, claim) {
-  const results = dropDatabases(claim.slot);
+function stillReserved(dir, claim, drop) {
+  const results = drop(claim.slot);
   console.log(`slot ${claim.slot} (${databaseFor(claim.slot)}):`);
   report(results, "  ");
   if (teardownIncomplete(results, claim.provisioned ?? null)) {
