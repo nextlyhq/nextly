@@ -77,6 +77,25 @@ unaffected either way, because access tokens rotate every fifteen minutes.
 A custom user field named `typ` can no longer reach the claims, where it would
 have been read as a token kind.
 
+A `customizeClaims` hook can add claims but no longer change the identity or
+token claims. `sub`, `email`, `name`, `image` and `roleIds`, and the token's
+own `iat`, `exp`, `jti`, `nbf`, `aud`, `iss` and `typ`, are restored as core
+built them after every hook has run, whether a hook replaced, changed in place
+or deleted them. A hook that returned a different `sub` or `roleIds` signed a
+session for another account, or with other roles, that the account-state gate
+never saw. A plugin that renamed a core claim now adds its own spelling beside
+it instead.
+
+An `afterAuthenticate` hook can change the user's details or pause the login
+with a challenge, but only for the account that authenticated. A hook that
+returns a user with a different id, a challenge for a different `userId`, or
+no user at all now fails the login with an internal error, because what it
+returns is what the session or pending token is issued for.
+
+The forced first-sign-in password change checks the account before changing
+the password, not only at the session afterwards, so an account deactivated or
+unverified since its pending token was issued cannot set its credentials.
+
 A self-registered account was marked as having a verified email address the
 moment it was created. Creating a user with a password set `emailVerified`
 straight away, and registration supplies a password, so the verification email

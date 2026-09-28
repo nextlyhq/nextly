@@ -83,7 +83,9 @@ export interface AuthHooks {
   beforeLogin?: (input: AuthInput, ctx: PluginContext) => Promise<void> | void;
   /**
    * After a user is identified. Return a `{ challenge }` to require a second
-   * step, the (possibly modified) user to continue, or throw to abort.
+   * step, the (possibly modified) user to continue, or throw to abort. The
+   * user returned, and a challenge's `userId`, must be the account that
+   * authenticated: a different id fails the login.
    */
   afterAuthenticate?: (
     user: AuthUser,
@@ -116,7 +118,13 @@ export interface AuthHooks {
     request: Request,
     ctx: PluginContext
   ) => Promise<AuthUser | null> | AuthUser | null;
-  /** Add/rename JWT claims. Receives the core claims, returns the final claims. */
+  /**
+   * Add JWT claims. Receives the core claims and returns the final ones. The
+   * identity and token claims (`sub`, `email`, `name`, `image`, `roleIds`,
+   * `iat`, `exp`, `jti`, `nbf`, `aud`, `iss`, `typ`) are restored as core
+   * built them, so a hook can add a claim but never change who the session
+   * belongs to or what it may do.
+   */
   customizeClaims?: (
     claims: Record<string, unknown>,
     user: AuthUser,

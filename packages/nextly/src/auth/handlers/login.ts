@@ -13,10 +13,6 @@ import {
 } from "../pipeline/pending-token";
 import { runStrategyChain } from "../pipeline/strategy-chain";
 import type { AuthStrategy } from "../pipeline/types";
-import {
-  assertAccountUsable,
-  type AccountState,
-} from "../session/account-state";
 
 import {
   jsonResponse,
@@ -27,6 +23,7 @@ import {
 import {
   issueSession,
   challengeResponse,
+  gateAccountForSession,
   type IssueSessionDeps,
 } from "./issue-session";
 
@@ -308,36 +305,4 @@ export async function handleLogin(
     await recordLoginFailure(deps, request, err, requestId);
     return loginFailureResponse(err, requestId);
   }
-}
-
-/**
- * Ask the shared account-state gate about the account a strategy just
- * authenticated, before anything is minted or run on its behalf.
- *
- * The session path asks the same question inside `mintSession`; asking it
- * HERE keeps a refused account from receiving a challenge prompt, a sent
- * code, or a paused login it could never finish. The password lockout stays
- * scoped to the password strategy, exactly as the session-time gate scopes
- * it — no other strategy'"'"'s failures may be answerable by typing passwords
- * at an address someone does not own.
- */
-async function gateAccountForSession(
-  deps: Pick<
-    IssueSessionDeps,
-    "fetchAccountState" | "requireEmailVerification"
-  >,
-  userId: string,
-  strategy: string | undefined
-): Promise<AccountState> {
-  const state = await deps.fetchAccountState(userId);
-  if (!state) {
-    throw NextlyError.invalidCredentials({
-      logContext: { userId, reason: auditReason("user-not-found") },
-    });
-  }
-  assertAccountUsable(state, {
-    requireEmailVerification: deps.requireEmailVerification,
-    enforcePasswordLockout: strategy === undefined || strategy === "password",
-  });
-  return state;
 }

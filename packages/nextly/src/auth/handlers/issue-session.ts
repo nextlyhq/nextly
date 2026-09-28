@@ -120,6 +120,40 @@ export interface MintedSession {
 }
 
 /**
+ * Ask the shared account-state gate whether the account may hold a session,
+ * and return the state it judged.
+ *
+ * Every step that acts for an account on its way to a session asks this one
+ * function: the session mint, the login path before it sends a challenge or
+ * runs a hook, and the forced password change before it changes the password.
+ * Asking early keeps a refused account from receiving a challenge prompt, a
+ * sent code, or a credential change it could never use. The password lockout
+ * guards the password strategy only: a session finished by any other strategy
+ * must not be blockable by someone typing wrong passwords at an address they
+ * do not own.
+ */
+export async function gateAccountForSession(
+  deps: Pick<
+    IssueSessionDeps,
+    "fetchAccountState" | "requireEmailVerification"
+  >,
+  userId: string,
+  strategy: string | undefined
+): Promise<AccountState> {
+  const state = await deps.fetchAccountState(userId);
+  if (!state) {
+    throw NextlyError.invalidCredentials({
+      logContext: { userId, reason: auditReason("user-not-found") },
+    });
+  }
+  assertAccountUsable(state, {
+    requireEmailVerification: deps.requireEmailVerification,
+    enforcePasswordLockout: strategy === undefined || strategy === "password",
+  });
+  return state;
+}
+
+/**
  * Mint a session: run the account-state gate, build and sign the claims,
  * rotate in a refresh token, run the post-login hooks and record the success.
  *
@@ -136,20 +170,7 @@ export async function mintSession(
   // Preconditions run first, before any token or refresh row exists. Every
   // strategy reaches a session through here, so this is the one place that can
   // refuse an account no matter which path authenticated it.
-  const state = await deps.fetchAccountState(user.id);
-  if (!state) {
-    throw NextlyError.invalidCredentials({
-      logContext: { userId: user.id, reason: auditReason("user-not-found") },
-    });
-  }
-  assertAccountUsable(state, {
-    requireEmailVerification: deps.requireEmailVerification,
-    // The lockout guards the password strategy. A session finished by any
-    // other strategy must not be blockable by someone typing wrong passwords
-    // at an address they do not own.
-    enforcePasswordLockout:
-      opts?.strategy === undefined || opts.strategy === "password",
-  });
+  await gateAccountForSession(deps, user.id, opts?.strategy);
 
   const [roleIds, customFields] = await Promise.all([
     deps.fetchRoleIds(user.id),

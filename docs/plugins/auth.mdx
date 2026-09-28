@@ -200,13 +200,13 @@ value), **abort** (throw → generic error), or — for `afterAuthenticate` — 
 | Hook | When | Use |
 |---|---|---|
 | `beforeLogin(input)` | Before any strategy | Pre-checks; throw to block (maintenance mode, IP allowlist) |
-| `afterAuthenticate(user)` | After a strategy identifies the user | **Insert 2FA / step-up**; decorate the user |
+| `afterAuthenticate(user)` | After a strategy identifies the user | **Insert 2FA / step-up**; decorate the user (the id must stay the same, or the login fails) |
 | `afterLogin(user)` | After the session is issued | Side effects (audit, last-login, notify) |
 | `beforeRegister(data)` | Before a new user is created | Normalize / augment the payload |
 | `afterRegister(user)` | After a successful register | Welcome email, provisioning, CRM sync |
 | `beforeLogout` / `afterLogout` | Around logout | Cleanup, revoke external sessions |
 | `determineUser(request)` | Session/refresh resolution | Custom credential (API key, alt token) → return a user or `null` |
-| `customizeClaims(claims, user)` | Building the JWT (login **and** refresh) | Add/rename JWT claims |
+| `customizeClaims(claims, user)` | Building the JWT (login **and** refresh) | Add JWT claims; `sub`, `email`, `name`, `image`, `roleIds` and the token claims are restored as core built them |
 
 Hooks observe-or-mutate; they do **not** replace strategies. Use a strategy to
 authenticate, a hook to gate/decorate.

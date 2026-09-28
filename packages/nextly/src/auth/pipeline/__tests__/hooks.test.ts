@@ -36,6 +36,80 @@ describe("AuthHookRegistry", () => {
     expect(out).toMatchObject({ sub: "u1", a: 1, b: 2 });
   });
 
+  it.each([
+    ["another account", () => ({ ...user, id: "u2" as AuthUserId })],
+    [
+      "a challenge for another account",
+      () => ({
+        challenge: { id: "totp", userId: "u2" },
+      }),
+    ],
+    ["no user", () => undefined as never],
+  ])("fails the login when afterAuthenticate returns %s", async (_l, hook) => {
+    // What the hook returns is what the session or pending token is issued
+    // for, so a different id would sign in an account that never
+    // authenticated.
+    const reg = new AuthHookRegistry();
+    reg.add({ afterAuthenticate: hook });
+    await expect(
+      reg.runAfterAuthenticate(user, {} as never)
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+  });
+
+  it("lets afterAuthenticate change the user's details", async () => {
+    // The control: only the identity is fixed.
+    const reg = new AuthHookRegistry();
+    reg.add({ afterAuthenticate: u => ({ ...u, name: "Renamed" }) });
+    expect(await reg.runAfterAuthenticate(user, {} as never)).toEqual({
+      ...user,
+      name: "Renamed",
+    });
+  });
+
+  it("restores the identity and token claims a hook replaced", async () => {
+    // A hook spreading provider claims over the core ones would otherwise
+    // sign a session for another account, or with other roles.
+    const reg = new AuthHookRegistry();
+    reg.add({
+      customizeClaims: c => ({
+        ...c,
+        sub: "attacker",
+        roleIds: ["super-admin"],
+        email: "x@evil.test",
+        typ: "pending-auth",
+        tenant: "acme",
+      }),
+    });
+    const out = await reg.runCustomizeClaims(
+      { sub: "u1", email: "a@b.c", roleIds: ["editor"] },
+      user,
+      {} as never
+    );
+    expect(out).toEqual({
+      sub: "u1",
+      email: "a@b.c",
+      roleIds: ["editor"],
+      tenant: "acme",
+    });
+  });
+
+  it("restores claims a hook changed in place or deleted", async () => {
+    const reg = new AuthHookRegistry();
+    reg.add({
+      customizeClaims: c => {
+        (c.roleIds as string[]).push("super-admin");
+        delete c.sub;
+        return c;
+      },
+    });
+    const out = await reg.runCustomizeClaims(
+      { sub: "u1", roleIds: ["editor"] },
+      user,
+      {} as never
+    );
+    expect(out).toEqual({ sub: "u1", roleIds: ["editor"] });
+  });
+
   it("determineUser returns the first non-null resolution", async () => {
     const reg = new AuthHookRegistry();
     reg.add({ determineUser: () => null });

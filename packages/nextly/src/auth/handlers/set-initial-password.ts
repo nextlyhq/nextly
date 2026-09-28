@@ -31,7 +31,11 @@ import {
   readJsonObjectBody,
   recordLoginFailure,
 } from "./handler-utils";
-import { finishResumedSignIn, type IssueSessionDeps } from "./issue-session";
+import {
+  gateAccountForSession,
+  finishResumedSignIn,
+  type IssueSessionDeps,
+} from "./issue-session";
 
 export interface SetInitialPasswordDeps extends IssueSessionDeps {
   allowedOrigins: string[];
@@ -113,6 +117,12 @@ export async function handleSetInitialPassword(
         logContext: { reason: auditReason("pending-token-wrong-challenge") },
       });
     }
+
+    // Before the password changes, not only at the session after it: an
+    // account disabled or unverified since its pending token was issued must
+    // not complete a change to its credentials. The session gate still runs
+    // afterwards, for a change of state in between.
+    await gateAccountForSession(deps, pending.userId, pending.strategy);
 
     try {
       await deps.setInitialPassword(pending.userId, newPassword);
