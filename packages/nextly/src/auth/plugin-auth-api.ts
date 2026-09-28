@@ -180,11 +180,9 @@ async function loadUsableUser(
   const user = await deps.findUserById(userId);
   if (!user) throw refusal();
 
-  await deps.authHooks.runBeforeLogin(
-    { request: opts.request, body: {}, strategyName: opts.strategy },
-    deps.pluginCtx
-  );
-
+  // The account gate runs BEFORE any hook: a `beforeLogin` handler may act —
+  // send a code, write a record — and must never do so for an account that
+  // cannot sign in.
   const state = await deps.fetchAccountState(user.id);
   if (!state) throw refusal();
   assertAccountUsable(state, {
@@ -193,6 +191,11 @@ async function loadUsableUser(
     // at this address must not block it.
     enforcePasswordLockout: false,
   });
+
+  await deps.authHooks.runBeforeLogin(
+    { request: opts.request, body: {}, strategyName: opts.strategy },
+    deps.pluginCtx
+  );
 
   return user;
 }

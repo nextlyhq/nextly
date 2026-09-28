@@ -223,8 +223,7 @@ describe("ctx.auth.completeLogin", () => {
     expect(cookieNames(res)).not.toContain("nextly_session");
   });
 
-  it("fails generically when a beforeLogin hook refuses, before the gate", async () => {
-    const fetchAccountState = vi.fn();
+  it("fails generically when a beforeLogin hook refuses", async () => {
     const hooks = new AuthHookRegistry();
     hooks.add({
       beforeLogin: () => {
@@ -233,9 +232,8 @@ describe("ctx.auth.completeLogin", () => {
         });
       },
     });
-    const deps = { ...makeDeps({ hooks }), fetchAccountState };
 
-    const res = await api(deps).completeLogin("u1", {
+    const res = await api(makeDeps({ hooks })).completeLogin("u1", {
       request,
       strategy: "oauth-test",
     });
@@ -243,8 +241,34 @@ describe("ctx.auth.completeLogin", () => {
     expect(res.headers.get("Location")).toBe(
       "/admin/login?error=signin-failed"
     );
-    expect(fetchAccountState).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      "deactivated",
+      { isActive: false, lockedUntil: null, emailVerified: new Date() },
+    ],
+    ["unverified", { isActive: true, lockedUntil: null, emailVerified: null }],
+  ])(
+    "never runs a beforeLogin hook for a %s account",
+    async (_label, state) => {
+      // A hook may act — send a code, write a record — so the account gate
+      // runs first, and an account that cannot sign in never reaches one.
+      const beforeLogin = vi.fn();
+      const hooks = new AuthHookRegistry();
+      hooks.add({ beforeLogin });
+
+      const res = await api(makeDeps({ hooks, state })).completeLogin("u1", {
+        request,
+        strategy: "oauth-test",
+      });
+
+      expect(res.headers.get("Location")).toBe(
+        "/admin/login?error=signin-failed"
+      );
+      expect(beforeLogin).not.toHaveBeenCalled();
+    }
+  );
 
   // Every 4xx is a verdict about the caller, so every one of them owes the
   // audited redirect. An allowlist of six codes answered only six of them and
