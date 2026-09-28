@@ -376,7 +376,7 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   /** Runs one post-job step as GitHub's bash does, with `files` written beside the stand-in first. */
-  function runStep(name, files = {}, comments = [], body = "the review\n\n<!-- pr-review-agent round:1 head:x -->") {
+  function runStep(name, files = {}, comments = [], body = `the review\n\n<!-- pr-review-agent round:1 head:${SHA} -->`) {
     writeFileSync(join(dir, "payload", "review.json"), JSON.stringify({ body, comments }));
     for (const file of readdirSync(dir).filter(file => file === "calls" || file.startsWith("ids-"))) rmSync(join(dir, file));
     for (const [file, text] of Object.entries(files)) writeFileSync(join(dir, file), text);
@@ -414,14 +414,31 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
     expect(calls).toEqual([`files 7`]);
   });
 
-  // A review with no summary, or none that carries the round marker, is
-  // refused before anything is asked of GitHub: posted, it would read as a
-  // finished round that said nothing.
-  it.each(["", "  \n ", "a summary without the marker"])("posts nothing for a review whose summary is %j", body => {
+  // A review whose summary lacks the whole round marker for this head, or any
+  // text besides it, is refused before anything is asked of GitHub: posted, it
+  // would read as a finished round that said nothing.
+  it.each([
+    "",
+    "  \n ",
+    "a summary without the marker",
+    "<!-- pr-review-agent round:",
+    "a summary <!-- pr-review-agent round:",
+    `<!-- pr-review-agent round:1 head:${SHA} -->`,
+    ` \n<!-- pr-review-agent round:1 head:${SHA} -->\n<!-- nextly-review-bot run:1 -->\n`,
+    "a summary <!-- pr-review-agent round:1 head:0000000 -->",
+    `a summary <!-- pr-review-agent round:0 head:${SHA} -->`,
+  ])("posts nothing for a review whose summary is %j", body => {
     const { status, output, calls } = runStep("Post the review as the review bot", {}, [], body);
     expect(status).not.toBe(0);
     expect(output).toContain("the payload is not a review");
     expect(calls).toEqual([]);
+  });
+
+  it("posts a review whose only text sits between its markers", () => {
+    const body = `<!-- pr-review-agent round:2 head:${SHA} -->\n\nNo new findings.\n\n<!-- nextly-review-bot run:1 -->`;
+    const { status, output, calls } = runStep("Post the review as the review bot", {}, [], body);
+    expect(status, output).toBe(0);
+    expect(calls[1]).toMatch(/^post-review 7 /);
   });
 
   it("confirms with the review this run posted, whichever attempt posted it", () => {
