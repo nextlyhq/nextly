@@ -31,7 +31,7 @@ import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 
 import { load } from "js-yaml";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const { jobs } = load(read(".github/workflows/nextly-review-bot.yml"));
@@ -44,6 +44,8 @@ const usesOf = (list, action) => list.filter(step => step.uses?.startsWith(`${ac
 const named = (list, name) => list.find(step => step.name === name);
 /** The step that gives the agent its protocol and gateway. */
 const MATERIALIZE = "Materialize the reviewer's tooling outside the tree";
+/** The step that gives the agent the whole checkout, which the two checkouts before it leave sparse. */
+const WHOLE_TREE = "Give the agent the whole pull request";
 
 /** The one directory the agent writes to, and the two files it hands on from there. */
 const PAYLOAD_DIR = ".nextly-review";
@@ -275,6 +277,86 @@ describe("what else could widen the agent's grant", () => {
 
   it("denies exactly the denylist reviewed", () => {
     expect(rulesOf("disallowedTools")).toEqual(DISALLOWED);
+  });
+});
+
+describe("the tree the agent reads", () => {
+  it("is made whole straight after the pull request's checkout, before anything reads it", () => {
+    const head = steps.findIndex(step => step.uses?.startsWith("actions/checkout@") && step.with?.ref === "${{ steps.pr.outputs.sha }}");
+    const at = steps.findIndex(step => step.name === WHOLE_TREE);
+    expect(head).toBeGreaterThan(-1);
+    expect(at).toBe(head + 1);
+    expect(at).toBeLessThan(steps.indexOf(agent));
+    expect(steps[at].if).toBe(agent.if);
+    // A tree with holes must stop the job, not reach the agent.
+    expect(steps[at]["continue-on-error"]).toBeUndefined();
+  });
+});
+
+describe.runIf(process.platform !== "win32")("the whole-tree step, run as GitHub runs it", () => {
+  const TRACKED = [".github/scripts/g.sh", "README.md", "tools/t.mjs"];
+  // git here reads no configuration of the developer's, and no GIT_* variable.
+  const isolated = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))),
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+  };
+  let root;
+  let repo;
+  const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd: repo, encoding: "utf8", env: isolated }).trim();
+  const present = () => TRACKED.filter(path => existsSync(join(repo, path)));
+  const runStep = (path = process.env.PATH) =>
+    spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(root, "step.sh")], { cwd: repo, encoding: "utf8", env: { ...isolated, PATH: path } });
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "review-bot-whole-tree-"));
+    repo = join(root, "repo");
+    mkdirSync(join(repo, ".github", "scripts"), { recursive: true });
+    mkdirSync(join(repo, "tools"));
+    for (const path of TRACKED) writeFileSync(join(repo, path), `${path}\n`);
+    git("init", "-q");
+    git("add", "-A");
+    git("commit", "-qm", "head");
+    // What actions/checkout does across the job's two checkouts: the parser's
+    // sparse one, then the full one, which turns sparse checkout off in the
+    // worktree's config and removes the extension that config needs.
+    git("config", "core.sparseCheckout", "true");
+    writeFileSync(join(repo, ".git", "info", "sparse-checkout"), ".github/scripts\n");
+    git("checkout", "-q", "--force", "HEAD");
+    git("sparse-checkout", "disable");
+    git("config", "--local", "--unset-all", "extensions.worktreeConfig");
+    git("checkout", "-q", "--force", "HEAD");
+    writeFileSync(join(root, "step.sh"), named(steps, WHOLE_TREE).run);
+  });
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("is needed: the checkouts leave the head holding .github/scripts alone", () => {
+    expect(present()).toEqual([".github/scripts/g.sh"]);
+  });
+
+  it("puts every tracked file back, and they stay through a later checkout", () => {
+    const result = runStep();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(present()).toEqual(TRACKED);
+    // Another removal of the extension, as the next checkout would make, no
+    // longer brings the sparse setting back.
+    git("config", "--local", "--unset-all", "extensions.worktreeConfig");
+    git("checkout", "-q", "--force", "HEAD");
+    expect(present()).toEqual(TRACKED);
+  });
+
+  it("fails the job when files are still left out", () => {
+    // A `git` whose config and sparse-checkout commands change nothing leaves
+    // the tree as the checkouts made it.
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const real = execFileSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    writeFileSync(join(bin, "git"), `#!/usr/bin/env bash\ncase "$1" in config|sparse-checkout) exit 0 ;; esac\nexec ${real} "$@"\n`);
+    chmodSync(join(bin, "git"), 0o755);
+    const result = runStep(`${bin}:${process.env.PATH}`);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("::error::the checkout still leaves 2 files of the pull request out");
   });
 });
 
