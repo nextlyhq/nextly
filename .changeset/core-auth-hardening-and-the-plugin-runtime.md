@@ -57,7 +57,9 @@ so the login page can show its "Resend verification email" action instead of
 a dead-end "Invalid email or password". Whoever receives it already holds the
 password; a wrong password, and every other refusal, still answer
 `AUTH_INVALID_CREDENTIALS`, and a locked account answers generically even to a
-correct password. The Direct API's `nextly.login()` answers the same way.
+correct password, as does one an administrator deactivated, since no
+verification link is sent to it. The Direct API's `nextly.login()` answers the
+same way.
 
 Resending a verification email now does nothing for an address that is
 already verified, answering the same as for an unknown one; previously it

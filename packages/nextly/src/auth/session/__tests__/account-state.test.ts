@@ -147,6 +147,17 @@ describe("assertAccountUsable", () => {
       expect(codeOf(unverified)).toBe("AUTH_INVALID_CREDENTIALS");
     });
 
+    it("stays generic for an account an administrator deactivated", () => {
+      // Such an account is sent no verification link, so naming the state
+      // would send its owner to a resend that never arrives.
+      const deactivated = {
+        ...unverified,
+        isActive: false,
+        deactivatedAt: new Date("2026-09-01T00:00:00Z"),
+      };
+      expect(codeOf(deactivated, true)).toBe("AUTH_INVALID_CREDENTIALS");
+    });
+
     it("stays generic when the account is also locked", () => {
       // The lockout is judged first: a correct password must not reveal
       // anything about an account locked against guessing.

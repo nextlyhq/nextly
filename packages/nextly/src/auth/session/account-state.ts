@@ -32,6 +32,13 @@ export interface AccountState {
    * let a benign profile-transforming hook skip the forced change.
    */
   mustChangePassword?: boolean | null;
+  /**
+   * When an administrator deactivated the account. Only the password path
+   * reads it, to decide whether naming an unverified address would help: a
+   * deactivated account is sent no verification link, so it is refused like
+   * any other deactivated account instead.
+   */
+  deactivatedAt?: Date | null;
 }
 
 export interface AccountGateOptions {
@@ -45,9 +52,10 @@ export interface AccountGateOptions {
    */
   enforcePasswordLockout: boolean;
   /**
-   * Whether the caller has just proven the account's password. Only then is an
-   * unverified address refused as `EMAIL_NOT_VERIFIED` rather than the generic
-   * error, so the login page can offer to resend the link. It does confirm the
+   * Whether the caller has just proven the account's password. Only then, and
+   * only for an account no administrator deactivated, is an unverified address
+   * refused as `EMAIL_NOT_VERIFIED` rather than the generic error, so the login
+   * page can offer to resend the link. It does confirm the
    * password to whoever typed it, which is why it waits for the proof: a wrong
    * guess still answers generically and still counts toward the lockout, and
    * the right one still issues no session. Every other path leaves it unset
@@ -63,8 +71,8 @@ export interface AccountGateOptions {
  *
  * Every refusal carries the same code and message and differs only in
  * `logContext.reason`, except an unverified address when `passwordProven` is
- * set. The lockout is judged first, so a locked account answers generically
- * even to a correct password.
+ * set and no administrator has deactivated the account. The lockout is judged
+ * first, so a locked account answers generically even to a correct password.
  */
 export function assertAccountUsable(
   state: AccountState,
@@ -91,7 +99,11 @@ export function assertAccountUsable(
       userId: state.userId,
       reason: auditReason("unverified"),
     };
-    throw opts.passwordProven
+    // Named only where acting on it can work: the password was proven, and the
+    // account is not one an administrator deactivated, which is sent no
+    // verification link. Telling that account to verify would send its owner
+    // to a resend that never arrives.
+    throw opts.passwordProven && !state.deactivatedAt
       ? NextlyError.emailNotVerified({ logContext })
       : NextlyError.invalidCredentials({ logContext });
   }

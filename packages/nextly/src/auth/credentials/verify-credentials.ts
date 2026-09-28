@@ -39,6 +39,8 @@ export interface CredentialUserRow {
   mustChangePassword: boolean | null;
   failedLoginAttempts: number;
   lockedUntil: Date | null;
+  /** When an administrator deactivated the account; null when none has. */
+  deactivatedAt: Date | null;
 }
 
 /** What a password sign-in needs from the database, and its limits. */
@@ -141,6 +143,7 @@ export async function verifyCredentials(
       isActive: user.isActive,
       lockedUntil: user.lockedUntil,
       emailVerified: user.emailVerified,
+      deactivatedAt: user.deactivatedAt,
     },
     {
       requireEmailVerification: deps.requireEmailVerification,

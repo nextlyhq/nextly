@@ -86,8 +86,9 @@ The exception is an unverified address when the password was correct: the
 login answers `EMAIL_NOT_VERIFIED`, so the login page can offer to resend the
 verification link. Only someone who already holds the password sees it; a wrong
 password on the same account answers like any other refusal, and a locked
-account answers generically even to the right password. Asking for the link
-again does nothing for an address that is already verified.
+account, or one an administrator deactivated, answers generically even to the
+right password. Asking for the link again does nothing for an address that is
+already verified.
 
 The lockout is the exception to "every path": it applies to password attempts
 only. A refresh is not a password attempt, and neither is an external sign-in —

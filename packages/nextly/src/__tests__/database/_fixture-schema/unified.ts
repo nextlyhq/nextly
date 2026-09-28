@@ -118,6 +118,12 @@ export const nextlyTables: TableDefinition[] = [
         default: false,
       },
       {
+        // Nullable, as on the real table: unset means no administrator has
+        // deactivated the account.
+        name: "deactivated_at",
+        type: "timestamp",
+      },
+      {
         name: "failed_login_attempts",
         type: "integer",
         nullable: false,

@@ -532,7 +532,10 @@ describe("login handler: respondAction shape", () => {
  * the chain and reaches the response the page reads.
  */
 describe("login handler: an unverified account", () => {
-  async function loginAsUnverified(password: string): Promise<Response> {
+  async function loginAsUnverified(
+    password: string,
+    deactivatedAt: Date | null = null
+  ): Promise<Response> {
     const passwordHash = await hashPassword("Pass1234!");
     const fakeUser = {
       id: "u1",
@@ -545,6 +548,7 @@ describe("login handler: an unverified account", () => {
       mustChangePassword: false,
       failedLoginAttempts: 0,
       lockedUntil: null,
+      deactivatedAt,
     };
     const lockout = {
       findUserByEmail: vi.fn().mockResolvedValue(fakeUser),
@@ -592,6 +596,14 @@ describe("login handler: an unverified account", () => {
     const res = await loginAsUnverified("Pass1234!");
     expect(res.status).toBe(403);
     expect(await codeOf(res)).toBe("EMAIL_NOT_VERIFIED");
+  });
+
+  it("is not named for an account an administrator deactivated", async () => {
+    // No verification link is sent to it, so the resend the page would offer
+    // could never arrive: it is refused like any deactivated account.
+    const res = await loginAsUnverified("Pass1234!", new Date());
+    expect(res.status).toBe(401);
+    expect(await codeOf(res)).toBe("AUTH_INVALID_CREDENTIALS");
   });
 
   it("is not named to a caller who gave the wrong one", async () => {

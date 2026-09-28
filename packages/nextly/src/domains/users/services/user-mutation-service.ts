@@ -75,6 +75,7 @@ import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-li
 import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
+import { activationChanges } from "./user-activation";
 import type { UserExtSchemaService } from "./user-ext-schema-service";
 
 /** The one role an external identity may never be given. */
@@ -382,25 +383,6 @@ function userExtValueError(name: string, expected: string): NextlyError {
 interface MediaRow {
   id: string;
   [column: string]: unknown;
-}
-
-/**
- * The `isActive` and `deactivatedAt` writes for an update that sets `isActive`.
- *
- * An explicit `false` records the deactivation even when the account was
- * already inactive — a self-registration still waiting on its link is
- * inactive, and deactivating it is what stops that link from switching it on.
- * An explicit `true` clears the record. The first deactivation's time is kept.
- */
-function activationChanges(
-  next: boolean,
-  current: { isActive: boolean; deactivatedAt: Date | null }
-): Pick<UserUpdateData, "isActive" | "deactivatedAt"> {
-  const out: Pick<UserUpdateData, "isActive" | "deactivatedAt"> = {};
-  if (next !== current.isActive) out.isActive = next;
-  if (!next && !current.deactivatedAt) out.deactivatedAt = new Date();
-  if (next && current.deactivatedAt) out.deactivatedAt = null;
-  return out;
 }
 
 /**

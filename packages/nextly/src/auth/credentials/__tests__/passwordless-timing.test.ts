@@ -47,6 +47,7 @@ const account = (passwordHash: string | null): Found => ({
   mustChangePassword: false,
   failedLoginAttempts: 0,
   lockedUntil: null,
+  deactivatedAt: null,
 });
 
 async function attempt(found: Found): Promise<string> {
