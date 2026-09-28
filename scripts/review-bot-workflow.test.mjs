@@ -376,8 +376,8 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   /** Runs one post-job step as GitHub's bash does, with `files` written beside the stand-in first. */
-  function runStep(name, files = {}, comments = []) {
-    writeFileSync(join(dir, "payload", "review.json"), JSON.stringify({ body: "the review", comments }));
+  function runStep(name, files = {}, comments = [], body = `the review\n\n<!-- pr-review-agent round:1 head:${SHA} -->`) {
+    writeFileSync(join(dir, "payload", "review.json"), JSON.stringify({ body, comments }));
     for (const file of readdirSync(dir).filter(file => file === "calls" || file.startsWith("ids-"))) rmSync(join(dir, file));
     for (const [file, text] of Object.entries(files)) writeFileSync(join(dir, file), text);
     writeFileSync(join(dir, "step.sh"), named(postSteps, name).run);
@@ -414,6 +414,33 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
     expect(calls).toEqual([`files 7`]);
   });
 
+  // A review whose summary lacks the whole round marker for this head, or any
+  // text besides it, is refused before anything is asked of GitHub: posted, it
+  // would read as a finished round that said nothing.
+  it.each([
+    "",
+    "  \n ",
+    "a summary without the marker",
+    "<!-- pr-review-agent round:",
+    "a summary <!-- pr-review-agent round:",
+    `<!-- pr-review-agent round:1 head:${SHA} -->`,
+    ` \n<!-- pr-review-agent round:1 head:${SHA} -->\n<!-- nextly-review-bot run:1 -->\n`,
+    "a summary <!-- pr-review-agent round:1 head:0000000 -->",
+    `a summary <!-- pr-review-agent round:0 head:${SHA} -->`,
+  ])("posts nothing for a review whose summary is %j", body => {
+    const { status, output, calls } = runStep("Post the review as the review bot", {}, [], body);
+    expect(status).not.toBe(0);
+    expect(output).toContain("the payload is not a review");
+    expect(calls).toEqual([]);
+  });
+
+  it("posts a review whose only text sits between its markers", () => {
+    const body = `<!-- pr-review-agent round:2 head:${SHA} -->\n\nNo new findings.\n\n<!-- nextly-review-bot run:1 -->`;
+    const { status, output, calls } = runStep("Post the review as the review bot", {}, [], body);
+    expect(status, output).toBe(0);
+    expect(calls[1]).toMatch(/^post-review 7 /);
+  });
+
   it("confirms with the review this run posted, whichever attempt posted it", () => {
     const { status, output, calls } = runStep("Confirm this run posted a review", { [`ids-${RUN}`]: "555\n" });
     expect(status, output).toBe(0);
@@ -424,5 +451,31 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
     const { status, output } = runStep("Confirm this run posted a review", { "ids-111": "444\n" });
     expect(status).toBe(1);
     expect(output).toContain("this run posted no review");
+  });
+});
+
+/*
+ * Before it reviews, the agent compares the commit it was asked to review with
+ * the branch's head now. Only a request starts a review, so a head that moved
+ * gets no newer run, and the agent must say so rather than wait for one.
+ */
+describe("the head the protocol has the agent compare", () => {
+  const protocol = read(".github/review-prompt.md");
+  const gateway = read(".github/scripts/review-bot-gh.sh");
+
+  it("names the field the gateway's pull request carries, and writes no payload for a head that moved", () => {
+    // `pr` answers with the REST pull request, whose head commit is `head.sha`,
+    // and `head-sha` reads that field; `headRefOid` is GraphQL's name for it,
+    // which neither answer carries.
+    expect(gateway).toMatch(/^ {2}pr\)\n(?: {4}#.*\n)*(?: {4}.*\n)*? {4}exec gh api "repos\/\$REPO\/pulls\/\$1"\n/m);
+    expect(gateway).toMatch(/^ {2}head-sha\)\n(?: {4}.*\n)*? {4}exec gh api "repos\/\$REPO\/pulls\/\$1" --jq '\.head\.sha'\n/m);
+    expect(protocol).not.toContain("headRefOid");
+    expect(protocol).toContain("If the PR's `head.sha` (or the gateway's `head-sha`) no longer matches the SHA you were invoked for");
+    expect(protocol).toContain("write no payload");
+  });
+
+  it("says a review runs on request, not on a push", () => {
+    expect(protocol).toContain("You run when someone asks for a review, once per request");
+    expect(protocol).not.toMatch(/per push|newer push/);
   });
 });

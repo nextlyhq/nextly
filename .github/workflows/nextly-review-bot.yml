@@ -391,11 +391,21 @@ jobs:
           out="${RUNNER_TEMP}/nextly-review-post"
           mkdir -p "$out"
           test -s "$PAYLOAD/review.json" || { echo "::error::the agent wrote no review payload for $SHA"; exit 1; }
+          # A review is refused unless its summary carries the whole round
+          # marker the protocol writes, naming the head being posted to, and
+          # some text besides: a marker alone, a truncated one or an empty
+          # summary would read as a finished round that said nothing, and the
+          # merge queue counts the bot's review while Codex is held up. The SHA
+          # is hexadecimal, so it is safe inside the pattern.
           jq -e --arg sha "$SHA" '
-            if type == "object" and (.body | type == "string") and ((.comments // []) | type == "array")
-            then {commit_id: $sha, event: "COMMENT", body, comments: (.comments // [])}
-            else error("the payload is not a review: an object with a string body and a comments array")
-            end' "$PAYLOAD/review.json" > "$out/review.json"
+            ("<!-- pr-review-agent round:[1-9][0-9]* head:" + $sha + " -->") as $marker
+            | if type == "object" and (.body | type == "string")
+                and (.body | test($marker))
+                and (.body | gsub("<!--[\\s\\S]*?-->"; "") | test("\\S"))
+                and ((.comments // []) | type == "array")
+              then {commit_id: $sha, event: "COMMENT", body, comments: (.comments // [])}
+              else error("the payload is not a review: an object with a summary that carries the round marker for this head, and a comments array")
+              end' "$PAYLOAD/review.json" > "$out/review.json"
           "$gateway" files "$NUMBER" | jq -s 'add // []' > "$out/files.json"
           node scripts/review-anchors.mjs "$out/review.json" "$out/files.json" "$out/inline.json" "$out/file-comments.json"
           "$gateway" post-review "$NUMBER" "$out/inline.json" "$SHA" "$GITHUB_RUN_ID"
