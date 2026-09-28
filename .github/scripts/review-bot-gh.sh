@@ -21,6 +21,15 @@ die() {
   exit 2
 }
 
+# The review workflow has Claude Code keep credentials out of every command
+# the agent runs, this one included, and says so with REVIEW_BOT_EXPECT_SCRUB.
+# A model key here then means the scrub did not happen, whatever the workflow
+# asked, as when an action stops passing the setting on: stop, rather than go
+# on with the key in reach. A caller that does not say so is not held to it.
+if [[ "${REVIEW_BOT_EXPECT_SCRUB:-}" == 1 && -n "${ANTHROPIC_API_KEY:-}${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
+  die "a model key reached this command, though the workflow had it scrubbed"
+fi
+
 # Every caller-supplied identifier is checked before it reaches a URL, so a
 # crafted value cannot smuggle a flag or a second endpoint into the request.
 require_number() {

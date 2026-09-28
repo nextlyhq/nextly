@@ -261,6 +261,11 @@ jobs:
           # the gateway still reaches GitHub. The action reads this from the
           # step's env.
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+          # The gateway stops if a model key reaches it all the same, so an
+          # action that stopped passing the setting on would fail the review
+          # rather than run it unscrubbed. The action does not know this
+          # variable, and passes it through as it is.
+          REVIEW_BOT_EXPECT_SCRUB: "1"
         with:
           anthropic_api_key: ${{ secrets.ZAI_API_KEY }}
           # The workflow's own token, which only reads here. The action writes

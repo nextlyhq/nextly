@@ -287,6 +287,12 @@ describe("what the agent's commands can read", () => {
     expect(agent.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB).toBe("1");
   });
 
+  it("has the gateway stop the review if a model key reaches it all the same", () => {
+    // What the setting does is up to the action and the Claude Code it
+    // installs; the gateway checks the result on every call.
+    expect(agent.env.REVIEW_BOT_EXPECT_SCRUB).toBe("1");
+  });
+
   it("prepares what the scrub needs before the agent starts, and fails the review without it", () => {
     const at = steps.findIndex(step => step.name === ISOLATION);
     expect(at).toBeGreaterThan(-1);
