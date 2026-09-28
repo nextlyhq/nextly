@@ -391,10 +391,14 @@ jobs:
           out="${RUNNER_TEMP}/nextly-review-post"
           mkdir -p "$out"
           test -s "$PAYLOAD/review.json" || { echo "::error::the agent wrote no review payload for $SHA"; exit 1; }
+          # A review with no summary, or one without the round marker the
+          # protocol writes into it, is refused: posted, it would read as a
+          # finished round that said nothing, and the merge queue counts the
+          # bot's review while Codex is held up.
           jq -e --arg sha "$SHA" '
-            if type == "object" and (.body | type == "string") and ((.comments // []) | type == "array")
+            if type == "object" and (.body | type == "string") and (.body | test("\\S")) and (.body | contains("<!-- pr-review-agent round:")) and ((.comments // []) | type == "array")
             then {commit_id: $sha, event: "COMMENT", body, comments: (.comments // [])}
-            else error("the payload is not a review: an object with a string body and a comments array")
+            else error("the payload is not a review: an object with a summary that carries the round marker, and a comments array")
             end' "$PAYLOAD/review.json" > "$out/review.json"
           "$gateway" files "$NUMBER" | jq -s 'add // []' > "$out/files.json"
           node scripts/review-anchors.mjs "$out/review.json" "$out/files.json" "$out/inline.json" "$out/file-comments.json"
