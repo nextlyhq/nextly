@@ -121,4 +121,40 @@ describe("assertAccountUsable", () => {
     });
     expect(new Set(codes).size).toBe(1);
   });
+
+  describe("an unverified address once the password is proven", () => {
+    const unverified = { ...ok, emailVerified: null };
+    const codeOf = (state: AccountState, passwordProven?: boolean) => {
+      try {
+        assertAccountUsable(state, {
+          requireEmailVerification: true,
+          enforcePasswordLockout: true,
+          passwordProven,
+          now,
+        });
+      } catch (err) {
+        return NextlyError.is(err) ? err.code : undefined;
+      }
+      return undefined;
+    };
+
+    it("is named, so the login page can offer the link again", () => {
+      expect(codeOf(unverified, true)).toBe("EMAIL_NOT_VERIFIED");
+    });
+
+    it("stays generic on every path that did not prove the password", () => {
+      // The session gates behind other strategies and refresh.
+      expect(codeOf(unverified)).toBe("AUTH_INVALID_CREDENTIALS");
+    });
+
+    it("stays generic when the account is also locked", () => {
+      // The lockout is judged first: a correct password must not reveal
+      // anything about an account locked against guessing.
+      const locked = {
+        ...unverified,
+        lockedUntil: new Date("2026-09-18T12:05:00Z"),
+      };
+      expect(codeOf(locked, true)).toBe("AUTH_INVALID_CREDENTIALS");
+    });
+  });
 });

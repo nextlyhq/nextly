@@ -641,8 +641,11 @@ export class AuthService extends BaseService {
     try {
       const user = await queryService.findByEmail(email);
 
-      if (!user) {
-        // Silent success — never reveal whether the email is registered.
+      // Silent success either way, so neither case reveals the account. An
+      // address already verified has nothing to verify: a link would mail a
+      // verification to someone who only forgot their password, and following
+      // it re-activates an account an administrator deactivated.
+      if (!user || user.emailVerified) {
         return {};
       }
 
@@ -673,45 +676,12 @@ export class AuthService extends BaseService {
         return { token: rawToken };
       }
 
-      if (this.emailService) {
-        let delivered = false;
-        try {
-          // Same reasoning as the password-reset path: a provider failure
-          // arrives as `{ success: false }`, not as a throw, so the result is
-          // the only evidence that nothing reached the user.
-          const result = await this.emailService.sendEmailVerificationEmail(
-            email,
-            { name: user.name, email: user.email },
-            rawToken,
-            { path: options?.redirectPath }
-          );
-          delivered = result.success;
-          if (!delivered) {
-            this.logger.error("Email verification message was not delivered", {
-              event: "auth.email_verification.email_failed",
-              reason: "not-delivered-to-recipient",
-            });
-          }
-        } catch (emailError) {
-          this.logger.error("Failed to send email verification email", {
-            event: "auth.email_verification.email_failed",
-            error:
-              emailError instanceof Error
-                ? emailError.message
-                : String(emailError),
-          });
-        }
-
-        if (delivered) return {};
-
-        return this.undeliveredTokenFallback(rawToken);
-      }
-
-      this.logger.warn(
-        "No email provider is configured, so the verification token could not be delivered",
-        { event: "auth.email_verification.email_unconfigured" }
+      return await this.deliverVerificationEmail(
+        email,
+        { name: user.name, email: user.email },
+        rawToken,
+        options?.redirectPath
       );
-      return this.undeliveredTokenFallback(rawToken);
     } catch (error) {
       // A malformed address surfaces as the resolver's VALIDATION_ERROR, not
       // as a database failure dressed up as a 500.
@@ -719,6 +689,56 @@ export class AuthService extends BaseService {
       // Normalise raw driver errors so the DB kind is preserved.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+  }
+
+  /**
+   * Send the verification link, or hand back the token when nothing could.
+   *
+   * Separate from issuing the token so that method reads as the decision —
+   * which account, and whether it needs a link at all — and this one as the
+   * delivery and its fallback.
+   */
+  private async deliverVerificationEmail(
+    email: string,
+    recipient: { name: string | null; email: string },
+    rawToken: string,
+    redirectPath: string | undefined
+  ): Promise<{ token?: string }> {
+    if (!this.emailService) {
+      this.logger.warn(
+        "No email provider is configured, so the verification token could not be delivered",
+        { event: "auth.email_verification.email_unconfigured" }
+      );
+      return this.undeliveredTokenFallback(rawToken);
+    }
+
+    let delivered = false;
+    try {
+      // Same reasoning as the password-reset path: a provider failure
+      // arrives as `{ success: false }`, not as a throw, so the result is
+      // the only evidence that nothing reached the user.
+      const result = await this.emailService.sendEmailVerificationEmail(
+        email,
+        recipient,
+        rawToken,
+        { path: redirectPath }
+      );
+      delivered = result.success;
+      if (!delivered) {
+        this.logger.error("Email verification message was not delivered", {
+          event: "auth.email_verification.email_failed",
+          reason: "not-delivered-to-recipient",
+        });
+      }
+    } catch (emailError) {
+      this.logger.error("Failed to send email verification email", {
+        event: "auth.email_verification.email_failed",
+        error:
+          emailError instanceof Error ? emailError.message : String(emailError),
+      });
+    }
+
+    return delivered ? {} : this.undeliveredTokenFallback(rawToken);
   }
 
   /**

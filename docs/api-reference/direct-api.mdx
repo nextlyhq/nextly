@@ -560,7 +560,7 @@ result.exp;    // unix timestamp
 
 **Returns:** `LoginResult` — `{ user, token, exp }`. Throws `NextlyError` (`AUTH_INVALID_CREDENTIALS`) on bad credentials.
 
-The credentials are checked the way the login endpoint checks them: a wrong password counts toward the account lockout, and an account that is locked, deactivated, has not verified its email, or must replace an admin-set password is refused with the same `AUTH_INVALID_CREDENTIALS` error, so the caller cannot tell which applied.
+The credentials are checked the way the login endpoint checks them: a wrong password counts toward the account lockout, and an account that is locked, deactivated, or must replace an admin-set password is refused with the same `AUTH_INVALID_CREDENTIALS` error, so the caller cannot tell which applied. An account that has not verified its email is refused with `EMAIL_NOT_VERIFIED` once the password is proven correct, and with `AUTH_INVALID_CREDENTIALS` otherwise.
 
 `login` is for trusted server code. It runs no plugin login hooks and no second-factor challenge, so do not use it to sign a person in on their behalf; send them through the admin login page, which does both.
 
@@ -832,7 +832,7 @@ async function getPost() {
 
 Available type guards: `NextlyError.is`, `NextlyError.isCode`, `NextlyError.isNotFound`, `NextlyError.isValidation`, `NextlyError.isAuthRequired`, `NextlyError.isForbidden`, `NextlyError.isConflict`, `NextlyError.isRateLimited`.
 
-Common `code` values you will see: `VALIDATION_ERROR` (400), `INVALID_INPUT` (422), `AUTH_REQUIRED` (401), `AUTH_INVALID_CREDENTIALS` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `DUPLICATE` (409), `PAYLOAD_TOO_LARGE` (413), `RATE_LIMITED` (429), `DATABASE_ERROR` (500), `INTERNAL_ERROR` (500), `SERVICE_UNAVAILABLE` (503).
+Common `code` values you will see: `VALIDATION_ERROR` (400), `INVALID_INPUT` (422), `AUTH_REQUIRED` (401), `AUTH_INVALID_CREDENTIALS` (401), `EMAIL_NOT_VERIFIED` (403), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `DUPLICATE` (409), `PAYLOAD_TOO_LARGE` (413), `RATE_LIMITED` (429), `DATABASE_ERROR` (500), `INTERNAL_ERROR` (500), `SERVICE_UNAVAILABLE` (503).
 
 The same `NextlyError` is what the route handler serialises into the HTTP error envelope (`{ error: { code, message, requestId, ... } }`) — see the [REST API error response section](/docs/api-reference/rest-api#errors) for the wire format.
 

@@ -10,7 +10,8 @@
  *
  * The public error is identical for every refusal; only the log context names
  * the reason, so the gate cannot be used to tell a locked account from an
- * unknown one.
+ * unknown one. The one exception is an unverified address after the password
+ * was proven correct (see {@link AccountGateOptions.passwordProven}).
  *
  * @module auth/session/account-state
  * @since 1.0.0
@@ -43,6 +44,16 @@ export interface AccountGateOptions {
    * five wrong passwords — a denial of service, not a defence.
    */
   enforcePasswordLockout: boolean;
+  /**
+   * Whether the caller has just proven the account's password. Only then is an
+   * unverified address refused as `EMAIL_NOT_VERIFIED` rather than the generic
+   * error, so the login page can offer to resend the link. It does confirm the
+   * password to whoever typed it, which is why it waits for the proof: a wrong
+   * guess still answers generically and still counts toward the lockout, and
+   * the right one still issues no session. Every other path leaves it unset
+   * and stays generic.
+   */
+  passwordProven?: boolean;
   /** Overridable so the lock comparison is testable without faking the clock. */
   now?: Date;
 }
@@ -50,8 +61,10 @@ export interface AccountGateOptions {
 /**
  * Throw `AUTH_INVALID_CREDENTIALS` unless the account may hold a session.
  *
- * Order does not matter to the caller: every refusal carries the same code and
- * message, and differs only in `logContext.reason`.
+ * Every refusal carries the same code and message and differs only in
+ * `logContext.reason`, except an unverified address when `passwordProven` is
+ * set. The lockout is judged first, so a locked account answers generically
+ * even to a correct password.
  */
 export function assertAccountUsable(
   state: AccountState,
@@ -74,9 +87,13 @@ export function assertAccountUsable(
   }
 
   if (opts.requireEmailVerification && !state.emailVerified) {
-    throw NextlyError.invalidCredentials({
-      logContext: { userId: state.userId, reason: auditReason("unverified") },
-    });
+    const logContext = {
+      userId: state.userId,
+      reason: auditReason("unverified"),
+    };
+    throw opts.passwordProven
+      ? NextlyError.emailNotVerified({ logContext })
+      : NextlyError.invalidCredentials({ logContext });
   }
 
   if (!state.isActive) {

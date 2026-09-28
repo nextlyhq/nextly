@@ -162,9 +162,11 @@ export function Login() {
       window.location.href = ROUTES.DASHBOARD;
     } catch (error: unknown) {
       // The fetcher throws an `ApiError`, so the code and the message are read
-      // off the parsed error. The two code branches below are left as they
-      // were: nothing in the core emits either code today, so whether they
-      // should exist is an API question rather than a reading one.
+      // off the parsed error. The server answers `EMAIL_NOT_VERIFIED` only
+      // after the password was proven correct, which is what makes offering
+      // the resend action here safe; every other refusal is the generic one.
+      // `ACCOUNT_LOCKED` is not emitted by the core, whose lockout answers
+      // generically, and is kept for a server that does name it.
       const errorCode =
         error instanceof Error ? ((error as ApiError).code ?? "") : "";
       const errorMessage = apiErrorMessage(error, "Invalid email or password.");

@@ -526,6 +526,81 @@ describe("login handler: respondAction shape", () => {
   });
 });
 
+/**
+ * What the login page is told about an unverified account. Through the real
+ * strategy pipeline, because the distinct code is only useful if it survives
+ * the chain and reaches the response the page reads.
+ */
+describe("login handler: an unverified account", () => {
+  async function loginAsUnverified(password: string): Promise<Response> {
+    const passwordHash = await hashPassword("Pass1234!");
+    const fakeUser = {
+      id: "u1",
+      email: "a@example.com",
+      name: "A",
+      image: null,
+      passwordHash,
+      emailVerified: null,
+      isActive: false,
+      mustChangePassword: false,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+    };
+    const lockout = {
+      findUserByEmail: vi.fn().mockResolvedValue(fakeUser),
+      incrementFailedAttempts: vi.fn().mockResolvedValue(undefined),
+      lockAccount: vi.fn().mockResolvedValue(undefined),
+      resetFailedAttempts: vi.fn().mockResolvedValue(undefined),
+      maxLoginAttempts: 5,
+      lockoutDurationSeconds: 900,
+      requireEmailVerification: true,
+    };
+    const deps = {
+      secret: SECRET,
+      isProduction: false,
+      accessTokenTTL: 900,
+      refreshTokenTTL: 604800,
+      loginStallTimeMs: 0,
+      allowedOrigins: ALLOWED_ORIGINS,
+      trustProxy: false,
+      trustedProxyIps: [],
+      fetchRoleIds: vi.fn().mockResolvedValue([]),
+      fetchCustomFields: vi.fn().mockResolvedValue({}),
+      storeRefreshToken: vi.fn().mockResolvedValue(undefined),
+      fetchAccountState: vi.fn().mockResolvedValue({
+        userId: "u1",
+        isActive: false,
+        lockedUntil: null,
+        emailVerified: null,
+      }),
+      ...lockout,
+      ...loginPipelineDeps(lockout),
+    };
+    return handleLogin(
+      makeRequest("POST", { email: "a@example.com", password }),
+      deps
+    );
+  }
+
+  async function codeOf(res: Response): Promise<unknown> {
+    const body = (await res.json()) as { error?: { code?: string } };
+    return body.error?.code;
+  }
+
+  it("is named to a caller who gave the right password", async () => {
+    // The login page offers to resend the verification link on this code.
+    const res = await loginAsUnverified("Pass1234!");
+    expect(res.status).toBe(403);
+    expect(await codeOf(res)).toBe("EMAIL_NOT_VERIFIED");
+  });
+
+  it("is not named to a caller who gave the wrong one", async () => {
+    const res = await loginAsUnverified("Wrong1234!");
+    expect(res.status).toBe(401);
+    expect(await codeOf(res)).toBe("AUTH_INVALID_CREDENTIALS");
+  });
+});
+
 describe("logout handler: respondAction shape", () => {
   it("returns just { message }", async () => {
     const deps = {

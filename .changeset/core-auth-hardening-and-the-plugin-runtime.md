@@ -51,6 +51,20 @@ for signing a person in. Each
 refusal carries the same public error, so the gate cannot be used to tell a
 locked account from an unknown one.
 
+The one refusal that is named is an unverified address, and only after the
+password has been proven correct: login answers `EMAIL_NOT_VERIFIED` (403),
+so the login page can show its "Resend verification email" action instead of
+a dead-end "Invalid email or password". Whoever receives it already holds the
+password; a wrong password, and every other refusal, still answer
+`AUTH_INVALID_CREDENTIALS`, and a locked account answers generically even to a
+correct password. The Direct API's `nextly.login()` answers the same way.
+
+Resending a verification email now does nothing for an address that is
+already verified, answering the same as for an unknown one. Previously it
+mailed a fresh link to any account, and following that link re-activated an
+account an administrator had deactivated. The resend endpoint is also held to the
+same per-IP budget as `forgot-password`, since both send an email on request.
+
 A refresh whose account is no longer usable now deletes the refresh row and
 clears the cookies rather than answering 401 and leaving both alive, so an
 account deactivated mid-session loses it at the next rotation. The password

@@ -165,6 +165,7 @@ For rate-limited responses (`code: "RATE_LIMITED"`, status 429) the runtime also
 | `400` | `VALIDATION_ERROR` | Body or query failed validation. |
 | `401` | `AUTH_REQUIRED`, `AUTH_INVALID_CREDENTIALS` | Missing or bad credentials. |
 | `403` | `FORBIDDEN` | Authenticated but lacks permission. |
+| `403` | `EMAIL_NOT_VERIFIED` | Login with the correct password for an address not yet verified. |
 | `404` | `NOT_FOUND` | Resource does not exist. |
 | `409` | `CONFLICT`, `DUPLICATE` | Concurrent edit, duplicate email, etc. |
 | `413` | `PAYLOAD_TOO_LARGE` | Upload bigger than configured cap. |

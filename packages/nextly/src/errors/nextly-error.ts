@@ -223,6 +223,24 @@ export class NextlyError extends Error {
     });
   }
 
+  /**
+   * The password was correct and the address is unverified. Thrown only once
+   * the password is proven, so only someone who holds it learns the address
+   * is unverified; every other refusal stays
+   * {@link NextlyError.invalidCredentials}.
+   */
+  static emailNotVerified(opts?: {
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "EMAIL_NOT_VERIFIED",
+      publicMessage:
+        "Verify your email address to sign in. Check your inbox for the link.",
+      logMessage: "Login refused: email not verified",
+      logContext: opts?.logContext,
+    });
+  }
+
   static authRequired(opts?: {
     logContext?: Record<string, unknown>;
   }): NextlyError {

@@ -11,6 +11,10 @@ export const NEXTLY_ERROR_STATUS = {
   AUTH_INVALID_CREDENTIALS: 401,
   TOKEN_EXPIRED: 401,
   FORBIDDEN: 403,
+  // The password was right and the address is unverified. Distinct from
+  // AUTH_INVALID_CREDENTIALS so the login page can offer to resend the link;
+  // only a caller who proved the password ever receives it.
+  EMAIL_NOT_VERIFIED: 403,
   // The schema builder is off in this environment (production by default).
   // Separate from FORBIDDEN: the caller's permissions are not the problem.
   BUILDER_DISABLED: 403,

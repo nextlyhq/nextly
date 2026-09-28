@@ -133,7 +133,6 @@ describe("Direct API - Auth Operations", () => {
     // Each is refused with the error a wrong password gets, so the Direct
     // API cannot tell a caller which of them applied.
     it.each([
-      ["unverified", { emailVerified: null }],
       ["deactivated", { isActive: false }],
       ["locked", { lockedUntil: new Date(Date.now() + 60_000) }],
       // The endpoint answers this with the forced-change step, which a
@@ -147,6 +146,31 @@ describe("Direct API - Auth Operations", () => {
       const refusal = await refusalOf(PASSWORD);
 
       expect(NextlyError.is(refusal)).toBe(true);
+      expect((refusal as NextlyError).code).toBe("AUTH_INVALID_CREDENTIALS");
+    });
+
+    // An unverified address is the one refusal named, and only once the
+    // password is proven: the caller already holds it, and the login page
+    // needs the distinction to offer the verification link again.
+    it("refuses an unverified account with a correct password as EMAIL_NOT_VERIFIED", async () => {
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(
+        storedUser({ emailVerified: null })
+      );
+
+      const refusal = await refusalOf(PASSWORD);
+
+      expect((refusal as NextlyError).code).toBe("EMAIL_NOT_VERIFIED");
+    });
+
+    it("answers a wrong password on an unverified account generically", async () => {
+      // The separating case: naming the state before the password is proven
+      // would tell anyone which addresses are registered and unverified.
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(
+        storedUser({ emailVerified: null })
+      );
+
+      const refusal = await refusalOf("wrong");
+
       expect((refusal as NextlyError).code).toBe("AUTH_INVALID_CREDENTIALS");
     });
 

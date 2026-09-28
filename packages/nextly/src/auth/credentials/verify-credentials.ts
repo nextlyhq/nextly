@@ -129,8 +129,9 @@ export async function verifyCredentials(
   }
 
   // Account-state checks happen AFTER the password check so they cannot be
-  // used as an enumeration side-channel either. All three paths throw the
-  // same public error; only the internal logContext distinguishes them.
+  // used as an enumeration side-channel either. They throw the same public
+  // error, except an unverified address, which is named now that the password
+  // is proven so the login page can offer to resend the link.
   //
   // The decision itself lives in the shared gate, which every session-issuing
   // path calls, so the password path cannot drift from the rest.
@@ -145,6 +146,7 @@ export async function verifyCredentials(
       requireEmailVerification: deps.requireEmailVerification,
       // This IS the password strategy, so the attempt lockout applies.
       enforcePasswordLockout: true,
+      passwordProven: true,
     }
   );
 
