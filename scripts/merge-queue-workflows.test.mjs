@@ -15,6 +15,7 @@ import { posix } from "node:path";
 
 import { load } from "js-yaml";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 import { describe, expect, it } from "vitest";
 
@@ -939,8 +940,36 @@ describe("who owns what the required checks run", () => {
       'const list = readFileSync(new URL("./list.json", import.meta.url), "utf8");',
       'import shared from "@scope/shared";',
     ].join("\n");
-    const loads = ["dynamic.mjs", "list.json", "re-export.js", "required.cjs", "rule.js", "side-effect.js"].map(file => `packages/a/${file}`);
-    expect(loadsIn(text, "packages/a/eslint.config.mjs").sort()).toEqual(loads);
+    const loads = loadsIn(text, "packages/a/eslint.config.mjs");
+    expect(loads.map(load => load.target).sort()).toEqual(["dynamic.mjs", "list.json", "re-export.js", "required.cjs", "rule.js", "side-effect.js"].map(file => `packages/a/${file}`));
+    // A file it reads is not an import, and is not held to resolving.
+    expect(loads.filter(load => !load.imported).map(load => load.specifier)).toEqual(["././list.json"]);
+  });
+
+  it("takes nothing for an import that sits in a comment or a string", () => {
+    // The shapes the repository held on 2026-09-26: a comment naming a file,
+    // and a child process's source in a string.
+    const text = [
+      '// a rollup plugin rewrites `from "./foo.js"` in the declarations',
+      "/* require(\"../bar.cjs\") */",
+      "execSync(`node -e \"import('./dist/index.mjs')\"`);",
+      "const example = 'import(\"./a\")';",
+      'import real from "./real.js";',
+    ].join("\n");
+    expect(loadsIn(text, "packages/a/scripts/x.ts").map(load => load.specifier)).toEqual(["./real.js"]);
+  });
+
+  it("fails on a relative import no tracked file answers, naming the import and the module", () => {
+    const files = { "packages/x/eslint.config.mjs": 'import rule from "./rule.js";\nimport gone from "./gone.js";', "packages/x/rule.ts": "" };
+    const walk = () => loadedThrough(["packages/x/eslint.config.mjs"], new Set(Object.keys(files)), path => files[path]);
+    expect(walk).toThrow('packages/x/eslint.config.mjs imports "./gone.js", which names no tracked file');
+    const tooling = { "packages/x/scripts/build.ts": 'import { helper } from "./helper.js";' };
+    expect(() => toolingImportedBy(["packages/x/scripts/build.ts"], new Set(Object.keys(tooling)), path => tooling[path])).toThrow('packages/x/scripts/build.ts imports "./helper.js"');
+  });
+
+  it("leaves out a file a module reads that is not tracked, since a build can write it", () => {
+    const files = { "packages/x/eslint.config.mjs": 'const list = readFileSync("generated.json", "utf8");' };
+    expect(loadedThrough(["packages/x/eslint.config.mjs"], new Set(Object.keys(files)), path => files[path])).toEqual([]);
   });
 
   it.each([
@@ -1191,10 +1220,21 @@ function loadedThrough(roots, tracked, readFile = readRepositoryFile) {
   return [...reached].filter(path => !roots.includes(path));
 }
 
-/** The files a module loads, as tracked paths; `readFile` reads its text, the repository's copy unless told otherwise. */
+/**
+ * The files a module loads, as tracked paths; `readFile` reads its text, the
+ * repository's copy unless told otherwise. A relative import that names no
+ * tracked file fails the walk, naming the import and the module: left out, the
+ * file it was written for would go unowned. A file read with `readFileSync`
+ * that is not tracked, such as one a build writes, is left out.
+ */
 function loadedBy(path, tracked, readFile = readRepositoryFile) {
-  return loadsIn(readFile(path), path)
-    .flatMap(target => resolvedModules(target, tracked));
+  return loadsIn(readFile(path), path).flatMap(load => filesLoaded(load, path, tracked));
+}
+
+function filesLoaded({ specifier, target, imported }, from, tracked) {
+  const files = resolvedModules(target, tracked);
+  if (imported && files.length === 0) throw new Error(`${from} imports "${specifier}", which names no tracked file`);
+  return files;
 }
 
 /** The TypeScript sources a JavaScript extension compiles from: `./x.js` is written for `./x.ts` or `./x.tsx`. */
@@ -1234,11 +1274,15 @@ function toolingImportedBy(roots, tracked, readFile = readRepositoryFile) {
   return [...reached].filter(path => !roots.includes(path));
 }
 
-/** The files beside it a module's text loads: a relative import in any form, and a file it reads with `readFileSync`. */
+/**
+ * The files beside it a module's text loads: each relative import in any form,
+ * and each file it reads with `readFileSync`, with the repository path it
+ * names and whether it is an import.
+ */
 function loadsIn(text, path) {
-  const imported = [...text.matchAll(CONFIGURATION_IMPORT)].map(match => match[1]).filter(specifier => specifier.startsWith("."));
+  const beside = imported => specifier => ({ specifier, target: repositoryPathOf(specifier, path, new Map()), imported });
   const read = [...text.matchAll(/readFileSync\(([^;]*?)["']utf-?8["']/g)].flatMap(match => [...match[1].matchAll(/["']([^"']+)["']/g)].map(literal => `./${literal[1]}`));
-  return [...imported, ...read].map(specifier => repositoryPathOf(specifier, path, new Map()));
+  return [...importsIn(text).filter(specifier => specifier.startsWith(".")).map(beside(true)), ...read.map(beside(false))];
 }
 
 /** The modules a test configuration's setup keys name, as repository paths. */
@@ -1269,8 +1313,16 @@ const SETUP_VALUE = /^(?:\[\s*(?:["'][^"'\n]+["']\s*,?\s*)*\]|["'][^"'\n]+["'])/
 /** Compiler and lint configuration, which may extend or import shared configuration. */
 const SHARING_CONFIGURATION = /(?:^|\/)(?:tsconfig[^/]*\.json|eslint[^/]*\.config\.[^/]+)$/;
 const EXTENDS = /"extends"\s*:\s*(\[[^\]]*\]|"[^"]*")/;
-/** A module another loads: `import … from`, `export … from`, a bare `import` for its side effects, `require()` and `import()`. */
-const CONFIGURATION_IMPORT = /(?:\bfrom\s+|\bimport\s+|\brequire\(\s*|\bimport\(\s*)["']([^"']+)["']/g;
+/**
+ * The modules a module's text imports, as written: `import … from`,
+ * `export … from`, a bare `import` for its side effects, `require()` and
+ * `import()`. TypeScript's own scanner reads them, so text that only looks like
+ * an import, in a comment or in a string such as a child process's source, is
+ * never taken for one.
+ */
+function importsIn(text) {
+  return ts.preProcessFile(text, true, true).importedFiles.map(file => file.fileName);
+}
 
 function readRepositoryFile(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -1286,7 +1338,7 @@ function workspacePackages(files) {
 function sharedConfigurationOf(path, packages) {
   const text = readRepositoryFile(path);
   const extended = EXTENDS.exec(text)?.[1] ?? "";
-  const specifiers = [...extended.matchAll(/"([^"]+)"/g), ...text.matchAll(CONFIGURATION_IMPORT)].map(match => match[1]);
+  const specifiers = [...[...extended.matchAll(/"([^"]+)"/g)].map(match => match[1]), ...importsIn(text)];
   return specifiers.map(specifier => repositoryPathOf(specifier, path, packages)).filter(Boolean);
 }
 
