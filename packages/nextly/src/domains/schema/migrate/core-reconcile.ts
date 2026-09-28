@@ -124,7 +124,7 @@ export async function reconcileCore(
     // the cleanup before returning, or the ordinary upgrade — a database
     // already carrying the current core schema — is exactly the one where a
     // requested drop silently does nothing.
-    await dropRetiredAuthTablesIfAllowed(deps);
+    await executeRetiredDrops(deps, await decideRetiredDrops(deps));
     logger?.info?.("Core schema up to date.");
     return { changed: false };
   }
@@ -180,6 +180,11 @@ export async function reconcileCore(
     }
   }
 
+  // Decided before the apply as well as at the drop. A refusal has to come
+  // while the database is still as it was, or the command reports a refusal
+  // for a run that has already applied and recorded the core change.
+  const retiredDropsExpected = await decideRetiredDrops(deps);
+
   const repo = new SchemaEventsRepository(db, dialect);
   try {
     // 1. Apply the core schema first (drizzle-kit pushSchema over
@@ -217,13 +222,19 @@ export async function reconcileCore(
   // apply is not guaranteed: dropping first, a failed apply would leave a
   // database without the retired tables' rows AND without the core update,
   // with no way back to where it started. Outside the `try`, so a failed drop
-  // is reported as itself rather than as a failed apply.
-  await dropRetiredAuthTablesIfAllowed(deps);
+  // is reported as itself rather than as a failed apply. Decided again on
+  // fresh counts, so a table that gained rows during the apply is refused
+  // rather than dropped on a count taken before it.
+  if (retiredDropsExpected.length > 0) {
+    await executeRetiredDrops(deps, await decideRetiredDrops(deps));
+  }
   return { changed: true };
 }
 
 /**
- * Drop the retired auth tables, when the operator has asked for it.
+ * The retired auth tables to drop, when the operator has asked for it — or
+ * a refusal, thrown, when one still holds rows the operator has not agreed to
+ * lose. Deciding only: the caller drops them, once nothing else can fail.
  *
  * Separate from the diff above because these tables are no longer part of the
  * core schema: `getCoreTableNames` does not name them, so the introspection
@@ -231,10 +242,10 @@ export async function reconcileCore(
  * would simply sit in an existing database forever, which is the right default
  * but a poor only option.
  */
-async function dropRetiredAuthTablesIfAllowed(
+async function decideRetiredDrops(
   deps: ReconcileCoreDeps
-): Promise<void> {
-  if (!deps.allowDestructive) return;
+): Promise<readonly string[]> {
+  if (!deps.allowDestructive) return [];
 
   // `allowDestructive` is the GENERAL flag — it also authorises dropping an
   // orphaned core column — so its being set does not mean retired-table work
@@ -250,7 +261,7 @@ async function dropRetiredAuthTablesIfAllowed(
     deps.logger?.info?.(
       "Retired-table cleanup skipped: this caller supplies no table-existence, row-count or statement operations."
     );
-    return;
+    return [];
   }
 
   const {
@@ -268,7 +279,7 @@ async function dropRetiredAuthTablesIfAllowed(
     allowNonEmpty: deps.allowDropNonEmptyRetired === true,
   });
 
-  if (plan.action === "keep") return;
+  if (plan.action === "keep") return [];
   if (plan.action === "refuse") {
     throw new NextlyError({
       code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
@@ -276,7 +287,7 @@ async function dropRetiredAuthTablesIfAllowed(
     });
   }
 
-  await executeRetiredDrops(deps, plan.tables);
+  return plan.tables;
 }
 
 /**

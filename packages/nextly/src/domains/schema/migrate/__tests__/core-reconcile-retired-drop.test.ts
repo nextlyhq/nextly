@@ -145,6 +145,46 @@ describe("a retired-table drop the operator asked for", () => {
       expect(order).toEqual(["apply", "drop", "drop"]);
     });
 
+    it("refuses a table holding rows before applying anything", async () => {
+      // The refusal has to come while the database is unchanged: refusing
+      // after the apply reports a failed run that has already applied and
+      // recorded the core change.
+      let applied = false;
+      const { args, executed } = deps({
+        ...needsApply,
+        countRows: () => Promise.resolve(3),
+        applyCore: () => {
+          applied = true;
+          return Promise.resolve({ statementsExecuted: [] as string[] });
+        },
+      });
+
+      await expect(reconcileCore(args as never)).rejects.toMatchObject({
+        code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
+      });
+      expect(applied).toBe(false);
+      expect(executed).toEqual([]);
+    });
+
+    it("counts the rows again at the drop", async () => {
+      // Empty when checked before the apply, holding rows by the drop: the
+      // operator agreed to lose an empty table, not this one.
+      let applied = false;
+      const { args, executed } = deps({
+        ...needsApply,
+        countRows: () => Promise.resolve(applied ? 3 : 0),
+        applyCore: () => {
+          applied = true;
+          return Promise.resolve({ statementsExecuted: [] as string[] });
+        },
+      });
+
+      await expect(reconcileCore(args as never)).rejects.toMatchObject({
+        code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
+      });
+      expect(executed).toEqual([]);
+    });
+
     it("leaves the retired tables in place when the core apply fails", async () => {
       // The drop cannot be undone and the apply can fail. Dropping first, a
       // failed apply leaves the database without those rows and without the
