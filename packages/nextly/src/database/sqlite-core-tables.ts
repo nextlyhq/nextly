@@ -42,6 +42,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "image" TEXT,
       "password_hash" TEXT,
       "is_active" INTEGER NOT NULL DEFAULT 0,
+      "deactivated_at" INTEGER,
       "failed_login_attempts" INTEGER NOT NULL DEFAULT 0,
       "locked_until" INTEGER,
       "must_change_password" INTEGER,

@@ -453,17 +453,6 @@ function raceCallerAbort<T>(
 }
 
 /**
- * Send to each vetted address until one CONNECTS.
- *
- * A rejection from the send is a transport-level failure — connection
- * refused, reset, unreachable — which is exactly the case DNS failover
- * exists for; a completed exchange resolves with whatever status it
- * produced, and a policy refusal (NextlyError) has nothing to do with which
- * address was tried, so it propagates untouched. The last address's
- * rejection rethrows, so the caller sees the failure it would have seen
- * without the fallback.
- */
-/**
  * Resolve and send ONE hop: vet the name (inside the deadline, against the
  * caller's cancellation), then try each vetted address in turn.
  *
@@ -497,6 +486,17 @@ async function sendOneHop(
   );
 }
 
+/**
+ * Send to each vetted address until one CONNECTS.
+ *
+ * A rejection from the send is a transport-level failure — connection
+ * refused, reset, unreachable — which is exactly the case DNS failover
+ * exists for; a completed exchange resolves with whatever status it
+ * produced, and a policy refusal (NextlyError) has nothing to do with which
+ * address was tried, so it propagates untouched. The last address's
+ * rejection rethrows, so the caller sees the failure it would have seen
+ * without the fallback.
+ */
 async function firstConnectedAddress(
   method: string,
   addresses: readonly ResolvedAddress[],

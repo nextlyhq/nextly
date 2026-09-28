@@ -385,6 +385,25 @@ interface MediaRow {
 }
 
 /**
+ * The `isActive` and `deactivatedAt` writes for an update that sets `isActive`.
+ *
+ * An explicit `false` records the deactivation even when the account was
+ * already inactive — a self-registration still waiting on its link is
+ * inactive, and deactivating it is what stops that link from switching it on.
+ * An explicit `true` clears the record. The first deactivation's time is kept.
+ */
+function activationChanges(
+  next: boolean,
+  current: { isActive: boolean; deactivatedAt: Date | null }
+): Pick<UserUpdateData, "isActive" | "deactivatedAt"> {
+  const out: Pick<UserUpdateData, "isActive" | "deactivatedAt"> = {};
+  if (next !== current.isActive) out.isActive = next;
+  if (!next && !current.deactivatedAt) out.deactivatedAt = new Date();
+  if (next && current.deactivatedAt) out.deactivatedAt = null;
+  return out;
+}
+
+/**
  * The validation refusal for a user input that failed its schema: one error
  * per issue, at the field it names — or `input` for an issue about the whole
  * value. One spelling for every user write, so a client reads the same shape
@@ -702,26 +721,6 @@ export class UserMutationService extends BaseService {
   private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
 
   /**
-   * Create an active, email-verified user with no password, for an identity a
-   * trusted provider has already verified.
-   *
-   * Distinct from a passwordless {@link createLocalUser}, which creates an
-   * INACTIVE invite carrying a set-password link — an external identity needs
-   * neither, and the account must be usable the moment the provider vouches
-   * for it.
-   *
-   * Two refusals are policy rather than validation. It will not create the
-   * FIRST account on an install, because that account decides who administers
-   * the site and a login provider must never be what mints it. And it will not
-   * assign the super-admin role, because the privileges of the highest role
-   * should never be reachable by arriving through a provider.
-   *
-   * Roles are validated and assigned INSIDE the insert's transaction, unlike
-   * `createLocalUser`, which assigns them afterwards and swallows failures —
-   * that would leave an active account with fewer privileges than it was
-   * created with, and nothing to say so.
-   */
-  /**
    * Record `user.created` in the SAME transaction that inserts the account.
    *
    * One implementation for both creation paths. They had diverged: the local
@@ -782,6 +781,26 @@ export class UserMutationService extends BaseService {
     safeEmit("user.created", { userId });
   }
 
+  /**
+   * Create an active, email-verified user with no password, for an identity a
+   * trusted provider has already verified.
+   *
+   * Distinct from a passwordless {@link createLocalUser}, which creates an
+   * INACTIVE invite carrying a set-password link — an external identity needs
+   * neither, and the account must be usable the moment the provider vouches
+   * for it.
+   *
+   * Two refusals are policy rather than validation. It will not create the
+   * FIRST account on an install, because that account decides who administers
+   * the site and a login provider must never be what mints it. And it will not
+   * assign the super-admin role, because the privileges of the highest role
+   * should never be reachable by arriving through a provider.
+   *
+   * Roles are validated and assigned INSIDE the insert's transaction, unlike
+   * `createLocalUser`, which assigns them afterwards and swallows failures —
+   * that would leave an active account with fewer privileges than it was
+   * created with, and nothing to say so.
+   */
   async createExternalUser(
     input: CreateExternalUserData,
     _context?: RequestActor
@@ -1480,6 +1499,7 @@ export class UserMutationService extends BaseService {
           image: true,
           emailVerified: true,
           isActive: true as unknown as boolean,
+          deactivatedAt: true,
         },
       });
 
@@ -1554,11 +1574,17 @@ export class UserMutationService extends BaseService {
           updateData.emailVerified = changes.emailVerified;
         }
 
-      // ✅ Handle isActive
-      if (Object.prototype.hasOwnProperty.call(changes, "isActive")) {
-        if (changes.isActive !== currentUser.isActive) {
-          updateData.isActive = changes.isActive;
-        }
+      // ✅ Handle isActive. A boolean only: callers such as the Direct API
+      // pass the key with `undefined` when the caller left it out, and reading
+      // that as `false` would deactivate every account they update.
+      if (typeof changes.isActive === "boolean") {
+        Object.assign(
+          updateData,
+          activationChanges(changes.isActive, {
+            isActive: Boolean(currentUser.isActive),
+            deactivatedAt: currentUser.deactivatedAt ?? null,
+          })
+        );
       }
 
       const hasFieldUpdates = Object.keys(updateData).length > 0;
@@ -1832,34 +1858,6 @@ export class UserMutationService extends BaseService {
   }
 
   /**
-   * Delete a user and all related data (roles, media ownership).
-   *
-   * §13.8 + spec note: user existence is sensitive (account enumeration);
-   * the public message stays generic. The id flows only through logContext.
-   *
-   * @param actor - Who initiated the delete, recorded for event attribution.
-   * @throws NextlyError(NOT_FOUND) when the user does not exist.
-   * @throws NextlyError on DB errors via fromDatabaseError.
-   */
-  /**
-   * Forget who edited a plugin's settings, without forgetting the settings.
-   *
-   * `updated_by` keeps the editing user's id and nothing else erases it, so a
-   * deleted account went on being identified by core-owned rows indefinitely.
-   * The row itself stays: it is the plugin's configuration rather than the
-   * user's data, and removing it would reconfigure the install.
-   *
-   * Its own step so the deletion transaction reads as the sequence it
-   * enforces rather than as the detail of each erasure.
-   *
-   * `tableExists` is asked by the caller, before the transaction opens, and
-   * passed in. The declaration being registered says only that this build
-   * knows the table; it says nothing about the database in front of it, and a
-   * statement against an absent table aborts the whole deletion — every
-   * account deletion, permanently, on any install whose database predates the
-   * table.
-   */
-  /**
    * Whether a table is present, for a probe taken BEFORE the delete
    * transaction opens.
    *
@@ -1965,6 +1963,24 @@ export class UserMutationService extends BaseService {
     await txDb.delete(retired).where(eq(retired.userId, String(userId)));
   }
 
+  /**
+   * Forget who edited a plugin's settings, without forgetting the settings.
+   *
+   * `updated_by` keeps the editing user's id and nothing else erases it, so a
+   * deleted account went on being identified by core-owned rows indefinitely.
+   * The row itself stays: it is the plugin's configuration rather than the
+   * user's data, and removing it would reconfigure the install.
+   *
+   * Its own step so the deletion transaction reads as the sequence it
+   * enforces rather than as the detail of each erasure.
+   *
+   * `tableExists` is asked by the caller, before the transaction opens, and
+   * passed in. The declaration being registered says only that this build
+   * knows the table; it says nothing about the database in front of it, and a
+   * statement against an absent table aborts the whole deletion — every
+   * account deletion, permanently, on any install whose database predates the
+   * table.
+   */
   private async scrubPluginSettingsActor(
     txDb: DrizzleTransactionLike,
     userId: string | number,
@@ -1980,6 +1996,16 @@ export class UserMutationService extends BaseService {
       );
   }
 
+  /**
+   * Delete a user and all related data (roles, media ownership).
+   *
+   * §13.8 + spec note: user existence is sensitive (account enumeration);
+   * the public message stays generic. The id flows only through logContext.
+   *
+   * @param actor - Who initiated the delete, recorded for event attribution.
+   * @throws NextlyError(NOT_FOUND) when the user does not exist.
+   * @throws NextlyError on DB errors via fromDatabaseError.
+   */
   async deleteUser(
     userId: number | string,
     actor?: RequestActor

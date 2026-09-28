@@ -189,14 +189,6 @@ async function passwordChangeRequired(
 }
 
 /**
- * Answer a wrong challenge response: one more attempt, or a final refusal.
- *
- * The attempt counter lives in the token rather than in a row, so advancing it
- * means minting a new one — and the strategy has to be carried across, or a
- * second attempt would record the session as coming from the password path
- * whatever actually signed the person in.
- */
-/**
  * Spend one attempt from this account's budget for this challenge.
  *
  * A PRECONDITION, so it runs before the answer is examined. Counting only
@@ -262,6 +254,14 @@ async function spendChallengeAttempt(
   }
 }
 
+/**
+ * Answer a wrong challenge response: one more attempt, or a final refusal.
+ *
+ * The attempt counter lives in the token rather than in a row, so advancing it
+ * means minting a new one — and the strategy has to be carried across, or a
+ * second attempt would record the session as coming from the password path
+ * whatever actually signed the person in.
+ */
 async function wrongAnswer(
   deps: Pick<
     ChallengeResolveDeps,

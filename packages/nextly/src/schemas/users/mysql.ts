@@ -35,6 +35,12 @@ export const users = mysqlTable(
     image: varchar("image", { length: 255 }),
     passwordHash: varchar("password_hash", { length: 255 }),
     isActive: boolean("is_active").notNull().default(false),
+    // When an administrator deactivated the account; null when none has. Kept
+    // apart from is_active because that flag is also false for an account
+    // still waiting on its verification link or invite, and only this says
+    // whether following one may switch the account on. Nullable, so adding it
+    // to an existing table rewrites no row.
+    deactivatedAt: datetime("deactivated_at"),
     // Set when an admin creates the account with a password they chose: the
     // person must replace it on first sign-in (ASVS 6.4.1). Nullable so the
     // column can be added to an existing table without a data-losing default;

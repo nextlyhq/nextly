@@ -98,6 +98,11 @@ An account deactivated mid-session loses it at the next token refresh, which
 also deletes the refresh token and clears the cookies rather than leaving them
 to be retried.
 
+A deactivation also outlasts the account's own links. While an administrator
+has an account switched off, following its verification link verifies the
+address without activating the account, no new verification link is sent, and
+an invite link is refused. Activating the account again lifts all three.
+
 ## What a token is for
 
 Every token Nextly signs carries a `typ` header naming its purpose, and is

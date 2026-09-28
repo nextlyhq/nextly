@@ -114,6 +114,43 @@ describe("acceptInvite", () => {
     expect(invite.usedAt).toBeTruthy();
   });
 
+  it("refuses an account an administrator deactivated, and changes nothing", async () => {
+    // An invite must not set credentials on, or switch back on, an account
+    // an administrator turned off after the link was sent.
+    const { auth, db, userId } = await setup();
+    const { token } = await auth.generateInviteToken(userId);
+    await db
+      .update(users)
+      .set({ deactivatedAt: new Date() })
+      .where(eq(users.id, userId));
+
+    await expect(auth.acceptInvite(token, STRONG)).rejects.toBeInstanceOf(
+      NextlyError
+    );
+
+    const [user] = await db.select().from(users).where(eq(users.id, userId));
+    expect(user.passwordHash).toBeNull();
+    expect(user.isActive).toBe(false);
+    // The claim rolled back with the refusal, so the token is not spent.
+    const [invite] = await db.select().from(userInviteTokens);
+    expect(invite.usedAt).toBeNull();
+  });
+
+  it("will not mint an invite for an account an administrator deactivated", async () => {
+    // The link could never be accepted, so the administrator is told now
+    // rather than the invitee meeting a dead link later.
+    const { auth, db, userId } = await setup();
+    await db
+      .update(users)
+      .set({ deactivatedAt: new Date() })
+      .where(eq(users.id, userId));
+
+    await expect(auth.generateInviteToken(userId)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(await db.select().from(userInviteTokens)).toHaveLength(0);
+  });
+
   it("refuses a token that was already used", async () => {
     const { auth, userId } = await setup();
     const { token } = await auth.generateInviteToken(userId);

@@ -73,6 +73,21 @@ function serviceFor(
   });
 }
 
+/**
+ * Mark a settings response to skip global date formatting.
+ *
+ * Settings are configuration a plugin round-trips, not records with
+ * timestamps: an ISO-looking string a plugin stored — a provider's `since`
+ * cursor, a version date — was rewritten by value into the installation's
+ * timezone, so the admin was shown, and could write back, a value the plugin
+ * never set. Every response carrying settings is marked, the update's as much
+ * as the read's, since the admin renders the one it gets back.
+ */
+function configurationResponse(response: Response): Response {
+  response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+  return response;
+}
+
 export async function dispatchPluginSettings(
   container: ServiceContainer,
   config: NextlyServiceConfig | undefined,
@@ -84,14 +99,9 @@ export async function dispatchPluginSettings(
   const service = serviceFor(container, config, pluginName);
 
   if (method === "getPluginSettings") {
-    // Marked to skip global date formatting. Settings are configuration a
-    // plugin round-trips, not records with timestamps: an ISO-looking string
-    // a plugin stored — a provider's `since` cursor, a version date — was
-    // rewritten by value into the installation's timezone, so the admin was
-    // shown, and could write back, a value the plugin never set.
-    const response = respondData({ settings: await service.getRedacted() });
-    response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
-    return response;
+    return configurationResponse(
+      respondData({ settings: await service.getRedacted() })
+    );
   }
 
   if (method === "updatePluginSettings") {
@@ -120,7 +130,9 @@ export async function dispatchPluginSettings(
     // the item: a client processing this update like every other mutation
     // gets the resulting settings instead of a bare message. Redacted for
     // the same reason the GET is — a secret is never handed back.
-    return respondMutation("Settings updated.", await service.getRedacted());
+    return configurationResponse(
+      respondMutation("Settings updated.", await service.getRedacted())
+    );
   }
 
   throw NextlyError.notFound({

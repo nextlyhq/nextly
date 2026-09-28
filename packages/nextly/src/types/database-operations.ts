@@ -21,6 +21,8 @@ export interface UserUpdateData {
   emailVerified?: Date | null;
   passwordHash?: string;
   isActive?: boolean;
+  /** When an administrator deactivated the account; null once reactivated. */
+  deactivatedAt?: Date | null;
   /** Cleared to false once the user replaces an admin-set password. */
   mustChangePassword?: boolean;
   updatedAt?: Date;

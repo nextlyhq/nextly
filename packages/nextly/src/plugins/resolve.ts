@@ -20,13 +20,6 @@ export interface ResolvePluginsOptions {
 }
 
 /**
- * The single shared plugin resolver used by both the CLI and the runtime.
- * Validates compatibility, then returns dependency order. Fail-fast.
- *
- * Pure — NOT yet wired into boot. P1 calls this from `register.ts` (runtime) and
- * `config-loader.ts` (CLI).
- */
-/**
  * Every check that must hold for the plugin list a boot actually USES.
  *
  * Separated from `resolvePlugins` because the list can change after it runs: a
@@ -101,6 +94,13 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   validatePluginMenus(plugins);
 }
 
+/**
+ * The single shared plugin resolver used by both the CLI and the runtime.
+ * Validates compatibility, then returns dependency order. Fail-fast.
+ *
+ * Pure, so the boot (`register.ts`) and the CLI (`config-loader.ts`) resolve a
+ * plugin list the same way.
+ */
 export function resolvePlugins(
   plugins: PluginDefinition[],
   opts: ResolvePluginsOptions

@@ -60,10 +60,22 @@ password; a wrong password, and every other refusal, still answer
 correct password. The Direct API's `nextly.login()` answers the same way.
 
 Resending a verification email now does nothing for an address that is
-already verified, answering the same as for an unknown one. Previously it
-mailed a fresh link to any account, and following that link re-activated an
-account an administrator had deactivated. The resend endpoint is also held to the
+already verified, answering the same as for an unknown one; previously it
+mailed a fresh link to any account. The resend endpoint is also held to the
 same per-IP budget as `forgot-password`, since both send an email on request.
+
+An administrator's deactivation now outlasts the account's own links. The
+`users` table gains a nullable `deactivated_at` column, added in place by the
+core schema sync with no row rewritten. Setting `isActive: false` records it,
+even on an account that was already inactive, such as a sign-up still waiting
+on its link; setting `isActive: true` clears it. While it is set, a
+verification link verifies the address but no longer activates the account, no
+new verification link is sent, and an invite link is refused without setting a
+password. Previously any of these switched the account back on. Minting a new
+invite for such an account answers `CONFLICT` with a message to activate it
+first, rather than handing out a link that could never be accepted. Accounts
+deactivated before this release carry no record, so deactivating them again is
+what protects them.
 
 A refresh whose account is no longer usable now deletes the refresh row and
 clears the cookies rather than answering 401 and leaving both alive, so an

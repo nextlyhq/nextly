@@ -24,6 +24,9 @@ import { satisfiesRange } from "./semver-range";
 /** The capability keys a plugin may declare. Anything else is a typo. */
 const KNOWN_CAPABILITIES = ["net", "db", "secrets"] as const;
 
+/** A dotted-quad, which the hostname pattern would otherwise accept. */
+const IP_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
+
 /**
  * A hostname, or one leading `*.` wildcard.
  *
@@ -32,9 +35,6 @@ const KNOWN_CAPABILITIES = ["net", "db", "secrets"] as const;
  * and `ctx.fetch` resolves names to addresses itself precisely so the answer
  * cannot be swapped underneath the check.
  */
-/** A dotted-quad, which the hostname pattern would otherwise accept. */
-const IP_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
-
 const OUTBOUND_HOST =
   /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
 
@@ -58,10 +58,6 @@ function plugins(all: PluginDefinition[]): PluginDefinition[] {
   return all.filter(plugin => plugin.enabled !== false);
 }
 
-/**
- * Check every plugin's own manifest: the keys it declares, the hosts it names,
- * the secrets it lists, and its schema version.
- */
 /** Refuse a capability key the runtime does not implement. */
 function assertKnownCapabilities(plugin: PluginDefinition): void {
   for (const key of Object.keys(plugin.capabilities ?? {})) {
@@ -196,7 +192,7 @@ function assertSettingsIdentifiers(plugin: PluginDefinition): void {
 
 /**
  * Check every plugin's own manifest: the keys it declares, the hosts it names,
- * the secrets it lists, and its schema version.
+ * the secrets it lists, its schema version, and its settings identifiers.
  */
 export function validateCapabilities(all: PluginDefinition[]): void {
   for (const plugin of plugins(all)) {

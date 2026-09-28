@@ -55,13 +55,6 @@ export function getDeclaredHookPoints(): ReadonlyMap<
 }
 
 /**
- * Collect every declared point, refusing a bad name or a collision.
- *
- * The prefix rule is what keeps ownership legible: a point named
- * `acme-auth.profile` belongs to the plugin whose slug is `acme-auth`, and no
- * other plugin can publish under it.
- */
-/**
  * Whether this plugin may declare this name at all.
  *
  * Both refusals, together, because they answer one question — who owns the
@@ -94,6 +87,13 @@ function assertPointDeclarable(
   }
 }
 
+/**
+ * Collect every declared point, refusing a bad name or a collision.
+ *
+ * The prefix rule is what keeps ownership legible: a point named
+ * `acme-auth.profile` belongs to the plugin whose slug is `acme-auth`, and no
+ * other plugin can publish under it.
+ */
 export function collectHookPoints(
   plugins: PluginDefinition[]
 ): Map<string, DeclaredHookPoint> {

@@ -51,13 +51,6 @@ interface SettingsDb extends SettingsWriter {
 }
 
 /**
- * Settings stored in `nextly_plugin_settings`.
- *
- * The write is an upsert on `(owner, key)`, the table's primary key, so two
- * concurrent writers cannot produce two rows for one setting — the last write
- * wins and both complete, rather than one failing on a duplicate.
- */
-/**
  * The key of the row every writer for one plugin contends on.
  *
  * The EMPTY string, which is not a settings key: `settings-service` refuses a
@@ -67,6 +60,13 @@ interface SettingsDb extends SettingsWriter {
  */
 export const OWNER_LOCK_KEY = "";
 
+/**
+ * Settings stored in `nextly_plugin_settings`.
+ *
+ * The write is an upsert on `(owner, key)`, the table's primary key, so two
+ * concurrent writers cannot produce two rows for one setting — the last write
+ * wins and both complete, rather than one failing on a duplicate.
+ */
 export function createPluginSettingsStore(
   db: unknown,
   dialect: SupportedDialect,

@@ -641,11 +641,8 @@ export class AuthService extends BaseService {
     try {
       const user = await queryService.findByEmail(email);
 
-      // Silent success either way, so neither case reveals the account. An
-      // address already verified has nothing to verify: a link would mail a
-      // verification to someone who only forgot their password, and following
-      // it re-activates an account an administrator deactivated.
-      if (!user || user.emailVerified) {
+      // Silent success either way, so neither case reveals the account.
+      if (!user || !(await this.awaitsVerificationLink(user))) {
         return {};
       }
 
@@ -689,6 +686,26 @@ export class AuthService extends BaseService {
       // Normalise raw driver errors so the DB kind is preserved.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+  }
+
+  /**
+   * Whether a verification link would do anything for this account.
+   *
+   * Not for an address already verified: the link would mail someone who only
+   * forgot their password. Not for an account an administrator deactivated:
+   * following the link no longer switches it on, so it would only invite the
+   * owner to try.
+   */
+  private async awaitsVerificationLink(user: {
+    id: string | number;
+    emailVerified?: Date | string | null;
+  }): Promise<boolean> {
+    if (user.emailVerified) return false;
+    const row = await this.db.query.users.findFirst({
+      where: { id: requireFilterValue(String(user.id), "userId") },
+      columns: { deactivatedAt: true },
+    });
+    return !row?.deactivatedAt;
   }
 
   /**
@@ -803,18 +820,28 @@ export class AuthService extends BaseService {
       // fluent query API as this.db.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await this.withTransaction(async (tx: any) => {
-        // IMPORTANT: Mark email as verified AND activate the user. Self-verification
+        // Mark the email verified, and activate the account. Self-verification
         // (whether initiated by /auth/register or by an admin invite with
         // sendWelcomeEmail=true) is what activates the account — both
         // paths funnel through here. An admin can still manually activate
         // a user without email verification via the user-mutation path.
         await tx
           .update(this.tables.users)
-          .set({
-            emailVerified: new Date(),
-            isActive: true,
-          })
+          .set({ emailVerified: new Date() })
           .where(eq(this.tables.users.email, email));
+        // Activation is conditional in the statement itself: an account an
+        // administrator deactivated stays inactive, including when its link
+        // was sent before the deactivation. The address is still verified —
+        // following the link proved it — so reactivating needs no new link.
+        await tx
+          .update(this.tables.users)
+          .set({ isActive: true })
+          .where(
+            and(
+              eq(this.tables.users.email, email),
+              isNull(this.tables.users.deactivatedAt)
+            )
+          );
 
         await tx
           .delete(this.tables.emailVerificationTokens)
@@ -847,10 +874,21 @@ export class AuthService extends BaseService {
     const user = await this.db.query.users.findFirst({
       // rqb v2 object filter (drizzle v1)
       where: { id: requireFilterValue(userId, "userId") },
-      columns: { id: true },
+      columns: { id: true, deactivatedAt: true },
     });
     if (!user) {
       throw NextlyError.notFound({ logContext: { userId } });
+    }
+    // Accepting an invite is refused while the account is deactivated, so a
+    // link minted now could only ever fail for the person it was sent to.
+    // The administrator is told instead, while they can still act on it.
+    if (user.deactivatedAt) {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "This account is deactivated. Activate it before sending an invite.",
+        logContext: { userId },
+      });
     }
 
     const {
@@ -976,7 +1014,12 @@ export class AuthService extends BaseService {
         if (affectedRowCount(claim, this.dialect) !== 1) return;
         claimed = true;
 
-        await tx
+        // Conditional on the account not being deactivated by an
+        // administrator, in the same statement that sets the password: an
+        // invite must not set credentials on, or re-activate, an account an
+        // administrator switched off. Throwing here rolls the claim back too,
+        // and the refusal reads like any other dead invite.
+        const accepted = await tx
           .update(this.tables.users)
           .set({
             passwordHash,
@@ -985,9 +1028,21 @@ export class AuthService extends BaseService {
             isActive: true,
             updatedAt: new Date(),
           })
-          .where(eq(this.tables.users.id, invite.userId));
+          .where(
+            and(
+              eq(this.tables.users.id, invite.userId),
+              isNull(this.tables.users.deactivatedAt)
+            )
+          );
+        if (affectedRowCount(accepted, this.dialect) !== 1) {
+          throw this.invalidInviteError({
+            inviteId: invite.id,
+            reason: "account-deactivated",
+          });
+        }
       });
     } catch (error) {
+      if (NextlyError.is(error)) throw error;
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 

@@ -33,6 +33,12 @@ export const users = sqliteTable(
     isActive: integer("is_active", { mode: "boolean" })
       .notNull()
       .default(false),
+    // When an administrator deactivated the account; null when none has. Kept
+    // apart from is_active because that flag is also false for an account
+    // still waiting on its verification link or invite, and only this says
+    // whether following one may switch the account on. Nullable, so adding it
+    // to an existing table rewrites no row.
+    deactivatedAt: integer("deactivated_at", { mode: "timestamp" }),
     // Set when an admin creates the account with a password they chose: the
     // person must replace it on first sign-in (ASVS 6.4.1). Nullable so the
     // column can be added to an existing table without a data-losing default;
