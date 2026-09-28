@@ -55,14 +55,20 @@ export interface PluginAuthApi {
    * Finish a login a plugin authenticated elsewhere (for example an OAuth
    * callback).
    *
-   * Order, the same as the password path's, preconditions first:
+   * Order, preconditions first:
    *   1. load the user by id (callers cannot fabricate profile fields);
-   *   2. the beforeLogin hooks (maintenance mode and IP allowlists apply to
-   *      an external login too);
-   *   3. the account-state gate (inactive and unverified refused; the password
+   *   2. the account-state gate (inactive and unverified refused; the password
    *      lockout does not apply);
+   *   3. the beforeLogin hooks (maintenance mode and IP allowlists apply to
+   *      an external login too);
    *   4. the afterAuthenticate hooks (second factor);
    *   5. mint the session.
+   *
+   * The gate comes before the hooks because the account is already known
+   * here, and a hook may act — send a code, write a record — for it. The
+   * password path runs its beforeLogin hooks first only because no account is
+   * known until a strategy names one. An account the gate refuses reaches no
+   * hook; its attempt is still recorded in the `login-failed` audit row.
    *
    * Its responses:
    *  - a usable account with no challenge: 302 to `next`, with session cookies;
@@ -147,13 +153,14 @@ function redirectWithCookies(location: string, cookies: string[]): Response {
 }
 
 /**
- * Load the account and establish that it may hold a session.
+ * Load the account, establish that it may hold a session, then run the
+ * `beforeLogin` hooks.
  *
- * The `beforeLogin` hooks run between the two, because a deployment-wide
- * refusal (maintenance, an IP allowlist) applies to an external login as much
- * as to a password one. The account-state gate then runs BEFORE any hook that
- * might act — sending a code, notifying someone — so an account that may not
- * hold a session never triggers one.
+ * The gate runs BEFORE the hooks, because a hook may act — send a code,
+ * notify someone — and an account that may not hold a session must never
+ * trigger one. The hooks still run for every account that passes, so a
+ * deployment-wide refusal (maintenance, an IP allowlist) applies to an
+ * external login as much as to a password one.
  */
 async function loadUsableUser(
   deps: CompleteLoginDeps,

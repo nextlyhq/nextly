@@ -111,10 +111,15 @@ declare function findLocalUserFor(
 ```
 
 **What `completeLogin` does for you**, in this order: loads the user by id, so a
-caller cannot fabricate profile fields; runs the `beforeLogin` hooks, so a
-maintenance mode or an IP allowlist applies to an external login too; checks
-that the account may hold a session at all; runs the `afterAuthenticate` hooks,
+caller cannot fabricate profile fields; checks that the account may hold a
+session at all; runs the `beforeLogin` hooks, so a maintenance mode or an IP
+allowlist applies to an external login too; runs the `afterAuthenticate` hooks,
 which is where a second factor interrupts; and only then mints the session.
+
+The account check comes before the hooks because a hook may act, sending a code
+or writing a record, and must never do so for an account that cannot sign in.
+Such an account reaches no hook; its attempt is still recorded in the
+`login-failed` audit row.
 
 The password-attempt lockout does NOT apply here. An external login is not a
 password attempt, and otherwise anyone who knows an address could lock its
@@ -199,7 +204,7 @@ value), **abort** (throw → generic error), or — for `afterAuthenticate` — 
 
 | Hook | When | Use |
 |---|---|---|
-| `beforeLogin(input)` | Before any strategy | Pre-checks; throw to block (maintenance mode, IP allowlist) |
+| `beforeLogin(input)` | Before any strategy; in `completeLogin`, after the account check | Pre-checks; throw to block (maintenance mode, IP allowlist) |
 | `afterAuthenticate(user)` | After a strategy identifies the user | **Insert 2FA / step-up**; decorate the user (the id must stay the same, or the login fails) |
 | `afterLogin(user)` | After the session is issued | Side effects (audit, last-login, notify) |
 | `beforeRegister(data)` | Before a new user is created | Normalize / augment the payload |

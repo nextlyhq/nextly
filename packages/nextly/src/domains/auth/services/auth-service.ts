@@ -946,9 +946,13 @@ export class AuthService extends BaseService {
    * password in one transaction — there is no separate verification round trip,
    * and no window where the account has a password but still cannot sign in.
    *
+   * An account an administrator deactivated is refused instead, without
+   * setting the password: an invite must not set credentials on, or switch
+   * back on, an account someone turned off.
+   *
    * The failure messages do not distinguish "never existed" from "already
-   * used" from "expired-by-a-second", to avoid confirming which invites are
-   * live to whoever holds a guessed token.
+   * used" from "expired-by-a-second" from "deactivated", to avoid confirming
+   * which invites are live to whoever holds a guessed token.
    */
   async acceptInvite(
     token: string,

@@ -3,9 +3,10 @@
  *
  * Accepts an invite link: the new person sets their own password, and the
  * account is verified, activated and signed-in-capable in one step. All
- * token-related failures (unknown, used, expired) collapse into a single
- * response so a guessed token learns nothing about which invites are live;
- * the real reason lives only in logContext.
+ * failures (unknown, used or expired token, or an account an administrator
+ * deactivated) collapse into a single response so a guessed token learns
+ * nothing about which invites are live; the real reason lives only in
+ * logContext.
  */
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction } from "../../api/response-shapes";
