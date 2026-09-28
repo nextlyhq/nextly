@@ -200,6 +200,43 @@ jobs:
           rm -rf .nextly-review
           mkdir .nextly-review
 
+      # What the agent's Bash commands need so that Claude Code can keep
+      # credentials out of their environment (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
+      # on the next step). It runs each command inside bubblewrap, in a PID
+      # namespace of its own. Measured on this runner on 2026-09-28, with the
+      # Claude Code the pinned action installs (2.1.222):
+      #
+      # - Without bubblewrap, Claude Code refuses to start, and without socat
+      #   it refuses every command. The runner image has neither.
+      # - Ubuntu 24.04's AppArmor forbids the user namespace bubblewrap makes,
+      #   until the sysctl below lifts that. The runner is thrown away after
+      #   the job, and nothing in it runs code from the pull request.
+      # - 2.1.222 shields `.mcp.json` in every directory above the checkout, up
+      #   to `/`, by mounting over it, and bubblewrap cannot create the mount
+      #   point where the runner's user may not write (`/home` and `/`). An
+      #   empty, root-owned one is made there instead; Claude Code reads MCP
+      #   servers from none of them (`--strict-mcp-config`).
+      #
+      # A missing piece fails the review rather than running it unscrubbed.
+      - name: Prepare the agent's subprocess isolation
+        if: steps.ask.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap socat && break
+            [ "$attempt" = 3 ] && exit 1
+            sleep 5
+          done
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          dir=$(dirname "$GITHUB_WORKSPACE")
+          while :; do
+            [ -w "$dir" ] || sudo touch "${dir%/}/.mcp.json"
+            [ "$dir" = / ] && break
+            dir=$(dirname "$dir")
+          done
+
       - name: Run review agent
         if: steps.ask.outputs.run == 'true'
         uses: anthropics/claude-code-action@9db594c7a0e82298c121c18b7f08aa1579ce7341 # v1.0.185
@@ -217,6 +254,13 @@ jobs:
           API_TIMEOUT_MS: "3000000"
           CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000"
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+          # Every Bash command the agent runs, the gateway included, starts
+          # without the model key or any other credential Claude Code knows,
+          # in a PID namespace of its own; the step above prepares what that
+          # needs. The workflow's read token is not on Claude Code's list, so
+          # the gateway still reaches GitHub. The action reads this from the
+          # step's env.
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         with:
           anthropic_api_key: ${{ secrets.ZAI_API_KEY }}
           # The workflow's own token, which only reads here. The action writes
@@ -247,6 +291,11 @@ jobs:
             workflow posts both as the review bot, and a `post-review` or `reply`
             call of your own is refused. A `gh api` call of your own is not
             permitted. Do not approve, request changes, merge, close, or push.
+
+            Claude Code's isolation creates some files in the checkout, empty,
+            when they are missing: `.env` files, `package.json`, lock files,
+            `.gitmodules`, `.npmrc` and the like. Git does not track them, and
+            they are not part of the pull request.
           # Allowlist entries match a command prefix, so every entry has to be
           # safe under ANY arguments appended to it, and no raw `gh` or `git`
           # qualifies. `gh api` takes `--hostname` and `gh pr` takes
@@ -278,17 +327,18 @@ jobs:
           #
           # Keeping the model API key on the runner rests on two layers, not on
           # this list alone. Outbound: the gateway fixes the destination of
-          # every request. Inbound: the key sits in the agent's own process
-          # environment, so reading it is the remaining path. Every primitive
-          # that reaches it is withheld: `/proc` and `/sys` are denied below and
-          # the action's own guard blocks those reads too, no `env`/`printenv`
-          # is allowlisted, and `jq` is absent because `jq -n '$ENV'` reads the
-          # environment through libc without going near `/proc`. Treat that as
-          # defence in depth rather than an impossibility proof: an agent that
-          # reads files and emits text is trusted by construction. The backstops
-          # are that forks never reach this job, only collaborators can trigger
-          # it, the token is read-only, and the key should be a CI-dedicated one
-          # that is rotated on suspicion.
+          # every request. Inbound: the key sits in Claude Code's own process
+          # environment, and the scrub keeps it out of every command the agent
+          # runs, so reading it from there is the remaining path. Every
+          # primitive that reaches it is withheld: `/proc` and `/sys` are denied
+          # below and the action's own guard blocks those reads too, no
+          # `env`/`printenv` is allowlisted, and `jq` is absent because
+          # `jq -n '$ENV'` reads the environment through libc without going near
+          # `/proc`. Treat that as defence in depth rather than an impossibility
+          # proof: an agent that reads files and emits text is trusted by
+          # construction. The backstops are that forks never reach this job,
+          # only collaborators can trigger it, the token is read-only, and the
+          # key should be a CI-dedicated one that is rotated on suspicion.
           claude_args: |
             --allowedTools "Read,Grep,Glob,Edit(/.nextly-review/**),Bash(${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(bash ${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(ls:*)"
             --disallowedTools "WebSearch,WebFetch,Read(//proc/**),Read(//sys/**),Grep(//proc/**),Grep(//sys/**)"
