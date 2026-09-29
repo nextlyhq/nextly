@@ -86,21 +86,25 @@ A plugin route can ask for the same protections core's own routes have:
   method: "POST",
   path: "/callback",
   rateLimit: "auth",   // the per-IP auth limit, in this plugin's own bucket
-  csrf: true,          // for cookie-authenticated callers on unsafe methods
+  csrf: false,         // opts out, for callers that bring their own credential
   rawBody: true,       // the exact bytes, for a signed webhook
   noStore: true,       // never cached
 }
 ```
 
-Two things are worth knowing. `csrf` applies only to **cookie**-authenticated
-callers: a browser cannot attach an API key cross-site, so there is no
-cross-site request to forge. And `rateLimit: "auth"` uses core's limit and
-window in a bucket namespaced to the plugin, so one plugin's traffic cannot
-exhaust the budget protecting another's — or core's login.
+Two things are worth knowing. `csrf` is checked **by default** for
+cookie-authenticated callers on unsafe methods — the same protection core's
+own routes take. A route whose callers bring their own credential (an API
+key, a signed webhook) opts out with `csrf: false`. The check applies only
+to **cookie**-authenticated callers: a browser cannot attach an API key
+cross-site, so there is no cross-site request to forge. And
+`rateLimit: "auth"` uses core's limit and window in a bucket namespaced to
+the plugin, so one plugin's traffic cannot exhaust the budget protecting
+another's — or core's login.
 
-Declaring `csrf` on a `public` route fails boot. A public route has no cookie
-identity to protect, and accepting the combination would advertise a protection
-that is not there.
+Declaring `csrf: true` on a `public` route fails boot. A public route has no
+cookie identity to protect, and accepting the combination would advertise a
+protection that is not there.
 
 ## Secrets
 

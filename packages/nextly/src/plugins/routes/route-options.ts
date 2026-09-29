@@ -46,7 +46,11 @@ export function csrfApplies(
   request: Request,
   credential: CallerCredential = callerCredential(request)
 ): boolean {
-  if (route.csrf !== true) return false;
+  // Checked unless the route opts out: forgetting the flag must not leave a
+  // cookie-authenticated mutation forgeable. A route whose callers bring
+  // their own credential (an API key, a signed webhook) opts out with
+  // `csrf: false`.
+  if (route.csrf === false) return false;
   if (!UNSAFE_METHODS.has(request.method.toUpperCase())) return false;
   // Only a cookie travels automatically, so only a cookie-authenticated
   // request can be made by a site the user did not intend to act on. The

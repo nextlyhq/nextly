@@ -80,10 +80,14 @@ describe("csrfApplies", () => {
     ).toBe(false);
   });
 
-  it("does not apply when the route did not ask for it", () => {
-    expect(csrfApplies(route(), request("POST", { cookie: "a=b" }))).toBe(
-      false
-    );
+  it("applies when the route did not opt out", () => {
+    expect(csrfApplies(route(), request("POST", { cookie: "a=b" }))).toBe(true);
+  });
+
+  it("does not apply to a route that opted out", () => {
+    expect(
+      csrfApplies(route({ csrf: false }), request("POST", { cookie: "a=b" }))
+    ).toBe(false);
   });
 });
 

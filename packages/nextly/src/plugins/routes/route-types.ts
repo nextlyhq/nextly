@@ -207,7 +207,8 @@ export interface PluginRoute {
   rawBody?: boolean;
   /**
    * @experimental Require a valid double-submit CSRF token for unsafe methods
-   * when the caller is cookie-authenticated.
+   * when the caller is cookie-authenticated. Checked by default; a route
+   * whose callers bring their own credential opts out with `false`.
    *
    * API-key and Bearer callers are exempt, because a browser cannot attach
    * those cross-site — the attack this prevents needs the credential to travel
