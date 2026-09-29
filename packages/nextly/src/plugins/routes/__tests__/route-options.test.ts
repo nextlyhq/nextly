@@ -98,15 +98,27 @@ describe("csrfApplies", () => {
       csrfApplies(route({ public: true }), request("POST", { cookie: "a=b" }))
     ).toBe(false);
   });
+
+  it("honors an explicit csrf on a public route", () => {
+    // A public handler that resolves the session user and acts on them
+    // declares the check; only cookie-carrying callers are asked for a
+    // token, so webhook callers stay free.
+    expect(
+      csrfApplies(
+        route({ public: true, csrf: true }),
+        request("POST", { cookie: "a=b" })
+      )
+    ).toBe(true);
+  });
 });
 
 describe("validateRouteOptions", () => {
-  it("refuses csrf on a public route", () => {
-    // A public route has no cookie identity to protect, so accepting this
-    // would advertise a protection that is not there.
-    expect(validateRouteOptions(route({ csrf: true, public: true }))).toMatch(
-      /public route/
-    );
+  it("accepts csrf on a public route", () => {
+    // Honored at runtime for cookie-carrying callers; the declaration is
+    // how a public handler that resolves the session user protects itself.
+    expect(
+      validateRouteOptions(route({ csrf: true, public: true }))
+    ).toBeNull();
   });
 
   it("refuses rawBody on a method with no body", () => {

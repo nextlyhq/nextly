@@ -51,11 +51,12 @@ export function csrfApplies(
   // their own credential (an API key, a signed webhook) opts out with
   // `csrf: false`.
   if (route.csrf === false) return false;
-  // A public route authenticated no one, so there is no cookie identity to
-  // protect — the credential here is a header sniff, and it cannot say the
-  // cookie admitted the request. Demanding a token would refuse a browser
-  // post for carrying an unrelated session cookie.
-  if (route.public === true) return false;
+  // A public route skips the DEFAULT: it authenticated no one, and a cookie
+  // on the request says nothing about what admitted it. An explicit
+  // `csrf: true` is still honored — a public handler that resolves the
+  // session user and acts on them declares it, and the check demands a
+  // token only from cookie-carrying callers, so webhook callers stay free.
+  if (route.public === true && route.csrf !== true) return false;
   if (!UNSAFE_METHODS.has(request.method.toUpperCase())) return false;
   // Only a cookie travels automatically, so only a cookie-authenticated
   // request can be made by a site the user did not intend to act on. The
@@ -124,12 +125,6 @@ export function rateLimitKey(
 
 /** Why a route's declared options are invalid, or null when they are fine. */
 export function validateRouteOptions(route: PluginRoute): string | null {
-  if (route.csrf === true && route.public === true) {
-    // A public route has no cookie identity to protect: CSRF defends a
-    // credential the browser attaches automatically, and there is none here.
-    // Accepting the combination would suggest a protection that is not there.
-    return "csrf cannot be set on a public route: there is no cookie identity to protect";
-  }
   if (route.rawBody === true && !UNSAFE_METHODS.has(route.method)) {
     return `rawBody is only meaningful on a method with a body, not ${route.method}`;
   }
