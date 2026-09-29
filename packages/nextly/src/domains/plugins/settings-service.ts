@@ -143,7 +143,30 @@ function deepMergeSettings(
   }
   return out;
 }
+/**
 
+ * The redacted view of a store nothing was ever saved to: every declared
+ * secret appears as `{ set: false }`, and a wildcard path is skipped — it
+ * names no key until saved settings give it instances to name.
+ */
+function unsetSecretsView(
+  secretPaths: readonly string[]
+): Record<string, unknown> {
+  const view: Record<string, unknown> = {};
+  for (const path of secretPaths) {
+    if (path.includes("*")) continue;
+    const parts = path.split(".");
+    let node = view;
+    for (const part of parts.slice(0, -1)) {
+      const existing = node[part];
+      node[part] =
+        typeof existing === "object" && existing !== null ? existing : {};
+      node = node[part] as Record<string, unknown>;
+    }
+    node[parts[parts.length - 1]] = { set: false };
+  }
+  return view;
+}
 export class PluginSettingsService {
   constructor(private readonly deps: PluginSettingsServiceDeps) {}
 
@@ -160,7 +183,9 @@ export class PluginSettingsService {
   }
 
   /**
-   * The same settings with every secret replaced by `{ set }`.
+
+/**
+ * The same settings with every secret replaced by `{ set }`.
    *
    * What the admin API returns. A secret that has been written is reported as
    * present and never as a value: the browser has no use for the plaintext,
@@ -171,12 +196,22 @@ export class PluginSettingsService {
     // only the ones written so far — a secret that has never been set still
     // has to appear, as `{ set: false }`, or the form has nothing to render.
     const stored = await this.readStored();
-    const parsed = this.deps.schema.parse(stored);
-    return redactSecrets(
-      parsed,
-      this.deps.secretPaths,
-      this.savedSecretCheck(stored)
-    );
+    const parsed = this.deps.schema.safeParse(stored);
+    if (parsed.success) {
+      return redactSecrets(
+        parsed.data,
+        this.deps.secretPaths,
+        this.savedSecretCheck(stored)
+      );
+    }
+    // Empty settings with a required key never parse — there is nothing at
+    // the key to parse — and the read still has to render the form nothing
+    // was ever saved to: every declared secret is unset, and a wildcard
+    // path names no key until saved settings give it instances to name.
+    if (Object.keys(stored).length === 0) {
+      return unsetSecretsView(this.deps.secretPaths);
+    }
+    throw parsed.error;
   }
 
   /**

@@ -876,3 +876,36 @@ describe("the read-repair for newly secret rows", () => {
     expect(JSON.stringify(store.rows.find(r => r.key === "port"))).toBe(before);
   });
 });
+
+/**
+ * A fresh install has an empty store, and a required key with no default
+ * rejects it — the admin settings page still has to open, showing every
+ * declared secret unset, or the form can never be filled in the first time.
+ */
+describe("an empty store a required key rejects", () => {
+  it("still renders every declared secret unset", async () => {
+    const store = memoryStore();
+    const service = new PluginSettingsService({
+      owner: "@test/p",
+      schema: z.object({ apiKey: z.string() }),
+      secretPaths: ["apiKey"],
+      store,
+      secrets: () => [KEY_A],
+    });
+
+    expect(await service.getRedacted()).toEqual({ apiKey: { set: false } });
+  });
+
+  it("skips a wildcard path nothing was ever saved to", async () => {
+    const store = memoryStore();
+    const service = new PluginSettingsService({
+      owner: "@test/p",
+      schema: z.object({ apiKey: z.string() }),
+      secretPaths: ["providers.*.clientSecret"],
+      store,
+      secrets: () => [KEY_A],
+    });
+
+    expect(await service.getRedacted()).toEqual({});
+  });
+});
