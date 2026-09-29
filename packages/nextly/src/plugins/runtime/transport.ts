@@ -152,6 +152,10 @@ function requestHeaders(
   // of that: a caller's Content-Length describes the body it built, which
   // materialization may have re-encoded, and the connection is written in
   // chunks when no length is set — framing a strict receiver can refuse.
+  // The transfer-encoding a caller declared for its own streaming body
+  // goes with it: both together describe the same bytes two ways, which a
+  // destination is entitled to refuse.
+  delete headers["transfer-encoding"];
   if (body !== null) {
     headers["content-length"] = String(Buffer.byteLength(body));
   } else {
