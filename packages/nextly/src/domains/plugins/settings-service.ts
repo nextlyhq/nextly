@@ -167,6 +167,31 @@ function unsetSecretsView(
   }
   return view;
 }
+
+/**
+ * Fill the unset view with the defaults the schema still offers: a key
+ * that parses on its own when absent carries a default the admin form
+ * should see. Required keys fail their absent parse and stay unset — the
+ * failed whole-store parse already said so.
+ */
+function mergeSchemaDefaults(
+  schema: unknown,
+  view: Record<string, unknown>
+): void {
+  const shape = (schema as { shape?: Record<string, unknown> } | null)?.shape;
+  if (!shape) return;
+  for (const [key, field] of Object.entries(shape)) {
+    const parsed = (
+      field as {
+        safeParse?: (value: undefined) => { success: boolean; data?: unknown };
+      } | null
+    )?.safeParse?.(undefined);
+    if (parsed?.success && view[key] === undefined) {
+      view[key] = parsed.data;
+    }
+  }
+}
+
 export class PluginSettingsService {
   constructor(private readonly deps: PluginSettingsServiceDeps) {}
 
@@ -209,7 +234,9 @@ export class PluginSettingsService {
     // was ever saved to: every declared secret is unset, and a wildcard
     // path names no key until saved settings give it instances to name.
     if (Object.keys(stored).length === 0) {
-      return unsetSecretsView(this.deps.secretPaths);
+      const view = unsetSecretsView(this.deps.secretPaths);
+      mergeSchemaDefaults(this.deps.schema, view);
+      return view;
     }
     throw parsed.error;
   }

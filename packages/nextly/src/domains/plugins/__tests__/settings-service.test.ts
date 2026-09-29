@@ -909,3 +909,24 @@ describe("an empty store a required key rejects", () => {
     expect(await service.getRedacted()).toEqual({});
   });
 });
+
+describe("an empty store a required key rejects", () => {
+  it("keeps the defaults the schema still offers", async () => {
+    const store = memoryStore();
+    const service = new PluginSettingsService({
+      owner: "@test/p",
+      schema: z.object({
+        apiKey: z.string(),
+        region: z.string().default("eu"),
+      }),
+      secretPaths: ["apiKey"],
+      store,
+      secrets: () => [KEY_A],
+    });
+
+    expect(await service.getRedacted()).toEqual({
+      apiKey: { set: false },
+      region: "eu",
+    });
+  });
+});
