@@ -238,8 +238,9 @@ under its own slug, with metadata keys allowlisted per kind.
 
 **Route options** — `rateLimit`, `rawBody`, `csrf` and `noStore` — the
 protections core's own routes have. CSRF applies only to cookie-authenticated
-callers, because a browser cannot attach an API key cross-site; declaring it on
-a public route fails boot.
+callers, because a browser cannot attach an API key cross-site; a public route
+skips the default check, and a public handler that resolves the session user
+declares `csrf: true` for exactly that case.
 
 **Declared hook points**, collision-checked and owned by prefix, plus
 `ctx.filters.decide` for seams where handlers veto rather than transform.

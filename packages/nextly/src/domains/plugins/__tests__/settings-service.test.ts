@@ -948,7 +948,7 @@ describe("an empty store a required key rejects", () => {
     });
 
     expect(await service.getRedacted()).toEqual({
-      providers: { clientId: "acme" },
+      providers: { clientId: "acme", clientSecret: { set: false } },
     });
   });
 

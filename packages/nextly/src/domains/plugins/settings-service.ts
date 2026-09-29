@@ -184,23 +184,36 @@ function mergeSchemaDefaults(
   const shape = (schema as { shape?: Record<string, unknown> } | null)?.shape;
   if (!shape) return;
   for (const [key, field] of Object.entries(shape)) {
-    if (secretPaths.some(path => path === key)) continue;
-    const parsed = (
-      field as {
-        safeParse?: (value: undefined) => { success: boolean; data?: unknown };
-      } | null
-    )?.safeParse?.(undefined);
-    if (!parsed?.success || view[key] !== undefined) continue;
-    const pruned = pruneSecretPaths(parsed.data, [key], secretPaths);
-    if (
-      pruned !== null &&
-      typeof pruned === "object" &&
-      Object.keys(pruned).length === 0
-    ) {
-      continue;
-    }
-    view[key] = pruned;
+    if (view[key] !== undefined) continue;
+    const merged = defaultedAndPruned(key, field, secretPaths);
+    if (merged !== undefined) view[key] = merged;
   }
+}
+
+/**
+ * The pruned default a single shape key offers, or undefined when it has
+ * none worth showing: absent-parse failures (a required key), keys a secret
+ * path names outright, and groups whose default pruned down to nothing.
+ */
+function defaultedAndPruned(
+  key: string,
+  field: unknown,
+  secretPaths: readonly string[]
+): unknown {
+  if (secretPaths.some(path => path === key)) return undefined;
+  const parsed = (
+    field as {
+      safeParse?: (value: undefined) => { success: boolean; data?: unknown };
+    } | null
+  )?.safeParse?.(undefined);
+  if (!parsed?.success) return undefined;
+  const pruned = pruneSecretPaths(parsed.data, [key], secretPaths);
+  const nothingLeft =
+    pruned !== null &&
+    typeof pruned === "object" &&
+    !Array.isArray(pruned) &&
+    Object.keys(pruned).length === 0;
+  return nothingLeft ? undefined : pruned;
 }
 
 /**
@@ -233,7 +246,7 @@ function secretPathMatches(
   return secretPaths.some(declared => matches(declared.split("."), path));
 }
 
-/** A copied default with everything a secret path reaches cut out. */
+/** A copied default with everything a secret path reaches marked unset. */
 function pruneSecretPaths(
   node: unknown,
   prefix: string[],
@@ -247,8 +260,11 @@ function pruneSecretPaths(
   if (node === null || typeof node !== "object") return node;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(node)) {
-    if (secretPathMatches(secretPaths, [...prefix, k])) continue;
-    out[k] = pruneSecretPaths(v, [...prefix, k], secretPaths);
+    // Marked rather than cut: the operator still has to see the credential
+    // is missing, or the form offers no place to learn it needs configuring.
+    out[k] = secretPathMatches(secretPaths, [...prefix, k])
+      ? { set: false }
+      : pruneSecretPaths(v, [...prefix, k], secretPaths);
   }
   return out;
 }
