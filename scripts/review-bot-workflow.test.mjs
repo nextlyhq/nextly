@@ -26,7 +26,7 @@
  * the calls they make are what is asserted.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 
@@ -304,17 +304,46 @@ describe.runIf(process.platform !== "win32")("the whole-tree step, run as GitHub
   let root;
   let repo;
   const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd: repo, encoding: "utf8", env: isolated }).trim();
+  const write = (path, text) => {
+    mkdirSync(join(repo, posix.dirname(path)), { recursive: true });
+    writeFileSync(join(repo, path), text);
+  };
+  const read = path => (existsSync(join(repo, path)) ? readFileSync(join(repo, path), "utf8") : null);
   const present = () => TRACKED.filter(path => existsSync(join(repo, path)));
+  const links = () => execFileSync("find", [repo, "-path", join(repo, ".git"), "-prune", "-o", "-type", "l", "-print"], { encoding: "utf8" }).trim();
   const runStep = (path = process.env.PATH) =>
-    spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(root, "step.sh")], { cwd: repo, encoding: "utf8", env: { ...isolated, PATH: path } });
+    spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(root, "step.sh")], { cwd: repo, encoding: "utf8", env: { ...isolated, PATH: path, BASE: "main" } });
+  /** A `PATH` whose `name` is the script given, ahead of the real one. */
+  const standIn = (name, script) => {
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const real = execFileSync("bash", ["-c", `command -v ${name}`], { encoding: "utf8" }).trim();
+    writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${script.replaceAll("REAL", real)}\n`);
+    chmodSync(join(bin, name), 0o755);
+    return `${bin}:${process.env.PATH}`;
+  };
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "review-bot-whole-tree-"));
     repo = join(root, "repo");
-    mkdirSync(join(repo, ".github", "scripts"), { recursive: true });
-    mkdirSync(join(repo, "tools"));
-    for (const path of TRACKED) writeFileSync(join(repo, path), `${path}\n`);
+    mkdirSync(repo);
     git("init", "-q");
+    // The base branch, with instruction files of its own.
+    for (const path of TRACKED) write(path, `${path}\n`);
+    write("AGENTS.md", "the base branch's rules\n");
+    write("CLAUDE.md", "@AGENTS.md\n");
+    write("sub/AGENTS.md", "the base branch's rules for sub\n");
+    git("add", "-A");
+    git("commit", "-qm", "base");
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    // The head under review: it rewrites and adds instruction files, and
+    // commits links, one to a file outside the tree and one to a directory.
+    write("AGENTS.md", "the pull request's rules\n");
+    write("sub/AGENTS.md", "the pull request's rules for sub\n");
+    write("new/CLAUDE.md", "the pull request's own\n");
+    write(".claude/CLAUDE.md", "the pull request's own\n");
+    symlinkSync("../outside", join(repo, "leak"));
+    symlinkSync("..", join(repo, "tools", "up"));
     git("add", "-A");
     git("commit", "-qm", "head");
     // What actions/checkout does across the job's two checkouts: the parser's
@@ -346,17 +375,38 @@ describe.runIf(process.platform !== "win32")("the whole-tree step, run as GitHub
     expect(present()).toEqual(TRACKED);
   });
 
+  it("removes every symbolic link the pull request commits", () => {
+    git("sparse-checkout", "disable");
+    // The control: once the tree is whole, the head's links are in it.
+    expect(links()).not.toBe("");
+    const result = runStep();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(links()).toBe("");
+  });
+
+  it("gives every instruction file the base branch's text, and removes one the base branch lacks", () => {
+    const result = runStep();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(read("AGENTS.md")).toBe("the base branch's rules\n");
+    expect(read("CLAUDE.md")).toBe("@AGENTS.md\n");
+    expect(read("sub/AGENTS.md")).toBe("the base branch's rules for sub\n");
+    expect(read("new/CLAUDE.md")).toBeNull();
+    expect(read(".claude/CLAUDE.md")).toBeNull();
+  });
+
   it("fails the job when files are still left out", () => {
     // A `git` whose config and sparse-checkout commands change nothing leaves
     // the tree as the checkouts made it.
-    const bin = join(root, "bin");
-    mkdirSync(bin);
-    const real = execFileSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).trim();
-    writeFileSync(join(bin, "git"), `#!/usr/bin/env bash\ncase "$1" in config|sparse-checkout) exit 0 ;; esac\nexec ${real} "$@"\n`);
-    chmodSync(join(bin, "git"), 0o755);
-    const result = runStep(`${bin}:${process.env.PATH}`);
+    const result = runStep(standIn("git", 'case "$1" in config|sparse-checkout) exit 0 ;; esac\nexec REAL "$@"'));
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain("::error::the checkout still leaves 2 files of the pull request out");
+    expect(result.stdout).toMatch(/::error::the checkout still leaves \d+ files of the pull request out/);
+  });
+
+  it("fails the job when a link is still in the checkout", () => {
+    // A `find` that runs no command for what it finds removes nothing.
+    const result = runStep(standIn("find", 'case " $* " in *" -exec "*) exit 0 ;; esac\nexec REAL "$@"'));
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("symbolic links are still in the checkout");
   });
 });
 

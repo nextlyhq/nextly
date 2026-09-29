@@ -168,8 +168,22 @@ jobs:
       # pull request from this tree, so the whole of it goes back, with sparse
       # checkout turned off where it stays off, and a file still left out fails
       # the job rather than leaving the agent a tree with holes in it.
+      #
+      # A whole tree also holds what a sparse one kept out, so two kinds of
+      # file in it are made safe before the agent starts:
+      # - Symbolic links are removed. The Claude Code pinned here (2.1.222)
+      #   does not apply a `Read` deny through a link in its Grep and Glob
+      #   tools (fixed in 2.1.251), so a link committed to `/proc` would reach
+      #   what the denies below keep out.
+      # - Every CLAUDE.md, CLAUDE.local.md and AGENTS.md is the base branch's,
+      #   and one the base branch lacks is removed. Claude Code can load these
+      #   as instructions from where it runs, and a pull request must not get
+      #   to instruct its own reviewer; the agent reads the pull request's own
+      #   versions as data, through the gateway.
       - name: Give the agent the whole pull request
         if: steps.ask.outputs.run == 'true'
+        env:
+          BASE: ${{ steps.pr.outputs.base }}
         run: |
           set -euo pipefail
           git config --local core.sparseCheckout false
@@ -180,6 +194,18 @@ jobs:
           skipped=$(git ls-files -t | awk '$1 == "S"' | wc -l)
           if [ "$skipped" -ne 0 ]; then
             echo "::error::the checkout still leaves $skipped files of the pull request out"
+            exit 1
+          fi
+          find . -path ./.git -prune -o -type l -exec rm -f {} +
+          # Names and paths travel NUL-separated, so no path the pull request
+          # chooses can split into two.
+          instructions='(^|/)(CLAUDE|CLAUDE\.local|AGENTS)\.md$'
+          git ls-files -z | { grep -zE "$instructions" || true; } | xargs -0 -r rm -f --
+          git ls-tree -r -z --name-only "origin/$BASE" | { grep -zE "$instructions" || true; } |
+            xargs -0 -r git checkout "origin/$BASE" --
+          links=$(find . -path ./.git -prune -o -type l -print | wc -l)
+          if [ "$links" -ne 0 ]; then
+            echo "::error::$links symbolic links are still in the checkout"
             exit 1
           fi
 
@@ -271,6 +297,11 @@ jobs:
             workflow posts both as the review bot, and a `post-review` or `reply`
             call of your own is refused. A `gh api` call of your own is not
             permitted. Do not approve, request changes, merge, close, or push.
+
+            In the checkout, every CLAUDE.md, CLAUDE.local.md and AGENTS.md is
+            the base branch's, and symbolic links are removed. Read the pull
+            request's own versions of those with the gateway's `file-at`, at the
+            head SHA above.
           # Allowlist entries match a command prefix, so every entry has to be
           # safe under ANY arguments appended to it, and no raw `gh` or `git`
           # qualifies. `gh api` takes `--hostname` and `gh pr` takes
