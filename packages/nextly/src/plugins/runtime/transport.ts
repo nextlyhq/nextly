@@ -137,7 +137,8 @@ async function materializeBody(
 function requestHeaders(
   bodyHeaders: Record<string, string>,
   init: RequestInit,
-  url: URL
+  url: URL,
+  body: Uint8Array | string | null
 ): Record<string, string> {
   const generated = bodyHeaders["content-type"];
   const formData = init.body instanceof FormData && generated !== undefined;
@@ -147,11 +148,15 @@ function requestHeaders(
     ...(formData ? { "content-type": generated } : {}),
     host: url.host,
   };
-  // The transport writes the body it materialized, so it owns the length:
-  // a caller's Content-Length describes the body it built, which the
-  // materialization may have re-encoded, and a stale number leaves the
-  // destination waiting for bytes that are not coming.
-  delete headers["content-length"];
+  // The transport writes the body it materialized, so it states the length
+  // of that: a caller's Content-Length describes the body it built, which
+  // materialization may have re-encoded, and the connection is written in
+  // chunks when no length is set — framing a strict receiver can refuse.
+  if (body !== null) {
+    headers["content-length"] = String(Buffer.byteLength(body));
+  } else {
+    delete headers["content-length"];
+  }
   return headers;
 }
 
@@ -376,7 +381,7 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
         port: url.port || (url.protocol === "https:" ? 443 : 80),
         path: `${url.pathname}${url.search}`,
         method: init.method ?? "GET",
-        headers: requestHeaders(bodyHeaders, init, url),
+        headers: requestHeaders(bodyHeaders, init, url, body),
         // The whole point: connect to the address already judged, and never
         // consult the resolver a second time.
         lookup: (_hostname, options, callback) => {
