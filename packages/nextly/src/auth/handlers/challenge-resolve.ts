@@ -380,6 +380,18 @@ export async function handleChallengeResolve(
     // keep guessing until one landed.
     await spendChallengeAttempt(deps, pending);
 
+    // The resolver is plugin code with side effects of its own (a one-time
+    // code it consumes, an audit it writes), so it must not run for an
+    // account that can no longer sign in: the mint would refuse it after
+    // the resolver had already spent something. The same refusal the
+    // post-resolve check gives, before anything is consumed.
+    const candidate = await deps.findUserById(pending.userId);
+    if (!candidate || !candidate.isActive) {
+      throw NextlyError.invalidCredentials({
+        logContext: { reason: auditReason("challenge-user-missing") },
+      });
+    }
+
     const result = await deps.challengeRegistry.resolve(
       pending.challengeId,
       { userId: pending.userId, response: challengeResponse },

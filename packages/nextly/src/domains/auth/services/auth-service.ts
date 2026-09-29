@@ -1186,7 +1186,13 @@ export class AuthService extends BaseService {
           .where(
             and(
               eq(this.tables.users.id, userId),
-              eq(this.tables.users.mustChangePassword, true)
+              eq(this.tables.users.mustChangePassword, true),
+              // Conditional on the account not being deactivated, in the
+              // same statement: an administrator may have switched it off
+              // after the pending token was issued, and a zero-row write
+              // falls to the not-in-must-change-state refusal below — no
+              // password planted for a later reactivation to switch on.
+              isNull(this.tables.users.deactivatedAt)
             )
           );
         if (affectedRowCount(claim, this.dialect) !== 1) return;
