@@ -46,6 +46,8 @@ const named = (list, name) => list.find(step => step.name === name);
 const MATERIALIZE = "Materialize the reviewer's tooling outside the tree";
 /** The step that gives the agent the whole checkout, which the two checkouts before it leave sparse. */
 const WHOLE_TREE = "Give the agent the whole pull request";
+/** The step that readies what Claude Code needs to scrub the agent's commands. */
+const ISOLATION = "Prepare the agent's subprocess isolation";
 
 /** The one directory the agent writes to, and the two files it hands on from there. */
 const PAYLOAD_DIR = ".nextly-review";
@@ -293,6 +295,30 @@ describe("the tree the agent reads", () => {
   });
 });
 
+describe("what the agent's commands can read", () => {
+  it("keeps credentials out of the environment of every command the agent runs", () => {
+    // Without it the model key sits in the environment of the gateway and of
+    // anything else the agent runs. The action reads it from the step's env.
+    expect(agent.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB).toBe("1");
+  });
+
+  it("has the gateway stop the review if a model key reaches it all the same", () => {
+    // What the setting does is up to the action and the Claude Code it
+    // installs; the gateway checks the result on every call.
+    expect(agent.env.REVIEW_BOT_EXPECT_SCRUB).toBe("1");
+  });
+
+  it("prepares what the scrub needs before the agent starts, and fails the review without it", () => {
+    const at = steps.findIndex(step => step.name === ISOLATION);
+    expect(at).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(steps.indexOf(agent));
+    expect(steps[at].if).toBe(agent.if);
+    // A failure here has to stop the job: carried past it, Claude Code would
+    // either refuse to start or refuse every command, mid-review.
+    expect(steps[at]["continue-on-error"]).toBeUndefined();
+  });
+});
+
 describe.runIf(process.platform !== "win32")("the whole-tree step, run as GitHub runs it", () => {
   const TRACKED = [".github/scripts/g.sh", "README.md", "tools/t.mjs"];
   // git here reads no configuration of the developer's, and no GIT_* variable.
@@ -407,6 +433,58 @@ describe.runIf(process.platform !== "win32")("the whole-tree step, run as GitHub
     const result = runStep(standIn("find", 'case " $* " in *" -exec "*) exit 0 ;; esac\nexec REAL "$@"'));
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("symbolic links are still in the checkout");
+  });
+});
+
+// Unprivileged, so that a directory can be one the job's user may not write,
+// as `/home` is on GitHub's runner.
+describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)("the isolation step, run as GitHub runs it", () => {
+  let dir;
+  let locked;
+  let calls;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "review-bot-isolation-"));
+    locked = join(dir, "home");
+    const workspace = join(locked, "runner", "work", "repo", "repo");
+    mkdirSync(workspace, { recursive: true });
+    chmodSync(locked, 0o555);
+    // The stand-in for `sudo` records what it was asked to run, and runs none of it.
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "sudo"), '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$FAKE/calls"\n');
+    chmodSync(join(bin, "sudo"), 0o755);
+    writeFileSync(join(dir, "step.sh"), named(steps, ISOLATION).run);
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], {
+      cwd: workspace,
+      encoding: "utf8",
+      env: { PATH: `${bin}:${process.env.PATH}`, HOME: join(locked, "runner"), FAKE: dir, GITHUB_WORKSPACE: workspace },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    calls = readFileSync(join(dir, "calls"), "utf8").trim().split("\n");
+  });
+
+  afterAll(() => {
+    chmodSync(locked, 0o755);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("installs bubblewrap and socat", () => {
+    expect(calls).toContain("apt-get install -y --no-install-recommends bubblewrap socat");
+  });
+
+  it("lifts AppArmor's limit on user namespaces where the kernel has one", () => {
+    // Whether the step lifts it depends on this machine's own /proc, which has
+    // the setting on GitHub's runner, where this runs in CI, and not
+    // everywhere else; so the command is looked for in the step as well.
+    expect(named(steps, ISOLATION).run).toContain("sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0");
+    const lifted = calls.includes("sysctl -w kernel.apparmor_restrict_unprivileged_userns=0");
+    expect(lifted).toBe(existsSync("/proc/sys/kernel/apparmor_restrict_unprivileged_userns"));
+  });
+
+  it("creates `.mcp.json` in each directory above the checkout the job's user cannot write, and nowhere else", () => {
+    const touched = calls.filter(call => call.startsWith("touch "));
+    expect(touched).toEqual([`touch ${locked}/.mcp.json`, "touch /.mcp.json"]);
   });
 });
 
