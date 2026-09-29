@@ -105,7 +105,11 @@ another's — or core's login.
 Declaring `csrf: true` on a `public` route fails boot. A public route has no
 cookie identity to protect — it is exempt from the default check for the same
 reason — and accepting the combination would advertise a protection that is
-not there.
+not there. One duty replaces it: a public handler that resolves the session
+user (`ctx.auth.currentUser`) and acts on them must call
+`ctx.auth.verifyCsrf` itself. The route-level option applies to every caller,
+which a public route cannot assume; the conditional check exists for exactly
+that handler.
 
 ## Secrets
 
