@@ -49,6 +49,37 @@ beforeAll(() => {
 
 afterAll(() => rmSync(clone, { recursive: true, force: true }));
 
+describe("a model key in reach of the gateway", () => {
+  // The review workflow says it had Claude Code scrub credentials from every
+  // command the agent runs. The environment is built from nothing but what
+  // each test names, so a key in the shell running the suite decides nothing.
+  const KEYS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+  const run = (extra, ...args) => {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => ![...KEYS, "REVIEW_BOT_EXPECT_SCRUB"].includes(name)));
+    return spawnSync("bash", [GATEWAY, ...args], { cwd: clone, encoding: "utf8", env: { ...env, GITHUB_REPOSITORY: "owner/name", ...extra } });
+  };
+
+  it.each(KEYS)("stops, and names no key, when the workflow expects a scrub and %s got through", name => {
+    const stopped = run({ REVIEW_BOT_EXPECT_SCRUB: "1", [name]: "the-key" }, "base-file", "f.txt");
+    expect(stopped.status).not.toBe(0);
+    expect(stopped.stdout).toBe("");
+    expect(stopped.stderr).toContain("a model key reached this command");
+    expect(stopped.stderr).not.toContain("the-key");
+  });
+
+  it("answers when the workflow expects a scrub and no key got through", () => {
+    const answered = run({ REVIEW_BOT_EXPECT_SCRUB: "1" }, "base-file", "f.txt");
+    expect(answered.status).toBe(0);
+    expect(answered.stdout).toBe("one\ntwo\nthree\n");
+  });
+
+  it("holds a caller that expects no scrub to nothing", () => {
+    const answered = run({ ANTHROPIC_API_KEY: "the-key" }, "base-file", "f.txt");
+    expect(answered.status).toBe(0);
+    expect(answered.stdout).toBe("one\ntwo\nthree\n");
+  });
+});
+
 describe("reading the local history through the gateway", () => {
   it("is needed: a git prefix given --output writes a file here", () => {
     git("diff", `--output=${MARK}`, first, "HEAD");
