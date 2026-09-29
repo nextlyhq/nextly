@@ -29,7 +29,6 @@ import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
 import { buildPluginRouteCaller } from "./route-caller";
 import {
-  callerCredential,
   checkRouteCsrf,
   csrfApplies,
   rateLimitKey,
@@ -102,9 +101,14 @@ async function resolvePluginRouteAuth(
     return {
       user: null,
       caller: null,
-      // No credential resolved anyone on a public route; the sniffed answer
-      // feeds the CSRF decision the same way it always did.
-      credential: callerCredential(req) === "cookie" ? "cookie" : "bearer",
+      // No credential resolved anyone on a public route, so the sniff cannot
+      // say what admitted the request — and a handler may still resolve the
+      // session cookie through ctx.auth.currentUser. A cookie therefore
+      // wins over an Authorization header here: the header may be ambient
+      // HTTP authentication a browser attached on its own, and classifying
+      // by it would skip the CSRF check exactly when the cookie identity is
+      // in play.
+      credential: req.headers.get("cookie") ? "cookie" : "bearer",
     };
   }
 
