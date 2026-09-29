@@ -117,6 +117,35 @@ function AdminAppContent() {
     return componentElement;
   };
 
+  // Everything the settings sync would wrap. Held in a variable because the
+  // provider around it is now conditional — see the comment at its use.
+  const content = (
+    <>
+      {/* Conditional wrapper: Public routes need centering and padding, private routes don't */}
+      {routeType === "public" ? (
+        <div className="min-h-screen bg-background flex flex-col justify-center text-foreground">
+          {renderComponent()}
+        </div>
+      ) : (
+        <div className="h-screen overflow-hidden bg-background text-foreground flex flex-col">
+          {renderComponent()}
+        </div>
+      )}
+      {/* Restart overlay for schema save flow */}
+      <Suspense fallback={null}>
+        <RestartOverlay />
+      </Suspense>
+      {/* Toaster uses default position (bottom-right) per component spec */}
+      <Toaster richColors />
+      {/* Portal root for dialogs, dropdowns, etc. Synchronized with theme class. */}
+      <div
+        id="nextly-admin-portal-root"
+        ref={setPortalRoot}
+        className={cn("nextly-admin", isDark && "dark")}
+      />
+    </>
+  );
+
   return (
     <div
       className={cn("nextly-admin", isDark && "dark")}
@@ -126,30 +155,19 @@ function AdminAppContent() {
         <BrandingProvider>
           {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
           <PluginPageRegistrar />
-          <GeneralSettingsSyncProvider>
-            {/* Conditional wrapper: Public routes need centering and padding, private routes don't */}
-            {routeType === "public" ? (
-              <div className="min-h-screen bg-background flex flex-col justify-center text-foreground">
-                {renderComponent()}
-              </div>
-            ) : (
-              <div className="h-screen overflow-hidden bg-background text-foreground flex flex-col">
-                {renderComponent()}
-              </div>
-            )}
-            {/* Restart overlay for schema save flow */}
-            <Suspense fallback={null}>
-              <RestartOverlay />
-            </Suspense>
-            {/* Toaster uses default position (bottom-right) per component spec */}
-            <Toaster richColors />
-            {/* Portal root for dialogs, dropdowns, etc. Synchronized with theme class. */}
-            <div
-              id="nextly-admin-portal-root"
-              ref={setPortalRoot}
-              className={cn("nextly-admin", isDark && "dark")}
-            />
-          </GeneralSettingsSyncProvider>
+          {/* The settings sync exists to apply the admin timezone to date
+                rendering, and mounting it starts the ["generalSettings"]
+                query. That endpoint is permission-gated, so on the signed-out
+                screens (login, register, forgot password, setup) the query
+                can only fail — and retry once — while the login form waits on
+                nothing it needs. Public routes skip the provider; navigating
+                between public and private routes happens through full page
+                loads, so there is no mid-session mount/unmount churn. */}
+          {routeType === "public" ? (
+            content
+          ) : (
+            <GeneralSettingsSyncProvider>{content}</GeneralSettingsSyncProvider>
+          )}
         </BrandingProvider>
       </PortalProvider>
     </div>
