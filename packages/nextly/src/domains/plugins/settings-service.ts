@@ -218,11 +218,11 @@ function defaultedAndPruned(
 
 /**
  * Whether a concrete path (dot segments, array indices as segments) is
- * matched by a declared secret path. A wildcard segment stands for any
- * one segment — an array's index — or for none at all, because a group a
- * wildcard path crosses may be a plain object, whose property sits one
- * segment closer. Matching both readings is the conservative direction:
- * the pruner may cut a little more than strictly asked, never less.
+ * matched by a declared secret path, on the one rule storage and the
+ * redactor both use: a wildcard segment stands for exactly one segment.
+ * The pruned view then behaves like the successful-parse path beside it,
+ * neither stricter nor looser — a group whose key merely collides with a
+ * secret field name is left alone, the same way redaction leaves it.
  */
 function secretPathMatches(
   secretPaths: readonly string[],
@@ -232,9 +232,7 @@ function secretPathMatches(
     if (declared.length === 0) return concrete.length === 0;
     if (declared[0] === "*") {
       return (
-        (concrete.length > 0 &&
-          matches(declared.slice(1), concrete.slice(1))) ||
-        matches(declared.slice(1), concrete)
+        concrete.length > 0 && matches(declared.slice(1), concrete.slice(1))
       );
     }
     return (

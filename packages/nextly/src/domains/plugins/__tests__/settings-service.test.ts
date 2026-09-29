@@ -939,8 +939,8 @@ describe("an empty store a required key rejects", () => {
       schema: z.object({
         apiKey: z.string(),
         providers: z
-          .object({ clientId: z.string(), clientSecret: z.string() })
-          .default({ clientId: "acme", clientSecret: "sk-baked-in" }),
+          .array(z.object({ clientId: z.string(), clientSecret: z.string() }))
+          .default([{ clientId: "acme", clientSecret: "sk-baked-in" }]),
       }),
       secretPaths: ["providers.*.clientSecret"],
       store,
@@ -948,7 +948,7 @@ describe("an empty store a required key rejects", () => {
     });
 
     expect(await service.getRedacted()).toEqual({
-      providers: { clientId: "acme", clientSecret: { set: false } },
+      providers: [{ clientId: "acme", clientSecret: { set: false } }],
     });
   });
 
