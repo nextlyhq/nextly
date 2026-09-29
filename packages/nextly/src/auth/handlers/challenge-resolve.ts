@@ -379,19 +379,19 @@ export async function handleChallengeResolve(
 
     refuseIfFlowExhausted(pending, deps);
 
+    // The resolver is plugin code with side effects of its own (a one-time
+    // code it consumes, an audit it writes), so it must not run for an
+    // account that can no longer sign in: the mint would refuse it after
+    // the resolver had already spent something. Before the attempt is
+    // spent too — a refusal must leave no mutable rate-limit side effect
+    // behind, or an account reactivated while the token still lives finds
+    // its budget already burned by refusals it never answered.
+    await gateAccountForSession(deps, pending.userId, pending.strategy);
+
     // BEFORE the answer is examined. Spending the budget only on a wrong
     // answer left a correct one free, and a replayed token could therefore
     // keep guessing until one landed.
     await spendChallengeAttempt(deps, pending);
-
-    // The resolver is plugin code with side effects of its own (a one-time
-    // code it consumes, an audit it writes), so it must not run for an
-    // account that can no longer sign in: the mint would refuse it after
-    // the resolver had already spent something. The shared session gate
-    // answers on the mint's own terms — every facet of the account state,
-    // with the lockout judged only for the password strategy — before
-    // anything is consumed.
-    await gateAccountForSession(deps, pending.userId, pending.strategy);
 
     const result = await deps.challengeRegistry.resolve(
       pending.challengeId,
