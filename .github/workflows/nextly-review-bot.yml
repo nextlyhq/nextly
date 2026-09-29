@@ -159,6 +159,58 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # The checkout above cannot undo the parser's sparse checkout before it.
+      # That one sets `core.sparseCheckout true` in `.git/config`; this one
+      # turns sparse checkout off in the worktree's own config, then removes the
+      # extension that config lives under, so `.git/config` applies again and
+      # the head is checked out holding `.github/scripts` alone (measured on
+      # 2026-09-28, git 2.53, actions/checkout v7.0.0). The agent reads the
+      # pull request from this tree, so the whole of it goes back, with sparse
+      # checkout turned off where it stays off, and a file still left out fails
+      # the job rather than leaving the agent a tree with holes in it.
+      #
+      # A whole tree also holds what a sparse one kept out, so two kinds of
+      # file in it are made safe before the agent starts:
+      # - Symbolic links are removed. The Claude Code pinned here (2.1.222)
+      #   does not apply a `Read` deny through a link in its Grep and Glob
+      #   tools (fixed in 2.1.251), so a link committed to `/proc` would reach
+      #   what the denies below keep out.
+      # - Every CLAUDE.md, CLAUDE.local.md and AGENTS.md, and every file under a
+      #   `.claude/` directory at any depth (rules, settings, skills), is the
+      #   base branch's, and one the base branch lacks is removed. Claude Code
+      #   can load these as instructions from where it runs, and a pull request
+      #   must not get to instruct its own reviewer; the agent reads the pull
+      #   request's own versions as data, through the gateway. The action
+      #   restores the root `.claude/` itself; this does not depend on it.
+      - name: Give the agent the whole pull request
+        if: steps.ask.outputs.run == 'true'
+        env:
+          BASE: ${{ steps.pr.outputs.base }}
+        run: |
+          set -euo pipefail
+          git config --local core.sparseCheckout false
+          git sparse-checkout disable
+          # Counted over the whole listing: a `grep -q` that stops at the first
+          # match can end `git ls-files` on a broken pipe, which `pipefail`
+          # would then read as no match.
+          skipped=$(git ls-files -t | awk '$1 == "S"' | wc -l)
+          if [ "$skipped" -ne 0 ]; then
+            echo "::error::the checkout still leaves $skipped files of the pull request out"
+            exit 1
+          fi
+          find . -path ./.git -prune -o -type l -exec rm -f {} +
+          # Names and paths travel NUL-separated, so no path the pull request
+          # chooses can split into two.
+          instructions='(^|/)((CLAUDE|CLAUDE\.local|AGENTS)\.md$|\.claude/)'
+          git ls-files -z | { grep -zE "$instructions" || true; } | xargs -0 -r rm -f --
+          git ls-tree -r -z --name-only "origin/$BASE" | { grep -zE "$instructions" || true; } |
+            xargs -0 -r git checkout "origin/$BASE" --
+          links=$(find . -path ./.git -prune -o -type l -print | wc -l)
+          if [ "$links" -ne 0 ]; then
+            echo "::error::$links symbolic links are still in the checkout"
+            exit 1
+          fi
+
       # The reviewer runs its OWN protocol, not the one in the tree it is
       # reviewing: a pull request old enough to predate the bot carries neither
       # file, and one that edits them must not get to rewrite the review it is
@@ -301,6 +353,11 @@ jobs:
             when they are missing: `.env` files, `package.json`, lock files,
             `.gitmodules`, `.npmrc` and the like. Git does not track them, and
             they are not part of the pull request.
+
+            In the checkout, every CLAUDE.md, CLAUDE.local.md and AGENTS.md,
+            and every file under a `.claude/` directory, is the base branch's,
+            and symbolic links are removed. Read the pull request's own versions
+            of those with the gateway's `file-at`, at the head SHA above.
           # Allowlist entries match a command prefix, so every entry has to be
           # safe under ANY arguments appended to it, and no raw `gh` or `git`
           # qualifies. `gh api` takes `--hostname` and `gh pr` takes

@@ -26,12 +26,12 @@
  * the calls they make are what is asserted.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 
 import { load } from "js-yaml";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const { jobs } = load(read(".github/workflows/nextly-review-bot.yml"));
@@ -44,6 +44,8 @@ const usesOf = (list, action) => list.filter(step => step.uses?.startsWith(`${ac
 const named = (list, name) => list.find(step => step.name === name);
 /** The step that gives the agent its protocol and gateway. */
 const MATERIALIZE = "Materialize the reviewer's tooling outside the tree";
+/** The step that gives the agent the whole checkout, which the two checkouts before it leave sparse. */
+const WHOLE_TREE = "Give the agent the whole pull request";
 /** The step that readies what Claude Code needs to scrub the agent's commands. */
 const ISOLATION = "Prepare the agent's subprocess isolation";
 
@@ -280,6 +282,19 @@ describe("what else could widen the agent's grant", () => {
   });
 });
 
+describe("the tree the agent reads", () => {
+  it("is made whole straight after the pull request's checkout, before anything reads it", () => {
+    const head = steps.findIndex(step => step.uses?.startsWith("actions/checkout@") && step.with?.ref === "${{ steps.pr.outputs.sha }}");
+    const at = steps.findIndex(step => step.name === WHOLE_TREE);
+    expect(head).toBeGreaterThan(-1);
+    expect(at).toBe(head + 1);
+    expect(at).toBeLessThan(steps.indexOf(agent));
+    expect(steps[at].if).toBe(agent.if);
+    // A tree with holes must stop the job, not reach the agent.
+    expect(steps[at]["continue-on-error"]).toBeUndefined();
+  });
+});
+
 describe("what the agent's commands can read", () => {
   it("keeps credentials out of the environment of every command the agent runs", () => {
     // Without it the model key sits in the environment of the gateway and of
@@ -301,6 +316,131 @@ describe("what the agent's commands can read", () => {
     // A failure here has to stop the job: carried past it, Claude Code would
     // either refuse to start or refuse every command, mid-review.
     expect(steps[at]["continue-on-error"]).toBeUndefined();
+  });
+});
+
+describe.runIf(process.platform !== "win32")("the whole-tree step, run as GitHub runs it", () => {
+  const TRACKED = [".github/scripts/g.sh", "README.md", "tools/t.mjs"];
+  // git here reads no configuration of the developer's, and no GIT_* variable.
+  const isolated = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))),
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+  };
+  let root;
+  let repo;
+  const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd: repo, encoding: "utf8", env: isolated }).trim();
+  const write = (path, text) => {
+    mkdirSync(join(repo, posix.dirname(path)), { recursive: true });
+    writeFileSync(join(repo, path), text);
+  };
+  const read = path => (existsSync(join(repo, path)) ? readFileSync(join(repo, path), "utf8") : null);
+  const present = () => TRACKED.filter(path => existsSync(join(repo, path)));
+  const links = () => execFileSync("find", [repo, "-path", join(repo, ".git"), "-prune", "-o", "-type", "l", "-print"], { encoding: "utf8" }).trim();
+  const runStep = (path = process.env.PATH) =>
+    spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(root, "step.sh")], { cwd: repo, encoding: "utf8", env: { ...isolated, PATH: path, BASE: "main" } });
+  /** A `PATH` whose `name` is the script given, ahead of the real one. */
+  const standIn = (name, script) => {
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const real = execFileSync("bash", ["-c", `command -v ${name}`], { encoding: "utf8" }).trim();
+    writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${script.replaceAll("REAL", real)}\n`);
+    chmodSync(join(bin, name), 0o755);
+    return `${bin}:${process.env.PATH}`;
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "review-bot-whole-tree-"));
+    repo = join(root, "repo");
+    mkdirSync(repo);
+    git("init", "-q");
+    // The base branch, with instruction files of its own.
+    for (const path of TRACKED) write(path, `${path}\n`);
+    write("AGENTS.md", "the base branch's rules\n");
+    write("CLAUDE.md", "@AGENTS.md\n");
+    write("sub/AGENTS.md", "the base branch's rules for sub\n");
+    write(".claude/rules/base.md", "the base branch's rule\n");
+    git("add", "-A");
+    git("commit", "-qm", "base");
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    // The head under review: it rewrites and adds instruction files, and
+    // commits links, one to a file outside the tree and one to a directory.
+    write("AGENTS.md", "the pull request's rules\n");
+    write("sub/AGENTS.md", "the pull request's rules for sub\n");
+    write("new/CLAUDE.md", "the pull request's own\n");
+    write(".claude/CLAUDE.md", "the pull request's own\n");
+    write(".claude/rules/base.md", "the pull request's rule\n");
+    write(".claude/rules/override.md", "the pull request's own rule\n");
+    write("sub/.claude/rules/nested.md", "the pull request's own rule\n");
+    symlinkSync("../outside", join(repo, "leak"));
+    symlinkSync("..", join(repo, "tools", "up"));
+    git("add", "-A");
+    git("commit", "-qm", "head");
+    // What actions/checkout does across the job's two checkouts: the parser's
+    // sparse one, then the full one, which turns sparse checkout off in the
+    // worktree's config and removes the extension that config needs.
+    git("config", "core.sparseCheckout", "true");
+    writeFileSync(join(repo, ".git", "info", "sparse-checkout"), ".github/scripts\n");
+    git("checkout", "-q", "--force", "HEAD");
+    git("sparse-checkout", "disable");
+    git("config", "--local", "--unset-all", "extensions.worktreeConfig");
+    git("checkout", "-q", "--force", "HEAD");
+    writeFileSync(join(root, "step.sh"), named(steps, WHOLE_TREE).run);
+  });
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("is needed: the checkouts leave the head holding .github/scripts alone", () => {
+    expect(present()).toEqual([".github/scripts/g.sh"]);
+  });
+
+  it("puts every tracked file back, and they stay through a later checkout", () => {
+    const result = runStep();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(present()).toEqual(TRACKED);
+    // Another removal of the extension, as the next checkout would make, no
+    // longer brings the sparse setting back.
+    git("config", "--local", "--unset-all", "extensions.worktreeConfig");
+    git("checkout", "-q", "--force", "HEAD");
+    expect(present()).toEqual(TRACKED);
+  });
+
+  it("removes every symbolic link the pull request commits", () => {
+    git("sparse-checkout", "disable");
+    // The control: once the tree is whole, the head's links are in it.
+    expect(links()).not.toBe("");
+    const result = runStep();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(links()).toBe("");
+  });
+
+  it("gives every instruction file, and everything under `.claude/`, the base branch's text, and removes one the base branch lacks", () => {
+    const result = runStep();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(read("AGENTS.md")).toBe("the base branch's rules\n");
+    expect(read("CLAUDE.md")).toBe("@AGENTS.md\n");
+    expect(read("sub/AGENTS.md")).toBe("the base branch's rules for sub\n");
+    expect(read("new/CLAUDE.md")).toBeNull();
+    expect(read(".claude/CLAUDE.md")).toBeNull();
+    // Under a `.claude/` directory, at the root or deeper, too.
+    expect(read(".claude/rules/base.md")).toBe("the base branch's rule\n");
+    expect(read(".claude/rules/override.md")).toBeNull();
+    expect(read("sub/.claude/rules/nested.md")).toBeNull();
+  });
+
+  it("fails the job when files are still left out", () => {
+    // A `git` whose config and sparse-checkout commands change nothing leaves
+    // the tree as the checkouts made it.
+    const result = runStep(standIn("git", 'case "$1" in config|sparse-checkout) exit 0 ;; esac\nexec REAL "$@"'));
+    expect(result.status).toBe(1);
+    expect(result.stdout).toMatch(/::error::the checkout still leaves \d+ files of the pull request out/);
+  });
+
+  it("fails the job when a link is still in the checkout", () => {
+    // A `find` that runs no command for what it finds removes nothing.
+    const result = runStep(standIn("find", 'case " $* " in *" -exec "*) exit 0 ;; esac\nexec REAL "$@"'));
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("symbolic links are still in the checkout");
   });
 });
 
