@@ -484,7 +484,10 @@ jobs:
       # it was refused, and why a failed run failed. Read with `jq` on the
       # runner, outside the agent's reach, from the action's execution file, a
       # JSON array of the SDK's messages. It prints names and counts only,
-      # never a message's text, and it runs whatever became of the agent.
+      # never a message's text, and it runs whatever became of the agent. A
+      # failed run's `result` is printed only when Claude Code worded it as an
+      # API failure (`API Error: <status> <body>`): other text there can be the
+      # model's own.
       - name: Log what the run used
         if: always() && steps.fresh.outputs.run == 'true'
         env:
@@ -504,7 +507,11 @@ jobs:
               "turns: \($result.num_turns // "unknown"), ended: \($result.subtype // "without a result"), error: \(if $result.is_error == null then "unknown" else $result.is_error end), \((($result.duration_ms // 0) / 1000) | floor) s",
               "refused tools: \([($result.permission_denials // [])[] | .tool_name] | group_by(.) | map("\(.[0]) x\(length)") | if length > 0 then join(", ") else "none" end)",
               (if $result.api_error_status then "API error status: \($result.api_error_status)" else empty end),
-              (if $result.is_error == true then "error: \(($result.result // "") | tostring | .[0:500])" else empty end)
+              (if $result.is_error == true then
+                (($result.result // "") | tostring) as $text
+                | if ($text | startswith("API Error")) then "error: \($text | .[0:500])"
+                  else "error: withheld, as it is not an API error (\($text | length) characters)" end
+              else empty end)
           ' "$file" || echo "could not read the execution file"
 
       # Said here, where it is plain, rather than left to the upload below to

@@ -339,16 +339,43 @@ describe("the tree the agent reads", () => {
 
 describe("where a model agent runs", () => {
   const WORKFLOWS = ".github/workflows";
-  /** Every job of a workflow that runs the agent action or names the model key, as `file:job`. */
-  const agentJobs = (file, text) =>
+  /** A local action's manifest in this repository, by the path a step's `uses` gives it. */
+  const manifestOf = path => {
+    const found = ["action.yml", "action.yaml"].map(name => `${path}/${name}`).find(file => existsSync(new URL(`../${file}`, import.meta.url)));
+    expect(found, `${path} has a manifest`).toBeDefined();
+    return read(found);
+  };
+  /**
+   * Every step a list runs, with the steps of each local action it uses
+   * followed down, and the text they are written in: a composite action can
+   * run the agent, or take the key as an input, out of the job's own sight.
+   */
+  function reached(list, readAction, seen = new Set()) {
+    return list.flatMap(step => {
+      const local = step.uses?.startsWith("./") ? step.uses.slice(2).replace(/\/$/, "") : undefined;
+      if (local === undefined || seen.has(local)) return [step];
+      seen.add(local);
+      const manifest = load(readAction(local));
+      return [step, manifest, ...reached(manifest.runs?.steps ?? [], readAction, seen)];
+    });
+  }
+  /** Every job of a workflow that runs the agent action or names the model key, directly or through a local action, as `file:job`. */
+  const agentJobs = (file, text, readAction = manifestOf) =>
     Object.entries(load(text).jobs ?? {})
-      .filter(([, job]) => (job.steps ?? []).some(step => step.uses?.startsWith("anthropics/claude-code-action@")) || JSON.stringify(job).includes("ZAI_API_KEY"))
+      .filter(([, job]) => {
+        const all = [job, ...reached(job.steps ?? [], readAction)];
+        return all.some(part => part.uses?.startsWith("anthropics/claude-code-action@")) || JSON.stringify(all).includes("ZAI_API_KEY");
+      })
       .map(([name]) => `${file}:${name}`);
 
   it("is the review job alone, so one agent at a time spends the model account", () => {
-    // The control: a workflow that answers mentions with the agent and the key is found.
+    // The controls: a workflow that answers mentions with the agent and the
+    // key is found, and so is one that reaches the agent through a local action.
     const mention = "jobs:\n  answer:\n    steps:\n      - uses: anthropics/claude-code-action@x\n        with:\n          anthropic_api_key: ${{ secrets.ZAI_API_KEY }}\n";
     expect(agentJobs("mention.yml", mention)).toEqual(["mention.yml:answer"]);
+    const wrapped = "jobs:\n  answer:\n    steps:\n      - uses: ./.github/actions/answer\n";
+    const composite = "runs:\n  using: composite\n  steps:\n    - uses: anthropics/claude-code-action@x\n";
+    expect(agentJobs("wrapped.yml", wrapped, () => composite)).toEqual(["wrapped.yml:answer"]);
     const found = readdirSync(new URL(`../${WORKFLOWS}`, import.meta.url))
       .filter(file => /\.ya?ml$/.test(file))
       .flatMap(file => agentJobs(file, read(`${WORKFLOWS}/${file}`)));
@@ -721,6 +748,13 @@ describe.runIf(process.platform !== "win32")("the log step, run as GitHub runs i
     const out = log([init, result({ is_error: true, api_error_status: 429, result: "API Error: 429 rate limited" })]);
     expect(out).toContain("API error status: 429");
     expect(out).toContain("error: API Error: 429 rate limited");
+  });
+
+  it("withholds a failed run's result when it is not an API error", () => {
+    // The field can carry the model's own last text when a run fails another way.
+    const out = log([init, result({ is_error: true, subtype: "error_during_execution" })]);
+    expect(out).toContain(`error: withheld, as it is not an API error (${CONTENT.length} characters)`);
+    expect(out).not.toContain(CONTENT);
   });
 
   it("says so, rather than failing, when the agent never started", () => {
