@@ -282,6 +282,48 @@ describe("what else could widen the agent's grant", () => {
   });
 });
 
+describe("the checkout the agent reads", () => {
+  const FORGET = "Forget the parser's checkout";
+
+  it("comes from a checkout that is neither filtered nor sparse", () => {
+    // A filtered clone fetches each file when first read, which fails once the
+    // checkout has removed its credentials; a sparse one leaves files out.
+    const head = steps.find(step => step.uses?.startsWith("actions/checkout@") && step.with?.ref === "${{ steps.pr.outputs.sha }}");
+    // The control: the parser's checkout is sparse on purpose, under the key read below.
+    expect(usesOf(steps, "actions/checkout")[0].with["sparse-checkout"]).toBe(".github/scripts");
+    expect(head.with.filter).toBeUndefined();
+    expect(head.with["sparse-checkout"]).toBeUndefined();
+  });
+
+  it("empties the workspace straight before the pull request's checkout, on the same condition", () => {
+    // The parser's sparse checkout is a partial clone, which the pull
+    // request's checkout would otherwise reuse and fetch into on demand.
+    const head = steps.findIndex(step => step.uses?.startsWith("actions/checkout@") && step.with?.ref === "${{ steps.pr.outputs.sha }}");
+    const at = steps.findIndex(step => step.name === FORGET);
+    expect(at).toBe(head - 1);
+    expect(steps[at].if).toBe(steps[head].if);
+  });
+
+  it.runIf(process.platform !== "win32")("leaves nothing behind, a repository and dotfiles included", () => {
+    const dir = mkdtempSync(join(tmpdir(), "review-bot-forget-"));
+    try {
+      const workspace = join(dir, "workspace");
+      mkdirSync(join(workspace, ".git", "objects"), { recursive: true });
+      mkdirSync(join(workspace, ".github", "scripts"), { recursive: true });
+      writeFileSync(join(workspace, ".git", "config"), "[remote \"origin\"]\n\tpromisor = true\n");
+      writeFileSync(join(workspace, ".github", "scripts", "is-review-command.sh"), "\n");
+      writeFileSync(join(workspace, ".hidden"), "\n");
+      writeFileSync(join(workspace, "-dash"), "\n");
+      writeFileSync(join(dir, "step.sh"), named(steps, FORGET).run);
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], { cwd: workspace, encoding: "utf8" });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(readdirSync(workspace)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("the tree the agent reads", () => {
   it("is made whole straight after the pull request's checkout, before anything reads it", () => {
     const head = steps.findIndex(step => step.uses?.startsWith("actions/checkout@") && step.with?.ref === "${{ steps.pr.outputs.sha }}");
@@ -292,16 +334,6 @@ describe("the tree the agent reads", () => {
     expect(steps[at].if).toBe(agent.if);
     // A tree with holes must stop the job, not reach the agent.
     expect(steps[at]["continue-on-error"]).toBeUndefined();
-  });
-
-  it("comes from a checkout that is neither filtered nor sparse", () => {
-    // A filtered clone fetches each file when first read, which fails once the
-    // checkout has removed its credentials; a sparse one leaves files out.
-    const head = steps.find(step => step.uses?.startsWith("actions/checkout@") && step.with?.ref === "${{ steps.pr.outputs.sha }}");
-    // The control: the parser's checkout is sparse on purpose, under the key read below.
-    expect(usesOf(steps, "actions/checkout")[0].with["sparse-checkout"]).toBe(".github/scripts");
-    expect(head.with.filter).toBeUndefined();
-    expect(head.with["sparse-checkout"]).toBeUndefined();
   });
 });
 

@@ -192,6 +192,17 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # The parser's checkout is sparse, and actions/checkout makes a sparse
+      # checkout a partial clone (`--filter=blob:none`). The checkout below
+      # would reuse that repository: it stays a partial clone, fetching each
+      # file when first read, which fails once that checkout has removed its
+      # credentials, and it keeps the sparse setting (the step after it).
+      # Emptied here, the workspace gets a whole clone of its own (measured on
+      # 2026-09-29: no filter, and every tracked file present).
+      - name: Forget the parser's checkout
+        if: steps.fresh.outputs.run == 'true'
+        run: find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         if: steps.fresh.outputs.run == 'true'
         with:
@@ -204,7 +215,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # The checkout above cannot undo the parser's sparse checkout before it.
+      # With the workspace emptied first, the checkout above is not sparse; the
+      # sparse-checkout lines below stay as the guard should that ever change.
+      # Without the emptying, the checkout above could not undo the parser's
+      # sparse checkout before it.
       # That one sets `core.sparseCheckout true` in `.git/config`; this one
       # turns sparse checkout off in the worktree's own config, then removes the
       # extension that config lives under, so `.git/config` applies again and
