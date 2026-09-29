@@ -23,7 +23,11 @@ import {
   csrfRefusal,
   recordLoginFailure,
 } from "./handler-utils";
-import { finishResumedSignIn, type IssueSessionDeps } from "./issue-session";
+import {
+  finishResumedSignIn,
+  gateAccountForSession,
+  type IssueSessionDeps,
+} from "./issue-session";
 
 export interface ChallengeResolveDeps extends IssueSessionDeps {
   challengeRegistry: ChallengeRegistry;
@@ -70,8 +74,6 @@ export interface ChallengeResolveDeps extends IssueSessionDeps {
     image: string | null;
     isActive: boolean;
     mustChangePassword: boolean | null;
-    /** Read by the pre-resolve check; the mint's lockout uses it too. */
-    lockedUntil?: Date | null;
   } | null>;
 }
 
@@ -385,24 +387,11 @@ export async function handleChallengeResolve(
     // The resolver is plugin code with side effects of its own (a one-time
     // code it consumes, an audit it writes), so it must not run for an
     // account that can no longer sign in: the mint would refuse it after
-    // the resolver had already spent something. The refusal matches the
-    // post-resolve check, and the lockout is judged on the mint's own
-    // terms — only for the password strategy, so wrong-password guesses
-    // cannot be turned into a denial of a credential already proven.
-    const candidate = await deps.findUserById(pending.userId);
-    const lockoutApplies =
-      pending.strategy === undefined || pending.strategy === "password";
-    if (
-      !candidate ||
-      !candidate.isActive ||
-      (lockoutApplies &&
-        candidate.lockedUntil != null &&
-        candidate.lockedUntil > new Date())
-    ) {
-      throw NextlyError.invalidCredentials({
-        logContext: { reason: auditReason("challenge-user-missing") },
-      });
-    }
+    // the resolver had already spent something. The shared session gate
+    // answers on the mint's own terms — every facet of the account state,
+    // with the lockout judged only for the password strategy — before
+    // anything is consumed.
+    await gateAccountForSession(deps, pending.userId, pending.strategy);
 
     const result = await deps.challengeRegistry.resolve(
       pending.challengeId,
