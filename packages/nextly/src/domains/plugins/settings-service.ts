@@ -171,8 +171,9 @@ function unsetSecretsView(
 /**
  * Fill the unset view with the defaults the schema still offers: a key
  * that parses on its own when absent carries a default the admin form
- * should see. A key a secret path reaches is never merged — a group's
- * default can bake a secret value in, and withheld beats redacted-late.
+ * should see. A secret path reaching INTO a copied default prunes exactly
+ * what it reaches — an ordinary sibling in the same group keeps its
+ * default — and a key a secret path names outright is never merged.
  * Required keys fail their absent parse and stay unset.
  */
 function mergeSchemaDefaults(
@@ -183,19 +184,73 @@ function mergeSchemaDefaults(
   const shape = (schema as { shape?: Record<string, unknown> } | null)?.shape;
   if (!shape) return;
   for (const [key, field] of Object.entries(shape)) {
-    const reached = secretPaths.some(
-      path => path === key || path.startsWith(`${key}.`)
-    );
-    if (reached) continue;
+    if (secretPaths.some(path => path === key)) continue;
     const parsed = (
       field as {
         safeParse?: (value: undefined) => { success: boolean; data?: unknown };
       } | null
     )?.safeParse?.(undefined);
-    if (parsed?.success && view[key] === undefined) {
-      view[key] = parsed.data;
+    if (!parsed?.success || view[key] !== undefined) continue;
+    const pruned = pruneSecretPaths(parsed.data, [key], secretPaths);
+    if (
+      pruned !== null &&
+      typeof pruned === "object" &&
+      Object.keys(pruned).length === 0
+    ) {
+      continue;
     }
+    view[key] = pruned;
   }
+}
+
+/**
+ * Whether a concrete path (dot segments, array indices as segments) is
+ * matched by a declared secret path. A wildcard segment stands for any
+ * one segment — an array's index — or for none at all, because a group a
+ * wildcard path crosses may be a plain object, whose property sits one
+ * segment closer. Matching both readings is the conservative direction:
+ * the pruner may cut a little more than strictly asked, never less.
+ */
+function secretPathMatches(
+  secretPaths: readonly string[],
+  path: string[]
+): boolean {
+  const matches = (declared: string[], concrete: string[]): boolean => {
+    if (declared.length === 0) return concrete.length === 0;
+    if (declared[0] === "*") {
+      return (
+        (concrete.length > 0 &&
+          matches(declared.slice(1), concrete.slice(1))) ||
+        matches(declared.slice(1), concrete)
+      );
+    }
+    return (
+      concrete.length > 0 &&
+      declared[0] === concrete[0] &&
+      matches(declared.slice(1), concrete.slice(1))
+    );
+  };
+  return secretPaths.some(declared => matches(declared.split("."), path));
+}
+
+/** A copied default with everything a secret path reaches cut out. */
+function pruneSecretPaths(
+  node: unknown,
+  prefix: string[],
+  secretPaths: readonly string[]
+): unknown {
+  if (Array.isArray(node)) {
+    return node.map((item, i) =>
+      pruneSecretPaths(item, [...prefix, String(i)], secretPaths)
+    );
+  }
+  if (node === null || typeof node !== "object") return node;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(node)) {
+    if (secretPathMatches(secretPaths, [...prefix, k])) continue;
+    out[k] = pruneSecretPaths(v, [...prefix, k], secretPaths);
+  }
+  return out;
 }
 
 export class PluginSettingsService {

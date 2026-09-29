@@ -932,22 +932,24 @@ describe("an empty store a required key rejects", () => {
 });
 
 describe("an empty store a required key rejects", () => {
-  it("withholds a group default a wildcard secret reaches", async () => {
+  it("prunes the secret a group default carries, keeps its sibling", async () => {
     const store = memoryStore();
     const service = new PluginSettingsService({
       owner: "@test/p",
       schema: z.object({
         apiKey: z.string(),
         providers: z
-          .object({ clientSecret: z.string() })
-          .default({ clientSecret: "sk-baked-in" }),
+          .object({ clientId: z.string(), clientSecret: z.string() })
+          .default({ clientId: "acme", clientSecret: "sk-baked-in" }),
       }),
       secretPaths: ["providers.*.clientSecret"],
       store,
       secrets: () => [KEY_A],
     });
 
-    expect(await service.getRedacted()).toEqual({});
+    expect(await service.getRedacted()).toEqual({
+      providers: { clientId: "acme" },
+    });
   });
 
   it("redacts a flat default a secret path names", async () => {
