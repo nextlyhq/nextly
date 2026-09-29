@@ -103,8 +103,9 @@ the plugin, so one plugin's traffic cannot exhaust the budget protecting
 another's — or core's login.
 
 Declaring `csrf: true` on a `public` route fails boot. A public route has no
-cookie identity to protect, and accepting the combination would advertise a
-protection that is not there.
+cookie identity to protect — it is exempt from the default check for the same
+reason — and accepting the combination would advertise a protection that is
+not there.
 
 ## Secrets
 

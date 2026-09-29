@@ -89,6 +89,15 @@ describe("csrfApplies", () => {
       csrfApplies(route({ csrf: false }), request("POST", { cookie: "a=b" }))
     ).toBe(false);
   });
+
+  it("does not apply to a public route", () => {
+    // A public route authenticated no one, so a cookie on the request says
+    // nothing about what admitted it — an unrelated session cookie must not
+    // earn a browser post a CSRF refusal.
+    expect(
+      csrfApplies(route({ public: true }), request("POST", { cookie: "a=b" }))
+    ).toBe(false);
+  });
 });
 
 describe("validateRouteOptions", () => {

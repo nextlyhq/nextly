@@ -31,7 +31,8 @@ Plugin routes now check CSRF by default: an unsafe-method request admitted
 by a session cookie must present the double-submit token, the same
 protection core's own routes take, unless the route opts out with
 `csrf: false`. API-key and Bearer callers are exempt either way — a browser
-cannot attach those cross-site. A route that previously relied on
+cannot attach those cross-site — and so are public routes, which
+authenticate no one. A route that previously relied on
 forgetting the flag will start refusing a browser POST that carries no
 token, which is the point; the SPA holds the readable csrf cookie and sends
 the token already. Declaring `csrf: true` on a `public` route still fails

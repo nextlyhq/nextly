@@ -51,6 +51,11 @@ export function csrfApplies(
   // their own credential (an API key, a signed webhook) opts out with
   // `csrf: false`.
   if (route.csrf === false) return false;
+  // A public route authenticated no one, so there is no cookie identity to
+  // protect — the credential here is a header sniff, and it cannot say the
+  // cookie admitted the request. Demanding a token would refuse a browser
+  // post for carrying an unrelated session cookie.
+  if (route.public === true) return false;
   if (!UNSAFE_METHODS.has(request.method.toUpperCase())) return false;
   // Only a cookie travels automatically, so only a cookie-authenticated
   // request can be made by a site the user did not intend to act on. The
