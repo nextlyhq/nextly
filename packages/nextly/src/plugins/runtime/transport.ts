@@ -141,12 +141,18 @@ function requestHeaders(
 ): Record<string, string> {
   const generated = bodyHeaders["content-type"];
   const formData = init.body instanceof FormData && generated !== undefined;
-  return {
+  const headers: Record<string, string> = {
     ...bodyHeaders,
     ...toHeaders(init),
     ...(formData ? { "content-type": generated } : {}),
     host: url.host,
   };
+  // The transport writes the body it materialized, so it owns the length:
+  // a caller's Content-Length describes the body it built, which the
+  // materialization may have re-encoded, and a stale number leaves the
+  // destination waiting for bytes that are not coming.
+  delete headers["content-length"];
+  return headers;
 }
 
 /**
