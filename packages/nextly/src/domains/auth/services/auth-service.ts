@@ -612,8 +612,12 @@ export class AuthService extends BaseService {
 
       // Update password by user ID (same pattern as changePassword — avoids
       // transaction/email-matching issues that caused the update to silently
-      // affect 0 rows)
-      await this.db
+      // affect 0 rows). Conditional on the account not being deactivated, in
+      // the same statement that sets the password: an administrator may have
+      // switched the account off while the new password was being hashed,
+      // and the read above would not have seen it. The credentials stay
+      // frozen in that window too.
+      const reset = await this.db
         .update(this.tables.users)
         .set({
           passwordHash,
@@ -622,7 +626,27 @@ export class AuthService extends BaseService {
           // themselves — clear any admin-set must-change requirement.
           mustChangePassword: false,
         })
-        .where(eq(this.tables.users.id, targetUser.id));
+        .where(
+          and(
+            eq(this.tables.users.id, targetUser.id),
+            isNull(this.tables.users.deactivatedAt)
+          )
+        );
+      if (affectedRowCount(reset, this.dialect) !== 1) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "token",
+              code: "INVALID",
+              message: "The reset link is invalid.",
+            },
+          ],
+          logContext: {
+            reason: "reset-token-deactivated",
+            tokenId: resetToken.id,
+          },
+        });
+      }
 
       await this.db
         .update(this.tables.passwordResetTokens)
@@ -631,6 +655,7 @@ export class AuthService extends BaseService {
         })
         .where(eq(this.tables.passwordResetTokens.id, resetToken.id));
     } catch (error) {
+      if (NextlyError.is(error)) throw error;
       // Normalise raw driver errors before mapping.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
