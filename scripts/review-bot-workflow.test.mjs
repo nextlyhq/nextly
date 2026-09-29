@@ -352,13 +352,20 @@ describe("where a model agent runs", () => {
    */
   function reached(list, readAction, seen = new Set()) {
     return list.flatMap(step => {
-      const local = step.uses?.startsWith("./") ? step.uses.slice(2).replace(/\/$/, "") : undefined;
+      const local = localActionOf(step);
       if (local === undefined || seen.has(local)) return [step];
       seen.add(local);
       const manifest = load(readAction(local));
-      return [step, manifest, ...reached(manifest.runs?.steps ?? [], readAction, seen)];
+      return [step, manifest, ...reached(stepsOfAction(manifest), readAction, seen)];
     });
   }
+  /** The repository path of the local action a step uses, or nothing for any other step. */
+  function localActionOf(step) {
+    if (!step.uses?.startsWith("./")) return undefined;
+    return step.uses.slice(2).replace(/\/$/, "");
+  }
+  /** A composite action's steps; an action of another kind runs none of this repository's. */
+  const stepsOfAction = manifest => manifest.runs?.steps ?? [];
   /** Every job of a workflow that runs the agent action or names the model key, directly or through a local action, as `file:job`. */
   const agentJobs = (file, text, readAction = manifestOf) =>
     Object.entries(load(text).jobs ?? {})
