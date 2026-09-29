@@ -13,8 +13,9 @@ export type VerifyResult =
  * A header `typ` naming another purpose is refused, so a token minted for a
  * challenge or any future single-purpose flow cannot be presented as a
  * session. An absent header `typ` is still accepted, because tokens already in
- * circulation were minted before the header existed; a later release drops
- * that allowance. Pending tokens are additionally recognised by their claim,
+ * circulation were minted before the header existed; 0.1.0 drops that
+ * allowance, so a token without a header `typ` stops verifying from then on.
+ * Pending tokens are additionally recognised by their claim,
  * as they were before, which is what covers those legacy tokens meanwhile.
  *
  * The algorithm list is explicit: left implicit, a token declaring `alg:

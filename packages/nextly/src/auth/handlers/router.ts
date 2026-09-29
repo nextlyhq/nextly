@@ -41,6 +41,9 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
   // Sends an email on request, like forgot-password: unlimited, it is a way
   // to mail any registered address as often as someone likes.
   "verify-email/resend",
+  // Consumes the single-use verification token, as reset-password consumes
+  // its own: the same grind surface for an attacker holding no token.
+  "verify-email",
   "reset-password",
   // Same bucket as reset-password: both consume a token, so both are
   // grind-able by an attacker holding no token at all.

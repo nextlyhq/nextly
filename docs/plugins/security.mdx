@@ -31,7 +31,7 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 export default definePlugin({
   name: "@acme/auth",
   version: "1.0.0",
-  nextly: ">=0.1.0",
+  nextly: ">=0.0.2-alpha.63",
   capabilities: {
     net: { outbound: ["accounts.google.com", "*.googleapis.com"] },
     secrets: ["providers.*.clientSecret"],
@@ -143,6 +143,9 @@ have refused. See [plugin authentication](/docs/plugins/auth).
 - Read the manifest. Does what it declares match what the plugin says it does?
 - Does it ask for outbound hosts you recognise?
 - Does it ask for raw SQL (`capabilities.db.rawSql`)? Most plugins should not.
+  Either way, read the database access as total: without the capability the
+  plugin still reads and writes every table through the typed surface — the
+  capability gates only raw SQL, not data access.
 - Does the source match the published package?
 - Is it maintained by someone you would give a database credential to?
 
