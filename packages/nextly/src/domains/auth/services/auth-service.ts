@@ -556,7 +556,7 @@ export class AuthService extends BaseService {
 
     const targetUser = await this.db.query.users.findFirst({
       where: { email: requireFilterValue(email, "email") },
-      columns: { id: true },
+      columns: { id: true, deactivatedAt: true },
     });
 
     if (!targetUser) {
@@ -572,6 +572,27 @@ export class AuthService extends BaseService {
           },
         ],
         logContext: { reason: "reset-token-orphan", tokenId: resetToken.id },
+      });
+    }
+
+    if (targetUser.deactivatedAt) {
+      // A deactivated account's credentials are frozen: a link minted
+      // before the deactivation may still arrive, but it can no longer set
+      // a password or clear an admin-set must-change requirement. The wire
+      // stays the generic invalid-link answer, so the account's state is
+      // not confirmed to whoever holds the link.
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "token",
+            code: "INVALID",
+            message: "The reset link is invalid.",
+          },
+        ],
+        logContext: {
+          reason: "reset-token-deactivated",
+          tokenId: resetToken.id,
+        },
       });
     }
 

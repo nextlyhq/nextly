@@ -136,3 +136,39 @@ describe("an administrator's update", () => {
     expect(user.name).toBe("Renamed");
   });
 });
+
+describe("a password-reset link", () => {
+  it("sets a password for an active account", async () => {
+    // The control: the rule below must not stop an ordinary reset.
+    const { t, auth, db } = await setup();
+    await setActive(t, true);
+    const { token } = await auth.generatePasswordResetToken(EMAIL, {
+      disableEmail: true,
+    });
+
+    await auth.resetPasswordWithToken(token as string, "Str0ngPassw0rd!");
+
+    const user = await row(db);
+    expect(user.passwordHash).toBeTruthy();
+    expect(user.mustChangePassword).toBe(false);
+  });
+
+  it("does not set a password for an account an administrator deactivated", async () => {
+    // The link was minted before the deactivation, so it is still valid.
+    // The refusal lands before the password write, so the admin-set
+    // must-change flag a reset would clear is left alone too.
+    const { t, auth, db } = await setup();
+    await setActive(t, true);
+    const { token } = await auth.generatePasswordResetToken(EMAIL, {
+      disableEmail: true,
+    });
+    await setActive(t, false);
+
+    await expect(
+      auth.resetPasswordWithToken(token as string, "Str0ngPassw0rd!")
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    const user = await row(db);
+    expect(user.passwordHash).toBeNull();
+  });
+});
