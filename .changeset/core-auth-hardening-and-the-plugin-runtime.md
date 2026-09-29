@@ -315,3 +315,19 @@ Plugin-contributed login slots also render where their names say. Everything
 was previously rendered below the form, which made `beforeForm` describe
 nothing and put provider buttons underneath the password field they are an
 alternative to.
+
+Plugin routes now check CSRF by default: an unsafe-method request admitted
+
+by a session cookie must present the double-submit token, the same
+
+protection core's own routes take, unless the route opts out with
+
+`csrf: false`. API-key and Bearer callers are exempt either way — a browser
+
+cannot attach those cross-site — and a public route skips the default (it
+
+authenticated no one), while a public handler that resolves the session user
+
+declares `csrf: true`; only cookie-carrying callers are asked for a token.
+
+The SPA holds the readable csrf cookie and sends the token already.
