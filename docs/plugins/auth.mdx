@@ -210,7 +210,7 @@ value), **abort** (throw → generic error), or — for `afterAuthenticate` — 
 | `beforeRegister(data)` | Before a new user is created | Normalize / augment the payload |
 | `afterRegister(user)` | After a successful register | Welcome email, provisioning, CRM sync |
 | `beforeLogout` / `afterLogout` | Around logout | Cleanup, revoke external sessions |
-| `determineUser(request)` | Session/refresh resolution | Custom credential (API key, alt token) → return a user or `null` |
+| `determineUser(request)` | Session/refresh resolution | Custom credential (API key, alt token) → return a user or `null`. The returned user must still pass the account gate: an unknown, deactivated, or (where sign-in requires it) unverified account is not answered as a session |
 | `customizeClaims(claims, user)` | Building the JWT (login **and** refresh) | Add JWT claims; `sub`, `email`, `name`, `image`, `roleIds` and the token claims are restored as core built them |
 
 Hooks observe-or-mutate; they do **not** replace strategies. Use a strategy to

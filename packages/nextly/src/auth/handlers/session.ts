@@ -1,7 +1,11 @@
 /**
  * GET /auth/session
  * Returns the current session user from the access token.
- * No database hit; purely stateless JWT verification.
+ * The cookie/JWT path is purely stateless — no database hit. The one
+ * exception is a user a plugin resolves from a custom credential
+ * (`determineUser`): that answer is a claim about the account, not proof,
+ * so the account row is re-read and gated before it is answered as a
+ * session.
  *
  * In dev (NODE_ENV !== "production"), this handler also implements
  * `admin.devAutoLogin`: when the user has no valid session and the host
@@ -12,6 +16,7 @@
  * silently auto-login users. See `attemptDevAutoLogin` below.
  */
 import { respondData } from "../../api/response-shapes";
+import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext } from "../../plugins/plugin-context";
 import {
   clearAccessTokenCookie,
@@ -22,6 +27,10 @@ import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
 import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
+import {
+  assertAccountUsable,
+  type AccountState,
+} from "../session/account-state";
 import { getSession } from "../session/get-session";
 import {
   generateRefreshToken,
@@ -65,6 +74,15 @@ export type SessionHandlerDeps = Pick<
   authHooks?: AuthHookRegistry;
   /** Plugin context for {@link authHooks}; supplied alongside `authHooks`. */
   pluginCtx?: PluginContext;
+  /**
+   * Account-state lookup for the plugin-resolved user, the same one the
+   * refresh handler gates with. Optional so legacy fixtures keep working;
+   * the DI path always supplies it. Without it a plugin-resolved identity
+   * cannot be checked, so it is not answered.
+   */
+  fetchAccountState?: (userId: string) => Promise<AccountState | null>;
+  /** Whether an unverified email disqualifies the account, as at sign-in. */
+  requireEmailVerification?: boolean;
 };
 
 // Reasons we treat the request as not-authenticated. The first three
@@ -75,6 +93,30 @@ export type SessionHandlerDeps = Pick<
 // `invalid` for cookie cleanup so the stale token does not survive
 // across the next devAutoLogin re-issue.
 type FailureReason = "no_token" | "expired" | "invalid" | "user_gone";
+
+/**
+ * The account gate as a question rather than an error: `true` when an
+ * account a plugin resolved may be answered as the session user. A
+ * password lockout does not disqualify — someone else's wrong guesses must
+ * not end a session the credential itself still holds, the same terms a
+ * refresh is judged on.
+ */
+function accountMayHoldSession(
+  state: AccountState | null,
+  requireEmailVerification: boolean
+): boolean {
+  if (!state) return false;
+  try {
+    assertAccountUsable(state, {
+      requireEmailVerification,
+      enforcePasswordLockout: false,
+    });
+    return true;
+  } catch (error) {
+    if (!NextlyError.is(error)) throw error;
+    return false;
+  }
+}
 
 export async function handleSession(
   request: Request,
@@ -88,16 +130,23 @@ export async function handleSession(
       request,
       deps.pluginCtx
     );
-    if (custom) {
-      return respondData({
-        user: {
-          id: custom.id,
-          email: custom.email,
-          name: custom.name ?? null,
-          image: custom.image ?? null,
-        },
-        accessToken: null,
-      });
+    if (custom && deps.fetchAccountState) {
+      const state = await deps.fetchAccountState(custom.id);
+      if (accountMayHoldSession(state, deps.requireEmailVerification ?? true)) {
+        return respondData({
+          user: {
+            id: custom.id,
+            email: custom.email,
+            name: custom.name ?? null,
+            image: custom.image ?? null,
+          },
+          accessToken: null,
+        });
+      }
+      // The credential names an account that may not hold a session right
+      // now (unknown, deactivated, or unverified where that disqualifies),
+      // so it is not answered as one. The stateless path below returns 401
+      // for a request carrying no cookie/JWT alongside the credential.
     }
   }
 
