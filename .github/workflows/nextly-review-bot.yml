@@ -175,11 +175,13 @@ jobs:
       #   does not apply a `Read` deny through a link in its Grep and Glob
       #   tools (fixed in 2.1.251), so a link committed to `/proc` would reach
       #   what the denies below keep out.
-      # - Every CLAUDE.md, CLAUDE.local.md and AGENTS.md is the base branch's,
-      #   and one the base branch lacks is removed. Claude Code can load these
-      #   as instructions from where it runs, and a pull request must not get
-      #   to instruct its own reviewer; the agent reads the pull request's own
-      #   versions as data, through the gateway.
+      # - Every CLAUDE.md, CLAUDE.local.md and AGENTS.md, and every file under a
+      #   `.claude/` directory at any depth (rules, settings, skills), is the
+      #   base branch's, and one the base branch lacks is removed. Claude Code
+      #   can load these as instructions from where it runs, and a pull request
+      #   must not get to instruct its own reviewer; the agent reads the pull
+      #   request's own versions as data, through the gateway. The action
+      #   restores the root `.claude/` itself; this does not depend on it.
       - name: Give the agent the whole pull request
         if: steps.ask.outputs.run == 'true'
         env:
@@ -199,7 +201,7 @@ jobs:
           find . -path ./.git -prune -o -type l -exec rm -f {} +
           # Names and paths travel NUL-separated, so no path the pull request
           # chooses can split into two.
-          instructions='(^|/)(CLAUDE|CLAUDE\.local|AGENTS)\.md$'
+          instructions='(^|/)((CLAUDE|CLAUDE\.local|AGENTS)\.md$|\.claude/)'
           git ls-files -z | { grep -zE "$instructions" || true; } | xargs -0 -r rm -f --
           git ls-tree -r -z --name-only "origin/$BASE" | { grep -zE "$instructions" || true; } |
             xargs -0 -r git checkout "origin/$BASE" --
@@ -352,10 +354,10 @@ jobs:
             `.gitmodules`, `.npmrc` and the like. Git does not track them, and
             they are not part of the pull request.
 
-            In the checkout, every CLAUDE.md, CLAUDE.local.md and AGENTS.md is
-            the base branch's, and symbolic links are removed. Read the pull
-            request's own versions of those with the gateway's `file-at`, at the
-            head SHA above.
+            In the checkout, every CLAUDE.md, CLAUDE.local.md and AGENTS.md,
+            and every file under a `.claude/` directory, is the base branch's,
+            and symbolic links are removed. Read the pull request's own versions
+            of those with the gateway's `file-at`, at the head SHA above.
           # Allowlist entries match a command prefix, so every entry has to be
           # safe under ANY arguments appended to it, and no raw `gh` or `git`
           # qualifies. `gh api` takes `--hostname` and `gh pr` takes

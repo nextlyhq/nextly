@@ -359,6 +359,7 @@ describe.runIf(process.platform !== "win32")("the whole-tree step, run as GitHub
     write("AGENTS.md", "the base branch's rules\n");
     write("CLAUDE.md", "@AGENTS.md\n");
     write("sub/AGENTS.md", "the base branch's rules for sub\n");
+    write(".claude/rules/base.md", "the base branch's rule\n");
     git("add", "-A");
     git("commit", "-qm", "base");
     git("update-ref", "refs/remotes/origin/main", "HEAD");
@@ -368,6 +369,9 @@ describe.runIf(process.platform !== "win32")("the whole-tree step, run as GitHub
     write("sub/AGENTS.md", "the pull request's rules for sub\n");
     write("new/CLAUDE.md", "the pull request's own\n");
     write(".claude/CLAUDE.md", "the pull request's own\n");
+    write(".claude/rules/base.md", "the pull request's rule\n");
+    write(".claude/rules/override.md", "the pull request's own rule\n");
+    write("sub/.claude/rules/nested.md", "the pull request's own rule\n");
     symlinkSync("../outside", join(repo, "leak"));
     symlinkSync("..", join(repo, "tools", "up"));
     git("add", "-A");
@@ -410,7 +414,7 @@ describe.runIf(process.platform !== "win32")("the whole-tree step, run as GitHub
     expect(links()).toBe("");
   });
 
-  it("gives every instruction file the base branch's text, and removes one the base branch lacks", () => {
+  it("gives every instruction file, and everything under `.claude/`, the base branch's text, and removes one the base branch lacks", () => {
     const result = runStep();
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(read("AGENTS.md")).toBe("the base branch's rules\n");
@@ -418,6 +422,10 @@ describe.runIf(process.platform !== "win32")("the whole-tree step, run as GitHub
     expect(read("sub/AGENTS.md")).toBe("the base branch's rules for sub\n");
     expect(read("new/CLAUDE.md")).toBeNull();
     expect(read(".claude/CLAUDE.md")).toBeNull();
+    // Under a `.claude/` directory, at the root or deeper, too.
+    expect(read(".claude/rules/base.md")).toBe("the base branch's rule\n");
+    expect(read(".claude/rules/override.md")).toBeNull();
+    expect(read("sub/.claude/rules/nested.md")).toBeNull();
   });
 
   it("fails the job when files are still left out", () => {
