@@ -930,3 +930,42 @@ describe("an empty store a required key rejects", () => {
     });
   });
 });
+
+describe("an empty store a required key rejects", () => {
+  it("withholds a group default a wildcard secret reaches", async () => {
+    const store = memoryStore();
+    const service = new PluginSettingsService({
+      owner: "@test/p",
+      schema: z.object({
+        apiKey: z.string(),
+        providers: z
+          .object({ clientSecret: z.string() })
+          .default({ clientSecret: "sk-baked-in" }),
+      }),
+      secretPaths: ["providers.*.clientSecret"],
+      store,
+      secrets: () => [KEY_A],
+    });
+
+    expect(await service.getRedacted()).toEqual({});
+  });
+
+  it("redacts a flat default a secret path names", async () => {
+    const store = memoryStore();
+    const service = new PluginSettingsService({
+      owner: "@test/p",
+      schema: z.object({
+        apiKey: z.string().default("sk-baked-in"),
+        region: z.string().default("eu"),
+      }),
+      secretPaths: ["apiKey"],
+      store,
+      secrets: () => [KEY_A],
+    });
+
+    expect(await service.getRedacted()).toEqual({
+      apiKey: { set: false },
+      region: "eu",
+    });
+  });
+});

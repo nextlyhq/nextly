@@ -171,16 +171,22 @@ function unsetSecretsView(
 /**
  * Fill the unset view with the defaults the schema still offers: a key
  * that parses on its own when absent carries a default the admin form
- * should see. Required keys fail their absent parse and stay unset — the
- * failed whole-store parse already said so.
+ * should see. A key a secret path reaches is never merged — a group's
+ * default can bake a secret value in, and withheld beats redacted-late.
+ * Required keys fail their absent parse and stay unset.
  */
 function mergeSchemaDefaults(
   schema: unknown,
+  secretPaths: readonly string[],
   view: Record<string, unknown>
 ): void {
   const shape = (schema as { shape?: Record<string, unknown> } | null)?.shape;
   if (!shape) return;
   for (const [key, field] of Object.entries(shape)) {
+    const reached = secretPaths.some(
+      path => path === key || path.startsWith(`${key}.`)
+    );
+    if (reached) continue;
     const parsed = (
       field as {
         safeParse?: (value: undefined) => { success: boolean; data?: unknown };
@@ -235,8 +241,15 @@ export class PluginSettingsService {
     // path names no key until saved settings give it instances to name.
     if (Object.keys(stored).length === 0) {
       const view = unsetSecretsView(this.deps.secretPaths);
-      mergeSchemaDefaults(this.deps.schema, view);
-      return view;
+      mergeSchemaDefaults(this.deps.schema, this.deps.secretPaths, view);
+      // The defaults pass through the redactor too: nothing a secret path
+      // reaches was merged, and the redactor is the second wall behind it
+      // — the admin page never receives a secret as a value.
+      return redactSecrets(
+        view,
+        this.deps.secretPaths,
+        this.savedSecretCheck(stored)
+      );
     }
     throw parsed.error;
   }
