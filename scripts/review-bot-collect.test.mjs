@@ -88,7 +88,8 @@ describe("one pull request's findings", () => {
   }
 
   const inline = { id: 1, user: { login: BOT }, path: "src/a.ts", original_line: 5, original_commit_id: REVIEWED, body: `**[P1] Guard it**${tag(1, "P1", "L3")}` };
-  const fileLevel = { id: 2, user: { login: BOT }, path: "docs/b.md", original_commit_id: REVIEWED, body: `**[P2] Date it**${tag(2, "P2", "A3")}` };
+  // As GitHub lists a file-level comment: line 1, told apart by its subject_type.
+  const fileLevel = { id: 2, user: { login: BOT }, path: "docs/b.md", subject_type: "file", line: 1, original_line: 1, original_commit_id: REVIEWED, body: `**[P2] Date it**${tag(2, "P2", "A3")}` };
   const answers = {
     [`repos/${REPO}/pulls/7/comments`]: [
       inline,
@@ -144,6 +145,15 @@ describe("one pull request's findings", () => {
     expect(withCompare(files).map(finding => finding.changed)).toEqual([true, true]);
   });
 
+  it("counts a file-level finding changed when any line of its file changed, not only line 1", () => {
+    expect(withCompare([{ filename: "docs/b.md", patch: "@@ -40,2 +40,3 @@\n forty\n+added\n forty-one" }])[1].changed).toBe(true);
+  });
+
+  it("takes a comment whose in_reply_to_id is null as opening a thread, as one that leaves it out", () => {
+    const { fetch } = github({ ...answers, [`repos/${REPO}/pulls/7/comments`]: [{ ...inline, in_reply_to_id: null }] });
+    expect(collectPull(fetch, REPO, 7).map(finding => finding.n)).toEqual([1]);
+  });
+
   it("follows a file the commits after the finding renamed", () => {
     expect(withCompare([{ filename: "src/moved.ts", previous_filename: "src/a.ts", patch: "@@ -5 +5 @@\n-x\n+y" }])[0].changed).toBe(true);
   });
@@ -170,6 +180,13 @@ describe("one pull request's findings", () => {
     const { fetch } = github({ ...answers, graphql: pages });
     expect(collectPull(fetch, REPO, 7).map(finding => finding.resolved)).toEqual([false, true]);
     expect(afters).toEqual([null, "c1"]);
+  });
+
+  it("reads one compare for the findings made on the same commit", () => {
+    const { fetch, asked } = github(answers);
+    collectPull(fetch, REPO, 7);
+    // The control: both findings were made on REVIEWED, and both read changes.
+    expect(asked.filter(path => path.includes("/compare/"))).toEqual([`repos/${REPO}/compare/${REVIEWED}...${HEAD}`]);
   });
 
   it("only reads", () => {

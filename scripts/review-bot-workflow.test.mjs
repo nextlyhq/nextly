@@ -739,8 +739,9 @@ describe("the reactions on a request", () => {
     expect(jobs.acknowledge.needs).toBe("gate");
     expect(jobs.acknowledge.if).toBe("github.event_name == 'issue_comment' && needs.gate.outputs.asked == 'true'");
     expect(jobs.report.needs).toEqual(["gate", "review", "post"]);
-    // A failed review has to be reported too, so the job runs whatever became of the others.
-    expect(jobs.report.if).toBe("always() && github.event_name == 'issue_comment' && needs.gate.outputs.run == 'true'");
+    // A failed review has to be reported too, so the job runs whatever became
+    // of the others, and a failed gate, which settled no `run`, is reported too.
+    expect(jobs.report.if).toBe("always() && github.event_name == 'issue_comment' && (needs.gate.outputs.run == 'true' || needs.gate.result == 'failure')");
   });
 
   describe.runIf(process.platform !== "win32")("run as GitHub runs them", () => {
@@ -751,6 +752,8 @@ describe("the reactions on a request", () => {
       // The stand-in gateway records how it was called.
       writeFileSync(join(dir, ".github", "scripts", "review-bot-gh.sh"), '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$FAKE/calls"\n');
       chmodSync(join(dir, ".github", "scripts", "review-bot-gh.sh"), 0o755);
+      // The parser, as the job checks it out beside the gateway.
+      copyFileSync(new URL("../.github/scripts/is-review-command.sh", import.meta.url), join(dir, ".github", "scripts", "is-review-command.sh"));
     });
     afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -761,7 +764,7 @@ describe("the reactions on a request", () => {
       writeFileSync(join(dir, "step.sh"), step.run);
       const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], { cwd: dir, encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir, FAKE: dir, COMMENT: "123", ...env } });
       expect(result.status, result.stdout + result.stderr).toBe(0);
-      return readFileSync(join(dir, "calls"), "utf8").trim();
+      return existsSync(join(dir, "calls")) ? readFileSync(join(dir, "calls"), "utf8").trim() : "";
     }
 
     it.each([
@@ -777,7 +780,12 @@ describe("the reactions on a request", () => {
       ["skipped", "confused"],
       ["cancelled", "confused"],
     ])("reports a post job that ended %s with %s", (posted, reaction) => {
-      expect(react(jobs.report, { POSTED: posted })).toBe(`react-request 123 ${reaction}`);
+      expect(react(jobs.report, { GATE: "success", POSTED: posted })).toBe(`react-request 123 ${reaction}`);
+    });
+
+    it("reports a failed gate on a request with 😕, and reacts to nothing else it failed on", () => {
+      expect(react(jobs.report, { GATE: "failure", POSTED: "skipped", COMMENT_BODY: "@nextly-bot review" })).toBe("react-request 123 confused");
+      expect(react(jobs.report, { GATE: "failure", POSTED: "skipped", COMMENT_BODY: "what does @nextly-bot do?" })).toBe("");
     });
   });
 });

@@ -838,13 +838,15 @@ jobs:
           echo "this run posted a review for $SHA"
 
   # 🚀 on the comment that asked once the review is posted, and 😕 when the run
-  # did not get that far, so the outcome shows where the request was made. As
-  # the acknowledgement: the review bot's identity, minted for `issues: write`
+  # did not get that far, so the outcome shows where the request was made. A
+  # gate that failed, on GitHub's answer say, settled nothing and acknowledged
+  # nothing, so the job runs then too, and reacts if the comment asked. As the
+  # acknowledgement: the review bot's identity, minted for `issues: write`
   # alone, in a job that runs no agent, with the key from the environment that
   # admits `main` only.
   report:
     needs: [gate, review, post]
-    if: always() && github.event_name == 'issue_comment' && needs.gate.outputs.run == 'true'
+    if: always() && github.event_name == 'issue_comment' && (needs.gate.outputs.run == 'true' || needs.gate.result == 'failure')
     environment: review-bot
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -868,8 +870,16 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           COMMENT: ${{ github.event.comment.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          GATE: ${{ needs.gate.result }}
           POSTED: ${{ needs.post.result }}
         run: |
           set -euo pipefail
+          # A gate that failed may have failed on a comment that asked for
+          # nothing; the parser, read from this checkout, says whether it asked.
+          if [ "$GATE" != success ] && [ "$(.github/scripts/is-review-command.sh)" != true ]; then
+            echo "the gate failed on a comment that asks for no review, so no reaction"
+            exit 0
+          fi
           if [ "$POSTED" = success ]; then reaction=rocket; else reaction=confused; fi
           .github/scripts/review-bot-gh.sh react-request "$COMMENT" "$reaction"

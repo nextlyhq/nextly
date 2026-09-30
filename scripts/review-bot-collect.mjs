@@ -92,11 +92,24 @@ export function changedRanges(patch) {
 /** Whether any of `ranges` overlaps the lines `start` to `end`. */
 const overlaps = (ranges, start, end) => ranges.some(([first, last]) => first <= end && last >= start);
 
+/** `read`, asked each path once: the findings of one review share a commit, and so a compare. */
+function once(read) {
+  const answers = new Map();
+  return path => {
+    if (!answers.has(path)) answers.set(path, read(path));
+    return answers.get(path);
+  };
+}
+
 /** The first of `values` that is set, or null. */
 const firstSet = (...values) => values.find(value => value !== undefined && value !== null) ?? null;
 
-/** Whether a comment is one of the bot's findings: its own, opening a thread, and tagged. */
-const isFinding = comment => comment.user?.login === BOT && comment.in_reply_to_id === undefined && findingTag(comment.body) !== null;
+/**
+ * Whether a comment is one of the bot's findings: its own, opening a thread (a
+ * reply names the comment it answers; one that opens a thread leaves the field
+ * out, or null), and tagged.
+ */
+const isFinding = comment => comment.user?.login === BOT && firstSet(comment.in_reply_to_id) === null && findingTag(comment.body) !== null;
 
 /**
  * Each finding of one PR, with what became of it.
@@ -114,13 +127,14 @@ export function collectPull(fetch, repo, number) {
   // would not do: comparing to it runs from where the branch left main, so
   // every line the branch changed before the review would count.
   const end = pull.head.sha;
+  const compare = once(fetch);
   return comments.filter(isFinding).map(comment => ({
     pull: number,
     ...findingTag(comment.body),
     path: comment.path,
     ratings: ratings(fetch(`repos/${repo}/pulls/comments/${comment.id}/reactions?per_page=100`)),
     resolved: resolved.has(comment.id),
-    changed: linesChanged(fetch, repo, comment, end),
+    changed: linesChanged(compare, repo, comment, end),
   }));
 }
 
@@ -181,8 +195,13 @@ function changedIn(files, comment) {
   return patchChanged(file.patch, findingLines(comment));
 }
 
-/** The first and last lines a finding names, or null for a file-level finding. */
+/**
+ * The first and last lines a finding names, or null for a file-level finding.
+ * GitHub gives a file-level comment line 1 all the same, so it is told by its
+ * `subject_type`.
+ */
 function findingLines(comment) {
+  if (comment.subject_type === "file") return null;
   const last = firstSet(comment.original_line, comment.line);
   if (last === null) return null;
   return [firstSet(comment.original_start_line, comment.start_line, last), last];
