@@ -1100,9 +1100,10 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
         "  reviews) echo '[{\"id\": 1}]'; echo '[{\"id\": 2}]' ;;",
         "  threads) echo '{\"data\": {}}' ;;",
         '  diff) printf "diff --git a/x b/x\\n" ;;',
-        // A modified file with its patch, and a renamed one GitHub shows no patch for.
+        // A modified file with its patch, a renamed and a removed one GitHub
+        // shows no patch for, and an added one.
         // GitHub's file list stops at 3,000 files; MANY_FILES stands for a list that reached it.
-        "  files) [ -n \"${MANY_FILES:-}\" ] && { seq 3000 | jq -cs 'map({filename: (\"f\" + tostring)})'; exit 0; }; echo '[{\"filename\": \"a\", \"status\": \"modified\", \"patch\": \"@@ -1 +1 @@\\n-x\\n+y\"}]'; echo '[{\"filename\": \"b\", \"previous_filename\": \"old-b\", \"status\": \"renamed\"}, {\"filename\": \"c\", \"status\": \"removed\"}]' ;;",
+        "  files) [ -n \"${MANY_FILES:-}\" ] && { seq 3000 | jq -cs 'map({filename: (\"f\" + tostring)})'; exit 0; }; echo '[{\"filename\": \"a\", \"status\": \"modified\", \"patch\": \"@@ -1 +1 @@\\n-x\\n+y\"}]'; echo '[{\"filename\": \"b\", \"previous_filename\": \"old-b\", \"status\": \"renamed\"}, {\"filename\": \"c\", \"status\": \"removed\"}, {\"filename\": \"d\", \"status\": \"added\", \"patch\": \"@@ -0,0 +1 @@\\n+new\"}]' ;;",
         "esac",
         "",
       ].join("\n"),
@@ -1140,6 +1141,7 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
       { filename: "a", status: "modified", patch: "@@ -1 +1 @@\n-x\n+y" },
       { filename: "b", previous_filename: "old-b", status: "renamed" },
       { filename: "c", status: "removed" },
+      { filename: "d", status: "added", patch: "@@ -0,0 +1 @@\n+new" },
     ]);
   });
 
@@ -1163,6 +1165,11 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
       "--- a/c",
       "+++ /dev/null",
       "GitHub shows no patch for this deleted file: read it as main has it, with base-file",
+      "diff --git a/d b/d",
+      "--- /dev/null",
+      "+++ b/d",
+      "@@ -0,0 +1 @@",
+      "+new",
       "",
     ]);
   });
