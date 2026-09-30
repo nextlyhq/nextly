@@ -40,9 +40,14 @@ on:
 # costs a few seconds for the no-op runs and nothing for the real ones.
 # Staleness is handled where it actually matters: `post-review` re-reads the
 # head and refuses to post against a commit that has moved on.
+#
+# A group keeps one pending run by default, and a newer one cancels it, so a
+# request waiting behind a review was lost to any later comment. `queue: max`
+# keeps up to 100 pending, run in order; it cannot go with cancel-in-progress.
 concurrency:
   group: nextly-review-bot-${{ github.event.issue.number || inputs.pr }}
   cancel-in-progress: false
+  queue: max
 
 # The workflow's own token only reads: the review and its replies post with
 # the App's token in the `post` job, so nothing here can post as the login
@@ -74,9 +79,15 @@ jobs:
     runs-on: ubuntu-latest
     # GLM thinking responses are slow; a deep multi-phase review needs headroom.
     timeout-minutes: 90
+    # One review at a time in this repository, whatever the pull request, in
+    # the order asked: every review spends the one z.ai account, which answers
+    # concurrent requests past its limit with an error rather than a wait.
+    concurrency:
+      group: nextly-review-bot-reviews
+      queue: max
     # Settled before the agent starts, so nothing it does can change them.
     outputs:
-      run: ${{ steps.ask.outputs.run }}
+      run: ${{ steps.fresh.outputs.run }}
       sha: ${{ steps.pr.outputs.sha }}
     steps:
       # Only the command parser, from the workflow's own commit, so the decision
@@ -99,7 +110,7 @@ jobs:
 
       # `contains` cannot express a boundary, so the job condition only asks
       # whether the bot was mentioned at all. Whether that mention ASKS for a
-      # review is decided here, by the same script the mention workflow uses,
+      # review is decided here, by `.github/scripts/is-review-command.sh`,
       # before anything expensive starts. The body travels in an env var: it is
       # attacker-controlled text, and interpolating it into a `run:` line is the
       # standard Actions script-injection hole.
@@ -147,6 +158,40 @@ jobs:
             echo "base=$base"
           } >> "$GITHUB_OUTPUT"
 
+      # A request can wait in the queue behind a running review, and several
+      # can arrive for one head. One that a review of the same head has already
+      # answered, posted after the request was made, is skipped before anything
+      # is cloned, so a burst of requests costs one review. A request made after
+      # that review still runs: asking again on an unchanged head can be
+      # deliberate. A dispatch carries no request time, and always runs.
+      - name: Skip a request a review has already answered
+        id: fresh
+        if: steps.ask.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+          SHA: ${{ steps.pr.outputs.sha }}
+          ASKED: ${{ github.event.comment.created_at }}
+        run: |
+          set -euo pipefail
+          answered=""
+          # `--paginate` prints each page as an array of its own; `-s` reads them
+          # all. Reviews that cannot be read leave the request to run: a second
+          # review of a head costs less than a request lost.
+          if [ -n "$ASKED" ] && ! answered=$(gh api --paginate "repos/$REPO/pulls/$NUMBER/reviews?per_page=100" |
+              jq -rs --arg sha "$SHA" --arg asked "$ASKED" \
+                '[.[][] | select(.user.login == "nextly-review-bot[bot]" and .commit_id == $sha and .submitted_at > $asked) | .html_url] | first // empty'); then
+            echo "::warning::could not read the pull request's reviews, so the request runs"
+            answered=""
+          fi
+          if [ -n "$answered" ]; then
+            echo "::notice::skipped: $answered already reviewed $SHA after this request"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # The parser's checkout is sparse, and actions/checkout makes a sparse
       # checkout a partial clone (`--filter=blob:none`). The checkout below
       # would reuse that repository: it stays a partial clone, fetching each
@@ -155,11 +200,11 @@ jobs:
       # Emptied here, the workspace gets a whole clone of its own (measured on
       # 2026-09-29: no filter, and every tracked file present).
       - name: Forget the parser's checkout
-        if: steps.ask.outputs.run == 'true'
+        if: steps.fresh.outputs.run == 'true'
         run: find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        if: steps.ask.outputs.run == 'true'
+        if: steps.fresh.outputs.run == 'true'
         with:
           # The PR head itself, not the merge ref: the review protocol judges
           # the code at a specific head SHA and reports findings against it.
@@ -197,7 +242,7 @@ jobs:
       #   request's own versions as data, through the gateway. The action
       #   restores the root `.claude/` itself; this does not depend on it.
       - name: Give the agent the whole pull request
-        if: steps.ask.outputs.run == 'true'
+        if: steps.fresh.outputs.run == 'true'
         env:
           BASE: ${{ steps.pr.outputs.base }}
         run: |
@@ -240,7 +285,7 @@ jobs:
       # files under review with the base versions, so a change to the protocol
       # or the gateway would be reviewed as though it had not been made.
       - name: Materialize the reviewer's tooling outside the tree
-        if: steps.ask.outputs.run == 'true'
+        if: steps.fresh.outputs.run == 'true'
         env:
           TOOLING: ${{ runner.temp }}/nextly-review-bot
           REVISION: ${{ github.sha }}
@@ -285,7 +330,7 @@ jobs:
       #
       # A missing piece fails the review rather than running it unscrubbed.
       - name: Prepare the agent's subprocess isolation
-        if: steps.ask.outputs.run == 'true'
+        if: steps.fresh.outputs.run == 'true'
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
@@ -304,16 +349,27 @@ jobs:
           done
 
       - name: Run review agent
-        if: steps.ask.outputs.run == 'true'
+        id: agent
+        if: steps.fresh.outputs.run == 'true'
         uses: anthropics/claude-code-action@9db594c7a0e82298c121c18b7f08aa1579ce7341 # v1.0.185
         env:
           # z.ai's Anthropic-compatible endpoint; the key goes in via
           # anthropic_api_key below and is exported as ANTHROPIC_AUTH_TOKEN.
           ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
           # Model tier overrides are how third-party providers select models.
-          ANTHROPIC_DEFAULT_OPUS_MODEL: glm-5.2
-          ANTHROPIC_DEFAULT_SONNET_MODEL: glm-5.2
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: glm-4.7
+          # The main loop runs on GLM-5.3 with its 1M window; `[1m]` is how
+          # Claude Code learns the window, and it strips the suffix before the
+          # request, so z.ai receives `glm-5.3`. Background calls need no such
+          # window and run on the Flash model. Named rather than left to z.ai's
+          # routing of older names, which it may change without notice.
+          ANTHROPIC_DEFAULT_OPUS_MODEL: glm-5.3[1m]
+          ANTHROPIC_DEFAULT_SONNET_MODEL: glm-5.3[1m]
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: glm-5.3-flash
+          # Effort is sent on every request: z.ai maps it onto its thinking
+          # levels, and left unset its default depends on which reading of
+          # the docs holds. A review is worth the deepest.
+          CLAUDE_CODE_EFFORT_LEVEL: max
+          CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "1"
           # z.ai-recommended CI settings: long single-response timeout and an
           # explicit compact window (context detection is wrong for third-party
           # providers).
@@ -390,7 +446,8 @@ jobs:
           # target included; a rule written for Write is accepted and never
           # consulted, so it grants nothing. The leading `/` anchors it at the
           # directory the agent starts in, the checkout. There is no other Edit
-          # or Write rule and no bare Bash.
+          # or Write rule and no bare Bash, and the gateway is the only command:
+          # the Glob tool lists files, so `ls` is not granted either.
           #
           # The checkout is the pull request under review, and Claude Code loads
           # a project's own settings from where it starts: its hooks, its
@@ -416,16 +473,51 @@ jobs:
           # only collaborators can trigger it, the token is read-only, and the
           # key should be a CI-dedicated one that is rotated on suspicion.
           claude_args: |
-            --allowedTools "Read,Grep,Glob,Edit(/.nextly-review/**),Bash(${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(bash ${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(ls:*)"
+            --allowedTools "Read,Grep,Glob,Edit(/.nextly-review/**),Bash(${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(bash ${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*)"
             --disallowedTools "WebSearch,WebFetch,Read(//proc/**),Read(//sys/**),Grep(//proc/**),Grep(//sys/**)"
             --setting-sources user
             --strict-mcp-config
             --max-turns 150
 
+      # What the run used, which the action's log leaves out: the model it
+      # asked for, the models that answered, the tokens each spent, the tools
+      # it was refused, and why a failed run failed. Read with `jq` on the
+      # runner, outside the agent's reach, from the action's execution file, a
+      # JSON array of the SDK's messages. It prints names and counts only,
+      # never a message's text, and it runs whatever became of the agent. A
+      # failed run's `result` is printed only when Claude Code worded it as an
+      # API failure (`API Error: <status> <body>`): other text there can be the
+      # model's own.
+      - name: Log what the run used
+        if: always() && steps.fresh.outputs.run == 'true'
+        env:
+          EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
+        run: |
+          file=${EXECUTION_FILE:-$RUNNER_TEMP/claude-execution-output.json}
+          if [ ! -s "$file" ]; then
+            echo "no execution file: the agent did not start"
+            exit 0
+          fi
+          jq -r '
+            (map(select(.type == "system" and .subtype == "init")) | first) as $init
+            | (map(select(.type == "result")) | last) as $result
+            | "asked for: \($init.model // "unknown"), on Claude Code \($init.claude_code_version // "unknown")",
+              "answered by: \([.[] | select(.type == "assistant") | .message.model] | group_by(.) | map("\(.[0]) x\(length)") | if length > 0 then join(", ") else "no reply" end)",
+              (($result.modelUsage // {}) | to_entries[] | "tokens for \(.key): input \(.value.inputTokens), output \(.value.outputTokens), cache read \(.value.cacheReadInputTokens), cache write \(.value.cacheCreationInputTokens)"),
+              "turns: \($result.num_turns // "unknown"), ended: \($result.subtype // "without a result"), error: \(if $result.is_error == null then "unknown" else $result.is_error end), \((($result.duration_ms // 0) / 1000) | floor) s",
+              "refused tools: \([($result.permission_denials // [])[] | .tool_name] | group_by(.) | map("\(.[0]) x\(length)") | if length > 0 then join(", ") else "none" end)",
+              (if $result.api_error_status then "API error status: \($result.api_error_status)" else empty end),
+              (if $result.is_error == true then
+                (($result.result // "") | tostring) as $text
+                | if ($text | startswith("API Error")) then "error: \($text | .[0:500])"
+                  else "error: withheld, as it is not an API error (\($text | length) characters)" end
+              else empty end)
+          ' "$file" || echo "could not read the execution file"
+
       # Said here, where it is plain, rather than left to the upload below to
       # report as a missing file.
       - name: Check the agent wrote a review
-        if: steps.ask.outputs.run == 'true'
+        if: steps.fresh.outputs.run == 'true'
         run: |
           test -s .nextly-review/review.json || { echo "::error::the agent wrote no review payload for ${{ steps.pr.outputs.sha }}"; exit 1; }
 
@@ -433,7 +525,7 @@ jobs:
       # rest of what it wrote stays on this runner. `.nextly-review` is a hidden
       # directory, which the action leaves out unless told to include it.
       - name: Hand the payload to the post job
-        if: steps.ask.outputs.run == 'true'
+        if: steps.fresh.outputs.run == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: review-payload

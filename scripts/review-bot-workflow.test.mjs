@@ -34,7 +34,8 @@ import { load } from "js-yaml";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
-const { jobs } = load(read(".github/workflows/nextly-review-bot.yml"));
+const workflow = load(read(".github/workflows/nextly-review-bot.yml"));
+const { jobs } = workflow;
 /** The job the agent runs in, and the job that posts what it wrote. */
 const steps = jobs.review.steps;
 const postSteps = jobs.post.steps;
@@ -73,7 +74,6 @@ const ALLOWED = [
   `Edit(/${PAYLOAD_DIR}/**)`,
   "Bash(${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*)",
   "Bash(bash ${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*)",
-  "Bash(ls:*)",
 ];
 /** The denylist as reviewed. A denial wins over a grant, so an added one can cancel the payload's; a removed one lifts a boundary. */
 const DISALLOWED = ["WebSearch", "WebFetch", "Read(//proc/**)", "Read(//sys/**)", "Grep(//proc/**)", "Grep(//sys/**)"];
@@ -285,6 +285,16 @@ describe("what else could widen the agent's grant", () => {
 describe("the checkout the agent reads", () => {
   const FORGET = "Forget the parser's checkout";
 
+  it("comes from a checkout that is neither filtered nor sparse", () => {
+    // A filtered clone fetches each file when first read, which fails once the
+    // checkout has removed its credentials; a sparse one leaves files out.
+    const head = steps.find(step => step.uses?.startsWith("actions/checkout@") && step.with?.ref === "${{ steps.pr.outputs.sha }}");
+    // The control: the parser's checkout is sparse on purpose, under the key read below.
+    expect(usesOf(steps, "actions/checkout")[0].with["sparse-checkout"]).toBe(".github/scripts");
+    expect(head.with.filter).toBeUndefined();
+    expect(head.with["sparse-checkout"]).toBeUndefined();
+  });
+
   it("empties the workspace straight before the pull request's checkout, on the same condition", () => {
     // The parser's sparse checkout is a partial clone, which the pull
     // request's checkout would otherwise reuse and fetch into on demand.
@@ -324,6 +334,67 @@ describe("the tree the agent reads", () => {
     expect(steps[at].if).toBe(agent.if);
     // A tree with holes must stop the job, not reach the agent.
     expect(steps[at]["continue-on-error"]).toBeUndefined();
+  });
+});
+
+describe("where a model agent runs", () => {
+  const WORKFLOWS = ".github/workflows";
+  /** A local action's manifest in this repository, by the path a step's `uses` gives it. */
+  const manifestOf = path => {
+    const found = ["action.yml", "action.yaml"].map(name => `${path}/${name}`).find(file => existsSync(new URL(`../${file}`, import.meta.url)));
+    expect(found, `${path} has a manifest`).toBeDefined();
+    return read(found);
+  };
+  /**
+   * Every step a list runs, with the steps of each local action it uses
+   * followed down, and the text they are written in: a composite action can
+   * run the agent, or take the key as an input, out of the job's own sight.
+   */
+  function reached(list, readAction, seen = new Set()) {
+    return list.flatMap(step => {
+      const local = localActionOf(step);
+      if (local === undefined || seen.has(local)) return [step];
+      seen.add(local);
+      const manifest = load(readAction(local));
+      return [step, manifest, ...reached(stepsOfAction(manifest), readAction, seen)];
+    });
+  }
+  /** The repository path of the local action a step uses, or nothing for any other step. */
+  function localActionOf(step) {
+    if (!step.uses?.startsWith("./")) return undefined;
+    return step.uses.slice(2).replace(/\/$/, "");
+  }
+  /** A composite action's steps; an action of another kind runs none of this repository's. */
+  const stepsOfAction = manifest => manifest.runs?.steps ?? [];
+  /** Every job of a workflow that runs the agent action or names the model key, directly or through a local action, as `file:job`. */
+  const agentJobs = (file, text, readAction = manifestOf) =>
+    Object.entries(load(text).jobs ?? {})
+      .filter(([, job]) => {
+        const all = [job, ...reached(job.steps ?? [], readAction)];
+        return all.some(part => part.uses?.startsWith("anthropics/claude-code-action@")) || JSON.stringify(all).includes("ZAI_API_KEY");
+      })
+      .map(([name]) => `${file}:${name}`);
+
+  it("is the review job alone, so one agent at a time spends the model account", () => {
+    // The controls: a workflow that answers mentions with the agent and the
+    // key is found, and so is one that reaches the agent through a local action.
+    const mention = "jobs:\n  answer:\n    steps:\n      - uses: anthropics/claude-code-action@x\n        with:\n          anthropic_api_key: ${{ secrets.ZAI_API_KEY }}\n";
+    expect(agentJobs("mention.yml", mention)).toEqual(["mention.yml:answer"]);
+    const wrapped = "jobs:\n  answer:\n    steps:\n      - uses: ./.github/actions/answer\n";
+    const composite = "runs:\n  using: composite\n  steps:\n    - uses: anthropics/claude-code-action@x\n";
+    expect(agentJobs("wrapped.yml", wrapped, () => composite)).toEqual(["wrapped.yml:answer"]);
+    const found = readdirSync(new URL(`../${WORKFLOWS}`, import.meta.url))
+      .filter(file => /\.ya?ml$/.test(file))
+      .flatMap(file => agentJobs(file, read(`${WORKFLOWS}/${file}`)));
+    expect(found).toEqual(["nextly-review-bot.yml:review"]);
+  });
+
+  it("names the model key nowhere outside the jobs", () => {
+    // A workflow-level `env` would hand the key to every job, the agent's included.
+    for (const file of readdirSync(new URL(`../${WORKFLOWS}`, import.meta.url)).filter(file => /\.ya?ml$/.test(file))) {
+      const { jobs: _jobs, ...rest } = load(read(`${WORKFLOWS}/${file}`));
+      expect(JSON.stringify(rest), file).not.toContain("ZAI_API_KEY");
+    }
   });
 });
 
@@ -525,6 +596,176 @@ describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)("the is
   it("creates `.mcp.json` in each directory above the checkout the job's user cannot write, and nowhere else", () => {
     const touched = calls.filter(call => call.startsWith("touch "));
     expect(touched).toEqual([`touch ${locked}/.mcp.json`, "touch /.mcp.json"]);
+  });
+});
+
+describe("the model the agent runs", () => {
+  it("asks for GLM-5.3 by name, with the Flash model for background calls", () => {
+    // `[1m]` gives Claude Code the 1M window and is stripped before the request.
+    expect(agent.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("glm-5.3[1m]");
+    expect(agent.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("glm-5.3[1m]");
+    expect(agent.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("glm-5.3-flash");
+  });
+
+  it("sends the deepest effort on every request", () => {
+    expect(agent.env.CLAUDE_CODE_EFFORT_LEVEL).toBe("max");
+    expect(agent.env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT).toBe("1");
+  });
+});
+
+describe("requests that wait", () => {
+  it("queues every request for a pull request in order, and cancels none", () => {
+    // A group keeps one pending run by default, and a newer one cancels it.
+    expect(workflow.concurrency).toEqual({ group: "nextly-review-bot-${{ github.event.issue.number || inputs.pr }}", "cancel-in-progress": false, queue: "max" });
+  });
+
+  it("runs one review at a time in the repository, whatever the pull request", () => {
+    expect(jobs.review.concurrency).toEqual({ group: "nextly-review-bot-reviews", queue: "max" });
+  });
+
+  it("decides whether a request still needs a review before anything else runs", () => {
+    const fresh = steps.findIndex(step => step.id === "fresh");
+    expect(fresh).toBe(steps.findIndex(step => step.id === "pr") + 1);
+    expect(jobs.review.outputs.run).toBe("${{ steps.fresh.outputs.run }}");
+    // Every later step of the job runs on that answer, the log step whatever
+    // became of the agent.
+    for (const step of steps.slice(fresh + 1)) {
+      expect(step.if.replace(/^always\(\) && /, ""), step.name ?? step.uses).toBe("steps.fresh.outputs.run == 'true'");
+    }
+  });
+});
+
+describe.runIf(process.platform !== "win32")("the skip step, run as GitHub runs it", () => {
+  const SHA = "b".repeat(40);
+  const ASKED = "2026-09-29T17:00:00Z";
+  let dir;
+  const review = (login, commit, at) => ({ user: { login }, commit_id: commit, submitted_at: at, html_url: `https://example.test/${login}/${at}` });
+
+  /** Runs the step against a stand-in `gh` whose pages are the ones given. */
+  function decide(pages, asked = ASKED) {
+    dir = mkdtempSync(join(tmpdir(), "review-bot-fresh-"));
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(dir, "pages"), (pages ?? []).map(page => JSON.stringify(page)).join("\n"));
+    // No pages given: GitHub cannot be read.
+    writeFileSync(join(bin, "gh"), pages ? '#!/usr/bin/env bash\ncat "$FAKE/pages"\n' : "#!/usr/bin/env bash\necho 'HTTP 502' >&2\nexit 1\n");
+    chmodSync(join(bin, "gh"), 0o755);
+    writeFileSync(join(dir, "step.sh"), steps.find(step => step.id === "fresh").run);
+    const output = join(dir, "output");
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { PATH: `${bin}:${process.env.PATH}`, HOME: dir, FAKE: dir, GITHUB_OUTPUT: output, REPO: "o/r", NUMBER: "7", SHA, ASKED: asked },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    return { run: readFileSync(output, "utf8").trim(), stdout: result.stdout };
+  }
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("skips a request the bot's review of the same head answered after it was made", () => {
+    const { run, stdout } = decide([[review("nextly-review-bot[bot]", SHA, "2026-09-29T17:20:00Z")]]);
+    expect(run).toBe("run=false");
+    expect(stdout).toContain("https://example.test/nextly-review-bot[bot]/2026-09-29T17:20:00Z");
+  });
+
+  it("finds that review on a later page", () => {
+    expect(decide([[review("someone", SHA, "2026-09-29T16:00:00Z")], [review("nextly-review-bot[bot]", SHA, "2026-09-29T17:20:00Z")]]).run).toBe("run=false");
+  });
+
+  it.each([
+    ["a review made before the request", review("nextly-review-bot[bot]", SHA, "2026-09-29T16:59:59Z")],
+    ["a review of another head", review("nextly-review-bot[bot]", "c".repeat(40), "2026-09-29T17:20:00Z")],
+    ["another login's review", review("chatgpt-codex-connector[bot]", SHA, "2026-09-29T17:20:00Z")],
+  ])("runs a request that only %s would answer", (_, found) => {
+    expect(decide([[found]]).run).toBe("run=true");
+  });
+
+  it("runs the request, and says why, when the reviews cannot be read", () => {
+    const { run, stdout } = decide(null);
+    expect(run).toBe("run=true");
+    expect(stdout).toContain("::warning::could not read the pull request's reviews, so the request runs");
+  });
+
+  it("runs a dispatch, which has no request time", () => {
+    expect(decide([[review("nextly-review-bot[bot]", SHA, "2026-09-29T17:20:00Z")]], "").run).toBe("run=true");
+  });
+});
+
+describe.runIf(process.platform !== "win32")("the log step, run as GitHub runs it", () => {
+  // Every message's text carries this; none of it may reach the log.
+  const CONTENT = "the-text-of-a-message";
+  let dir;
+  const init = { type: "system", subtype: "init", model: "glm-5.3[1m]", claude_code_version: "2.1.222" };
+  const said = model => ({ type: "assistant", message: { model, content: [{ type: "text", text: CONTENT }] } });
+  const result = extra => ({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    num_turns: 64,
+    duration_ms: 803005,
+    result: CONTENT,
+    modelUsage: { "glm-5.3[1m]": { inputTokens: 1200, outputTokens: 340, cacheReadInputTokens: 90000, cacheCreationInputTokens: 5000 } },
+    permission_denials: [
+      { tool_name: "Bash", tool_input: { command: CONTENT } },
+      { tool_name: "Bash", tool_input: { command: CONTENT } },
+      { tool_name: "Read", tool_input: { file_path: CONTENT } },
+    ],
+    ...extra,
+  });
+
+  function log(messages) {
+    dir = mkdtempSync(join(tmpdir(), "review-bot-log-"));
+    const file = join(dir, "execution.json");
+    if (messages) writeFileSync(file, JSON.stringify(messages, null, 2));
+    writeFileSync(join(dir, "step.sh"), named(steps, "Log what the run used").run);
+    const run = spawnSync("bash", ["--noprofile", "--norc", join(dir, "step.sh")], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, HOME: dir, EXECUTION_FILE: file, RUNNER_TEMP: dir },
+    });
+    expect(run.status, run.stderr).toBe(0);
+    return run.stdout;
+  }
+
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  it("reads the execution file the action names, whatever became of the agent", () => {
+    const step = named(steps, "Log what the run used");
+    expect(step.env.EXECUTION_FILE).toBe("${{ steps.agent.outputs.execution_file }}");
+    // A failed run is the one whose log matters most.
+    expect(step.if).toBe("always() && steps.fresh.outputs.run == 'true'");
+    expect(steps.indexOf(step)).toBe(steps.indexOf(agent) + 1);
+  });
+
+  it("prints the models, tokens, turns and refusals, and no message's text", () => {
+    const out = log([init, said("glm-5.3"), { type: "user", message: { content: CONTENT } }, said("glm-5.3"), said("glm-5.3-flash"), result()]);
+    expect(out).toContain("asked for: glm-5.3[1m], on Claude Code 2.1.222");
+    expect(out).toContain("answered by: glm-5.3 x2, glm-5.3-flash x1");
+    expect(out).toContain("tokens for glm-5.3[1m]: input 1200, output 340, cache read 90000, cache write 5000");
+    expect(out).toContain("turns: 64, ended: success, error: false, 803 s");
+    expect(out).toContain("refused tools: Bash x2, Read x1");
+    expect(out).not.toContain(CONTENT);
+  });
+
+  it("prints why a failed run failed", () => {
+    const out = log([init, result({ is_error: true, api_error_status: 429, result: "API Error: 429 rate limited" })]);
+    expect(out).toContain("API error status: 429");
+    expect(out).toContain("error: API Error: 429 rate limited");
+  });
+
+  it("withholds a failed run's result when it is not an API error", () => {
+    // The field can carry the model's own last text when a run fails another way.
+    const out = log([init, result({ is_error: true, subtype: "error_during_execution" })]);
+    expect(out).toContain(`error: withheld, as it is not an API error (${CONTENT.length} characters)`);
+    expect(out).not.toContain(CONTENT);
+  });
+
+  it("says so, rather than failing, when the agent never started", () => {
+    expect(log(null)).toContain("no execution file: the agent did not start");
   });
 });
 

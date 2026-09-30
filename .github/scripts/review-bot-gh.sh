@@ -133,8 +133,9 @@ case "$command" in
       }'
     ;;
   file-at)
-    # Read one file at one commit. Used by the mention workflow, whose checkout
-    # is the default branch rather than the PR head.
+    # Read one file at one commit. The review agent reads the pull request's
+    # own instruction files this way, since its checkout holds the base
+    # branch's in their place.
     # The raw media type returns the file body itself, so there is no JSON
     # envelope here to select a field out of.
     require_sha "${1:-}"
