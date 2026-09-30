@@ -615,6 +615,11 @@ describe("requests that wait", () => {
     expect(jobs.review.if).toBe("needs.gate.outputs.run == 'true'");
   });
 
+  /** The condition a review-job step should carry: none, bar the log step, which runs whatever became of the agent. */
+  const conditionFor = step => (step.name === "Log what the run used" ? "always()" : null);
+  const conditionOf = step => step.if ?? null;
+  const labelOf = step => step.name ?? step.uses;
+
   it("decides whether a request still needs a review before anything else runs", () => {
     const fresh = gateSteps.findIndex(step => step.id === "fresh");
     expect(fresh).toBe(gateSteps.findIndex(step => step.id === "pr") + 1);
@@ -622,7 +627,7 @@ describe("requests that wait", () => {
     expect(jobs.gate.outputs.run).toBe("${{ steps.fresh.outputs.run }}");
     // The review job runs on that answer, every step of it, the log step
     // whatever became of the agent; and the post job only after both.
-    for (const step of steps) expect(step.if ?? null, step.name ?? step.uses).toBe(step.name === "Log what the run used" ? "always()" : null);
+    for (const step of steps) expect(conditionOf(step), labelOf(step)).toBe(conditionFor(step));
     expect(jobs.post.needs).toEqual(["gate", "review"]);
   });
 });
@@ -1018,7 +1023,7 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
 
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-  /** When the prefetch read the pull request, as the review job hands it on. */
+  /** When the prefetch began its reads, as the review job hands it on. */
   const PREFETCHED = "2026-09-29T20:00:00Z";
   /** A thread as the gateway's `threads` returns it: the finding, and its newest comments by login and time. */
   const thread = (finding, ...recent) => ({
@@ -1029,16 +1034,21 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
   /** Both findings' threads as the prefetch left them: a person replied before the review started. */
   const QUIET = threads(thread(101, ["someone", "2026-09-29T19:30:00Z"]), thread(102));
 
-  /** Runs one post-job step as GitHub's bash does, with `files` written beside the stand-in first; `null` removes one. */
-  function runStep(name, files = {}, comments = [], body = `the review\n\n<!-- pr-review-agent round:1 head:${SHA} -->`) {
-    writeFileSync(join(dir, "payload", "review.json"), JSON.stringify({ body, comments }));
-    for (const file of readdirSync(dir).filter(file => file === "calls" || file.startsWith("ids-"))) rmSync(join(dir, file));
+  /** The quiet threads and the head as reviewed, then `files` written beside the stand-in over them; `null` removes one. */
+  function besideTheStandIn(files) {
     writeFileSync(join(dir, "threads.json"), QUIET);
     rmSync(join(dir, "head"), { force: true });
     for (const [file, text] of Object.entries(files)) {
       if (text === null) rmSync(join(dir, file), { force: true });
       else writeFileSync(join(dir, file), text);
     }
+  }
+
+  /** Runs one post-job step as GitHub's bash does, with `files` written beside the stand-in first; `null` removes one. */
+  function runStep(name, files = {}, comments = [], body = `the review\n\n<!-- pr-review-agent round:1 head:${SHA} -->`) {
+    writeFileSync(join(dir, "payload", "review.json"), JSON.stringify({ body, comments }));
+    for (const file of readdirSync(dir).filter(file => file === "calls" || file.startsWith("ids-"))) rmSync(join(dir, file));
+    besideTheStandIn(files);
     writeFileSync(join(dir, "step.sh"), named(postSteps, name).run);
     const env = { PATH: process.env.PATH, HOME: dir, FAKE: dir, RUNNER_TEMP: join(dir, "temp"), GITHUB_RUN_ID: RUN, NUMBER: "7", SHA, PREFETCHED, PAYLOAD: join(dir, "payload") };
     const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], { cwd: dir, encoding: "utf8", env });
