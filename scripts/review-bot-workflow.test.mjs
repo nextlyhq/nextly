@@ -660,6 +660,43 @@ describe("the review the protocol has the agent write", () => {
   });
 });
 
+describe.runIf(process.platform !== "win32")("which comments ask for a review", () => {
+  /** What the parser prints for a comment's body. */
+  const asks = body =>
+    execFileSync("bash", [fileURLToPath(new URL("../.github/scripts/is-review-command.sh", import.meta.url))], { encoding: "utf8", env: { PATH: process.env.PATH, COMMENT_BODY: body } }).trim();
+
+  it.each([
+    "@nextly-bot review",
+    "  @nextly-bot   review",
+    "@nextly-bot Review",
+    "@nextly-bot please review",
+    "@nextly-bot please review this PR",
+    "@nextly-bot review this pull request",
+    "@nextly-bot review the PR please!",
+    "@nextly-bot, re-review please.",
+    "@nextly-bot review again",
+    "@nextly-bot review\r",
+    "Thanks for the fixes.\n\n@nextly-bot please review this PR\n",
+  ])("takes %j as a request", body => {
+    expect(asks(body)).toBe("true");
+  });
+
+  it.each([
+    "please look at this",
+    "`@nextly-bot review` failed?",
+    "@nextly-bot reviewer status?",
+    "@nextly-bot review this PR?",
+    "@nextly-bot why is this a P1?",
+    "@nextly-bot review the auth part only",
+    "@nextly-bot please don't review",
+    "I asked @nextly-bot review earlier",
+    "Then ask @nextly-bot review",
+    "@nextly-bot",
+  ])("takes %j as no request", body => {
+    expect(asks(body)).toBe("false");
+  });
+});
+
 describe("the reactions on a request", () => {
   /** Every job that takes the review bot's App identity, by name. */
   const identityJobs = Object.entries(jobs).filter(([, job]) => usesOf(job.steps ?? [], "actions/create-github-app-token").length > 0);
