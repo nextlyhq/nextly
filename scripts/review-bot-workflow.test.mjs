@@ -1084,7 +1084,7 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
   let dir;
 
   /** Runs the step with a stand-in gateway, which answers as GitHub does and records what the step's output held at each call. */
-  function prefetch(failing = "", headNow = SHA) {
+  function prefetch(failing = "", headNow = SHA, extra = {}) {
     dir = mkdtempSync(join(tmpdir(), "review-bot-prefetch-"));
     const tooling = join(dir, "nextly-review-bot");
     mkdirSync(tooling);
@@ -1101,7 +1101,8 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
         "  threads) echo '{\"data\": {}}' ;;",
         '  diff) printf "diff --git a/x b/x\\n" ;;',
         // A modified file with its patch, and a renamed one GitHub shows no patch for.
-        "  files) echo '[{\"filename\": \"a\", \"status\": \"modified\", \"patch\": \"@@ -1 +1 @@\\n-x\\n+y\"}]'; echo '[{\"filename\": \"b\", \"previous_filename\": \"old-b\", \"status\": \"renamed\"}, {\"filename\": \"c\", \"status\": \"removed\"}]' ;;",
+        // GitHub's file list stops at 3,000 files; MANY_FILES stands for a list that reached it.
+        "  files) [ -n \"${MANY_FILES:-}\" ] && { seq 3000 | jq -cs 'map({filename: (\"f\" + tostring)})'; exit 0; }; echo '[{\"filename\": \"a\", \"status\": \"modified\", \"patch\": \"@@ -1 +1 @@\\n-x\\n+y\"}]'; echo '[{\"filename\": \"b\", \"previous_filename\": \"old-b\", \"status\": \"renamed\"}, {\"filename\": \"c\", \"status\": \"removed\"}]' ;;",
         "esac",
         "",
       ].join("\n"),
@@ -1115,7 +1116,7 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
     const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], {
       cwd: dir,
       encoding: "utf8",
-      env: { PATH: process.env.PATH, HOME: dir, FAKE: dir, GITHUB_OUTPUT: join(dir, "output"), HEAD_NOW: headNow, ...env },
+      env: { PATH: process.env.PATH, HOME: dir, FAKE: dir, GITHUB_OUTPUT: join(dir, "output"), HEAD_NOW: headNow, ...env, ...extra },
     });
     const calls = existsSync(join(dir, "calls")) ? readFileSync(join(dir, "calls"), "utf8").trim().split("\n") : [];
     return { status: result.status, output: result.stdout + result.stderr, calls, folder: join(tooling, "pr") };
@@ -1164,6 +1165,14 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
       "GitHub shows no patch for this deleted file: read it as main has it, with base-file",
       "",
     ]);
+  });
+
+  it("fails the review, rather than build a partial diff, when GitHub refuses the diff and lists its most files", () => {
+    const { status, output } = prefetch("diff", SHA, { MANY_FILES: "1" });
+    expect(status).not.toBe(0);
+    expect(output).toContain("GitHub gives neither the whole diff nor every changed file (it lists 3,000 at most), so this cannot be reviewed whole");
+    // The control: the same list with the whole diff given is read as usual.
+    expect(prefetch("", SHA, { MANY_FILES: "1" }).status).toBe(0);
   });
 
   it("fails the review when the files, which the diff can be built from, cannot be read", () => {
