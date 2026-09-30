@@ -168,8 +168,10 @@ describe("one pull request's findings", () => {
     const refused = () => {
       throw new Error("gh: No common ancestor between the commits (HTTP 404)");
     };
-    const { fetch } = github({ ...answers, [`repos/${REPO}/compare/${REVIEWED}...${HEAD}`]: refused });
+    const { fetch, asked } = github({ ...answers, [`repos/${REPO}/compare/${REVIEWED}...${HEAD}`]: refused });
     expect(collectPull(fetch, REPO, 7).map(finding => finding.changed)).toEqual([null, null]);
+    // Both findings were made on one commit, so the compare GitHub refused is asked once.
+    expect(asked.filter(path => path.includes("/compare/"))).toHaveLength(1);
   });
 
   it("stops, rather than hide it, when GitHub refuses a compare for another reason", () => {

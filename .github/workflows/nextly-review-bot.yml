@@ -300,10 +300,10 @@ jobs:
       #
       # A whole tree also holds what a sparse one kept out, so two kinds of
       # file in it are made safe before the agent starts:
-      # - Symbolic links are removed. The Claude Code pinned here (2.1.222)
-      #   does not apply a `Read` deny through a link in its Grep and Glob
-      #   tools (fixed in 2.1.251), so a link committed to `/proc` would reach
-      #   what the denies below keep out.
+      # - Symbolic links are removed. Claude Code before 2.1.251 did not apply
+      #   a `Read` deny through a link in its Grep and Glob tools, so a link
+      #   committed to `/proc` would reach what the denies below keep out; the
+      #   removal stays with 2.1.283, pinned here, as a second guard.
       # - Every CLAUDE.md, CLAUDE.local.md and AGENTS.md, and every file under a
       #   `.claude/` directory at any depth (rules, settings, skills), is the
       #   base branch's, and one the base branch lacks is removed. Claude Code
@@ -446,8 +446,9 @@ jobs:
       # What the agent's Bash commands need so that Claude Code can keep
       # credentials out of their environment (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
       # on the next step). It runs each command inside bubblewrap, in a PID
-      # namespace of its own. Measured on this runner on 2026-09-28, with the
-      # Claude Code the pinned action installs (2.1.222):
+      # namespace of its own. Measured on this runner on 2026-09-28, with
+      # Claude Code 2.1.222; the move to 2.1.283 (v1.0.235) keeps these steps
+      # as they were, without measuring them again (decided 2026-09-30):
       #
       # - Without bubblewrap, Claude Code refuses to start, and without socat
       #   it refuses every command. The runner image has neither.
@@ -481,7 +482,7 @@ jobs:
 
       - name: Run review agent
         id: agent
-        uses: anthropics/claude-code-action@9db594c7a0e82298c121c18b7f08aa1579ce7341 # v1.0.185
+        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1.0.235
         env:
           # z.ai's Anthropic-compatible endpoint; the key goes in via
           # anthropic_api_key below and is exported as ANTHROPIC_AUTH_TOKEN.
@@ -506,6 +507,10 @@ jobs:
           API_TIMEOUT_MS: "3000000"
           CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000"
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+          # A review needs no background subagent, and in the Claude Code this
+          # action installs one can end the run before its work is written
+          # (claude-code-action issue 1852, open on 2026-09-28).
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
           # Every Bash command the agent runs, the gateway included, starts
           # without the model key or any other credential Claude Code knows,
           # in a PID namespace of its own; the step above prepares what that
@@ -607,12 +612,21 @@ jobs:
           # construction. The backstops are that forks never reach this job,
           # only collaborators can trigger it, the token is read-only, and the
           # key should be a CI-dedicated one that is rotated on suspicion.
+          # From v1.0.188 the action fails a finished run whose `num_turns`
+          # passes --max-turns, and `num_turns` counts tool results, so
+          # parallel calls inflate it (claude-code-action issue 1795, open on
+          # 2026-09-28): a review done in fewer turns can still read as over.
+          # The cap sits far above the counts this workflow recorded: across
+          # its runs from 2026-08-10 to 2026-09-28, 90 of which reported a
+          # count, `num_turns` reached 175 at most (run 32655211349), and 173
+          # for a review that posted (run 32067853247). So only a runaway meets
+          # it, and the job's 90-minute timeout bounds the rest.
           claude_args: |
             --allowedTools "Read,Grep,Glob,Edit(/.nextly-review/**),Bash(${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(bash ${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*)"
             --disallowedTools "WebSearch,WebFetch,Read(//proc/**),Read(//sys/**),Grep(//proc/**),Grep(//sys/**)"
             --setting-sources user
             --strict-mcp-config
-            --max-turns 150
+            --max-turns 400
 
       # What the run used, which the action's log leaves out: the model it
       # asked for, the models that answered, the tokens each spent, the tools
@@ -641,7 +655,7 @@ jobs:
             | (map(select(.type == "result")) | last) as $result
             | "asked for: \($init.model // "unknown"), on Claude Code \($init.claude_code_version // "unknown")",
               "answered by: \([.[] | select(.type == "assistant") | .message.model] | group_by(.) | map("\(.[0]) x\(length)") | if length > 0 then join(", ") else "no reply" end)",
-              (($result.modelUsage // {}) | to_entries[] | "tokens for \(.key): input \(.value.inputTokens), output \(.value.outputTokens), cache read \(.value.cacheReadInputTokens), cache write \(.value.cacheCreationInputTokens)"),
+              (($result.modelUsage // {}) | to_entries[] | "tokens for \(.key): input \(.value.inputTokens), output \(.value.outputTokens), cache read \(.value.cacheReadInputTokens), cache write \(.value.cacheCreationInputTokens), context window \(.value.contextWindow // "unknown")"),
               "turns: \($result.num_turns // "unknown"), ended: \($result.subtype // "without a result"), error: \(if $result.is_error == null then "unknown" else $result.is_error end), \((($result.duration_ms // 0) / 1000) | floor) s",
               "refused tools: \([($result.permission_denials // [])[] | .tool_name] | group_by(.) | map("\(.[0]) x\(length)") | if length > 0 then join(", ") else "none" end)",
               ([($result.permission_denials // [])[] | select(.tool_name == "Bash")
