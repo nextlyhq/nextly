@@ -219,7 +219,7 @@ describe.runIf(process.platform !== "win32")("posting once per run", () => {
     const file = join(fake, "reply.md");
     writeFileSync(file, "the reply\n");
     const before = posts().length;
-    const result = api("reply", "7", "101", file, run, String(place));
+    const result = api("reply", "7", HEAD, "101", file, run, String(place));
     expect(result.status, result.stderr).toBe(0);
     const sent = posts().slice(before);
     expect(sent, `reply ${place} of run ${run} is posted`).toHaveLength(1);
@@ -329,12 +329,35 @@ describe.runIf(process.platform !== "win32")("posting once per run", () => {
     const reply = repliedBy(RUN, 0);
     expect(reply.body.startsWith("the reply\n")).toBe(true);
     listed("comments", [reply]);
-    const again = api("reply", "7", "101", join(fake, "reply.md"), RUN, "0");
+    const again = api("reply", "7", HEAD, "101", join(fake, "reply.md"), RUN, "0");
     expect(again.status, again.stderr).toBe(0);
     expect(again.stderr).toContain("already posted reply 0 as comment 21");
     expect(posts()).toHaveLength(1);
     repliedBy(RUN, 1);
     repliedBy(NEXT_RUN, 0);
+  });
+
+  it("posts no reply once the head has moved from the one reviewed", () => {
+    // The review refuses a moved head as it posts; a reply must too, or it
+    // lands on a pull request whose review never did.
+    writeFileSync(join(fake, "reply.md"), "the reply\n");
+    writeFileSync(join(fake, "head"), `${"b".repeat(40)}\n`);
+    const result = api("reply", "7", HEAD, "101", join(fake, "reply.md"), RUN, "0");
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(`head moved to ${"b".repeat(40)} since ${HEAD} was reviewed; not posting`);
+    expect(posts()).toEqual([]);
+  });
+
+  it("asks for each thread's newest comments whole, and when every comment was made", () => {
+    // The post job tells a thread that moved during the review by its newest
+    // comment, which the first twenty of a long thread do not hold, and the
+    // agent reads that comment's argument before it classifies the finding.
+    api("threads", "7");
+    const query = calls().join("\n");
+    // The control: the call reached GitHub, with the thread query.
+    expect(query).toContain("reviewThreads(first:100)");
+    expect(query).toContain("recent: comments(last:10){ nodes{ author{login} body url databaseId createdAt } }");
+    expect(query).toContain("comments(first:20){ nodes{ author{login} body url databaseId createdAt } }");
   });
 
   it("counts a reply only in the thread it answers", () => {
@@ -353,7 +376,7 @@ describe.runIf(process.platform !== "win32")("posting once per run", () => {
 
   it.each([
     ["post-review", "7", "review.json", "a".repeat(40), "--run"],
-    ["reply", "7", "101", "reply.md", "424242", "--place"],
+    ["reply", "7", "a".repeat(40), "101", "reply.md", "424242", "--place"],
     ["review-ids-at", "7", "a".repeat(40), "--run"],
     ["post-file-comment", "7", "a".repeat(40), "src/a.ts", "reply.md", "424242", "--place"],
   ])("refuses %s given anything but a number for the run or place, and asks GitHub nothing", (command, ...args) => {
