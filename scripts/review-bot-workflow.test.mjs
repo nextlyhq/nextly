@@ -8,9 +8,9 @@
  * Glob is accepted and never consulted, so it reads as a grant and allows
  * nothing: the agent is refused every write, finishes without error, and the
  * post step finds no payload. Only a live, paid review would show that, so the
- * rules are held here. What each rule allows was measured against the Claude
- * Code the pinned action installs (2.1.222); moving the pin is when to measure
- * again.
+ * rules are held here. What each rule allows was measured against Claude Code
+ * 2.1.222, which the action pinned before v1.0.235; the move to v1.0.235
+ * (2.1.283) was made without measuring them again, as decided on 2026-09-30.
  *
  * The file rules are not the only road to a grant. Another input of the
  * action, another flag, another allowlist entry or the reviewed pull request's
@@ -60,8 +60,8 @@ const ROUND_MARKER = ".github/scripts/round-marker.jq";
 const PAYLOAD_DIR = ".nextly-review";
 const PAYLOAD_FILES = ["review.json", "replies.json"];
 
-/** The action revision whose Claude Code (2.1.222) the rules here were measured against. */
-const ACTION = "anthropics/claude-code-action@9db594c7a0e82298c121c18b7f08aa1579ce7341";
+/** The action revision the workflow pins: v1.0.235, which installs Claude Code 2.1.283. */
+const ACTION = "anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790";
 /** The action's inputs as reviewed. One that carries permissions, such as `settings`, would sidestep the allowlist. */
 const INPUTS = ["anthropic_api_key", "claude_args", "github_token", "prompt", "track_progress"];
 /** The agent's flags as reviewed, each set once. A second `--allowedTools`, or a permission mode, widens the grant unseen. */
@@ -260,7 +260,7 @@ describe("where the bot's identity lives", () => {
 });
 
 describe("what else could widen the agent's grant", () => {
-  it("runs the action revision the rules were measured against", () => {
+  it("runs the action revision the workflow pins", () => {
     expect(agent.uses).toBe(ACTION);
   });
 
@@ -282,6 +282,12 @@ describe("what else could widen the agent's grant", () => {
     // Project settings would let the code under review add hooks, permissions
     // or MCP servers to its own reviewer.
     expect(/--setting-sources (\S+)/.exec(agent.with.claude_args)?.[1]).toBe("user");
+  });
+
+  it("caps the turns far above a review's own, since the action fails a finished run whose inflated count passes the cap", () => {
+    // Parallel tool calls count as more turns than they are; this workflow's
+    // runs recorded at most 175 (2026-08-10 to 2026-09-28).
+    expect(Number(/--max-turns (\d+)/.exec(agent.with.claude_args)?.[1])).toBeGreaterThanOrEqual(400);
   });
 
   it("grants exactly the allowlist reviewed", () => {
@@ -389,6 +395,10 @@ describe("what the agent's commands can read", () => {
     // Without it the model key sits in the environment of the gateway and of
     // anything else the agent runs. The action reads it from the step's env.
     expect(agent.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB).toBe("1");
+  });
+
+  it("runs no background subagent, which can end a review before its work is written", () => {
+    expect(agent.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe("1");
   });
 
   it("has the gateway stop the review if a model key reaches it all the same", () => {
@@ -910,7 +920,7 @@ describe.runIf(process.platform !== "win32")("the log step, run as GitHub runs i
     num_turns: 64,
     duration_ms: 803005,
     result: CONTENT,
-    modelUsage: { "glm-5.3[1m]": { inputTokens: 1200, outputTokens: 340, cacheReadInputTokens: 90000, cacheCreationInputTokens: 5000 } },
+    modelUsage: { "glm-5.3[1m]": { inputTokens: 1200, outputTokens: 340, cacheReadInputTokens: 90000, cacheCreationInputTokens: 5000, contextWindow: 1000000 } },
     permission_denials: [
       { tool_name: "Bash", tool_input: { command: `grep -rn ${CONTENT} .` } },
       { tool_name: "Bash", tool_input: { command: `  /usr/bin/grep\t${CONTENT}` } },
@@ -951,7 +961,8 @@ describe.runIf(process.platform !== "win32")("the log step, run as GitHub runs i
     const out = log([init, said("glm-5.3"), { type: "user", message: { content: CONTENT } }, said("glm-5.3"), said("glm-5.3-flash"), result()]);
     expect(out).toContain("asked for: glm-5.3[1m], on Claude Code 2.1.222");
     expect(out).toContain("answered by: glm-5.3 x2, glm-5.3-flash x1");
-    expect(out).toContain("tokens for glm-5.3[1m]: input 1200, output 340, cache read 90000, cache write 5000");
+    // The window the model got: a model ID Claude Code does not know may be held to a smaller one.
+    expect(out).toContain("tokens for glm-5.3[1m]: input 1200, output 340, cache read 90000, cache write 5000, context window 1000000");
     expect(out).toContain("turns: 64, ended: success, error: false, 803 s");
     expect(out).toContain("refused tools: Bash x3, Read x1");
     // The program alone, without its path; a first word that is no program's name is not echoed.
