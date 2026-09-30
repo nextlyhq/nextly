@@ -132,7 +132,8 @@ export function collectPull(fetch, repo, number) {
   // would not do: comparing to it runs from where the branch left main, so
   // every line the branch changed before the review would count.
   const end = pull.head.sha;
-  const compare = once(fetch);
+  // A compare GitHub will not answer is asked once too, not once a finding.
+  const compare = once(path => readOrNull(fetch, path));
   return comments.filter(isFinding).map(comment => ({
     pull: number,
     ...findingTag(comment.body),
@@ -174,7 +175,7 @@ const COMPARE_FILES = 300;
 function linesChanged(fetch, repo, comment, end) {
   const from = firstSet(comment.original_commit_id, comment.commit_id);
   if (from === null || from === end) return false;
-  return comparedFrom(readOrNull(fetch, `repos/${repo}/compare/${from}...${end}`), comment);
+  return comparedFrom(fetch(`repos/${repo}/compare/${from}...${end}`), comment);
 }
 
 /**
