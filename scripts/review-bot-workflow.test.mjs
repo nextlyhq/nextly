@@ -1098,7 +1098,8 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
         "  reviews) echo '[{\"id\": 1}]'; echo '[{\"id\": 2}]' ;;",
         "  threads) echo '{\"data\": {}}' ;;",
         '  diff) printf "diff --git a/x b/x\\n" ;;',
-        "  files) echo '[{\"filename\": \"a\"}]'; echo '[{\"filename\": \"b\"}]' ;;",
+        // A modified file with its patch, and a renamed one GitHub shows no patch for.
+        "  files) echo '[{\"filename\": \"a\", \"status\": \"modified\", \"patch\": \"@@ -1 +1 @@\\n-x\\n+y\"}]'; echo '[{\"filename\": \"b\", \"previous_filename\": \"old-b\", \"status\": \"renamed\"}]' ;;",
         "esac",
         "",
       ].join("\n"),
@@ -1132,7 +1133,34 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
     expect(JSON.parse(readFileSync(join(folder, "reviews.json"), "utf8"))).toEqual([{ id: 1 }, { id: 2 }]);
     expect(JSON.parse(readFileSync(join(folder, "threads.json"), "utf8"))).toEqual({ data: {} });
     expect(readFileSync(join(folder, "diff.patch"), "utf8")).toBe("diff --git a/x b/x\n");
-    expect(JSON.parse(readFileSync(join(folder, "files.json"), "utf8"))).toEqual([{ filename: "a" }, { filename: "b" }]);
+    expect(JSON.parse(readFileSync(join(folder, "files.json"), "utf8"))).toEqual([
+      { filename: "a", status: "modified", patch: "@@ -1 +1 @@\n-x\n+y" },
+      { filename: "b", previous_filename: "old-b", status: "renamed" },
+    ]);
+  });
+
+  it("builds the diff from each file's patch when GitHub refuses the whole diff", () => {
+    // GitHub answers HTTP 406 past 20,000 lines; a PR that large is still reviewed.
+    const { status, output, folder } = prefetch("diff");
+    expect(status, output).toBe(0);
+    expect(output).toContain("GitHub did not give the whole diff, so it is built from each file's patch");
+    expect(readFileSync(join(folder, "diff.patch"), "utf8").split("\n")).toEqual([
+      "diff --git a/a b/a",
+      "--- a/a",
+      "+++ b/a",
+      "@@ -1 +1 @@",
+      "-x",
+      "+y",
+      "diff --git a/old-b b/b",
+      "--- a/old-b",
+      "+++ b/b",
+      "GitHub shows no patch for this file (binary, or too large to show): read it with file-at",
+      "",
+    ]);
+  });
+
+  it("fails the review when the files, which the diff can be built from, cannot be read", () => {
+    expect(prefetch("files").status).not.toBe(0);
   });
 
   it.runIf(process.getuid?.() !== 0)("leaves the folder where the agent can read but not write", () => {

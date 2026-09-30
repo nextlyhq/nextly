@@ -418,8 +418,19 @@ jobs:
           # Paginated answers arrive as one array per page; each file holds one.
           "$gateway" reviews "$NUMBER" | jq -s 'add // []' > "$dir/reviews.json"
           "$gateway" threads "$NUMBER" > "$dir/threads.json"
-          "$gateway" diff "$NUMBER" > "$dir/diff.patch"
           "$gateway" files "$NUMBER" | jq -s 'add // []' > "$dir/files.json"
+          # GitHub refuses a whole diff of more than 20,000 lines (HTTP 406),
+          # and a PR that large is still reviewed: its diff is then built from
+          # each file's patch in the list just read. A file GitHub shows no
+          # patch for says so, for the agent to read with file-at.
+          if ! "$gateway" diff "$NUMBER" > "$dir/diff.patch"; then
+            echo "::notice::GitHub did not give the whole diff, so it is built from each file's patch"
+            jq -r '.[] | "diff --git a/\(.previous_filename // .filename) b/\(.filename)",
+              (if .status == "added" then "--- /dev/null" else "--- a/\(.previous_filename // .filename)" end),
+              (if .status == "removed" then "+++ /dev/null" else "+++ b/\(.filename)" end),
+              (.patch // "GitHub shows no patch for this file (binary, or too large to show): read it with file-at")' \
+              "$dir/files.json" > "$dir/diff.patch"
+          fi
           chmod -R a-w "$dir"
 
       # What the agent's Bash commands need so that Claude Code can keep
