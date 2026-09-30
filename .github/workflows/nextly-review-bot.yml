@@ -14,9 +14,11 @@
 # the bot, which is what lets the merge queue count its review as the standby's
 # when Codex is held up. The agent itself never holds a token that can write,
 # and never shares a runner with one: it runs in the `review` job, which hands
-# on only the two files it wrote, and the `post` job, on a fresh runner that the
-# agent never touched, is the only one that takes the App's identity. So a file
-# the agent overwrites or a process it leaves behind cannot reach the token. A
+# on only the two files it wrote, and only jobs that run no agent take the App's
+# identity: `post`, on a fresh runner that the agent never touched, to post what
+# it wrote, and `acknowledge` and `report`, each with a token for nothing but
+# `issues: write`, to react to the comment that asked. So a file the agent
+# overwrites or a process it leaves behind cannot reach a token. A
 # mention inside a review thread does not start a review, since that event runs
 # the pull request's own copy of this workflow; ask in the pull request's
 # conversation instead.
@@ -83,11 +85,12 @@ jobs:
       contains(github.event.comment.body, '@nextly-bot') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
       !endsWith(github.event.comment.user.login, '[bot]'))
-    # No environment: the App's key is for the `post` job alone.
+    # No environment: the App's key is for the jobs that post or react alone.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Settled before the agent starts, so nothing it does can change them.
     outputs:
+      asked: ${{ steps.ask.outputs.run }}
       run: ${{ steps.fresh.outputs.run }}
       number: ${{ steps.pr.outputs.number }}
       sha: ${{ steps.pr.outputs.sha }}
@@ -202,10 +205,54 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
+  # 👀 on the comment that asked, as soon as the gate takes the request, and 👍
+  # on one a review of the same head already answered: the request shows it was
+  # seen, whether it then waits in the queue or not. A request on a pull request
+  # whose review is running waits for that run first, as every run of this
+  # workflow for it does (the concurrency group above), so its reaction comes
+  # when that run ends: reacting sooner would mean a gate outside that group,
+  # which could not see the running review and would start a second review of
+  # the same head. It reacts as the review bot, with a token minted here for
+  # nothing but `issues: write`, which a reaction on a pull request's
+  # conversation comment needs; the agent never runs in this job, and it checks
+  # out the workflow's own gateway alone. The App's key comes from the
+  # environment that admits `main` only, as for `post`.
+  acknowledge:
+    needs: gate
+    if: github.event_name == 'issue_comment' && needs.gate.outputs.asked == 'true'
+    environment: review-bot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Take the review bot's App identity, to react
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.REVIEW_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
+          permission-issues: write
+
+      - name: React to the request
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          COMMENT: ${{ github.event.comment.id }}
+          RUN: ${{ needs.gate.outputs.run }}
+        run: |
+          set -euo pipefail
+          if [ "$RUN" = true ]; then reaction=eyes; else reaction=+1; fi
+          .github/scripts/review-bot-gh.sh react-request "$COMMENT" "$reaction"
+
   review:
     needs: gate
     if: needs.gate.outputs.run == 'true'
-    # No environment: the App's key is for the `post` job alone.
+    # No environment: the App's key is for the jobs that post or react alone.
     runs-on: ubuntu-latest
     # GLM thinking responses are slow; a deep multi-phase review needs headroom.
     timeout-minutes: 90
@@ -551,7 +598,10 @@ jobs:
       # it was refused, and why a failed run failed. Read with `jq` on the
       # runner, outside the agent's reach, from the action's execution file, a
       # JSON array of the SDK's messages. It prints names and counts only,
-      # never a message's text, and it runs whatever became of the agent. A
+      # never a message's text, and it runs whatever became of the agent. For a
+      # refused `Bash` call it names the program alone, the command's first
+      # word without its path, and only one that looks like a program's name:
+      # the rest of a command can quote the pull request. A
       # failed run's `result` is printed only when Claude Code worded it as an
       # API failure (`API Error: <status> <body>`): other text there can be the
       # model's own.
@@ -573,6 +623,11 @@ jobs:
               (($result.modelUsage // {}) | to_entries[] | "tokens for \(.key): input \(.value.inputTokens), output \(.value.outputTokens), cache read \(.value.cacheReadInputTokens), cache write \(.value.cacheCreationInputTokens)"),
               "turns: \($result.num_turns // "unknown"), ended: \($result.subtype // "without a result"), error: \(if $result.is_error == null then "unknown" else $result.is_error end), \((($result.duration_ms // 0) / 1000) | floor) s",
               "refused tools: \([($result.permission_denials // [])[] | .tool_name] | group_by(.) | map("\(.[0]) x\(length)") | if length > 0 then join(", ") else "none" end)",
+              ([($result.permission_denials // [])[] | select(.tool_name == "Bash")
+                | [(.tool_input.command // "") | tostring | splits("\\s+") | select(. != "")] | (.[0] // "")
+                | split("/") | last
+                | if test("^[A-Za-z0-9._-]{1,40}$") then . else "(other)" end]
+                | if length > 0 then "refused commands: \(group_by(.) | map("\(.[0]) x\(length)") | join(", "))" else empty end),
               (if $result.api_error_status then "API error status: \($result.api_error_status)" else empty end),
               (if $result.is_error == true then
                 (($result.result // "") | tostring) as $text
@@ -606,8 +661,9 @@ jobs:
   # read as untrusted data.
   post:
     needs: [gate, review]
-    # The App's key is here and nowhere else, and the environment admits `main`
-    # only: a dispatch from any other branch is refused before a step runs.
+    # The App's key is here and in the two jobs that react, and the environment
+    # admits `main` only: a dispatch from any other branch is refused before a
+    # step runs.
     environment: review-bot
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -724,12 +780,17 @@ jobs:
               # A comment in the reply's thread, by anyone but this bot, made at
               # or after the prefetch. The same second counts as after: GitHub's
               # times are whole seconds. GraphQL names an App without `[bot]`.
+              # A thread not among those read (the gateway reads the first
+              # hundred) cannot be shown unmoved, so no reply goes to it.
               moved=$(jq -r --arg id "$target" --arg since "$PREFETCHED" '
                 [.data.repository.pullRequest.reviewThreads.nodes[]
-                  | select(any(((.comments.nodes // []) + (.recent.nodes // []))[]; (.databaseId | tostring) == $id))
-                  | (.recent.nodes // [])[]
-                  | select(.author.login != "nextly-review-bot" and .createdAt >= $since)]
-                | length' "$out/threads.json")
+                  | select(any(((.comments.nodes // []) + (.recent.nodes // []))[]; (.databaseId | tostring) == $id))] as $threads
+                | if ($threads | length) == 0 then "unread"
+                  else [$threads[] | (.recent.nodes // [])[] | select(.author.login != "nextly-review-bot" and .createdAt >= $since)] | length end' "$out/threads.json")
+              if [ "$moved" = unread ]; then
+                echo "::notice::reply $((i + 1)) of $count not posted: its thread is not among the threads read"
+                continue
+              fi
               if [ "$moved" != 0 ]; then
                 echo "::notice::reply $((i + 1)) of $count not posted: its thread has a comment made since the review started ($PREFETCHED)"
                 continue
@@ -741,6 +802,11 @@ jobs:
             done
           fi
           "$gateway" post-review "$NUMBER" "$out/inline.json" "$SHA" "$GITHUB_RUN_ID"
+          # 👍 and 👎 on each finding, for readers to rate it; the review stands
+          # without them.
+          if ! "$gateway" seed-reactions "$NUMBER" "$SHA" "$GITHUB_RUN_ID"; then
+            echo "::warning::👍 and 👎 could not be added to the findings; the review stands"
+          fi
 
       # A run that finishes without posting is the failure mode that looks most
       # like success: the job is green, the agent spent its budget, and the pull
@@ -770,3 +836,40 @@ jobs:
             exit 1
           fi
           echo "this run posted a review for $SHA"
+
+  # 🚀 on the comment that asked once the review is posted, and 😕 when the run
+  # did not get that far, so the outcome shows where the request was made. As
+  # the acknowledgement: the review bot's identity, minted for `issues: write`
+  # alone, in a job that runs no agent, with the key from the environment that
+  # admits `main` only.
+  report:
+    needs: [gate, review, post]
+    if: always() && github.event_name == 'issue_comment' && needs.gate.outputs.run == 'true'
+    environment: review-bot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Take the review bot's App identity, to react
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.REVIEW_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
+          permission-issues: write
+
+      - name: React to the request with how the run ended
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          COMMENT: ${{ github.event.comment.id }}
+          POSTED: ${{ needs.post.result }}
+        run: |
+          set -euo pipefail
+          if [ "$POSTED" = success ]; then reaction=rocket; else reaction=confused; fi
+          .github/scripts/review-bot-gh.sh react-request "$COMMENT" "$reaction"

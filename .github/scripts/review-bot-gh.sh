@@ -239,6 +239,47 @@ case "$command" in
     reply=$(jq -n --rawfile body "$4" --arg tag "$tag" --argjson to "$3" '{in_reply_to: $to, body: ($body + "\n\n" + $tag)}')
     exec gh api --method POST "repos/$REPO/pulls/$1/comments" --input - <<<"$reply"
     ;;
+  react-request)
+    # A reaction on the comment that asked for a review: 👀 when the request is
+    # taken, 👍 when a review already answered it, then 🚀 once the review is
+    # posted or 😕 when the run did not get that far. Only these four, on the
+    # one comment named, so nothing a caller passes can choose another
+    # endpoint or reaction. GitHub keeps one reaction of a kind per user, so a
+    # repeat changes nothing.
+    require_number "${1:-}"
+    case "${2:-}" in
+      eyes | +1 | rocket | confused) ;;
+      *) die "expected eyes, +1, rocket or confused, got '${2:-}'" ;;
+    esac
+    exec gh api --method POST "repos/$REPO/issues/comments/$1/reactions" -f content="$2" --silent
+    ;;
+  seed-reactions)
+    # 👍 and 👎 on each finding one run posted at one head, so a reader rates it
+    # in one click: the inline comments of the run's review, and the file-level
+    # comments the run posted, which carry its tag. Its replies are answers,
+    # not findings, and get none. One reaction of a kind per user, so a re-run
+    # adds nothing.
+    require_number "${1:-}"
+    require_sha "${2:-}"
+    require_number "${3:-}"
+    reviews=$(posted_ids "repos/$REPO/pulls/$1/reviews" "$(posted_tag "$3")" commit_id "$2") ||
+      die "could not read the reviews, so cannot tell which findings run $3 posted; none seeded"
+    findings=$(
+      for review in $reviews; do
+        gh api --paginate "repos/$REPO/pulls/$1/reviews/$review/comments?per_page=100" | jq -r '.[].id'
+      done
+      gh api --paginate "repos/$REPO/pulls/$1/comments?per_page=100" |
+        jq -r --arg tag "<!-- nextly-review-bot run:$3 file:" '
+          .[]
+          | select(.user.login == "nextly-review-bot[bot]")
+          | select((.body // "") | split("\n") | map(rtrimstr("\r") | select(length > 0)) | last // "" | startswith($tag))
+          | .id'
+    ) || die "could not read the findings run $3 posted; none seeded"
+    for id in $findings; do
+      gh api --method POST "repos/$REPO/pulls/comments/$id/reactions" -f content=+1 --silent
+      gh api --method POST "repos/$REPO/pulls/comments/$id/reactions" -f content=-1 --silent
+    done
+    ;;
   post-file-comment)
     # A finding no line of the diff shows, posted as a file-level comment on
     # its file so that it opens a thread as an inline one would. GitHub takes
@@ -267,6 +308,6 @@ case "$command" in
     exec gh api --method POST "repos/$REPO/pulls/$1/comments" --input - <<<"$comment"
     ;;
   *)
-    die "usage: review-bot-gh.sh {pr|head-sha|diff|reviews|review-ids-at|review-comments|issue-comments|files|threads|file-at|base-file|delta|line-history|post-review|reply|post-file-comment} ..."
+    die "usage: review-bot-gh.sh {pr|head-sha|diff|reviews|review-ids-at|review-comments|issue-comments|files|threads|file-at|base-file|delta|line-history|post-review|reply|post-file-comment|react-request|seed-reactions} ..."
     ;;
 esac

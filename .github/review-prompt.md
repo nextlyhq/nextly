@@ -112,24 +112,36 @@ Discard failed findings silently. Do not post hedged maybes.
 
 ## Phase 7: Compose comments
 
-```
+````markdown
 **[P1] <imperative title that names the fix, under 80 chars>**
 
-<Trigger: the concrete input/state.> <Mechanism: traced through the real code
-path, with function/file references, including what you checked.> <Consequence:
-what the user or system observably gets.> Fix direction: <one or two sentences,
-the shape of the fix>. <If a written rule is violated: cite it, e.g. an
-AGENTS.md permalink to the rule lines.>
+<One sentence, the consequence first: what the user or system observably gets.>
 
-<!-- nrb v1 id:<round>.<n> sev:<P0|P1|P2|P3> lens:<L1..L10 or A<k>> -->
+- **Trigger:** <the concrete input or state>.
+- **Why:** <the mechanism, traced through the real code path, with `file:line`>.
+- **Fix:** <the shape of the fix, in a sentence or two; a written rule it breaks, cited, e.g. an AGENTS.md permalink to the rule lines>.
+- **Done when:** <the observable check that shows it fixed, such as a test that fails today>.
+
+```suggestion
+<the replacement for exactly the anchored lines, when there is one>
 ```
 
-- End every finding with that hidden line: `<n>` numbers the round's findings from 1, and `lens` names the lens or Appendix A invariant that found it. It goes last, so `**[Pn] title**` stays the first line; the workflow appends its own run tag after it.
+<details>
+<summary>How this was verified</summary>
 
-- One dense paragraph, roughly 400-900 characters. No filler, no praise padding.
+- <what you read and checked, each with `file:line`>
+
+</details>
+
+<!-- nrb v1 id:<round>.<n> sev:<P0|P1|P2|P3> lens:<L1..L10 or A<k>> -->
+````
+
+- End every finding with that hidden line: `<n>` numbers the round's findings from 1, and `lens` names the lens or Appendix A invariant that found it. It goes last, so `**[Pn] title**` stays the first line; the workflow appends its own run tag after it.
+- About 700 visible characters, the folded verification aside. No filler, no praise padding.
+- The severity stays text in the title, with no emoji or colour of its own: the other reviewers' badges on the same PR already use colours for different scales.
 - One comment per distinct issue; for repeats, comment the clearest instance plus "also occurs at `<path>:<line>`".
 - Multi-line anchors (`start_line`/`line`) when the issue spans a range.
-- GitHub ```suggestion blocks only when the fix is under ~6 lines, certain, and replaces exactly the anchored range.
+- A `suggestion` block whenever the fix is under ~6 lines, certain, and replaces exactly the anchored range; otherwise leave the block out. On a finding the workflow has to post at file level, it shows as plain code.
 - State severity honestly; inflating P2s to P1s destroys credibility across rounds.
 
 | Level  | Meaning                                                                                                                                                                                   |
@@ -145,7 +157,7 @@ Everything in ONE review so the PR gets one notification. Write the payload with
 
 Set `commit_id` to `HEAD_SHA`, the commit you actually reviewed. The summary's round marker names the same full `HEAD_SHA`, and the summary carries text besides its markers: the workflow refuses a review whose marker is missing, cut short or names another commit, or whose summary is only markers. The workflow posts only as a comment on that commit, and refuses to post if the branch has moved since, because a review that lands against a commit nobody is looking at any more is worse than no review: it reads as current. Before posting, the workflow checks every inline anchor against the diff: one the diff does not show is posted as a file-level thread on its file instead, so validate anchors in Phase 6 to keep your findings on the lines they are about. A comment on a file the PR does not change could open no thread, so the workflow then posts nothing and the run fails.
 
-A review runs for tens of minutes, and an author can reply to or resolve a thread in that time. So before you write any reply or the **Prior rounds** line, re-read the threads through the gateway (`.github/scripts/review-bot-gh.sh threads <N> > .nextly-review/threads-now.json`, then Read it) and reclassify what changed since the prefetch. The workflow also leaves out a reply to a thread that has a comment made since the prefetch.
+A review runs for tens of minutes, and an author can reply to or resolve a thread in that time. So before you write any reply or the **Earlier findings** section, re-read the threads through the gateway (`.github/scripts/review-bot-gh.sh threads <N> > .nextly-review/threads-now.json`, then Read it) and reclassify what changed since the prefetch. The workflow also leaves out a reply to a thread that has a comment made since the prefetch.
 
 If you cannot finish the review, do NOT write a payload that reads as a finished round. Say plainly in your final message what stopped you, so the run is treated as a failed round rather than a clean one.
 
@@ -170,28 +182,54 @@ If you cannot finish the review, do NOT write a payload that reads as a finished
 - Summary body template:
 
 ```markdown
-## Nextly Review Bot: round <N> - <verdict>
+## Nextly Review Bot: round <N> · <status>
 
 <!-- pr-review-agent round:<N> head:<HEAD_SHA> -->
 <!-- nrb-stats round:<N> fixed:<x> open:<y> withdrawn:<w> disputed:<d> -->
 
-**Verdict:** <one sentence: does the PR do what it claims, and is it safe to
-merge once findings are addressed?>
-**New findings:** <a> P0/P1, <b> P2, <c> P3 (inline below)
-**Prior rounds:** <x> fixed, <y> still open, <w> withdrawn, <d> disputed, <z> superseded
-**File-level:** <n> findings posted as file threads, or "none"
-**Pre-existing (not this PR):** <at most one or two bullets, or "none noted">
-**Could not settle:** <P0/P1-shaped claims that need running code, each with
-the test that would settle it, or "nothing">
+**Verdict:** <at most two sentences and 40 words: does the PR do what it claims, and is it safe to merge once findings are addressed?>
+
+Reviewed head: <HEAD_SHA> <(the changes since <last_sha>, and the whole-PR checks), on a later round>
+
+### New findings
+
+- **[P1]** <title> (`<path>:<line>`)
+
+### Earlier findings
+
+- ✅ fixed: [<title>](<thread url>)
+- 🔁 still open: [<title>](<thread url>)
+- ↩️ withdrawn: [<title>](<thread url>), <what the reply showed>
+- 💬 disputed: [<title>](<thread url>), for a person to settle
+
+**Pre-existing (not this PR):** <at most one or two bullets>
+**Could not settle:** <P0/P1-shaped claims that need running code, each with the test that would settle it>
 **Not examined:** <variants, files or lenses not reached, and why, or "nothing skipped">
-**Checked:** <compact proof of work: guarantees attacked and, for each, the
-variants attacked; dialects considered; invariant sweeps done; what could not
-be settled without running code. 5 lines max.>
+
+<details>
+<summary>What this round checked</summary>
+
+- <at most five bullets: the guarantees attacked and, for each, the variants attacked; dialects considered; invariant sweeps done>
+
+</details>
+
+<details>
+<summary>How to read and answer this review</summary>
+
+- **P0** data loss, a security hole, or a broken build. **P1** breaks the PR's stated guarantee, corrupts persistent state, or a real bug with a concrete trigger. **P2** a parallel case left out (a dialect, a companion table), a missing test, an error-handling gap, or a process rule. **P3** a minor breach of a written rule.
+- Each finding is its own thread. Fix it, or reply with the evidence that it is wrong, then resolve it.
+- To ask for the next round after pushing, comment `@nextly-bot review` on a line of its own.
+
+</details>
 ```
 
-- The `pr-review-agent` marker stays exactly as shown, and the `nrb-stats` line goes directly under it.
+- The heading's `<status>` is one of three, the emoji always with its words: `✅ no new findings`, `⚠️ <n> new findings (<a> P1, <b> P2)` naming only the levels present, or `🛑 P0 open` while any P0 stands.
+- The `pr-review-agent` marker stays exactly as shown, second, and the `nrb-stats` line goes directly under it.
+- Leave out a section with nothing in it: **New findings** on a clean round, **Earlier findings** on round 1, **Pre-existing** and **Could not settle** when empty. **Not examined** is always there.
+- "What this round checked" is folded when there are findings. On a clean round it is the evidence, so show it: drop the `<details>` around it.
+- At most one alert, `> [!CAUTION]` under the verdict, and only for an open P0 or a round that could not cover the whole PR.
 
-- Empty round: same call, empty `comments` array, body states there are no new findings at `<HEAD_SHA>`, which prior findings were re-verified as fixed, and what was checked. Only send it after the full protocol, never after a skim.
+- Empty round: same call, empty `comments` array, heading `✅ no new findings`, and the summary says which prior findings were re-verified as fixed and what was checked. Only send it after the full protocol, never after a skim.
 
 ## Appendix A: Review invariants (a PR must never...)
 

@@ -635,6 +635,116 @@ describe("requests that wait", () => {
   });
 });
 
+describe("the review the protocol has the agent write", () => {
+  const protocol = read(".github/review-prompt.md");
+  /** The summary template, the fenced block under Phase 8 that opens with the heading. */
+  const summary = protocol.slice(protocol.indexOf("## Nextly Review Bot: round <N> · <status>"));
+
+  it("opens with the heading in fixed words, then the round marker, then the stats line", () => {
+    // The control: the template was found.
+    expect(summary.startsWith("## Nextly Review Bot: round <N> · <status>")).toBe(true);
+    const lines = summary.split("\n").filter(line => line.trim() !== "");
+    expect(lines[1]).toBe("<!-- pr-review-agent round:<N> head:<HEAD_SHA> -->");
+    expect(lines[2]).toBe("<!-- nrb-stats round:<N> fixed:<x> open:<y> withdrawn:<w> disputed:<d> -->");
+  });
+
+  it("names the three statuses a heading can carry, each an emoji with its words", () => {
+    for (const status of ["`✅ no new findings`", "`⚠️ <n> new findings (<a> P1, <b> P2)`", "`🛑 P0 open`"]) expect(protocol).toContain(status);
+  });
+
+  it("has each finding end with its hidden tag, and keep its title first", () => {
+    const template = protocol.slice(protocol.indexOf("**[P1] <imperative title"));
+    expect(template.split("\n")[0]).toBe("**[P1] <imperative title that names the fix, under 80 chars>**");
+    for (const part of ["- **Trigger:**", "- **Why:**", "- **Fix:**", "- **Done when:**", "<summary>How this was verified</summary>"]) expect(template).toContain(part);
+    expect(template).toContain("<!-- nrb v1 id:<round>.<n> sev:<P0|P1|P2|P3> lens:<L1..L10 or A<k>> -->\n````");
+  });
+});
+
+describe("the reactions on a request", () => {
+  /** Every job that takes the review bot's App identity, by name. */
+  const identityJobs = Object.entries(jobs).filter(([, job]) => usesOf(job.steps ?? [], "actions/create-github-app-token").length > 0);
+  /** The permissions a job's App token is minted with. */
+  const permissionsOf = job =>
+    Object.fromEntries(
+      Object.entries(usesOf(job.steps, "actions/create-github-app-token")[0].with)
+        .filter(([name]) => name.startsWith("permission-"))
+        .map(([name, level]) => [name.slice("permission-".length), level]),
+    );
+
+  it("takes the App identity only in jobs that run no agent and check out the workflow's own scripts alone", () => {
+    // The control: the post job is one of them.
+    expect(identityJobs.map(([name]) => name).sort()).toEqual(["acknowledge", "post", "report"]);
+    for (const [name, job] of identityJobs) {
+      expect(usesOf(job.steps, "anthropics/claude-code-action"), name).toEqual([]);
+      for (const checkout of usesOf(job.steps, "actions/checkout")) {
+        expect(checkout.with, name).toMatchObject({ ref: "${{ github.sha }}", "persist-credentials": false });
+        expect(checkout.with["sparse-checkout"].split("\n")[0], name).toBe(".github/scripts");
+      }
+    }
+  });
+
+  it("mints each token for what that job does, and nothing else", () => {
+    // A reaction on a conversation comment needs `issues: write`; the post
+    // job writes line comments and reactions on them, which `pull-requests` covers.
+    expect(permissionsOf(jobs.acknowledge)).toEqual({ issues: "write" });
+    expect(permissionsOf(jobs.report)).toEqual({ issues: "write" });
+    expect(permissionsOf(jobs.post)).toEqual({ contents: "read", "pull-requests": "write" });
+  });
+
+  it("takes the App's key, in every job that reacts or posts, from the environment that admits main alone", () => {
+    for (const [name, job] of identityJobs) expect(job.environment, name).toBe("review-bot");
+    // And no job outside that environment names the key.
+    for (const [name, job] of Object.entries(jobs).filter(([, job]) => job.environment !== "review-bot")) expect(JSON.stringify(job), name).not.toContain("REVIEW_BOT_PRIVATE_KEY");
+  });
+
+  it("acknowledges a request the gate took, and reports how every reviewed request ended", () => {
+    expect(jobs.gate.outputs.asked).toBe("${{ steps.ask.outputs.run }}");
+    expect(jobs.acknowledge.needs).toBe("gate");
+    expect(jobs.acknowledge.if).toBe("github.event_name == 'issue_comment' && needs.gate.outputs.asked == 'true'");
+    expect(jobs.report.needs).toEqual(["gate", "review", "post"]);
+    // A failed review has to be reported too, so the job runs whatever became of the others.
+    expect(jobs.report.if).toBe("always() && github.event_name == 'issue_comment' && needs.gate.outputs.run == 'true'");
+  });
+
+  describe.runIf(process.platform !== "win32")("run as GitHub runs them", () => {
+    let dir;
+    beforeAll(() => {
+      dir = mkdtempSync(join(tmpdir(), "review-bot-react-"));
+      mkdirSync(join(dir, ".github", "scripts"), { recursive: true });
+      // The stand-in gateway records how it was called.
+      writeFileSync(join(dir, ".github", "scripts", "review-bot-gh.sh"), '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$FAKE/calls"\n');
+      chmodSync(join(dir, ".github", "scripts", "review-bot-gh.sh"), 0o755);
+    });
+    afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+    /** Runs a job's reacting step with the env it would have, and says what it asked the gateway. */
+    function react(job, env) {
+      rmSync(join(dir, "calls"), { force: true });
+      const step = job.steps.find(step => step.name?.startsWith("React to the request"));
+      writeFileSync(join(dir, "step.sh"), step.run);
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], { cwd: dir, encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir, FAKE: dir, COMMENT: "123", ...env } });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      return readFileSync(join(dir, "calls"), "utf8").trim();
+    }
+
+    it.each([
+      ["true", "eyes"],
+      ["false", "+1"],
+    ])("reacts to a request the gate answered %s with %s", (run, reaction) => {
+      expect(react(jobs.acknowledge, { RUN: run })).toBe(`react-request 123 ${reaction}`);
+    });
+
+    it.each([
+      ["success", "rocket"],
+      ["failure", "confused"],
+      ["skipped", "confused"],
+      ["cancelled", "confused"],
+    ])("reports a post job that ended %s with %s", (posted, reaction) => {
+      expect(react(jobs.report, { POSTED: posted })).toBe(`react-request 123 ${reaction}`);
+    });
+  });
+});
+
 describe("the round marker", () => {
   const SHA = "a".repeat(40);
   /** Whether the module finds the marker for `SHA` in a review body. */
@@ -755,8 +865,9 @@ describe.runIf(process.platform !== "win32")("the log step, run as GitHub runs i
     result: CONTENT,
     modelUsage: { "glm-5.3[1m]": { inputTokens: 1200, outputTokens: 340, cacheReadInputTokens: 90000, cacheCreationInputTokens: 5000 } },
     permission_denials: [
-      { tool_name: "Bash", tool_input: { command: CONTENT } },
-      { tool_name: "Bash", tool_input: { command: CONTENT } },
+      { tool_name: "Bash", tool_input: { command: `grep -rn ${CONTENT} .` } },
+      { tool_name: "Bash", tool_input: { command: `  /usr/bin/grep\t${CONTENT}` } },
+      { tool_name: "Bash", tool_input: { command: `$(${CONTENT})` } },
       { tool_name: "Read", tool_input: { file_path: CONTENT } },
     ],
     ...extra,
@@ -795,7 +906,9 @@ describe.runIf(process.platform !== "win32")("the log step, run as GitHub runs i
     expect(out).toContain("answered by: glm-5.3 x2, glm-5.3-flash x1");
     expect(out).toContain("tokens for glm-5.3[1m]: input 1200, output 340, cache read 90000, cache write 5000");
     expect(out).toContain("turns: 64, ended: success, error: false, 803 s");
-    expect(out).toContain("refused tools: Bash x2, Read x1");
+    expect(out).toContain("refused tools: Bash x3, Read x1");
+    // The program alone, without its path; a first word that is no program's name is not echoed.
+    expect(out).toContain("refused commands: (other) x1, grep x2");
     expect(out).not.toContain(CONTENT);
   });
 
@@ -1036,6 +1149,7 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
         '  review-ids-at) cat "$FAKE/ids-$4" 2>/dev/null || true ;;',
         '  files) cat "$FAKE/files.json" ;;',
         '  threads) cat "$FAKE/threads.json" ;;',
+        '  seed-reactions) [ ! -e "$FAKE/seed-fails" ] ;;',
         '  head-sha) cat "$FAKE/head" 2>/dev/null || printf "%s\\n" "$SHA" ;;',
         "esac",
         "",
@@ -1078,6 +1192,7 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
   function besideTheStandIn(files) {
     writeFileSync(join(dir, "threads.json"), QUIET);
     rmSync(join(dir, "head"), { force: true });
+    rmSync(join(dir, "seed-fails"), { force: true });
     for (const [file, text] of Object.entries(files)) {
       if (text === null) rmSync(join(dir, file), { force: true });
       else writeFileSync(join(dir, file), text);
@@ -1100,7 +1215,7 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
     const { status, output, calls } = runStep("Post the review as the review bot");
     expect(status, output).toBe(0);
     const out = join(dir, "temp", "nextly-review-post");
-    expect(calls).toEqual([`files 7`, `head-sha 7`, `threads 7`, `reply 7 ${SHA} 101 ${out}/reply-0.md ${RUN} 0`, `reply 7 ${SHA} 102 ${out}/reply-1.md ${RUN} 1`, `post-review 7 ${out}/inline.json ${SHA} ${RUN}`]);
+    expect(calls).toEqual([`files 7`, `head-sha 7`, `threads 7`, `reply 7 ${SHA} 101 ${out}/reply-0.md ${RUN} 0`, `reply 7 ${SHA} 102 ${out}/reply-1.md ${RUN} 1`, `post-review 7 ${out}/inline.json ${SHA} ${RUN}`, `seed-reactions 7 ${SHA} ${RUN}`]);
   });
 
   it("posts the review last, after the file-level comments and the replies", () => {
@@ -1108,7 +1223,14 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
     // must not exist before everything else this run posts.
     const { status, output, calls } = runStep("Post the review as the review bot", {}, [{ path: "src/a.ts", line: 40, side: "RIGHT", body: "not shown" }]);
     expect(status, output).toBe(0);
-    expect(calls.map(call => call.split(" ")[0])).toEqual(["files", "head-sha", "post-file-comment", "threads", "reply", "reply", "post-review"]);
+    expect(calls.map(call => call.split(" ")[0])).toEqual(["files", "head-sha", "post-file-comment", "threads", "reply", "reply", "post-review", "seed-reactions"]);
+  });
+
+  it("seeds 👍 and 👎 on the findings after the review, and posts it all the same when that fails", () => {
+    const { status, output, calls } = runStep("Post the review as the review bot", { "seed-fails": "" });
+    expect(status, output).toBe(0);
+    expect(calls.slice(-2).map(call => call.split(" ")[0])).toEqual(["post-review", "seed-reactions"]);
+    expect(output).toContain("👍 and 👎 could not be added to the findings; the review stands");
   });
 
   it("posts nothing once the head has moved, replies included", () => {
@@ -1130,7 +1252,18 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
     const replies = calls.filter(call => call.startsWith("reply "));
     expect(replies).toHaveLength(1);
     expect(replies[0]).toMatch(new RegExp(`^reply 7 ${SHA} 102 `));
-    expect(calls.at(-1)).toMatch(/^post-review 7 /);
+    expect(calls.at(-2)).toMatch(/^post-review 7 /);
+  });
+
+  it("does not reply in a thread that is not among the threads read", () => {
+    // The gateway reads a pull request's first hundred threads; a thread past
+    // them cannot be shown unmoved.
+    const { status, output, calls } = runStep("Post the review as the review bot", { "threads.json": threads(thread(102)) });
+    expect(status, output).toBe(0);
+    expect(output).toContain("reply 1 of 2 not posted: its thread is not among the threads read");
+    const replies = calls.filter(call => call.startsWith("reply "));
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatch(new RegExp(`^reply 7 ${SHA} 102 `));
   });
 
   it("replies in a thread where only this bot has spoken since", () => {
@@ -1145,7 +1278,7 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
     expect(output).toContain("the review threads could not be read, so no reply was posted");
     // Said once, for the reason it is: no thread was read, so none can be said to have moved.
     expect(output).not.toContain("not posted: its thread has a comment");
-    expect(calls.map(call => call.split(" ")[0])).toEqual(["files", "head-sha", "threads", "post-review"]);
+    expect(calls.map(call => call.split(" ")[0])).toEqual(["files", "head-sha", "threads", "post-review", "seed-reactions"]);
   });
 
   it("posts a comment the diff shows inline, and one it does not as a file-level thread", () => {
@@ -1157,7 +1290,7 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
     expect(status, output).toBe(0);
     const out = join(dir, "temp", "nextly-review-post");
     expect(calls.slice(0, 3)).toEqual([`files 7`, `head-sha 7`, `post-file-comment 7 ${SHA} src/a.ts ${out}/file-0.md ${RUN} 0`]);
-    expect(calls.at(-1)).toBe(`post-review 7 ${out}/inline.json ${SHA} ${RUN}`);
+    expect(calls.at(-2)).toBe(`post-review 7 ${out}/inline.json ${SHA} ${RUN}`);
     expect(JSON.parse(readFileSync(join(out, "inline.json"), "utf8")).comments).toEqual([comments[0]]);
     expect(readFileSync(join(out, "file-0.md"), "utf8")).toContain("not shown");
   });
@@ -1193,7 +1326,7 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
     const body = `<!-- pr-review-agent round:2 head:${SHA} -->\n\nNo new findings.\n\n<!-- nextly-review-bot run:1 -->`;
     const { status, output, calls } = runStep("Post the review as the review bot", {}, [], body);
     expect(status, output).toBe(0);
-    expect(calls.at(-1)).toMatch(/^post-review 7 /);
+    expect(calls.at(-2)).toMatch(/^post-review 7 /);
   });
 
   it("confirms with the review this run posted, whichever attempt posted it", () => {
