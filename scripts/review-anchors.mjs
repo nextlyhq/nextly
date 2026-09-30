@@ -115,10 +115,21 @@ function checkComment(comment, shownByPath) {
   if (!shownByPath.has(comment.path)) throw new Error(`a comment is on ${comment.path}, which the diff does not change, so it could open no thread`);
 }
 
+/**
+ * A comment the diff cannot anchor, as a file-level comment on its file. A
+ * `suggestion` block needs a line to replace, and a file-level comment has
+ * none, so it becomes plain code showing the change proposed. The note of which
+ * lines it was about goes under the first line, so the finding's title stays
+ * where a reader, and the collector, look for it.
+ */
 function fileComment(comment) {
-  if (comment.line === undefined) return { path: comment.path, body: comment.body };
+  const body = comment.body.replace(/^(\s*)```suggestion\b/gm, "$1```");
+  if (comment.line === undefined) return { path: comment.path, body };
   const lines = comment.start_line === undefined ? `line ${comment.line}` : `lines ${comment.start_line}–${comment.line}`;
-  return { path: comment.path, body: `_About ${lines}, which the diff does not show inline._\n\n${comment.body}` };
+  const note = `_About ${lines}, which the diff does not show inline._`;
+  const [title, ...rest] = body.split("\n");
+  const after = rest.join("\n").replace(/^\n+/, "");
+  return { path: comment.path, body: after === "" ? `${title}\n\n${note}` : `${title}\n\n${note}\n\n${after}` };
 }
 
 if (isCliEntry(import.meta.url)) {
