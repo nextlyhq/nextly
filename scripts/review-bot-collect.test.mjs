@@ -5,7 +5,7 @@
  * and whether their lines changed before the merge.
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,6 +66,16 @@ describe("the lines a later commit changed", () => {
       [30, 31],
     ]);
     expect(changedRanges(undefined)).toEqual([]);
+  });
+});
+
+describe("an insertion past a replacement", () => {
+  it("records the two old lines it falls between, as any other insertion does", () => {
+    // Line 4 replaced, then a line added before line 5.
+    expect(changedRanges("@@ -3,3 +3,4 @@\n three\n-four\n+four revised\n+new\n five")).toEqual([
+      [4, 4],
+      [4, 5],
+    ]);
   });
 });
 
@@ -162,6 +172,14 @@ describe("one pull request's findings", () => {
     expect(collectPull(fetch, REPO, 7).map(finding => finding.changed)).toEqual([null, null]);
   });
 
+  it("stops, rather than hide it, when GitHub refuses a compare for another reason", () => {
+    const expired = () => {
+      throw new Error("gh: Bad credentials (HTTP 401)");
+    };
+    const { fetch } = github({ ...answers, [`repos/${REPO}/compare/${REVIEWED}...${HEAD}`]: expired });
+    expect(() => collectPull(fetch, REPO, 7)).toThrow(/HTTP 401/);
+  });
+
   it("follows a file the commits after the finding renamed", () => {
     expect(withCompare([{ filename: "src/moved.ts", previous_filename: "src/a.ts", patch: "@@ -5 +5 @@\n-x\n+y" }])[0].changed).toBe(true);
   });
@@ -235,6 +253,7 @@ describe("the command", () => {
 const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 const args = process.argv.slice(2);
+require("node:fs").appendFileSync(join(process.env.FAKE, "calls"), JSON.stringify(args) + "\\n");
 const read = name => JSON.parse(readFileSync(join(process.env.FAKE, name), "utf8"));
 if (args[0] !== "api") process.exit(2);
 if (args[1] === "graphql") process.stdout.write(JSON.stringify(read("threads.json")));
@@ -281,6 +300,22 @@ else if (args[1] === "--paginate") {
     expect(stdout.split("\n")[0]).toBe("1 tagged findings");
     expect(stdout).toContain("| P2 | 1 | 1 | 0 | 0 | 0 | 0 |");
     expect(stdout).toContain("| L5 | 1 | 1 | 0 | 0 | 0 | 0 |");
+  });
+
+  it("asks gh for reads alone", () => {
+    rmSync(join(dir, "calls"), { force: true });
+    expect(run("o/r", "--pr", "7", "--json").status).toBe(0);
+    const calls = readFileSync(join(dir, "calls"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    // The control: it did ask, a GraphQL query among its calls.
+    expect(calls.some(args => args[1] === "graphql")).toBe(true);
+    for (const args of calls) {
+      const shown = JSON.stringify(args);
+      expect(args[0], shown).toBe("api");
+      expect(args.some(arg => /^(--method|-X|--input)$/.test(arg)), shown).toBe(false);
+      // A REST call with fields would be a POST; a GraphQL one is a query, not a mutation.
+      if (args[1] === "graphql") expect(args.find(arg => arg.startsWith("query=")), shown).toMatch(/^query=query\(/);
+      else expect(args.some(arg => /^(-f|-F|--field|--raw-field)$/.test(arg)), shown).toBe(false);
+    }
   });
 
   it("refuses a call that names no pull request", () => {

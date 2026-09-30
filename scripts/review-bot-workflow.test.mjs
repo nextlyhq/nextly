@@ -1095,7 +1095,7 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
         'printf "%s | %s\\n" "$*" "$(cat "$GITHUB_OUTPUT" 2>/dev/null)" >> "$FAKE/calls"',
         `[ "$1" = "${failing}" ] && exit 1`,
         'case "$1" in',
-        '  pr) printf \'{"number": 7, "head": {"sha": "%s"}}\\n\' "${HEAD_NOW:-$SHA}" ;;',
+        '  pr) printf \'{"number": 7, "changed_files": %s, "head": {"sha": "%s"}}\\n\' "${CHANGED_FILES:-4}" "${HEAD_NOW:-$SHA}" ;;',
         // `gh api --paginate` prints each page as an array of its own.
         "  reviews) echo '[{\"id\": 1}]'; echo '[{\"id\": 2}]' ;;",
         "  threads) echo '{\"data\": {}}' ;;",
@@ -1133,7 +1133,7 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
   it("writes what every review reads first, each list one array", () => {
     const { status, output, folder } = prefetch();
     expect(status, output).toBe(0);
-    expect(JSON.parse(readFileSync(join(folder, "pr.json"), "utf8"))).toEqual({ number: 7, head: { sha: SHA } });
+    expect(JSON.parse(readFileSync(join(folder, "pr.json"), "utf8"))).toEqual({ number: 7, changed_files: 4, head: { sha: SHA } });
     expect(JSON.parse(readFileSync(join(folder, "reviews.json"), "utf8"))).toEqual([{ id: 1 }, { id: 2 }]);
     expect(JSON.parse(readFileSync(join(folder, "threads.json"), "utf8"))).toEqual({ data: {} });
     expect(readFileSync(join(folder, "diff.patch"), "utf8")).toBe("diff --git a/x b/x\n");
@@ -1174,12 +1174,14 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
     ]);
   });
 
-  it("fails the review, rather than build a partial diff, when GitHub refuses the diff and lists its most files", () => {
-    const { status, output } = prefetch("diff", SHA, { MANY_FILES: "1" });
+  it("fails the review, rather than build a partial diff, when GitHub refuses the diff and its file list stops short", () => {
+    const { status, output } = prefetch("diff", SHA, { MANY_FILES: "1", CHANGED_FILES: "3500" });
     expect(status).not.toBe(0);
     expect(output).toContain("GitHub gives neither the whole diff nor every changed file (it lists 3,000 at most), so this cannot be reviewed whole");
-    // The control: the same list with the whole diff given is read as usual.
-    expect(prefetch("", SHA, { MANY_FILES: "1" }).status).toBe(0);
+    // The controls: a list of exactly the changed files is whole, and the same
+    // short list with the whole diff given is read as usual.
+    expect(prefetch("diff", SHA, { MANY_FILES: "1", CHANGED_FILES: "3000" }).status).toBe(0);
+    expect(prefetch("", SHA, { MANY_FILES: "1", CHANGED_FILES: "3500" }).status).toBe(0);
   });
 
   it("fails the review when the files, which the diff can be built from, cannot be read", () => {

@@ -51,23 +51,29 @@ function hunkStart(header) {
 
 /**
  * What each kind of patch line does as the patch is read: a header moves to
- * its hunk's first old line; context and a removed line each take one old
- * line, and a removed one records it; a run of added lines not replacing
- * removed ones records the two old lines it falls between.
+ * its hunk's first old line; context takes one old line; a removed line takes
+ * one and records it. An added line pairs with a removed line before it, as
+ * its replacement; past those, a run of added lines is an insertion, and
+ * records the two old lines it falls between.
  */
 const STEPS = {
   "@": (state, line) => {
-    state.old = hunkStart(line);
+    Object.assign(state, { old: hunkStart(line), unpaired: 0, inserting: false });
   },
   " ": state => {
-    state.old += 1;
+    Object.assign(state, { old: state.old + 1, unpaired: 0, inserting: false });
   },
   "-": state => {
     state.ranges.push([state.old, state.old]);
-    state.old += 1;
+    Object.assign(state, { old: state.old + 1, unpaired: state.unpaired + 1, inserting: false });
   },
   "+": state => {
-    if (state.last === " " || state.last === "@") state.ranges.push([state.old - 1, state.old]);
+    if (state.unpaired > 0) {
+      state.unpaired -= 1;
+      return;
+    }
+    if (!state.inserting) state.ranges.push([state.old - 1, state.old]);
+    state.inserting = true;
   },
 };
 
@@ -79,12 +85,11 @@ const STEPS = {
  * a change is not a change.
  */
 export function changedRanges(patch) {
-  const state = { old: 0, last: "@", ranges: [] };
+  const state = { old: 0, unpaired: 0, inserting: false, ranges: [] };
   for (const line of (patch ?? "").split("\n")) {
     const step = STEPS[line[0]];
     if (step === undefined) continue;
     step(state, line);
-    state.last = line[0];
   }
   return state.ranges;
 }
@@ -172,12 +177,18 @@ function linesChanged(fetch, repo, comment, end) {
   return comparedFrom(readOrNull(fetch, `repos/${repo}/compare/${from}...${end}`), comment);
 }
 
-/** What `read` answers for `path`, or null when GitHub will not answer: a commit it no longer keeps, say. */
+/**
+ * What `read` answers for `path`, or null when GitHub says the commits are not
+ * there to compare: HTTP 404, or 422 for commits with nothing in common. Any
+ * other failure, a login that expired or a rate limit, stops the run, so the
+ * report never passes it off as a finding GitHub could not tell.
+ */
 function readOrNull(read, path) {
   try {
     return read(path);
-  } catch {
-    return null;
+  } catch (error) {
+    if (/HTTP (404|422)\b/.test(String(error?.message))) return null;
+    throw error;
   }
 }
 

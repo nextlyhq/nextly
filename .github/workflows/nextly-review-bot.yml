@@ -427,9 +427,10 @@ jobs:
           # each file's patch in the list just read. A file GitHub shows no
           # patch for says so, for the agent to read with file-at.
           if ! "$gateway" diff "$NUMBER" > "$dir/diff.patch"; then
-            # The file list stops at 3,000 files, and a diff built from it
-            # would leave the rest out while a review of it read as whole.
-            if [ "$(jq length "$dir/files.json")" -ge 3000 ]; then
+            # The file list stops at 3,000 files: one shorter than the count of
+            # changed files leaves some out, and a diff built from it would
+            # read as whole.
+            if [ "$(jq length "$dir/files.json")" -lt "$(jq '.changed_files // 0' "$dir/pr.json")" ]; then
               echo "::error::GitHub gives neither the whole diff nor every changed file (it lists 3,000 at most), so this cannot be reviewed whole"
               exit 1
             fi
