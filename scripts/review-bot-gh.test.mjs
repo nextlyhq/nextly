@@ -135,16 +135,23 @@ if (after("--method") === "POST") {
   const input = after("--input");
   const body = input === undefined ? {} : JSON.parse(readFileSync(input === "-" ? 0 : input, "utf8"));
   args.forEach((arg, i) => {
-    if (arg !== "-F") return;
+    if (arg !== "-F" && arg !== "-f") return;
     const [key, ...rest] = args[i + 1].split("=");
     const value = rest.join("=");
-    body[key] = value.startsWith("@") ? readFileSync(value.slice(1), "utf8") : /^\d+$/.test(value) ? Number(value) : value;
+    // -f sends its value as a string, as gh does; -F reads a file or a number.
+    if (arg === "-f") body[key] = value;
+    else body[key] = value.startsWith("@") ? readFileSync(value.slice(1), "utf8") : /^\d+$/.test(value) ? Number(value) : value;
   });
+  body.endpoint = args[args.indexOf("--method") + 2];
   appendFileSync(fake("posted"), JSON.stringify(body) + "\n");
   console.log('{"id": 1}');
 } else if (args[1] === "--paginate") {
   if (existsSync(fake("unreadable"))) process.exit(1);
-  process.stdout.write(readFileSync(fake(basename(args[2].split("?")[0])), "utf8"));
+  // A list the test names by its last two path segments ("11-comments" for a
+  // review's comments) comes first; otherwise the last one names it.
+  const path = args[2].split("?")[0];
+  const specific = fake(path.split("/").slice(-2).join("-"));
+  process.stdout.write(readFileSync(existsSync(specific) ? specific : fake(basename(path)), "utf8"));
 } else if (after("--jq") === ".head.sha") {
   process.stdout.write(readFileSync(fake("head"), "utf8"));
 } else {
@@ -363,6 +370,36 @@ describe.runIf(process.platform !== "win32")("posting once per run", () => {
   it("counts a reply only in the thread it answers", () => {
     listed("comments", [{ ...repliedBy(RUN, 0), in_reply_to_id: 102 }]);
     repliedBy(RUN, 0);
+  });
+
+  it.each(["eyes", "+1", "rocket", "confused"])("reacts %s to the comment that asked, and nowhere else", reaction => {
+    const result = api("react-request", "123", reaction);
+    expect(result.status, result.stderr).toBe(0);
+    expect(posts()).toEqual([{ content: reaction, endpoint: "repos/owner/name/issues/comments/123/reactions" }]);
+  });
+
+  it("reacts with none of the others, and to no comment but a number", () => {
+    for (const [comment, reaction] of [["123", "heart"], ["123", "-1"], ["123", ""], ["12/../3", "eyes"], ["-1", "eyes"]]) {
+      expect(api("react-request", comment, reaction).status, `${comment} ${reaction}`).toBe(2);
+    }
+    expect(posts()).toEqual([]);
+  });
+
+  it("seeds 👍 and 👎 on each finding a run posted, and on none of its replies or another run's", () => {
+    const mine = postedBy(RUN);
+    listed("reviews", [mine, { ...postedBy(NEXT_RUN), id: 12 }]);
+    // The run's review holds two inline findings; the other run's one more.
+    listed("11-comments", [{ id: 31 }, { id: 32 }]);
+    listed("12-comments", [{ id: 99 }]);
+    const tagged = (id, tag, extra = {}) => ({ id, user: { login: BOT }, body: `a finding\n\n<!-- nextly-review-bot run:${tag} -->`, ...extra });
+    listed("comments", [tagged(41, `${RUN} file:0`), tagged(42, `${RUN} reply:0`, { in_reply_to_id: 101 }), tagged(43, `${NEXT_RUN} file:0`), { ...tagged(44, `${RUN} file:1`), user: { login: "someone" } }]);
+    const before = posts().length;
+    const result = api("seed-reactions", "7", HEAD, RUN);
+    expect(result.status, result.stderr).toBe(0);
+    const seeded = posts()
+      .slice(before)
+      .map(post => `${post.endpoint.split("/")[5]} ${post.content}`);
+    expect(seeded).toEqual(["31 +1", "31 -1", "32 +1", "32 -1", "41 +1", "41 -1"]);
   });
 
   it("lists the reviews one run posted at one head, and no other", () => {

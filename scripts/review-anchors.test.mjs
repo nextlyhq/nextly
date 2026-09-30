@@ -103,10 +103,27 @@ describe("the review posted, and its file-level comments", () => {
     const { review: posted, fileComments } = splitComments(review, FILES);
     expect(posted).toEqual({ ...review, comments: [inline] });
     expect(fileComments).toEqual([
-      { path: "src/a.ts", body: "_About line 40, which the diff does not show inline._\n\na line the diff does not show" },
-      { path: "src/a.ts", body: "_About lines 2–10, which the diff does not show inline._\n\na range across hunks" },
+      { path: "src/a.ts", body: "a line the diff does not show\n\n_About line 40, which the diff does not show inline._" },
+      { path: "src/a.ts", body: "a range across hunks\n\n_About lines 2–10, which the diff does not show inline._" },
       { path: "logo.png", body: "about the file" },
     ]);
+  });
+
+  it("keeps a finding's title first, with the note of its lines under it", () => {
+    const review = { body: "summary", comments: [{ path: "src/a.ts", line: 40, body: "**[P2] Pin the list**\n\nThe lead.\n\n- **Fix:** pin it." }] };
+    expect(splitComments(review, FILES).fileComments[0].body).toBe(
+      "**[P2] Pin the list**\n\n_About line 40, which the diff does not show inline._\n\nThe lead.\n\n- **Fix:** pin it.",
+    );
+  });
+
+  it("shows a suggestion on a file-level comment as the code it proposes, with no line to replace", () => {
+    const body = "**[P2] Pin the list**\n\n```suggestion\n    expect(keys).toEqual([\"A\"]);\n```";
+    const review = { body: "summary", comments: [{ path: "src/a.ts", line: 40, body }, { path: "src/a.ts", line: 2, body }] };
+    const { review: posted, fileComments } = splitComments(review, FILES);
+    expect(fileComments[0].body).toContain("```\n    expect(keys)");
+    expect(fileComments[0].body).not.toContain("```suggestion");
+    // The control: one that anchors keeps its suggestion, which GitHub applies to its line.
+    expect(posted.comments[0].body).toContain("```suggestion");
   });
 
   it("posts each comment kept inline with the sides it was checked on, a range's start side included", () => {
