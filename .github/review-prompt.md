@@ -69,7 +69,7 @@ Prior rounds were posted by `nextly-review-bot[bot]`, this bot's own GitHub App,
 
 Never judge a hunk in isolation:
 
-1. Read the diff, `<prefetch>/diff.patch` (for a very large PR, work file by file from `<prefetch>/files.json`, whose `patch` fields you also need for anchor validation), then each changed function whole; read a whole file only when it is short. When GitHub refuses the whole diff (past 20,000 lines), `diff.patch` is built from those per-file patches, and a file GitHub shows no patch for says so: read it with `file-at`.
+1. Read the diff, `<prefetch>/diff.patch` (for a very large PR, work file by file from `<prefetch>/files.json`, whose `patch` fields you also need for anchor validation), then each changed function whole; read a whole file only when it is short. When GitHub refuses the whole diff (past 20,000 lines), `diff.patch` is built from those per-file patches, and a file GitHub shows no patch for says so: read it with `file-at`, or with `base-file` if it was deleted.
 2. Write down the questions the diff raises: does every caller still pass what the changed signature now needs? does this catch still fire when the call before it throws? does the fixture reach the changed branch? Answer each with the narrowest read: the Grep or Glob tool to find the place, then Read of just that range. Every further read should answer a question you can name.
 3. For every changed public signature or export: find every call site and check each was updated. Check `STABILITY.md` and the surface snapshot tests if `ui` or `plugin-sdk` exports changed.
 4. For every changed behavior: find the test that covers it. Missing coverage for changed behavior is P2; missing negative/edge tests for new security or data-integrity logic is P1.

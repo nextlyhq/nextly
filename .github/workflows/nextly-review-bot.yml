@@ -17,8 +17,8 @@
 # on only the two files it wrote, and only jobs that run no agent take the App's
 # identity: `post`, on a fresh runner that the agent never touched, to post what
 # it wrote, and `acknowledge` and `report`, each with a token for nothing but
-# `issues: write`, to react to the comment that asked. So a file the agent
-# overwrites or a process it leaves behind cannot reach a token. A
+# the writes a reaction needs, to react to the comment that asked. So a file
+# the agent overwrites or a process it leaves behind cannot reach a token. A
 # mention inside a review thread does not start a review, since that event runs
 # the pull request's own copy of this workflow; ask in the pull request's
 # conversation instead.
@@ -213,10 +213,12 @@ jobs:
   # when that run ends: reacting sooner would mean a gate outside that group,
   # which could not see the running review and would start a second review of
   # the same head. It reacts as the review bot, with a token minted here for
-  # nothing but `issues: write`, which a reaction on a pull request's
-  # conversation comment needs; the agent never runs in this job, and it checks
-  # out the workflow's own gateway alone. The App's key comes from the
-  # environment that admits `main` only, as for `post`.
+  # `issues: write` and `pull-requests: write` alone: GitHub's tables name the
+  # first for a reaction on a conversation comment, and a comment on a PR,
+  # through the same API, needs the second (measured by `code-hygiene.yml`'s
+  # post step). The agent never runs in this job, and it checks out the
+  # workflow's own gateway alone. The App's key comes from the environment
+  # that admits `main` only, as for `post`.
   acknowledge:
     needs: gate
     if: github.event_name == 'issue_comment' && needs.gate.outputs.asked == 'true'
@@ -238,6 +240,7 @@ jobs:
           client-id: ${{ vars.REVIEW_BOT_CLIENT_ID }}
           private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
           permission-issues: write
+          permission-pull-requests: write
 
       - name: React to the request
         env:
@@ -428,7 +431,7 @@ jobs:
             jq -r '.[] | "diff --git a/\(.previous_filename // .filename) b/\(.filename)",
               (if .status == "added" then "--- /dev/null" else "--- a/\(.previous_filename // .filename)" end),
               (if .status == "removed" then "+++ /dev/null" else "+++ b/\(.filename)" end),
-              (.patch // "GitHub shows no patch for this file (binary, or too large to show): read it with file-at")' \
+              (.patch // if .status == "removed" then "GitHub shows no patch for this deleted file: read it as main has it, with base-file" else "GitHub shows no patch for this file (binary, or too large to show): read it with file-at" end)' \
               "$dir/files.json" > "$dir/diff.patch"
           fi
           chmod -R a-w "$dir"
@@ -852,7 +855,7 @@ jobs:
   # did not get that far, so the outcome shows where the request was made. A
   # gate that failed, on GitHub's answer say, settled nothing and acknowledged
   # nothing, so the job runs then too, and reacts if the comment asked. As the
-  # acknowledgement: the review bot's identity, minted for `issues: write`
+  # acknowledgement: the review bot's identity, minted for the same two writes
   # alone, in a job that runs no agent, with the key from the environment that
   # admits `main` only.
   report:
@@ -876,6 +879,7 @@ jobs:
           client-id: ${{ vars.REVIEW_BOT_CLIENT_ID }}
           private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
           permission-issues: write
+          permission-pull-requests: write
 
       - name: React to the request with how the run ended
         env:

@@ -169,7 +169,16 @@ const COMPARE_FILES = 300;
 function linesChanged(fetch, repo, comment, end) {
   const from = firstSet(comment.original_commit_id, comment.commit_id);
   if (from === null || from === end) return false;
-  return comparedFrom(fetch(`repos/${repo}/compare/${from}...${end}`), comment);
+  return comparedFrom(readOrNull(fetch, `repos/${repo}/compare/${from}...${end}`), comment);
+}
+
+/** What `read` answers for `path`, or null when GitHub will not answer: a commit it no longer keeps, say. */
+function readOrNull(read, path) {
+  try {
+    return read(path);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -180,7 +189,7 @@ function linesChanged(fetch, repo, comment, end) {
  * finding too. Then which lines changed since is not known.
  */
 function comparedFrom(compare, comment) {
-  if (compare.status !== "ahead") return null;
+  if (compare?.status !== "ahead") return null;
   return changedIn(compare.files ?? [], comment);
 }
 

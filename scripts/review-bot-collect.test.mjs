@@ -154,6 +154,14 @@ describe("one pull request's findings", () => {
     expect(collectPull(fetch, REPO, 7).map(finding => finding.n)).toEqual([1]);
   });
 
+  it("cannot tell, rather than stopping, when GitHub will not answer a compare", () => {
+    const refused = () => {
+      throw new Error("gh: No common ancestor between the commits (HTTP 404)");
+    };
+    const { fetch } = github({ ...answers, [`repos/${REPO}/compare/${REVIEWED}...${HEAD}`]: refused });
+    expect(collectPull(fetch, REPO, 7).map(finding => finding.changed)).toEqual([null, null]);
+  });
+
   it("follows a file the commits after the finding renamed", () => {
     expect(withCompare([{ filename: "src/moved.ts", previous_filename: "src/a.ts", patch: "@@ -5 +5 @@\n-x\n+y" }])[0].changed).toBe(true);
   });

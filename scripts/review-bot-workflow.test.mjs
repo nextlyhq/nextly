@@ -721,10 +721,12 @@ describe("the reactions on a request", () => {
   });
 
   it("mints each token for what that job does, and nothing else", () => {
-    // A reaction on a conversation comment needs `issues: write`; the post
+    // A reaction on a conversation comment: GitHub's tables name `issues`, and
+    // a conversation comment on a pull request, through the same API, needs
+    // `pull-requests` as well. The post
     // job writes line comments and reactions on them, which `pull-requests` covers.
-    expect(permissionsOf(jobs.acknowledge)).toEqual({ issues: "write" });
-    expect(permissionsOf(jobs.report)).toEqual({ issues: "write" });
+    expect(permissionsOf(jobs.acknowledge)).toEqual({ issues: "write", "pull-requests": "write" });
+    expect(permissionsOf(jobs.report)).toEqual({ issues: "write", "pull-requests": "write" });
     expect(permissionsOf(jobs.post)).toEqual({ contents: "read", "pull-requests": "write" });
   });
 
@@ -1099,7 +1101,7 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
         "  threads) echo '{\"data\": {}}' ;;",
         '  diff) printf "diff --git a/x b/x\\n" ;;',
         // A modified file with its patch, and a renamed one GitHub shows no patch for.
-        "  files) echo '[{\"filename\": \"a\", \"status\": \"modified\", \"patch\": \"@@ -1 +1 @@\\n-x\\n+y\"}]'; echo '[{\"filename\": \"b\", \"previous_filename\": \"old-b\", \"status\": \"renamed\"}]' ;;",
+        "  files) echo '[{\"filename\": \"a\", \"status\": \"modified\", \"patch\": \"@@ -1 +1 @@\\n-x\\n+y\"}]'; echo '[{\"filename\": \"b\", \"previous_filename\": \"old-b\", \"status\": \"renamed\"}, {\"filename\": \"c\", \"status\": \"removed\"}]' ;;",
         "esac",
         "",
       ].join("\n"),
@@ -1136,6 +1138,7 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
     expect(JSON.parse(readFileSync(join(folder, "files.json"), "utf8"))).toEqual([
       { filename: "a", status: "modified", patch: "@@ -1 +1 @@\n-x\n+y" },
       { filename: "b", previous_filename: "old-b", status: "renamed" },
+      { filename: "c", status: "removed" },
     ]);
   });
 
@@ -1155,6 +1158,10 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
       "--- a/old-b",
       "+++ b/b",
       "GitHub shows no patch for this file (binary, or too large to show): read it with file-at",
+      "diff --git a/c b/c",
+      "--- a/c",
+      "+++ /dev/null",
+      "GitHub shows no patch for this deleted file: read it as main has it, with base-file",
       "",
     ]);
   });
