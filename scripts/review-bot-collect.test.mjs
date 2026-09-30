@@ -102,7 +102,7 @@ describe("one pull request's findings", () => {
     [`repos/${REPO}/pulls/7`]: { merged_at: "2026-09-30T10:00:00Z", merge_commit_sha: MERGE, head: { sha: HEAD } },
     [`repos/${REPO}/pulls/comments/1/reactions`]: [{ user: { login: BOT }, content: "+1" }, { user: { login: BOT }, content: "-1" }, { user: { login: "a" }, content: "+1" }],
     [`repos/${REPO}/pulls/comments/2/reactions`]: [{ user: { login: BOT }, content: "+1" }, { user: { login: BOT }, content: "-1" }],
-    [`repos/${REPO}/compare/${REVIEWED}...${HEAD}`]: { files: [{ filename: "src/a.ts", patch: "@@ -4,3 +4,4 @@\n a\n-b\n+c\n+d" }] },
+    [`repos/${REPO}/compare/${REVIEWED}...${HEAD}`]: { status: "ahead", files: [{ filename: "src/a.ts", patch: "@@ -4,3 +4,4 @@\n a\n-b\n+c\n+d" }] },
     graphql: { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ isResolved: true, comments: { nodes: [{ databaseId: 1 }] } }, { isResolved: false, comments: { nodes: [{ databaseId: 2 }] } }] } } } } },
   };
 
@@ -115,7 +115,7 @@ describe("one pull request's findings", () => {
   });
 
   /** The findings when the compare from the reviewed commit to the last head lists `files`. */
-  const withCompare = files => collectPull(github({ ...answers, [`repos/${REPO}/compare/${REVIEWED}...${HEAD}`]: { files } }).fetch, REPO, 7);
+  const withCompare = (files, status = "ahead") => collectPull(github({ ...answers, [`repos/${REPO}/compare/${REVIEWED}...${HEAD}`]: { status, files } }).fetch, REPO, 7);
 
   it("counts a finding unchanged when the commits after it touched other lines of its file", () => {
     expect(withCompare([{ filename: "src/a.ts", patch: "@@ -40,2 +40,3 @@\n a\n+b\n c" }])[0].changed).toBe(false);
@@ -131,9 +131,17 @@ describe("one pull request's findings", () => {
 
   it("compares to the last head, not to a squash merge's commit, which would count the lines the pull request added before the review", () => {
     // From the reviewed commit, a squash merge's compare runs from where the branch left main.
-    const squash = { files: [{ filename: "src/a.ts", patch: "@@ -4,3 +4,3 @@\n four\n-five\n+five, as the branch wrote it\n six" }] };
-    const { fetch } = github({ ...answers, [`repos/${REPO}/compare/${REVIEWED}...${MERGE}`]: squash, [`repos/${REPO}/compare/${REVIEWED}...${HEAD}`]: { files: [] } });
+    const squash = { status: "ahead", files: [{ filename: "src/a.ts", patch: "@@ -4,3 +4,3 @@\n four\n-five\n+five, as the branch wrote it\n six" }] };
+    const { fetch } = github({ ...answers, [`repos/${REPO}/compare/${REVIEWED}...${MERGE}`]: squash, [`repos/${REPO}/compare/${REVIEWED}...${HEAD}`]: { status: "ahead", files: [] } });
     expect(collectPull(fetch, REPO, 7).map(finding => finding.changed)).toEqual([false, false]);
+  });
+
+  it("cannot tell when the branch was rebased past the finding, since the compare then runs from where they forked", () => {
+    const patch = "@@ -4,3 +4,3 @@\n four\n-five\n+five, as the branch wrote it\n six";
+    const files = [{ filename: "src/a.ts", patch }, { filename: "docs/b.md", patch }];
+    expect(withCompare(files, "diverged").map(finding => finding.changed)).toEqual([null, null]);
+    // The control: the same files from a head that is ahead of the finding.
+    expect(withCompare(files).map(finding => finding.changed)).toEqual([true, true]);
   });
 
   it("follows a file the commits after the finding renamed", () => {
@@ -226,7 +234,7 @@ else if (args[1] === "--paginate") {
       ],
       "reactions.json": [[{ user: { login: BOT }, content: "+1" }], [{ user: { login: "a" }, content: "+1" }]],
       "pull.json": { head: { sha: HEAD } },
-      "compare.json": { files: [] },
+      "compare.json": { status: "ahead", files: [] },
       "threads.json": { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } },
     };
     for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), JSON.stringify(content));

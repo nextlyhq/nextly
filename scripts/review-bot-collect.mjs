@@ -155,7 +155,19 @@ const COMPARE_FILES = 300;
 function linesChanged(fetch, repo, comment, end) {
   const from = firstSet(comment.original_commit_id, comment.commit_id);
   if (from === null || from === end) return false;
-  return changedIn(fetch(`repos/${repo}/compare/${from}...${end}`).files ?? [], comment);
+  return comparedFrom(fetch(`repos/${repo}/compare/${from}...${end}`), comment);
+}
+
+/**
+ * Whether a compare from a finding's commit changed its lines. Only a compare
+ * whose head is ahead of that commit runs from it: once a branch is rebased or
+ * force-pushed past the finding, the two have diverged, and GitHub diffs from
+ * where they forked, which holds every line the branch changed before the
+ * finding too. Then which lines changed since is not known.
+ */
+function comparedFrom(compare, comment) {
+  if (compare.status !== "ahead") return null;
+  return changedIn(compare.files ?? [], comment);
 }
 
 /**
