@@ -43,11 +43,27 @@ describe("readers' ratings", () => {
 });
 
 describe("the lines a later commit changed", () => {
-  it("are each hunk's old-side lines, and the line an addition follows", () => {
-    expect(changedRanges("@@ -3,4 +3,5 @@\n x\n@@ -20 +21 @@\n y\n@@ -30,0 +32,2 @@\n+z")).toEqual([
-      [3, 6],
-      [20, 20],
-      [30, 30],
+  it("are the lines removed or replaced, and the two lines each run of additions falls between, never the context", () => {
+    const patch = [
+      "@@ -2,7 +2,8 @@",
+      " two",
+      " three",
+      "-four",
+      "+four, replaced",
+      " five",
+      "+added after five",
+      " six",
+      " seven",
+      " eight",
+      "\\ No newline at end of file",
+      "@@ -30,0 +32,2 @@",
+      "+added after thirty",
+      "+and another",
+    ].join("\n");
+    expect(changedRanges(patch)).toEqual([
+      [4, 4],
+      [5, 6],
+      [30, 31],
     ]);
     expect(changedRanges(undefined)).toEqual([]);
   });
@@ -102,12 +118,20 @@ describe("one pull request's findings", () => {
   const withCompare = files => collectPull(github({ ...answers, [`repos/${REPO}/compare/${REVIEWED}...${HEAD}`]: { files } }).fetch, REPO, 7);
 
   it("counts a finding unchanged when the commits after it touched other lines of its file", () => {
-    expect(withCompare([{ filename: "src/a.ts", patch: "@@ -40,2 +40,3 @@\n a" }])[0].changed).toBe(false);
+    expect(withCompare([{ filename: "src/a.ts", patch: "@@ -40,2 +40,3 @@\n a\n+b\n c" }])[0].changed).toBe(false);
+  });
+
+  it("counts a finding unchanged when its line is only context around a change nearby", () => {
+    // The finding is on line 5; the hunk spans lines 2 to 8, and adds one after line 7.
+    const patch = "@@ -2,7 +2,8 @@\n two\n three\n four\n five\n six\n seven\n+added\n eight";
+    expect(withCompare([{ filename: "src/a.ts", patch }])[0].changed).toBe(false);
+    // The control: a line added just above it counts.
+    expect(withCompare([{ filename: "src/a.ts", patch: "@@ -2,7 +2,8 @@\n two\n three\n four\n+added\n five\n six" }])[0].changed).toBe(true);
   });
 
   it("compares to the last head, not to a squash merge's commit, which would count the lines the pull request added before the review", () => {
     // From the reviewed commit, a squash merge's compare runs from where the branch left main.
-    const squash = { files: [{ filename: "src/a.ts", patch: "@@ -1,50 +1,60 @@\n a" }] };
+    const squash = { files: [{ filename: "src/a.ts", patch: "@@ -4,3 +4,3 @@\n four\n-five\n+five, as the branch wrote it\n six" }] };
     const { fetch } = github({ ...answers, [`repos/${REPO}/compare/${REVIEWED}...${MERGE}`]: squash, [`repos/${REPO}/compare/${REVIEWED}...${HEAD}`]: { files: [] } });
     expect(collectPull(fetch, REPO, 7).map(finding => finding.changed)).toEqual([false, false]);
   });

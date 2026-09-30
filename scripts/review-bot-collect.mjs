@@ -37,19 +37,56 @@ export function ratings(reactions) {
   return { up: others.filter(reaction => reaction.content === "+1").length, down: others.filter(reaction => reaction.content === "-1").length };
 }
 
+/** A hunk's header: where its old side starts, and how many lines it spans. */
+const HUNK = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/;
+
+/**
+ * The old-side line a hunk's first line is at. A hunk with no old lines names
+ * the line its additions follow, so its first line is the one after.
+ */
+function hunkStart(header) {
+  const [, start, count] = HUNK.exec(header);
+  return count === "0" ? Number(start) + 1 : Number(start);
+}
+
+/**
+ * What each kind of patch line does as the patch is read: a header moves to
+ * its hunk's first old line; context and a removed line each take one old
+ * line, and a removed one records it; a run of added lines not replacing
+ * removed ones records the two old lines it falls between.
+ */
+const STEPS = {
+  "@": (state, line) => {
+    state.old = hunkStart(line);
+  },
+  " ": state => {
+    state.old += 1;
+  },
+  "-": state => {
+    state.ranges.push([state.old, state.old]);
+    state.old += 1;
+  },
+  "+": state => {
+    if (state.last === " " || state.last === "@") state.ranges.push([state.old - 1, state.old]);
+  },
+};
+
 /**
  * The line ranges, on the side of `from`, that a compare from `from` to a later
- * commit changed in one file: each hunk's old-side lines, as `@@ -a,b +c,d @@`
- * gives them. A hunk that only adds lines covers the line it follows.
+ * commit changed in one file: each line it removed or replaced, and for each
+ * run of lines it only added, the two lines that run falls between, so a line
+ * added just above or below a finding counts. The context a patch shows around
+ * a change is not a change.
  */
 export function changedRanges(patch) {
-  const ranges = [];
-  for (const [, start, count] of (patch ?? "").matchAll(/^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/gm)) {
-    const first = Number(start);
-    const length = count === undefined ? 1 : Number(count);
-    ranges.push([first, first + Math.max(length, 1) - 1]);
+  const state = { old: 0, last: "@", ranges: [] };
+  for (const line of (patch ?? "").split("\n")) {
+    const step = STEPS[line[0]];
+    if (step === undefined) continue;
+    step(state, line);
+    state.last = line[0];
   }
-  return ranges;
+  return state.ranges;
 }
 
 /** Whether any of `ranges` overlaps the lines `start` to `end`. */
