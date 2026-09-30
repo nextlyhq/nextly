@@ -189,9 +189,9 @@ jobs:
           # all. Reviews that cannot be read leave the request to run: a second
           # review of a head costs less than a request lost.
           if [ -n "$ASKED" ] && ! answered=$(gh api --paginate "repos/$REPO/pulls/$NUMBER/reviews?per_page=100" |
-              jq -rs --arg sha "$SHA" --arg asked "$ASKED" \
-                '[.[][] | select(.user.login == "nextly-review-bot[bot]" and .commit_id == $sha and .submitted_at > $asked)
-                  | select((.body // "") | test("<!-- pr-review-agent round:[1-9][0-9]* head:" + $sha + " -->")) | .html_url] | first // empty'); then
+              jq -rs -L .github/scripts --arg sha "$SHA" --arg asked "$ASKED" \
+                'include "round-marker"; [.[][] | select(.user.login == "nextly-review-bot[bot]" and .commit_id == $sha and .submitted_at > $asked)
+                  | select(.body | carries_round_marker($sha)) | .html_url] | first // empty'); then
             echo "::warning::could not read the pull request's reviews, so the request runs"
             answered=""
           fi
@@ -684,10 +684,10 @@ jobs:
           # summary would read as a finished round that said nothing, and the
           # merge queue counts the bot's review while Codex is held up. The SHA
           # is hexadecimal, so it is safe inside the pattern.
-          jq -e --arg sha "$SHA" '
-            ("<!-- pr-review-agent round:[1-9][0-9]* head:" + $sha + " -->") as $marker
-            | if type == "object" and (.body | type == "string")
-                and (.body | test($marker))
+          jq -e -L .github/scripts --arg sha "$SHA" '
+            include "round-marker";
+            if type == "object" and (.body | type == "string")
+                and (.body | carries_round_marker($sha))
                 and (.body | gsub("<!--[\\s\\S]*?-->"; "") | test("\\S"))
                 and ((.comments // []) | type == "array")
               then {commit_id: $sha, event: "COMMENT", body, comments: (.comments // [])}

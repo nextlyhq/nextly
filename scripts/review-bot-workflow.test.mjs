@@ -29,6 +29,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { load } from "js-yaml";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -52,6 +53,8 @@ const WHOLE_TREE = "Give the agent the whole pull request";
 const ISOLATION = "Prepare the agent's subprocess isolation";
 /** The step that fetches what every review reads first. */
 const PREFETCH = "Prefetch the pull request for the agent";
+/** The one definition of the round marker, which the gate and the post job both include. */
+const ROUND_MARKER = ".github/scripts/round-marker.jq";
 
 /** The one directory the agent writes to, and the two files it hands on from there. */
 const PAYLOAD_DIR = ".nextly-review";
@@ -632,6 +635,39 @@ describe("requests that wait", () => {
   });
 });
 
+describe("the round marker", () => {
+  const SHA = "a".repeat(40);
+  /** Whether the module finds the marker for `SHA` in a review body. */
+  const carries = body =>
+    execFileSync("jq", ["-n", "-L", join(fileURLToPath(new URL("..", import.meta.url)), ".github", "scripts"), "--argjson", "body", JSON.stringify(body), "--arg", "sha", SHA, 'include "round-marker"; $body | carries_round_marker($sha)'], {
+      encoding: "utf8",
+    }).trim();
+
+  it("is defined once, and both the gate and the post job include that definition", () => {
+    // Two copies agree on the day they are written; a later edit to one would
+    // make the gate and the post job judge a finished round differently.
+    expect(read(".github/workflows/nextly-review-bot.yml")).not.toContain("pr-review-agent round:");
+    for (const step of [gateSteps.find(step => step.id === "fresh"), named(postSteps, "Post the review as the review bot")]) {
+      expect(step.run, step.name).toContain('-L .github/scripts');
+      expect(step.run, step.name).toContain('include "round-marker";');
+      expect(step.run, step.name).toContain("carries_round_marker($sha)");
+    }
+    // Both jobs check out the directory the module lives in.
+    expect(usesOf(gateSteps, "actions/checkout")[0].with["sparse-checkout"]).toBe(".github/scripts");
+    expect(checkedOut()).toContain(".github/scripts");
+  });
+
+  it.each([
+    ["a whole marker for the head", `the summary\n\n<!-- pr-review-agent round:3 head:${SHA} -->`, "true"],
+    ["a marker for another head", `<!-- pr-review-agent round:3 head:${"b".repeat(40)} -->`, "false"],
+    ["round 0", `<!-- pr-review-agent round:0 head:${SHA} -->`, "false"],
+    ["a marker cut short", "<!-- pr-review-agent round:3 head:aaaa", "false"],
+    ["no body", null, "false"],
+  ])("finds %s: %s", (_, body, expected) => {
+    expect(carries(body)).toBe(expected);
+  });
+});
+
 describe.runIf(process.platform !== "win32")("the skip step, run as GitHub runs it", () => {
   const SHA = "b".repeat(40);
   const ASKED = "2026-09-29T17:00:00Z";
@@ -650,6 +686,9 @@ describe.runIf(process.platform !== "win32")("the skip step, run as GitHub runs 
     dir = mkdtempSync(join(tmpdir(), "review-bot-fresh-"));
     const bin = join(dir, "bin");
     mkdirSync(bin);
+    // The step includes the round marker's one definition from the checkout.
+    mkdirSync(join(dir, ".github", "scripts"), { recursive: true });
+    copyFileSync(new URL(`../${ROUND_MARKER}`, import.meta.url), join(dir, ROUND_MARKER));
     writeFileSync(join(dir, "pages"), (pages ?? []).map(page => JSON.stringify(page)).join("\n"));
     // No pages given: GitHub cannot be read.
     writeFileSync(join(bin, "gh"), pages ? '#!/usr/bin/env bash\ncat "$FAKE/pages"\n' : "#!/usr/bin/env bash\necho 'HTTP 502' >&2\nexit 1\n");
@@ -1003,6 +1042,7 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
       ].join("\n"),
     );
     chmodSync(gateway, 0o755);
+    copyFileSync(new URL(`../${ROUND_MARKER}`, import.meta.url), join(dir, ROUND_MARKER));
     // The modules the job checks out beside the gateway, copied as the job has them.
     for (const path of checkedOut().filter(entry => entry.startsWith("scripts/"))) {
       mkdirSync(join(dir, posix.dirname(path)), { recursive: true });
