@@ -37,6 +37,7 @@ const read = path => readFileSync(new URL(`../${path}`, import.meta.url), "utf8"
 const workflow = load(read(".github/workflows/nextly-review-bot.yml"));
 const { jobs } = workflow;
 /** The job the agent runs in, and the job that posts what it wrote. */
+const gateSteps = jobs.gate.steps;
 const steps = jobs.review.steps;
 const postSteps = jobs.post.steps;
 /** Found by the action it runs rather than by its name. */
@@ -49,6 +50,8 @@ const MATERIALIZE = "Materialize the reviewer's tooling outside the tree";
 const WHOLE_TREE = "Give the agent the whole pull request";
 /** The step that readies what Claude Code needs to scrub the agent's commands. */
 const ISOLATION = "Prepare the agent's subprocess isolation";
+/** The step that fetches what every review reads first. */
+const PREFETCH = "Prefetch the pull request for the agent";
 
 /** The one directory the agent writes to, and the two files it hands on from there. */
 const PAYLOAD_DIR = ".nextly-review";
@@ -198,25 +201,30 @@ describe("the payload the agent writes is the one the bot posts", () => {
 
 describe("where the bot's identity lives", () => {
   it("runs the agent in a job that cannot reach the review-bot environment", () => {
-    expect(jobs.review.environment).toBeUndefined();
-    expect(usesOf(steps, "actions/create-github-app-token")).toEqual([]);
-    expect(JSON.stringify(jobs.review)).not.toContain("REVIEW_BOT_PRIVATE_KEY");
+    for (const job of [jobs.gate, jobs.review]) {
+      expect(job.environment).toBeUndefined();
+      expect(usesOf(job.steps, "actions/create-github-app-token")).toEqual([]);
+      expect(JSON.stringify(job)).not.toContain("REVIEW_BOT_PRIVATE_KEY");
+    }
   });
 
   it("runs a dispatch only from the default branch, before the paid agent starts", () => {
     // The environment refuses other branches only once the post job starts; by
-    // then the agent has run, so the review job refuses them itself. It names
-    // the branch by its full ref: a dispatch of a tag called `main` has the
-    // ref name `main` too, and the ref `refs/tags/main`.
-    expect(jobs.review.if).toContain(
+    // then the agent has run, so the gate refuses them itself. It names the
+    // branch by its full ref: a dispatch of a tag called `main` has the ref
+    // name `main` too, and the ref `refs/tags/main`.
+    expect(jobs.gate.if).toContain(
       "(github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||",
     );
-    expect(jobs.review.if).not.toContain("ref_name");
+    expect(jobs.gate.if).not.toContain("ref_name");
+    // The agent's job runs only on the gate's word.
+    expect(jobs.review.needs).toBe("gate");
+    expect(jobs.review.if).toBe("needs.gate.outputs.run == 'true'");
   });
 
   it("takes the App identity only in a job after the agent's, which never runs the agent", () => {
     expect(jobs.post.environment).toBe("review-bot");
-    expect(jobs.post.needs).toBe("review");
+    expect(jobs.post.needs).toEqual(["gate", "review"]);
     expect(usesOf(postSteps, "actions/create-github-app-token")).toHaveLength(1);
     expect(usesOf(postSteps, "anthropics/claude-code-action")).toEqual([]);
   });
@@ -234,7 +242,7 @@ describe("where the bot's identity lives", () => {
     // protocol the agent follows must stay the one the post job's code was
     // written for, or the agent can write a payload that code refuses.
     const revision = usesOf(postSteps, "actions/checkout")[0].with.ref;
-    expect(usesOf(steps, "actions/checkout")[0].with.ref, "the command parser's checkout").toBe(revision);
+    expect(usesOf(gateSteps, "actions/checkout")[0].with.ref, "the command parser's checkout").toBe(revision);
     expect(named(steps, MATERIALIZE).env.REVISION, "the protocol and gateway the agent runs").toBe(revision);
   });
 
@@ -283,50 +291,25 @@ describe("what else could widen the agent's grant", () => {
 });
 
 describe("the checkout the agent reads", () => {
-  const FORGET = "Forget the parser's checkout";
-
-  it("comes from a checkout that is neither filtered nor sparse", () => {
-    // A filtered clone fetches each file when first read, which fails once the
-    // checkout has removed its credentials; a sparse one leaves files out.
-    const head = steps.find(step => step.uses?.startsWith("actions/checkout@") && step.with?.ref === "${{ steps.pr.outputs.sha }}");
-    // The control: the parser's checkout is sparse on purpose, under the key read below.
-    expect(usesOf(steps, "actions/checkout")[0].with["sparse-checkout"]).toBe(".github/scripts");
-    expect(head.with.filter).toBeUndefined();
-    expect(head.with["sparse-checkout"]).toBeUndefined();
-  });
-
-  it("empties the workspace straight before the pull request's checkout, on the same condition", () => {
-    // The parser's sparse checkout is a partial clone, which the pull
-    // request's checkout would otherwise reuse and fetch into on demand.
-    const head = steps.findIndex(step => step.uses?.startsWith("actions/checkout@") && step.with?.ref === "${{ steps.pr.outputs.sha }}");
-    const at = steps.findIndex(step => step.name === FORGET);
-    expect(at).toBe(head - 1);
-    expect(steps[at].if).toBe(steps[head].if);
-  });
-
-  it.runIf(process.platform !== "win32")("leaves nothing behind, a repository and dotfiles included", () => {
-    const dir = mkdtempSync(join(tmpdir(), "review-bot-forget-"));
-    try {
-      const workspace = join(dir, "workspace");
-      mkdirSync(join(workspace, ".git", "objects"), { recursive: true });
-      mkdirSync(join(workspace, ".github", "scripts"), { recursive: true });
-      writeFileSync(join(workspace, ".git", "config"), "[remote \"origin\"]\n\tpromisor = true\n");
-      writeFileSync(join(workspace, ".github", "scripts", "is-review-command.sh"), "\n");
-      writeFileSync(join(workspace, ".hidden"), "\n");
-      writeFileSync(join(workspace, "-dash"), "\n");
-      writeFileSync(join(dir, "step.sh"), named(steps, FORGET).run);
-      const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], { cwd: workspace, encoding: "utf8" });
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(readdirSync(workspace)).toEqual([]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it("is the first on a runner of the review job's own, whole and unfiltered", () => {
+    // On the parser's runner, a checkout after its sparse one reused that
+    // partial clone and fetched each file on first read, which failed once
+    // the checkout had removed its credentials. The review job's runner has
+    // had no checkout before this one.
+    // The control: the gate's checkout is sparse, under the key read below.
+    expect(usesOf(gateSteps, "actions/checkout")[0].with["sparse-checkout"]).toBe(".github/scripts");
+    const checkouts = usesOf(steps, "actions/checkout");
+    expect(checkouts).toHaveLength(1);
+    expect(steps[0]).toBe(checkouts[0]);
+    expect(checkouts[0].with.ref).toBe("${{ needs.gate.outputs.sha }}");
+    expect(checkouts[0].with.filter).toBeUndefined();
+    expect(checkouts[0].with["sparse-checkout"]).toBeUndefined();
   });
 });
 
 describe("the tree the agent reads", () => {
   it("is made whole straight after the pull request's checkout, before anything reads it", () => {
-    const head = steps.findIndex(step => step.uses?.startsWith("actions/checkout@") && step.with?.ref === "${{ steps.pr.outputs.sha }}");
+    const head = steps.findIndex(step => step.uses?.startsWith("actions/checkout@") && step.with?.ref === "${{ needs.gate.outputs.sha }}");
     const at = steps.findIndex(step => step.name === WHOLE_TREE);
     expect(head).toBeGreaterThan(-1);
     expect(at).toBe(head + 1);
@@ -623,15 +606,24 @@ describe("requests that wait", () => {
     expect(jobs.review.concurrency).toEqual({ group: "nextly-review-bot-reviews", queue: "max" });
   });
 
+  it("turns a request down on a runner that holds no place in that queue", () => {
+    // A comment that only mentions the bot, a request the checks refuse and
+    // one already answered end in the gate, so none waits behind another pull
+    // request's review. A job its condition skips takes no place in a group.
+    expect(jobs.gate.concurrency).toBeUndefined();
+    expect(jobs.review.needs).toBe("gate");
+    expect(jobs.review.if).toBe("needs.gate.outputs.run == 'true'");
+  });
+
   it("decides whether a request still needs a review before anything else runs", () => {
-    const fresh = steps.findIndex(step => step.id === "fresh");
-    expect(fresh).toBe(steps.findIndex(step => step.id === "pr") + 1);
-    expect(jobs.review.outputs.run).toBe("${{ steps.fresh.outputs.run }}");
-    // Every later step of the job runs on that answer, the log step whatever
-    // became of the agent.
-    for (const step of steps.slice(fresh + 1)) {
-      expect(step.if.replace(/^always\(\) && /, ""), step.name ?? step.uses).toBe("steps.fresh.outputs.run == 'true'");
-    }
+    const fresh = gateSteps.findIndex(step => step.id === "fresh");
+    expect(fresh).toBe(gateSteps.findIndex(step => step.id === "pr") + 1);
+    expect(fresh, "the gate's last step").toBe(gateSteps.length - 1);
+    expect(jobs.gate.outputs.run).toBe("${{ steps.fresh.outputs.run }}");
+    // The review job runs on that answer, every step of it, the log step
+    // whatever became of the agent; and the post job only after both.
+    for (const step of steps) expect(step.if ?? null, step.name ?? step.uses).toBe(step.name === "Log what the run used" ? "always()" : null);
+    expect(jobs.post.needs).toEqual(["gate", "review"]);
   });
 });
 
@@ -639,7 +631,14 @@ describe.runIf(process.platform !== "win32")("the skip step, run as GitHub runs 
   const SHA = "b".repeat(40);
   const ASKED = "2026-09-29T17:00:00Z";
   let dir;
-  const review = (login, commit, at) => ({ user: { login }, commit_id: commit, submitted_at: at, html_url: `https://example.test/${login}/${at}` });
+  /** A review as GitHub lists it; the bot's own summary carries the round marker for the head it reviewed. */
+  const review = (login, commit, at, body = `the summary\n\n<!-- pr-review-agent round:2 head:${commit} -->\n<!-- nextly-review-bot run:9 -->`) => ({
+    user: { login },
+    commit_id: commit,
+    submitted_at: at,
+    body,
+    html_url: `https://example.test/${login}/${at}`,
+  });
 
   /** Runs the step against a stand-in `gh` whose pages are the ones given. */
   function decide(pages, asked = ASKED) {
@@ -650,7 +649,7 @@ describe.runIf(process.platform !== "win32")("the skip step, run as GitHub runs 
     // No pages given: GitHub cannot be read.
     writeFileSync(join(bin, "gh"), pages ? '#!/usr/bin/env bash\ncat "$FAKE/pages"\n' : "#!/usr/bin/env bash\necho 'HTTP 502' >&2\nexit 1\n");
     chmodSync(join(bin, "gh"), 0o755);
-    writeFileSync(join(dir, "step.sh"), steps.find(step => step.id === "fresh").run);
+    writeFileSync(join(dir, "step.sh"), gateSteps.find(step => step.id === "fresh").run);
     const output = join(dir, "output");
     const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], {
       cwd: dir,
@@ -677,6 +676,11 @@ describe.runIf(process.platform !== "win32")("the skip step, run as GitHub runs 
     ["a review made before the request", review("nextly-review-bot[bot]", SHA, "2026-09-29T16:59:59Z")],
     ["a review of another head", review("nextly-review-bot[bot]", "c".repeat(40), "2026-09-29T17:20:00Z")],
     ["another login's review", review("chatgpt-codex-connector[bot]", SHA, "2026-09-29T17:20:00Z")],
+    // A reply or a file-level comment makes a review of its own, with no body,
+    // and the review itself is posted last: without its marker, the run that
+    // made these may not have finished posting.
+    ["a review with no body, as a reply makes", review("nextly-review-bot[bot]", SHA, "2026-09-29T17:20:00Z", "")],
+    ["a review whose marker names another head", review("nextly-review-bot[bot]", SHA, "2026-09-29T17:20:00Z", `x <!-- pr-review-agent round:2 head:${"c".repeat(40)} -->`)],
   ])("runs a request that only %s would answer", (_, found) => {
     expect(decide([[found]]).run).toBe("run=true");
   });
@@ -737,7 +741,7 @@ describe.runIf(process.platform !== "win32")("the log step, run as GitHub runs i
     const step = named(steps, "Log what the run used");
     expect(step.env.EXECUTION_FILE).toBe("${{ steps.agent.outputs.execution_file }}");
     // A failed run is the one whose log matters most.
-    expect(step.if).toBe("always() && steps.fresh.outputs.run == 'true'");
+    expect(step.if).toBe("always()");
     expect(steps.indexOf(step)).toBe(steps.indexOf(agent) + 1);
   });
 
@@ -784,10 +788,28 @@ describe.runIf(process.platform !== "win32")("the tooling step, run as GitHub ru
   });
   const git = (...args) => execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args], { cwd: dir, encoding: "utf8", env: isolatedEnv() }).trim();
 
-  /** Commits a protocol and a gateway that each name the commit they are read from. */
+  /** The rule files the step copies for the protocol's Phase 1, as a repository holds them. */
+  const RULES = [
+    "AGENTS.md",
+    "ARCHITECTURE.md",
+    ".agents/skills/derived-checks/SKILL.md",
+    ".agents/skills/verifying-merged-work/SKILL.md",
+    ".agents/skills/reviewing-a-pr/SKILL.md",
+    ".agents/skills/release-and-changesets/SKILL.md",
+    "packages/nextly/AGENTS.md",
+    "packages/admin/AGENTS.md",
+    "packages/plugin-sdk/STABILITY.md",
+    "packages/ui/STABILITY.md",
+  ];
+
+  /** Commits a protocol, a gateway and the rule files, each naming the commit it is read from. */
   function commitTooling(name) {
     writeFileSync(join(dir, ".github", "review-prompt.md"), `The protocol at ${name}. Run .github/scripts/review-bot-gh.sh.\n`);
     writeFileSync(join(dir, ".github", "scripts", "review-bot-gh.sh"), `# The gateway at ${name}.\n`);
+    for (const rule of RULES) {
+      mkdirSync(join(dir, posix.dirname(rule)), { recursive: true });
+      writeFileSync(join(dir, rule), `${rule} at ${name}.\n`);
+    }
     git("add", "-A");
     git("commit", "-q", "-m", name);
     return git("rev-parse", "HEAD");
@@ -804,9 +826,16 @@ describe.runIf(process.platform !== "win32")("the tooling step, run as GitHub ru
     commitTooling("the pull request's head");
   });
 
-  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  afterAll(() => {
+    // The rule copies are read-only, and so are the directories that hold them.
+    execFileSync("chmod", ["-R", "u+w", dir]);
+    rmSync(dir, { recursive: true, force: true });
+  });
 
-  it("reads the protocol and the gateway from the event's commit, not the default branch or the checkout", () => {
+  /** Runs the step once, as GitHub would with the event's commit, and says where its tooling went. */
+  let ran;
+  function materialize() {
+    if (ran) return ran;
     const step = named(steps, MATERIALIZE);
     // GitHub fills in each expression before the step runs.
     const values = { "github.sha": commits.event, "runner.temp": join(dir, "temp") };
@@ -815,8 +844,130 @@ describe.runIf(process.platform !== "win32")("the tooling step, run as GitHub ru
     writeFileSync(join(dir, "step.sh"), resolve(step.run));
     const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], { cwd: dir, encoding: "utf8", env: { PATH: process.env.PATH, HOME: dir, ...env } });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(readFileSync(join(env.TOOLING, "review-prompt.md"), "utf8")).toBe(`The protocol at the event's commit. Run ${env.TOOLING}/review-bot-gh.sh.\n`);
-    expect(readFileSync(join(env.TOOLING, "review-bot-gh.sh"), "utf8")).toBe("# The gateway at the event's commit.\n");
+    ran = env.TOOLING;
+    return ran;
+  }
+
+  it("reads the protocol and the gateway from the event's commit, not the default branch or the checkout", () => {
+    const tooling = materialize();
+    expect(readFileSync(join(tooling, "review-prompt.md"), "utf8")).toBe(`The protocol at the event's commit. Run ${tooling}/review-bot-gh.sh.\n`);
+    expect(readFileSync(join(tooling, "review-bot-gh.sh"), "utf8")).toBe("# The gateway at the event's commit.\n");
+  });
+
+  it.runIf(process.getuid?.() !== 0)("gives the agent main's rules from the same commit, read-only", () => {
+    const tooling = materialize();
+    for (const rule of RULES) {
+      expect(readFileSync(join(tooling, "law", rule), "utf8"), rule).toBe(`${rule} at the event's commit.\n`);
+      expect(() => writeFileSync(join(tooling, "law", rule), "rewritten"), `${rule} is read-only`).toThrow(/EACCES/);
+    }
+  });
+
+  it("copies only rule files this repository has, so a review never fails for a missing one", () => {
+    // `git archive` stops at a path the commit lacks, and the review with it.
+    const listed = named(steps, MATERIALIZE)
+      .run.match(/git archive "\$REVISION" ([^|]+)\|/)[1]
+      .replace(/\\\n/g, " ")
+      .split(/\s+/)
+      .filter(Boolean);
+    // The control: the list was read, and holds the root contract.
+    expect(listed).toContain("AGENTS.md");
+    for (const path of listed) expect(existsSync(new URL(`../${path}`, import.meta.url)), path).toBe(true);
+  });
+});
+
+describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub runs it", () => {
+  const SHA = "a".repeat(40);
+  let dir;
+
+  /** Runs the step with a stand-in gateway, which answers as GitHub does and records what the step's output held at each call. */
+  function prefetch(failing = "", headNow = SHA) {
+    dir = mkdtempSync(join(tmpdir(), "review-bot-prefetch-"));
+    const tooling = join(dir, "nextly-review-bot");
+    mkdirSync(tooling);
+    writeFileSync(
+      join(tooling, "review-bot-gh.sh"),
+      [
+        "#!/usr/bin/env bash",
+        'printf "%s | %s\\n" "$*" "$(cat "$GITHUB_OUTPUT" 2>/dev/null)" >> "$FAKE/calls"',
+        `[ "$1" = "${failing}" ] && exit 1`,
+        'case "$1" in',
+        '  pr) printf \'{"number": 7, "head": {"sha": "%s"}}\\n\' "${HEAD_NOW:-$SHA}" ;;',
+        // `gh api --paginate` prints each page as an array of its own.
+        "  reviews) echo '[{\"id\": 1}]'; echo '[{\"id\": 2}]' ;;",
+        "  threads) echo '{\"data\": {}}' ;;",
+        '  diff) printf "diff --git a/x b/x\\n" ;;',
+        "  files) echo '[{\"filename\": \"a\"}]'; echo '[{\"filename\": \"b\"}]' ;;",
+        "esac",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(tooling, "review-bot-gh.sh"), 0o755);
+    const step = named(steps, PREFETCH);
+    const values = { "runner.temp": dir, "needs.gate.outputs.number": "7", "needs.gate.outputs.sha": SHA, "secrets.GITHUB_TOKEN": "read-token" };
+    const resolve = text => text.replace(/\$\{\{ (.+?) \}\}/g, (_, expression) => values[expression]);
+    const env = Object.fromEntries(Object.entries(step.env).map(([name, value]) => [name, resolve(value)]));
+    writeFileSync(join(dir, "step.sh"), step.run);
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, HOME: dir, FAKE: dir, GITHUB_OUTPUT: join(dir, "output"), HEAD_NOW: headNow, ...env },
+    });
+    const calls = existsSync(join(dir, "calls")) ? readFileSync(join(dir, "calls"), "utf8").trim().split("\n") : [];
+    return { status: result.status, output: result.stdout + result.stderr, calls, folder: join(tooling, "pr") };
+  }
+
+  afterEach(() => {
+    if (!dir) return;
+    execFileSync("chmod", ["-R", "u+w", dir]);
+    rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  it("writes what every review reads first, each list one array", () => {
+    const { status, output, folder } = prefetch();
+    expect(status, output).toBe(0);
+    expect(JSON.parse(readFileSync(join(folder, "pr.json"), "utf8"))).toEqual({ number: 7, head: { sha: SHA } });
+    expect(JSON.parse(readFileSync(join(folder, "reviews.json"), "utf8"))).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(JSON.parse(readFileSync(join(folder, "threads.json"), "utf8"))).toEqual({ data: {} });
+    expect(readFileSync(join(folder, "diff.patch"), "utf8")).toBe("diff --git a/x b/x\n");
+    expect(JSON.parse(readFileSync(join(folder, "files.json"), "utf8"))).toEqual([{ filename: "a" }, { filename: "b" }]);
+  });
+
+  it.runIf(process.getuid?.() !== 0)("leaves the folder where the agent can read but not write", () => {
+    const { folder } = prefetch();
+    expect(() => writeFileSync(join(folder, "threads.json"), "rewritten")).toThrow(/EACCES/);
+    expect(() => writeFileSync(join(folder, "new.json"), "added")).toThrow(/EACCES/);
+  });
+
+  it("takes the time before the first read", () => {
+    // A thread that moves while the reads run must still count as moved.
+    const { calls } = prefetch();
+    expect(calls[0]).toMatch(/^pr 7 \| at=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+  });
+
+  it("fails the review when a read fails, rather than leave the agent a part of it", () => {
+    expect(prefetch("threads").status).not.toBe(0);
+  });
+
+  it("stops before the agent starts when the head moved while the request waited", () => {
+    const moved = "b".repeat(40);
+    const { status, output, calls } = prefetch("", moved);
+    expect(status).not.toBe(0);
+    expect(output).toContain(`head moved to ${moved} while the request for ${SHA} waited; ask for another review`);
+    // Nothing more is read once the head is known to have moved.
+    expect(calls.map(call => call.split(" ")[0])).toEqual(["pr"]);
+  });
+
+  it("runs after the tooling it calls and before the agent, which is told where to read", () => {
+    const at = steps.findIndex(step => step.name === PREFETCH);
+    expect(at).toBeGreaterThan(steps.findIndex(step => step.name === MATERIALIZE));
+    expect(at).toBeLessThan(steps.indexOf(agent));
+    expect(steps[at].env.GH_TOKEN).toBe("${{ secrets.GITHUB_TOKEN }}");
+    expect(agent.with.prompt).toContain("${{ runner.temp }}/nextly-review-bot/pr/");
+    expect(agent.with.prompt).toContain("${{ runner.temp }}/nextly-review-bot/law/");
+    // The post job compares threads with the time the reads began.
+    expect(jobs.review.outputs.prefetched).toBe("${{ steps.prefetch.outputs.at }}");
+    expect(named(postSteps, "Post the review as the review bot").env.PREFETCHED).toBe("${{ needs.review.outputs.prefetched }}");
   });
 });
 
@@ -840,7 +991,8 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
         'case "$1" in',
         '  review-ids-at) cat "$FAKE/ids-$4" 2>/dev/null || true ;;',
         '  files) cat "$FAKE/files.json" ;;',
-        '  head-sha) printf "%s\\n" "$SHA" ;;',
+        '  threads) cat "$FAKE/threads.json" ;;',
+        '  head-sha) cat "$FAKE/head" 2>/dev/null || printf "%s\\n" "$SHA" ;;',
         "esac",
         "",
       ].join("\n"),
@@ -866,13 +1018,29 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
 
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-  /** Runs one post-job step as GitHub's bash does, with `files` written beside the stand-in first. */
+  /** When the prefetch read the pull request, as the review job hands it on. */
+  const PREFETCHED = "2026-09-29T20:00:00Z";
+  /** A thread as the gateway's `threads` returns it: the finding, and its newest comments by login and time. */
+  const thread = (finding, ...recent) => ({
+    comments: { nodes: [{ author: { login: "nextly-review-bot" }, databaseId: finding, createdAt: "2026-09-29T19:00:00Z" }] },
+    recent: { nodes: [{ author: { login: "nextly-review-bot" }, databaseId: finding, createdAt: "2026-09-29T19:00:00Z" }, ...recent.map(([login, createdAt]) => ({ author: { login }, databaseId: 1, createdAt }))] },
+  });
+  const threads = (...nodes) => JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } });
+  /** Both findings' threads as the prefetch left them: a person replied before the review started. */
+  const QUIET = threads(thread(101, ["someone", "2026-09-29T19:30:00Z"]), thread(102));
+
+  /** Runs one post-job step as GitHub's bash does, with `files` written beside the stand-in first; `null` removes one. */
   function runStep(name, files = {}, comments = [], body = `the review\n\n<!-- pr-review-agent round:1 head:${SHA} -->`) {
     writeFileSync(join(dir, "payload", "review.json"), JSON.stringify({ body, comments }));
     for (const file of readdirSync(dir).filter(file => file === "calls" || file.startsWith("ids-"))) rmSync(join(dir, file));
-    for (const [file, text] of Object.entries(files)) writeFileSync(join(dir, file), text);
+    writeFileSync(join(dir, "threads.json"), QUIET);
+    rmSync(join(dir, "head"), { force: true });
+    for (const [file, text] of Object.entries(files)) {
+      if (text === null) rmSync(join(dir, file), { force: true });
+      else writeFileSync(join(dir, file), text);
+    }
     writeFileSync(join(dir, "step.sh"), named(postSteps, name).run);
-    const env = { PATH: process.env.PATH, HOME: dir, FAKE: dir, RUNNER_TEMP: join(dir, "temp"), GITHUB_RUN_ID: RUN, NUMBER: "7", SHA, PAYLOAD: join(dir, "payload") };
+    const env = { PATH: process.env.PATH, HOME: dir, FAKE: dir, RUNNER_TEMP: join(dir, "temp"), GITHUB_RUN_ID: RUN, NUMBER: "7", SHA, PREFETCHED, PAYLOAD: join(dir, "payload") };
     const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], { cwd: dir, encoding: "utf8", env });
     const calls = existsSync(join(dir, "calls")) ? readFileSync(join(dir, "calls"), "utf8").trim().split("\n") : [];
     return { status: result.status, output: result.stdout + result.stderr, calls };
@@ -882,7 +1050,52 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
     const { status, output, calls } = runStep("Post the review as the review bot");
     expect(status, output).toBe(0);
     const out = join(dir, "temp", "nextly-review-post");
-    expect(calls).toEqual([`files 7`, `post-review 7 ${out}/inline.json ${SHA} ${RUN}`, `reply 7 101 ${out}/reply-0.md ${RUN} 0`, `reply 7 102 ${out}/reply-1.md ${RUN} 1`]);
+    expect(calls).toEqual([`files 7`, `head-sha 7`, `threads 7`, `reply 7 ${SHA} 101 ${out}/reply-0.md ${RUN} 0`, `reply 7 ${SHA} 102 ${out}/reply-1.md ${RUN} 1`, `post-review 7 ${out}/inline.json ${SHA} ${RUN}`]);
+  });
+
+  it("posts the review last, after the file-level comments and the replies", () => {
+    // A request waiting behind this run counts the review as an answer, so it
+    // must not exist before everything else this run posts.
+    const { status, output, calls } = runStep("Post the review as the review bot", {}, [{ path: "src/a.ts", line: 40, side: "RIGHT", body: "not shown" }]);
+    expect(status, output).toBe(0);
+    expect(calls.map(call => call.split(" ")[0])).toEqual(["files", "head-sha", "post-file-comment", "threads", "reply", "reply", "post-review"]);
+  });
+
+  it("posts nothing once the head has moved, replies included", () => {
+    // The step checks before its first write; each file-level comment, reply and
+    // the review then checks again as it posts (review-bot-gh.sh's reply included).
+    const { status, output, calls } = runStep("Post the review as the review bot", { head: `${"b".repeat(40)}\n` });
+    expect(status).not.toBe(0);
+    expect(output).toContain(`head moved to ${"b".repeat(40)} while reviewing ${SHA}; nothing was posted`);
+    expect(calls).toEqual([`files 7`, `head-sha 7`]);
+  });
+
+  it.each([
+    ["a person commented after the review started", ["someone", "2026-09-29T20:10:00Z"]],
+    ["a person commented in the second the review started", ["someone", PREFETCHED]],
+  ])("does not reply in a thread where %s", (_, recent) => {
+    const { status, output, calls } = runStep("Post the review as the review bot", { "threads.json": threads(thread(101, recent), thread(102)) });
+    expect(status, output).toBe(0);
+    expect(output).toContain(`reply 1 of 2 not posted: its thread has a comment made since the review started (${PREFETCHED})`);
+    const replies = calls.filter(call => call.startsWith("reply "));
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatch(new RegExp(`^reply 7 ${SHA} 102 `));
+    expect(calls.at(-1)).toMatch(/^post-review 7 /);
+  });
+
+  it("replies in a thread where only this bot has spoken since", () => {
+    const { status, output, calls } = runStep("Post the review as the review bot", { "threads.json": threads(thread(101, ["nextly-review-bot", "2026-09-29T20:10:00Z"]), thread(102)) });
+    expect(status, output).toBe(0);
+    expect(calls.filter(call => call.startsWith("reply "))).toHaveLength(2);
+  });
+
+  it("posts no reply, and still the review, when the threads cannot be read", () => {
+    const { status, output, calls } = runStep("Post the review as the review bot", { "threads.json": null });
+    expect(status, output).toBe(0);
+    expect(output).toContain("the review threads could not be read, so no reply was posted");
+    // Said once, for the reason it is: no thread was read, so none can be said to have moved.
+    expect(output).not.toContain("not posted: its thread has a comment");
+    expect(calls.map(call => call.split(" ")[0])).toEqual(["files", "head-sha", "threads", "post-review"]);
   });
 
   it("posts a comment the diff shows inline, and one it does not as a file-level thread", () => {
@@ -893,7 +1106,8 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
     const { status, output, calls } = runStep("Post the review as the review bot", {}, comments);
     expect(status, output).toBe(0);
     const out = join(dir, "temp", "nextly-review-post");
-    expect(calls.slice(0, 3)).toEqual([`files 7`, `post-review 7 ${out}/inline.json ${SHA} ${RUN}`, `post-file-comment 7 ${SHA} src/a.ts ${out}/file-0.md ${RUN} 0`]);
+    expect(calls.slice(0, 3)).toEqual([`files 7`, `head-sha 7`, `post-file-comment 7 ${SHA} src/a.ts ${out}/file-0.md ${RUN} 0`]);
+    expect(calls.at(-1)).toBe(`post-review 7 ${out}/inline.json ${SHA} ${RUN}`);
     expect(JSON.parse(readFileSync(join(out, "inline.json"), "utf8")).comments).toEqual([comments[0]]);
     expect(readFileSync(join(out, "file-0.md"), "utf8")).toContain("not shown");
   });
@@ -929,7 +1143,7 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
     const body = `<!-- pr-review-agent round:2 head:${SHA} -->\n\nNo new findings.\n\n<!-- nextly-review-bot run:1 -->`;
     const { status, output, calls } = runStep("Post the review as the review bot", {}, [], body);
     expect(status, output).toBe(0);
-    expect(calls[1]).toMatch(/^post-review 7 /);
+    expect(calls.at(-1)).toMatch(/^post-review 7 /);
   });
 
   it("confirms with the review this run posted, whichever attempt posted it", () => {

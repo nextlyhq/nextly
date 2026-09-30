@@ -59,7 +59,15 @@ permissions:
   issues: read
 
 jobs:
-  review:
+  # Decides, on a runner of its own, whether a comment asks for a review that
+  # still needs one, and of which pull request at which commit. It holds no
+  # place in the repository-wide queue below: a comment that only mentions the
+  # bot, a request the checks refuse and a request already answered are all
+  # turned down here without waiting behind another pull request's review. A
+  # job its condition skips takes no place in a concurrency group (measured on
+  # 2026-09-29: a skipped job finished while another held the group, and one
+  # that ran waited for it).
+  gate:
     # Gates evaluated before a runner starts: a pull request conversation, the
     # review phrase, a trusted author (a stranger cannot spend the API budget or
     # prompt-inject the agent), and never another bot. A dispatch carries no
@@ -77,18 +85,13 @@ jobs:
       !endsWith(github.event.comment.user.login, '[bot]'))
     # No environment: the App's key is for the `post` job alone.
     runs-on: ubuntu-latest
-    # GLM thinking responses are slow; a deep multi-phase review needs headroom.
-    timeout-minutes: 90
-    # One review at a time in this repository, whatever the pull request, in
-    # the order asked: every review spends the one z.ai account, which answers
-    # concurrent requests past its limit with an error rather than a wait.
-    concurrency:
-      group: nextly-review-bot-reviews
-      queue: max
+    timeout-minutes: 10
     # Settled before the agent starts, so nothing it does can change them.
     outputs:
       run: ${{ steps.fresh.outputs.run }}
+      number: ${{ steps.pr.outputs.number }}
       sha: ${{ steps.pr.outputs.sha }}
+      base: ${{ steps.pr.outputs.base }}
     steps:
       # Only the command parser, from the workflow's own commit, so the decision
       # below can be made before anything is cloned. The full checkout follows
@@ -158,12 +161,18 @@ jobs:
             echo "base=$base"
           } >> "$GITHUB_OUTPUT"
 
-      # A request can wait in the queue behind a running review, and several
-      # can arrive for one head. One that a review of the same head has already
-      # answered, posted after the request was made, is skipped before anything
-      # is cloned, so a burst of requests costs one review. A request made after
-      # that review still runs: asking again on an unchanged head can be
-      # deliberate. A dispatch carries no request time, and always runs.
+      # A request can wait behind a running review of its pull request, and
+      # several can arrive for one head. One that a review of the same head has
+      # already answered, posted after the request was made, is skipped before
+      # anything is cloned, so a burst of requests costs one review. A request
+      # made after that review still runs: asking again on an unchanged head can
+      # be deliberate. A dispatch carries no request time, and always runs.
+      #
+      # Only the review that carries the round marker for this head counts, and
+      # the post job posts it last, after the file-level comments and replies:
+      # its presence means the run finished posting. A reply or a file-level
+      # comment makes a review of its own with no body, and a run that failed
+      # part way leaves no marked review, so neither answers a request.
       - name: Skip a request a review has already answered
         id: fresh
         if: steps.ask.outputs.run == 'true'
@@ -181,7 +190,8 @@ jobs:
           # review of a head costs less than a request lost.
           if [ -n "$ASKED" ] && ! answered=$(gh api --paginate "repos/$REPO/pulls/$NUMBER/reviews?per_page=100" |
               jq -rs --arg sha "$SHA" --arg asked "$ASKED" \
-                '[.[][] | select(.user.login == "nextly-review-bot[bot]" and .commit_id == $sha and .submitted_at > $asked) | .html_url] | first // empty'); then
+                '[.[][] | select(.user.login == "nextly-review-bot[bot]" and .commit_id == $sha and .submitted_at > $asked)
+                  | select((.body // "") | test("<!-- pr-review-agent round:[1-9][0-9]* head:" + $sha + " -->")) | .html_url] | first // empty'); then
             echo "::warning::could not read the pull request's reviews, so the request runs"
             answered=""
           fi
@@ -192,41 +202,51 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # The parser's checkout is sparse, and actions/checkout makes a sparse
-      # checkout a partial clone (`--filter=blob:none`). The checkout below
-      # would reuse that repository: it stays a partial clone, fetching each
-      # file when first read, which fails once that checkout has removed its
-      # credentials, and it keeps the sparse setting (the step after it).
-      # Emptied here, the workspace gets a whole clone of its own (measured on
-      # 2026-09-29: no filter, and every tracked file present).
-      - name: Forget the parser's checkout
-        if: steps.fresh.outputs.run == 'true'
-        run: find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-
+  review:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    # No environment: the App's key is for the `post` job alone.
+    runs-on: ubuntu-latest
+    # GLM thinking responses are slow; a deep multi-phase review needs headroom.
+    timeout-minutes: 90
+    # One review at a time in this repository, whatever the pull request, in
+    # the order asked: every review spends the one z.ai account, which answers
+    # concurrent requests past its limit with an error rather than a wait.
+    concurrency:
+      group: nextly-review-bot-reviews
+      queue: max
+    # When the prefetch read the pull request, which the post job compares a
+    # thread's newest comment with before it replies there.
+    outputs:
+      prefetched: ${{ steps.prefetch.outputs.at }}
+    steps:
+      # The first checkout on this runner, so it makes a whole clone of its
+      # own. With the parser's sparse checkout on the same runner, as before
+      # the gate had a job of its own, this one reused that partial clone
+      # (`--filter=blob:none`) and fetched each file on first read, which
+      # failed once its credentials were gone (2026-09-29).
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        if: steps.fresh.outputs.run == 'true'
         with:
           # The PR head itself, not the merge ref: the review protocol judges
           # the code at a specific head SHA and reports findings against it.
-          ref: ${{ steps.pr.outputs.sha }}
+          ref: ${{ needs.gate.outputs.sha }}
           # Full history: the protocol distinguishes PR-introduced defects from
           # pre-existing ones by comparing against main, and materializing every
           # ref here means the agent never needs a network-capable git command.
           fetch-depth: 0
           persist-credentials: false
 
-      # With the workspace emptied first, the checkout above is not sparse; the
+      # On a runner of its own, the checkout above is not sparse; the
       # sparse-checkout lines below stay as the guard should that ever change.
-      # Without the emptying, the checkout above could not undo the parser's
-      # sparse checkout before it.
-      # That one sets `core.sparseCheckout true` in `.git/config`; this one
-      # turns sparse checkout off in the worktree's own config, then removes the
-      # extension that config lives under, so `.git/config` applies again and
-      # the head is checked out holding `.github/scripts` alone (measured on
-      # 2026-09-28, git 2.53, actions/checkout v7.0.0). The agent reads the
-      # pull request from this tree, so the whole of it goes back, with sparse
-      # checkout turned off where it stays off, and a file still left out fails
-      # the job rather than leaving the agent a tree with holes in it.
+      # A sparse checkout earlier on the same runner, as the parser's once was,
+      # sets `core.sparseCheckout true` in `.git/config`; a later checkout turns
+      # it off in the worktree's own config, then removes the extension that
+      # config lives under, so `.git/config` applies again and the head is
+      # checked out holding `.github/scripts` alone (measured on 2026-09-28,
+      # git 2.53, actions/checkout v7.0.0). The agent reads the pull request
+      # from this tree, so sparse checkout is turned off where it stays off,
+      # and a file left out fails the job rather than leaving the agent a tree
+      # with holes in it.
       #
       # A whole tree also holds what a sparse one kept out, so two kinds of
       # file in it are made safe before the agent starts:
@@ -242,9 +262,8 @@ jobs:
       #   request's own versions as data, through the gateway. The action
       #   restores the root `.claude/` itself; this does not depend on it.
       - name: Give the agent the whole pull request
-        if: steps.fresh.outputs.run == 'true'
         env:
-          BASE: ${{ steps.pr.outputs.base }}
+          BASE: ${{ needs.gate.outputs.base }}
         run: |
           set -euo pipefail
           git config --local core.sparseCheckout false
@@ -284,8 +303,12 @@ jobs:
       # checkout would work for running, but it would also replace the very
       # files under review with the base versions, so a change to the protocol
       # or the gateway would be reviewed as though it had not been made.
+      #
+      # Beside them, in `law/`, go the same commit's copies of the rules the
+      # protocol's Phase 1 reads, read-only. A pull request is judged by the
+      # rules as `main` has them, never by a version it rewrote; the change it
+      # makes to a rule is reviewed as a change.
       - name: Materialize the reviewer's tooling outside the tree
-        if: steps.fresh.outputs.run == 'true'
         env:
           TOOLING: ${{ runner.temp }}/nextly-review-bot
           REVISION: ${{ github.sha }}
@@ -305,11 +328,52 @@ jobs:
           # Every gateway reference must now point at the runnable copy; a stray
           # in-repo path left behind would fail mid-review instead of here.
           ! grep -q "\.github/scripts/review-bot-gh\.sh" "$TOOLING/review-prompt.md"
+          mkdir "$TOOLING/law"
+          git archive "$REVISION" AGENTS.md ARCHITECTURE.md .agents/skills/derived-checks \
+            .agents/skills/verifying-merged-work .agents/skills/reviewing-a-pr \
+            .agents/skills/release-and-changesets packages/nextly/AGENTS.md packages/admin/AGENTS.md \
+            packages/plugin-sdk/STABILITY.md packages/ui/STABILITY.md |
+            tar -x -C "$TOOLING/law"
+          chmod -R a-w "$TOOLING/law"
           # The agent's one writable directory starts empty. A pull request can
           # commit files there, and what this job posts as the bot must only
           # ever be what this run's agent wrote.
           rm -rf .nextly-review
           mkdir .nextly-review
+
+      # What every review reads first, fetched before the agent starts, so its
+      # turns go to reviewing: each fetch through the gateway costs it a call
+      # and a Read. Read-only, and outside the working tree like the tooling.
+      # The time is taken before the first read, so a thread that moves while
+      # these run still counts as moved when the post job compares it. The gate
+      # settled the head before the request waited in the queue; one pushed
+      # since stops the job here, before the agent starts, rather than in the
+      # agent's first phase.
+      - name: Prefetch the pull request for the agent
+        id: prefetch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUMBER: ${{ needs.gate.outputs.number }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          TOOLING: ${{ runner.temp }}/nextly-review-bot
+        run: |
+          set -euo pipefail
+          echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          gateway="$TOOLING/review-bot-gh.sh"
+          dir="$TOOLING/pr"
+          mkdir "$dir"
+          "$gateway" pr "$NUMBER" > "$dir/pr.json"
+          head=$(jq -r .head.sha "$dir/pr.json")
+          if [ "$head" != "$SHA" ]; then
+            echo "::error::head moved to $head while the request for $SHA waited; ask for another review"
+            exit 1
+          fi
+          # Paginated answers arrive as one array per page; each file holds one.
+          "$gateway" reviews "$NUMBER" | jq -s 'add // []' > "$dir/reviews.json"
+          "$gateway" threads "$NUMBER" > "$dir/threads.json"
+          "$gateway" diff "$NUMBER" > "$dir/diff.patch"
+          "$gateway" files "$NUMBER" | jq -s 'add // []' > "$dir/files.json"
+          chmod -R a-w "$dir"
 
       # What the agent's Bash commands need so that Claude Code can keep
       # credentials out of their environment (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
@@ -330,7 +394,6 @@ jobs:
       #
       # A missing piece fails the review rather than running it unscrubbed.
       - name: Prepare the agent's subprocess isolation
-        if: steps.fresh.outputs.run == 'true'
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
@@ -350,7 +413,6 @@ jobs:
 
       - name: Run review agent
         id: agent
-        if: steps.fresh.outputs.run == 'true'
         uses: anthropics/claude-code-action@9db594c7a0e82298c121c18b7f08aa1579ce7341 # v1.0.185
         env:
           # z.ai's Anthropic-compatible endpoint; the key goes in via
@@ -408,9 +470,14 @@ jobs:
 
             Invocation context:
             - Repository: ${{ github.repository }}
-            - PR number: ${{ steps.pr.outputs.number }}
-            - Head SHA this run was triggered for: ${{ steps.pr.outputs.sha }}
-            - Base branch: ${{ steps.pr.outputs.base }}
+            - PR number: ${{ needs.gate.outputs.number }}
+            - Head SHA this run was triggered for: ${{ needs.gate.outputs.sha }}
+            - Base branch: ${{ needs.gate.outputs.base }}
+            - Prefetch folder, read-only, fetched just before you started:
+              ${{ runner.temp }}/nextly-review-bot/pr/ (pr.json, reviews.json,
+              threads.json, diff.patch, files.json)
+            - Law folder, read-only, `main`'s copies of the rules Phase 1
+              reads: ${{ runner.temp }}/nextly-review-bot/law/
 
             Write the review payload to .nextly-review/review.json, and any
             replies to earlier findings to .nextly-review/replies.json (the only
@@ -489,7 +556,7 @@ jobs:
       # API failure (`API Error: <status> <body>`): other text there can be the
       # model's own.
       - name: Log what the run used
-        if: always() && steps.fresh.outputs.run == 'true'
+        if: always()
         env:
           EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
         run: |
@@ -517,15 +584,13 @@ jobs:
       # Said here, where it is plain, rather than left to the upload below to
       # report as a missing file.
       - name: Check the agent wrote a review
-        if: steps.fresh.outputs.run == 'true'
         run: |
-          test -s .nextly-review/review.json || { echo "::error::the agent wrote no review payload for ${{ steps.pr.outputs.sha }}"; exit 1; }
+          test -s .nextly-review/review.json || { echo "::error::the agent wrote no review payload for ${{ needs.gate.outputs.sha }}"; exit 1; }
 
       # Only the two files the agent was asked for travel to the post job; the
       # rest of what it wrote stays on this runner. `.nextly-review` is a hidden
       # directory, which the action leaves out unless told to include it.
       - name: Hand the payload to the post job
-        if: steps.fresh.outputs.run == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: review-payload
@@ -540,8 +605,7 @@ jobs:
   # on. Its tooling comes from the workflow's own commit, and the payload is
   # read as untrusted data.
   post:
-    needs: review
-    if: needs.review.outputs.run == 'true'
+    needs: [gate, review]
     # The App's key is here and nowhere else, and the environment admits `main`
     # only: a dispatch from any other branch is refused before a step runs.
     environment: review-bot
@@ -590,18 +654,23 @@ jobs:
       # inline one does, and one on a file the change does not touch stops the
       # post, since it could open no thread and the merge queue counts the bot's
       # review while Codex is held up. A file-level comment that cannot post
-      # fails the step for the same reason, and a re-run posts it. Replies
-      # follow the review, each body through a file so no comment text passes
-      # through the shell; one that cannot post, to a thread removed since,
-      # say, is reported without undoing the review. Each post names this run,
-      # and a reply or a file-level comment its place, so re-running this job after a
+      # fails the step for the same reason, and a re-run posts it. Replies go
+      # next, each body through a file so no comment text passes through the
+      # shell; one that cannot post, to a thread removed since, say, is reported
+      # and the rest go on. A reply to a thread with a comment newer than the
+      # prefetch is not posted: the agent answered the thread as it stood when
+      # it started, and someone has spoken since. The review itself goes last,
+      # so its presence says the rest is posted: a request waiting behind this
+      # run counts it as an answer only then. Each post names this run, and a
+      # reply or a file-level comment its place, so re-running this job after a
       # failure posts only what the earlier attempt did not: the gateway tags
       # every post with them and skips one this run already made.
       - name: Post the review as the review bot
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-          NUMBER: ${{ github.event.issue.number || inputs.pr }}
-          SHA: ${{ needs.review.outputs.sha }}
+          NUMBER: ${{ needs.gate.outputs.number }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          PREFETCHED: ${{ needs.review.outputs.prefetched }}
           PAYLOAD: ${{ runner.temp }}/payload
         run: |
           set -euo pipefail
@@ -626,7 +695,14 @@ jobs:
               end' "$PAYLOAD/review.json" > "$out/review.json"
           "$gateway" files "$NUMBER" | jq -s 'add // []' > "$out/files.json"
           node scripts/review-anchors.mjs "$out/review.json" "$out/files.json" "$out/inline.json" "$out/file-comments.json"
-          "$gateway" post-review "$NUMBER" "$out/inline.json" "$SHA" "$GITHUB_RUN_ID"
+          # Checked once before the first write, so a head that has moved stops
+          # the step with nothing posted; each file-level comment, reply and the
+          # review check again as they post.
+          current=$("$gateway" head-sha "$NUMBER")
+          if [ "$current" != "$SHA" ]; then
+            echo "::error::head moved to ${current} while reviewing $SHA; nothing was posted, ask for another review"
+            exit 1
+          fi
           count=$(jq length "$out/file-comments.json")
           for i in $(seq 0 $((count - 1))); do
             jq -r ".[$i].body" "$out/file-comments.json" > "$out/file-$i.md"
@@ -637,13 +713,34 @@ jobs:
               echo "::warning::replies.json is not a JSON array, so no reply was posted"
               count=0
             fi
+            # Threads as they stand now. Unreadable, no reply goes: a reply the
+            # next round can make costs less than one that talks past a person.
+            if [ "$count" -gt 0 ] && ! "$gateway" threads "$NUMBER" > "$out/threads.json"; then
+              echo "::warning::the review threads could not be read, so no reply was posted"
+              count=0
+            fi
             for i in $(seq 0 $((count - 1))); do
+              target=$(jq -r ".[$i].in_reply_to" "$PAYLOAD/replies.json")
+              # A comment in the reply's thread, by anyone but this bot, made at
+              # or after the prefetch. The same second counts as after: GitHub's
+              # times are whole seconds. GraphQL names an App without `[bot]`.
+              moved=$(jq -r --arg id "$target" --arg since "$PREFETCHED" '
+                [.data.repository.pullRequest.reviewThreads.nodes[]
+                  | select(any(((.comments.nodes // []) + (.recent.nodes // []))[]; (.databaseId | tostring) == $id))
+                  | (.recent.nodes // [])[]
+                  | select(.author.login != "nextly-review-bot" and .createdAt >= $since)]
+                | length' "$out/threads.json")
+              if [ "$moved" != 0 ]; then
+                echo "::notice::reply $((i + 1)) of $count not posted: its thread has a comment made since the review started ($PREFETCHED)"
+                continue
+              fi
               if ! { jq -er ".[$i].body" "$PAYLOAD/replies.json" > "$out/reply-$i.md" &&
-                "$gateway" reply "$NUMBER" "$(jq -r ".[$i].in_reply_to" "$PAYLOAD/replies.json")" "$out/reply-$i.md" "$GITHUB_RUN_ID" "$i"; }; then
+                "$gateway" reply "$NUMBER" "$SHA" "$target" "$out/reply-$i.md" "$GITHUB_RUN_ID" "$i"; }; then
                 echo "::warning::reply $((i + 1)) of $count could not be posted; the review stands"
               fi
             done
           fi
+          "$gateway" post-review "$NUMBER" "$out/inline.json" "$SHA" "$GITHUB_RUN_ID"
 
       # A run that finishes without posting is the failure mode that looks most
       # like success: the job is green, the agent spent its budget, and the pull
@@ -651,8 +748,8 @@ jobs:
       - name: Confirm this run posted a review
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NUMBER: ${{ github.event.issue.number || inputs.pr }}
-          SHA: ${{ needs.review.outputs.sha }}
+          NUMBER: ${{ needs.gate.outputs.number }}
+          SHA: ${{ needs.gate.outputs.sha }}
         run: |
           set -euo pipefail
           # A review this run did not post proves nothing: repeating the request

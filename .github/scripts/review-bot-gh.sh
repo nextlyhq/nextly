@@ -116,7 +116,11 @@ case "$command" in
     ;;
   threads)
     # Review threads carry the resolution state the multi-round protocol needs,
-    # and that state is only exposed through GraphQL.
+    # and that state is only exposed through GraphQL. `comments` holds a
+    # thread's first twenty, the finding and the replies to it; `recent` its
+    # last ten, whole, so the newest reply is there to read however long the
+    # thread, and the post job can tell a thread that moved while the agent
+    # worked.
     require_number "${1:-}"
     exec gh api graphql -F owner="$OWNER" -F name="$NAME" -F number="$1" -f query='
       query($owner:String!,$name:String!,$number:Int!){
@@ -125,7 +129,8 @@ case "$command" in
             reviewThreads(first:100){
               nodes{
                 isResolved isOutdated path line
-                comments(first:20){ nodes{ author{login} body url databaseId } }
+                comments(first:20){ nodes{ author{login} body url databaseId createdAt } }
+                recent: comments(last:10){ nodes{ author{login} body url databaseId createdAt } }
               }
             }
           }
@@ -213,20 +218,25 @@ case "$command" in
   reply)
     # Reply inside an existing review thread; the body comes from a file so no
     # comment text has to survive shell quoting. It is tagged with the run and
-    # its place in the payload, and posted once per run as a review is.
+    # its place in the payload, and posted once per run as a review is. Like
+    # a review, it answers the head reviewed, and none once the head has moved:
+    # it would argue about code nobody is looking at any more.
     require_number "${1:-}"
-    require_number "${2:-}"
-    require_file "${3:-}"
-    require_number "${4:-}"
+    require_sha "${2:-}"
+    require_number "${3:-}"
+    require_file "${4:-}"
     require_number "${5:-}"
-    tag=$(posted_tag "$4" "reply:$5")
-    posted=$(posted_ids "repos/$REPO/pulls/$1/comments" "$tag" in_reply_to_id "$2") ||
-      die "could not read the review comments, so cannot tell whether run $4 already replied; not posting"
+    require_number "${6:-}"
+    current=$(gh api "repos/$REPO/pulls/$1" --jq '.head.sha')
+    [ "$current" = "$2" ] || die "head moved to $current since $2 was reviewed; not posting"
+    tag=$(posted_tag "$5" "reply:$6")
+    posted=$(posted_ids "repos/$REPO/pulls/$1/comments" "$tag" in_reply_to_id "$3") ||
+      die "could not read the review comments, so cannot tell whether run $5 already replied; not posting"
     if [ -n "$posted" ]; then
-      echo "review-bot-gh: run $4 already posted reply $5 as comment ${posted//$'\n'/, }; not posting it again" >&2
+      echo "review-bot-gh: run $5 already posted reply $6 as comment ${posted//$'\n'/, }; not posting it again" >&2
       exit 0
     fi
-    reply=$(jq -n --rawfile body "$3" --arg tag "$tag" --argjson to "$2" '{in_reply_to: $to, body: ($body + "\n\n" + $tag)}')
+    reply=$(jq -n --rawfile body "$4" --arg tag "$tag" --argjson to "$3" '{in_reply_to: $to, body: ($body + "\n\n" + $tag)}')
     exec gh api --method POST "repos/$REPO/pulls/$1/comments" --input - <<<"$reply"
     ;;
   post-file-comment)
