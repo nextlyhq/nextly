@@ -32,10 +32,13 @@ const PASSWORD = "Str0ng-P@ssw0rd!";
 /** Captured at init so the test can call ctx.auth exactly as a route would. */
 let captured: PluginContext | undefined;
 
+// A plugin that finishes logins declares it, and records them under a
+// strategy carrying its own slug: completeLogin refuses either one missing.
 const capturingPlugin: PluginDefinition = {
   name: "@test/capture-ctx",
   version: "0.0.0",
   nextly: ">=0.0.1",
+  capabilities: { auth: { login: true } },
   init: ctx => {
     captured = ctx;
   },
@@ -46,6 +49,7 @@ function twoFactorPlugin(email: string): PluginDefinition {
     name: "@test/complete-login-2fa",
     version: "0.0.0",
     nextly: ">=0.0.1",
+    capabilities: { auth: { login: true } },
     init: ctx => {
       captured = ctx;
     },
@@ -130,7 +134,7 @@ describe("ctx.auth.completeLogin, end to end", () => {
 
     const res = await ctx().auth.completeLogin(userId, {
       request: callbackRequest,
-      strategy: "oauth-test",
+      strategy: "test-capture-ctx:oauth",
       next: "/admin/collections",
     });
 
@@ -144,7 +148,7 @@ describe("ctx.auth.completeLogin, end to end", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].actorUserId).toBe(userId);
     expect(JSON.parse(rows[0].metadata ?? "{}")).toMatchObject({
-      strategy: "oauth-test",
+      strategy: "test-capture-ctx:oauth",
     });
   });
 
@@ -154,7 +158,7 @@ describe("ctx.auth.completeLogin, end to end", () => {
 
     const started = await ctx().auth.completeLogin(userId, {
       request: callbackRequest,
-      strategy: "oauth-test",
+      strategy: "test-complete-login-2fa:oauth",
       next: "/admin/collections",
     });
 
@@ -199,7 +203,7 @@ describe("ctx.auth.completeLogin, end to end", () => {
     const rows = await auditRows(t, "login-succeeded");
     expect(rows).toHaveLength(1);
     expect(JSON.parse(rows[0].metadata ?? "{}")).toMatchObject({
-      strategy: "oauth-test",
+      strategy: "test-complete-login-2fa:oauth",
     });
   });
 
@@ -212,7 +216,7 @@ describe("ctx.auth.completeLogin, end to end", () => {
 
     const res = await ctx().auth.completeLogin(userId, {
       request: callbackRequest,
-      strategy: "oauth-test",
+      strategy: "test-capture-ctx:oauth",
     });
 
     expect(res.headers.get("Location")).toBe(
@@ -230,7 +234,7 @@ describe("ctx.auth.completeLogin, end to end", () => {
     const userId = await makeUser(t, "whoami@example.com");
     const login = await ctx().auth.completeLogin(userId, {
       request: callbackRequest,
-      strategy: "oauth-test",
+      strategy: "test-capture-ctx:oauth",
     });
 
     const withSession = new Request(`${ORIGIN}/admin/api/plugins/test/me`, {

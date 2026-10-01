@@ -5,7 +5,7 @@
 // right for an external login: the account must be usable at once, and a login
 // provider must never be able to mint the first administrator.
 
-import { eq } from "drizzle-orm";
+import { eq, getTableName, is, Table } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../../database/index";
@@ -592,7 +592,6 @@ describe.each(getConfiguredTestDialects())(
       await seedFirstUser(t);
       const editor = await makeRole(t, "editor");
       const before = await countUsers(t);
-      const { roleInherits } = getDialectTables();
 
       const users = services(t).users;
       const mutation = (
@@ -622,7 +621,13 @@ describe.each(getConfiguredTestDialects())(
                   const member = Reflect.get(b, p) as unknown;
                   if (p === "from") {
                     return (table: unknown) => {
-                      if (table === roleInherits) {
+                      // By SQL name, not object identity: the RBAC reader
+                      // caches its own dialect bundle per process, which
+                      // need not be the object this test would fetch.
+                      if (
+                        is(table, Table) &&
+                        getTableName(table) === "role_inherits"
+                      ) {
                         failedReads++;
                         throw new Error("connection reset");
                       }

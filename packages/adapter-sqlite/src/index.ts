@@ -549,7 +549,10 @@ export class SqliteAdapter extends DrizzleAdapter {
         db.exec(`RELEASE ${name}`);
         return result;
       } catch (error) {
-        scope.active = false;
+        // Nested work this savepoint started and did not wait for is part of
+        // it: let it finish first, so the rollback discards its writes rather
+        // than leaving it to run afterwards on the enclosing transaction.
+        await settleNested(scope);
         try {
           db.exec(`ROLLBACK TO ${name}`);
           db.exec(`RELEASE ${name}`);
@@ -606,7 +609,9 @@ export class SqliteAdapter extends DrizzleAdapter {
 
         return result;
       } catch (error) {
-        scope.active = false;
+        // As on commit: queued nested work finishes inside the transaction,
+        // so the rollback discards it instead of it running in autocommit.
+        await settleNested(scope);
         // Rollback on error
         try {
           db.exec("ROLLBACK");

@@ -32,10 +32,11 @@ may *ship* a strategy, but it only takes effect when the **app** enables it:
 ```ts
 // nextly.config.ts
 import { defineConfig } from "nextly/config";
-import { magicLink } from "@acme/nextly-plugin-magic-link";
+import { googleOneTap } from "@acme/nextly-plugin-google";
 
 export default defineConfig({
-  auth: { strategies: [magicLink({ ttlMinutes: 15 })] },
+  // One Tap posts a Google ID token with the request, so it is a strategy.
+  auth: { strategies: [googleOneTap({ clientId: process.env.GOOGLE_CLIENT_ID! })] },
 });
 ```
 
