@@ -2093,7 +2093,7 @@ async function handleGet(req: Request, params: string[]) {
 }
 
 async function handlePost(req: Request, params: string[]) {
-  if (params[0] === "_dev" && process.env.NODE_ENV === "development") {
+  if (params[0] === "_dev" && isDevServerRuntime()) {
     return handleDevSchemaRequest(req, params, "POST");
   }
   return handleServiceRequest(req, params, "POST");
@@ -2111,7 +2111,7 @@ async function handlePatch(req: Request, params: string[]) {
 }
 
 async function handleDelete(req: Request, params: string[]) {
-  if (params[0] === "_dev" && process.env.NODE_ENV === "development") {
+  if (params[0] === "_dev" && isDevServerRuntime()) {
     return handleDevSchemaRequest(req, params, "DELETE");
   }
   return handleServiceRequest(req, params, "DELETE");
