@@ -815,8 +815,9 @@ jobs:
               # A comment in the reply's thread, by anyone but this bot, made at
               # or after the prefetch. The same second counts as after: GitHub's
               # times are whole seconds. GraphQL names an App without `[bot]`.
-              # A thread not among those read (the gateway reads the first
-              # hundred) cannot be shown unmoved, so no reply goes to it.
+              # A thread not among those read (one deleted since, or a
+              # comment id the agent got wrong) cannot be shown unmoved, so no
+              # reply goes to it.
               moved=$(jq -r --arg id "$target" --arg since "$PREFETCHED" '
                 [.data.repository.pullRequest.reviewThreads.nodes[]
                   | select(any(((.comments.nodes // []) + (.recent.nodes // []))[]; (.databaseId | tostring) == $id))] as $threads

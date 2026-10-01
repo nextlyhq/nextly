@@ -1365,8 +1365,8 @@ describe.runIf(process.platform !== "win32")("the post step, run as GitHub runs 
   });
 
   it("does not reply in a thread that is not among the threads read", () => {
-    // The gateway reads a pull request's first hundred threads; a thread past
-    // them cannot be shown unmoved.
+    // A thread the post job's read does not hold, one deleted since or a
+    // comment id the agent got wrong, cannot be shown unmoved.
     const { status, output, calls } = runStep("Post the review as the review bot", { "threads.json": threads(thread(102)) });
     expect(status, output).toBe(0);
     expect(output).toContain("reply 1 of 2 not posted: its thread is not among the threads read");

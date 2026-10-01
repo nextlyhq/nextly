@@ -116,26 +116,57 @@ case "$command" in
     ;;
   threads)
     # Review threads carry the resolution state the multi-round protocol needs,
-    # and that state is only exposed through GraphQL. `comments` holds a
-    # thread's first twenty, the finding and the replies to it; `recent` its
-    # last ten, whole, so the newest reply is there to read however long the
-    # thread, and the post job can tell a thread that moved while the agent
-    # worked.
+    # and that state is only exposed through GraphQL. Every thread is read, a
+    # hundred to a page, and `comments` holds every comment of each, the
+    # finding and every reply to it; `recent` holds its last ten again, where
+    # the post job tells a thread that moved while the agent worked. gh pages
+    # by the first `pageInfo` in an answer, so the threads' own comes before
+    # their nodes and no connection inside them asks for one: a thread with
+    # more comments than its first hundred is read again whole, through its
+    # own id, a hundred to a page. Prints one answer in the shape of a single
+    # page, holding every thread, or nothing if any page cannot be read.
     require_number "${1:-}"
-    exec gh api graphql -F owner="$OWNER" -F name="$NAME" -F number="$1" -f query='
-      query($owner:String!,$name:String!,$number:Int!){
+    pages=$(gh api graphql --paginate -F owner="$OWNER" -F name="$NAME" -F number="$1" -f query='
+      query($owner:String!,$name:String!,$number:Int!,$endCursor:String){
         repository(owner:$owner,name:$name){
           pullRequest(number:$number){
-            reviewThreads(first:100){
+            reviewThreads(first:100,after:$endCursor){
+              pageInfo{ hasNextPage endCursor }
               nodes{
-                isResolved isOutdated path line
-                comments(first:20){ nodes{ author{login} body url databaseId createdAt } }
+                id isResolved isOutdated path line
+                comments(first:100){ totalCount nodes{ author{login} body url databaseId createdAt } }
                 recent: comments(last:10){ nodes{ author{login} body url databaseId createdAt } }
               }
             }
           }
         }
-      }'
+      }') || die "could not read the review threads of #$1"
+    long=$(jq -rs '.[].data.repository.pullRequest.reviewThreads.nodes[]
+      | select(.comments.totalCount > (.comments.nodes | length)) | .id' <<<"$pages") ||
+      die "could not read the review threads of #$1"
+    whole=$(
+      printf '%s\n' "$pages"
+      while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        [[ "$id" =~ ^[A-Za-z0-9_=-]+$ ]] || die "expected a review thread's node id, got '$id'"
+        gh api graphql --paginate -f id="$id" -f query='
+          query($id:ID!,$endCursor:String){
+            node(id:$id){
+              ... on PullRequestReviewThread{
+                comments(first:100,after:$endCursor){
+                  pageInfo{ hasNextPage endCursor }
+                  nodes{ author{login} body url databaseId createdAt }
+                }
+              }
+            }
+          }' | jq -cs --arg id "$id" '{thread: $id, comments: [.[].data.node.comments.nodes[]]}' ||
+          die "could not read the comments of review thread $id"
+      done <<<"$long"
+    ) || die "could not read the review threads of #$1"
+    jq -s '(map(select(.thread)) | map({key: .thread, value: .comments}) | from_entries) as $all
+      | {data: {repository: {pullRequest: {reviewThreads: {nodes: [
+          .[] | select(.data) | .data.repository.pullRequest.reviewThreads.nodes[]
+          | if $all[.id] then .comments.nodes = $all[.id] else . end]}}}}}' <<<"$whole"
     ;;
   file-at)
     # Read one file at one commit. The review agent reads the pull request's
