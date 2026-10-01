@@ -14,7 +14,7 @@ import { PublicRoute } from "../components/guards/PublicRoute";
 import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar";
 import { Toaster } from "../components/ui/toaster";
 import { BrandingProvider } from "../context/providers/BrandingProvider";
-import { GeneralSettingsSyncProvider } from "../context/providers/GeneralSettingsSyncProvider";
+import { GeneralSettingsSync } from "../context/providers/GeneralSettingsSyncProvider";
 import { ThemeProvider, useTheme } from "../context/providers/ThemeProvider";
 import { RestartProvider } from "../context/RestartContext";
 import { fieldGroupKeys } from "../hooks/queries";
@@ -155,19 +155,20 @@ function AdminAppContent() {
         <BrandingProvider>
           {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
           <PluginPageRegistrar />
-          {/* The settings sync exists to apply the admin timezone to date
-                rendering, and mounting it starts the ["generalSettings"]
-                query. That endpoint is permission-gated, so on the signed-out
+          {/* The settings sync applies the admin timezone to date rendering,
+                and mounting it starts the ["generalSettings"] query — an
+                endpoint gated by settings permissions, so on the signed-out
                 screens (login, register, forgot password, setup) the query
-                can only fail — and retry once — while the login form waits on
-                nothing it needs. Public routes skip the provider; navigating
-                between public and private routes happens through full page
-                loads, so there is no mid-session mount/unmount churn. */}
-          {routeType === "public" ? (
-            content
-          ) : (
-            <GeneralSettingsSyncProvider>{content}</GeneralSettingsSyncProvider>
-          )}
+                can only fail and retry once while the form waits on nothing
+                it needs. The sync is a null-rendering SIBLING rather than a
+                wrapper, and that shape is load-bearing: the public/private
+                flip re-renders this tree in place — logout and the
+                signed-in redirect are pushState navigations, not full page
+                loads — and a swapped element type around the subtree would
+                remount all of it, Toaster and portal root included,
+                dropping whatever toast was in flight across the flip. */}
+          {routeType !== "public" && <GeneralSettingsSync />}
+          {content}
         </BrandingProvider>
       </PortalProvider>
     </div>
