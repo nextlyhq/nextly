@@ -275,6 +275,8 @@ describe("projectAuditMetadata", () => {
       "challenge-attempts-exhausted",
       "challenge-failed-final",
       "challenge-user-missing",
+      "challenge-wrong-answer",
+      "challenge-flow-settled",
       // auth/handlers/set-initial-password.ts
       "pending-token-wrong-challenge",
       "not-in-must-change-state",

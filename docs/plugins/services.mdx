@@ -239,9 +239,17 @@ for things the services layer doesn't cover yet (aggregations beyond `count`). I
 find yourself needing it often, that's a signal worth raising — the goal (D56) is that
 most plugins never touch it.
 
-It is the live Drizzle instance for the configured dialect, so use its fluent
-API (`select`, `insert`, `update`, `delete`). There is no relational `query`
-namespace: the one that used to exist named a few core tables, so it could
-never answer about a plugin's own tables.
+It is Drizzle's fluent API for the configured dialect: `select`, `insert`,
+`update`, `delete`, and `transaction(async tx => { ... })`, which commits the
+work as one unit and rolls it back if the work throws, on every dialect and
+with or without `rawSql`. Inside it, write through `tx`: `tx` has no nested
+`transaction`, and another service or `ctx.settings` called there runs on its
+own connection on PostgreSQL and MySQL, outside the transaction. There is no relational
+`query` namespace: the one that used to exist named a few core tables, so it
+could never answer about a plugin's own tables.
+
+Without `capabilities.db.rawSql` the handle has no `execute` or `run`; with it,
+`ctx.db` is the live Drizzle instance. The capability is a declaration a
+reviewer can read, not an enforced boundary: plugins run as trusted code.
 
 See also: [Permissions](/docs/plugins/permissions) · [HTTP routes](/docs/plugins/routes).

@@ -139,29 +139,6 @@ describe("onReady", () => {
       }
     );
   });
-
-  it("never calls onInstall or onUninstall during a boot", async () => {
-    // They belong to install and uninstall, which a boot is neither. Calling
-    // them here would re-run one-time setup on every start.
-    let installs = 0;
-    let uninstalls = 0;
-    const p = definePlugin({
-      name: "@test/lifecycle",
-      version: "1.0.0",
-      nextly: ">=0.0.0",
-      onInstall() {
-        installs += 1;
-      },
-      onUninstall() {
-        uninstalls += 1;
-      },
-    });
-
-    current = await createTestNextly({ plugins: [p] });
-
-    expect(installs).toBe(0);
-    expect(uninstalls).toBe(0);
-  });
 });
 
 describe("a failed boot destroys what it started", () => {

@@ -30,7 +30,7 @@ export function validateOrigin(
 ): boolean {
   const origin = request.headers.get("origin");
   const referer = request.headers.get("referer");
-  const requestOrigin = origin || (referer ? new URL(referer).origin : null);
+  const requestOrigin = origin || (referer ? refererOrigin(referer) : null);
 
   if (!requestOrigin) {
     // No origin header -- reject to be safe
@@ -46,6 +46,19 @@ export function validateOrigin(
   return allAllowed.some(
     allowed => requestOrigin.toLowerCase() === allowed.toLowerCase()
   );
+}
+
+/**
+ * The origin a `Referer` names, or null when it is not a URL. A malformed
+ * header is a refusal like a missing one, not a thrown error that answered
+ * 500 instead of the CSRF refusal.
+ */
+function refererOrigin(referer: string): string | null {
+  try {
+    return new URL(referer).origin;
+  } catch {
+    return null;
+  }
 }
 
 /**

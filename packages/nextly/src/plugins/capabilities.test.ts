@@ -392,7 +392,12 @@ describe("validateCapabilities", () => {
     expect(
       reasonOf(() =>
         validateCapabilities([
-          plugin({ capabilities: { secrets: ["a.b", "a.b"] } }),
+          plugin({
+            capabilities: { secrets: ["a.b", "a.b"] },
+            contributes: {
+              settings: z.object({ a: z.object({ b: z.string() }) }),
+            },
+          }),
         ])
       )
     ).toBe("invalid-secret-path");
@@ -622,5 +627,119 @@ describe("settings identifiers against the storage columns", () => {
         ])
       )
     ).toBe("plugin-name-too-long-for-settings");
+  });
+});
+
+/**
+ * The manifest's SHAPE is checked before anything reads it, so a typo fails
+ * the boot rather than leaving a declared surface silently absent.
+ */
+describe("validateCapabilities: the manifest shape", () => {
+  it.each([
+    [
+      "a misspelled nested key",
+      { capabilities: { net: { outBound: ["a.com"] } } },
+    ],
+    ["a misspelled rawSql", { capabilities: { db: { rawSQL: true } } }],
+    [
+      "outbound as a string",
+      { capabilities: { net: { outbound: "api.stripe.com" } } },
+    ],
+    ["secrets as a string", { capabilities: { secrets: "apiKey" } }],
+    ["an empty provided name", { provides: [""] }],
+    [
+      "a requires range that is not a range",
+      { requires: { cap: "not-a-range" } },
+    ],
+  ])("refuses %s", (_label, over) => {
+    expect(reasonOf(() => validateCapabilities([plugin(over as never)]))).toBe(
+      "invalid-manifest"
+    );
+  });
+
+  it("accepts a well-formed manifest", () => {
+    expect(() =>
+      validateCapabilities([
+        plugin({
+          capabilities: {
+            net: { outbound: ["api.stripe.com"] },
+            db: { rawSql: false },
+          },
+          provides: ["acme/payments"],
+          requires: {},
+          schemaVersion: 2,
+        }),
+      ])
+    ).not.toThrow();
+  });
+});
+
+describe("validateCapabilities: secrets and the settings schema", () => {
+  it("refuses secrets declared without a settings schema", () => {
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({ capabilities: { secrets: ["apiKey"] } }),
+        ])
+      )
+    ).toBe("secrets-without-settings");
+  });
+
+  it.each([
+    [
+      "an object group",
+      "providers",
+      z.object({ providers: z.object({ id: z.string() }) }),
+    ],
+    [
+      "a record",
+      "providers",
+      z.object({
+        providers: z.record(z.string(), z.object({ s: z.string() })),
+      }),
+    ],
+    [
+      "a record's entry",
+      "providers.*",
+      z.object({
+        providers: z.record(z.string(), z.object({ s: z.string() })),
+      }),
+    ],
+  ])("refuses a secret path naming %s", (_label, path, settings) => {
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({
+            capabilities: { secrets: [path] },
+            contributes: { settings },
+          }),
+        ])
+      )
+    ).toBe("secret-path-names-group");
+  });
+
+  it("accepts a secret path naming the value inside a group", () => {
+    expect(() =>
+      validateCapabilities([
+        plugin({
+          capabilities: { secrets: ["providers.*.s"] },
+          contributes: {
+            settings: z.object({
+              providers: z.record(z.string(), z.object({ s: z.string() })),
+            }),
+          },
+        }),
+      ])
+    ).not.toThrow();
+  });
+});
+
+describe("validateCapabilities: an empty requires range", () => {
+  it("is refused rather than read as any version", () => {
+    // semver reads "" as "*", which would accept any provider version for a
+    // range nobody wrote.
+    expect(
+      reasonOf(() => validateCapabilities([plugin({ requires: { x: "" } })]))
+    ).toBe("invalid-manifest");
   });
 });

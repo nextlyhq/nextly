@@ -34,6 +34,8 @@
  * @packageDocumentation
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 // F17: connect-time DB version check shared across all adapters.
 import {
@@ -242,6 +244,19 @@ export class SqliteAdapter extends DrizzleAdapter {
    * surface area without changing the achievable concurrency.
    */
   private transactionQueue: Promise<unknown> = Promise.resolve();
+
+  /**
+   * The transaction the current async chain is running inside, if any.
+   *
+   * A `transaction()` call made from INSIDE a transaction's work — a store
+   * writing on behalf of the caller, a plugin's write inside its own
+   * `ctx.db.transaction` — used to queue behind the very transaction that
+   * was waiting for it, and neither ever settled: that hung every later
+   * transaction on the instance too. Such a call now runs as a SAVEPOINT of
+   * the active transaction instead, so it commits or rolls back with it and
+   * its own failure undoes only its own part.
+   */
+  private readonly transactionScope = new AsyncLocalStorage<TransactionScope>();
 
   /**
    * Creates a new SQLite adapter instance.
@@ -497,10 +512,56 @@ export class SqliteAdapter extends DrizzleAdapter {
     // rejected value). We attach a no-op `.catch` so the chain stays
     // resolved while the actual error propagates back to the original
     // caller through the inner promise.
+    const outer = this.transactionScope.getStore();
+    if (outer?.active) {
+      // Nested calls of one transaction are serialized among themselves too:
+      // savepoints on one connection form a stack, and two interleaved ones
+      // would release or roll back each other.
+      return enqueueIn(outer, () => this.runSavepoint(work, outer.depth + 1));
+    }
     const run = async (): Promise<T> => this.runTransaction(work);
     const next = this.transactionQueue.then(run, run);
     this.transactionQueue = next.catch(() => undefined);
     return next;
+  }
+
+  /**
+   * Run `work` as a savepoint of the active transaction: released when it
+   * resolves, rolled back to when it throws.
+   */
+  private async runSavepoint<T>(
+    work: (tx: TransactionContext) => Promise<T>,
+    depth: number
+  ): Promise<T> {
+    const db = this.ensureDb();
+    const name = `nextly_sp_${depth}`;
+    const scope: TransactionScope = {
+      active: true,
+      depth,
+      queue: Promise.resolve(),
+    };
+    try {
+      const ctx = this.createTransactionContext(db);
+      db.exec(`SAVEPOINT ${name}`);
+      try {
+        const result = await this.transactionScope.run(scope, () => work(ctx));
+        await settleNested(scope);
+        db.exec(`RELEASE ${name}`);
+        return result;
+      } catch (error) {
+        scope.active = false;
+        try {
+          db.exec(`ROLLBACK TO ${name}`);
+          db.exec(`RELEASE ${name}`);
+        } catch {
+          // The enclosing transaction may already have ended.
+        }
+        throw error;
+      }
+    } catch (error) {
+      if (isApplicationError(error)) throw error;
+      throw this.classifyError(error);
+    }
   }
 
   /**
@@ -522,8 +583,17 @@ export class SqliteAdapter extends DrizzleAdapter {
       // we manually manage the transaction with BEGIN/COMMIT/ROLLBACK
       db.exec("BEGIN IMMEDIATE");
 
+      // The scope nested `transaction()` calls from this work join.
+      const scope: TransactionScope = {
+        active: true,
+        depth: 0,
+        queue: Promise.resolve(),
+      };
       try {
-        const result = await work(ctx);
+        const result = await this.transactionScope.run(scope, () => work(ctx));
+        // Anything the work started and did not wait for is part of this
+        // transaction, so it finishes before the commit rather than after.
+        await settleNested(scope);
         db.exec("COMMIT");
 
         // Log success
@@ -536,6 +606,7 @@ export class SqliteAdapter extends DrizzleAdapter {
 
         return result;
       } catch (error) {
+        scope.active = false;
         // Rollback on error
         try {
           db.exec("ROLLBACK");
@@ -1069,4 +1140,33 @@ export function createSqliteAdapter(
  */
 export function isSqliteAdapter(value: unknown): value is SqliteAdapter {
   return value instanceof SqliteAdapter;
+}
+
+/** One active transaction, as the calls nested inside it see it. */
+interface TransactionScope {
+  /** False once the transaction has finished, or is finishing. */
+  active: boolean;
+  /** 0 for the transaction itself; each savepoint is one deeper. */
+  depth: number;
+  /** Serializes the calls nested directly inside this transaction. */
+  queue: Promise<unknown>;
+}
+
+/** Chain `run` onto a scope's queue, keeping the queue itself unrejected. */
+function enqueueIn<T>(
+  scope: TransactionScope,
+  run: () => Promise<T>
+): Promise<T> {
+  const next = scope.queue.then(run, run);
+  scope.queue = next.catch(() => undefined);
+  return next;
+}
+
+/**
+ * Close a scope to new nested calls and wait for those already queued. A call
+ * arriving after this goes to the instance queue, behind the transaction.
+ */
+async function settleNested(scope: TransactionScope): Promise<void> {
+  scope.active = false;
+  await scope.queue;
 }

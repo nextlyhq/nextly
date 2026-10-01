@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Button, Input } from "@nextlyhq/ui";
+import { Alert, AlertDescription, Button, Input } from "@nextlyhq/ui";
 import { useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { z } from "zod";
@@ -257,20 +257,48 @@ export function Login() {
             // here rather than trusted to the view, which may predate the
             // `continues` field entirely.
             if (challengeFlow.isContinuing()) return;
+            // The host has already sent the browser to the server's `next`;
+            // the view's own value cannot be that, and navigating on it
+            // replaced the destination with the dashboard.
+            if (challengeFlow.hasNavigated()) return;
             window.location.href = next ?? ROUTES.DASHBOARD;
           }}
         />
+      ) : challengeFlow.resuming ? (
+        // The outstanding step is still being looked up. Showing the password
+        // form meanwhile swapped it out from under the person a moment later,
+        // and focus fell to the page.
+        <p
+          role="status"
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+          data-testid="resuming-sign-in"
+        >
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Continuing sign-in…
+        </p>
       ) : (
         <>
           {challengeFlow.signInFailed && (
-            <div
-              className="flex items-start gap-3 rounded-lg border border-destructive bg-destructive/10 p-4 mb-6"
+            <Alert
+              variant="destructive"
+              className="mb-6"
               data-testid="signin-failed"
             >
-              <p className="text-sm text-foreground">
+              <AlertDescription>
                 Sign-in failed. Try again or use another method.
-              </p>
-            </div>
+              </AlertDescription>
+            </Alert>
+          )}
+          {challengeFlow.flowEnded && (
+            <Alert
+              variant="destructive"
+              className="mb-6"
+              data-testid="signin-ended"
+            >
+              <AlertDescription>
+                That sign-in attempt ended. Please sign in again.
+              </AlertDescription>
+            </Alert>
           )}
           {hasPreFormUi(authUi) && (
             <div className="mb-6">

@@ -119,11 +119,12 @@ export interface AuthHooks {
     ctx: PluginContext
   ) => Promise<AuthUser | null> | AuthUser | null;
   /**
-   * Add JWT claims. Receives the core claims and returns the final ones. The
-   * identity and token claims (`sub`, `email`, `name`, `image`, `roleIds`,
-   * `iat`, `exp`, `jti`, `nbf`, `aud`, `iss`, `typ`) are restored as core
-   * built them, so a hook can add a claim but never change who the session
-   * belongs to or what it may do.
+   * Add JWT claims. Receives the core claims and returns the final ones.
+   * Every claim core built — `sub`, `email`, `name`, `image`, `roleIds`, the
+   * claims from the user's custom fields, and `iat`, `exp`, `jti` — is
+   * restored as core built it, and the reserved `nbf`, `aud`, `iss` and `typ`
+   * cannot be added, so a hook can add a claim of its own but never change
+   * who the session belongs to or what it may do.
    */
   customizeClaims?: (
     claims: Record<string, unknown>,

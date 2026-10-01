@@ -293,8 +293,10 @@ export async function runMigrate(
 
     // Operator-set override; never in CI config (spec §4.6.1).
     const allowCoreDestructive = process.env.NEXTLY_ALLOW_CORE_DESTRUCTIVE === "1"; // prettier-ignore
-    // Separate flag, because losing rows is a different decision from
-    // accepting a schema change; read here so both live at the same edge.
+    // The retired-table cleanup has flags of its own: removing those tables
+    // and losing rows still in them are each a separate decision from
+    // accepting a core schema change. Read here so all three live at one edge.
+    const dropRetiredAuthTables = process.env.NEXTLY_DROP_RETIRED_AUTH_TABLES === "1"; // prettier-ignore
     const allowDropNonEmptyRetired = process.env.NEXTLY_DROP_NONEMPTY_RETIRED === "1"; // prettier-ignore
 
     const dz = adapter as unknown as DrizzleAdapter & {
@@ -325,6 +327,7 @@ export async function runMigrate(
         // resolve.
         knownJunctions: resolvedSchema.knownJunctions,
         allowDestructive: allowCoreDestructive,
+        dropRetiredAuthTables,
         allowDropNonEmptyRetired,
         ensureLedger: async () => {
           if (!(await dz.tableExists("nextly_schema_events"))) {
@@ -435,6 +438,8 @@ export interface MigrateCoreDeps {
   ttlSeconds?: number;
   isSettled?: () => Promise<boolean>;
   allowDestructive?: boolean;
+  /** NEXTLY_DROP_RETIRED_AUTH_TABLES=1: drop the retired auth tables. */
+  dropRetiredAuthTables?: boolean;
   /**
    * NEXTLY_DROP_NONEMPTY_RETIRED=1: also drop a retired table holding rows.
    *
@@ -660,12 +665,15 @@ export async function migrateCore(
           warn: m => deps.logger.warn(m),
         },
         allowDestructive: deps.allowDestructive,
+        ...(deps.dropRetiredAuthTables === true
+          ? { dropRetiredAuthTables: true }
+          : {}),
         ...(deps.allowDropNonEmptyRetired === true
           ? { allowDropNonEmptyRetired: true }
           : {}),
         // The operations the retired-table drop needs. Without them the
         // cleanup returned at its first guard, so the documented
-        // NEXTLY_ALLOW_CORE_DESTRUCTIVE flow dropped nothing and said nothing.
+        // NEXTLY_DROP_RETIRED_AUTH_TABLES flow dropped nothing and said nothing.
         // Passed as a group: half of them is not a usable cleanup, and the
         // guard reads their absence as "this caller is not asking for it".
         ...(canDropRetired

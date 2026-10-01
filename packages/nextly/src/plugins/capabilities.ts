@@ -15,14 +15,80 @@
  * @module plugins/capabilities
  * @since 1.0.0
  */
+import { z } from "zod";
+
 import { nextlyPluginSettings as mysqlPluginSettings } from "../schemas/plugin-settings/mysql";
 
 import type { PluginDefinition } from "./plugin-context";
 import { resolutionError } from "./resolution-error";
-import { satisfiesRange } from "./semver-range";
+import { outboundEntry } from "./runtime/address-rules";
+import { isValidRange, satisfiesRange } from "./semver-range";
 
-/** The capability keys a plugin may declare. Anything else is a typo. */
-const KNOWN_CAPABILITIES = ["net", "db", "secrets"] as const;
+/**
+ * The SHAPE of a manifest, strict at every level.
+ *
+ * Checked before anything reads it, because each semantic check below assumes
+ * the shape: `outbound: "api.stripe.com"` as a string was iterated by
+ * character and reported the host "a", and a misspelled nested key —
+ * `net: { outBound }`, `db: { rawSQL }` — was simply not read, so the plugin
+ * booted without the `ctx.fetch` it declared. A key the manifest does not
+ * define is a typo, at any depth.
+ */
+const MANIFEST_SHAPE = z.object({
+  capabilities: z
+    .strictObject({
+      net: z.strictObject({ outbound: z.array(z.string()) }).optional(),
+      db: z.strictObject({ rawSql: z.boolean().optional() }).optional(),
+      secrets: z.array(z.string().min(1)).optional(),
+      auth: z.strictObject({ login: z.boolean().optional() }).optional(),
+    })
+    .optional(),
+  provides: z.array(z.string().min(1)).optional(),
+  requires: z
+    .record(
+      z.string().min(1),
+      // Non-empty first: semver reads "" as "*", which would accept any
+      // provider version for a range nobody wrote.
+      z.string().min(1).refine(isValidRange, { message: "not a semver range" })
+    )
+    .optional(),
+  schemaVersion: z.number().int().positive().optional(),
+});
+
+/** Refuse a manifest whose shape is not the one the runtime reads. */
+function assertManifestShape(plugin: PluginDefinition): void {
+  const parsed = MANIFEST_SHAPE.safeParse({
+    capabilities: plugin.capabilities,
+    provides: plugin.provides,
+    requires: plugin.requires,
+    schemaVersion: plugin.schemaVersion,
+  });
+  if (parsed.success) return;
+  const issue = parsed.error.issues[0];
+  const at = issue.path.join(".");
+  // The two refusals that had their own reasons before the shape was checked
+  // whole keep them, so an operator's log search still finds them.
+  if (at === "capabilities" && issue.code === "unrecognized_keys") {
+    const key = issue.keys[0];
+    throw resolutionError(
+      "unknown-capability",
+      `Plugin "${plugin.name}" declares an unknown capability "${key}".`,
+      { plugin: plugin.name, capability: key }
+    );
+  }
+  if (at === "schemaVersion") {
+    throw resolutionError(
+      "invalid-schema-version",
+      `Plugin "${plugin.name}" declares schemaVersion ${String(plugin.schemaVersion)}; it must be a positive integer.`,
+      { plugin: plugin.name, schemaVersion: plugin.schemaVersion }
+    );
+  }
+  throw resolutionError(
+    "invalid-manifest",
+    `Plugin "${plugin.name}" declares an invalid manifest at "${at}": ${issue.message}.`,
+    { plugin: plugin.name, path: at, issue: issue.message }
+  );
+}
 
 /** A dotted-quad, which the hostname pattern would otherwise accept. */
 const IP_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
@@ -58,90 +124,142 @@ function plugins(all: PluginDefinition[]): PluginDefinition[] {
   return all.filter(plugin => plugin.enabled !== false);
 }
 
-/** Refuse a capability key the runtime does not implement. */
-function assertKnownCapabilities(plugin: PluginDefinition): void {
-  for (const key of Object.keys(plugin.capabilities ?? {})) {
-    if (
-      !KNOWN_CAPABILITIES.includes(key as (typeof KNOWN_CAPABILITIES)[number])
-    ) {
-      throw resolutionError(
-        "unknown-capability",
-        `Plugin "${plugin.name}" declares an unknown capability "${key}".`,
-        { plugin: plugin.name, capability: key }
-      );
-    }
-  }
-}
-
-/** Refuse an outbound entry that is not a hostname. */
+/**
+ * Refuse an outbound entry that is not a hostname, optionally with a port.
+ *
+ * Split by the same parser `ctx.fetch` matches with, so an entry the manifest
+ * accepts is one the runtime reads the same way.
+ */
 function assertOutboundHosts(plugin: PluginDefinition): void {
-  for (const host of plugin.capabilities?.net?.outbound ?? []) {
-    // An IP literal is a valid hostname as far as the pattern is concerned —
-    // every label is digits — so it is refused explicitly. An allowlist is a
-    // statement about WHO a plugin talks to, and an address is not who
-    // anybody is.
-    const named = host === LOOPBACK_HOST || OUTBOUND_HOST.test(host);
-    if (!named || IP_LITERAL.test(host)) {
+  for (const entry of plugin.capabilities?.net?.outbound ?? []) {
+    if (!isOutboundEntry(entry)) {
       throw resolutionError(
         "invalid-outbound-host",
-        `Plugin "${plugin.name}" declares an outbound host that is not a hostname: "${host}".`,
-        { plugin: plugin.name, host }
+        `Plugin "${plugin.name}" declares an outbound host that is not a hostname with an optional port: "${entry}".`,
+        { plugin: plugin.name, host: entry }
       );
     }
   }
 }
 
-/** Refuse a secret path that is empty, repeated, or absent from the schema. */
-function assertSecretPaths(plugin: PluginDefinition): void {
-  const seen = new Set<string>();
-  for (const path of plugin.capabilities?.secrets ?? []) {
-    if (typeof path !== "string" || path.length === 0) {
-      throw resolutionError(
-        "invalid-secret-path",
-        `Plugin "${plugin.name}" declares an empty secret path.`,
-        { plugin: plugin.name }
-      );
-    }
-    if (seen.has(path)) {
-      throw resolutionError(
-        "invalid-secret-path",
-        `Plugin "${plugin.name}" declares the secret path "${path}" twice.`,
-        { plugin: plugin.name, path }
-      );
-    }
-    seen.add(path);
+/** Whether an outbound entry is a hostname, optionally with a valid port. */
+function isOutboundEntry(entry: string): boolean {
+  const { pattern: host, port } = outboundEntry(entry);
+  // An IP literal is a valid hostname as far as the pattern is concerned —
+  // every label is digits — so it is refused explicitly. An allowlist is a
+  // statement about WHO a plugin talks to, and an address is not who anybody
+  // is.
+  if (IP_LITERAL.test(host)) return false;
+  if (host !== LOOPBACK_HOST && !OUTBOUND_HOST.test(host)) return false;
+  return port === undefined || (port >= 1 && port <= 65_535);
+}
 
-    // A secret path the schema does not have is a credential stored in plain
-    // text, because nothing matches it on the way in and nothing redacts it
-    // on the way out — and it fails silently, which is the worst way for that
-    // to be wrong.
-    if (!schemaHasPath(plugin, path)) {
-      throw resolutionError(
-        "unknown-secret-path",
-        `Plugin "${plugin.name}" declares the secret path "${path}", which its settings schema does not contain.`,
-        { plugin: plugin.name, path }
-      );
-    }
+/**
+ * Refuse a secret path that is empty, repeated, absent from the schema, or
+ * names a group rather than a value.
+ */
+function assertSecretPaths(plugin: PluginDefinition): void {
+  const secrets = plugin.capabilities?.secrets ?? [];
+  // Secrets name settings, so they mean nothing without a settings schema:
+  // nothing would ever be stored for them to encrypt.
+  if (secrets.length > 0 && !plugin.contributes?.settings) {
+    throw resolutionError(
+      "secrets-without-settings",
+      `Plugin "${plugin.name}" declares secret paths but no settings schema (contributes.settings) for them to name.`,
+      { plugin: plugin.name }
+    );
+  }
+  const seen = new Set<string>();
+  for (const path of secrets) {
+    assertSecretPath(plugin, path, seen);
+    seen.add(path);
+  }
+}
+
+/** Refuse one secret path that is empty, repeated, unknown, or a group. */
+function assertSecretPath(
+  plugin: PluginDefinition,
+  path: string,
+  seen: ReadonlySet<string>
+): void {
+  if (typeof path !== "string" || path.length === 0) {
+    throw resolutionError(
+      "invalid-secret-path",
+      `Plugin "${plugin.name}" declares an empty secret path.`,
+      { plugin: plugin.name }
+    );
+  }
+  if (seen.has(path)) {
+    throw resolutionError(
+      "invalid-secret-path",
+      `Plugin "${plugin.name}" declares the secret path "${path}" twice.`,
+      { plugin: plugin.name, path }
+    );
+  }
+  // A secret path the schema does not have is a credential stored in plain
+  // text, because nothing matches it on the way in and nothing redacts it on
+  // the way out — and it fails silently, which is the worst way for that to
+  // be wrong.
+  if (!schemaHasPath(plugin, path)) {
+    throw resolutionError(
+      "unknown-secret-path",
+      `Plugin "${plugin.name}" declares the secret path "${path}", which its settings schema does not contain.`,
+      { plugin: plugin.name, path }
+    );
+  }
+  // A secret is a credential, which is a string. A path naming a group
+  // booted, and then every save failed with "A secret setting must be a
+  // string" — found by the operator, not the author.
+  if (pathEndsInGroup(plugin.contributes?.settings, path)) {
+    throw resolutionError(
+      "secret-path-names-group",
+      `Plugin "${plugin.name}" declares the secret path "${path}", which names a group of settings rather than one value; name the value inside it.`,
+      { plugin: plugin.name, path }
+    );
   }
 }
 
 /**
- * Refuse a schema version that is not a positive integer.
+ * Whether a path, followed through object shapes, records and arrays, ends at
+ * an object, record or array — a group rather than a value.
  *
- * The whole of the check. Comparing it against what a database has applied
- * needs plugin migration state, which does not exist yet, so nothing here
- * stops a plugin booting ahead of its tables.
+ * Answers only where the walk is certain. A union, a pipe or a lazy schema on
+ * the way answers false, leaving those to the existence check above and to
+ * the write-time refusal of a non-string secret.
  */
-function assertSchemaVersion(plugin: PluginDefinition): void {
-  const version = plugin.schemaVersion;
-  if (version === undefined) return;
-  if (!Number.isInteger(version) || version < 1) {
-    throw resolutionError(
-      "invalid-schema-version",
-      `Plugin "${plugin.name}" declares schemaVersion ${String(version)}; it must be a positive integer.`,
-      { plugin: plugin.name, schemaVersion: version }
-    );
+function pathEndsInGroup(schema: unknown, path: string): boolean {
+  if (!schema) return false;
+  let current: unknown = schema;
+  for (const segment of path.split(".")) {
+    current = groupMember(current, segment);
+    if (current === null) return false;
   }
+  return isGroupSchema(current);
+}
+
+/**
+ * The schema a segment reaches inside a node: a named key of an object, or
+ * the entries of a record or array for `*`. Null where the walk is not
+ * certain, which makes the caller answer "not a group".
+ */
+function groupMember(node: unknown, segment: string): unknown {
+  const shape = objectShape(node);
+  if (shape !== null) {
+    return segment !== "*" && Object.hasOwn(shape, segment)
+      ? shape[segment]
+      : null;
+  }
+  if (segment !== "*") return null;
+  return recordValueSchema(node) ?? arrayElementSchema(node);
+}
+
+/** Whether a schema node is an object, record or array. */
+function isGroupSchema(node: unknown): boolean {
+  return (
+    objectShape(node) !== null ||
+    recordValueSchema(node) !== null ||
+    arrayElementSchema(node) !== null
+  );
 }
 
 /**
@@ -191,15 +309,14 @@ function assertSettingsIdentifiers(plugin: PluginDefinition): void {
 }
 
 /**
- * Check every plugin's own manifest: the keys it declares, the hosts it names,
- * the secrets it lists, its schema version, and its settings identifiers.
+ * Check every plugin's own manifest: its shape (schema version included), the
+ * hosts it names, the secrets it lists, and its settings identifiers.
  */
 export function validateCapabilities(all: PluginDefinition[]): void {
   for (const plugin of plugins(all)) {
-    assertKnownCapabilities(plugin);
+    assertManifestShape(plugin);
     assertOutboundHosts(plugin);
     assertSecretPaths(plugin);
-    assertSchemaVersion(plugin);
     assertSettingsIdentifiers(plugin);
   }
 }
@@ -364,8 +481,8 @@ function unionOptions(node: unknown): unknown[] | null {
  */
 function schemaHasPath(plugin: PluginDefinition, path: string): boolean {
   const schema = plugin.contributes?.settings;
-  // Nothing to check against: a plugin may declare secrets before it declares
-  // a schema, and resolution is not the place to demand an ordering.
+  // Unreachable through `assertSecretPaths`, which refuses secrets without a
+  // schema first; kept so the walk below never reads an absent schema.
   if (!schema) return true;
   return schemaHasPathFrom(schema, path);
 }

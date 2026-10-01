@@ -150,7 +150,11 @@ export function createPluginSettingsStore(
       updatedAt: row.updatedAt,
       updatedBy: row.updatedBy,
     };
-    const insert = tx.insert(table).values(row);
+    const insert = tx.insert(table).values({
+      owner: row.owner,
+      key: row.key,
+      ...update,
+    });
     // MySQL spells the same upsert differently; nothing else about the
     // statement changes, so the dialect decides only which method to call.
     if (dialect === "mysql") {
@@ -208,7 +212,18 @@ export function createPluginSettingsStore(
 
         const current = await rowsFor(writer, owner);
         const rows = await computeRows(current);
-        for (const row of rows) await upsert(writer, row);
+        for (const row of rows) {
+          // A key the update removed is deleted, not stored as `null`: a
+          // stored `null` would reach the schema on the next read as a value
+          // someone set.
+          if (row.remove) {
+            await writer
+              .delete(table)
+              .where(and(eq(table.owner, owner), eq(table.key, row.key)));
+          } else {
+            await upsert(writer, row);
+          }
+        }
 
         // The lock row is not settings and must never be read as any. It is
         // removed before commit, so it exists only for the life of this

@@ -1,5 +1,6 @@
 import {
   auditFailureMetadata,
+  isStrategyName,
   type AuditLogWriter,
 } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors/nextly-error";
@@ -125,12 +126,19 @@ export interface LoginFailureDeps {
  * package controls, and names no actor — a failure must not say which
  * account was reached — so nothing links it to a person. The specific cause
  * reaches the operator through the log instead.
+ *
+ * `strategy` is the sign-in method the attempt was using, when the caller
+ * knows it. It is stated here rather than read from the error, because the
+ * account-state gate raises its own error and knows nothing about the method:
+ * a refusal it produced would otherwise record no method at all. A value that
+ * is not a strategy name is left off, as the projection would drop it.
  */
 export async function recordLoginFailure(
   deps: LoginFailureDeps,
   request: Request,
   err: unknown,
-  requestId: string
+  requestId: string,
+  strategy?: string
 ): Promise<void> {
   await deps.auditLog.write({
     kind: "login-failed",
@@ -139,7 +147,10 @@ export async function recordLoginFailure(
       trustedProxyIps: deps.trustedProxyIps,
     }),
     userAgent: request.headers.get("user-agent"),
-    metadata: auditFailureMetadata(err, requestId),
+    metadata: {
+      ...auditFailureMetadata(err, requestId),
+      ...(isStrategyName(strategy) ? { strategy } : {}),
+    },
   });
 }
 

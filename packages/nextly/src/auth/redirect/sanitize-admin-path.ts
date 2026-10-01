@@ -32,58 +32,55 @@ export const DEFAULT_ADMIN_PATH = "/admin";
  * Anything rejected returns {@link DEFAULT_ADMIN_PATH} rather than raising: a
  * bad destination is a reason to ignore it, not a reason to fail a login the
  * user legitimately started.
+ *
+ * Nothing is decoded. Decoding before parsing changed what a valid
+ * destination meant — `?search=a%26b` became two parameters, `%23` became a
+ * fragment, a lone `%` was refused — and a second pass decoded again, so
+ * sanitizing twice gave a different answer from sanitizing once. The URL
+ * parser is the only thing that interprets the destination, here and in the
+ * browser, so the result is judged exactly as it will be followed, and
+ * sanitizing it again returns it unchanged.
  */
 export function sanitizeAdminPath(next: string | null | undefined): string {
   if (typeof next !== "string" || next.length === 0) return DEFAULT_ADMIN_PATH;
 
-  // Decode once before inspecting, so a percent-encoded separator is judged as
-  // the character it becomes rather than as the literal `%2f`. A malformed
-  // sequence throws, and a destination that is not valid percent-encoding is
-  // not one worth recovering.
-  let candidate: string;
-  try {
-    candidate = decodeURIComponent(next);
-  } catch {
-    return DEFAULT_ADMIN_PATH;
-  }
-
   // A control character (NUL, CR, LF, tab, DEL) can truncate a Location header
-  // or split it into a second one. Nothing legitimate carries one.
+  // or split it into a second one, and the URL parser strips tab, CR and LF
+  // silently — so `/\t/evil` would parse as `//evil`. Judged on the raw input
+  // for that reason. Nothing legitimate carries one.
   //
   // Compared by code point rather than matched by pattern: a literal control
   // character inside a regular expression is invisible in review and easily
   // lost to an editor or a copy, and the comparison says what it means.
-  for (let i = 0; i < candidate.length; i++) {
-    const code = candidate.charCodeAt(i);
+  for (let i = 0; i < next.length; i++) {
+    const code = next.charCodeAt(i);
     if (code <= 0x1f || code === 0x7f) return DEFAULT_ADMIN_PATH;
   }
 
   // Must be a rooted path.
-  if (!candidate.startsWith("/")) return DEFAULT_ADMIN_PATH;
+  if (!next.startsWith("/")) return DEFAULT_ADMIN_PATH;
 
   // `//host` and `/\host` are both authority-relative: the browser reads them
   // as another origin, so neither is a path however much it looks like one.
-  if (candidate.length > 1) {
-    const second = candidate[1];
+  if (next.length > 1) {
+    const second = next[1];
     if (second === "/" || second === "\\") return DEFAULT_ADMIN_PATH;
   }
 
-  // NORMALIZED before it is judged, by the same parser that will interpret it.
-  // One `decodeURIComponent` is not normalization: `/admin/%252e%252e/public`
-  // becomes `/admin/%2e%2e/public`, which passes a prefix test and is then
-  // resolved by the browser to `/public` — outside the admin panel this
-  // function exists to keep it inside. The URL parser resolves `.`, `..` and
-  // their percent-encoded spellings, so asking it removes the whole class
-  // rather than the one encoding that was noticed.
-  //
-  // The base is a placeholder: `candidate` is already known to be a rooted
-  // path and not authority-relative, so nothing here can reach another origin.
+  // NORMALIZED before it is judged, by the parser the browser uses. It
+  // resolves `.`, `..` and their percent-encoded spellings, and folds a
+  // backslash to a slash, so `/admin/%2e%2e/public` and `/admin\..\public`
+  // are judged as the `/public` they reach rather than by how they look.
+  const base = "http://nextly.invalid";
   let parsed: URL;
   try {
-    parsed = new URL(candidate, "http://nextly.invalid");
+    parsed = new URL(next, base);
   } catch {
     return DEFAULT_ADMIN_PATH;
   }
+  // Checked rather than assumed: the checks above are what make another
+  // origin impossible, and this is what notices if one of them is wrong.
+  if (parsed.origin !== base) return DEFAULT_ADMIN_PATH;
 
   // Judged on the path alone so a query or fragment cannot smuggle the
   // decision. `/adminx` shares a prefix with `/admin` and is a different place

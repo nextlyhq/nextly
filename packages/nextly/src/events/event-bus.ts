@@ -62,6 +62,19 @@ const RESERVED_EVENT_PREFIXES = [
   "user.",
 ];
 
+/**
+ * Whether an event name belongs to core.
+ *
+ * One answer for both questions it is asked: whether an emit needs a
+ * declaration, and whether a plugin may emit it at all. A plugin emitting
+ * `user.deleted` for a live user would make every listener act on a deletion
+ * that never happened — unlinking an identity, dropping stored data — so the
+ * per-plugin bus refuses these names, and core emits them through the raw bus.
+ */
+export function isReservedEventName(name: EventName): boolean {
+  return RESERVED_EVENT_PREFIXES.some(prefix => name.startsWith(prefix));
+}
+
 export class EventBus {
   private handlers: Map<EventName, Set<EventHandler>> = new Map();
   private declaredEvents: Set<EventName> = new Set();
@@ -167,7 +180,7 @@ export class EventBus {
 
   private isKnownName(name: EventName): boolean {
     if (this.declaredEvents.has(name)) return true;
-    return RESERVED_EVENT_PREFIXES.some(prefix => name.startsWith(prefix));
+    return isReservedEventName(name);
   }
 
   private logError(name: EventName, err: unknown): void {

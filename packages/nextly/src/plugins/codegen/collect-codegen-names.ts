@@ -26,6 +26,8 @@ import {
   AuthEvents,
   DocumentEvents,
   MediaEvents,
+  PLUGIN_SETTINGS_CHANGED_EVENT,
+  UserEvents,
 } from "../../events/event-names";
 import type { PermissionConfigSource } from "../permissions/collect-permissions";
 import { collectCustomPermissions } from "../permissions/collect-permissions";
@@ -92,9 +94,11 @@ export function collectCodegenNames(
 
   // Lifecycle event + core event families.
   eventNames.add("plugin.initialized");
+  eventNames.add(PLUGIN_SETTINGS_CHANGED_EVENT);
   for (const name of Object.values(DocumentEvents)) eventNames.add(name);
   for (const name of Object.values(AuthEvents)) eventNames.add(name);
   for (const name of Object.values(MediaEvents)) eventNames.add(name);
+  for (const name of Object.values(UserEvents)) eventNames.add(name);
 
   // Plugin-declared custom events.
   for (const plugin of plugins) {

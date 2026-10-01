@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -158,6 +158,10 @@ describe("AuthChallenge (D71)", () => {
       />
     );
     expect(screen.getByTestId("challenge-fallback")).toBeInTheDocument();
+    // The fallback offers a way on rather than only a message.
+    expect(
+      screen.getByRole("link", { name: "Back to sign in" })
+    ).toHaveAttribute("href", "/admin/login");
   });
   it("renders a resumed challenge, which carries no token", () => {
     // The resume path is the reason the host posts the answer: there is no
@@ -243,5 +247,78 @@ describe("provider buttons", () => {
     );
     expect(screen.getByText("custom-provider")).toBeInTheDocument();
     expect(screen.queryByText("Continue with Google")).not.toBeInTheDocument();
+  });
+});
+
+describe("a navigating provider link", () => {
+  const google = {
+    ...base,
+    providers: [
+      {
+        strategy: "google",
+        label: "Continue with Google",
+        href: "/sso/google/authorize",
+        icon: "Mail",
+      },
+    ],
+  };
+
+  it("lets the first click through and blocks a second", () => {
+    // A second click started a second authorize request, whose state cookie
+    // replaced the first one's.
+    render(<AuthUiExtras authUi={google} />);
+    const link = screen.getByText("Continue with Google").closest("a")!;
+
+    const first = new MouseEvent("click", { bubbles: true, cancelable: true });
+    act(() => {
+      link.dispatchEvent(first);
+    });
+    expect(first.defaultPrevented).toBe(false);
+
+    const second = new MouseEvent("click", { bubbles: true, cancelable: true });
+    act(() => {
+      link.dispatchEvent(second);
+    });
+    expect(second.defaultPrevented).toBe(true);
+    expect(link).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("is not disabled by a click that opens another tab", () => {
+    render(<AuthUiExtras authUi={google} />);
+    const link = screen.getByText("Continue with Google").closest("a")!;
+    act(() => {
+      link.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          metaKey: true,
+        })
+      );
+    });
+    expect(link).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("is enabled again when the page is restored from the back-forward cache", () => {
+    render(<AuthUiExtras authUi={google} />);
+    const link = screen.getByText("Continue with Google").closest("a")!;
+    act(() => {
+      link.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true })
+      );
+    });
+    expect(link).toHaveAttribute("aria-disabled", "true");
+
+    act(() => {
+      const shown = new Event("pageshow");
+      Object.defineProperty(shown, "persisted", { value: true });
+      window.dispatchEvent(shown);
+    });
+    expect(link).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("draws the icon the provider declared", () => {
+    render(<AuthUiExtras authUi={google} />);
+    const link = screen.getByText("Continue with Google").closest("a")!;
+    expect(link.querySelector("svg")).not.toBeNull();
   });
 });

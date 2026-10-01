@@ -46,9 +46,20 @@ import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { safeEmit } from "../../../events/domain-events";
 import {
+  UserEvents,
+  type UserCreatedPayload,
+  type UserDeletedPayload,
+} from "../../../events/event-names";
+import {
   RETIRED_ACCOUNTS_TABLE,
+  RETIRED_SESSIONS_TABLE,
   retiredAccountsTable,
+  retiredSessionsTable,
 } from "../../../init/retired-accounts-erasure";
+import {
+  hasRetiredShape,
+  liveColumnsOf,
+} from "../../../init/retired-auth-tables";
 import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
 import {
   layoutRowId,
@@ -760,7 +771,8 @@ export class UserMutationService extends BaseService {
     // Only the delivery of the outbox row depends on there being one.
     if (recorded) this.fastDrainScheduler?.offer();
     // The account exists either way, so in-process subscribers are told.
-    safeEmit("user.created", { userId });
+    const payload: UserCreatedPayload = { userId };
+    safeEmit(UserEvents.Created, payload);
   }
 
   /**
@@ -1015,10 +1027,15 @@ export class UserMutationService extends BaseService {
         // uncommitted rows, which is the only way to see roles not yet
         // committed, and it bypasses the super-admin cache in both
         // directions, so nothing here can poison a later request's answer.
-        const { isSuperAdmin } = await import(
+        //
+        // The THROWING form: this is a refusal gate, so a read that fails
+        // must fail the creation. The access-check form answers a failure
+        // with `false`, which here would mean "allow", and on MySQL and
+        // SQLite the failed read does not abort the transaction.
+        const { isSuperAdminOrThrow } = await import(
           "../../../services/lib/permissions"
         );
-        if (await isSuperAdmin(newUserId, txDb)) {
+        if (await isSuperAdminOrThrow(newUserId, txDb)) {
           throw NextlyError.forbidden({
             logContext: {
               reason: "external-user-super-admin-refused",
@@ -1604,10 +1621,33 @@ export class UserMutationService extends BaseService {
 
       if (hasFieldUpdates) {
         updateData.updatedAt = new Date();
-        await this.db
-          .update(users)
-          .set(updateData)
-          .where(eq(users.id, currentUser.id));
+        // A deactivation, or a password an administrator set, ends every
+        // session the account holds. The refresh rows are what a session is
+        // renewed from; left in place, a deactivated account's sessions
+        // came back the moment it was reactivated, and a password reset for
+        // a compromised account left the attacker's session renewing. In the
+        // same transaction, so the account never has the new state with the
+        // old sessions still valid.
+        const endsSessions =
+          changes.isActive === false || updateData.passwordHash !== undefined;
+        if (endsSessions) {
+          const { refreshTokens } = this.tables;
+          await this.withTransaction(async tx => {
+            const txDb = tx as DrizzleTransactionLike;
+            await txDb
+              .update(users)
+              .set(updateData)
+              .where(eq(users.id, currentUser.id));
+            await txDb
+              .delete(refreshTokens)
+              .where(eq(refreshTokens.userId, String(currentUser.id)));
+          });
+        } else {
+          await this.db
+            .update(users)
+            .set(updateData)
+            .where(eq(users.id, currentUser.id));
+        }
       }
 
       // 2c) Upsert custom fields in user_ext
@@ -1922,13 +1962,16 @@ export class UserMutationService extends BaseService {
   }
 
   /**
-   * Remove the deleted account's rows from the RETIRED `accounts` table.
+   * Remove the deleted account's rows from the RETIRED `accounts` and
+   * `sessions` tables, each when the database still has it in the shape
+   * Nextly created.
    *
-   * It is no longer created and nothing reads it, but an upgraded database
-   * keeps it until the operator drops it — and on Postgres and MySQL its
-   * `user_id` carried no cascade, so its provider identifiers and stored
-   * access, refresh and ID tokens outlive the account unless they are removed
-   * here. No later run revisits a deletion that has already happened.
+   * Neither is created any more and nothing reads them, but an upgraded
+   * database keeps them until the operator drops them — and on Postgres and
+   * MySQL their `user_id` carried no cascade, so provider identifiers, stored
+   * access, refresh and ID tokens, and session tokens outlive the account
+   * unless they are removed here. No later run revisits a deletion that has
+   * already happened.
    *
    * Runs in the deletion transaction, so the credentials go with the account
    * rather than in a step a failure could skip. Its own method for the reason
@@ -1938,11 +1981,33 @@ export class UserMutationService extends BaseService {
   private async eraseRetiredAccountRows(
     txDb: DrizzleTransactionLike,
     userId: string | number,
-    present: boolean
+    present: { accounts: boolean; sessions: boolean }
   ): Promise<void> {
-    if (!present) return;
-    const retired = retiredAccountsTable(this.dialect);
-    await txDb.delete(retired).where(eq(retired.userId, String(userId)));
+    if (present.accounts) {
+      const accounts = retiredAccountsTable(this.dialect);
+      await txDb.delete(accounts).where(eq(accounts.userId, String(userId)));
+    }
+    if (present.sessions) {
+      const sessions = retiredSessionsTable(this.dialect);
+      await txDb.delete(sessions).where(eq(sessions.userId, String(userId)));
+    }
+  }
+
+  /**
+   * Whether a retired table is present AND is the one Nextly created.
+   *
+   * A fresh install no longer creates these, so the name alone can belong to
+   * a host application's own table — and erasing from that one ran a DELETE
+   * against columns it does not have, which failed every user deletion on
+   * the install. Presence is asked the fail-safe way the other erasures ask
+   * it; the shape is read from the catalogue, and an absent table has none.
+   */
+  private async retiredTableErasable(table: string): Promise<boolean> {
+    if (!(await this.tablePresent(table))) return false;
+    return hasRetiredShape(
+      table,
+      await liveColumnsOf(this.db, this.dialect)(table)
+    );
   }
 
   /**
@@ -2095,14 +2160,13 @@ export class UserMutationService extends BaseService {
     // arrives with the plugin runtime, so any database reconciled before it
     // lacks the table while this build's declaration is present either way.
     const settingsExist = await this.tablePresent(PLUGIN_SETTINGS_TABLE);
-    // The RETIRED `accounts` table, probed for the same reason. It is no
-    // longer created and nothing reads it, but an upgraded database keeps it
-    // until the operator drops it — and on Postgres and MySQL its `user_id`
-    // carried no cascade, so its provider identifiers and stored access,
-    // refresh and ID tokens outlive the account unless they are erased here.
-    const retiredAccountsExist = await this.tablePresent(
-      RETIRED_ACCOUNTS_TABLE
-    );
+    // The RETIRED `accounts` and `sessions` tables, probed for the same
+    // reason and by their shape as well as their name, since either name may
+    // now belong to the host app's own table.
+    const retiredTables = {
+      accounts: await this.retiredTableErasable(RETIRED_ACCOUNTS_TABLE),
+      sessions: await this.retiredTableErasable(RETIRED_SESSIONS_TABLE),
+    };
     // The two answer a legacy shape differently, because what happens to an
     // un-erased row differs. A legacy `activity_log` still cascades from the
     // account, so its rows go with the deletion and there is nothing left to
@@ -2240,7 +2304,7 @@ export class UserMutationService extends BaseService {
         // being absent, so it needs no guard of its own.
         await this.scrubPluginSettingsActor(txDb, userId, settingsExist);
 
-        await this.eraseRetiredAccountRows(txDb, userId, retiredAccountsExist);
+        await this.eraseRetiredAccountRows(txDb, userId, retiredTables);
 
         if (mediaExists) {
           // Read before writing: the event carries a before and an after, and
@@ -2376,7 +2440,8 @@ export class UserMutationService extends BaseService {
     // row says nothing about whether the account is gone, so this asks the
     // question it actually means.
     if (userWasDeleted) {
-      safeEmit("user.deleted", { userId: String(userId) });
+      const payload: UserDeletedPayload = { userId: String(userId) };
+      safeEmit(UserEvents.Deleted, payload);
     }
 
     // The detached files changed, so anything cached against them is stale —

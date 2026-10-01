@@ -36,7 +36,10 @@ function memoryStore(): PluginSettingsStore & { rows: PluginSettingRow[] } {
         const at = rows.findIndex(
           r => r.owner === row.owner && r.key === row.key
         );
-        if (at === -1) rows.push(row);
+        // A removed key is deleted, as the real store deletes it.
+        if (row.remove) {
+          if (at !== -1) rows.splice(at, 1);
+        } else if (at === -1) rows.push(row);
         else rows[at] = row;
       }
     },
@@ -547,7 +550,7 @@ describe("the empty key is not a settings key", () => {
   it("still accepts an ordinary key", async () => {
     // The control: refusing every patch would satisfy the test above.
     const store = memoryStore();
-    await expect(service(store).set({ port: 8443 })).resolves.toBeUndefined();
+    await expect(service(store).set({ port: 8443 })).resolves.toEqual(["port"]);
   });
 });
 
@@ -791,18 +794,17 @@ describe("a plaintext value that claims the envelope prefix", () => {
     // A credential encrypted under a key the install no longer configures
     // is a lost secret, and handing its ciphertext back as configuration
     // would have the plugin authenticate with the envelope text. The read
-    // refuses with the decryption reason instead.
+    // refuses, naming the path to enter again.
     const store = memoryStore();
     // Written under KEY_B; read under a service configured with KEY_A only.
     await service(store, [KEY_B]).set({ clientSecret: SECRET_VALUE });
 
-    await expect(service(store, [KEY_A]).get()).rejects.toSatisfy(err => {
-      if (!NextlyError.is(err)) return false;
-      return (
-        (err.logContext as { reason?: string } | undefined)?.reason?.includes(
-          "decrypt"
-        ) === true
-      );
+    await expect(service(store, [KEY_A]).get()).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      logContext: expect.objectContaining({
+        reason: "stored-secret-unreadable",
+        paths: ["clientSecret"],
+      }),
     });
   });
 });
@@ -969,5 +971,496 @@ describe("an empty store a required key rejects", () => {
       apiKey: { set: false },
       region: "eu",
     });
+  });
+});
+
+/**
+ * Where a secret is stored is part of what authenticates it, so a value moved
+ * to another plugin or another path is unreadable there instead of being read
+ * as that other setting.
+ */
+describe("the encrypted envelope", () => {
+  it("names the key generation that sealed it", async () => {
+    const store = memoryStore();
+    await service(store, [KEY_A]).set({ clientSecret: SECRET_VALUE });
+    await service(store, [KEY_B]).set({ port: 1 });
+    const sealedA = JSON.parse(
+      store.rows.find(r => r.key === "clientSecret")?.value ?? '""'
+    ) as string;
+    await service(store, [KEY_B]).set({ clientSecret: SECRET_VALUE });
+    const sealedB = JSON.parse(
+      store.rows.find(r => r.key === "clientSecret")?.value ?? '""'
+    ) as string;
+
+    const kid = (envelope: string) =>
+      /^enc:v2:([0-9a-f]{16}):/.exec(envelope)?.[1];
+    expect(kid(sealedA)).toBeDefined();
+    expect(kid(sealedB)).toBeDefined();
+    expect(kid(sealedA)).not.toBe(kid(sealedB));
+  });
+
+  it("does not decrypt in ANOTHER plugin's row", async () => {
+    const store = memoryStore();
+    await service(store).set({ clientSecret: SECRET_VALUE });
+    const row = store.rows.find(r => r.key === "clientSecret");
+    if (!row) throw new Error("expected a stored row");
+    store.rows.push({ ...row, owner: "@test/other" });
+
+    const other = new PluginSettingsService({
+      owner: "@test/other",
+      schema,
+      secretPaths: ["clientSecret"],
+      store,
+      secrets: () => [KEY_A],
+    });
+    await expect(other.get()).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      logContext: expect.objectContaining({
+        reason: "stored-secret-unreadable",
+        paths: ["clientSecret"],
+      }),
+    });
+  });
+
+  it("does not decrypt at ANOTHER path of the same plugin", async () => {
+    const store = memoryStore();
+    await service(store).set({
+      providers: { google: { clientId: "g", clientSecret: SECRET_VALUE } },
+    });
+    const row = store.rows.find(r => r.key === "providers");
+    if (!row) throw new Error("expected a stored row");
+    const value = JSON.parse(row.value) as Record<
+      string,
+      { clientId: string; clientSecret: string }
+    >;
+    // The google envelope copied under github, as a database edit would.
+    value.github = { clientId: "h", clientSecret: value.google.clientSecret };
+    row.value = JSON.stringify(value);
+
+    await expect(service(store).get()).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      logContext: expect.objectContaining({
+        reason: "stored-secret-unreadable",
+        paths: ["providers.github.clientSecret"],
+      }),
+    });
+  });
+
+  it("still decrypts where it was sealed", async () => {
+    // The control for the two above: the same row, unmoved, reads.
+    const store = memoryStore();
+    await service(store).set({
+      providers: { google: { clientId: "g", clientSecret: SECRET_VALUE } },
+    });
+    const settings = await service(store).get<{
+      providers: Record<string, { clientSecret: string }>;
+    }>();
+    expect(settings.providers.google.clientSecret).toBe(SECRET_VALUE);
+  });
+});
+
+describe("a read with a retired generation", () => {
+  it("re-seals the value under the current one, without any write", async () => {
+    // Re-sealing only on a write of that key left the retired secret needed
+    // for as long as nobody edited the setting.
+    const store = memoryStore();
+    await service(store, [KEY_A]).set({ clientSecret: SECRET_VALUE });
+
+    await service(store, [KEY_B, KEY_A]).get();
+
+    const settings = await service(store, [KEY_B]).get<{
+      clientSecret: string;
+    }>();
+    expect(settings.clientSecret).toBe(SECRET_VALUE);
+  });
+
+  it("leaves a value sealed by the current generation untouched", async () => {
+    // The control: a read of a current value writes nothing.
+    const store = memoryStore();
+    await service(store, [KEY_A]).set({ clientSecret: SECRET_VALUE });
+    const before = store.rows.find(r => r.key === "clientSecret")?.value;
+
+    await service(store, [KEY_A, KEY_B]).get();
+
+    expect(store.rows.find(r => r.key === "clientSecret")?.value).toBe(before);
+  });
+});
+
+/**
+ * A secret sealed under a key the install no longer has. The operator must be
+ * able to see it and replace it: failing every read and write of the plugin's
+ * settings left no way to enter the credential again.
+ */
+describe("a secret no configured generation can open", () => {
+  async function lostSecretStore() {
+    const store = memoryStore();
+    await service(store, [KEY_B]).set({
+      clientSecret: SECRET_VALUE,
+      providers: { google: { clientId: "g", clientSecret: SECRET_VALUE } },
+    });
+    return store;
+  }
+
+  it("is shown to the admin as set but unreadable", async () => {
+    const store = await lostSecretStore();
+    const view = await service(store, [KEY_A]).view();
+    expect(view.settings).toMatchObject({
+      clientSecret: { set: true, readable: false },
+      providers: {
+        google: { clientId: "g", clientSecret: { set: true, readable: false } },
+      },
+    });
+  });
+
+  it("does not block a write of an unrelated key", async () => {
+    const store = await lostSecretStore();
+    await service(store, [KEY_A]).set({ port: 8443 });
+    expect(store.rows.find(r => r.key === "port")?.value).toBe("8443");
+  });
+
+  it("is replaced by a write that enters it again", async () => {
+    const store = await lostSecretStore();
+    await service(store, [KEY_A]).set({
+      clientSecret: ROTATED_SECRET_VALUE,
+      providers: {
+        google: { clientId: "g", clientSecret: ROTATED_SECRET_VALUE },
+      },
+    });
+    const settings = await service(store, [KEY_A]).get<{
+      clientSecret: string;
+      providers: Record<string, { clientSecret: string }>;
+    }>();
+    expect(settings.clientSecret).toBe(ROTATED_SECRET_VALUE);
+    expect(settings.providers.google.clientSecret).toBe(ROTATED_SECRET_VALUE);
+  });
+
+  it("refuses a write that would keep it without entering it", async () => {
+    // Patching the sibling would carry the unreadable leaf into the new row,
+    // where it would be sealed as if it were the credential.
+    const store = await lostSecretStore();
+    await expect(
+      service(store, [KEY_A]).set({
+        providers: { google: { clientId: "changed" } },
+      } as never)
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "providers.google.clientSecret",
+            code: "UNREADABLE_SECRET",
+          }),
+        ],
+      },
+    });
+  });
+});
+
+/** RFC 7396: `null` removes a member, at any depth. */
+describe("a patch naming a key with null", () => {
+  it("removes one entry of a record and keeps the others", async () => {
+    const store = memoryStore();
+    await service(store).set({
+      providers: {
+        google: { clientId: "g", clientSecret: SECRET_VALUE },
+        github: { clientId: "h", clientSecret: SECRET_VALUE },
+      },
+    });
+
+    await service(store).set({ providers: { github: null } } as never);
+
+    const settings = await service(store).get<{
+      providers: Record<string, unknown>;
+    }>();
+    expect(Object.keys(settings.providers)).toEqual(["google"]);
+  });
+
+  it("deletes a top-level key's row, so its default applies again", async () => {
+    const store = memoryStore();
+    await service(store).set({ port: 8443 });
+
+    await service(store).set({ port: null } as never);
+
+    expect(store.rows.find(r => r.key === "port")).toBeUndefined();
+    expect((await service(store).get<{ port: number }>()).port).toBe(443);
+  });
+
+  it("still refuses a removal the schema cannot do without", async () => {
+    // The merged result is validated as before: removing a required member
+    // is a change that makes the settings invalid.
+    const store = memoryStore();
+    await service(store).set({
+      providers: { google: { clientId: "g", clientSecret: SECRET_VALUE } },
+    });
+    await expect(
+      service(store).set({
+        providers: { google: { clientId: null } },
+      } as never)
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+});
+
+describe("an unknown key below the top level", () => {
+  it("is refused, naming its full path", async () => {
+    // A plain zod object strips what it does not declare, so a misspelled
+    // nested field answered 200 and its value was silently dropped.
+    const store = memoryStore();
+    await expect(
+      service(store).set({
+        providers: {
+          google: { clientId: "g", clientSecret: "s", clientSecrett: "x" },
+        },
+      } as never)
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "providers.google.clientSecrett",
+            code: "UNKNOWN_KEY",
+          }),
+        ],
+      },
+    });
+    expect(store.rows).toHaveLength(0);
+  });
+});
+
+describe("a setting larger than every dialect can hold alike", () => {
+  it("is refused", async () => {
+    const store = memoryStore();
+    await expect(
+      service(store).set({
+        providers: {
+          big: { clientId: "x".repeat(300 * 1024), clientSecret: "s" },
+        },
+      })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({ path: "providers", code: "TOO_LARGE" }),
+        ],
+      },
+    });
+  });
+
+  it("is stored when it fits", async () => {
+    const store = memoryStore();
+    await service(store).set({
+      providers: {
+        big: { clientId: "x".repeat(200 * 1024), clientSecret: "s" },
+      },
+    });
+    expect(store.rows.find(r => r.key === "providers")).toBeDefined();
+  });
+});
+
+/**
+ * Stored settings a newer plugin version no longer accepts — it added a
+ * required key. The form is how that gets fixed, so it has to render.
+ */
+describe("stored settings that no longer fit the schema", () => {
+  const v2 = z.object({
+    clientSecret: z.string().default(""),
+    port: z.number().default(443),
+    tenantId: z.string(),
+  });
+  function v2Service(store: PluginSettingsStore) {
+    return new PluginSettingsService({
+      owner: "@test/p",
+      schema: v2,
+      secretPaths: ["clientSecret"],
+      store,
+      secrets: () => [KEY_A],
+    });
+  }
+
+  it("still render, with what is stored and the issue beside it", async () => {
+    const store = memoryStore();
+    await service(store).set({ port: 8443, clientSecret: SECRET_VALUE });
+
+    const view = await v2Service(store).view();
+
+    expect(view.settings).toEqual({
+      port: 8443,
+      clientSecret: { set: true },
+    });
+    expect(view.issues.map(issue => issue.path)).toEqual(["tenantId"]);
+  });
+
+  it("make get() refuse with an internal error that logs the key", async () => {
+    // Internal, not a 400: this is the install's configuration, and a public
+    // plugin route must not hand setting paths to whoever called it.
+    const store = memoryStore();
+    await service(store).set({ port: 8443 });
+
+    const error = await v2Service(store)
+      .get()
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      code: "INTERNAL_ERROR",
+      logContext: expect.objectContaining({
+        reason: "stored-settings-invalid",
+        issues: [expect.objectContaining({ path: "tenantId" })],
+      }),
+    });
+    expect(NextlyError.is(error) && error.publicData).toBeFalsy();
+  });
+
+  it("report no issue once the missing key is saved", async () => {
+    // The control: the issue list reflects the stored state, not the schema.
+    const store = memoryStore();
+    await service(store).set({ port: 8443 });
+    await v2Service(store).set({ tenantId: "t-1" });
+
+    expect((await v2Service(store).view()).issues).toEqual([]);
+  });
+});
+
+/** What `set()` reports changed: what an audit entry and a listener act on. */
+describe("the keys an update reports changed", () => {
+  it("names a key whose value moved", async () => {
+    const store = memoryStore();
+    expect(await service(store).set({ port: 8443 })).toEqual(["port"]);
+  });
+
+  it("leaves out a resent value, a secret included", async () => {
+    // A secret's stored text differs on every write, so this is judged on
+    // the decoded value, not the row.
+    const store = memoryStore();
+    await service(store).set({ port: 8443, clientSecret: SECRET_VALUE });
+
+    expect(
+      await service(store).set({ port: 8443, clientSecret: SECRET_VALUE })
+    ).toEqual([]);
+  });
+
+  it("names a changed secret", async () => {
+    const store = memoryStore();
+    await service(store).set({ clientSecret: SECRET_VALUE });
+
+    expect(
+      await service(store).set({ clientSecret: ROTATED_SECRET_VALUE })
+    ).toEqual(["clientSecret"]);
+  });
+
+  it("names a removed key that was stored, and not one that never was", async () => {
+    const store = memoryStore();
+    await service(store).set({ port: 8443 });
+
+    expect(
+      await service(store).set({ port: null, clientSecret: null } as never)
+    ).toEqual(["port"]);
+  });
+});
+
+/**
+ * A credential stored encrypted stays secret after the manifest stops naming
+ * it: a plugin update that renames, drops or un-declares a secret must not
+ * make the stored value readable in the admin, or plaintext at rest.
+ */
+describe("a secret the current manifest no longer declares", () => {
+  const v1 = z.object({ apiKey: z.string().default("") });
+  function versioned(
+    store: PluginSettingsStore,
+    schema: z.ZodObject<z.ZodRawShape>,
+    secretPaths: string[],
+    secrets: string[] = [KEY_A]
+  ) {
+    return new PluginSettingsService({
+      owner: "@test/p",
+      schema,
+      secretPaths,
+      store,
+      secrets: () => secrets,
+    });
+  }
+
+  it("is not sent to the admin when a newer schema no longer parses", async () => {
+    const store = memoryStore();
+    await versioned(store, v1, ["apiKey"]).set({ apiKey: SECRET_VALUE });
+
+    const v2 = z.object({ token: z.string() });
+    const view = await versioned(store, v2, ["token"]).view();
+
+    expect(JSON.stringify(view)).not.toContain(SECRET_VALUE);
+    // Not even as a marker: the key is not this version's configuration.
+    expect(view.settings).not.toHaveProperty("apiKey");
+  });
+
+  it("is redacted when the manifest stops declaring its path", async () => {
+    const store = memoryStore();
+    await service(store).set({
+      providers: { google: { clientId: "g", clientSecret: SECRET_VALUE } },
+    });
+
+    const view = await service(store, [KEY_A], []).view();
+
+    expect(JSON.stringify(view)).not.toContain(SECRET_VALUE);
+    expect(view.settings).toMatchObject({
+      providers: { google: { clientId: "g", clientSecret: { set: true } } },
+    });
+  });
+
+  it("stays encrypted when a rotation re-seals its row", async () => {
+    const store = memoryStore();
+    const legacy = z.object({ legacyKey: z.string().default("") });
+    await versioned(store, legacy, ["legacyKey"], [KEY_A]).set({
+      legacyKey: SECRET_VALUE,
+    });
+
+    // v2 dropped the key from the schema and the manifest; the secret rotated.
+    const v2 = z.object({ port: z.number().default(443) });
+    await versioned(store, v2, [], [KEY_B, KEY_A]).get();
+    await versioned(store, v2, [], [KEY_B, KEY_A]).set({ port: 1 });
+
+    const row = store.rows.find(r => r.key === "legacyKey");
+    expect(row?.isSecret).toBe(true);
+    expect(row?.value).not.toContain(SECRET_VALUE);
+  });
+
+  it("stays encrypted when a sibling of an undeclared leaf is written", async () => {
+    const store = memoryStore();
+    await service(store).set({
+      providers: { google: { clientId: "g", clientSecret: SECRET_VALUE } },
+    });
+
+    await service(store, [KEY_A], []).set({
+      providers: { google: { clientId: "changed" } },
+    } as never);
+
+    const row = store.rows.find(r => r.key === "providers");
+    expect(row?.value).toContain("changed");
+    expect(row?.value).not.toContain(SECRET_VALUE);
+  });
+
+  it("does not block reads when it is lost under a key the schema dropped", async () => {
+    const store = memoryStore();
+    const legacy = z.object({
+      legacyKey: z.string().default(""),
+      port: z.number().default(443),
+    });
+    await versioned(store, legacy, ["legacyKey"], [KEY_B]).set({
+      legacyKey: SECRET_VALUE,
+    });
+
+    const v2 = z.object({ port: z.number().default(443) });
+    await expect(versioned(store, v2, [], [KEY_A]).get()).resolves.toEqual({
+      port: 443,
+    });
+    const view = await versioned(store, v2, [], [KEY_A]).view();
+    expect(view.settings).not.toHaveProperty("legacyKey");
+  });
+});
+
+describe("a null inside a group the store does not hold yet", () => {
+  it("removes the member rather than storing null", async () => {
+    // RFC 7396 applies the patch to `{}` there; storing the null failed the
+    // documented `set({ providers: { github: null } })` on a fresh store.
+    const store = memoryStore();
+    await service(store).set({ providers: { github: null } } as never);
+
+    const settings = await service(store).get<{
+      providers: Record<string, unknown>;
+    }>();
+    expect(settings.providers).toEqual({});
   });
 });

@@ -302,6 +302,24 @@ export class NextlyError extends Error {
   }
 
   /**
+   * A cookie-authenticated write refused because its origin or CSRF token did
+   * not check out. The public message names no detail of which check failed;
+   * that goes to the log through `logMessage`.
+   */
+  static csrfFailed(opts?: {
+    logMessage?: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "CSRF_FAILED",
+      publicMessage:
+        "This request could not be verified. Reload the page and try again.",
+      logMessage: opts?.logMessage,
+      logContext: opts?.logContext,
+    });
+  }
+
+  /**
    * A call the caller got wrong, where naming the mistake IS the value of the
    * error.
    *

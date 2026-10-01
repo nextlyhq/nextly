@@ -27,6 +27,8 @@
  * users out.
  */
 
+import { ipv4ToInt } from "../../utils/get-trusted-client-ip";
+
 export type RefreshBindingResult =
   | { kind: "ok" }
   | { kind: "soft"; reason: string }
@@ -53,36 +55,25 @@ function classifyIp(addr: string): IpFamily {
   return 0;
 }
 
-function ipv4ToInt(ip: string): number | null {
-  const parts = ip.split(".");
-  if (parts.length !== 4) return null;
-  let acc = 0;
-  for (const p of parts) {
-    const n = Number(p);
-    if (!Number.isInteger(n) || n < 0 || n > 255) return null;
-    acc = (acc << 8) | n;
-  }
-  return acc >>> 0;
-}
-
 function sameIpv4Prefix(a: string, b: string, prefix: number): boolean {
   const ai = ipv4ToInt(a);
   const bi = ipv4ToInt(b);
   if (ai === null || bi === null) return false;
   const mask = prefix === 0 ? 0 : (-1 >>> (32 - prefix)) << (32 - prefix);
-  return ((ai & mask) >>> 0) === ((bi & mask) >>> 0);
+  return (ai & mask) >>> 0 === (bi & mask) >>> 0;
 }
 
 /**
  * Expand an IPv6 address to 8 groups of 4 lowercase hex digits, then return
  * the leftmost `prefixBits / 4` hex characters as the prefix key. This avoids
- * pulling in a BigInt-based mask while still being correct for the /48
- * prefix used here (12 hex chars). Returns `null` if the input cannot be
- * parsed as IPv6.
+ * pulling in a BigInt-based mask while staying correct for any prefix that
+ * is a whole number of hex digits: the /48 the refresh binding compares, and
+ * the /64 the plugin route rate limit keys by. Returns `null` if the input
+ * cannot be parsed as IPv6.
  *
  * Handles `::`-collapsed forms and embedded IPv4 in the last 32 bits.
  */
-function ipv6PrefixHex(addr: string, prefixBits: number): string | null {
+export function ipv6PrefixHex(addr: string, prefixBits: number): string | null {
   if (prefixBits % 4 !== 0) return null;
   const hexCount = prefixBits / 4;
 
@@ -149,7 +140,10 @@ export function evaluateRefreshBinding(
 }
 
 /** Returns a hard-fail reason or `null` if the IP comparison is acceptable. */
-function compareIps(stored: string | null, current: string | null): string | null {
+function compareIps(
+  stored: string | null,
+  current: string | null
+): string | null {
   if (stored === null || current === null) return null;
   if (stored === current) return null;
 

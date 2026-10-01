@@ -12,8 +12,8 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import { readOrGenerateRequestId } from "../api/request-id";
 import {
-  auditFailureMetadata,
   isStrategyName,
   type AuditLogWriter,
 } from "../domains/audit/audit-log-writer";
@@ -22,12 +22,12 @@ import { NextlyError } from "../errors/nextly-error";
 import { env } from "../lib/env";
 import type { PluginContext } from "../plugins/plugin-context";
 import type { AuthUser } from "../types/auth";
-import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
 
 import { setPendingCookie } from "./cookies/pending-cookie";
 import { readCsrfCookie, readCsrfFromRequest } from "./csrf/csrf-cookie";
 import { readCsrfBody } from "./csrf/read-csrf-body";
 import { validateCsrf } from "./csrf/validate";
+import { recordLoginFailure } from "./handlers/handler-utils";
 import { mintSession, type IssueSessionDeps } from "./handlers/issue-session";
 import type { AuthHookRegistry } from "./pipeline/hooks";
 import {
@@ -39,10 +39,14 @@ import { sanitizeAdminPath } from "./redirect/sanitize-admin-path";
 import { assertAccountUsable } from "./session/account-state";
 import { getSession } from "./session/get-session";
 
+/** @experimental What `ctx.auth.completeLogin` takes besides the user id. */
 export interface CompleteLoginOptions {
   /** The incoming request (for IP/UA in the audit row and the cookie Secure flag). */
   request: Request;
-  /** Strategy name recorded on the audit rows, e.g. "oauth-google". */
+  /**
+   * Strategy name recorded on the audit rows. From a plugin it must begin
+   * with the plugin's own slug and a colon, e.g. "acme-google-auth:google".
+   */
   strategy: string;
   /** Admin path to land on. Sanitized here; anything unsafe becomes "/admin". */
   next?: string;
@@ -50,6 +54,7 @@ export interface CompleteLoginOptions {
   appendCookies?: string[];
 }
 
+/** @experimental `ctx.auth`: finishing an external login, and session reads. */
 export interface PluginAuthApi {
   /**
    * Finish a login a plugin authenticated elsewhere (for example an OAuth
@@ -84,6 +89,12 @@ export interface PluginAuthApi {
   /**
    * The session user for this request, or null. Resolved through `getSession`,
    * so the typed-token rules apply and no plugin parses the cookie itself.
+   *
+   * It reads the access token and does not re-check the account's state, as
+   * core's own `requireAuth` does not: an account deactivated after its
+   * token was issued is still returned until that token expires, which is at
+   * most the 15-minute access-token lifetime. A handler acting on something
+   * sensitive re-reads the account itself.
    */
   currentUser(request: Request): Promise<{ id: string; email: string } | null>;
   /**
@@ -383,25 +394,16 @@ export function createPluginAuthApi(
         // contract, skipped the `login-failed` row, and surfaced the exception
         // in whichever plugin route had called in.
         if (isSystemFailure(err)) throw err;
-        // Actor-less, like the login handler: naming the account on a failure
-        // is the enumeration leak the generic response exists to avoid.
-        await deps.auditLog.write({
-          kind: "login-failed",
-          // The strategy is attached here rather than relied on from the
-          // error: the account-state gate raises its own error and knows
-          // nothing about the caller, so every refusal would otherwise name
-          // the method only when it happened to come from this module. It is
-          // safe to state directly, having been validated on the way in.
-          metadata: {
-            ...auditFailureMetadata(err),
-            strategy: opts.strategy,
-          },
-          ipAddress: getTrustedClientIp(opts.request, {
-            trustProxy: deps.trustProxy,
-            trustedProxyIps: deps.trustedProxyIps,
-          }),
-          userAgent: opts.request.headers.get("user-agent"),
-        });
+        // The same actor-less row every sign-in path records, naming the
+        // strategy the plugin was completing: the account-state gate raises
+        // its own error and knows nothing about the caller.
+        await recordLoginFailure(
+          deps,
+          opts.request,
+          err,
+          readOrGenerateRequestId(opts.request),
+          opts.strategy
+        );
         return redirectWithCookies(SIGNIN_FAILED_PATH, extra);
       }
     },

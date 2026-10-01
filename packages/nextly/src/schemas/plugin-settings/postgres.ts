@@ -33,9 +33,9 @@ export const nextlyPluginSettings = pgTable(
     owner: text("owner").notNull(),
     /** A top-level key of the plugin's declared settings schema. */
     key: text("key").notNull(),
-    /** JSON, or ciphertext when the whole value is a secret. */
+    /** JSON; in a secret row, its secret leaves are sealed envelopes. */
     value: text("value").notNull(),
-    /** Whether `value` is ciphertext rather than readable JSON. */
+    /** Whether `value` holds sealed secret leaves. */
     isSecret: boolean("is_secret").notNull().default(false),
     updatedAt: timestamp("updated_at", { withTimezone: false }).notNull(),
     /** Who wrote it, when a person did. Null for a write the system made. */

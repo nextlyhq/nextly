@@ -32,6 +32,7 @@ export type AddressRefusal =
   | "reserved"
   | "unique-local"
   | "site-local"
+  | "nat64-local-use"
   | "malformed";
 
 export type AddressVerdict =
@@ -250,6 +251,19 @@ const REFUSED_IPV6: ReadonlyArray<{
     matches: ([a, b]) => a === 0xfe && (b & 0xc0) === 0xc0,
   },
   { reason: "multicast", matches: ([a]) => a === 0xff },
+  // 64:ff9b:1::/48 — RFC 8215 local-use NAT64, marked not globally reachable
+  // by IANA. Refused whatever it carries: an operator may run it with any
+  // RFC 6052 prefix length, so the IPv4 inside cannot be located reliably.
+  {
+    reason: "nat64-local-use",
+    matches: ([a, b, c, d, e, f]) =>
+      a === 0x00 &&
+      b === 0x64 &&
+      c === 0xff &&
+      d === 0x9b &&
+      e === 0x00 &&
+      f === 0x01,
+  },
   // 2001:db8::/32 (RFC 3849) and 3fff::/20 (RFC 9637), the IPv6 counterparts
   // of the IPv4 TEST-NETs.
   {
@@ -293,14 +307,11 @@ const REFUSED_IPV6: ReadonlyArray<{
  *
  * Every translation prefix asks the same question — "what IPv4 does this
  * actually reach" — so each is judged as the address it carries rather than
- * as an ordinary v6 global that matches no refused prefix. The layouts
- * differ: the mapped and compatible forms and the well-known NAT64 prefix
- * end in the IPv4, the RFC 8215 local-use NAT64 prefix SPLITS it around its
- * u octet (RFC 6052: bits 48-63 and 72-87, so octets at bytes 6-7 and 9-10 —
- * the split keeps the u octet inside the interface-identifier portion an
- * EUI-64 expects), and 6to4 carries its own right after the /16. Answering
- * in octets rather than an offset is what lets the split layout say where
- * each octet actually is.
+ * as an ordinary v6 global that matches no refused prefix. The mapped and
+ * compatible forms and the well-known NAT64 prefix end in the IPv4, and 6to4
+ * carries its own right after the /16. The RFC 8215 local-use NAT64 prefix is
+ * not decoded here: it is refused whole (`nat64-local-use`), since any
+ * network can deploy it and what it translates to is that network's choice.
  */
 function embeddedIpv4(bytes: number[]): number[] | null {
   const ffff = ffffTranslationIpv4(bytes);
@@ -346,27 +357,24 @@ function ffffTranslationIpv4(bytes: number[]): number[] | null {
 }
 
 /**
- * The IPv4 either NAT64 prefix carries, as four octets — or null when the
- * address is neither.
+ * The IPv4 the well-known NAT64 prefix `64:ff9b::/96` carries, as four octets
+ * — or null when the address is not under it.
  *
- * Two prefixes, two layouts: the well-known `64:ff9b::/96` ends in the IPv4,
- * and the RFC 8215 local-use `64:ff9b:1::/48` splits it around the u octet
- * (octets at bytes 6-7 and 9-10 per RFC 6052). Reading the split form as one
- * contiguous run judged the private `10.8.5.4` as the public `8.0.5.4` — the
- * exact bypass this judge exists to prevent, since what the prefix carries
- * can be private, loopback, or a metadata service.
+ * Only the well-known prefix, whose layout is fixed. The RFC 8215 local-use
+ * `64:ff9b:1::/48` may be operated with any RFC 6052 prefix length, so no
+ * single decoding reads it correctly — one layout judged `10.0.0.1` behind a
+ * /96 as some unrelated public address. It is refused as a whole instead (see
+ * `REFUSED_IPV6`), as IANA marks it not globally reachable.
  */
 function nat64Ipv4(bytes: number[]): number[] | null {
   if (
     bytes[0] === 0x00 &&
     bytes[1] === 0x64 &&
     bytes[2] === 0xff &&
-    bytes[3] === 0x9b
+    bytes[3] === 0x9b &&
+    bytes.slice(4, 12).every(b => b === 0)
   ) {
-    if (bytes.slice(4, 12).every(b => b === 0)) return bytes.slice(12, 16);
-    if (bytes[4] === 0x00 && bytes[5] === 0x01) {
-      return [bytes[6], bytes[7], bytes[9], bytes[10]];
-    }
+    return bytes.slice(12, 16);
   }
   return null;
 }
@@ -393,10 +401,51 @@ export function hostMatches(host: string, pattern: string): boolean {
   return h === p;
 }
 
-/** Whether a host is on the allowlist at all. */
-export function hostAllowed(
-  host: string,
-  allowlist: readonly string[]
+/**
+ * An outbound allowlist entry split into its host pattern and its port.
+ *
+ * `api.example.com` names the host on its scheme's default port;
+ * `api.example.com:8443` names that port. A port is a separate service on the
+ * same machine, and an entry naming only the host granted every one of them
+ * (`https://api.example.com:22/`), which nobody reading the manifest would
+ * have understood it to say.
+ */
+export function outboundEntry(entry: string): {
+  pattern: string;
+  port?: number;
+} {
+  const match = /^(.*):(\d{1,5})$/.exec(entry);
+  if (!match) return { pattern: entry };
+  return { pattern: match[1], port: Number(match[2]) };
+}
+
+/** The default port of a URL's scheme. */
+function schemeDefaultPort(url: URL): number {
+  return url.protocol === "http:" ? 80 : 443;
+}
+
+/** The port a URL connects to, its scheme's default when it names none. */
+function effectivePort(url: URL): number {
+  return url.port === "" ? schemeDefaultPort(url) : Number(url.port);
+}
+
+/**
+ * Whether a URL's host AND port are on the allowlist.
+ *
+ * `anyPort` is for the development-only loopback exception: a fake provider
+ * in a plugin's own tests listens on whatever port it was given, and its
+ * manifest cannot know that number in advance.
+ */
+export function destinationAllowed(
+  url: URL,
+  allowlist: readonly string[],
+  anyPort: boolean
 ): boolean {
-  return allowlist.some(pattern => hostMatches(host, pattern));
+  const port = effectivePort(url);
+  return allowlist.some(entry => {
+    const { pattern, port: declared } = outboundEntry(entry);
+    if (!hostMatches(url.hostname, pattern)) return false;
+    if (anyPort) return true;
+    return port === (declared ?? schemeDefaultPort(url));
+  });
 }

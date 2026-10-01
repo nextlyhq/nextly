@@ -9,6 +9,7 @@ import { buildAuditLogWriter } from "../domains/audit/audit-log-writer";
 import {
   collectPluginAuditKinds,
   projectPluginAuditEvent,
+  type PluginAuditEvent,
 } from "../domains/audit/plugin-audit";
 import { getNextlyLogger } from "../observability/logger";
 import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
@@ -37,48 +38,59 @@ export function createPluginAudit(plugin: PluginDefinition): PluginAuditApi {
 
   return {
     async write(event) {
-      const projected = projectPluginAuditEvent(event, kinds, plugin.name);
-      if (!projected) return;
-
       try {
-        const writer = buildAuditLogWriter(
-          getService as (n: string) => unknown
-        );
-        // `PluginAuditApi.write` accepts a request and the projection keeps
-        // it deliberately, and it stopped here — so a plugin's authentication
-        // and security rows lost the caller context the equivalent core rows
-        // retain, even when the plugin took the trouble to supply it.
-        //
-        // Resolved through the same helper core uses, under the same proxy
-        // settings: a client IP read straight from a header is whatever the
-        // caller wrote there.
-        const { request } = projected;
-        const trust = request
-          ? readProxyTrustSettings(() => getService("config"))
-          : undefined;
+        // Inside the `try`, as everything else is: the contract is that this
+        // never throws, and a plugin passing no event at all — a JavaScript
+        // caller has no types — made the projection reject instead.
+        const projected = projectPluginAuditEvent(event, kinds, plugin.name);
+        if (!projected) return;
 
-        await writer.write({
-          kind: projected.kind as never,
-          actorUserId: projected.actorUserId ?? undefined,
-          targetUserId: projected.targetUserId ?? undefined,
-          metadata: projected.metadata,
-          ...(request && trust
-            ? {
-                ipAddress: getTrustedClientIp(request, trust),
-                userAgent: request.headers.get("user-agent"),
-              }
-            : {}),
-        });
+        await writeProjected(projected);
       } catch (error) {
         // Same contract as the core writer: never throw. The caller is in the
         // middle of doing the thing the row describes.
         getNextlyLogger().warn({
           kind: "plugin-audit-write-failed",
           plugin: plugin.name,
-          auditKind: event.kind,
+          auditKind: (event as { kind?: unknown } | undefined)?.kind,
           error: error instanceof Error ? error.message : String(error),
         });
       }
     },
+  };
+}
+
+/**
+ * Write a projected event through the core writer, with the caller's client
+ * details when the plugin supplied its request.
+ *
+ * `PluginAuditApi.write` accepts a request and the projection keeps it
+ * deliberately, and it stopped here — so a plugin's authentication and
+ * security rows lost the caller context the equivalent core rows retain, even
+ * when the plugin took the trouble to supply it. Resolved through the same
+ * helper core uses, under the same proxy settings: a client IP read straight
+ * from a header is whatever the caller wrote there.
+ */
+async function writeProjected(projected: PluginAuditEvent): Promise<void> {
+  const writer = buildAuditLogWriter(getService as (n: string) => unknown);
+  const { request } = projected;
+  await writer.write({
+    kind: projected.kind as never,
+    actorUserId: projected.actorUserId ?? undefined,
+    targetUserId: projected.targetUserId ?? undefined,
+    metadata: projected.metadata,
+    ...(request ? requestDetails(request) : {}),
+  });
+}
+
+/** The client address and agent of a request, under the proxy settings. */
+function requestDetails(request: Request): {
+  ipAddress: string | null;
+  userAgent: string | null;
+} {
+  const trust = readProxyTrustSettings(() => getService("config"));
+  return {
+    ipAddress: getTrustedClientIp(request, trust),
+    userAgent: request.headers.get("user-agent"),
   };
 }

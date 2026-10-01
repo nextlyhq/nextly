@@ -28,7 +28,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 
-import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
+import { authUiProblems } from "../auth/handlers/auth-ui";
+import {
+  buildAuthRouterDeps,
+  challengeBudgetWarning,
+} from "../auth/handlers/deps-bridge";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
@@ -129,9 +133,10 @@ import type {
   PluginServiceName,
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
-import { resolvePlugins } from "../plugins/resolve";
+import { resolvePlugins, resolveTransformedPlugins } from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { collectPluginRoutes } from "../plugins/routes/collect-routes";
+import { rateLimitProxyWarning } from "../plugins/routes/route-options";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import {
   applyPluginSchemaContributionsDeferred,
@@ -196,6 +201,7 @@ import { initializeMediaStorage, type MediaStorage } from "../storage/storage";
 import type { IStorageAdapter, StoragePlugin } from "../storage/types";
 import type { DatabaseInstance } from "../types/database-operations";
 import type { UserConfig } from "../users/config/types";
+import { readProxyTrustSettings } from "../utils/proxy-trust";
 
 import { container } from "./container";
 import {
@@ -571,13 +577,11 @@ export async function registerServices(
   // The published hook-point map is rewritten by the same call, and the
   // schema folding below receives this list, so a transformer-added plugin's
   // collections and singles fold exactly like a declared plugin's.
-  const transformedPlugins = resolvePlugins(setupConfig.plugins ?? [], {
-    coreVersion: getCoreVersion(),
-  });
-  const transformedSetupConfig: NextlyServiceConfig = {
-    ...setupConfig,
-    plugins: transformedPlugins,
-  };
+  const transformedSetupConfig: NextlyServiceConfig = resolveTransformedPlugins(
+    setupConfig,
+    { coreVersion: getCoreVersion() }
+  );
+  const transformedPlugins = transformedSetupConfig.plugins ?? [];
 
   // ----------------------------------------
   // Layer 0c: Fold declarative plugin schema contributions (D3/D12/D50)
@@ -2858,6 +2862,17 @@ async function initializePlugins(
   // collision / invalid path fails the boot fast (D25/D7), before side effects.
   const collectedRoutes = collectPluginRoutes(plugins);
 
+  // Reported once here rather than wherever the auth UI or deps are rebuilt,
+  // which is every `/auth/*` request and every `ctx.auth` call.
+  for (const problem of authUiProblems(plugins)) logger.warn?.(problem);
+  const budgetWarning = challengeBudgetWarning(plugins, transformedConfig);
+  if (budgetWarning) logger.warn?.(budgetWarning);
+  const proxyWarning = rateLimitProxyWarning(
+    collectedRoutes,
+    readProxyTrustSettings(() => transformedConfig).trustProxy
+  );
+  if (proxyWarning) logger.warn?.(proxyWarning);
+
   const pluginHookRegistry = hookRegistry ?? getHookRegistry();
 
   /**
@@ -2914,16 +2929,12 @@ async function initializePlugins(
   const getServiceForPlugin = <T extends PluginServiceName>(name: T) =>
     pluginServiceResolvers[name]();
 
-  // HMR/re-registration safety (B2): drop every plugin's prior event/hook
-  // subscriptions before plugins re-subscribe in init(), so the globalThis
-  // EventBus + HookRegistry never accumulate duplicates across module
-  // re-evaluation. Mirrors the route registry's clear-and-rebuild below. Core
-  // (non-plugin) subscriptions are untracked and untouched.
   // Teach `ctx.auth` how to reach the auth router, and drop any memo held from
   // a previous registration. Registered rather than imported by the provider,
   // because the auth bridge reaches back into the plugin context it would
-  // otherwise have to import. Lazy on purpose: the deps are built per call, so
-  // hooks added by a config reload apply without rebuilding the API.
+  // otherwise have to import. Lazy on purpose: the deps are built on first
+  // use, after every service is registered, and kept until this runs again
+  // — on the next boot — rather than rebuilt on every call.
   setPluginAuthDepsResolver(() =>
     // The container's own resolver, not the plugin-facing one: the auth
     // bridge asks for services (the adapter, the config) that are
@@ -2931,6 +2942,11 @@ async function initializePlugins(
     buildAuthRouterDeps(getService as (name: string) => unknown)
   );
 
+  // HMR/re-registration safety (B2): drop every plugin's prior event/hook
+  // subscriptions before plugins re-subscribe in init(), so the globalThis
+  // EventBus + HookRegistry never accumulate duplicates across module
+  // re-evaluation. Mirrors the route registry's clear-and-rebuild below. Core
+  // (non-plugin) subscriptions are untracked and untouched.
   clearPluginSubscriptions();
   // Re-register plugin services from scratch each boot (D64) — same
   // clear-and-rebuild posture as subscriptions/routes, so HMR never leaks stale

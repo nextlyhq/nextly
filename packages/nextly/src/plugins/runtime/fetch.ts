@@ -22,7 +22,7 @@
  */
 import { NextlyError } from "../../errors/nextly-error";
 
-import { hostAllowed, judgeAddress } from "./address-rules";
+import { destinationAllowed, judgeAddress } from "./address-rules";
 import type { SendArgs } from "./transport";
 
 /**
@@ -108,6 +108,12 @@ export interface PluginFetchDeps {
   send: (request: SendArgs) => Promise<Response>;
   /** Development installs may reach localhost, for a fake provider in tests. */
   allowLoopback: boolean;
+  /**
+   * The `User-Agent` sent when the caller names none. Some APIs refuse a
+   * request without one — GitHub's REST API among them — and a name that says
+   * which plugin is calling is what an operator on the other end needs.
+   */
+  userAgent?: string;
 }
 
 /**
@@ -341,8 +347,17 @@ export async function vetUrl(
     url.hostname === "localhost" || url.hostname === "127.0.0.1";
   assertUsableScheme(url, isLocalhost, deps.allowLoopback);
 
-  if (!hostAllowed(url.hostname, deps.allowlist)) {
-    refuse("host-not-declared", { host: url.hostname });
+  // The port as well as the host: an entry naming only the host allows its
+  // scheme's default port, and `host:port` names another. A development
+  // loopback target may use any port, since a fake provider's is not known
+  // until it listens.
+  if (
+    !destinationAllowed(url, deps.allowlist, isLocalhost && deps.allowLoopback)
+  ) {
+    refuse("host-not-declared", {
+      host: url.hostname,
+      port: url.port === "" ? null : url.port,
+    });
   }
 
   const answers = await deps.resolve(url.hostname);
@@ -368,15 +383,12 @@ export async function vetUrl(
  */
 export function createPluginFetch(
   deps: PluginFetchDeps
-): (input: string | URL, init?: RequestInit) => Promise<Response> {
+): (input: string | URL | Request, init?: RequestInit) => Promise<Response> {
   return async function pluginFetch(input, init = {}) {
-    let url: URL;
-    try {
-      url = input instanceof URL ? input : new URL(input);
-    } catch {
-      refuse("malformed-url", { input: String(input) });
-    }
+    const merged = mergedInit(input, init);
+    let url = parsedInputUrl(input);
 
+    const redirectMode = merged.redirect ?? "follow";
     let remaining = MAX_REDIRECTS;
     // Fixed BEFORE the loop, so every hop spends the same budget. Set inside,
     // each redirect would start a fresh thirty seconds and a chain of them
@@ -386,7 +398,8 @@ export function createPluginFetch(
     // original was replayed unchanged to every target, so an OAuth form or a
     // binary credential posted to one allowed host was re-sent verbatim to
     // whatever other allowed host it redirected to.
-    let hop: RequestInit = init;
+    let hop: RequestInit = withDefaultUserAgent(merged, deps.userAgent);
+    let redirected = false;
     for (;;) {
       // Inside the deadline AND against the caller's cancellation, because
       // the DNS lookup it performs is outside every timer this function
@@ -396,13 +409,11 @@ export function createPluginFetch(
       // be interrupted, but the caller is released the moment it cancels.
       const response = await sendOneHop(url, hop, deps, {
         deadlineAt,
-        callerSignal: init.signal ?? undefined,
+        callerSignal: merged.signal ?? undefined,
       });
 
-      const location = response.headers.get("location");
-      if (!REDIRECT_STATUSES.has(response.status) || !location) {
-        return response;
-      }
+      const location = redirectToFollow(response, url, redirectMode);
+      if (location === null) return withFinalUrl(response, url, redirected);
 
       if (remaining === 0) {
         refuse("too-many-redirects", { host: url.hostname });
@@ -411,23 +422,146 @@ export function createPluginFetch(
       // Captured before `url` moves: whether this hop crosses an origin is
       // what decides if the request's credentials may travel with it.
       const from = url;
-      try {
-        url = new URL(location, url);
-      } catch {
-        refuse("malformed-redirect", { location });
-      }
+      url = resolvedLocation(location, url);
       hop = nextHop(hop, response.status, from, url);
+      redirected = true;
     }
   };
+}
+
+/**
+ * The init a call stands for.
+ *
+ * A `Request` is read into the init it carries, as `fetch` does: refusing
+ * one as a malformed URL made `ctx.fetch` the one fetch a library handing
+ * over a prepared request could not call. The explicit init wins over the
+ * request's own fields, as it does for `fetch`.
+ */
+function mergedInit(
+  input: string | URL | Request,
+  init: RequestInit
+): RequestInit {
+  if (!(input instanceof Request)) return init;
+  return {
+    method: input.method,
+    headers: input.headers,
+    body: input.body ?? undefined,
+    redirect: input.redirect,
+    signal: input.signal,
+    ...init,
+  };
+}
+
+/** The URL a call is for, or a refusal naming what could not be read. */
+function parsedInputUrl(input: string | URL | Request): URL {
+  const text =
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.href
+        : input.url;
+  try {
+    return new URL(text);
+  } catch {
+    refuse("malformed-url", { input: text });
+  }
+}
+
+/**
+ * The `Location` to follow, or null when the response is the answer.
+ *
+ * `manual` hands the redirect itself back, as `fetch` does, so a caller that
+ * needs its `Location` — an OAuth flow reading a code from it — can read it.
+ * Following regardless left no way to. `error` refuses a redirect outright.
+ */
+function redirectToFollow(
+  response: Response,
+  url: URL,
+  mode: RequestRedirect
+): string | null {
+  const location = response.headers.get("location");
+  if (!REDIRECT_STATUSES.has(response.status) || !location) return null;
+  if (mode === "manual") return null;
+  if (mode === "error") {
+    refuse("redirect-refused", { host: url.hostname, status: response.status });
+  }
+  return location;
+}
+
+/** A redirect's `Location`, resolved against the URL that answered it. */
+function resolvedLocation(location: string, from: URL): URL {
+  try {
+    return new URL(location, from);
+  } catch {
+    refuse("malformed-redirect", { location });
+  }
+}
+
+/**
+ * The init with the default `User-Agent` added, when the caller named none.
+ *
+ * Added before the first hop, so a redirect carries it like any header it is
+ * safe to carry across origins.
+ */
+function withDefaultUserAgent(
+  init: RequestInit,
+  userAgent: string | undefined
+): RequestInit {
+  if (!userAgent) return init;
+  const headers = new Headers(init.headers ?? {});
+  if (headers.has("user-agent")) return init;
+  headers.set("user-agent", userAgent);
+  return { ...init, headers };
+}
+
+/**
+ * What a cancelled call rejects with: the signal's own `reason` when it is an
+ * Error, as `fetch` rejects, so a caller that aborted with a `TimeoutError`
+ * gets it back.
+ *
+ * `reason` is set by every abort, to an `AbortError` when the caller gave
+ * none; the fallback covers a signal aborted by something that set no reason,
+ * and a non-Error reason becomes the message of an `AbortError`.
+ */
+export function abortReason(signal: AbortSignal): Error {
+  // An Error reason is handed back as it is, as `fetch` does. Anything else —
+  // a string, say — is carried as the message of an AbortError, so a caller
+  // catching this always receives an Error.
+  if (signal.reason instanceof Error) return signal.reason;
+  return new DOMException(
+    signal.reason === undefined
+      ? "This operation was aborted"
+      : String(signal.reason),
+    "AbortError"
+  );
+}
+
+/**
+ * The response with `url` and `redirected` describing where it came from.
+ *
+ * A constructed `Response` reports an empty `url` and `redirected: false`
+ * whatever happened, and a caller resolving a relative link in the body, or
+ * checking whether it was sent elsewhere, reads those. Both are getters on the
+ * prototype, so own properties on the instance take their place.
+ */
+function withFinalUrl(
+  response: Response,
+  url: URL,
+  redirected: boolean
+): Response {
+  Object.defineProperty(response, "url", { value: url.href });
+  Object.defineProperty(response, "redirected", { value: redirected });
+  return response;
 }
 
 /**
  * Release the caller the moment it cancels, whatever the underlying work
  * does.
  *
- * The DOMException shape `fetch` itself rejects with, so plugin code holding
- * an AbortSignal recognises its cancellation by name. The work is not
- * interrupted — a DNS query cannot be — but nothing awaits it either.
+ * Rejects with the signal's own `reason`, as `fetch` does, so a caller that
+ * aborted with a `TimeoutError` gets its `TimeoutError` back rather than a
+ * generic `AbortError`. The work is not interrupted — a DNS query cannot be —
+ * but nothing awaits it either.
  */
 function raceCallerAbort<T>(
   work: Promise<T>,
@@ -435,8 +569,7 @@ function raceCallerAbort<T>(
 ): Promise<T> {
   if (!signal) return work;
   return new Promise<T>((resolve, reject) => {
-    const onAbort = () =>
-      reject(new DOMException("This operation was aborted", "AbortError"));
+    const onAbort = () => reject(abortReason(signal));
     if (signal.aborted) onAbort();
     else signal.addEventListener("abort", onAbort, { once: true });
     work.then(
@@ -473,6 +606,7 @@ async function sendOneHop(
   return firstConnectedAddress(
     (hop.method ?? "GET").toUpperCase(),
     addresses,
+    () => bounds.callerSignal?.aborted === true,
     address =>
       deps.send({
         url,
@@ -500,6 +634,7 @@ async function sendOneHop(
 async function firstConnectedAddress(
   method: string,
   addresses: readonly ResolvedAddress[],
+  cancelled: () => boolean,
   send: (address: ResolvedAddress) => Promise<Response>
 ): Promise<Response> {
   // Only IDEMPOTENT methods may fail over. A POST that was transmitted and
@@ -514,13 +649,12 @@ async function firstConnectedAddress(
       return await send(address);
     } catch (error) {
       // A caller cancellation stops the operation — trying another address
-      // would be work the caller has explicitly abandoned. A policy
-      // refusal likewise has nothing to do with which address was tried.
-      if (
-        NextlyError.is(error) ||
-        (error instanceof DOMException && error.name === "AbortError") ||
-        !idempotent
-      ) {
+      // would be work the caller has explicitly abandoned. Asked of the
+      // signal rather than read off the error: a cancellation rejects with
+      // the signal's own reason, which may be any value the caller chose. A
+      // policy refusal likewise has nothing to do with which address was
+      // tried.
+      if (NextlyError.is(error) || cancelled() || !idempotent) {
         throw error;
       }
       lastError = error;

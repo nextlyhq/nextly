@@ -74,3 +74,66 @@ describe("updatePluginSettings", () => {
     expect(response.headers.get("x-nextly-skip-date-formatting")).toBe("1");
   });
 });
+
+describe("a settings update's record", () => {
+  it("announces the changed keys with the request's actor", async () => {
+    const announced: unknown[] = [];
+    vi.doMock("../../../domains/plugins/settings-activity", () => ({
+      announcePluginSettingsChange: async (input: unknown) => {
+        announced.push(input);
+      },
+    }));
+    vi.resetModules();
+    const { dispatchPluginSettings: dispatch } = await import(
+      "../plugin-settings-dispatcher"
+    );
+
+    await dispatch(
+      container,
+      config,
+      "updatePluginSettings",
+      {
+        plugin: "acme-auth",
+        _authenticatedActorType: "user",
+        _authenticatedActorId: "user-7",
+      },
+      { since: "2026-01-01" }
+    );
+
+    expect(announced).toEqual([
+      {
+        plugin: "acme-auth",
+        changedKeys: ["since"],
+        actor: { type: "user", id: "user-7" },
+      },
+    ]);
+    vi.doUnmock("../../../domains/plugins/settings-activity");
+  });
+});
+
+describe("a read of settings a newer schema rejects", () => {
+  it("answers with the stored view and the issues, not a 500", async () => {
+    const strict = {
+      plugins: [
+        {
+          name: "acme-auth",
+          contributes: {
+            settings: z.object({ tenantId: z.string() }),
+          },
+        },
+      ],
+    } as never;
+
+    const response = (await dispatchPluginSettings(
+      container,
+      strict,
+      "getPluginSettings",
+      { plugin: "acme-auth" },
+      null
+    )) as Response;
+
+    const body = (await response.json()) as { issues: unknown[] };
+    // An empty store is waiting for its first save, not in error.
+    expect(body.issues).toEqual([]);
+  });
+});

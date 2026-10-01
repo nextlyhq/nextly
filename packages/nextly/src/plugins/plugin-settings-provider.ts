@@ -10,6 +10,7 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { announcePluginSettingsChange } from "../domains/plugins/settings-activity";
 import {
   PluginSettingsService,
   pluginSettingsSecrets,
@@ -75,6 +76,13 @@ export function createPluginSettings(
 
   return {
     get: () => service().get(),
-    set: (patch, opts) => service().set(patch, opts),
+    // A plugin's own write is announced like an operator's, so another plugin
+    // in this process caching these values hears that they moved. The event
+    // bus is in-process: other instances do not receive it. It has no request
+    // actor, so it records no audit entry.
+    set: async (patch, opts) => {
+      const changedKeys = await service().set(patch, opts);
+      await announcePluginSettingsChange({ plugin: plugin.name, changedKeys });
+    },
   };
 }

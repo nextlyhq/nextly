@@ -271,6 +271,22 @@ describe("every writer for one plugin contends on ONE row", () => {
   });
 });
 
+describe("a key the update removed", () => {
+  it("is DELETED rather than stored", async () => {
+    // Upserting it would store the placeholder value, which the next read
+    // hands the schema as though someone had set the key.
+    const fake = recordingDb();
+    await createPluginSettingsStore(fake.db, "postgresql").mutate(
+      "@test/p",
+      ["alpha", "beta"],
+      () => [...rows("alpha"), { ...rows("beta")[0], remove: true }]
+    );
+    expect(fake.applied).toEqual(["alpha"]);
+    // One delete for the removed key, one for the lock row.
+    expect(fake.deleted).toHaveLength(2);
+  });
+});
+
 describe("the claim placeholder is storable on every dialect", () => {
   it("carries a timestamp MySQL accepts", async () => {
     // MySQL's `TIMESTAMP` range begins AFTER 1970-01-01 00:00:00, and under

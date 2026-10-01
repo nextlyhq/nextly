@@ -44,15 +44,27 @@ export interface ReconcileCoreDeps {
   /** NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 lets a destructive core change proceed. */
   allowDestructive?: boolean;
   /**
+   * NEXTLY_DROP_RETIRED_AUTH_TABLES=1: drop the retired `accounts` and
+   * `sessions` tables. Its own flag rather than `allowDestructive`, which
+   * accepts destructive changes to the core schema — a different decision,
+   * that an operator makes for a different reason.
+   */
+  dropRetiredAuthTables?: boolean;
+  /**
    * NEXTLY_DROP_NONEMPTY_RETIRED=1: also drop a retired table that still holds
-   * rows. Separate from `allowDestructive`, because losing rows is a different
-   * decision from accepting a schema change.
+   * rows. Separate again, because losing rows is a different decision from
+   * removing an empty table.
    */
   allowDropNonEmptyRetired?: boolean;
   /** Whether a table is present. Supplied by the CLI; absent in tests that do not exercise the drop. */
   tableExists?: (table: string) => Promise<boolean>;
   /** Row count for a table, for deciding whether a retired one is empty. */
   countRows?: (db: unknown, dialect: Dialect, table: string) => Promise<number>;
+  /**
+   * A table's live column names, so a table that only shares a retired name
+   * is left alone. Read from the database catalogue when not supplied.
+   */
+  columnsOf?: (table: string) => Promise<string[]>;
   /** Executes one DDL statement. Only used for the retired-table drop. */
   executeSql?: (sql: string) => Promise<unknown>;
   /** Classifier mode for the core diff. Default: "production-strict". */
@@ -124,9 +136,16 @@ export async function reconcileCore(
     // the cleanup before returning, or the ordinary upgrade — a database
     // already carrying the current core schema — is exactly the one where a
     // requested drop silently does nothing.
-    await executeRetiredDrops(deps, await decideRetiredDrops(deps));
-    logger?.info?.("Core schema up to date.");
-    return { changed: false };
+    const dropped = await executeRetiredDrops(
+      deps,
+      await decideRetiredDrops(deps)
+    );
+    logger?.info?.(
+      dropped.length > 0
+        ? `Core schema up to date; dropped retired auth tables: ${dropped.join(", ")}.`
+        : "Core schema up to date."
+    );
+    return { changed: dropped.length > 0 };
   }
 
   const mode: ClassifierMode = deps.mode ?? "production-strict";
@@ -180,11 +199,6 @@ export async function reconcileCore(
     }
   }
 
-  // Decided before the apply as well as at the drop. A refusal has to come
-  // while the database is still as it was, or the command reports a refusal
-  // for a run that has already applied and recorded the core change.
-  const retiredDropsExpected = await decideRetiredDrops(deps);
-
   const repo = new SchemaEventsRepository(db, dialect);
   try {
     // 1. Apply the core schema first (drizzle-kit pushSchema over
@@ -222,19 +236,46 @@ export async function reconcileCore(
   // apply is not guaranteed: dropping first, a failed apply would leave a
   // database without the retired tables' rows AND without the core update,
   // with no way back to where it started. Outside the `try`, so a failed drop
-  // is reported as itself rather than as a failed apply. Decided again on
-  // fresh counts, so a table that gained rows during the apply is refused
-  // rather than dropped on a count taken before it.
-  if (retiredDropsExpected.length > 0) {
-    await executeRetiredDrops(deps, await decideRetiredDrops(deps));
-  }
+  // is reported as itself rather than as a failed apply. Decided here, on
+  // counts taken after the apply, so a table that gained rows in the meantime
+  // is kept rather than dropped on a stale count.
+  await executeRetiredDrops(deps, await decideRetiredDrops(deps));
   return { changed: true };
 }
 
 /**
- * The retired auth tables to drop, when the operator has asked for it — or
- * a refusal, thrown, when one still holds rows the operator has not agreed to
- * lose. Deciding only: the caller drops them, once nothing else can fail.
+ * The operations the retired-table cleanup needs, when it was asked for and
+ * the caller can run it; null otherwise.
+ *
+ * A caller without these operations cannot do this work, which is true of the
+ * in-process boot path. Said rather than thrown, because what actually went
+ * wrong was that the CLI supplied none of them: the cleanup returned here and
+ * the documented flow dropped nothing. That is now covered by asserting what
+ * the CLI passes, which is the thing that regressed.
+ */
+function retiredDropOps(deps: ReconcileCoreDeps): {
+  tableExists: NonNullable<ReconcileCoreDeps["tableExists"]>;
+  countRows: NonNullable<ReconcileCoreDeps["countRows"]>;
+} | null {
+  if (!deps.dropRetiredAuthTables) return null;
+  const { tableExists, countRows, executeSql } = deps;
+  if (!tableExists || !countRows || !executeSql) {
+    deps.logger?.info?.(
+      "Retired-table cleanup skipped: this caller supplies no table-existence, row-count or statement operations."
+    );
+    return null;
+  }
+  return { tableExists, countRows };
+}
+
+/**
+ * The retired auth tables to drop, when the operator has asked for it.
+ * Deciding only: the caller drops them, once nothing else can fail.
+ *
+ * A table holding rows the operator has not agreed to lose is KEPT, with a
+ * warning, rather than refused: the drop is a cleanup the operator opted into,
+ * and failing the run over it would hold back a core change that has nothing
+ * to do with these tables.
  *
  * Separate from the diff above because these tables are no longer part of the
  * core schema: `getCoreTableNames` does not name them, so the introspection
@@ -245,49 +286,29 @@ export async function reconcileCore(
 async function decideRetiredDrops(
   deps: ReconcileCoreDeps
 ): Promise<readonly string[]> {
-  if (!deps.allowDestructive) return [];
-
-  // `allowDestructive` is the GENERAL flag — it also authorises dropping an
-  // orphaned core column — so its being set does not mean retired-table work
-  // was asked for. A caller without these operations simply does not do that
-  // work, which is true of the in-process boot path, and refusing here would
-  // reject a destructive change that has nothing to do with these tables.
-  //
-  // Said rather than thrown, because what actually went wrong was that the
-  // CLI supplied none of them: the cleanup returned at this guard and the
-  // documented flow dropped nothing. That is now covered by asserting what
-  // the CLI passes, which is the thing that regressed.
-  if (!deps.tableExists || !deps.countRows || !deps.executeSql) {
-    deps.logger?.info?.(
-      "Retired-table cleanup skipped: this caller supplies no table-existence, row-count or statement operations."
-    );
-    return [];
-  }
+  const ops = retiredDropOps(deps);
+  if (!ops) return [];
 
   const {
     findRetiredAuthTables,
     planRetiredAuthTableDrop,
-    formatRetiredAuthDropRefusal,
+    formatRetiredAuthTablesKept,
+    liveColumnsOf,
   } = await import("../../../init/retired-auth-tables");
 
   const found = await findRetiredAuthTables(deps.db, deps.dialect, {
-    tableExists: deps.tableExists,
-    countRows: deps.countRows,
+    tableExists: ops.tableExists,
+    columnsOf: deps.columnsOf ?? liveColumnsOf(deps.db, deps.dialect),
+    countRows: ops.countRows,
   });
   const plan = planRetiredAuthTableDrop(found, {
-    allowDestructive: true,
+    dropRequested: true,
     allowNonEmpty: deps.allowDropNonEmptyRetired === true,
   });
-
-  if (plan.action === "keep") return [];
-  if (plan.action === "refuse") {
-    throw new NextlyError({
-      code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-      publicMessage: formatRetiredAuthDropRefusal(plan.nonEmpty),
-    });
+  if (plan.kept.length > 0) {
+    deps.logger?.warn?.(formatRetiredAuthTablesKept(plan.kept));
   }
-
-  return plan.tables;
+  return plan.drop;
 }
 
 /**
@@ -299,16 +320,51 @@ async function decideRetiredDrops(
 async function executeRetiredDrops(
   deps: ReconcileCoreDeps,
   tables: readonly string[]
-): Promise<void> {
+): Promise<string[]> {
+  if (tables.length === 0) return [];
   // Asked of the same generator the diff engine uses, rather than composed
   // here. Each dialect already spells this differently — PostgreSQL appends
   // CASCADE, MySQL and SQLite do not — and a second spelling in a domain
   // service is a second thing to keep in step with the dialects.
   const { generateSQL } = await import("../pipeline/sql-templates");
+  const dropped: string[] = [];
   for (const table of tables) {
     await deps.executeSql?.(
       generateSQL({ type: "drop_table", tableName: table }, deps.dialect)
     );
+    dropped.push(table);
     deps.logger?.warn?.(`Dropped retired auth table ${table}.`);
+    // Recorded as each one goes, so a later drop that fails leaves the
+    // earlier ones on record.
+    await recordRetiredDrop(deps, table);
+  }
+  return dropped;
+}
+
+/**
+ * Record one drop in the schema ledger, as the core change it is.
+ *
+ * After the fact and never fatal: the table is already gone, and failing the
+ * command now would report a run that did what it was asked as failed. The
+ * log line before it has already said what happened either way.
+ */
+async function recordRetiredDrop(
+  deps: ReconcileCoreDeps,
+  table: string
+): Promise<void> {
+  try {
+    await deps.ensureLedger?.();
+    const repo = new SchemaEventsRepository(deps.db, deps.dialect);
+    const id = await repo.recordStart({
+      eventType: "core_apply",
+      source: "cli-migrate",
+      scopeKind: "core",
+      scopeSlug: table,
+    });
+    await repo.markApplied(id, { statementsExecuted: 1 });
+  } catch (error) {
+    deps.logger?.warn?.(
+      `Dropped retired auth table ${table}, but could not record it in the schema ledger: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }

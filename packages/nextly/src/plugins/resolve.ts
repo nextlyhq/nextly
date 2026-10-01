@@ -1,9 +1,12 @@
+import { MUST_CHANGE_PASSWORD_CHALLENGE } from "../auth/pipeline/pending-token";
 import { collectPluginAuditKinds } from "../domains/audit/plugin-audit";
+import { isReservedEventName } from "../events/event-bus";
 
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
 import type { PluginDefinition } from "./plugin-context";
 import { pluginAdminSlug } from "./plugin-slug";
+import { resolutionError } from "./resolution-error";
 import { topoSortPlugins } from "./topo-sort";
 import { assertAdminWidgets } from "./validate-admin-widgets";
 import { assertClientConfigs } from "./validate-client-config";
@@ -92,6 +95,47 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // the item from everyone without the never-seeded permission, which is what
   // a role legitimately lacking access looks like.
   validatePluginMenus(plugins);
+  // A challenge under core's own password-change id would be offered in
+  // place of that step. The registry refuses it too, but only when the auth
+  // dependencies are first built — on the first sign-in request, which then
+  // failed every sign-in on the site. Refused here, it fails the boot instead.
+  assertNoReservedChallengeIds(plugins);
+  // A declared event under a core prefix boots, appears in the generated
+  // types, and is then refused on every emit — the per-plugin bus will not
+  // let a plugin speak for core. Refused here, the mistake is named at boot.
+  assertNoReservedEventNames(plugins);
+}
+
+/** Refuse a plugin event declared under a prefix core reserves. */
+function assertNoReservedEventNames(plugins: PluginDefinition[]): void {
+  for (const plugin of plugins) {
+    if (plugin.enabled === false) continue;
+    for (const event of plugin.contributes?.events ?? []) {
+      if (isReservedEventName(event.name)) {
+        throw resolutionError(
+          "plugin-event-name-reserved",
+          `Plugin "${plugin.name}" declares the event "${event.name}", whose prefix core reserves for its own events.`,
+          { plugin: plugin.name, event: event.name }
+        );
+      }
+    }
+  }
+}
+
+/** Refuse a plugin challenge declared under an id core reserves. */
+function assertNoReservedChallengeIds(plugins: PluginDefinition[]): void {
+  for (const plugin of plugins) {
+    if (plugin.enabled === false) continue;
+    for (const challenge of plugin.contributes?.auth?.challenges ?? []) {
+      if (challenge.id === MUST_CHANGE_PASSWORD_CHALLENGE) {
+        throw resolutionError(
+          "plugin-challenge-id-reserved",
+          `Plugin "${plugin.name}" declares the challenge id "${challenge.id}", which core reserves for its forced password change.`,
+          { plugin: plugin.name, challengeId: challenge.id }
+        );
+      }
+    }
+  }
 }
 
 /**
@@ -108,4 +152,21 @@ export function resolvePlugins(
   validatePluginVersions(plugins, opts.coreVersion);
   assertPluginManifests(plugins);
   return topoSortPlugins(plugins);
+}
+
+/**
+ * A config whose `setup` transformers have run, with its plugin list resolved
+ * again in full.
+ *
+ * A transformer may add, rename or replace entries in `plugins`, and
+ * everything after it consumes the transformed config. Resolving the whole
+ * list again — versions, dependencies, cycles, every manifest assertion and
+ * the topological sort — makes a transformer-added plugin as checked as a
+ * declared one. The boot and the CLI both call this, so a configuration one
+ * of them accepts is one the other accepts too.
+ */
+export function resolveTransformedPlugins<
+  C extends { plugins?: PluginDefinition[] },
+>(config: C, opts: ResolvePluginsOptions): C & { plugins: PluginDefinition[] } {
+  return { ...config, plugins: resolvePlugins(config.plugins ?? [], opts) };
 }

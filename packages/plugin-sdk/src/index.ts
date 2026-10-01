@@ -131,6 +131,7 @@ export type {
   PluginDeclaration,
   PluginCategory,
   PluginContext,
+  PluginDatabase,
   PluginHookRegistry,
   PluginPermission,
   PluginRole,
@@ -147,6 +148,26 @@ export type {
   PermissionSlug,
   ServiceOpts,
   AuthUser,
+} from "nextly";
+
+/**
+ * The runtime surfaces a plugin receives when it declares them, and the
+ * declarations that ask for them.
+ * @experimental `PluginSettingsApi` (`ctx.settings`), `PluginAuditApi`
+ *   (`ctx.audit`), `PluginAuthApi` and `CompleteLoginOptions` (`ctx.auth`),
+ *   `PluginCapabilities` (`capabilities`), `PluginAuditDeclaration`
+ *   (`contributes.audit`) and `PluginHookPointDeclaration`
+ *   (`contributes.hookPoints`). Held experimental until a first-party plugin
+ *   exercises them (see STABILITY.md).
+ */
+export type {
+  PluginSettingsApi,
+  PluginAuditApi,
+  PluginAuthApi,
+  CompleteLoginOptions,
+  PluginCapabilities,
+  PluginAuditDeclaration,
+  PluginHookPointDeclaration,
 } from "nextly";
 
 /**
@@ -343,6 +364,7 @@ export type {
   PluginRouteContext,
   PluginRouteHandler,
   PluginRouteMount,
+  PluginRouteRateLimit,
   Middleware,
   RouteMethod,
   AuthenticatedScope,
@@ -442,9 +464,13 @@ export {
   DocumentEvents,
   AuthEvents,
   MediaEvents,
+  UserEvents,
   type DocumentEventName,
   type AuthEventName,
   type MediaEventName,
+  type UserEventName,
+  type UserCreatedPayload,
+  type UserDeletedPayload,
 } from "nextly";
 
 /**
@@ -454,6 +480,7 @@ export {
  */
 export {
   FilterSeams,
+  type Decision,
   type Filter,
   type Action,
   type CoreFilterSeam,
@@ -614,13 +641,18 @@ export {
   type ReadCaller,
 } from "nextly";
 
-// Where a finished login may land. Re-exported so a plugin never keeps its own
-// copy of a rule that decides whether a redirect is an open one.
+/**
+ * Where a finished login may land.
+ * @experimental Re-exported so a plugin never keeps its own copy of the rule
+ *   that decides whether a redirect is an open one.
+ */
 export { sanitizeAdminPath, DEFAULT_ADMIN_PATH } from "nextly";
 
-// Reading what other plugins declared — an identity provider discovering
-// another plugin's declarations, a dashboard listing what it can integrate
-// with — because a plugin may import only from the SDK.
-// `PluginDeclaration` is already exported above with the rest of the
-// declaration types.
+/**
+ * Reading what other plugins declared — an identity provider discovering
+ * another plugin's declarations, a dashboard listing what it can integrate
+ * with — because a plugin may import only from the SDK. `PluginDeclaration`
+ * is exported above with the rest of the declaration types.
+ * @experimental
+ */
 export { collectDeclarations } from "nextly";

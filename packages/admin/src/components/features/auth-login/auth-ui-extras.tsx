@@ -4,7 +4,9 @@ import type { AuthUiMeta, AuthUiProvider } from "nextly/api/auth-ui-types";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 
+import { resolveIconName } from "@admin/components/features/widgets/archetypes/icon";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { ROUTES } from "@admin/constants/routes";
 import { useApi } from "@admin/hooks/useApi";
 
 // The `GET /auth/ui` contract (D57), imported from the server that serves it
@@ -58,9 +60,28 @@ function ProviderButton({
   provider: AuthUiProvider;
   onProvider?: (strategy: string) => void;
 }): ReactNode {
+  // Set on the first click of a navigating provider: the browser is leaving
+  // for the provider, and a second click started a second authorize request
+  // whose state cookie replaced the first one's.
+  const [starting, setStarting] = useState(false);
+  // Cleared when the browser shows this page again from its back-forward
+  // cache: a person who cancelled at the provider and pressed Back would
+  // otherwise find the button still disabled until they reloaded.
+  useEffect(() => {
+    const reset = (event: PageTransitionEvent) => {
+      if (event.persisted) setStarting(false);
+    };
+    window.addEventListener("pageshow", reset);
+    return () => window.removeEventListener("pageshow", reset);
+  }, []);
   const className =
-    "flex w-full h-11 items-center justify-center rounded-md border border-border " +
-    "bg-background text-foreground hover:bg-muted transition-colors text-sm font-medium";
+    "flex w-full h-11 items-center justify-center gap-2 rounded-md border border-border " +
+    "bg-background text-foreground hover:bg-muted transition-colors text-sm font-medium " +
+    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring " +
+    "aria-disabled:pointer-events-none aria-disabled:opacity-60";
+  // The declared Lucide name, from the admin's curated set; an unknown name
+  // draws nothing, as it does for a widget.
+  const icon = resolveIconName(provider.icon);
 
   if (provider.component) {
     return (
@@ -78,7 +99,30 @@ function ProviderButton({
     // A navigation rather than a fetch: the provider flow leaves the page, and
     // the server validated the path before serving it.
     return (
-      <a href={provider.href} className={className}>
+      <a
+        href={provider.href}
+        className={className}
+        aria-disabled={starting || undefined}
+        aria-busy={starting || undefined}
+        onClick={event => {
+          // A modified or middle click opens the provider in another tab and
+          // leaves this page where it is, so it does not count as starting.
+          if (
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.button !== 0
+          ) {
+            return;
+          }
+          if (starting) {
+            event.preventDefault();
+            return;
+          }
+          setStarting(true);
+        }}
+      >
+        {icon}
         {provider.label}
       </a>
     );
@@ -95,6 +139,7 @@ function ProviderButton({
       onClick={() => onProvider(provider.strategy)}
       className={className}
     >
+      {icon}
       {provider.label}
     </button>
   );
@@ -174,6 +219,33 @@ export interface ChallengeResolveResult {
    * cannot happen either way. Reading it lets a view skip the call entirely.
    */
   continues?: boolean;
+  /**
+   * Where the host is sending the browser, when the login finished. The host
+   * navigates itself; a view calling `onResolved` afterwards does not move it.
+   */
+  next?: string;
+}
+
+/**
+ * The props a plugin's challenge view receives, registered under
+ * `contributes.auth.challengeViews[challengeType]`.
+ *
+ * The view collects the factor and calls `resolve` with it; the host posts it
+ * to `/auth/challenge/resolve`. When the answer finishes the login, the view
+ * calls `onResolved` with where to go next, or `null` for the default.
+ */
+export interface ChallengeViewProps {
+  challengeType: string;
+  /**
+   * @deprecated The host posts the answer, so a view never needs the token,
+   * and a login resumed from an external provider has none to give (it is in
+   * an HttpOnly cookie). Removed in a later minor.
+   */
+  pendingToken?: string;
+  resolve: (
+    response: Record<string, unknown>
+  ) => Promise<ChallengeResolveResult>;
+  onResolved: (next: string | null) => void;
 }
 
 /**
@@ -193,28 +265,32 @@ export function AuthChallenge({
   pendingToken,
   resolve,
   onResolved,
-}: {
-  authUi: AuthUiMeta;
-  challengeType: string;
-  /** @deprecated The host posts the answer; a resumed login has no token here. */
-  pendingToken?: string;
-  resolve: (
-    response: Record<string, unknown>
-  ) => Promise<ChallengeResolveResult>;
-  onResolved: (next: string | null) => void;
-}): ReactNode {
+}: ChallengeViewProps & { authUi: AuthUiMeta }): ReactNode {
+  const props: ChallengeViewProps = {
+    challengeType,
+    pendingToken,
+    resolve,
+    onResolved,
+  };
   return (
     <PluginSlot
       path={authUi.challengeViews[challengeType]}
-      props={{ challengeType, pendingToken, resolve, onResolved }}
+      props={{ ...props }}
       fallback={
-        <p
-          className="text-sm text-muted-foreground"
-          data-testid="challenge-fallback"
-        >
-          Additional verification is required to sign in, but no UI is
-          registered for “{challengeType}”.
-        </p>
+        <div data-testid="challenge-fallback" className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Additional verification is required to sign in, but no UI is
+            registered for “{challengeType}”.
+          </p>
+          {/* The only way on from here: without it the page held a message
+              and nothing to act on. */}
+          <a
+            href={ROUTES.LOGIN}
+            className="text-sm font-medium text-foreground underline underline-offset-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
+          >
+            Back to sign in
+          </a>
+        </div>
       }
     />
   );

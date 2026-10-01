@@ -110,6 +110,98 @@ describe("AuthHookRegistry", () => {
     expect(out).toEqual({ sub: "u1", roleIds: ["editor"] });
   });
 
+  describe("an afterAuthenticate hook changing the account in place", () => {
+    it("fails the login when the only hook rewrites user.id and returns it", async () => {
+      // Compared against the object handed to the hook, the check saw the
+      // new id on both sides and passed; the session was then minted for it.
+      const reg = new AuthHookRegistry();
+      reg.add({
+        afterAuthenticate: u => {
+          Object.assign(u, { id: "admin-id" });
+          return u;
+        },
+      });
+      await expect(
+        reg.runAfterAuthenticate({ ...user }, {} as never)
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    });
+
+    it("fails when one hook mutates and the next returns a copy", async () => {
+      const reg = new AuthHookRegistry();
+      reg.add({
+        afterAuthenticate: u => {
+          u.id = "admin-id" as AuthUserId;
+          return u;
+        },
+      });
+      reg.add({ afterAuthenticate: u => ({ ...u }) });
+      await expect(
+        reg.runAfterAuthenticate({ ...user }, {} as never)
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    });
+
+    it("returns the authenticated id even if a hook changes its result later", async () => {
+      // A hook keeping a reference to what it returned could otherwise change
+      // the account between the check and the mint.
+      let kept: AuthUser | undefined;
+      const reg = new AuthHookRegistry();
+      reg.add({
+        afterAuthenticate: u => {
+          kept = { ...u, name: "decorated" };
+          return kept;
+        },
+      });
+      const out = await reg.runAfterAuthenticate({ ...user }, {} as never);
+      (kept as AuthUser).id = "admin-id" as AuthUserId;
+      expect(out).toMatchObject({ id: "u1", name: "decorated" });
+    });
+  });
+
+  describe("claims built from custom fields", () => {
+    it("are restored when a hook replaces them", async () => {
+      // A tenant id from `user_ext` reaches custom access rules as the
+      // caller's identity; a replaced one would judge the session as
+      // another tenant.
+      const reg = new AuthHookRegistry();
+      reg.add({ customizeClaims: c => ({ ...c, tenantId: "t2" }) });
+      const out = await reg.runCustomizeClaims(
+        { sub: "u1", tenantId: "t1" },
+        user,
+        {} as never
+      );
+      expect(out).toEqual({ sub: "u1", tenantId: "t1" });
+    });
+
+    it("are restored when a hook deletes them", async () => {
+      const reg = new AuthHookRegistry();
+      reg.add({
+        customizeClaims: c => {
+          delete c.tenantId;
+          return c;
+        },
+      });
+      const out = await reg.runCustomizeClaims(
+        { sub: "u1", tenantId: "t1" },
+        user,
+        {} as never
+      );
+      expect(out).toEqual({ sub: "u1", tenantId: "t1" });
+    });
+
+    it("still let a hook ADD a claim of its own", async () => {
+      // The control: restoring everything would satisfy the cases above
+      // while also dropping what hooks exist to add.
+      const reg = new AuthHookRegistry();
+      reg.add({ customizeClaims: c => ({ ...c, plan: "pro" }) });
+      const out = await reg.runCustomizeClaims(
+        { sub: "u1", tenantId: "t1" },
+        user,
+        {} as never
+      );
+      expect(out).toEqual({ sub: "u1", tenantId: "t1", plan: "pro" });
+    });
+  });
+
   it("determineUser returns the first non-null resolution", async () => {
     const reg = new AuthHookRegistry();
     reg.add({ determineUser: () => null });

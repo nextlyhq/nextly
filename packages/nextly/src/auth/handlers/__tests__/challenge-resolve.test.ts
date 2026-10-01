@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { describe, it, expect, vi } from "vitest";
 
 import { ChallengeRegistry } from "../../pipeline/challenge";
@@ -87,6 +89,10 @@ function retryPayload(body: Record<string, unknown>): {
  * lifetime signed in. Every case uses it, so a fixture that forgets the
  * lifetime fails as the refusable token it is rather than passing as the
  * backward-compat shape no production mint ever produced.
+ *
+ * A fresh flow id unless the case names one, as every production pause mints
+ * one: the budget and the settle mark are kept per flow in process memory, so
+ * cases sharing one flow would spend each other's budget.
  */
 async function mint(
   claims: { userId: string; challengeId: string; attempts?: number } & Record<
@@ -97,6 +103,7 @@ async function mint(
   return mintPendingToken(
     {
       attempts: 0,
+      flow: randomUUID(),
       flowExpiresAt: Math.floor(Date.now() / 1000) + 300,
       ...claims,
     } as never,
@@ -291,10 +298,13 @@ describe("the challenge attempt budget", () => {
         return { allowed: true };
       },
     };
+    // One named flow, so the same account's two calls are two attempts of
+    // one login rather than two logins with budgets of their own.
     const pendingToken = await mint({
       userId,
       challengeId: "totp",
       attempts: 0,
+      flow: "one-login",
     });
     await handleChallengeResolve(
       makeRequest({ pendingToken, response: { code: "000000" } }),
@@ -338,10 +348,22 @@ describe("the challenge attempt budget", () => {
  * `maxChallengeAttempts` into a cap.
  */
 describe("the challenge budget as a precondition", () => {
-  /** Run one resolve, reporting whether the counter was consulted. */
+  /**
+   * Run one resolve, reporting how often the counter was consulted BEFORE
+   * the answer was examined. A success settles its flow through the same
+   * counter afterwards, and those calls are not the precondition.
+   */
   async function attempt(code: string, allowed: boolean) {
     const deps = makeDeps();
     const seen: string[] = [];
+    let seenAtResolve: number | undefined;
+    const resolve = deps.challengeRegistry.resolve.bind(deps.challengeRegistry);
+    vi.spyOn(deps.challengeRegistry, "resolve").mockImplementation(
+      (...args) => {
+        seenAtResolve = seen.length;
+        return resolve(...args);
+      }
+    );
     const withCounter = {
       ...deps,
       countChallengeAttempt: (key: string) => {
@@ -354,7 +376,10 @@ describe("the challenge budget as a precondition", () => {
       makeRequest({ pendingToken, response: { code } }),
       withCounter as never
     );
-    return { status: res.status, spent: seen.length };
+    // Budget spends only: once the budget refuses, the settle mark is asked
+    // whether a success caused it, which spends nothing.
+    const budget = seen.filter(key => !key.endsWith(":settled"));
+    return { status: res.status, spent: seenAtResolve ?? budget.length };
   }
 
   it("spends the budget on a CORRECT answer too", async () => {
@@ -551,7 +576,7 @@ describe("a cookie-mode challenge that ends in a forced password change", () => 
       userId: "u1",
       challengeId: "totp",
       attempts: 0,
-      flow: "f",
+      flow: "f-body",
     });
     const res = await handleChallengeResolve(
       makeRequest({ pendingToken, response: { code: "123456" } }),
@@ -624,7 +649,10 @@ describe("a cookie-mode flow that fails for good", () => {
     // challenge after every reload — the login page hiding its password and
     // provider options behind a continuation nothing can finish.
     const deps = makeDeps();
-    deps.countChallengeAttempt = async () => ({ allowed: false });
+    // The budget is spent, and no correct answer ever settled the flow.
+    deps.countChallengeAttempt = async key => ({
+      allowed: key.endsWith(":settled"),
+    });
 
     const pendingToken = await mint({
       userId: "u1",
@@ -763,5 +791,292 @@ describe("the flow lifetime on the pending-status path", () => {
     expect(((await res.json()) as { challengeId: string }).challengeId).toBe(
       "totp"
     );
+  });
+});
+
+/** A cookie-mode resolve request: the pending token rides in the HttpOnly cookie. */
+function makeCookieRequest(
+  pendingToken: string,
+  response: Record<string, unknown>
+): Request {
+  return new Request("http://localhost:3000/admin/api/auth/challenge/resolve", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      cookie: `nextly_csrf=tok; nextly_pending=${pendingToken}`,
+      origin: "http://localhost:3000",
+    },
+    body: JSON.stringify({ csrfToken: "tok", response }),
+  });
+}
+
+/** The `login-failed` rows a deps' audit writer received, by their metadata. */
+function failureRows(
+  deps: ReturnType<typeof makeDeps>
+): Array<Record<string, unknown>> {
+  return deps.auditLog.write.mock.calls
+    .map(
+      ([event]) => event as { kind: string; metadata?: Record<string, unknown> }
+    )
+    .filter(event => event.kind === "login-failed")
+    .map(event => event.metadata ?? {});
+}
+
+describe("the last permitted wrong answer", () => {
+  it("answers 401, clears the pending cookie and records login-failed", async () => {
+    // The final wrong answer is a REJECTION of the helper that builds the
+    // retry. Returned un-awaited from inside the try, it settled after the
+    // catch was gone: no failure row, no stall, and the exhausted flow's
+    // cookie left behind for `/auth/pending` to keep reporting.
+    const deps = makeDeps();
+    deps.countChallengeAttempt = async () => ({ allowed: true });
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      attempts: 4,
+      flow: "final-wrong",
+      strategy: "sso:okta",
+    });
+
+    const res = await handleChallengeResolve(
+      makeCookieRequest(pendingToken, { code: "000000" }),
+      deps
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.headers.getSetCookie().join("\n")).toMatch(
+      /nextly_pending=;.*Max-Age=0/
+    );
+    expect(failureRows(deps)).toEqual([
+      expect.objectContaining({
+        reason: "challenge-failed-final",
+        strategy: "sso:okta",
+      }),
+    ]);
+  });
+});
+
+describe("the failure trail of a challenge", () => {
+  it("records every wrong answer, with the strategy, not only the last", async () => {
+    const deps = makeDeps();
+    deps.countChallengeAttempt = async () => ({ allowed: true });
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow: "wrong-trail",
+      strategy: "sso:okta",
+    });
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "000000" } }),
+      deps
+    );
+
+    expect(res.status).toBe(401);
+    expect(failureRows(deps)).toEqual([
+      expect.objectContaining({
+        reason: "challenge-wrong-answer",
+        strategy: "sso:okta",
+      }),
+    ]);
+  });
+
+  it("names the strategy when the account gate refuses the flow", async () => {
+    // The gate raises its own error and knows nothing about the method, so
+    // the row carried a reason but no strategy for exactly the refusals an
+    // operator reviewing an SSO flow most needs to attribute.
+    const deps = makeDeps();
+    deps.fetchAccountState.mockResolvedValue({
+      userId: "u1",
+      isActive: false,
+      lockedUntil: null,
+      emailVerified: new Date("2026-01-01T00:00:00Z"),
+    });
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow: "gate-strategy",
+      strategy: "sso:okta",
+    });
+
+    await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(failureRows(deps)).toEqual([
+      expect.objectContaining({ reason: "inactive", strategy: "sso:okta" }),
+    ]);
+  });
+});
+
+describe("an account the gate refuses never reaches the resolver", () => {
+  const refusedStates = [
+    {
+      name: "inactive",
+      state: { isActive: false, lockedUntil: null, emailVerified: new Date() },
+      strategy: "sso:okta",
+    },
+    {
+      name: "unverified",
+      state: { isActive: true, lockedUntil: null, emailVerified: null },
+      strategy: "sso:okta",
+    },
+    {
+      // The password lockout applies to the password strategy only, so the
+      // locked case pauses a password login.
+      name: "password-locked",
+      state: {
+        isActive: true,
+        lockedUntil: new Date(Date.now() + 60_000),
+        emailVerified: new Date(),
+      },
+      strategy: "password",
+    },
+  ];
+
+  for (const { name, state, strategy } of refusedStates) {
+    it(`${name}: neither the resolver nor the attempt budget is touched`, async () => {
+      // The resolver is plugin code with side effects of its own (a code it
+      // consumes, a record it writes), and the budget is shared state a
+      // reactivated account would find already spent.
+      const deps = makeDeps();
+      deps.fetchAccountState.mockResolvedValue({ userId: "u1", ...state });
+      const resolve = vi.spyOn(deps.challengeRegistry, "resolve");
+      const count = vi.fn(async () => ({ allowed: true }));
+      deps.countChallengeAttempt = count;
+      const pendingToken = await mint({
+        userId: "u1",
+        challengeId: "totp",
+        flow: `gate-${name}`,
+        strategy,
+      });
+
+      const res = await handleChallengeResolve(
+        makeRequest({ pendingToken, response: { code: "123456" } }),
+        deps
+      );
+
+      expect(res.status).toBe(401);
+      expect(resolve).not.toHaveBeenCalled();
+      expect(count).not.toHaveBeenCalled();
+    });
+  }
+});
+
+describe("a pending token after its challenge succeeded", () => {
+  it("cannot be replayed to mint a second session", async () => {
+    // The default counter (process memory), so the settle mark and the
+    // budget live where production keeps them without a shared store. A
+    // flow id of its own keeps other cases' counts out of this one.
+    const deps = makeDeps();
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow: "replay-after-success",
+    });
+
+    const first = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+    const resolve = vi.spyOn(deps.challengeRegistry, "resolve");
+    const replay = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(401);
+    // Refused before the resolver: a replay never reaches plugin code.
+    expect(resolve).not.toHaveBeenCalled();
+    expect(deps.storeRefreshToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("mints one session when two correct answers arrive together", async () => {
+    const deps = makeDeps();
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow: "concurrent-success",
+    });
+
+    const statuses = (
+      await Promise.all([
+        handleChallengeResolve(
+          makeRequest({ pendingToken, response: { code: "123456" } }),
+          deps
+        ),
+        handleChallengeResolve(
+          makeRequest({ pendingToken, response: { code: "123456" } }),
+          deps
+        ),
+      ])
+    ).map(res => res.status);
+
+    expect(statuses.sort()).toEqual([200, 401]);
+    expect(deps.storeRefreshToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not clear the winner's cookie from the losing response", async () => {
+    // Cookie mode, for an account that must change its password: the winner
+    // sets the cookie for that step, and the loser clearing it left the step
+    // with no token.
+    const deps = makeDeps();
+    deps.findUserById = vi.fn().mockResolvedValue({
+      id: "u1",
+      email: "a@b.c",
+      name: "A",
+      image: null,
+      isActive: true,
+      mustChangePassword: true,
+    });
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow: "concurrent-cookie",
+    });
+    const overCookie = () =>
+      handleChallengeResolve(
+        new Request("http://localhost:3000/admin/api/auth/challenge/resolve", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie: `nextly_csrf=tok; nextly_pending=${pendingToken}`,
+            origin: "http://localhost:3000",
+          },
+          body: JSON.stringify({
+            csrfToken: "tok",
+            response: { code: "123456" },
+          }),
+        }),
+        deps
+      );
+
+    // The loser arriving once the winner has finished: it meets the spent
+    // budget, which a correct answer filled, not the settle mark.
+    const winner = await overCookie();
+    const loser = await overCookie();
+
+    expect(winner.status).toBe(200);
+    expect(loser.status).toBe(401);
+    expect(loser.headers.getSetCookie().join("\n")).not.toMatch(
+      /nextly_pending=;/
+    );
+  });
+});
+
+describe("the reserved challenge id", () => {
+  it("refuses a plugin challenge registered as core's password-change step", () => {
+    // Set-initial-password accepts any pending token carrying this id, so a
+    // plugin challenge under it would hand its holders that step without
+    // answering the plugin's own factor.
+    const registry = new ChallengeRegistry();
+    expect(() =>
+      registry.add({
+        id: "must-change-password",
+        resolve: async () => ({ ok: true }),
+      })
+    ).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR" }));
   });
 });

@@ -147,21 +147,43 @@ describe("projectPluginAuditEvent", () => {
 });
 
 describe("looksLikeSecret", () => {
+  // Built by joining, so no credential-shaped literal sits in the source for
+  // a secret scanner to report; each is the documented shape and nothing more.
+  const shaped = (...parts: string[]) => parts.join("");
   it.each([
     ["eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1MSJ9.c2lnbmF0dXJlLXZhbHVl"],
     ["whsec_abcdef123456"],
+    [shaped("sk_", "live_", "4eC39HqLyjWDarjtT1zdp7dc")],
+    [shaped("rk_", "test_", "4eC39HqLyjWDarjtT1zdp7dc")],
+    [shaped("gh", "p_", "a".repeat(36))],
+    [shaped("github_", "pat_", "11ABCDE")],
+    [shaped("gl", "pat-", "abcdefghijklmnopqrst")],
+    [shaped("xo", "xb-", "1234-5678-abcdef")],
+    [shaped("AK", "IA", "ABCDEFGHIJKLMNOP")],
+    [shaped("ya", "29.", "a0AfH6SMB")],
+    [shaped("np", "m_", "a".repeat(36))],
+    ["Bearer abc.def"],
+    ["-----BEGIN PRIVATE KEY-----"],
   ])("recognises %s", value => {
     expect(looksLikeSecret(value)).toBe(true);
   });
 
-  it.each([["google"], ["first-login"], ["a.b.c"], [""]])(
-    "does not flag the ordinary value %s",
-    value => {
-      // The positive control: a matcher that flagged everything would pass
-      // every case above while dropping all real metadata.
-      expect(looksLikeSecret(value)).toBe(false);
-    }
-  );
+  it.each([
+    ["google"],
+    ["first-login"],
+    ["a.b.c"],
+    [""],
+    // Neighbours of the shapes above, which are ordinary words or ids.
+    ["sk_other_value"],
+    ["ghp"],
+    ["AKIA-short"],
+    ["bearer"],
+    ["xoxo"],
+  ])("does not flag the ordinary value %s", value => {
+    // The positive control: a matcher that flagged everything would pass
+    // every case above while dropping all real metadata.
+    expect(looksLikeSecret(value)).toBe(false);
+  });
 });
 
 describe("metadata values are held to the declared contract", () => {
@@ -216,6 +238,37 @@ describe("metadata values are held to the declared contract", () => {
       "@acme/auth"
     );
     expect(projected?.metadata).toEqual({ s: "text", n: 42, b: true });
+  });
+});
+
+describe("the shape of a declared kind", () => {
+  it.each([
+    [`${SLUG}.\nFAKE login-succeeded`],
+    [`${SLUG}.Identity-Linked`],
+    [`${SLUG}.`],
+    [`${SLUG}..linked`],
+    [`${SLUG}.linked by admin`],
+  ])("REFUSES %j", kind => {
+    let caught: unknown;
+    try {
+      collectPluginAuditKinds(SLUG, [{ kind }], "@acme/auth");
+    } catch (err) {
+      caught = err;
+    }
+    expect(NextlyError.is(caught)).toBe(true);
+    expect(
+      ((caught as NextlyError).logContext as { reason?: string }).reason
+    ).toBe("plugin-audit-kind-invalid");
+  });
+
+  it.each([
+    [`${SLUG}.identity-linked`],
+    [`${SLUG}.sso.callback_failed`],
+    [`${SLUG}.2fa-enrolled`],
+  ])("accepts %s", kind => {
+    expect(() =>
+      collectPluginAuditKinds(SLUG, [{ kind }], "@acme/auth")
+    ).not.toThrow();
   });
 });
 

@@ -8,9 +8,9 @@
 
 import {
   boolean,
+  mediumtext,
   mysqlTable,
   primaryKey,
-  text,
   timestamp,
   varchar,
 } from "drizzle-orm/mysql-core";
@@ -23,7 +23,11 @@ export const nextlyPluginSettings = mysqlTable(
     // Bounded, because MySQL cannot key a TEXT column without a prefix length.
     owner: varchar("owner", { length: 191 }).notNull(),
     key: varchar("key", { length: 191 }).notNull(),
-    value: text("value").notNull(),
+    // `mediumtext` (16 MiB), not `TEXT` (65,535 bytes): an encrypted value is
+    // about twice its plaintext, so a large setting saved on PostgreSQL and
+    // SQLite failed or was truncated here. The service bounds every value
+    // below this, so all three dialects refuse the same input.
+    value: mediumtext("value").notNull(),
     isSecret: boolean("is_secret").notNull().default(false),
     updatedAt: timestamp("updated_at").notNull(),
     updatedBy: varchar("updated_by", { length: 191 }),

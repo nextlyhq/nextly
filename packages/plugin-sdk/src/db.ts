@@ -1,17 +1,34 @@
 /**
- * Query operators for plugin code.
+ * @experimental Query operators for plugin code.
  *
  * Re-exported from core rather than from `drizzle-orm` directly, so every
- * plugin shares the instance core builds its tables with. Drizzle identifies
- * tables and columns by internal symbols, and a second copy of the package has
- * different ones — a condition built with those matches nothing, and does so
- * quietly.
+ * plugin builds its conditions with the Drizzle version core runs, and the SDK
+ * needs no `drizzle-orm` dependency of its own.
  *
- * The SDK therefore needs no `drizzle-orm` dependency of its own.
+ * Named one by one rather than re-exported with `*`, so an operator added to
+ * core does not become public SDK surface without a change here, a surface
+ * snapshot change and a stability row.
  *
- * `sql` is not here on purpose: raw SQL is what `capabilities.db.rawSql`
- * gates, and a convenience export would route around it.
+ * `sql` is left out: a plugin that runs raw SQL declares
+ * `capabilities.db.rawSql`, which a reviewer reads.
  *
  * @module db
  */
-export * from "nextly/db-operators";
+export {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  lt,
+  lte,
+  ne,
+  not,
+  or,
+} from "nextly/db-operators";

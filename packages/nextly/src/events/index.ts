@@ -24,7 +24,11 @@ export {
   DocumentEvents,
   AuthEvents,
   MediaEvents,
+  UserEvents,
   type DocumentEventName,
   type AuthEventName,
   type MediaEventName,
+  type UserEventName,
+  type UserCreatedPayload,
+  type UserDeletedPayload,
 } from "./event-names";

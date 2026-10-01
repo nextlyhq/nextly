@@ -65,6 +65,9 @@ export async function handleSetInitialPassword(
 ): Promise<Response> {
   const startTime = Date.now();
   const requestId = readOrGenerateRequestId(request);
+  // Outside the try so the failure row names the method the paused login was
+  // using, as the challenge path's does.
+  let strategy: string | undefined;
 
   try {
     const body = await readJsonObjectBody(request);
@@ -112,6 +115,7 @@ export async function handleSetInitialPassword(
         logContext: { reason: auditReason("pending-token-invalid") },
       });
     }
+    strategy = pending.strategy;
     if (pending.challengeId !== MUST_CHANGE_PASSWORD_CHALLENGE) {
       throw NextlyError.invalidCredentials({
         logContext: { reason: auditReason("pending-token-wrong-challenge") },
@@ -183,7 +187,7 @@ export async function handleSetInitialPassword(
     );
   } catch (err) {
     await stallResponse(startTime, deps.loginStallTimeMs);
-    await recordLoginFailure(deps, request, err, requestId);
+    await recordLoginFailure(deps, request, err, requestId, strategy);
     return loginFailureResponse(err, requestId);
   }
 }

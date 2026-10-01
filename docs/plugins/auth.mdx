@@ -1,6 +1,6 @@
 ---
 title: Auth extensibility
-description: Extend authentication from a plugin — custom strategies (OAuth/SSO), auth-flow hooks, and first-class multi-step challenges (2FA) — without forking core.
+description: Extend authentication from a plugin — custom strategies, external sign-in (OAuth/SSO), auth-flow hooks, and first-class multi-step challenges (2FA) — without forking core.
 ---
 
 > **Alpha (`0.x`) — `@experimental`.** The auth-extensibility surface (D71/D57) is
@@ -14,13 +14,15 @@ piecemeal:
 
 | Surface | What it does | Who provides it |
 |---|---|---|
-| **Strategies** | Decide *who a user is* (password, OAuth, SSO, magic-link, passkey) | App opt-in (`defineConfig({ auth: { strategies } })`) |
+| **Strategies** | Decide *who a user is* from a credential the request carries (password, an API token, a magic-link code) | App opt-in (`defineConfig({ auth: { strategies } })`) |
 | **Auth-flow hooks** | Modify / abort / **challenge** the login, register, logout, session flow | Plugin `contributes.auth.hooks` |
 | **Challenges** | A pending second step (2FA) that pauses login until resolved | Plugin `contributes.auth.challenges` |
 | **Auth-page UI** | Provider buttons, challenge views, login-form slots | Plugin `contributes.auth.ui` |
 
 The built-in email/password login is itself just the `password` strategy, always
-present (and run last) unless you disable it.
+present and run last; it cannot be disabled. A sign-in that starts with a
+redirect — OAuth, SSO — is not a strategy: see
+[signing in with an external provider](#worked-example-signing-in-with-an-external-provider).
 
 ## Strategies are opt-in (the trust boundary)
 
@@ -30,10 +32,10 @@ may *ship* a strategy, but it only takes effect when the **app** enables it:
 ```ts
 // nextly.config.ts
 import { defineConfig } from "nextly/config";
-import { googleOAuth } from "@acme/nextly-plugin-google";
+import { magicLink } from "@acme/nextly-plugin-magic-link";
 
 export default defineConfig({
-  auth: { strategies: [googleOAuth({ clientId: process.env.GOOGLE_ID! })] },
+  auth: { strategies: [magicLink({ ttlMinutes: 15 })] },
 });
 ```
 
@@ -53,6 +55,9 @@ export const googleAuth = definePlugin({
   name: "@acme/google-auth",
   version: "1.0.0",
   nextly: ">=0.0.2-alpha.63",
+  // Finishing a login signs in whichever account the plugin names, so it is
+  // declared where an operator reviews the plugin.
+  capabilities: { auth: { login: true } },
   contributes: {
     routes: [
       {
@@ -66,18 +71,30 @@ export const googleAuth = definePlugin({
         path: "/google/callback",
         public: true,
         async handler(request, ctx) {
-          // Whatever the provider takes to prove who this is. Everything up to
-          // here is the plugin's business; core has no opinion about it.
+          // Proving who this is stays the plugin's job; see the duties below.
+          // This checks the `state` cookie, sends the PKCE verifier, and
+          // validates the ID token's `iss`, `aud` and `nonce`.
           const profile = await exchangeCodeForProfile(request, ctx);
 
+          // Keyed on the provider's stable subject, never on an email alone,
+          // and never on anything the request supplies.
           const user = await findLocalUserFor(profile, ctx);
-          if (!user) return Response.redirect("/admin/login?error=signin-failed");
+          if (!user) {
+            // A relative redirect: `Response.redirect` needs an absolute URL
+            // and throws on this one.
+            return new Response(null, {
+              status: 302,
+              headers: { Location: "/admin/login?error=signin-failed" },
+            });
+          }
 
           // Core finishes the login: the account-state gate, the hooks, the
           // audit row, the cookies, and a second factor if one is configured.
           return ctx.auth.completeLogin(user.id, {
             request,
-            strategy: "oauth-google",
+            // Begins with the plugin's slug, so the audit trail says which
+            // plugin signed this person in.
+            strategy: "acme-google-auth:google",
             next: "/admin",
           });
         },
@@ -87,11 +104,13 @@ export const googleAuth = definePlugin({
       ui: {
         providers: [
           {
-            strategy: "oauth-google",
+            strategy: "acme-google-auth:google",
             label: "Continue with Google",
-            // Where the button goes. A provider button with no href and no
-            // component of its own renders and does nothing.
-            href: "/admin/api/plugins/acme-google-auth/google/authorize",
+            // Where the button goes. A provider with neither an href nor a
+            // component, or with an href that is not a same-origin path, is
+            // dropped from the login page and reported at boot.
+            // Routes are served under the raw package name.
+            href: "/admin/api/plugins/@acme/google-auth/google/authorize",
           },
         ],
       },
@@ -103,12 +122,29 @@ declare function redirectToGoogle(ctx: unknown): Response;
 declare function exchangeCodeForProfile(
   request: Request,
   ctx: unknown
-): Promise<{ email: string }>;
+): Promise<{ sub: string; email: string; emailVerified: boolean }>;
 declare function findLocalUserFor(
-  profile: { email: string },
+  profile: { sub: string; email: string; emailVerified: boolean },
   ctx: unknown
 ): Promise<{ id: string } | null>;
 ```
+
+**What stays the plugin's job.** Core cannot see the provider exchange, so it
+cannot check any of it. Each of these is what stops a login CSRF or an account
+takeover ([RFC 9700](https://www.rfc-editor.org/rfc/rfc9700)):
+
+- Bind the `state` parameter to an HttpOnly, single-use cookie set by the
+  authorize route, and refuse a callback whose `state` does not match it.
+- Use PKCE with `S256`.
+- Validate the ID token: its signature, `iss`, `aud`, expiry, and the `nonce`
+  you sent.
+- Key the linked account on the provider's `sub`, which is stable, rather than
+  on an email address, which can change hands.
+- Match an existing account by email only when the provider says the address
+  is verified (`email_verified`).
+- Never take a user id from the request: pass `completeLogin` only an id your
+  own lookup produced.
+- Clear the transaction cookie on the response, on success and on failure.
 
 **What `completeLogin` does for you**, in this order: loads the user by id, so a
 caller cannot fabricate profile fields; checks that the account may hold a
@@ -125,15 +161,23 @@ The password-attempt lockout does NOT apply here. An external login is not a
 password attempt, and otherwise anyone who knows an address could lock its
 owner out of their provider with five wrong guesses.
 
-It always answers with a redirect and never throws for a login outcome, so
-every plugin fails the same safe way: a refusal lands on
-`/admin/login?error=signin-failed` with an audit row that names no account, and
-a second factor lands on `/admin/login?resume=1` with the pending token in an
-HttpOnly cookie rather than in the URL.
+It answers every login outcome with a redirect, so every plugin fails the same
+safe way: a refusal lands on `/admin/login?error=signin-failed` with an audit
+row that names no account, and a second factor lands on
+`/admin/login?resume=1` with the pending token in an HttpOnly cookie rather
+than in the URL. A hook that blocks an external login throws a typed 4xx
+`NextlyError` (for example `NextlyError.forbidden`) to be answered that way.
+What is not a login outcome is thrown to the calling route instead: an untyped
+or 5xx error, an `afterAuthenticate` hook returning another account, and a
+plugin calling `completeLogin` without `capabilities.auth.login` or with a
+strategy name that does not begin with its own slug.
 
 Strategies remain app-level: they live in `defineConfig({ auth: { strategies } })`
-rather than in a plugin, so installing a plugin can never add a new way to
-authenticate without the app saying so.
+rather than in a plugin. A plugin that finishes logins with `completeLogin`
+does add a way in, which is why it must declare `capabilities.auth.login` —
+`nextly plugins info` shows it, and without it `completeLogin` refuses — and
+why its strategy names must begin with its own slug (`acme-google-auth:`), so
+every audit row names the plugin that signed someone in.
 
 ## Worked example: TOTP two-factor (a challenge)
 
@@ -184,34 +228,49 @@ export const twoFactor = definePlugin({
    ```json
    { "status": "challenge", "challengeType": "totp", "pendingToken": "…" }
    ```
-2. The client renders the `challengeViews["totp"]` component, collects the code, and
-   calls:
+   A login finished by `ctx.auth.completeLogin` instead redirects to
+   `/admin/login?resume=1` with the pending token in an HttpOnly cookie.
+2. The login page renders the `challengeViews["totp"]` component with
+   `ChallengeViewProps` from `@nextlyhq/plugin-sdk/admin`. The view collects the
+   code and calls `resolve({ code })`; the **host** posts it:
    ```
    POST /auth/challenge/resolve   { "pendingToken": "…", "response": { "code": "123456" } }
    ```
+   with the pending token from the body, or from the cookie when the login
+   resumed. The view never posts anything itself, and `pendingToken` in its
+   props is deprecated: a resumed login has none to give it.
 3. Core verifies the pending token (single-purpose, TTL'd, attempt-capped), runs your
    challenge's `resolve`, and on success issues the real session — identical to a
-   direct login. A wrong code re-issues a pending token until the cap is hit.
+   direct login — and the host navigates to the login's destination. `resolve`
+   answers `{ ok, error?, continues?, next? }`: `continues` means another step
+   follows (a forced password change), so the view must not call `onResolved`.
+   Calling it after the host has navigated changes nothing. A wrong code
+   re-issues a pending token until the cap is hit; the last refusal ends the
+   flow and the page says so.
 
 The pending token authorizes **nothing** except resolving the challenge — it can never
-establish a session (the access guard rejects it). Challenges are stackable (e.g. 2FA
-then a device-confirm).
+establish a session (the access guard rejects it). One challenge pauses a
+login at a time: the first an `afterAuthenticate` hook returns is the one asked,
+and once it is answered only core's forced password change can follow.
 
 ## Auth-flow hooks reference
 
-All hooks are optional on `contributes.auth.hooks`. Each can **modify** (return a new
-value), **abort** (throw → generic error), or — for `afterAuthenticate` — **challenge**.
+All hooks are optional on `contributes.auth.hooks`. Any of them can **abort** by
+throwing — a `NextlyError` keeps its own code, anything else becomes a generic
+error. `beforeRegister`, `afterAuthenticate`, `determineUser` and
+`customizeClaims` can also **modify** by returning a value; the others observe,
+and what they return is ignored. `afterAuthenticate` can **challenge**.
 
 | Hook | When | Use |
 |---|---|---|
 | `beforeLogin(input)` | Before any strategy; in `completeLogin`, after the account check | Pre-checks; throw to block (maintenance mode, IP allowlist) |
 | `afterAuthenticate(user)` | After a strategy identifies the user | **Insert 2FA / step-up**; decorate the user (the id must stay the same, or the login fails) |
-| `afterLogin(user)` | After the session is issued | Side effects (audit, last-login, notify) |
+| `afterLogin(user)` | After the session is minted, before the success audit row and the response | Side effects (last-login, notify); a throw fails the login |
 | `beforeRegister(data)` | Before a new user is created | Normalize / augment the payload |
 | `afterRegister(user)` | After a successful register | Welcome email, provisioning, CRM sync |
-| `beforeLogout` / `afterLogout` | Around logout | Cleanup, revoke external sessions |
-| `determineUser(request)` | Session/refresh resolution | Custom credential (API key, alt token) → return a user or `null`. The returned user must still pass the account gate: an unknown, deactivated, or (where sign-in requires it) unverified account is not answered as a session |
-| `customizeClaims(claims, user)` | Building the JWT (login **and** refresh) | Add JWT claims; `sub`, `email`, `name`, `image`, `roleIds` and the token claims are restored as core built them |
+| `beforeLogout` / `afterLogout` | Around logout | Cleanup, revoke external sessions. `beforeLogout` receives no user |
+| `determineUser(request)` | `GET /auth/session` only | Custom credential (API key, alt token) → return a user or `null`. The returned user must still pass the account gate: an unknown, deactivated, or (where sign-in requires it) unverified account is not answered as a session |
+| `customizeClaims(claims, user)` | Building the JWT (login **and** refresh) | Add JWT claims only. Every claim core built — identity, `roleIds`, claims from custom user fields, and the token claims — is restored as core built it, and the reserved `nbf`, `aud`, `iss` and `typ` cannot be added |
 
 Hooks observe-or-mutate; they do **not** replace strategies. Use a strategy to
 authenticate, a hook to gate/decorate.

@@ -6,10 +6,11 @@ import { JWT_INTERNAL_CLAIMS } from "../jwt/claims";
 import type { AuthHooks, AuthInput, Challenge } from "./types";
 
 /**
- * The claims no `customizeClaims` hook may change: the ones the session reader
- * turns into the signed-in user, and the ones token verification owns. A hook
- * that replaced `sub` or `roleIds` would sign a session for an account, or
- * with roles, that the account-state gate never saw.
+ * The claims no `customizeClaims` hook may set, even where core built none:
+ * the ones the session reader turns into the signed-in user, and the ones
+ * token verification owns. A hook that added `sub` or `roleIds` would sign a
+ * session for an account, or with roles, that the account-state gate never
+ * saw.
  */
 const RESERVED_CLAIMS: readonly string[] = [
   ...JWT_INTERNAL_CLAIMS,
@@ -20,15 +21,20 @@ const RESERVED_CLAIMS: readonly string[] = [
 ];
 
 /**
- * `customized` with every reserved claim put back as `core` had it: restored
- * where `core` set it, and removed where it did not.
+ * `customized` with every claim core built put back as core had it, and every
+ * reserved claim core did not build removed.
+ *
+ * Every claim core built, not only the reserved ones: the claims built from a
+ * user's custom fields reach `custom` access rules as the caller's identity —
+ * a tenant id is identity in practice — so a hook replacing one would sign a
+ * session that the rules judge as another tenant. A hook may still ADD claims.
  */
 function withCoreClaims(
   customized: Record<string, unknown>,
   core: Record<string, unknown>
 ): Record<string, unknown> {
   const out = { ...customized };
-  for (const key of RESERVED_CLAIMS) {
+  for (const key of new Set([...RESERVED_CLAIMS, ...Object.keys(core)])) {
     if (key in core) out[key] = core[key];
     else delete out[key];
   }
@@ -40,12 +46,12 @@ function withCoreClaims(
  * goes to the log only: the client sees the generic internal error, since the
  * fault is a plugin's, not the person's.
  */
-function assertSameAccount(authenticated: AuthUser, returnedId: unknown): void {
-  if (String(returnedId) === String(authenticated.id)) return;
+function assertSameAccount(authenticatedId: string, returnedId: unknown): void {
+  if (String(returnedId) === authenticatedId) return;
   throw NextlyError.internal({
     logContext: {
       hook: "afterAuthenticate",
-      authenticatedUserId: authenticated.id,
+      authenticatedUserId: authenticatedId,
       returnedUserId: returnedId ?? null,
     },
   });
@@ -81,23 +87,31 @@ export class AuthHookRegistry {
    * is what the session or the pending token is issued for, so a different
    * id would sign someone in as an account that never proved who it was. A
    * hook that returns another account, or no user at all, fails the login.
+   *
+   * The id is captured BEFORE the first hook, and the first hook receives a
+   * copy: comparing against the object handed to the hooks let a hook change
+   * `id` in place — `Object.assign(user, profile)` — and pass a check that
+   * then compared the new id with itself. What comes back carries the
+   * captured id, so a hook holding on to an object it returned cannot change
+   * the account afterwards either.
    */
   async runAfterAuthenticate(
     user: AuthUser,
     ctx: PluginContext
   ): Promise<AuthUser | { challenge: Challenge }> {
-    let current = user;
+    const authenticatedId = String(user.id);
+    let current: AuthUser = { ...user };
     for (const h of this.#hooks) {
       if (!h.afterAuthenticate) continue;
       const res = await h.afterAuthenticate(current, ctx);
       if (res && typeof res === "object" && "challenge" in res) {
-        assertSameAccount(user, res.challenge?.userId);
-        return res;
+        assertSameAccount(authenticatedId, res.challenge?.userId);
+        return { challenge: { ...res.challenge, userId: authenticatedId } };
       }
-      assertSameAccount(user, res?.id);
+      assertSameAccount(authenticatedId, res?.id);
       current = res;
     }
-    return current;
+    return { ...current, id: user.id };
   }
 
   async runAfterLogin(user: AuthUser, ctx: PluginContext): Promise<void> {
@@ -106,9 +120,10 @@ export class AuthHookRegistry {
 
   /**
    * Thread the claims through every `customizeClaims` hook. Hooks may add
-   * claims; the reserved ones come back as core built them, whatever a hook
-   * returned or changed in place, because the snapshot is a deep copy taken
-   * before any hook runs.
+   * claims; every claim core built comes back as core built it, and the
+   * reserved ones a hook added are removed, whatever a hook returned or
+   * changed in place, because the snapshot is a deep copy taken before any
+   * hook runs.
    */
   async runCustomizeClaims(
     claims: Record<string, unknown>,

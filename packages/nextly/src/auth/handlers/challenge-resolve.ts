@@ -207,54 +207,142 @@ async function passwordChangeRequired(
  * progress, but it is not what enforces anything.
  */
 async function spendChallengeAttempt(
-  deps: Pick<
-    ChallengeResolveDeps,
-    | "challengeTokenTTL"
-    | "maxChallengeAttempts"
-    | "countChallengeAttempt"
-    | "authRateLimit"
-  >,
-  pending: {
-    userId: string;
-    challengeId: string;
-    flow?: string;
-    flowExpiresAt?: number;
-  }
+  deps: AttemptCounterDeps,
+  pending: PendingFlow
 ): Promise<void> {
-  // The CONFIGURED store, not the module-level default. `authRateLimiter()`
-  // with no argument returns the process-memory limiter whatever the install
-  // configured, so each worker counted its own five attempts and the cap was
-  // effectively multiplied by the instance count — in the deployments that
-  // have a shared store precisely because they run more than one process.
-  const store = deps.authRateLimit?.store;
-  const count =
-    deps.countChallengeAttempt ??
-    (async (key: string, limit: number, windowMs: number) => {
-      const { authRateLimiter } = await import("../middleware/rate-limiter");
-      return authRateLimiter(store).check(key, limit, windowMs);
-    });
-
-  // Keyed by USER, challenge, and FLOW. `challengeId` names the challenge
-  // DEFINITION — "totp" — so keying on it alone pooled every account's wrong
-  // answers into one budget: a handful of failures by anyone locked out every
-  // user of that challenge until the window expired.
-  //
-  // The FLOW narrows it to one interrupted login, which is what the cap
-  // actually bounds. Without it every login the account started — including
-  // the ones that SUCCEEDED — drew on one counter, so five completed logins
-  // inside the window refused the sixth before it was attempted. A replayed
-  // token cannot escape its own flow: the id is signed into the token, and
-  // every re-issue carries it forward. A token from before the claim existed
-  // shares one budget, exactly as every token did then.
-  const verdict = await count(
-    `${pending.userId}:${pending.challengeId}:${pending.flow ?? "0"}`,
+  const verdict = await attemptCounter(deps)(
+    challengeFlowKey(pending),
     deps.maxChallengeAttempts,
     deps.challengeTokenTTL * 1000
   );
   if (!verdict.allowed) {
     throw NextlyError.invalidCredentials({
-      logContext: { reason: auditReason("challenge-attempts-exhausted") },
+      logContext: {
+        reason: (await flowWasSettled(deps, pending))
+          ? auditReason("challenge-flow-settled")
+          : auditReason("challenge-attempts-exhausted"),
+      },
     });
+  }
+}
+
+/**
+ * Whether a correct answer settled this flow, asked once its budget refuses.
+ *
+ * A settled flow's budget is full, so a token presented after the success is
+ * refused here rather than at the settle mark — and that refusal must not be
+ * read as the flow running out of attempts: the winning answer may have just
+ * set the cookie for the next step, and a terminal refusal clears it.
+ *
+ * The store can only count, not read, so this takes the settle mark with a
+ * limit of one: refused means a correct answer took it first. On a flow that
+ * was NOT settled it takes the mark itself, which is harmless — the budget is
+ * already spent, so this flow can never succeed and settle.
+ */
+async function flowWasSettled(
+  deps: AttemptCounterDeps,
+  pending: PendingFlow
+): Promise<boolean> {
+  const mark = await attemptCounter(deps)(
+    `${challengeFlowKey(pending)}:settled`,
+    1,
+    deps.challengeTokenTTL * 1000
+  );
+  return !mark.allowed;
+}
+
+/** What counting against a challenge flow's budget needs. */
+type AttemptCounterDeps = Pick<
+  ChallengeResolveDeps,
+  | "challengeTokenTTL"
+  | "maxChallengeAttempts"
+  | "countChallengeAttempt"
+  | "authRateLimit"
+>;
+
+/** The claims that identify one interrupted login. */
+interface PendingFlow {
+  userId: string;
+  challengeId: string;
+  flow?: string;
+}
+
+/**
+ * The counter a challenge flow's budget is kept in.
+ *
+ * The CONFIGURED store, not the module-level default. `authRateLimiter()`
+ * with no argument returns the process-memory limiter whatever the install
+ * configured, so each worker counted its own five attempts and the cap was
+ * effectively multiplied by the instance count — in the deployments that
+ * have a shared store precisely because they run more than one process.
+ */
+function attemptCounter(
+  deps: AttemptCounterDeps
+): NonNullable<ChallengeResolveDeps["countChallengeAttempt"]> {
+  const store = deps.authRateLimit?.store;
+  return (
+    deps.countChallengeAttempt ??
+    (async (key: string, limit: number, windowMs: number) => {
+      const { authRateLimiter } = await import("../middleware/rate-limiter");
+      return authRateLimiter(store).check(key, limit, windowMs);
+    })
+  );
+}
+
+/**
+ * The key one interrupted login's budget is counted under.
+ *
+ * Keyed by USER, challenge, and FLOW. `challengeId` names the challenge
+ * DEFINITION — "totp" — so keying on it alone pooled every account's wrong
+ * answers into one budget: a handful of failures by anyone locked out every
+ * user of that challenge until the window expired.
+ *
+ * The FLOW narrows it to one interrupted login, which is what the cap
+ * actually bounds. Without it every login the account started — including
+ * the ones that SUCCEEDED — drew on one counter, so five completed logins
+ * inside the window refused the sixth before it was attempted. A replayed
+ * token cannot escape its own flow: the id is signed into the token, and
+ * every re-issue carries it forward. A token from before the claim existed
+ * shares one budget, exactly as every token did then.
+ */
+function challengeFlowKey(pending: PendingFlow): string {
+  return `${pending.userId}:${pending.challengeId}:${pending.flow ?? "0"}`;
+}
+
+/**
+ * Settle a flow whose challenge was answered correctly, so its pending token
+ * cannot be spent again.
+ *
+ * The token is a JWT that stays valid until it expires, and after a success
+ * the flow's budget still had attempts left: replaying the same token with
+ * the same answer minted a second session. Two parts, both in the store the
+ * budget already lives in:
+ *
+ *  - A one-shot mark, taken atomically. Of two presentations that both
+ *    answered correctly at the same moment, only the first continues.
+ *  - The rest of the budget, spent. A later presentation is then refused by
+ *    `spendChallengeAttempt`, which runs before the resolver — so a replay
+ *    never reaches plugin code that may act on it.
+ */
+async function settleChallengeFlow(
+  deps: AttemptCounterDeps,
+  pending: PendingFlow
+): Promise<void> {
+  const count = attemptCounter(deps);
+  const key = challengeFlowKey(pending);
+  const windowMs = deps.challengeTokenTTL * 1000;
+
+  const mark = await count(`${key}:settled`, 1, windowMs);
+  if (!mark.allowed) {
+    throw NextlyError.invalidCredentials({
+      logContext: { reason: auditReason("challenge-flow-settled") },
+    });
+  }
+  // Bounded by the budget itself: each call records one attempt, so the
+  // budget is full after at most `maxChallengeAttempts` of them.
+  for (let i = 0; i < deps.maxChallengeAttempts; i++) {
+    const spent = await count(key, deps.maxChallengeAttempts, windowMs);
+    if (!spent.allowed) break;
   }
 }
 
@@ -347,6 +435,10 @@ export async function handleChallengeResolve(
   // Declared outside the try so the catch can read it: whether the pending
   // token arrived by cookie decides what a terminal failure owes the browser.
   let usedCookie = false;
+  // Likewise the method the paused login was using: the account gate and the
+  // final refusal raise errors that know nothing about it, and the failure row
+  // still has to say which method the attempt belonged to.
+  let strategy: string | undefined;
 
   try {
     const body = (await request.json()) as Record<string, unknown>;
@@ -377,6 +469,7 @@ export async function handleChallengeResolve(
       });
     }
 
+    strategy = pending.strategy;
     refuseIfFlowExhausted(pending, deps);
 
     // The resolver is plugin code with side effects of its own (a one-time
@@ -401,11 +494,28 @@ export async function handleChallengeResolve(
 
     if (!result.ok) {
       await stallResponse(startTime, deps.loginStallTimeMs);
-      return wrongAnswer(deps, {
+      // Awaited HERE, inside the try: the last permitted wrong answer is a
+      // rejection, and a promise returned un-awaited from a try block settles
+      // after the catch below is gone. That refusal would then skip its
+      // `login-failed` row and the pending cookie it has to clear.
+      const retry = await wrongAnswer(deps, {
         pending,
         usedCookie,
         requestId,
       });
+      // Every wrong answer is a failed sign-in attempt, not only the last.
+      // Recording only the final refusal left a second factor being guessed
+      // with no trace until the budget ran out.
+      await recordLoginFailure(
+        deps,
+        request,
+        NextlyError.invalidCredentials({
+          logContext: { reason: auditReason("challenge-wrong-answer") },
+        }),
+        requestId,
+        strategy
+      );
+      return retry;
     }
 
     // Challenge resolved → load the candidate user and issue the real session.
@@ -419,13 +529,19 @@ export async function handleChallengeResolve(
       });
     }
 
+    // Settled before either continuation below: the pending token is a JWT
+    // that stays valid until it expires, so without this a correct answer
+    // could be replayed to mint a second session, or a second set-password
+    // step, from the same flow.
+    await settleChallengeFlow(deps, pending);
+
     // Forced first-sign-in password change (ASVS 6.4.1) applies here too: a
     // must-change account that clears a post-auth challenge (e.g. 2FA) must
     // still replace its admin-set password before any session is issued, or the
     // challenge path would bypass the gate the login path enforces.
     if (u.mustChangePassword) {
       await stallResponse(startTime, deps.loginStallTimeMs);
-      return passwordChangeRequired(deps, {
+      return await passwordChangeRequired(deps, {
         userId: u.id,
         strategy: pending.strategy,
         requestId,
@@ -450,7 +566,7 @@ export async function handleChallengeResolve(
     );
   } catch (err) {
     await stallResponse(startTime, deps.loginStallTimeMs);
-    await recordLoginFailure(deps, request, err, requestId);
+    await recordLoginFailure(deps, request, err, requestId, strategy);
     return challengeErrorResponse(err, requestId, usedCookie);
   }
 }
@@ -487,11 +603,17 @@ function challengeErrorResponse(
 
 /**
  * Whether an error is a challenge flow's FINAL refusal — the attempt budget
- * exhausted, or the last permitted wrong answer spent.
+ * exhausted, or the last permitted wrong answer spent — so its pending cookie
+ * can go.
  *
- * A narrow test on the audit reason, because that is the identity the two
- * throw sites already share and nothing else in this handler's catch should
- * take a cookie from the browser.
+ * Not a flow ALREADY SETTLED by a correct answer: that refusal is only ever
+ * the loser of two simultaneous correct answers, and the winner may have just
+ * set the cookie for the next step (a forced password change). Clearing it
+ * from the losing response left that step with no token.
+ *
+ * A narrow test on the audit reason, because that is the identity the throw
+ * sites already share and nothing else in this handler's catch should take a
+ * cookie from the browser.
  */
 function terminalChallengeFailure(err: NextlyError): boolean {
   const reason = err.logContext?.reason;

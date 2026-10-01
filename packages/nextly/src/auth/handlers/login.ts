@@ -185,6 +185,10 @@ export async function handleLogin(
 ): Promise<Response> {
   const startTime = Date.now();
   const requestId = readOrGenerateRequestId(request);
+  // Declared outside the try so the failure row can name the method: once a
+  // strategy has decided, a refusal from the account gate or a hook still
+  // belongs to that method's attempt.
+  let strategy: string | undefined;
 
   try {
     const body = (await request.json()) as Record<string, unknown>;
@@ -229,7 +233,7 @@ export async function handleLogin(
     // Whichever strategy decided, recorded on both the success and the failure
     // row. A trail that says only "a login failed" cannot answer which method
     // was tried, which is the question an operator has after a breach.
-    const strategy = strategyName ?? undefined;
+    strategy = strategyName ?? undefined;
 
     if (outcome.type === "pass" || outcome.type === "fail") {
       // No strategy claimed the request → unified invalid-credentials 401
@@ -302,7 +306,7 @@ export async function handleLogin(
     // Every login failure (bad password, locked, unverified, inactive,
     // internal) records one 'login-failed' event, the same way every other
     // sign-in path records it.
-    await recordLoginFailure(deps, request, err, requestId);
+    await recordLoginFailure(deps, request, err, requestId, strategy);
     return loginFailureResponse(err, requestId);
   }
 }

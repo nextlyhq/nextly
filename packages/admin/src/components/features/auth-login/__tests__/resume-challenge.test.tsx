@@ -277,7 +277,11 @@ describe("a terminal failure exits the challenge UI", () => {
     });
     expect(result.current.challenge).not.toBeNull();
 
-    post.mockRejectedValue(new Error("no retry token in the envelope"));
+    post.mockRejectedValue(
+      Object.assign(new Error("no retry token in the envelope"), {
+        status: 401,
+      })
+    );
 
     let answer: { ok: boolean } | undefined;
     await act(async () => {
@@ -286,6 +290,37 @@ describe("a terminal failure exits the challenge UI", () => {
 
     expect(answer?.ok).toBe(false);
     expect(result.current.challenge).toBeNull();
+    expect(result.current.flowEnded).toBe(true);
+  });
+
+  it.each([
+    ["a network failure", new TypeError("Failed to fetch")],
+    ["a server error", Object.assign(new Error("boom"), { status: 500 })],
+    ["a CSRF refusal", Object.assign(new Error("csrf"), { status: 403 })],
+    ["a rate limit", Object.assign(new Error("slow down"), { status: 429 })],
+  ])("keeps the challenge through %s", async (_label, failure) => {
+    // None of these says anything about the challenge, and the server keeps
+    // the pending cookie through them: dropping the challenge sent the person
+    // back to the email field with no message.
+    const { result } = renderHook(() => useChallengeFlow("?resume=1"));
+    act(() => {
+      result.current.start({
+        challengeType: "test-totp",
+        pendingToken: "pt-1",
+        next: null,
+      });
+    });
+    post.mockRejectedValue(failure);
+
+    let answer: { ok: boolean; error?: string } | undefined;
+    await act(async () => {
+      answer = await result.current.resolve({ code: "000000" });
+    });
+
+    expect(answer?.ok).toBe(false);
+    expect(answer?.error).toBeTruthy();
+    expect(result.current.challenge).not.toBeNull();
+    expect(result.current.flowEnded).toBe(false);
   });
 
   it("keeps the challenge when a replacement token arrives", async () => {
@@ -337,5 +372,42 @@ describe("a cookie-mode wrong answer", () => {
     });
 
     expect(result.current.challenge).not.toBeNull();
+  });
+});
+
+describe("the URL parameters the page reads", () => {
+  it("removes ?error once read, and the failure message stays", async () => {
+    // A reload repeated the failure banner the person had already seen.
+    window.history.replaceState(null, "", "/admin/login?error=signin-failed");
+    get.mockResolvedValue(null);
+
+    const { result, rerender } = renderHook(() => useChallengeFlow());
+
+    await waitFor(() => expect(window.location.search).toBe(""));
+    rerender();
+    expect(result.current.signInFailed).toBe(true);
+  });
+
+  it("keeps ?resume, so a reload mid-challenge finds the flow again", async () => {
+    window.history.replaceState(null, "", "/admin/login?resume=1");
+    get.mockResolvedValue({ challengeId: "test-totp", next: null });
+
+    const { result } = renderHook(() => useChallengeFlow());
+
+    await waitFor(() => expect(result.current.challenge).not.toBeNull());
+    expect(window.location.search).toBe("?resume=1");
+  });
+});
+
+describe("while the outstanding step is looked up", () => {
+  it("reports that it is resuming", async () => {
+    let answer: (value: null) => void = () => undefined;
+    get.mockReturnValue(new Promise(resolve => (answer = resolve)));
+
+    const { result } = renderHook(() => useChallengeFlow("?resume=1"));
+
+    await waitFor(() => expect(result.current.resuming).toBe(true));
+    await act(async () => answer(null));
+    await waitFor(() => expect(result.current.resuming).toBe(false));
   });
 });

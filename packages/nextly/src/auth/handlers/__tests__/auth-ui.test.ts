@@ -17,12 +17,24 @@ describe("aggregateAuthUi (D57)", () => {
   it("concats providers, merges challengeViews, collects slots into arrays", () => {
     const meta = aggregateAuthUi([
       pluginWith({
-        providers: [{ strategy: "oauth-google", label: "Google" }],
+        providers: [
+          {
+            strategy: "oauth-google",
+            label: "Google",
+            href: "/sso/oauth-google",
+          },
+        ],
         challengeViews: { totp: "@a/admin#Totp" },
         slots: { afterForm: "@a/admin#Legal" },
       }),
       pluginWith({
-        providers: [{ strategy: "oauth-github", label: "GitHub" }],
+        providers: [
+          {
+            strategy: "oauth-github",
+            label: "GitHub",
+            href: "/sso/oauth-github",
+          },
+        ],
         challengeViews: { sms: "@b/admin#Sms" },
         slots: { afterForm: "@b/admin#Promo", branding: "@b/admin#Logo" },
       }),
@@ -51,7 +63,13 @@ describe("aggregateAuthUi (D57)", () => {
 
   it("handleAuthUi serves the aggregated meta as public JSON", async () => {
     const authUi: AuthUiMeta = {
-      providers: [{ strategy: "oauth-google", label: "Google" }],
+      providers: [
+        {
+          strategy: "oauth-google",
+          label: "Google",
+          href: "/sso/oauth-google",
+        },
+      ],
       challengeViews: { totp: "@a/admin#Totp" },
       slots: { beforeForm: [], afterForm: [], branding: [] },
     };
@@ -73,7 +91,9 @@ describe("a disabled plugin contributes no auth UI", () => {
     // button pointed at a start route that was never registered.
     const meta = aggregateAuthUi([
       disabled({
-        providers: [{ strategy: "oauth-off", label: "Off" }],
+        providers: [
+          { strategy: "oauth-off", label: "Off", href: "/sso/oauth-off" },
+        ],
         challengeViews: { totp: "@off/admin#Totp" },
         slots: { branding: "@off/admin#Logo" },
       }),
@@ -100,7 +120,11 @@ describe("a disabled plugin contributes no auth UI", () => {
     // The control: skipping everything would satisfy both tests above while
     // emptying the login page.
     const meta = aggregateAuthUi([
-      pluginWith({ providers: [{ strategy: "oauth-on", label: "On" }] }),
+      pluginWith({
+        providers: [
+          { strategy: "oauth-on", label: "On", href: "/sso/oauth-on" },
+        ],
+      }),
     ]);
     expect(meta.providers.map(p => p.strategy)).toEqual(["oauth-on"]);
   });

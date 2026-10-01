@@ -38,6 +38,43 @@ export interface RefreshTokenRecord {
   expiresAt: Date;
 }
 
+/** What storing a new refresh token needs. */
+export interface RefreshTokenStoreDeps {
+  storeRefreshToken: (record: RefreshTokenRecord) => Promise<void>;
+  refreshTokenTTL: number;
+  trustProxy: boolean;
+  trustedProxyIps: string[];
+}
+
+/**
+ * Mint a refresh token for a user, store its hash with the request's client
+ * details, and return the raw token for the cookie.
+ *
+ * Shared by the sign-in paths that record a client — a login, a resolved
+ * challenge, the first-run setup — so the stored row is written the same way,
+ * and the client address read under the same proxy settings, on each. The
+ * development auto-login records no client and writes its own row.
+ */
+export async function storeNewRefreshToken(
+  deps: RefreshTokenStoreDeps,
+  userId: string,
+  request: Request
+): Promise<string> {
+  const rawRefreshToken = generateRefreshToken();
+  await deps.storeRefreshToken({
+    id: generateRefreshTokenId(),
+    userId,
+    tokenHash: hashRefreshToken(rawRefreshToken),
+    userAgent: request.headers.get("user-agent"),
+    ipAddress: getTrustedClientIp(request, {
+      trustProxy: deps.trustProxy,
+      trustedProxyIps: deps.trustedProxyIps,
+    }),
+    expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
+  });
+  return rawRefreshToken;
+}
+
 /**
  * The slice of login/challenge deps needed to mint a session. Shared by the
  * login handler and the challenge-resolve handler so both issue sessions
@@ -195,19 +232,7 @@ export async function mintSession(
   const { token: accessToken, expiresAt: accessTokenExpiresAt } =
     await signAccessTokenWithExpiry(claims, deps.secret, deps.accessTokenTTL);
 
-  const rawRefreshToken = generateRefreshToken();
-  const refreshTokenHash = hashRefreshToken(rawRefreshToken);
-  await deps.storeRefreshToken({
-    id: generateRefreshTokenId(),
-    userId: user.id,
-    tokenHash: refreshTokenHash,
-    userAgent: request.headers.get("user-agent"),
-    ipAddress: getTrustedClientIp(request, {
-      trustProxy: deps.trustProxy,
-      trustedProxyIps: deps.trustedProxyIps,
-    }),
-    expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
-  });
+  const rawRefreshToken = await storeNewRefreshToken(deps, user.id, request);
 
   // Last, after the post-login hooks. A hook that throws sends the caller into
   // its failure path, which returns an error and records a failure — the client

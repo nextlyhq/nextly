@@ -504,6 +504,15 @@ export function buildAuditLogWriter(
         // longer exists for any later erasure to key on. Unattributed events
         // (a failed sign-in for an address owning no account) name nobody and
         // are stored as they are.
+        //
+        // A PLUGIN's metadata is decided the same way. Core's projection keeps
+        // only values this package controls, but a plugin row carries what the
+        // plugin chose within its declared keys — an email, a provider
+        // subject — which deletion clears and a write racing it must not put
+        // back. A plugin's kind always carries its `<slug>.` prefix, and no
+        // core kind contains a dot.
+        const metadata = encodeMetadata(table, event.metadata);
+        const pluginRow = event.kind.includes(".");
         const write = (executor: ErasureAwareDb): Promise<void> =>
           insertErasureAware(executor, dialect, {
             table: table as ErasureAwareInsert["table"],
@@ -513,12 +522,13 @@ export function buildAuditLogWriter(
               kind: event.kind,
               actorUserId: event.actorUserId ?? null,
               targetUserId: event.targetUserId ?? null,
-              metadata: encodeMetadata(table, event.metadata),
+              ...(pluginRow ? {} : { metadata }),
               createdAt: new Date(),
             },
             identity: {
               ipAddress: event.ipAddress ?? null,
               userAgent: event.userAgent ?? null,
+              ...(pluginRow ? { metadata } : {}),
             },
             actorUserId: event.actorUserId ?? null,
           });

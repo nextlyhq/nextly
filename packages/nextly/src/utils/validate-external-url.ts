@@ -44,6 +44,8 @@ import type { InputType, ZlibOptions, BrotliOptions } from "node:zlib";
 
 import { NextlyError } from "../errors/nextly-error";
 
+import { ipv4ToInt } from "./get-trusted-client-ip";
+
 /** The subset of node:zlib's sync decoders `decodeBody` needs. */
 interface ZlibSyncApi {
   gunzipSync(buffer: InputType, options?: ZlibOptions): Buffer;
@@ -737,18 +739,6 @@ function errorCode(err: unknown): string | undefined {
 }
 
 // ---------- IP classification (regex-based, browser-safe) ----------
-
-function ipv4ToInt(ip: string): number | null {
-  const parts = ip.split(".");
-  if (parts.length !== 4) return null;
-  let acc = 0;
-  for (const p of parts) {
-    const n = Number(p);
-    if (!Number.isInteger(n) || n < 0 || n > 255) return null;
-    acc = (acc << 8) | n;
-  }
-  return acc >>> 0;
-}
 
 function isIpv4InCidr(intIp: number, cidr: string): boolean {
   const [addr, prefixRaw] = cidr.split("/");

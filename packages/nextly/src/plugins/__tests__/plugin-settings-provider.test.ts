@@ -1,8 +1,15 @@
 /**
  * Which dialect a plugin's `ctx.settings` actually builds SQL for.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+
+const announced = vi.hoisted(() => [] as unknown[]);
+vi.mock("../../domains/plugins/settings-activity", () => ({
+  announcePluginSettingsChange: async (input: unknown) => {
+    announced.push(input);
+  },
+}));
 
 import type { PluginDefinition } from "../plugin-context";
 import { createPluginSettings } from "../plugin-settings-provider";
@@ -140,5 +147,20 @@ describe("the adapter transaction the plugin context hands the store", () => {
 
     await api.set({ port: 2 });
     expect(calls).toEqual(["begin", "commit"]);
+  });
+});
+
+describe("a plugin's own settings write", () => {
+  it("is announced with the keys it changed, and no actor", async () => {
+    // Another plugin or instance caching these values has to hear that they
+    // moved, whichever path moved them.
+    announced.length = 0;
+    const fake = recordingDb();
+    await createPluginSettings(plugin, fake.db, "postgresql").set({
+      port: 8443,
+    });
+    expect(announced).toEqual([
+      { plugin: "@acme/thing", changedKeys: ["port"] },
+    ]);
   });
 });

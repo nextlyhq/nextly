@@ -113,25 +113,34 @@ describe("address rules — IPv6", () => {
   });
 
   it.each([
-    // RFC 6052 /48 layout: the IPv4 splits around the u octet, octets at
-    // bytes 6-7 and 9-10. Spelled out per address so the encoding under test
-    // is checkable against the RFC by eye.
-    ["64:ff9b:1:7f00:0:100::", "127.0.0.1"],
-    ["64:ff9b:1:a9fe:a9:fe00::", "169.254.169.254"],
-    ["64:ff9b:1:a08:5:400::", "10.8.5.4"],
-  ])("refuses the local-use NAT64 prefix carrying %s", address => {
-    // Judging the split layout as one contiguous run read the private
-    // 10.8.5.4 as the public 8.0.5.4 — the exact bypass this judge exists to
-    // prevent, since what the prefix carries can be loopback, link-local
-    // metadata, or private space.
-    const verdict = judgeIpv6(address);
-    expect(verdict.allowed).toBe(false);
-  });
+    // The RFC 6052 /48 layout, carrying loopback, metadata and private space.
+    ["64:ff9b:1:7f00:0:100::"],
+    ["64:ff9b:1:a9fe:a9:fe00::"],
+    ["64:ff9b:1:a08:5:400::"],
+    // The same prefix operated as a /96: 169.254.169.254 and 10.0.0.1 at the
+    // end. A decoder assuming the /48 layout read these as public addresses.
+    ["64:ff9b:1:ab01::a9fe:a9fe"],
+    ["64:ff9b:1:ab01::a00:1"],
+    // And a public IPv4 inside it: the prefix is not globally reachable, so
+    // what it carries does not matter.
+    ["64:ff9b:1:5db8:d8:2200::"],
+  ])(
+    "refuses %s under the local-use NAT64 prefix, whatever it carries",
+    address => {
+      const verdict = judgeIpv6(address);
+      expect(verdict).toEqual({ allowed: false, reason: "nat64-local-use" });
+    }
+  );
 
-  it("allows the local-use NAT64 prefix carrying a public IPv4", () => {
-    // The control: the prefix itself is not refused, only what it carries —
-    // a deployment NAT-ing to a public address is ordinary outbound traffic.
-    expect(judgeIpv6("64:ff9b:1:5db8:d8:2200::").allowed).toBe(true);
+  it.each([
+    // The well-known /96 still decodes, and a public IPv4 in it is allowed.
+    ["64:ff9b::5db8:d822"],
+    // The /48's neighbours are ordinary addresses.
+    ["64:ff9b:2::1"],
+    ["64:ff9b:0:1::1"],
+  ])("still allows %s, next to the refused prefix", address => {
+    // The control: a rule one field too wide would refuse these too.
+    expect(judgeIpv6(address).allowed).toBe(true);
   });
 
   it.each([
@@ -799,5 +808,134 @@ describe("failover safety", () => {
       })
     ).rejects.toMatchObject({ name: "AbortError" });
     expect((d.send as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+});
+
+describe("ctx.fetch behaves as fetch does", () => {
+  /** A send answering a redirect to `location` first, then 200. */
+  function redirecting(location: string) {
+    let calls = 0;
+    return vi.fn(async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response(null, { status: 302, headers: { location } })
+        : new Response("final", { status: 200 });
+    });
+  }
+
+  it('hands back the redirect itself for redirect: "manual"', async () => {
+    // Followed regardless, a plugin could never read the `Location` an OAuth
+    // provider puts its code in.
+    const d = deps({ send: redirecting("https://api.example.com/next") });
+    const res = await createPluginFetch(d)("https://api.example.com/start", {
+      redirect: "manual",
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://api.example.com/next");
+    expect((d.send as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
+  it('refuses a redirect for redirect: "error"', async () => {
+    const d = deps({ send: redirecting("https://api.example.com/next") });
+    expect(
+      await refusalOf(() =>
+        createPluginFetch(d)("https://api.example.com/start", {
+          redirect: "error",
+        })
+      )
+    ).toBe("outbound-redirect-refused");
+  });
+
+  it("reports the final url and that it was redirected", async () => {
+    const d = deps({ send: redirecting("https://api.example.com/next") });
+    const res = await createPluginFetch(d)("https://api.example.com/start");
+    expect(res.url).toBe("https://api.example.com/next");
+    expect(res.redirected).toBe(true);
+  });
+
+  it("reports the url of an unredirected response too", async () => {
+    // The control: a response that was never redirected says so.
+    const res = await createPluginFetch(deps())("https://api.example.com/x");
+    expect(res.url).toBe("https://api.example.com/x");
+    expect(res.redirected).toBe(false);
+  });
+
+  it("accepts a Request, carrying its method, headers and body", async () => {
+    // Refused as a malformed URL, a prepared request could not be sent.
+    const d = deps();
+    await createPluginFetch(d)(
+      new Request("https://api.example.com/token", {
+        method: "POST",
+        headers: { "x-api-key": "k" },
+        body: "grant_type=code",
+      })
+    );
+    const sent = (d.send as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as SendArgs;
+    expect(sent.url.href).toBe("https://api.example.com/token");
+    expect(sent.init.method).toBe("POST");
+    expect(new Headers(sent.init.headers).get("x-api-key")).toBe("k");
+    expect(sent.init.body).toBeInstanceOf(ReadableStream);
+  });
+
+  it("sends a default User-Agent naming the plugin, unless the caller set one", async () => {
+    // GitHub's REST API refuses a request without one.
+    const d = deps({ userAgent: "nextly-plugin/@acme/github" });
+    await createPluginFetch(d)("https://api.example.com/x");
+    await createPluginFetch(d)("https://api.example.com/x", {
+      headers: { "User-Agent": "acme/2.0" },
+    });
+    const agents = (d.send as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([args]) => new Headers((args as SendArgs).init.headers).get("user-agent")
+    );
+    expect(agents).toEqual(["nextly-plugin/@acme/github", "acme/2.0"]);
+  });
+
+  it("rejects with the signal's own reason when the caller aborts", async () => {
+    // A generic AbortError lost the caller's TimeoutError, which libraries
+    // such as jose map to their own timeout error.
+    const reason = new DOMException("The operation timed out.", "TimeoutError");
+    const controller = new AbortController();
+    const d = deps({
+      resolve: vi.fn(
+        () =>
+          new Promise<ResolvedAddress[]>(() => {
+            // Never answers: the abort is what settles the call.
+          })
+      ),
+    });
+    const pending = createPluginFetch(d)("https://api.example.com/x", {
+      signal: controller.signal,
+    });
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+  });
+});
+
+describe("ctx.fetch and ports", () => {
+  it("refuses a port the manifest did not name", async () => {
+    // An entry naming only the host granted every service on it.
+    expect(
+      await refusalOf(() =>
+        createPluginFetch(deps())("https://api.example.com:22/")
+      )
+    ).toBe("outbound-host-not-declared");
+  });
+
+  it("allows the scheme's default port for an entry naming only the host", async () => {
+    const res = await createPluginFetch(deps())(
+      "https://api.example.com:443/x"
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("allows a port the manifest names", async () => {
+    const d = deps({ allowlist: ["api.example.com:8443"] });
+    expect(
+      (await createPluginFetch(d)("https://api.example.com:8443/x")).status
+    ).toBe(200);
+    expect(
+      await refusalOf(() => createPluginFetch(d)("https://api.example.com/x"))
+    ).toBe("outbound-host-not-declared");
   });
 });

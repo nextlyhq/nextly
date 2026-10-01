@@ -1,5 +1,6 @@
 /**
- * Erasing a deleted user's rows from the RETIRED `accounts` table.
+ * Erasing a deleted user's rows from the RETIRED `accounts` and `sessions`
+ * tables.
  *
  * `accounts` is no longer created and nothing reads or writes it, but an
  * upgraded database keeps it until the operator drops it — that is the whole
@@ -26,8 +27,9 @@ import { mysqlTable, varchar } from "drizzle-orm/mysql-core";
 import { pgTable, text } from "drizzle-orm/pg-core";
 import { sqliteTable, text as sqliteText } from "drizzle-orm/sqlite-core";
 
-/** The retired table this module erases from. */
+/** The retired tables this module erases from. */
 export const RETIRED_ACCOUNTS_TABLE = "accounts";
+export const RETIRED_SESSIONS_TABLE = "sessions";
 
 /** The column that names the owning user, as every dialect spelled it. */
 const OWNER_COLUMN = "user_id";
@@ -40,17 +42,27 @@ const OWNER_COLUMN = "user_id";
  * accidentally resurrect.
  */
 export function retiredAccountsTable(dialect: SupportedDialect) {
+  return retiredOwnedTable(RETIRED_ACCOUNTS_TABLE, dialect);
+}
+
+/**
+ * The same minimum shape for the retired `sessions` table. Its rows are
+ * session tokens nothing honours any more, keyed to the user — an identifier
+ * of the deleted person all the same, so they go with the account too.
+ */
+export function retiredSessionsTable(dialect: SupportedDialect) {
+  return retiredOwnedTable(RETIRED_SESSIONS_TABLE, dialect);
+}
+
+/** A retired table declared by its owning-user column alone. */
+function retiredOwnedTable(name: string, dialect: SupportedDialect) {
   if (dialect === "postgresql") {
-    return pgTable(RETIRED_ACCOUNTS_TABLE, {
-      userId: text(OWNER_COLUMN).notNull(),
-    });
+    return pgTable(name, { userId: text(OWNER_COLUMN).notNull() });
   }
   if (dialect === "mysql") {
-    return mysqlTable(RETIRED_ACCOUNTS_TABLE, {
+    return mysqlTable(name, {
       userId: varchar(OWNER_COLUMN, { length: 255 }).notNull(),
     });
   }
-  return sqliteTable(RETIRED_ACCOUNTS_TABLE, {
-    userId: sqliteText(OWNER_COLUMN).notNull(),
-  });
+  return sqliteTable(name, { userId: sqliteText(OWNER_COLUMN).notNull() });
 }

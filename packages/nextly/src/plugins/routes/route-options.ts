@@ -13,11 +13,13 @@
  * @module plugins/routes/route-options
  * @since 1.0.0
  */
+import { readAccessTokenCookie } from "../../auth/cookies/access-token-cookie";
 import {
   readCsrfCookie,
   readCsrfFromRequest,
 } from "../../auth/csrf/csrf-cookie";
-import { validateCsrf } from "../../auth/csrf/validate";
+import { validateCsrf, validateOrigin } from "../../auth/csrf/validate";
+import { ipv6PrefixHex } from "../../auth/session/refresh-binding";
 import { isReadOperation } from "../../middleware/rate-limit";
 
 import type { PluginRoute } from "./route-types";
@@ -29,57 +31,77 @@ const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 export type CallerCredential = "cookie" | "bearer" | "none";
 
 /**
- * How the caller authenticated.
+ * The credential a PUBLIC route's caller carries, for the CSRF decision.
  *
- * An `Authorization` header is the discriminator: a browser never attaches one
- * cross-site on its own, so a request carrying one was made deliberately by
- * whoever holds the credential.
+ * A public route resolved nobody, so this reads the one cookie a handler can
+ * act on — the session cookie `ctx.auth.currentUser` resolves — rather than
+ * any cookie at all. Classifying by the `Cookie` header's presence treated an
+ * analytics or locale cookie as a session, and a caller with any cookie was
+ * then held to a check it could never pass. The session cookie wins over an
+ * `Authorization` header: the header may be ambient HTTP authentication a
+ * browser attached on its own.
  */
-export function callerCredential(request: Request): CallerCredential {
-  if (request.headers.get("authorization")) return "bearer";
-  return request.headers.get("cookie") ? "cookie" : "none";
+export function publicCallerCredential(request: Request): CallerCredential {
+  if (readAccessTokenCookie(request)) return "cookie";
+  return request.headers.get("authorization") ? "bearer" : "none";
 }
 
-/** Whether this request must present a CSRF token. */
-export function csrfApplies(
+/**
+ * Which cross-site check a request to this route must pass.
+ *
+ * - `"origin"` — the DEFAULT for an authenticated route: the request must come
+ *   from this site or an allowed origin. Browsers send `Origin` (or at least
+ *   `Referer`) on every cross-site write, so this refuses a forged request
+ *   while the admin's own requests, which send no token, pass. It is the
+ *   origin check `validateCsrf` applies on core's `/auth/*` handlers, without
+ *   the token those handlers also require.
+ * - `"token"` — the route set `csrf: true`: a double-submit token as well as
+ *   the origin, the protection core's `/auth/*` handlers take.
+ * - `"none"` — the route opted out with `csrf: false`, the method changes
+ *   nothing, or the caller did not authenticate with the session cookie.
+ *
+ * Only a cookie travels automatically, so only a cookie-authenticated request
+ * can be made by a site the user did not intend to act on. The RESOLVED
+ * credential decides: a browser can attach an Authorization header on its own
+ * (ambient HTTP authentication), and classifying by header presence skipped
+ * the check for a request whose session cookie admitted it.
+ */
+export function routeCsrfMode(
   route: PluginRoute,
   request: Request,
-  credential: CallerCredential = callerCredential(request)
-): boolean {
-  // Checked unless the route opts out: forgetting the flag must not leave a
-  // cookie-authenticated mutation forgeable. A route whose callers bring
-  // their own credential (an API key, a signed webhook) opts out with
-  // `csrf: false`.
-  if (route.csrf === false) return false;
-  // A public route skips the DEFAULT: it authenticated no one, and a cookie
-  // on the request says nothing about what admitted it. An explicit
-  // `csrf: true` is still honored — a public handler that resolves the
-  // session user and acts on them declares it, and the check demands a
-  // token only from cookie-carrying callers, so webhook callers stay free.
-  if (route.public === true && route.csrf !== true) return false;
-  if (!UNSAFE_METHODS.has(request.method.toUpperCase())) return false;
-  // Only a cookie travels automatically, so only a cookie-authenticated
-  // request can be made by a site the user did not intend to act on. The
-  // RESOLVED credential wins when the caller has one: a browser can attach
-  // an Authorization header on its own (ambient HTTP authentication), and
-  // classifying by header presence then skipped CSRF for a request whose
-  // session cookie was the credential that admitted it.
-  return credential === "cookie";
+  credential: CallerCredential
+): "none" | "origin" | "token" {
+  // A route whose callers bring their own credential (an API key, a signed
+  // webhook) opts out with `csrf: false`.
+  if (route.csrf === false) return "none";
+  if (!UNSAFE_METHODS.has(request.method.toUpperCase())) return "none";
+  if (credential !== "cookie") return "none";
+  if (route.csrf === true) return "token";
+  // A public route skips the DEFAULT: it authenticated no one, and a cookie on
+  // the request says nothing about what admitted it. A public handler that
+  // resolves the session user and acts on them declares `csrf: true`.
+  if (route.public === true) return "none";
+  return "origin";
 }
 
-/** Check the CSRF token, when one is required. */
+/** Check the request against the route's cross-site rule. */
 export function checkRouteCsrf(
   route: PluginRoute,
   request: Request,
   body: Record<string, unknown> | undefined,
   allowedOrigins: string[],
-  credential: CallerCredential = callerCredential(request)
+  credential: CallerCredential
 ): { valid: boolean; error?: string } {
-  // The RESOLVED credential, when the caller has one — the same argument the
-  // preliminary check takes. Recomputing it from header presence here let a
-  // session-authenticated request carrying an ambient Authorization header
-  // slip past the validation the outer check had just demanded.
-  if (!csrfApplies(route, request, credential)) return { valid: true };
+  // The RESOLVED credential — the same argument the dispatcher decided the
+  // mode with. Recomputing it here from header presence let a request carrying
+  // an ambient Authorization header slip past the check just demanded.
+  const mode = routeCsrfMode(route, request, credential);
+  if (mode === "none") return { valid: true };
+  if (mode === "origin") {
+    return validateOrigin(request, allowedOrigins)
+      ? { valid: true }
+      : { valid: false, error: "Invalid request origin" };
+  }
   return validateCsrf(
     request,
     readCsrfCookie(request),
@@ -96,31 +118,75 @@ export function shouldNotStore(route: PluginRoute): boolean {
 }
 
 /**
+ * The part of a client address a rate limit counts by.
+ *
+ * An IPv4 address is one client. An IPv6 client is normally handed a whole
+ * /64 and chooses addresses within it freely, so counting the full address let
+ * one client rotate through the prefix and never reach its limit; the /64 is
+ * what it actually holds. An IPv4 address written in IPv6's mapped form is the
+ * IPv4 client, not a /64 shared by every IPv4 client.
+ */
+export function rateLimitClient(ip: string): string {
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (mapped) return mapped[1];
+  if (!ip.includes(":")) return ip;
+  const prefix = ipv6PrefixHex(ip, 64);
+  return prefix === null ? ip : `${prefix}::/64`;
+}
+
+/**
  * The rate-limit bucket key for this route and caller.
  *
  * Namespaced by plugin, so one plugin's traffic cannot exhaust another's
- * budget, and separate from core's `/auth/*` bucket for the same reason.
+ * budget, and separate from core's `/auth/*` bucket for the same reason. And
+ * by ROUTE: one bucket for every route of a plugin made an SSO sign-in, which
+ * spends one request on `authorize` and one on `callback`, cost two of the
+ * same budget, and an office behind one address was locked out at half the
+ * sign-ins the limit meant.
  */
 export function rateLimitKey(
   route: PluginRoute,
   pluginSlug: string,
   ip: string
 ): string | null {
-  // Both declared values get a bucket, and they are DIFFERENT buckets: an
-  // auth route's budget exists to make guessing expensive, and ordinary
-  // traffic must not be able to spend it. `general` returned null here, so a
-  // route declaring the public option ran with no limit at all.
-  if (route.rateLimit === "auth") return `plugin-auth-ip:${pluginSlug}:${ip}`;
-  if (route.rateLimit === "general") {
+  const declared = route.rateLimit;
+  if (declared === undefined) return null;
+  // The PATH, not the method: an auth bucket guards the sign-in step the path
+  // names, whichever method reaches it — a form-post callback and its GET
+  // twin are one step.
+  const at = `${pluginSlug}:${route.path}:${rateLimitClient(ip)}`;
+  // Each declared form gets its own bucket namespace: an auth route's budget
+  // exists to make guessing expensive, and ordinary traffic must not be able
+  // to spend it.
+  if (declared === "auth") return `plugin-auth-ip:${at}`;
+  if (declared === "general") {
     // SUFFIXED by the read/write class, exactly as the core limiter keys its
     // own buckets: reads and writes have separate configured limits, so a
     // shared counter let enough GETs raise the count past `writeLimit` and
     // refuse the next POST without a single write having been spent — read
     // traffic denying mutations.
     const operation = isReadOperation(route.method) ? "read" : "write";
-    return `plugin-general-ip:${pluginSlug}:${ip}:${operation}`;
+    return `plugin-general-ip:${at}:${operation}`;
   }
-  return null;
+  // A route's own allowance is per METHOD too: two methods on one path may
+  // declare different limits, and one counter checked against both let the
+  // looser method's traffic spend the stricter one's budget.
+  return `plugin-route-ip:${at}:${route.method}`;
+}
+
+/** Whether a declared custom allowance is one a limiter can apply. */
+function isRouteAllowance(value: unknown): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const { max, windowMs, ...rest } = value as Record<string, unknown>;
+  return (
+    Object.keys(rest).length === 0 &&
+    Number.isSafeInteger(max) &&
+    (max as number) > 0 &&
+    Number.isSafeInteger(windowMs) &&
+    (windowMs as number) > 0
+  );
 }
 
 /** Why a route's declared options are invalid, or null when they are fine. */
@@ -138,9 +204,37 @@ export function validateRouteOptions(route: PluginRoute): string | null {
   if (
     route.rateLimit !== undefined &&
     route.rateLimit !== "auth" &&
-    route.rateLimit !== "general"
+    route.rateLimit !== "general" &&
+    !isRouteAllowance(route.rateLimit)
   ) {
-    return `rateLimit must be "auth" or "general", not ${JSON.stringify(route.rateLimit)}`;
+    return `rateLimit must be "auth", "general" or { max, windowMs } with positive integers, not ${JSON.stringify(route.rateLimit)}`;
   }
   return null;
+}
+
+/**
+ * The boot warning for rate-limited routes on an install that does not trust
+ * its proxy, or null when there is nothing to say.
+ *
+ * Without `security.trustProxy` no client address is read at all, so every
+ * caller counts as the same client and a route's per-client limit is one
+ * bucket for the whole site: one client can spend it for everyone. Core's own `/auth/*` routes accept that trade-off
+ * deliberately; a plugin route inherits it, so the operator is told which
+ * routes do.
+ */
+export function rateLimitProxyWarning(
+  routes: ReadonlyArray<{ fullPath: string; route: PluginRoute }>,
+  trustProxy: boolean
+): string | null {
+  if (trustProxy) return null;
+  const limited = routes
+    .filter(entry => entry.route.rateLimit !== undefined)
+    .map(entry => `${entry.route.method} ${entry.fullPath}`);
+  if (limited.length === 0) return null;
+  return (
+    "[nextly] These plugin routes are rate limited per client, but " +
+    "security.trustProxy is off, so no client address is read and every " +
+    `client shares one limit: ${limited.join(", ")}. Turn on ` +
+    "security.trustProxy when the app runs behind a proxy you control."
+  );
 }

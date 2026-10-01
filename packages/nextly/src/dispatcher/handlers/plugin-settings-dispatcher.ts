@@ -17,6 +17,7 @@ import {
   SKIP_DATE_FORMATTING_HEADER,
 } from "../../api/response-shapes";
 import type { NextlyServiceConfig } from "../../di/register";
+import { announcePluginSettingsChange } from "../../domains/plugins/settings-activity";
 import {
   PluginSettingsService,
   pluginSettingsSecrets,
@@ -25,6 +26,7 @@ import { createPluginSettingsStore } from "../../domains/plugins/settings-store"
 import { NextlyError } from "../../errors/nextly-error";
 import { env } from "../../lib/env";
 import type { ServiceContainer } from "../../services";
+import { readAuthenticatedActor } from "../helpers/authenticated-actor";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { requireParam } from "../helpers/validation";
 import type { Params } from "../types";
@@ -99,9 +101,10 @@ export async function dispatchPluginSettings(
   const service = serviceFor(container, config, pluginName);
 
   if (method === "getPluginSettings") {
-    return configurationResponse(
-      respondData({ settings: await service.getRedacted() })
-    );
+    // The issues travel beside the settings: stored values a newer plugin
+    // version no longer accepts still render, and the form shows what to fix.
+    const { settings, issues } = await service.view();
+    return configurationResponse(respondData({ settings, issues }));
   }
 
   if (method === "updatePluginSettings") {
@@ -123,8 +126,15 @@ export async function dispatchPluginSettings(
     // took `params.userId`, which names the TARGET of a user route and is
     // never populated here — so `updated_by` was null on every settings
     // update, losing the actor the column was added to keep.
-    await service.set(body as Record<string, unknown>, {
+    const changedKeys = await service.set(body as Record<string, unknown>, {
       actorUserId: readAuthenticatedUser(params)?.id,
+    });
+    // Recorded by key NAME after the write commits: the last `updated_by` was
+    // otherwise the only trace of who changed a plugin's credentials.
+    await announcePluginSettingsChange({
+      plugin: pluginName,
+      changedKeys,
+      actor: readAuthenticatedActor(params),
     });
     // The CANONICAL mutation envelope, with the updated redacted value as
     // the item: a client processing this update like every other mutation

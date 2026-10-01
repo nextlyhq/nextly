@@ -359,8 +359,16 @@ export class AuthService extends BaseService {
 
     const newPasswordHash = await hashPasswordBcrypt(newPassword);
 
+    let changed: unknown;
     try {
-      await this.db
+      // Conditional on the account not being deactivated, in the same
+      // statement. A deactivated account's credentials are frozen, as they are
+      // for a reset link, an invite and the forced first-sign-in change: an
+      // access token still inside its lifetime, or a Direct API token, must
+      // not set a password for a later reactivation to switch on. Decided by
+      // the write rather than a read before it, which could not see a
+      // deactivation landing while the password was hashed.
+      changed = await this.db
         .update(this.tables.users)
         .set({
           passwordHash: newPasswordHash,
@@ -369,10 +377,20 @@ export class AuthService extends BaseService {
           // must-change requirement is satisfied.
           mustChangePassword: false,
         })
-        .where(eq(this.tables.users.id, userId));
+        .where(
+          and(
+            eq(this.tables.users.id, userId),
+            isNull(this.tables.users.deactivatedAt)
+          )
+        );
     } catch (error) {
       // Normalise raw driver errors before mapping.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+    if (affectedRowCount(changed, this.dialect) !== 1) {
+      throw NextlyError.invalidCredentials({
+        logContext: { reason: auditReason("inactive"), userId },
+      });
     }
 
     emitAuthEvent("passwordChanged", { userId });

@@ -133,6 +133,38 @@ function challengeStillLive(error: unknown): boolean {
 }
 
 /**
+ * Whether a failed answer ENDED the flow.
+ *
+ * Only the server's refusal of the flow itself does that: a 401 that offers no
+ * further attempt. Everything else — a network failure, a 500, a CSRF refusal,
+ * a rate limit — says nothing about the challenge, and the server keeps the
+ * pending cookie through those deliberately, so the challenge stays and the
+ * person can try again.
+ */
+function flowEndedBy(error: unknown): boolean {
+  const status = (error as { status?: unknown }).status;
+  return status === 401 && !challengeStillLive(error) && !retryTokenIn(error);
+}
+
+/**
+ * Remove `?error` once read, so a reload does not repeat a failure the person
+ * has already seen.
+ *
+ * `?resume` stays. A reload in the middle of a second factor — or a mobile
+ * browser discarding the tab while the person opens their authenticator —
+ * must find the flow again, and the URL is the only thing that tells this
+ * page to ask. A flow that has ended answers `/auth/pending` with nothing, so
+ * keeping the parameter costs nothing once it is over.
+ */
+function clearErrorParam(): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("error")) return;
+  url.searchParams.delete("error");
+  window.history.replaceState(window.history.state, "", url.toString());
+}
+
+/**
  * The forced password change a SUCCESSFUL answer reports, if it reports one.
  *
  * A 200 is not necessarily a session. The forced first-sign-in password
@@ -204,6 +236,20 @@ export interface ChallengeFlow {
   resolve: (response: Record<string, unknown>) => Promise<ChallengeAnswer>;
   /** Whether a provider redirect reported a generic sign-in failure. */
   signInFailed: boolean;
+  /** Whether the outstanding challenge is still being looked up. */
+  resuming: boolean;
+  /**
+   * Whether a challenge flow ended without a session — the last attempt was
+   * spent or the flow expired — so the page can say so above the sign-in form
+   * it has returned to.
+   */
+  flowEnded: boolean;
+  /**
+   * Whether the host has already sent the browser to the login's
+   * destination. A view's `onResolved` after that must not navigate again:
+   * its `next` cannot be the server's, so it would replace the destination.
+   */
+  hasNavigated: () => boolean;
 }
 
 export interface ChallengeAnswer {
@@ -217,6 +263,8 @@ export interface ChallengeAnswer {
    * away from the step the host is about to render.
    */
   continues?: boolean;
+  /** Where the host is sending the browser, when the login finished. */
+  next?: string;
   /**
    * The challenge was answered and STILL no session exists, because the
    * account holds an admin-set password it must replace first.
@@ -254,15 +302,26 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
   // Whether a continuation the PERSON started locally is showing — a challenge
   // carrying a body token. A resumed login arriving late must not replace it:
   // the resume effect runs when `/auth/pending` answers, which can be after
-  // the password form was already used, and either KIND of locally started
+  // a password login already raised one, and either KIND of locally started
   // continuation outranks a stale cookie-backed one.
   const localContinuationRef = useRef(false);
+  // Set when the host navigates to the login's destination, so a view's
+  // `onResolved` cannot replace that navigation with its own.
+  const navigatedRef = useRef(false);
+  const [flowEnded, setFlowEnded] = useState(false);
+  // Read ONCE: the parameter is removed from the URL after it is shown, so
+  // reading it on each render would hide the message on the next one.
+  const [signInFailed] = useState(() => hasSignInError(search));
+
+  useEffect(() => {
+    clearErrorParam();
+  }, []);
 
   useEffect(() => {
     if (resume.status !== "resume") return;
     // A locally started continuation outranks a late resume of EITHER kind.
-    // The password form stays usable while `/auth/pending` loads, so a login
-    // can raise its own challenge first — and a delayed must-change resume
+    // Nothing here assumes the page hides the password form while
+    // `/auth/pending` loads, so a login can raise its own challenge first — and a delayed must-change resume
     // then raising the set-password view over it sent that submit to the
     // stale pending cookie, a flow — possibly an account — the person had
     // already moved past.
@@ -283,9 +342,8 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
       return;
     }
     setChallenge(current =>
-      // It does NOT replace one that already has a token. The password form
-      // stays usable while `/auth/pending` is still loading, so a password
-      // login can raise its own challenge first — and overwriting that
+      // It does NOT replace one that already has a token. A password login
+      // can raise its own challenge before `/auth/pending` answers — and overwriting that
       // discarded its body token for the cookie-backed challenge of a login
       // the person had already moved past, sending every later answer to the
       // stale cookie flow instead.
@@ -325,23 +383,26 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
         return { ok: true, continues: true, passwordChangeRequired: raised };
       }
 
-      window.location.href = result?.next ?? ROUTES.DASHBOARD;
-      return { ok: true };
+      const next = result?.next ?? ROUTES.DASHBOARD;
+      navigatedRef.current = true;
+      window.location.href = next;
+      return { ok: true, next };
     } catch (error: unknown) {
       const advanced = retryTokenIn(error);
       if (advanced) {
         setChallenge(current =>
           current ? { ...current, pendingToken: advanced } : current
         );
-      } else if (!challengeStillLive(error)) {
-        // No replacement token means the failure was TERMINAL — the budget
-        // is spent, and the server has cleared or invalidated whatever this
-        // flow was carrying. Keeping the challenge rendered hid the password
-        // and provider options behind a continuation nothing can finish;
-        // dropping it returns the page to its ordinary sign-in choices.
+      } else if (flowEndedBy(error)) {
+        // The flow is over — the last attempt spent, or the flow expired —
+        // and the server has cleared what it was carrying. Keeping the
+        // challenge rendered hid the sign-in choices behind a step nothing
+        // can finish; dropping it returns the page to them, with a message
+        // saying why, since the view's own error unmounts with it.
         continuingRef.current = false;
         localContinuationRef.current = false;
         setChallenge(null);
+        setFlowEnded(true);
       }
       return {
         ok: false,
@@ -372,6 +433,9 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
       setChallenge(started);
     },
     resolve,
-    signInFailed: hasSignInError(search),
+    signInFailed,
+    resuming: resume.status === "loading",
+    flowEnded,
+    hasNavigated: () => navigatedRef.current,
   };
 }

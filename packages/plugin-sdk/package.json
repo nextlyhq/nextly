@@ -44,7 +44,8 @@
     },
     "./db": {
       "types": "./dist/db.d.ts",
-      "import": "./dist/db.mjs"
+      "import": "./dist/db.mjs",
+      "default": "./dist/db.mjs"
     },
     "./routing": {
       "types": "./dist/routing.d.ts",

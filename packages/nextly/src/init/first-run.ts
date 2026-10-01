@@ -179,13 +179,17 @@ async function runCoreSchemaChecks(
   // Asked of the database directly rather than read off the snapshot above:
   // these tables are no longer core, so `getCoreTableNames` does not name them
   // and the introspection never looked for them.
-  const { findRetiredAuthTables, formatRetiredAuthTablesWarning } =
-    await import("./retired-auth-tables");
+  const {
+    findRetiredAuthTables,
+    formatRetiredAuthTablesWarning,
+    liveColumnsOf,
+  } = await import("./retired-auth-tables");
   const retiredAuth = await findRetiredAuthTables(
     adapter.getDrizzle(),
     adapter.dialect,
     {
       tableExists: (table: string) => adapter.tableExists(table),
+      columnsOf: liveColumnsOf(adapter.getDrizzle(), adapter.dialect),
       countRows,
     }
   );

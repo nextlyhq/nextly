@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  callerCredential,
   checkRouteCsrf,
-  csrfApplies,
+  publicCallerCredential,
+  rateLimitClient,
   rateLimitKey,
+  rateLimitProxyWarning,
+  routeCsrfMode,
   shouldNotStore,
   validateRouteOptions,
 } from "../route-options";
@@ -29,86 +31,172 @@ function request(
   });
 }
 
-describe("callerCredential", () => {
-  it("reads an Authorization header as a deliberate credential", () => {
+describe("publicCallerCredential", () => {
+  it("reads the SESSION cookie as the automatic credential", () => {
     expect(
-      callerCredential(request("POST", { authorization: "Bearer k" }))
-    ).toBe("bearer");
-  });
-
-  it("reads a cookie as an automatic credential", () => {
-    expect(
-      callerCredential(request("POST", { cookie: "nextly_session=x" }))
+      publicCallerCredential(request("POST", { cookie: "nextly_session=x" }))
     ).toBe("cookie");
   });
 
-  it("prefers the header when both are present", () => {
-    // A request carrying a key was made by whoever holds it, whatever else
-    // the browser attached on its own.
+  it("does not read an unrelated cookie as a session", () => {
+    // Any cookie at all counted, so an analytics or locale cookie held a
+    // browser to a check it had no session to pass — and a root-mounted
+    // route never receives the `/admin`-scoped csrf cookie either.
     expect(
-      callerCredential(
-        request("POST", { authorization: "Bearer k", cookie: "a=b" })
+      publicCallerCredential(
+        request("POST", { cookie: "_ga=GA1.2.3; NEXT_LOCALE=en" })
       )
+    ).toBe("none");
+  });
+
+  it("reads an Authorization header as a deliberate credential", () => {
+    expect(
+      publicCallerCredential(request("POST", { authorization: "Bearer k" }))
     ).toBe("bearer");
+  });
+
+  it("prefers the session cookie over an Authorization header", () => {
+    // The header may be ambient HTTP authentication the browser attached on
+    // its own; the session cookie is what a handler would act on.
+    expect(
+      publicCallerCredential(
+        request("POST", {
+          authorization: "Basic dXNlcjpwYXNz",
+          cookie: "nextly_session=x",
+        })
+      )
+    ).toBe("cookie");
   });
 });
 
-describe("csrfApplies", () => {
-  it("applies to an unsafe method from a cookie caller", () => {
-    expect(
-      csrfApplies(route({ csrf: true }), request("POST", { cookie: "a=b" }))
-    ).toBe(true);
+describe("routeCsrfMode", () => {
+  it("checks the ORIGIN by default for a cookie-authenticated write", () => {
+    // The default the admin's own writes must pass: they send no token.
+    expect(routeCsrfMode(route(), request("POST"), "cookie")).toBe("origin");
   });
 
-  it.each([["GET"], ["HEAD"]])("does not apply to %s", method => {
+  it("requires a token when the route declares csrf: true", () => {
     expect(
-      csrfApplies(
+      routeCsrfMode(route({ csrf: true }), request("POST"), "cookie")
+    ).toBe("token");
+  });
+
+  it.each([["GET"], ["HEAD"]])("checks nothing on %s", method => {
+    expect(
+      routeCsrfMode(
         route({ csrf: true, method: method as never }),
-        request(method, { cookie: "a=b" })
+        request(method),
+        "cookie"
       )
-    ).toBe(false);
+    ).toBe("none");
   });
 
-  it("does not apply to an API-key caller", () => {
+  it("checks nothing for an API-key caller", () => {
     // A browser cannot attach a Bearer token cross-site, so there is no
     // cross-site request to forge.
     expect(
-      csrfApplies(
-        route({ csrf: true }),
-        request("POST", { authorization: "Bearer k" })
-      )
-    ).toBe(false);
+      routeCsrfMode(route({ csrf: true }), request("POST"), "bearer")
+    ).toBe("none");
   });
 
-  it("applies when the route did not opt out", () => {
-    expect(csrfApplies(route(), request("POST", { cookie: "a=b" }))).toBe(true);
-  });
-
-  it("does not apply to a route that opted out", () => {
+  it("checks nothing on a route that opted out", () => {
     expect(
-      csrfApplies(route({ csrf: false }), request("POST", { cookie: "a=b" }))
-    ).toBe(false);
+      routeCsrfMode(route({ csrf: false }), request("POST"), "cookie")
+    ).toBe("none");
   });
 
-  it("does not apply to a public route", () => {
-    // A public route authenticated no one, so a cookie on the request says
-    // nothing about what admitted it — an unrelated session cookie must not
-    // earn a browser post a CSRF refusal.
+  it("checks nothing on a public route by default", () => {
+    // A public route authenticated no one, so a session cookie on the
+    // request says nothing about what admitted it.
     expect(
-      csrfApplies(route({ public: true }), request("POST", { cookie: "a=b" }))
-    ).toBe(false);
+      routeCsrfMode(route({ public: true }), request("POST"), "cookie")
+    ).toBe("none");
   });
 
   it("honors an explicit csrf on a public route", () => {
     // A public handler that resolves the session user and acts on them
-    // declares the check; only cookie-carrying callers are asked for a
-    // token, so webhook callers stay free.
+    // declares the check; only session-cookie callers are asked for a token,
+    // so webhook callers stay free.
     expect(
-      csrfApplies(
+      routeCsrfMode(
         route({ public: true, csrf: true }),
-        request("POST", { cookie: "a=b" })
+        request("POST"),
+        "cookie"
       )
+    ).toBe("token");
+  });
+});
+
+describe("checkRouteCsrf: the default origin check", () => {
+  /** The admin's own write: session and csrf cookies, same origin, no token. */
+  function adminWrite(origin: string | null): Request {
+    return new Request("http://localhost:3000/admin/api/plugins/x/thing", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: "nextly_session=s; nextly_csrf=tok",
+        ...(origin ? { origin } : {}),
+      },
+      body: JSON.stringify({ name: "pattern" }),
+    });
+  }
+
+  it("admits the admin's own write, which sends no token", () => {
+    // The separating case: token-by-default refused exactly this request,
+    // so every admin page writing through `usePluginRouteMutation` got 403.
+    expect(
+      checkRouteCsrf(
+        route(),
+        adminWrite("http://localhost:3000"),
+        {},
+        [],
+        "cookie"
+      ).valid
     ).toBe(true);
+  });
+
+  it("refuses the same write from another site", () => {
+    // The control: an origin check that admitted everything would pass the
+    // case above too.
+    expect(
+      checkRouteCsrf(
+        route(),
+        adminWrite("https://evil.example"),
+        {},
+        [],
+        "cookie"
+      )
+    ).toEqual({ valid: false, error: "Invalid request origin" });
+  });
+
+  it("refuses a write that names no origin at all", () => {
+    expect(
+      checkRouteCsrf(route(), adminWrite(null), {}, [], "cookie").valid
+    ).toBe(false);
+  });
+
+  it("admits a configured allowed origin", () => {
+    expect(
+      checkRouteCsrf(
+        route(),
+        adminWrite("https://admin.example"),
+        {},
+        ["https://admin.example"],
+        "cookie"
+      ).valid
+    ).toBe(true);
+  });
+
+  it("still demands the token when the route declares csrf: true", () => {
+    expect(
+      checkRouteCsrf(
+        route({ csrf: true }),
+        adminWrite("http://localhost:3000"),
+        {},
+        [],
+        "cookie"
+      )
+    ).toEqual({ valid: false, error: "Missing CSRF token" });
   });
 });
 
@@ -155,7 +243,7 @@ describe("rateLimitKey", () => {
   it("namespaces the bucket by plugin", () => {
     expect(
       rateLimitKey(route({ rateLimit: "auth" }), "acme-auth", "1.2.3.4")
-    ).toBe("plugin-auth-ip:acme-auth:1.2.3.4");
+    ).toBe("plugin-auth-ip:acme-auth:/thing:1.2.3.4");
   });
 
   it("gives two plugins different buckets for the same caller", () => {
@@ -179,7 +267,7 @@ describe("rateLimitKey", () => {
     // half of the read/write pair.
     expect(
       rateLimitKey(route({ rateLimit: "general" }), "acme-auth", "1.2.3.4")
-    ).toBe("plugin-general-ip:acme-auth:1.2.3.4:write");
+    ).toBe("plugin-general-ip:acme-auth:/thing:1.2.3.4:write");
   });
 
   it("keeps the general and auth buckets apart", () => {
@@ -260,7 +348,7 @@ describe("rateLimitKey: reads and writes spend separate counters", () => {
   });
 });
 
-describe("csrfApplies with the resolved credential", () => {
+describe("routeCsrfMode with the resolved credential", () => {
   it("applies when the SESSION admitted the request, header notwithstanding", () => {
     // A browser can attach an Authorization header on its own (ambient HTTP
     // authentication); classifying by header presence then skipped CSRF for
@@ -269,19 +357,17 @@ describe("csrfApplies with the resolved credential", () => {
       authorization: "Basic dXNlcjpwYXNz",
       cookie: "nextly_session=x",
     });
-    expect(csrfApplies(route({ csrf: true }), req, "cookie")).toBe(true);
-    // The header-only sniff would have said bearer.
-    expect(callerCredential(req)).toBe("bearer");
+    expect(routeCsrfMode(route({ csrf: true }), req, "cookie")).toBe("token");
   });
 
   it("still skips when the header actually authenticated", () => {
     expect(
-      csrfApplies(
+      routeCsrfMode(
         route({ csrf: true }),
         request("POST", { authorization: "Bearer k" }),
         "bearer"
       )
-    ).toBe(false);
+    ).toBe("none");
   });
 });
 
@@ -320,5 +406,135 @@ describe("checkRouteCsrf with the resolved credential", () => {
       "cookie"
     );
     expect(verdict.valid).toBe(false);
+  });
+});
+
+describe("rateLimitKey: one bucket per route", () => {
+  it("gives two routes of one plugin different buckets", () => {
+    // An SSO sign-in spends `authorize` and `callback`; sharing one bucket
+    // made it cost two of the same budget.
+    const authorize = rateLimitKey(
+      route({ method: "GET", path: "/authorize", rateLimit: "auth" }),
+      "acme-auth",
+      "1.2.3.4"
+    );
+    const callback = rateLimitKey(
+      route({ method: "GET", path: "/callback", rateLimit: "auth" }),
+      "acme-auth",
+      "1.2.3.4"
+    );
+    expect(authorize).not.toBe(callback);
+  });
+
+  it("gives one route the same bucket on every call", () => {
+    // The control: a key that varied per call would never limit anything.
+    const r = route({ path: "/callback", rateLimit: "auth" });
+    expect(rateLimitKey(r, "acme-auth", "1.2.3.4")).toBe(
+      rateLimitKey(r, "acme-auth", "1.2.3.4")
+    );
+  });
+
+  it("puts a route's own allowance in a namespace of its own", () => {
+    expect(
+      rateLimitKey(
+        route({ rateLimit: { max: 5, windowMs: 60_000 } }),
+        "acme-auth",
+        "1.2.3.4"
+      )
+    ).toBe("plugin-route-ip:acme-auth:/thing:1.2.3.4:POST");
+  });
+});
+
+describe("rateLimitKey: a route's own allowance", () => {
+  it("counts two methods on one path apart", () => {
+    // Different limits on GET and POST must not share one counter, or the
+    // looser method's traffic spends the stricter one's budget.
+    const get = rateLimitKey(
+      route({
+        method: "GET",
+        path: "/hook",
+        rateLimit: { max: 1000, windowMs: 1 },
+      }),
+      "p",
+      "1.2.3.4"
+    );
+    const post = rateLimitKey(
+      route({
+        method: "POST",
+        path: "/hook",
+        rateLimit: { max: 10, windowMs: 1 },
+      }),
+      "p",
+      "1.2.3.4"
+    );
+    expect(get).not.toBe(post);
+  });
+});
+
+describe("rateLimitClient", () => {
+  it("counts two IPv6 addresses in one /64 as one client", () => {
+    expect(rateLimitClient("2001:db8:1:2::a")).toBe(
+      rateLimitClient("2001:db8:1:2:ffff:ffff:ffff:ffff")
+    );
+  });
+
+  it("counts addresses in different /64s apart", () => {
+    expect(rateLimitClient("2001:db8:1:2::a")).not.toBe(
+      rateLimitClient("2001:db8:1:3::a")
+    );
+  });
+
+  it("counts an IPv4 address by itself, mapped or not", () => {
+    expect(rateLimitClient("203.0.113.7")).toBe("203.0.113.7");
+    expect(rateLimitClient("::ffff:203.0.113.7")).toBe("203.0.113.7");
+    // Two mapped IPv4 clients are not one /64.
+    expect(rateLimitClient("::ffff:203.0.113.7")).not.toBe(
+      rateLimitClient("::ffff:203.0.113.8")
+    );
+  });
+});
+
+describe("validateRouteOptions: a route's own allowance", () => {
+  it("accepts positive integers", () => {
+    expect(
+      validateRouteOptions(route({ rateLimit: { max: 10, windowMs: 60_000 } }))
+    ).toBeNull();
+  });
+
+  it.each([
+    [{ max: 0, windowMs: 60_000 }],
+    [{ max: 10, windowMs: -1 }],
+    [{ max: 1.5, windowMs: 60_000 }],
+    [{ max: 10 }],
+    [{ max: 10, windowMs: 60_000, key: "ip" }],
+  ])("refuses %j", allowance => {
+    expect(
+      validateRouteOptions(route({ rateLimit: allowance as never }))
+    ).toContain("rateLimit");
+  });
+});
+
+describe("rateLimitProxyWarning", () => {
+  const limited = {
+    fullPath: "/plugins/acme-auth/callback",
+    route: route({ method: "GET", rateLimit: "auth" }),
+  };
+  const open = { fullPath: "/plugins/acme-auth/info", route: route() };
+
+  it("names each rate-limited route when the proxy is not trusted", () => {
+    expect(rateLimitProxyWarning([limited, open], false)).toContain(
+      "GET /plugins/acme-auth/callback"
+    );
+    expect(rateLimitProxyWarning([limited, open], false)).not.toContain(
+      "/info"
+    );
+  });
+
+  it("says nothing when the proxy is trusted", () => {
+    expect(rateLimitProxyWarning([limited], true)).toBeNull();
+  });
+
+  it("says nothing when no route is rate limited", () => {
+    expect(rateLimitProxyWarning([open], false)).toBeNull();
   });
 });

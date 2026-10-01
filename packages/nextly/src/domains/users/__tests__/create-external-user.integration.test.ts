@@ -579,6 +579,82 @@ describe.each(getConfiguredTestDialects())(
       expect(addedEdge).toBe(true);
     });
 
+    it("refuses, writing no account, when the in-transaction role read FAILS", async () => {
+      // The gate is a refusal, so an unreadable answer must refuse. Asked
+      // through the access-check form, a failed read came back `false` —
+      // "allow" — and on MySQL and SQLite the failed read did not abort the
+      // transaction, so the account committed.
+      //
+      // Only reads made THROUGH the transaction fail, so the pre-flight check
+      // before it still passes and the failure is the in-transaction one: the
+      // role-inheritance walk the super-admin decision makes.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const editor = await makeRole(t, "editor");
+      const before = await countUsers(t);
+      const { roleInherits } = getDialectTables();
+
+      const users = services(t).users;
+      const mutation = (
+        users as unknown as {
+          mutationService: {
+            withTransaction: <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>;
+          };
+        }
+      ).mutationService;
+      const realTransaction = mutation.withTransaction.bind(mutation);
+      let failedReads = 0;
+      /** The transaction handle, with every read of `role_inherits` failing. */
+      const failingInheritance = (tx: object): object =>
+        new Proxy(tx, {
+          get(target, prop) {
+            const value = Reflect.get(target, prop) as unknown;
+            if (prop !== "select" || typeof value !== "function") {
+              return typeof value === "function" ? value.bind(target) : value;
+            }
+            return (...args: unknown[]) => {
+              const builder = (value as (...a: unknown[]) => object).apply(
+                target,
+                args
+              );
+              return new Proxy(builder, {
+                get(b, p) {
+                  const member = Reflect.get(b, p) as unknown;
+                  if (p === "from") {
+                    return (table: unknown) => {
+                      if (table === roleInherits) {
+                        failedReads++;
+                        throw new Error("connection reset");
+                      }
+                      return (member as (t: unknown) => unknown).call(b, table);
+                    };
+                  }
+                  return typeof member === "function" ? member.bind(b) : member;
+                },
+              });
+            };
+          },
+        });
+      mutation.withTransaction = fn =>
+        realTransaction(tx => fn(failingInheritance(tx as object)));
+
+      await expect(
+        users.createExternalUser(
+          {
+            email: "unreadable@example.com",
+            name: "Unreadable",
+            roleIds: [editor],
+            emailVerifiedAt: new Date(),
+          },
+          SYSTEM_CONTEXT
+        )
+      ).rejects.toSatisfy(NextlyError.is);
+      // The failure this case is about happened, rather than some earlier one.
+      expect(failedReads).toBeGreaterThan(0);
+      expect(await userRow(t, "unreadable@example.com")).toBeUndefined();
+      expect(await countUsers(t)).toBe(before);
+    });
+
     it("still allows a role that inherits nothing dangerous", async () => {
       // The control: refusing every role with any inheritance edge would
       // satisfy the test above while making ordinary role composition

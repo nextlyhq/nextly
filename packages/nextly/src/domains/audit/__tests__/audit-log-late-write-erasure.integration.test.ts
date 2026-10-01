@@ -119,6 +119,50 @@ describe.each(getConfiguredTestDialects())(
       expect(row.identityErasedAt).toBeTruthy();
     });
 
+    it("stores no plugin metadata once the account is gone", async () => {
+      // A plugin's metadata is what the plugin chose to keep — an email, a
+      // provider subject — so a write racing the deletion must not put it
+      // back. Found by its actor, since the metadata is what is cleared.
+      current = await createTestNextly({ dialect });
+      const actor = `plugin-late-write-${dialect}-${Date.now()}`;
+
+      await buildAuditLogWriter((name: string) =>
+        current!.getService(name as Parameters<TestNextly["getService"]>[0])
+      ).write({
+        kind: "acme-auth.identity-linked" as never,
+        actorUserId: actor,
+        metadata: { email: "gone@example.test" },
+      });
+
+      const rows = (await current.adapter.select<AuditRow>("audit_log")).filter(
+        row => row.actorUserId === actor
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].metadata).toBeNull();
+      expect(rows[0].identityErasedAt).toBeTruthy();
+    });
+
+    it("keeps a plugin's metadata while the account exists", async () => {
+      // The control for the case above.
+      current = await createTestNextly({ dialect });
+      await current.adapter.insert("users", {
+        id: ACTOR.id,
+        email: ACTOR.email,
+        is_active: true,
+      });
+      const marker = `plugin-present-${dialect}-${Date.now()}`;
+
+      await buildAuditLogWriter((name: string) =>
+        current!.getService(name as Parameters<TestNextly["getService"]>[0])
+      ).write({
+        kind: "acme-auth.identity-linked" as never,
+        actorUserId: ACTOR.id,
+        metadata: { marker },
+      });
+
+      expect(await rowsFor(current, marker)).toHaveLength(1);
+    });
+
     it("stores an unattributed event as it is, with no erasure stamp", async () => {
       // A failed sign-in for an address that owns no account names nobody, so
       // there is nothing to erase against. Stamping it would claim a person was

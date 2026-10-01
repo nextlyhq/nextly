@@ -29,6 +29,48 @@
 
 Core authentication hardening, and the runtime surface a stateful plugin needs.
 
+## Upgrading
+
+**Run `nextly migrate` before deploying this release.** It adds the nullable
+`users.deactivated_at` column and the `nextly_plugin_settings` table. Unless
+`db.runMigrationsOnBoot` is on and the app runs with `NODE_ENV=production`,
+boot only warns about a schema that is behind,
+and password login and token refresh read whole `users` rows, so on an
+unmigrated database every login and refresh fails until the migration runs.
+
+## Breaking changes
+
+Each is described in its section below; listed here so none is missed.
+
+- **Plugin routes check the request origin by default** for unsafe methods
+  from a session-cookie caller, and answer `403 CSRF_FAILED` when it is not
+  this site or an allowed origin. A route whose callers bring their own
+  credential (a webhook, an API key) sets `csrf: false`.
+- **A `customizeClaims` hook can only add claims.** Every claim core built —
+  identity, `roleIds`, claims from custom user fields, and the token claims —
+  is restored as core built it, and the reserved token claims cannot be
+  added. Add your own claim beside a core one instead of changing it.
+- **An `afterAuthenticate` hook that returns another account fails the
+  login.** Change the user's details, never its id.
+- **Challenge views no longer post the answer.** They receive
+  `resolve(response)` and call it; `pendingToken` is deprecated.
+- **`createLocalUser` defaults to an unverified address** for a caller that
+  says nothing. `nextly.users.create` and `ctx.services.users.create` still
+  default to `admin-vouched`, because they are the host's own server code;
+  pass `emailVerification: "pending"` there for a self-supplied address.
+- **`runStrategyChain` returns `{ outcome, strategyName }`.** Read `.outcome`.
+- **`ctx.db` without `capabilities.db.rawSql` is a restricted handle** with
+  `select`, `insert`, `update`, `delete` and `transaction` only: `execute`,
+  `run`, `selectDistinct`, `$count`, `with`/`$with` and `batch` are gone, as is
+  the relational `query` namespace. Declare `rawSql` for the live instance.
+- **`ctx.events.emit` refuses core event names** (`plugin.`, `collection.`,
+  `auth.`, `document.`, `media.`, `user.`), and a plugin declaring an event
+  under one of those prefixes fails boot. Use your plugin's own prefix.
+- **The account-link endpoints and their service methods are removed.**
+- **`accounts` and `sessions` are no longer exported from `nextly/schemas`.**
+  Code that imports them stops compiling; declare the table yourself with only
+  the columns you read. Fresh installs no longer create the tables.
+
 ## Authentication
 
 Locked, unverified and deactivated accounts could still receive a session.
@@ -47,8 +89,7 @@ or unverified account is refused as the endpoint refuses it. An account that
 must replace an admin-set password is refused too, since the forced change
 is a step only the login page can complete. It runs no plugin login hooks
 and no second-factor challenge, so it is for trusted server code rather than
-for signing a person in. Each
-refusal carries the same public error, so the gate cannot be used to tell a
+for signing a person in. Each refusal carries the same public error, so the gate cannot be used to tell a
 locked account from an unknown one.
 
 The one refusal that is named is an unverified address, and only after the
@@ -80,8 +121,11 @@ deactivated before this release carry no record, so deactivating them again is
 what protects them.
 
 A refresh whose account is no longer usable now deletes the refresh row and
-clears the cookies rather than answering 401 and leaving both alive, so an
-account deactivated mid-session loses it at the next rotation. The password
+clears the cookies rather than answering 401 and leaving both alive.
+Deactivating an account, or an administrator setting its password, also
+deletes its refresh tokens in the same transaction, so a reactivation does not
+bring old sessions back. An access token already issued stays valid for the
+rest of its fifteen minutes. The password
 attempt lockout applies to password logins only: a refresh is not a password
 attempt, and someone else guessing a password must not end a session that is
 already established.
@@ -105,11 +149,12 @@ unaffected either way, because access tokens rotate every fifteen minutes.
 A custom user field named `typ` can no longer reach the claims, where it would
 have been read as a token kind.
 
-A `customizeClaims` hook can add claims but no longer change the identity or
-token claims. `sub`, `email`, `name`, `image` and `roleIds`, and the token's
-own `iat`, `exp`, `jti`, `nbf`, `aud`, `iss` and `typ`, are restored as core
-built them after every hook has run, whether a hook replaced, changed in place
-or deleted them. A hook that returned a different `sub` or `roleIds` signed a
+A `customizeClaims` hook can add claims but no longer change any claim core
+built. `sub`, `email`, `name`, `image`, `roleIds`, the claims built from the
+user's custom fields, and the token's own `iat`, `exp` and `jti` are restored
+as core built them after every hook has run, whether a hook replaced, changed
+in place or deleted them; the reserved `nbf`, `aud`, `iss` and `typ` cannot be
+added. A hook that returned a different `sub` or `roleIds` signed a
 session for another account, or with other roles, that the account-state gate
 never saw. A plugin that renamed a core claim now adds its own spelling beside
 it instead.
@@ -161,7 +206,9 @@ calling it directly needs to read `.outcome`.
 
 A plugin that has authenticated someone elsewhere — an OAuth callback, say —
 can now finish the login through the core session path with
-`ctx.auth.completeLogin`. It applies the same account-state rules, the same
+`ctx.auth.completeLogin`. It must declare `capabilities.auth.login`, and its
+strategy names must begin with its own slug (`acme-google-auth:google`), so the
+manifest shows the plugin can sign people in and every audit row names it. It applies the same account-state rules, the same
 hooks and the same audit trail as a password login, so a plugin cannot grant a
 session core would have refused, and every plugin fails the same safe way.
 
@@ -173,8 +220,9 @@ out of their provider.
 
 A login interrupted by a second factor now resumes without a token ever
 appearing in a URL. The pending token travels in an HttpOnly cookie and the
-login page asks `GET /auth/pending` which challenge is outstanding; the token
-itself is never returned to the page.
+login page asks `GET /auth/pending` which challenge is outstanding, and that
+endpoint never returns the token itself. (A password login still returns its
+challenge token in the response body, as before.)
 
 `ctx.auth.currentUser(request)` reports the signed-in user for a plugin route
 that behaves differently when someone is already signed in.
@@ -208,18 +256,39 @@ None of this is a sandbox — Nextly runs plugins as trusted code — but a
 manifest makes a plugin's reach legible before it is installed, and the
 surfaces below exist only for a plugin that asked for them.
 
-**Capabilities, and what a plugin provides or requires.** An invalid manifest
-fails boot with the plugin named, rather than becoming a surface that quietly
-does not exist.
+**Capabilities, and what a plugin provides or requires.** The manifest's shape
+is checked before anything reads it, and boot fails with the plugin named for:
+an unknown key anywhere inside `capabilities`, a value of the wrong type, an
+outbound entry that is not a hostname (IP literals included), an empty or
+unparseable `requires` range, secrets without a settings schema, a duplicate,
+unknown or group-naming secret path, a settings key or plugin name too long
+for storage, and a `schemaVersion` that is not a positive integer.
+`nextly plugins info <name>` prints the manifest: outbound hosts, raw SQL,
+whether it finishes logins, secret paths, and what it provides and requires. Capability names are
+global; prefix them with your vendor (`acme/auth-provider`).
 
 **`onReady`**, which runs after every plugin has initialised and routes are
-registered — the first moment the assembled system is readable. `onInstall`
-and `onUninstall` are typed and never called by a boot.
+registered — the first moment the assembled system is readable. There are no
+install or uninstall hooks yet: they arrive with the install command.
 
 **`ctx.settings`**: one store per plugin, validated by the plugin's own zod
-schema, with the paths named in `capabilities.secrets` encrypted at rest and
-readable across a secret rotation. Secret paths may be nested and may use `*`.
-A secret is never returned to the browser: the admin sees `{ set }`.
+schema, with the paths named in `capabilities.secrets` encrypted at rest.
+Secrets are sealed with AES-256-GCM under a key derived with HKDF once per
+`NEXTLY_SECRET` generation, with the plugin and path authenticated as
+associated data, and labelled with the generation that sealed them. A value
+sealed under `NEXTLY_SECRET_PREVIOUS` is re-sealed under the current secret
+when read; one no configured secret can open shows as
+`{ set: true, readable: false }` and can be overwritten. A value stored
+encrypted stays encrypted, and redacted in the admin, even after a plugin
+update stops declaring its path. `set` is a JSON merge patch, so `null`
+removes a key at any depth, and an unknown key is refused at any depth. One
+key's stored value, after encryption, holds at most 256 KiB on every dialect
+(MySQL stores it as `mediumtext`). Settings a newer plugin version no longer
+accepts still render in the admin with the problems listed, and `get()` throws
+an internal error whose log names them. A secret is never returned to the
+browser: the admin sees `{ set }`. An operator's change is recorded in the
+activity log by key name, and every change is announced in-process as
+`plugin.settings.changed`.
 
 **`ctx.fetch`**, limited to declared hosts. A hostname allowlist alone does not
 prevent server-side request forgery, so names are resolved here, every answer
@@ -233,14 +302,27 @@ carry a credential — an OAuth `client_secret`, say — as surely as a header,
 and the headers are already dropped at that boundary. A request body over
 10 MB is refused, whatever its type.
 
-**`ctx.audit`**, which writes only the kinds a plugin declared, namespaced
-under its own slug, with metadata keys allowlisted per kind.
+**`ctx.audit`**, which writes only the kinds a plugin declared — `<slug>.`
+followed by lowercase letters, digits, `.`, `_` and `-` — with metadata keys
+allowlisted per kind and values with a known credential shape dropped.
+Deleting a user clears the metadata of every plugin row naming them, as actor
+or target.
 
 **Route options** — `rateLimit`, `rawBody`, `csrf` and `noStore` — the
-protections core's own routes have. CSRF applies only to cookie-authenticated
-callers, because a browser cannot attach an API key cross-site; a public route
-skips the default check, and a public handler that resolves the session user
-declares `csrf: true` for exactly that case.
+protections core's own routes have.
+
+`rateLimit` takes `"auth"`, `"general"`, or `{ max, windowMs }`, and counts
+each route path separately, with IPv6 clients counted by their /64. Without
+`security.trustProxy` no client address is read, so every client shares one
+limit, and boot names each rate-limited route when that is the case.
+
+CSRF applies only to callers the session cookie admitted, because a browser
+cannot attach an API key cross-site. By default an unsafe-method request must
+come from this site or an allowed origin, which the admin's own requests do
+without a token; `csrf: true` also requires the double-submit token, and
+`csrf: false` opts out. A refusal answers `403 CSRF_FAILED` and records a
+`csrf-failed` audit event. A public route skips the default check, and a
+public handler that resolves the session user declares `csrf: true`.
 
 **Declared hook points**, collision-checked and owned by prefix, plus
 `ctx.filters.decide` for seams where handlers veto rather than transform.
@@ -248,13 +330,18 @@ Decisions fail closed: a handler that throws denies, and a handler may only
 keep or downgrade a verdict, so load order cannot decide access.
 
 **`user.created` and `user.deleted` events**, so a plugin can clean up what it
-stored against a user. The webhook outbox row is durable but reaches nothing
-inside the process.
+stored against a user, with `UserEvents` and their payload types. The webhook
+outbox row is durable but reaches nothing inside the process.
 
-**SDK additions**: `sanitizeAdminPath`, `ctx.auth.verifyCsrf`,
-`collectDeclarations`, and `@nextlyhq/plugin-sdk/db` — Drizzle's query
-operators re-exported through core, so a plugin shares core's instance rather
-than a second copy whose internal symbols match nothing. `ctx.auth.verifyCsrf`
+**SDK additions**: `sanitizeAdminPath`, `DEFAULT_ADMIN_PATH`,
+`ctx.auth.verifyCsrf`, `collectDeclarations`, the runtime types
+(`PluginSettingsApi`, `PluginAuditApi`, `PluginAuthApi`,
+`CompleteLoginOptions`, `Decision`, `PluginCapabilities`,
+`PluginAuditDeclaration`, `PluginHookPointDeclaration`, `PluginDatabase`,
+`PluginRouteRateLimit`), `ChallengeViewProps` and `ChallengeResolveResult` from
+`@nextlyhq/plugin-sdk/admin`, and `@nextlyhq/plugin-sdk/db` — Drizzle's query
+operators re-exported through core, so a plugin uses the Drizzle version core
+runs. All are experimental. `ctx.auth.verifyCsrf`
 reads the token from the `x-csrf-token` header or a JSON body's `csrfToken`,
 through the same bounded reader as the route option: it reads at most 64 KB of
 a body looking for it and refuses a larger one with `reason: "body-too-large"`,
@@ -274,6 +361,20 @@ type. It named a handful of core tables, so it could never answer about a
 plugin's own tables; reads go through the fluent Drizzle API or the typed
 services.
 
+`ctx.db` for a plugin that does not declare `capabilities.db.rawSql` is a
+restricted handle with `select`, `insert`, `update`, `delete` and
+`transaction`, and no `execute` or `run`; with `rawSql` it is the live Drizzle
+instance. The capability is a declaration a reviewer can read, not a sandbox:
+plugins run as trusted code. `transaction(async tx => ...)` works on every
+dialect, `rawSql` or not; inside it, write through `tx` — another Nextly
+service or `ctx.settings` called there runs on its own connection on
+PostgreSQL and MySQL, outside the transaction.
+
+The SQLite adapter runs a `transaction()` called from inside another
+transaction's work as a savepoint of it. It used to queue behind the
+transaction waiting for it, which hung both and every later transaction on
+the instance.
+
 External identities are not affected: they are the subject of the plugin
 identity tables that arrive with the auth plugin, not of this table.
 
@@ -285,10 +386,20 @@ identity belongs to the plugin that authenticated it.
 An existing database keeps both. Dropping a table that may hold rows is the
 operator's decision rather than an upgrade's, so Nextly warns once at startup,
 naming each table still present and how many rows it holds, and changes
-nothing. `nextly migrate` with `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1` drops them;
-one that still holds rows additionally needs `NEXTLY_DROP_NONEMPTY_RETIRED=1`,
-because accepting a schema change is not the same decision as accepting the
-loss of rows nothing can recreate.
+nothing. `nextly migrate` with `NEXTLY_DROP_RETIRED_AUTH_TABLES=1` drops them
+and records the drop in the schema ledger; one that still holds rows
+additionally needs `NEXTLY_DROP_NONEMPTY_RETIRED=1`, and is otherwise kept with
+a warning while the empty one is dropped and the rest of the run goes ahead.
+Only the value `1` turns either flag on.
+
+A table counts as one of these only when its columns match the shape Nextly
+created (`accounts`: `user_id`, `provider`, `provider_account_id`;
+`sessions`: `session_token`, `user_id`, `expires`), so a host application's
+own table that merely shares the name is not reported, dropped or erased from.
+A host table built on the same Auth.js model does match it: it is reported at
+boot, the flags would drop it, and deleting a Nextly user erases that user's
+id from it. If one shares the database, rename it. Deleting a user erases
+their rows from both retired tables.
 
 Both names stay reserved, so a collection cannot take a name that an existing
 database still has a table under.
@@ -317,18 +428,13 @@ was previously rendered below the form, which made `beforeForm` describe
 nothing and put provider buttons underneath the password field they are an
 alternative to.
 
-Plugin routes now check CSRF by default: an unsafe-method request admitted
+The login page lands a resumed second-factor login on its `next` rather than
+the dashboard, keeps the challenge through a network failure, a rate limit or
+a server error, and says so when the attempt has ended. A provider link shows
+its declared icon and starts one sign-in however often it is clicked, and the
+`?error` and `?resume` parameters are removed once read.
 
-by a session cookie must present the double-submit token, the same
-
-protection core's own routes take, unless the route opts out with
-
-`csrf: false`. API-key and Bearer callers are exempt either way — a browser
-
-cannot attach those cross-site — and a public route skips the default (it
-
-authenticated no one), while a public handler that resolves the session user
-
-declares `csrf: true`; only cookie-carrying callers are asked for a token.
-
-The SPA holds the readable csrf cookie and sends the token already.
+The CLI resolves the plugin list a `setup` transformer leaves exactly as the
+boot does, so `nextly migrate`, `build`, `db:sync` and the dev reload refuse a
+transformer-added plugin the app would refuse, and see its collections and
+field types.

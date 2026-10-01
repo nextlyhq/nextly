@@ -18,6 +18,33 @@ import { describe, expect, it } from "vitest";
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 
 /**
+ * The source file behind every subpath `package.json` publishes, read from
+ * the manifest rather than listed here: a hand-kept list is how a published
+ * subpath went unguarded.
+ */
+const PUBLISHED_FILES: string[] = Object.keys(
+  (
+    JSON.parse(readFileSync(path.join(SRC, "..", "package.json"), "utf8")) as {
+      exports: Record<string, unknown>;
+    }
+  ).exports
+)
+  .map(subpath => (subpath === "." ? "index.ts" : `${subpath.slice(2)}.ts`))
+  .sort();
+
+/** The files a snapshot test below covers. */
+const SNAPSHOTTED = [
+  "admin.ts",
+  "blocks.ts",
+  "client.ts",
+  "db.ts",
+  "index.ts",
+  "routing.ts",
+  "testing.ts",
+  "widgets.ts",
+];
+
+/**
  * Extract each export as `"<name> (value|type)"` from a module's source. Covers
  * the export forms this package uses: `export { … } from`, `export type { … }
  * from`, inline `export { type X }` (with `as` aliases), and `export
@@ -81,6 +108,24 @@ describe("plugin-sdk public export surface", () => {
     expect(exportedNames("widgets.ts")).toMatchSnapshot();
   });
 
+  it("`./db` surface is unchanged", () => {
+    expect(exportedNames("db.ts")).toMatchSnapshot();
+  });
+
+  it("`./blocks` surface is unchanged", () => {
+    expect(exportedNames("blocks.ts")).toMatchSnapshot();
+  });
+
+  it("`./testing` surface is unchanged", () => {
+    expect(exportedNames("testing.ts")).toMatchSnapshot();
+  });
+
+  it("snapshots every subpath the package publishes", () => {
+    // A subpath added to `exports` without a snapshot here fails this, so
+    // the surface it publishes is reviewed like every other one.
+    expect(PUBLISHED_FILES).toEqual(SNAPSHOTTED);
+  });
+
   it("takes the slug rule from the LEAF entry, not the route bundle", () => {
     // 🔴 The surface snapshot above cannot see this: both spellings export the
     // same name, so the SDK's public surface is identical either way. What
@@ -104,7 +149,7 @@ describe("plugin-sdk public export surface", () => {
   // The name/kind extractor cannot see through `export *` re-exports, so a star
   // export would add names to the public surface that the snapshots never
   // record. Fail loudly if one is introduced, so the guard stays complete.
-  it.each(["index.ts", "admin.ts", "client.ts", "routing.ts", "widgets.ts"])(
+  it.each(PUBLISHED_FILES)(
     "%s uses only named exports (no `export *`, which the guard cannot track)",
     file => {
       const source = readFileSync(path.join(SRC, file), "utf8");

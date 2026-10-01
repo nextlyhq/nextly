@@ -132,13 +132,19 @@ export function collectHookPoints(
  * The two halves are enforced DIFFERENTLY, by what a miss costs. A kind
  * mismatch is refused on every call, because it turns a veto into a permit;
  * it is a map lookup and a comparison, so running it always costs nothing. A
- * payload mismatch is warned once per point, because a schema parse on every
+ * payload mismatch is warned once per point, and only where
+ * `options.payloads` is on — development — because a schema parse on every
  * invocation is not free and a wrong payload does not, by itself, change who
  * is allowed to do what.
+ *
+ * The payload check never throws. A schema that throws while parsing is
+ * reported like a mismatch: this is a diagnostic, and an exception escaping
+ * it would turn a decision's fail-closed denial into a rejected call.
  */
 export function createPayloadChecker(
   points: ReadonlyMap<string, DeclaredHookPoint>,
-  warn: (message: string) => void
+  warn: (message: string) => void,
+  options: { payloads: boolean } = { payloads: true }
 ): (name: string, payload: unknown, via?: DeclaredHookPoint["kind"]) => void {
   const warned = new Set<string>();
 
@@ -166,10 +172,14 @@ export function createPayloadChecker(
       );
     }
 
-    if (warned.has(name)) return;
+    if (!options.payloads || warned.has(name)) return;
     const schema = point.payload;
     if (!schema) return;
-    if (schema.safeParse(payload).success) return;
+    try {
+      if (schema.safeParse(payload).success) return;
+    } catch {
+      // A throwing schema is reported below, like any other mismatch.
+    }
 
     warned.add(name);
     warn(

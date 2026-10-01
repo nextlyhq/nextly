@@ -130,9 +130,10 @@ export function collectPluginRoutes(
     if (plugin.enabled === false) continue;
     for (const route of plugin.contributes?.routes ?? []) {
       assertPathUsable(plugin.name, route);
-      // Before the route is registered. A combination that cannot mean what it
-      // says — CSRF on a public route — would otherwise look like protection
-      // while protecting nothing.
+      // Before the route is registered. An option that cannot mean what it
+      // says — a raw body on a method with no body, a rate-limit mode that
+      // does not exist — would otherwise look like protection while
+      // protecting nothing.
       const optionProblem = validateRouteOptions(route);
       if (optionProblem) {
         throw resolutionError(

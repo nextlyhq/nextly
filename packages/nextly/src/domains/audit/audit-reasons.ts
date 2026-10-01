@@ -43,8 +43,10 @@ export const AUDIT_REASONS = [
   // Pending-token exchanges: challenge resolution and initial password.
   "pending-token-invalid",
   "pending-token-wrong-challenge",
+  "challenge-wrong-answer",
   "challenge-failed-final",
   "challenge-attempts-exhausted",
+  "challenge-flow-settled",
   "challenge-user-missing",
   "not-in-must-change-state",
   "user-missing",

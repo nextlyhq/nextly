@@ -30,8 +30,9 @@ import { parsePermissionSlug } from "./permission-slug";
 import { buildPluginRouteCaller } from "./route-caller";
 import {
   checkRouteCsrf,
-  csrfApplies,
+  publicCallerCredential,
   rateLimitKey,
+  routeCsrfMode,
   shouldNotStore,
   type CallerCredential,
 } from "./route-options";
@@ -93,7 +94,7 @@ async function resolvePluginRouteAuth(
       authenticatedScope?: AuthenticatedScope;
       caller: PluginRouteCaller | null;
       /** How the caller actually authenticated, for the CSRF decision. */
-      credential: "cookie" | "bearer";
+      credential: CallerCredential;
     }
   | { error: NextlyError }
 > {
@@ -101,14 +102,11 @@ async function resolvePluginRouteAuth(
     return {
       user: null,
       caller: null,
-      // No credential resolved anyone on a public route, so the sniff cannot
-      // say what admitted the request — and a handler may still resolve the
-      // session cookie through ctx.auth.currentUser. A cookie therefore
-      // wins over an Authorization header here: the header may be ambient
-      // HTTP authentication a browser attached on its own, and classifying
-      // by it would skip the CSRF check exactly when the cookie identity is
-      // in play.
-      credential: req.headers.get("cookie") ? "cookie" : "bearer",
+      // No credential resolved anyone on a public route, and a handler may
+      // still resolve the session cookie through ctx.auth.currentUser — so the
+      // session cookie itself is what decides, not the presence of any
+      // cookie at all.
+      credential: publicCallerCredential(req),
     };
   }
 
@@ -414,10 +412,13 @@ async function applyRouteRateLimit(
   // The counter is shared with the auth limiter deliberately: it is a plain
   // fixed-window counter over a key, and a second implementation of that is a
   // second thing to keep correct.
+  // A route's own `{ max, windowMs }` is its budget as declared.
   const budget =
     declared === "auth"
       ? { limit: configured.requestsPerHour, windowMs: configured.windowMs }
-      : await generalRouteBudget(req.method);
+      : declared === "general"
+        ? await generalRouteBudget(req.method)
+        : { limit: declared.max, windowMs: declared.windowMs };
 
   // `null` is rate limiting switched off app-wide; a non-positive limit means
   // the same thing for the auth budget, exactly as it does for the core auth
@@ -457,15 +458,21 @@ async function applyRouteRateLimit(
   );
 }
 
-/** Check the route's CSRF requirement, returning the refusal when it fails. */
+/** Check the route's cross-site rule, returning the refusal when it fails. */
 async function applyRouteCsrf(
   req: Request,
   matched: RouteMatch,
   credential: CallerCredential
 ): Promise<Response | null> {
-  if (!csrfApplies(matched.route, req, credential)) return null;
+  const mode = routeCsrfMode(matched.route, req, credential);
+  if (mode === "none") return null;
 
-  const { body, tooLarge } = await readCsrfBody(req);
+  // The body is read only when a token may be in it. The origin check needs
+  // nothing from the body, so an ordinary write pays no second read.
+  const { body, tooLarge } =
+    mode === "token"
+      ? await readCsrfBody(req)
+      : { body: undefined, tooLarge: false };
 
   const { env } = await import("../../lib/env");
   const result = checkRouteCsrf(
@@ -477,18 +484,23 @@ async function applyRouteCsrf(
   );
   if (result.valid) return null;
 
+  await auditRouteCsrfFailure(req, matched);
+
   // The CANONICAL error boundary, like the rate-limit refusal beside it: this
   // is one of the errors no later wrapper decorates, so a hand-built body left
   // it without `requestId`, without `x-request-id`, and outside the
-  // development diagnostics. `no-store` is set on the built response because
-  // the builder does not know a CSRF refusal must never be cached.
+  // development diagnostics. `CSRF_FAILED`, as core's own refusals answer, so
+  // a client can tell a stale page from missing permissions. `no-store` is set
+  // on the built response because the builder does not know a CSRF refusal
+  // must never be cached.
   const refusal = buildErrorResponse(
-    NextlyError.forbidden({
+    NextlyError.csrfFailed({
       ...(result.error !== undefined ? { logMessage: result.error } : {}),
       logContext: {
         reason: "plugin-route-csrf-failed",
         plugin: matched.pluginName,
         path: matched.route.path,
+        mode,
         ...(tooLarge ? { bodyUnreadable: "too-large" } : {}),
       },
     }),
@@ -499,6 +511,40 @@ async function applyRouteCsrf(
   );
   refusal.headers.set("Cache-Control", "no-store");
   return refusal;
+}
+
+/**
+ * Record a refused cross-site write as the same `csrf-failed` event core's
+ * auth routes record, naming the route by its declared pattern rather than
+ * the concrete URL, so no identifier in a path segment reaches the trail.
+ */
+async function auditRouteCsrfFailure(
+  req: Request,
+  matched: RouteMatch
+): Promise<void> {
+  const { getService } = await import("../../di/register");
+  const { buildAuditLogWriter } = await import(
+    "../../domains/audit/audit-log-writer"
+  );
+  const { getTrustedClientIp } = await import(
+    "../../utils/get-trusted-client-ip"
+  );
+  const { readProxyTrustSettings } = await import("../../utils/proxy-trust");
+  const trust = readProxyTrustSettings(() => getService("config"));
+  try {
+    await buildAuditLogWriter(getService as (n: string) => unknown).write({
+      kind: "csrf-failed",
+      ipAddress: getTrustedClientIp(req, trust),
+      userAgent: req.headers.get("user-agent"),
+      metadata: {
+        path: `plugins/${matched.pluginName}${matched.route.path}`,
+        method: req.method.toUpperCase(),
+      },
+    });
+  } catch {
+    // An audit write that fails must not turn a refusal into a 500: the
+    // refusal is the protection, the row is the record of it.
+  }
 }
 
 /**

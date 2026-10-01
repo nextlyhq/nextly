@@ -432,7 +432,12 @@ describe("login handler: respondAction shape", () => {
       .map(([event]: [{ kind: string; metadata?: unknown }]) => event)
       .find(event => event.kind === "login-failed");
 
-    expect(recorded?.metadata).toEqual({ code: "INTERNAL_ERROR" });
+    // The strategy that decided is kept: a core-shaped method name, stated by
+    // the handler rather than taken from the plugin's error.
+    expect(recorded?.metadata).toEqual({
+      code: "INTERNAL_ERROR",
+      strategy: "password",
+    });
     expect(JSON.stringify(recorded)).not.toContain("ada@example.com");
     expect(JSON.stringify(recorded)).not.toContain("u-77");
     expect(JSON.stringify(recorded)).not.toContain("acct-8891-ada");

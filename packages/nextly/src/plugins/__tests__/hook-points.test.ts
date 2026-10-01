@@ -171,6 +171,55 @@ describe("payload checking in development", () => {
     createPayloadChecker(points, warn)("acme-auth.gate", {}, "decision");
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it("parses no payload when payload checks are off, as in production", () => {
+    // The comments said development only, and nothing checked the
+    // environment: a thousand valid calls in production made a thousand
+    // schema parses.
+    const safeParse = vi.fn(() => ({ success: true }));
+    const points = collectHookPoints([
+      plugin("@acme/auth", [
+        { name: "acme-auth.profile", kind: "filter", payload: { safeParse } },
+      ]),
+    ]);
+    const check = createPayloadChecker(points, vi.fn(), { payloads: false });
+
+    for (let i = 0; i < 10; i++) check("acme-auth.profile", {}, "filter");
+    expect(safeParse).not.toHaveBeenCalled();
+  });
+
+  it("still refuses the wrong kind when payload checks are off", () => {
+    // The control: switching the whole checker off in production would pass
+    // the case above and let a decision fail open.
+    const points = collectHookPoints([
+      plugin("@acme/auth", [{ name: "acme-auth.gate", kind: "decision" }]),
+    ]);
+    const check = createPayloadChecker(points, vi.fn(), { payloads: false });
+    expect(reasonOf(() => check("acme-auth.gate", {}, "filter"))).toBe(
+      "hook-point-kind-mismatch"
+    );
+  });
+
+  it("reports a schema that throws instead of letting it escape", () => {
+    // Escaping, it made `decide` reject rather than deny.
+    const warn = vi.fn();
+    const points = collectHookPoints([
+      plugin("@acme/auth", [
+        {
+          name: "acme-auth.gate",
+          kind: "decision",
+          payload: {
+            safeParse: () => {
+              throw new Error("schema bug");
+            },
+          },
+        },
+      ]),
+    ]);
+    const check = createPayloadChecker(points, warn);
+    expect(() => check("acme-auth.gate", {}, "decision")).not.toThrow();
+    expect(warn).toHaveBeenCalledOnce();
+  });
 });
 
 describe("decision points fail closed", () => {

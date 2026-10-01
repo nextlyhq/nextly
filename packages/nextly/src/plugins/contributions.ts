@@ -626,7 +626,7 @@ export interface PluginContributions {
    * Every kind must begin with the plugin's own admin slug, so one plugin
    * cannot write rows that read as another's.
    */
-  audit?: { kinds: Array<{ kind: string; metadataKeys?: string[] }> };
+  audit?: PluginAuditDeclaration;
 
   /**
    * @experimental Named seams this plugin publishes for others to extend.
@@ -640,12 +640,23 @@ export interface PluginContributions {
    * error-isolated. An `action` is an ordered side effect. A `decision` is a
    * VETO, and is the only one that fails closed — see `ctx.filters.decide`.
    */
-  hookPoints?: Array<{
-    /** Must start with the plugin's own admin slug, and be unique across all plugins. */
-    name: string;
-    kind: "filter" | "action" | "decision";
-    /** In development, payloads are checked against this and a mismatch warns once. */
-    payload?: ZodTypeAny;
-    description?: string;
-  }>;
+  hookPoints?: PluginHookPointDeclaration[];
+}
+
+/** @experimental `contributes.audit`: the kinds a plugin writes. */
+export interface PluginAuditDeclaration {
+  kinds: Array<{ kind: string; metadataKeys?: string[] }>;
+}
+
+/** @experimental One entry of `contributes.hookPoints`. */
+export interface PluginHookPointDeclaration {
+  /** Must start with the plugin's own admin slug, and be unique across all plugins. */
+  name: string;
+  kind: "filter" | "action" | "decision";
+  /**
+   * In development, payloads are checked against this and a mismatch warns
+   * once. For a `decision`, the payload is the context being decided.
+   */
+  payload?: ZodTypeAny;
+  description?: string;
 }

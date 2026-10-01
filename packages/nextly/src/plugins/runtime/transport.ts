@@ -15,12 +15,190 @@
  * @module plugins/runtime/transport
  * @since 1.0.0
  */
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { Agent as HttpAgent, request as httpRequest } from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
+import type { Socket } from "node:net";
+import {
+  brotliDecompressSync,
+  gunzipSync,
+  inflateRawSync,
+  inflateSync,
+} from "node:zlib";
 
 import { NextlyError } from "../../errors/nextly-error";
 
-import type { ResolvedAddress } from "./fetch";
+import { abortReason, type ResolvedAddress } from "./fetch";
+
+/**
+ * The agents every vetted request is sent through, and no other code's.
+ *
+ * Not the global agents. Those can route through an egress proxy taken from
+ * the environment (`NODE_USE_ENV_PROXY`), which re-resolves the name on its
+ * own network, and they pool keep-alive sockets by `host:port` — a key the
+ * pinned `lookup` is not part of — so a socket another library opened to the
+ * same name at a different address would be reused. Either way the request
+ * would leave for an address nobody vetted.
+ *
+ * Keep-alive is off for the same reason: every request opens its own socket,
+ * through the `lookup` below, so the address a socket reached is always the
+ * one this request vetted. An egress proxy is deliberately not supported.
+ */
+const pinnedHttpAgent = new HttpAgent({ keepAlive: false });
+const pinnedHttpsAgent = new HttpsAgent({ keepAlive: false });
+
+/**
+ * Whether a connected socket reached the address that was vetted.
+ *
+ * The belt to the agents' braces: whatever produced the socket, nothing is
+ * written to it unless its peer is the address judged. An IPv4 peer can be
+ * reported in its IPv4-mapped IPv6 form, so both spellings compare equal.
+ */
+export function connectedToVetted(
+  remoteAddress: string | undefined,
+  vetted: ResolvedAddress
+): boolean {
+  if (!remoteAddress) return false;
+  const normalise = (value: string) =>
+    value.toLowerCase().replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/, "");
+  return normalise(remoteAddress) === normalise(vetted.address);
+}
+
+/**
+ * Content codings this transport decodes, and asks for when the caller did not
+ * name its own `Accept-Encoding`.
+ *
+ * A request without the header accepts ANY coding (RFC 9110 §12.5.3), and a
+ * compressed body handed back undecoded made `res.json()` fail where the
+ * platform's `fetch` would have decoded it. Naming the codings this module
+ * can decode keeps a server from choosing one it cannot.
+ */
+const DECODABLE_CODINGS = "gzip, deflate, br";
+
+/**
+ * Decode a response body by its `Content-Encoding`, bounded by `maxBytes`.
+ *
+ * The cap applies to the DECODED bytes: the wire cap alone lets a small
+ * compressed body expand far past it. Codings are undone in reverse order of
+ * application, as the header lists them. A coding this module cannot decode
+ * is refused rather than handed back as bytes the caller would misread.
+ */
+function decodeBody(
+  raw: Buffer,
+  contentEncoding: string | undefined,
+  maxBytes: number,
+  host: string
+): Buffer {
+  const codings = (contentEncoding ?? "")
+    .split(",")
+    .map(coding => coding.trim().toLowerCase())
+    .filter(coding => coding !== "" && coding !== "identity");
+  let body = raw;
+  for (const coding of codings.reverse()) {
+    if (body.length === 0) return body;
+    body = decodeOne(body, coding, maxBytes, host);
+  }
+  return body;
+}
+
+/** What undoes each coding this module accepts. */
+const DECODERS: Readonly<
+  Record<string, (body: Buffer, options: { maxOutputLength: number }) => Buffer>
+> = {
+  gzip: gunzipSync,
+  "x-gzip": gunzipSync,
+  br: brotliDecompressSync,
+  deflate: inflateEitherSync,
+};
+
+/**
+ * Undo "deflate", which is the zlib-wrapped form by the specification and the
+ * raw form by what some servers actually send; both are accepted. Exceeding
+ * the size cap is not retried as the other form.
+ */
+function inflateEitherSync(
+  body: Buffer,
+  options: { maxOutputLength: number }
+): Buffer {
+  try {
+    return inflateSync(body, options);
+  } catch (error) {
+    if (error instanceof RangeError) throw error;
+    return inflateRawSync(body, options);
+  }
+}
+
+/** Undo one coding, or refuse: unsupported, too large, or undecodable. */
+function decodeOne(
+  body: Buffer,
+  coding: string,
+  maxBytes: number,
+  host: string
+): Buffer {
+  const decoder = Object.hasOwn(DECODERS, coding) ? DECODERS[coding] : null;
+  if (!decoder) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "outbound-unsupported-encoding", host, coding },
+    });
+  }
+  try {
+    return decoder(body, { maxOutputLength: maxBytes });
+  } catch (error) {
+    const tooLarge = error instanceof RangeError;
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: tooLarge ? "outbound-body-too-large" : "outbound-bad-response",
+        host,
+        ...(tooLarge ? { limit: maxBytes } : { coding }),
+      },
+    });
+  }
+}
+
+/**
+ * Build the `Response` handed back to the plugin, or refuse one the platform
+ * cannot represent.
+ *
+ * Node's parser accepts any three-digit status, while `Response` throws a
+ * `RangeError` outside 200–599. Thrown inside the response's `end` listener,
+ * that error escaped the promise entirely: the caller waited past its
+ * deadline with nothing left to settle it.
+ */
+function buildResponse(
+  status: number,
+  headers: NodeJS.Dict<string | string[]>,
+  raw: Buffer,
+  maxBytes: number,
+  host: string
+): Response {
+  if (status < 200 || status > 599) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "outbound-bad-response", host, status },
+    });
+  }
+  if (NULL_BODY_STATUSES.has(status)) {
+    return new Response(null, {
+      status,
+      headers: responseHeaderTuples(headers),
+    });
+  }
+  const encoding = headers["content-encoding"];
+  const decoded = decodeBody(
+    raw,
+    Array.isArray(encoding) ? encoding.join(",") : encoding,
+    maxBytes,
+    host
+  );
+  // A decoded body no longer matches the coding or the length the server
+  // described, so both headers go, exactly as the platform's `fetch` does.
+  const tuples = responseHeaderTuples(headers).filter(
+    ([name]) =>
+      decoded === raw ||
+      !["content-encoding", "content-length"].includes(name.toLowerCase())
+  );
+  // Copied into a plain `ArrayBuffer`: zlib hands back a buffer typed over
+  // any backing store, which the `Response` body type does not accept.
+  return new Response(new Uint8Array(decoded), { status, headers: tuples });
+}
 
 /**
  * Statuses whose responses may not carry a body.
@@ -143,6 +321,9 @@ function requestHeaders(
   const generated = bodyHeaders["content-type"];
   const formData = init.body instanceof FormData && generated !== undefined;
   const headers: Record<string, string> = {
+    // Only codings the response side can decode, unless the caller named its
+    // own: a server free to pick any coding may pick one nobody here reads.
+    "accept-encoding": DECODABLE_CODINGS,
     ...bodyHeaders,
     ...toHeaders(init),
     ...(formData ? { "content-type": generated } : {}),
@@ -265,7 +446,7 @@ async function withRequestDeadline<T>(
       ? new Promise<never>((_resolve, reject) => {
           const onAbort = () => {
             controller.abort();
-            reject(abortedByCaller());
+            reject(abortReason(caller));
           };
           caller.addEventListener("abort", onAbort, { once: true });
           detachCaller = () => caller.removeEventListener("abort", onAbort);
@@ -289,20 +470,6 @@ async function withRequestDeadline<T>(
     if (timer !== undefined) clearTimeout(timer);
     detachCaller?.();
   }
-}
-
-/**
- * The rejection for a caller's own cancellation.
- *
- * The shape `fetch` itself rejects with, because plugin code holding an
- * `AbortSignal` recognises its cancellation by `error.name === "AbortError"`
- * — and because a cancellation the caller asked for is not a policy refusal,
- * which is what the NextlyError refusals in this module answer for. Platform
- * DOMExceptions are outside the NextlyError contract by the same reasoning
- * `read-stored-media` gives for the timeouts of `AbortSignal.timeout`.
- */
-function abortedByCaller(): DOMException {
-  return new DOMException("This operation was aborted", "AbortError");
 }
 
 /** Header values as Node wants them, from whatever shape the caller used. */
@@ -362,7 +529,10 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
   // — until the fixed deadline answered for it. Normalised to undefined
   // because `RequestInit.signal` may be explicitly null.
   const caller = init.signal ?? undefined;
-  if (caller?.aborted) throw abortedByCaller();
+  // A cancellation the caller asked for is not a policy refusal, so it is
+  // not one of this module's NextlyErrors: it rejects with the signal's own
+  // reason, the value `fetch` rejects with.
+  if (caller?.aborted) throw abortReason(caller);
   const send = url.protocol === "https:" ? httpsRequest : httpRequest;
   // Inside the deadline, because reading the REQUEST body happens before any
   // socket exists and therefore before the timer below is armed. A plugin
@@ -386,6 +556,9 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
         path: `${url.pathname}${url.search}`,
         method: init.method ?? "GET",
         headers: requestHeaders(bodyHeaders, init, url, body),
+        // This module's own agents, never the global ones: see
+        // `pinnedHttpAgent` for what the global agents would bypass.
+        agent: url.protocol === "https:" ? pinnedHttpsAgent : pinnedHttpAgent,
         // The whole point: connect to the address already judged, and never
         // consult the resolver a second time.
         lookup: (_hostname, options, callback) => {
@@ -433,30 +606,63 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
           chunks.push(chunk);
         });
         response.on("end", () => {
-          const status = response.statusCode ?? 502;
-          resolve(
-            new Response(
-              NULL_BODY_STATUSES.has(status) ? null : Buffer.concat(chunks),
-              {
-                status,
-                headers: responseHeaderTuples(response.headers),
-              }
-            )
-          );
+          // Inside a try: anything thrown in this listener would escape the
+          // promise, leaving the caller waiting on a request already closed.
+          try {
+            resolve(
+              buildResponse(
+                response.statusCode ?? 502,
+                response.headers,
+                Buffer.concat(chunks),
+                maxBodyBytes,
+                url.hostname
+              )
+            );
+          } catch (error) {
+            // A refused response releases its socket rather than leaving it
+            // to whatever the server decides to do with the connection.
+            req.destroy();
+            reject(
+              error instanceof Error ? error : new TypeError(String(error))
+            );
+          }
         });
         response.on("error", reject);
       }
     );
 
+    // No request byte — headers or body — is written until the socket is
+    // known to have reached the vetted address. A socket that arrives still
+    // connecting is judged once it connects; one already connected is judged
+    // at once. Over HTTPS the TLS handshake (whose ClientHello names the host)
+    // starts on connect, before this runs; nothing of the request does.
+    req.on("socket", (socket: Socket) => {
+      const judge = () => {
+        if (connectedToVetted(socket.remoteAddress, address)) return;
+        const refusal = NextlyError.forbidden({
+          logContext: {
+            reason: "outbound-socket-address-mismatch",
+            host: url.hostname,
+            vetted: address.address,
+            connected: socket.remoteAddress ?? null,
+          },
+        });
+        req.destroy(refusal);
+        reject(refusal);
+      };
+      if (socket.connecting) socket.once("connect", judge);
+      else judge();
+    });
+
     // The caller's cancellation, applied to the socket the same way the
     // deadline applies itself: destroy the request rather than wait out a
     // timer the caller has already decided the answer to. The flag keeps the
-    // AbortError the promise settles with, whichever of this handler and the
-    // socket's own error event the destroy happens to surface first.
+    // signal's own reason as what the promise settles with, whichever of this
+    // handler and the socket's own error event the destroy surfaces first.
     const onCallerAbort = () => {
       cancelledByCaller = true;
       req.destroy();
-      reject(abortedByCaller());
+      reject(abortReason(caller as AbortSignal));
     };
     if (caller) caller.addEventListener("abort", onCallerAbort, { once: true });
 
@@ -489,7 +695,7 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
     req.on("close", done);
     req.on("error", error => {
       done();
-      reject(cancelledByCaller ? abortedByCaller() : error);
+      reject(cancelledByCaller ? abortReason(caller as AbortSignal) : error);
     });
 
     if (body !== null) req.write(body);

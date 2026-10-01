@@ -25,6 +25,7 @@ import type { RateLimitStore } from "../../middleware/rate-limit";
 import {
   createPluginContext,
   type PluginContext,
+  type PluginDefinition,
 } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
 import { readProxyTrustSettings } from "../../utils/proxy-trust";
@@ -661,6 +662,33 @@ export function readAuthRateLimit(getService: (name: string) => unknown): {
   } catch {
     return fallback;
   }
+}
+
+/**
+ * The boot warning owed when a second-factor attempt budget is per process.
+ *
+ * The budget lives in the configured rate-limit store, and in this process's
+ * memory when none is configured. On serverless or any multi-instance
+ * deployment each instance then counts its own attempts, so the effective cap
+ * grows with the instance count. That is a sound default for one process and
+ * a silent weakening for many, so an install that registers a challenge
+ * without a shared store is told once, at boot, rather than never.
+ */
+export function challengeBudgetWarning(
+  plugins: readonly PluginDefinition[],
+  config: unknown
+): string | null {
+  const challenges = plugins
+    .filter(plugin => plugin.enabled !== false)
+    .flatMap(plugin => plugin.contributes?.auth?.challenges ?? []);
+  if (challenges.length === 0) return null;
+  if (readAuthRateLimit(() => config).store !== undefined) return null;
+  return (
+    "[nextly] Second-factor challenges are registered but no shared rate-limit " +
+    "store is configured (rateLimit.store), so each process counts its own " +
+    "attempts: with several instances the attempt cap is multiplied by their " +
+    "number. Configure a shared store for a multi-instance deployment."
+  );
 }
 
 /**

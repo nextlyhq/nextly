@@ -143,3 +143,51 @@ describe("assertPluginManifests", () => {
     expect(() => assertPluginManifests(plugins)).not.toThrow();
   });
 });
+
+describe("a plugin challenge under core's reserved id", () => {
+  const challenge = (id: string) =>
+    p("@t/2fa", {
+      contributes: {
+        auth: { challenges: [{ id, resolve: async () => ({ ok: true }) }] },
+      },
+    } as never);
+
+  it("fails resolution, rather than the first sign-in request", () => {
+    expect(() =>
+      assertPluginManifests([challenge("must-change-password")])
+    ).toThrow(
+      expect.objectContaining({
+        logContext: expect.objectContaining({
+          reason: "plugin-challenge-id-reserved",
+        }),
+      })
+    );
+  });
+
+  it("accepts any other id", () => {
+    expect(() => assertPluginManifests([challenge("totp")])).not.toThrow();
+  });
+});
+
+describe("a plugin event under a reserved prefix", () => {
+  const declaring = (name: string) =>
+    p("@t/cache", { contributes: { events: [{ name }] } } as never);
+
+  it("fails resolution, rather than every emit", () => {
+    expect(() =>
+      assertPluginManifests([declaring("plugin.cache.cleared")])
+    ).toThrow(
+      expect.objectContaining({
+        logContext: expect.objectContaining({
+          reason: "plugin-event-name-reserved",
+        }),
+      })
+    );
+  });
+
+  it("accepts the plugin's own namespace", () => {
+    expect(() =>
+      assertPluginManifests([declaring("t-cache.cleared")])
+    ).not.toThrow();
+  });
+});

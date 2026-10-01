@@ -10,7 +10,6 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { NextlyError } from "../../../../errors/nextly-error";
 import { getCoreSchema } from "../../../../schemas";
 import { reconcileCore } from "../core-reconcile";
 
@@ -33,8 +32,15 @@ function deps(over: Record<string, unknown> = {}) {
     args: {
       db: {},
       dialect: "postgresql" as const,
-      allowDestructive: true,
+      dropRetiredAuthTables: true,
       tableExists: (table: string) => Promise.resolve(RETIRED.includes(table)),
+      // Both in the shape Nextly created them, so they are ours to drop.
+      columnsOf: (table: string) =>
+        Promise.resolve(
+          table === "accounts"
+            ? ["id", "user_id", "provider", "provider_account_id"]
+            : ["session_token", "user_id", "expires"]
+        ),
       countRows: () => Promise.resolve(0),
       executeSql: (sql: string) => {
         executed.push(sql);
@@ -79,9 +85,8 @@ describe("a retired-table drop the operator asked for", () => {
   });
 
   it("says so, and changes nothing, when the caller cannot run one", async () => {
-    // `allowDestructive` also authorises unrelated destructive changes, so a
-    // caller without these operations is not asking for this work and must
-    // not be refused. It is noted instead, because the silent version is
+    // A caller without these operations cannot do this work, and must not be
+    // refused for it. It is noted instead, because the silent version is
     // indistinguishable from a database with no retired tables left.
     const { args, executed } = deps();
     const said: string[] = [];
@@ -99,16 +104,58 @@ describe("a retired-table drop the operator asked for", () => {
   it("does nothing at all when the operator did not ask", async () => {
     // The control: a cleanup that ran unconditionally would pass every test
     // above while dropping tables nobody consented to lose.
-    const { args, executed } = deps({ allowDestructive: false });
+    const { args, executed } = deps({ dropRetiredAuthTables: false });
     await reconcileCore(args as never);
 
     expect(executed).toEqual([]);
   });
 
-  it("refuses a table that still holds rows unless that is allowed too", async () => {
-    const { args, executed } = deps({ countRows: () => Promise.resolve(3) });
-    await expect(reconcileCore(args as never)).rejects.toThrow(NextlyError);
+  it("is not asked for by accepting destructive core changes", async () => {
+    // That flag accepts changes to the core schema; dropping these tables is
+    // a different decision with a flag of its own.
+    const { args, executed } = deps({
+      dropRetiredAuthTables: false,
+      allowDestructive: true,
+    });
+    await reconcileCore(args as never);
+
     expect(executed).toEqual([]);
+  });
+
+  it("keeps a table that still holds rows unless that is allowed too, and says so", async () => {
+    const warned: string[] = [];
+    const { args, executed } = deps({
+      countRows: () => Promise.resolve(3),
+      logger: { info: () => {}, warn: (m: string) => warned.push(m) },
+    });
+    await expect(reconcileCore(args as never)).resolves.toEqual({
+      changed: false,
+    });
+    expect(executed).toEqual([]);
+    expect(warned.join(" ")).toMatch(/still hold rows/);
+  });
+
+  it("drops the empty table even when the other one holds rows", async () => {
+    const { args, executed } = deps({
+      countRows: (_db: unknown, _dialect: unknown, table: string) =>
+        Promise.resolve(table === "accounts" ? 3 : 0),
+    });
+    await reconcileCore(args as never);
+
+    expect(executed).toHaveLength(1);
+    expect(executed[0]).toContain("sessions");
+  });
+
+  it("does not report the schema up to date without saying what it dropped", async () => {
+    const said: string[] = [];
+    const { args } = deps({
+      logger: { info: (m: string) => said.push(m), warn: () => {} },
+    });
+    await reconcileCore(args as never);
+
+    expect(said.join(" ")).toMatch(
+      /dropped retired auth tables: accounts, sessions/
+    );
   });
 
   it("drops a non-empty table once the second flag is set", async () => {
@@ -145,10 +192,9 @@ describe("a retired-table drop the operator asked for", () => {
       expect(order).toEqual(["apply", "drop", "drop"]);
     });
 
-    it("refuses a table holding rows before applying anything", async () => {
-      // The refusal has to come while the database is unchanged: refusing
-      // after the apply reports a failed run that has already applied and
-      // recorded the core change.
+    it("applies the core change even when a retired table holds rows", async () => {
+      // The cleanup is opt-in housekeeping; a table it may not drop must not
+      // hold back a core change that has nothing to do with it.
       let applied = false;
       const { args, executed } = deps({
         ...needsApply,
@@ -159,16 +205,16 @@ describe("a retired-table drop the operator asked for", () => {
         },
       });
 
-      await expect(reconcileCore(args as never)).rejects.toMatchObject({
-        code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
+      await expect(reconcileCore(args as never)).resolves.toEqual({
+        changed: true,
       });
-      expect(applied).toBe(false);
+      expect(applied).toBe(true);
       expect(executed).toEqual([]);
     });
 
-    it("counts the rows again at the drop", async () => {
-      // Empty when checked before the apply, holding rows by the drop: the
-      // operator agreed to lose an empty table, not this one.
+    it("counts the rows after the apply, not before", async () => {
+      // Empty before the apply, holding rows by the drop: the operator agreed
+      // to lose an empty table, not this one.
       let applied = false;
       const { args, executed } = deps({
         ...needsApply,
@@ -179,9 +225,7 @@ describe("a retired-table drop the operator asked for", () => {
         },
       });
 
-      await expect(reconcileCore(args as never)).rejects.toMatchObject({
-        code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-      });
+      await reconcileCore(args as never);
       expect(executed).toEqual([]);
     });
 

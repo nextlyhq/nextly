@@ -148,6 +148,14 @@ export type Middleware = (
  */
 export type PluginRouteMount = "plugin" | "root";
 
+/** @experimental A plugin route's own rate-limit allowance. */
+export interface PluginRouteRateLimit {
+  /** Requests one client may make in a window, a positive integer. */
+  max: number;
+  /** The window, in milliseconds, a positive integer. */
+  windowMs: number;
+}
+
 /**
  * @public A single HTTP route contributed by a plugin. Answers at
  * `/plugins/<plugin-name><path>` under the existing catch-all, so its full URL
@@ -189,14 +197,27 @@ export interface PluginRoute {
   /** Opt out of auth — the route is publicly callable. */
   public?: boolean;
   /**
-   * @experimental Apply a per-IP rate limit.
+   * @experimental Apply a per-IP rate limit, counted for THIS route alone.
    *
-   * `"auth"` uses the same limit and window as `/auth/*`, in its OWN key
-   * namespace — a plugin's sign-in route is as much a credential-stuffing
-   * target as core's, and sharing core's bucket would let either exhaust the
-   * other's budget.
+   * - `"auth"` uses the same limit and window as `/auth/*`, in its OWN key
+   *   namespace — a plugin's sign-in route is as much a credential-stuffing
+   *   target as core's, and sharing core's bucket would let either exhaust the
+   *   other's budget.
+   * - `"general"` uses the app's REST read or write allowance.
+   * - `{ max, windowMs }` sets this route's own allowance: at most `max`
+   *   requests per `windowMs` milliseconds.
+   *
+   * Each route path has its own bucket per client, so an SSO sign-in
+   * spending `authorize` and `callback` costs one request from each route's
+   * budget rather than two from one. `"general"` also counts reads and writes
+   * apart, and `{ max, windowMs }` counts each method apart. IPv6 clients are
+   * counted by their /64.
+   *
+   * The client address is read only when `security.trustProxy` is on. Off,
+   * every client shares one bucket, and boot warns about each rate-limited
+   * route.
    */
-  rateLimit?: "general" | "auth";
+  rateLimit?: "general" | "auth" | PluginRouteRateLimit;
   /**
    * @experimental Hand the handler the untouched request body.
    *
@@ -206,13 +227,23 @@ export interface PluginRoute {
    */
   rawBody?: boolean;
   /**
-   * @experimental Require a valid double-submit CSRF token for unsafe methods
-   * when the caller is cookie-authenticated. Checked by default; a route
-   * whose callers bring their own credential opts out with `false`.
+   * @experimental The cross-site check for unsafe methods from a
+   * session-cookie caller.
    *
-   * API-key and Bearer callers are exempt, because a browser cannot attach
-   * those cross-site — the attack this prevents needs the credential to travel
-   * automatically, which is what a cookie does and a header does not.
+   * - Left unset, an authenticated route checks the request's `Origin` (or
+   *   `Referer`): it must be this site or one in `NEXTLY_ALLOWED_ORIGINS`.
+   *   The admin's own requests pass it without a token.
+   * - `true` also requires a valid double-submit CSRF token, in the
+   *   `x-csrf-token` header or as `csrfToken` in a JSON body. On a `public`
+   *   route it applies to callers carrying the session cookie.
+   * - `false` checks nothing, for a route whose callers bring their own
+   *   credential (an API key, a signed webhook).
+   *
+   * A refusal answers 403 `CSRF_FAILED` and records a `csrf-failed` audit
+   * event. API-key and Bearer callers are exempt, because a browser cannot
+   * attach those cross-site — the attack this prevents needs the credential
+   * to travel automatically, which is what a cookie does and a header does
+   * not.
    */
   csrf?: boolean;
   /**

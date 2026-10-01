@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { PluginDefinition } from "../../../plugins/plugin-context";
-import { aggregateAuthUi, isSameOriginPath } from "../auth-ui";
+import { aggregateAuthUi, authUiProblems, isSameOriginPath } from "../auth-ui";
 
-function pluginWith(href: string | undefined): PluginDefinition {
+function pluginWith(
+  href: string | undefined,
+  component?: string
+): PluginDefinition {
   return {
     name: "@test/provider",
     version: "0.0.0",
@@ -12,7 +15,12 @@ function pluginWith(href: string | undefined): PluginDefinition {
       auth: {
         ui: {
           providers: [
-            { strategy: "google", label: "Continue with Google", href },
+            {
+              strategy: "google",
+              label: "Continue with Google",
+              href,
+              ...(component ? { component } : {}),
+            },
           ],
         },
       },
@@ -59,20 +67,48 @@ describe("aggregateAuthUi provider hrefs", () => {
     expect(ui.providers[0].href).toBe("/sso/google/authorize");
   });
 
-  it("keeps a provider that declares no href at all", () => {
-    const ui = aggregateAuthUi([pluginWith(undefined)]);
+  it("keeps a provider that renders a component instead of an href", () => {
+    const ui = aggregateAuthUi([
+      pluginWith(undefined, "@test/provider/admin#GoogleButton"),
+    ]);
     expect(ui.providers).toHaveLength(1);
     expect(ui.providers[0].href).toBeUndefined();
   });
 
+  it("drops a provider with neither an href nor a component", () => {
+    // Its button would do nothing: the page rendered an empty provider
+    // area, and a gap where the button should have been.
+    expect(aggregateAuthUi([pluginWith(undefined)]).providers).toHaveLength(0);
+    expect(authUiProblems([pluginWith(undefined)])).toEqual([
+      expect.stringContaining("neither an href nor a component"),
+    ]);
+  });
+
   it.each([["https://evil.example"], ["//evil.example"], ["/\\evil"]])(
-    "drops a provider whose href is %s",
+    "drops a provider whose href is %s, reporting it at boot only",
     href => {
+      // The served list is rebuilt on every `/auth/*` request and every
+      // `ctx.auth` call, so a warning emitted while building it repeated on
+      // each one. The problem is reported once, by the boot check.
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const ui = aggregateAuthUi([pluginWith(href)]);
       expect(ui.providers).toHaveLength(0);
-      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).not.toHaveBeenCalled();
       warn.mockRestore();
+      expect(authUiProblems([pluginWith(href)])).toEqual([
+        expect.stringContaining("same-origin path"),
+      ]);
     }
   );
+
+  it("reports nothing for usable providers", () => {
+    // The control: a report that named every provider would satisfy the
+    // cases above.
+    expect(
+      authUiProblems([
+        pluginWith("/sso/google/authorize"),
+        pluginWith(undefined, "@test/provider/admin#GoogleButton"),
+      ])
+    ).toEqual([]);
+  });
 });

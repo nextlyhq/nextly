@@ -120,6 +120,21 @@ describe("a general-limited plugin route picks its budget by method", () => {
   });
 });
 
+describe("a route that declares its own allowance", () => {
+  it("is checked against exactly that allowance", async () => {
+    const own = match("POST");
+    own.route = { ...own.route, rateLimit: { max: 3, windowMs: 60_000 } };
+
+    await runPluginRoute(req("POST"), own);
+
+    expect(check).toHaveBeenCalledWith(
+      "plugin-route-ip:@a/x:/r:1.2.3.4:POST",
+      3,
+      60_000
+    );
+  });
+});
+
 describe("a plugin rate-limit refusal answers through the canonical boundary", () => {
   it("carries the request id, the envelope, and the retry hint", async () => {
     // This is the one plugin-route error no later wrapper decorates, so a
@@ -153,8 +168,9 @@ describe("a plugin CSRF refusal answers through the canonical boundary", () => {
     const res = await runPluginRoute(
       new Request("http://localhost/admin/api/plugins/@a/x/r", {
         method: "POST",
-        // A cookie caller with no CSRF token: `csrf: true` + POST + cookie.
-        headers: { cookie: "nextly_csrf=absent" },
+        // A session-cookie caller with no CSRF token: `csrf: true` + POST +
+        // the session cookie a public handler would act on.
+        headers: { cookie: "nextly_session=s; nextly_csrf=absent" },
       }),
       matchWithCsrf()
     );
@@ -166,6 +182,7 @@ describe("a plugin CSRF refusal answers through the canonical boundary", () => {
     const body = (await res.json()) as {
       error: { code: string; requestId: string };
     };
+    expect(body.error.code).toBe("CSRF_FAILED");
     expect(body.error.requestId).toBe(res.headers.get("x-request-id"));
   });
 });

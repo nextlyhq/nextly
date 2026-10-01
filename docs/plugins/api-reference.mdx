@@ -12,8 +12,9 @@ description: The public plugin surface re-exported by @nextlyhq/plugin-sdk.
 | `@nextlyhq/plugin-sdk` | `definePlugin`, `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()` | no |
 | `@nextlyhq/plugin-sdk/testing` | `createTestNextly` | no |
 | `@nextlyhq/plugin-sdk/client` | `useCan`, `<Can>` | yes (optional peer) |
-| `@nextlyhq/plugin-sdk/admin` | `registerComponent`, `registerComponents`, `registerKnownPlugin` | yes (optional peer) |
+| `@nextlyhq/plugin-sdk/admin` | `registerComponent`, `registerComponents`, `registerKnownPlugin`, `ChallengeViewProps`, `ChallengeResolveResult` | yes (optional peer) |
 | `@nextlyhq/plugin-sdk/routing` | `slugToStaticParam` | no |
+| `@nextlyhq/plugin-sdk/db` | Drizzle query operators (`eq`, `and`, `inArray`, …); `sql` is not among them | no |
 | `@nextlyhq/plugin-sdk/widgets` | `WidgetComponentProps`, `WidgetSlot`, `WidgetResult`, `WidgetResultField`, `WidgetQueryBatchResponse` — types only, no runtime | no |
 
 ## `definePlugin(def): PluginDefinition`
@@ -27,8 +28,13 @@ interface PluginDefinition {
   optionalDependsOn?: Record<string, string>;  // enhance-if-present
   enabled?: boolean;                           // default true; false = skip behavior, keep schema
   contributes?: PluginContributions;
+  capabilities?: PluginCapabilities;           // { net?: { outbound }, db?: { rawSql }, secrets?, auth?: { login } }
+  provides?: string[];                         // capability names, e.g. "acme/auth-provider"
+  requires?: Record<string, string>;           // capability → provider version range (checked, not ordering)
+  schemaVersion?: number;
   setup?:   (config: NextlyConfig) => NextlyConfig;   // all setups before any init
   init?:    (ctx: PluginContext) => void | Promise<void>;
+  onReady?: (ctx: PluginContext) => void | Promise<void>; // after every init and route registration
   destroy?: (ctx: PluginContext) => void | Promise<void>;
   rename?:  (map: Record<string, string>) => PluginDefinition;  // integrator-side remap (D54)
 }
@@ -44,8 +50,12 @@ interface PluginContributions {
   extend?:      Array<{ target: string | string[]; fields: FieldConfig[] }>;
   permissions?: PluginPermission[];            // { action, resource, label?, description?, group? }
   fieldTypes?:  PluginFieldType[];             // custom field types — see below
-  events?:      Array<{ name: string }>;
-  routes?:      PluginRoute[];                 // { method, path, handler, requiredPermission?, public?, middleware? }
+  events?:      Array<{ name: string }>;       // under your own prefix, never a core one
+  routes?:      PluginRoute[];                 // { method, path, handler, requiredPermission?, public?, middleware?, rateLimit?, rawBody?, csrf?, noStore? }
+  auth?:        PluginAuthContributions;       // hooks, challenges, ui — see Auth extensibility
+  settings?:    ZodObject;                     // gives ctx.settings
+  audit?:       PluginAuditDeclaration;        // gives ctx.audit
+  hookPoints?:  PluginHookPointDeclaration[];
   admin?: {
     menu?:     PluginMenuItem[];               // { label, to, icon?, order?, requiredPermission?, children? }
     pages?:    PluginAdminPage[];              // { path, component, requiredPermission? }
@@ -63,7 +73,11 @@ Component references are string paths: `"<package>/<path>#<Export>"`, e.g. `"@ac
 ```ts
 interface PluginContext {
   services: NextlyServices;       // managed, secure-by-default; .collections supports { as: 'user' | 'system' }
-  db: DatabaseInstance;           // raw Drizzle escape hatch (unmanaged)
+  db: PluginDatabase;             // Drizzle builder + transaction; the live instance only with capabilities.db.rawSql
+  auth: PluginAuthApi;            // always present; completeLogin needs capabilities.auth.login
+  settings?: PluginSettingsApi;   // with contributes.settings
+  fetch?: typeof fetch;           // with capabilities.net.outbound
+  audit?: PluginAuditApi;         // with contributes.audit
   hooks: PluginHookRegistry;      // in-transaction, modify/abort
   events: EventBus;               // post-commit, observe-only, best-effort
   filters: PluginFilterRegistry;  // transform values on typed seams (D63)
@@ -360,15 +374,19 @@ See the [author guide](/docs/plugins/author-guide) for the full workflow and the
 
 ## Runtime surfaces added for stateful plugins
 
-Each is present only when the plugin declares the matching contribution, so a
-plugin that never asked for a surface does not have one.
+`ctx.settings`, `ctx.fetch` and `ctx.audit` are present only when the plugin
+declares the matching contribution, so a plugin that never asked for one does
+not have it. They are typed as optional on `PluginContext`; read them through a
+guard that names the missing declaration. `ctx.auth` and `ctx.filters` are
+always present.
 
 ### `ctx.settings`
 
 Declare `contributes.settings` (a zod object) to get it.
 
 ```ts
-const config = await ctx.settings.get();
+if (!ctx.settings) throw new Error("declare contributes.settings");
+const config = (await ctx.settings.get()) as MySettings;
 await ctx.settings.set({ apiKey: "..." }, { actorUserId: user.id });
 ```
 
@@ -376,11 +394,27 @@ Values are parsed by the declared schema, and the paths named in
 `capabilities.secrets` are encrypted at rest. See
 [security](/docs/plugins/security) for what is and is not returned to the admin.
 
+`set` is a JSON merge patch ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)):
+keys you leave out keep their stored value at every depth, and a key set to
+`null` is removed, so `set({ providers: { github: null } })` deletes one entry
+of a record. The result is validated as a whole, and a key the schema does not
+declare is refused at any depth. One key's stored value may be at most 256 KiB.
+
+`get` throws an internal error when the stored settings no longer fit the
+schema — for example after an update added a required key — or hold a secret
+nothing can decrypt; the log names the plugin and the paths, and the admin
+settings page still opens and shows what is missing.
+
+After any change, from the admin or from `ctx.settings.set`, core emits
+`plugin.settings.changed` with `{ plugin, changedKeys }` (key names, never
+values), and an operator's change is recorded in the activity log by key name.
+
 ### `ctx.fetch`
 
 Declare `capabilities.net.outbound` to get it.
 
 ```ts
+if (!ctx.fetch) throw new Error("declare capabilities.net.outbound");
 const res = await ctx.fetch("https://accounts.google.com/.well-known/openid-configuration");
 ```
 
@@ -391,6 +425,7 @@ Reaches only the declared hosts, and only addresses outside your own network.
 Declare `contributes.audit` to get it.
 
 ```ts
+if (!ctx.audit) throw new Error("declare contributes.audit");
 await ctx.audit.write({
   kind: "acme-auth.identity-linked",
   actorUserId: user.id,
@@ -398,17 +433,19 @@ await ctx.audit.write({
 });
 ```
 
-Kinds must start with the plugin's own admin slug. Undeclared kinds and keys
-are dropped rather than stored.
+A kind is the plugin's own admin slug, a `.`, then lowercase letters, digits,
+`.`, `_` and `-`; a kind outside that, longer than the audit column, or declared
+twice fails boot. Undeclared kinds and keys are dropped rather than stored.
 
 ### `ctx.auth`
 
-Always present.
+Always present. `completeLogin` requires `capabilities.auth.login` and a
+strategy name beginning with the plugin's own slug.
 
 ```ts
 return ctx.auth.completeLogin(user.id, {
   request,
-  strategy: "oauth-google",
+  strategy: "acme-google-auth:google",
   next: "/admin",
 });
 ```
@@ -433,7 +470,6 @@ verdict — so the order plugins load in cannot decide access.
 ### Lifecycle
 
 `onReady` runs after every plugin has initialised and routes are registered.
-`onInstall` and `onUninstall` are declared for the install and uninstall
-commands — a boot never calls them. The commands that invoke them arrive with
-the plugin migration work, so today nothing calls them: treat them as the
-contract for that flow, not as a running lifecycle.
+There are no install or uninstall hooks yet: they arrive with the install
+command that calls them. Do one-time setup in `init`, written so running it on
+every boot is harmless.

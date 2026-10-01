@@ -45,7 +45,10 @@ import type { PluginFieldType } from "../../plugins/contributions";
 import { getCoreVersion } from "../../plugins/core-version";
 import { collectCustomPermissions } from "../../plugins/permissions/collect-permissions";
 import type { PluginDefinition } from "../../plugins/plugin-context";
-import { resolvePlugins } from "../../plugins/resolve";
+import {
+  resolvePlugins,
+  resolveTransformedPlugins,
+} from "../../plugins/resolve";
 import {
   applyPluginSchemaContributionsDeferred,
   type BuilderEntities,
@@ -58,8 +61,6 @@ import {
   finalizeRelationTargets,
   validateCrossPluginRelations,
 } from "../../plugins/schema/validate-relations";
-import { assertAdminWidgets } from "../../plugins/validate-admin-widgets";
-import { validatePluginSlugs } from "../../plugins/validate-slugs";
 
 import { bundleAndRequire } from "./config-bundler";
 
@@ -576,22 +577,20 @@ async function loadConfigInternal(
         }
       }
 
-      // The transformed list, for the same reason the runtime validates its
-      // own: a `setup` transformer can add or rename plugins into a slug
-      // collision, and everything below consumes the transformed config. The
-      // CLI has to agree with boot here — otherwise `nextly build`, a
-      // migration or a db sync accepts and acts on a configuration the
-      // deployed app then refuses to start on.
-      validatePluginSlugs(transformedConfig.plugins ?? []);
-
-      // The widgets on that same transformed list, and here for the same
-      // reason the runtime checks its own: a transformer can contribute a
-      // widget the resolver's list never held, and a value `JSON.stringify`
-      // cannot carry breaks the whole `/api/admin-meta/workspace` response
-      // rather than the one card. The CLI has to agree with boot, or
-      // `nextly build` accepts a configuration the deployed app refuses to
-      // start on.
-      assertAdminWidgets(transformedConfig.plugins ?? []);
+      // The transformed list, RESOLVED in full by the same call the boot
+      // makes: a `setup` transformer can add, rename or replace plugins, and
+      // everything below consumes the transformed config. Checking only slugs
+      // and widgets here let `nextly migrate`, `build`, `db:sync` and the dev
+      // reload accept a transformer-added plugin with an incompatible core
+      // version, an unmet `requires` or a mistyped secret path, while the
+      // deployed app refused to start on it. The resolved list, in its sorted
+      // order, is also what the fold and the field types below read, so a
+      // transformer-added plugin's collections and field types reach the CLI
+      // exactly as they reach the boot.
+      transformedConfig = resolveTransformedPlugins(transformedConfig, {
+        coreVersion: getCoreVersion(),
+      });
+      const transformedPlugins: PluginDefinition[] = transformedConfig.plugins;
 
       // Fold plugin contributions. Extend targets that aren't code/plugin
       // entities are DEFERRED (candidate Builder/UI-schema targets) rather than
@@ -599,7 +598,7 @@ async function loadConfigInternal(
       // (P8/D3/R2).
       const folded = applyPluginSchemaContributionsDeferred(
         transformedConfig,
-        plugins
+        transformedPlugins
       );
       config = applyFoldedToBase(config, folded.config, transformedConfig);
       deferredExtends = folded.deferredExtends;
@@ -609,7 +608,7 @@ async function loadConfigInternal(
       // storage primitive when reading ui-schema.json — parity with runtime boot
       // (di/register.ts). Clear-and-rebuild; ALL plugins (incl. disabled, per
       // D49) since field types are declarative + schema-affecting.
-      for (const fieldTypePlugin of plugins) {
+      for (const fieldTypePlugin of transformedPlugins) {
         for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
           registerFieldType(
             withoutDisabledBehavior(fieldType, fieldTypePlugin)
@@ -644,11 +643,11 @@ async function loadConfigInternal(
         ),
         builderCollectionSlugs(builderEntities)
       );
-      validateCrossPluginRelations(plugins);
+      validateCrossPluginRelations(transformedPlugins);
 
       // Fail fast on invalid plugin-declared custom permissions (D36) — same
       // collector the runtime boot runs (register.ts), so both paths agree (D50).
-      collectCustomPermissions(config, plugins);
+      collectCustomPermissions(config, transformedPlugins);
 
       debugLog(
         options,

@@ -57,19 +57,44 @@ const KIND_COLUMN_MAX = (() => {
   return typeof length === "number" ? length : Number.MAX_SAFE_INTEGER;
 })();
 
-/** A JWT, which is three base64url segments separated by dots. */
-const JWT_SHAPE = /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/;
-
 /**
- * Whether a value looks like a credential rather than a fact.
+ * The credential shapes a metadata value is refused for.
  *
- * Not a general secret detector, and not trying to be: it catches the two
- * shapes that actually end up in a plugin's metadata by accident — the token
- * it just exchanged, and a webhook signing secret. A retained row is the wrong
- * place for either, and neither is what the event is about.
+ * Not a general secret detector, and not trying to be: each entry is the
+ * documented shape of a token a plugin that talks to that provider could hold
+ * and paste into a row by accident. A retained row is the wrong place for any
+ * of them, and none is what the event is about. The user documentation lists
+ * this set exactly, so it promises what this does and no more.
  */
+const CREDENTIAL_SHAPES: readonly RegExp[] = [
+  // A JWT: three base64url segments separated by dots.
+  /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/,
+  // An HTTP authorization value carrying its scheme.
+  /^(?:bearer|basic)\s+\S/i,
+  // A PEM private key or certificate block.
+  /-----BEGIN [A-Z ]+-----/,
+  // Stripe secret and restricted keys, and webhook signing secrets.
+  /^(?:sk|rk)_(?:live|test)_/,
+  /^whsec_/,
+  // GitHub tokens: personal, OAuth, user-to-server, server-to-server, refresh,
+  // and fine-grained personal.
+  /^gh[pousr]_[A-Za-z0-9]{20,}/,
+  /^github_pat_/,
+  // GitLab personal access tokens.
+  /^glpat-/,
+  // Slack bot, user and other `xox?-` tokens.
+  /^xox[abposre]-/,
+  // AWS access key ids, long-term and temporary.
+  /^(?:AKIA|ASIA)[A-Z0-9]{16}$/,
+  // Google OAuth access tokens.
+  /^ya29\./,
+  // npm tokens.
+  /^npm_[A-Za-z0-9]{20,}/,
+];
+
+/** Whether a value has one of the credential shapes a row must not keep. */
 export function looksLikeSecret(value: string): boolean {
-  return JWT_SHAPE.test(value) || value.startsWith("whsec_");
+  return CREDENTIAL_SHAPES.some(shape => shape.test(value));
 }
 
 /**
@@ -84,6 +109,14 @@ export function looksLikeSecret(value: string): boolean {
 function isStorableValue(value: unknown): value is string | number | boolean {
   if (typeof value === "string" || typeof value === "boolean") return true;
   return typeof value === "number" && Number.isFinite(value);
+}
+
+/** The whole shape a plugin's kind must have, under its own prefix. */
+function kindShape(pluginSlug: string): RegExp {
+  // The slug is `[a-z0-9-]` by construction; escaped anyway, so a change to
+  // how slugs are made cannot turn one into a pattern.
+  const prefix = pluginSlug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${prefix}\\.[a-z0-9][a-z0-9._-]*$`);
 }
 
 /**
@@ -117,6 +150,17 @@ export function collectPluginAuditKinds(
           auditKind: entry.kind,
           expectedPrefix: pluginSlug,
         }
+      );
+    }
+    // The name after the prefix is held to one plain shape. A prefix check
+    // alone accepted `acme-auth.\nFAKE login-succeeded`, which renders in a
+    // log or an audit view as a second, forged line; nothing a kind names
+    // needs more than lowercase letters, digits, `.`, `_` and `-`.
+    if (!kindShape(pluginSlug).test(entry.kind)) {
+      throw resolutionError(
+        "plugin-audit-kind-invalid",
+        `Plugin "${pluginName}" declares the audit kind ${JSON.stringify(entry.kind)}; after "${pluginSlug}." a kind may use only lowercase letters, digits, ".", "_" and "-", starting with a letter or digit.`,
+        { plugin: pluginName, auditKind: entry.kind }
       );
     }
     // A kind the column cannot hold is refused here, at the same place the

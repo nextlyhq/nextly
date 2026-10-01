@@ -18,6 +18,11 @@ export const NEXTLY_ERROR_STATUS = {
   // The schema builder is off in this environment (production by default).
   // Separate from FORBIDDEN: the caller's permissions are not the problem.
   BUILDER_DISABLED: 403,
+  // A cookie-authenticated write whose origin or CSRF token did not check
+  // out. Separate from FORBIDDEN for the same reason: the caller may hold
+  // every permission, and a client can recover by reloading, not by asking
+  // an administrator for access.
+  CSRF_FAILED: 403,
   NOT_FOUND: 404,
   CONFLICT: 409,
   DUPLICATE: 409,

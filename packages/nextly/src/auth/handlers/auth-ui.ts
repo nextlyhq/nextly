@@ -53,26 +53,44 @@ export function isSameOriginPath(href: string): boolean {
 }
 
 /**
- * The providers whose buttons can safely be rendered.
+ * Why a provider's button cannot be rendered, or null when it can.
  *
- * One with an unusable `href` is dropped rather than failing boot: a single bad
- * button should not stop a site from starting, and a provider missing from the
- * login page is a visible failure an operator can act on.
+ * One rule for both uses: the served list drops what this names, and boot
+ * reports it once, so the two cannot disagree about which buttons exist.
  */
-function usableProviders(
-  pluginName: string,
-  providers: readonly AuthUiProvider[]
-): AuthUiProvider[] {
-  return providers.filter(provider => {
-    if (provider.href === undefined || isSameOriginPath(provider.href)) {
-      return true;
+function providerProblem(provider: AuthUiProvider): string | null {
+  if (provider.href !== undefined && !isSameOriginPath(provider.href)) {
+    return 'href must be a same-origin path beginning with a single "/"';
+  }
+  if (provider.href === undefined && provider.component === undefined) {
+    return "it has neither an href nor a component, so its button would do nothing";
+  }
+  return null;
+}
+
+/**
+ * Every provider a plugin contributes that the login page will not show, as
+ * the message boot reports for it.
+ *
+ * Reported ONCE, at boot. The served list is rebuilt for every `/auth/*`
+ * request and every `ctx.auth` call, and a warning emitted there repeated on
+ * each of them. A bad button is dropped rather than failing boot: one unusable
+ * provider should not stop a site from starting.
+ */
+export function authUiProblems(plugins: PluginDefinition[]): string[] {
+  const problems: string[] = [];
+  for (const plugin of plugins) {
+    if (plugin.enabled === false) continue;
+    for (const provider of plugin.contributes?.auth?.ui?.providers ?? []) {
+      const problem = providerProblem(provider);
+      if (problem) {
+        problems.push(
+          `[nextly] Ignoring provider "${provider.strategy}" from ${plugin.name}: ${problem}.`
+        );
+      }
     }
-    console.warn(
-      `[nextly] Ignoring provider "${provider.strategy}" from ${pluginName}: ` +
-        `href must be a same-origin path beginning with a single "/".`
-    );
-    return false;
-  });
+  }
+  return problems;
 }
 
 /** Fold every plugin's `contributes.auth.ui` into one served {@link AuthUiMeta}. */
@@ -90,7 +108,9 @@ export function aggregateAuthUi(plugins: PluginDefinition[]): AuthUiMeta {
     if (plugin.enabled === false) continue;
     const ui = plugin.contributes?.auth?.ui;
     if (!ui) continue;
-    meta.providers.push(...usableProviders(plugin.name, ui.providers ?? []));
+    meta.providers.push(
+      ...(ui.providers ?? []).filter(p => providerProblem(p) === null)
+    );
     if (ui.challengeViews)
       Object.assign(meta.challengeViews, ui.challengeViews);
     if (ui.slots?.beforeForm) meta.slots.beforeForm.push(ui.slots.beforeForm);
