@@ -131,6 +131,18 @@ const args = process.argv.slice(2);
 const fake = file => join(process.env.FAKE, file);
 const after = flag => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
 appendFileSync(fake("calls"), args.join(" ") + "\n");
+// A review-thread read answers the pages the test wrote, one per line: all of
+// them when asked with --paginate, as gh follows each page's cursor, and only
+// the first when not. A thread's own comments are thread-<id>.
+const query = args.find(arg => arg.startsWith("query=")) ?? "";
+if (args[1] === "graphql" && /reviewThreads|PullRequestReviewThread/.test(query)) {
+  const id = args.find(arg => arg.startsWith("id="))?.slice(3);
+  const file = fake(id === undefined ? "threads" : "thread-" + id);
+  if (!existsSync(file)) process.exit(1);
+  const pages = readFileSync(file, "utf8").split("\n").filter(Boolean);
+  process.stdout.write((args.includes("--paginate") ? pages : pages.slice(0, 1)).join("\n") + "\n");
+  process.exit(0);
+}
 if (after("--method") === "POST") {
   const input = after("--input");
   const body = input === undefined ? {} : JSON.parse(readFileSync(input === "-" ? 0 : input, "utf8"));
@@ -187,6 +199,8 @@ describe.runIf(process.platform !== "win32")("posting once per run", () => {
     listed("comments");
     listed("files", [{ filename: "src/a.ts" }]);
     writeFileSync(join(fake, "head"), `${HEAD}\n`);
+    // A pull request without review threads, one page of none.
+    writeFileSync(join(fake, "threads"), JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }));
   });
 
   const api = (...args) =>
@@ -357,14 +371,94 @@ describe.runIf(process.platform !== "win32")("posting once per run", () => {
 
   it("asks for each thread's newest comments whole, and when every comment was made", () => {
     // The post job tells a thread that moved during the review by its newest
-    // comment, which the first twenty of a long thread do not hold, and the
-    // agent reads that comment's argument before it classifies the finding.
+    // comment, and the agent reads that comment's argument before it
+    // classifies the finding.
     api("threads", "7");
     const query = calls().join("\n");
     // The control: the call reached GitHub, with the thread query.
-    expect(query).toContain("reviewThreads(first:100)");
+    expect(query).toContain("reviewThreads(first:100,after:$endCursor)");
     expect(query).toContain("recent: comments(last:10){ nodes{ author{login} body url databaseId createdAt } }");
-    expect(query).toContain("comments(first:20){ nodes{ author{login} body url databaseId createdAt } }");
+    expect(query).toContain("comments(first:100){ totalCount nodes{ author{login} body url databaseId createdAt } }");
+  });
+
+  describe("reading every review thread", () => {
+    const comment = id => ({ author: { login: "someone" }, body: `comment ${id}`, url: `https://example.test/${id}`, databaseId: id, createdAt: "2026-09-30T10:00:00Z" });
+    /** A thread as the threads read returns it: its first page of comments, out of `total`. */
+    const thread = (id, comments, total = comments.length) => ({
+      id,
+      isResolved: false,
+      isOutdated: false,
+      path: "src/a.ts",
+      line: 1,
+      comments: { totalCount: total, nodes: comments.map(comment) },
+      recent: { nodes: comments.slice(-10).map(comment) },
+    });
+    /** One page of threads, with the cursor of the next when there is one. */
+    const threadPage = (nodes, next) => ({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: Boolean(next), endCursor: next ?? null }, nodes } } } } });
+    /** One page of a thread's comments, read through its id. */
+    const commentPage = (ids, next) => ({ data: { node: { comments: { pageInfo: { hasNextPage: Boolean(next), endCursor: next ?? null }, nodes: ids.map(comment) } } } });
+    const pages = (file, ...answers) => writeFileSync(join(fake, file), answers.map(answer => JSON.stringify(answer)).join("\n"));
+    /** Every call as the stand-in recorded it, whole: a query spans lines. */
+    const asked = () => (existsSync(join(fake, "calls")) ? readFileSync(join(fake, "calls"), "utf8") : "");
+    const read = () => {
+      const result = api("threads", "7");
+      return { ...result, threads: result.status === 0 ? JSON.parse(result.stdout).data.repository.pullRequest.reviewThreads.nodes : null };
+    };
+
+    beforeEach(() => {
+      for (const name of ["threads", "thread-T2"]) rmSync(join(fake, name), { force: true });
+    });
+
+    it("reads every thread past the first page, and every comment past a thread's first page", () => {
+      pages("threads", threadPage([thread("T1", [1, 2]), thread("T2", [3, 4], 5)], "c1"), threadPage([thread("T3", [8])]));
+      pages("thread-T2", commentPage([3, 4], "d1"), commentPage([5, 6, 7]));
+      const { status, stderr, threads } = read();
+      expect(status, stderr).toBe(0);
+      expect(threads.map(({ id, comments }) => [id, comments.nodes.map(c => c.databaseId)])).toEqual([
+        ["T1", [1, 2]],
+        ["T2", [3, 4, 5, 6, 7]],
+        ["T3", [8]],
+      ]);
+      // The rest of each thread is as GitHub answered it, `recent` included.
+      expect(threads[1].recent.nodes.map(c => c.databaseId)).toEqual([3, 4]);
+      expect(threads[0].isResolved).toBe(false);
+      // Only the thread with more comments than its first page is read again,
+      // every page of it.
+      expect(asked().split("PullRequestReviewThread")).toHaveLength(2);
+      expect(asked()).toContain("api graphql --paginate -f id=T2 -f query=");
+    });
+
+    it("pages by the threads' own cursor: theirs comes first, and no connection inside them asks for one", () => {
+      pages("threads", threadPage([thread("T1", [1])]));
+      read();
+      const query = asked();
+      expect(query).toContain("api graphql --paginate -F owner=owner");
+      expect(query).toContain("$endCursor:String");
+      // gh follows the first pageInfo in an answer, so it must be the threads'.
+      expect(query.indexOf("pageInfo")).toBeLessThan(query.indexOf("nodes"));
+      expect(query.split("pageInfo")).toHaveLength(2);
+    });
+
+    it.each([
+      ["a page of the threads", () => rmSync(join(fake, "threads"))],
+      ["a page of a long thread's comments", () => rmSync(join(fake, "thread-T2"))],
+    ])("prints nothing, and fails, when %s cannot be read", (_, unread) => {
+      pages("threads", threadPage([thread("T1", [1]), thread("T2", [3], 2)]));
+      pages("thread-T2", commentPage([3, 4]));
+      unread();
+      const result = read();
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toMatch(/^review-bot-gh: could not read/m);
+    });
+
+    it("refuses a thread id that is not a node id, and asks nothing with it", () => {
+      pages("threads", threadPage([thread("T1 --hostname=elsewhere", [1], 2)]));
+      const result = read();
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("expected a review thread's node id");
+      expect(asked()).not.toContain("PullRequestReviewThread");
+    });
   });
 
   it("counts a reply only in the thread it answers", () => {
