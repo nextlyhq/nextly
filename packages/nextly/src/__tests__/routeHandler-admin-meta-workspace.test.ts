@@ -244,6 +244,10 @@ describe("dev-reload route gate", () => {
     );
 
     expect(response.headers.get("content-type")).toBe("text/event-stream");
+    // Cancelling fires the stream's own cancel callback, which unsubscribes
+    // the controller — otherwise this test leaves a subscriber registered in
+    // the process-global set for every later broadcast to feed.
+    await response.body?.cancel();
   });
 
   it("falls through to ordinary dispatch outside development", async () => {
