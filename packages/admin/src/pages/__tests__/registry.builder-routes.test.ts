@@ -13,7 +13,7 @@
  * keys are still present — so reintroducing an env-based drop under EITHER
  * value fails here.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ROUTES } from "@admin/constants/routes";
 
@@ -27,22 +27,10 @@ const BUILDER_EDITOR_ROUTES = [
 ] as const;
 
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
-const ORIGINAL_EVENT_SOURCE = globalThis.EventSource;
 
 beforeEach(() => {
   vi.resetModules();
   process.env.NODE_ENV = ORIGINAL_NODE_ENV;
-  // The dev-folded evaluation runs the fetcher's module scope, which opens
-  // the dev-reload stream; jsdom has no EventSource, so the import dies there
-  // before the registry is ever reached. The stream's behavior is pinned in
-  // dev-reload-guard.test.ts — here it only needs to not explode.
-  globalThis.EventSource = class {
-    addEventListener = vi.fn();
-  } as unknown as typeof EventSource;
-});
-
-afterEach(() => {
-  globalThis.EventSource = ORIGINAL_EVENT_SOURCE;
 });
 
 async function registryKeysUnder(
