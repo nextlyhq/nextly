@@ -27,7 +27,10 @@
 "@nextlyhq/ui": patch
 ---
 
-Signed-out screens boot without the requests they never needed, the
-development-only reload stream follows the running server's answer (active
-under `next dev`, never dialed in production), and the schema builder's
-editor routes survive every build flavor.
+The sign-in screen loads much faster: the setup and session checks used to
+run one after the other — two full API round-trips of blank screen — and are
+now one parallel wave, while signed-out screens stop requesting settings
+their session could only fail against. The development-only reload stream
+follows the running server's answer (active under `next dev`, never dialed in
+production), and the schema builder's editor routes survive every build
+flavor.
