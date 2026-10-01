@@ -135,12 +135,10 @@ describe("a socket that reached another address", () => {
       res.end("unvetted");
     });
     const spy = vi
-      .spyOn(HttpAgent.prototype, "createConnection" as never)
-      .mockImplementation(((options: { port: number }, cb: () => void) =>
-        createConnection(
-          { host: "127.0.0.1", port: options.port },
-          cb
-        )) as never);
+      .spyOn(HttpAgent.prototype, "createConnection")
+      .mockImplementation(options =>
+        createConnection({ host: "127.0.0.1", port: Number(options.port) })
+      );
     try {
       await expect(
         send(
