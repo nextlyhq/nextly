@@ -748,6 +748,28 @@ async function applyWithinBudget(
 }
 
 /**
+ * Each component's releases that a pass may settle, in the planner's order:
+ * those of the pass's due releases that are not held open.
+ *
+ * The due releases are looked up in a set built once, so the decision grows
+ * with the backlog, not its square. A scan of the due list for each release
+ * took seconds at twenty thousand due releases, an imported schedule's size,
+ * and every second of it came out of the pass's deadline.
+ */
+export function settleableComponents(
+  plan: Pick<
+    ReturnType<typeof planReleaseMaterialisation>,
+    "releaseIds" | "overlappingReleases"
+  >,
+  heldOpen: ReadonlySet<string>
+): string[][] {
+  const due = new Set(plan.releaseIds);
+  return plan.overlappingReleases.map(group =>
+    group.filter(id => !heldOpen.has(id) && due.has(id))
+  );
+}
+
+/**
  * Mark every settleable component published, until the budget runs out.
  *
  * Separate from the loop above because it is bounded for a different reason:
@@ -775,10 +797,9 @@ async function dischargeSettledComponents(
   // long gone.
   let finalizedComponents = 0;
   let undischarged = 0;
-  for (const group of plan.overlappingReleases) {
-    const settleable = group.filter(
-      id => !heldOpen.has(id) && plan.releaseIds.includes(id)
-    );
+  const settleableOf = settleableComponents(plan, heldOpen);
+  for (const [index, group] of plan.overlappingReleases.entries()) {
+    const settleable = settleableOf[index];
     if (settleable.length === 0) continue;
     // A component this pass APPLIED is always discharged, whatever the clock
     // says. Its content mutations already happened; leaving it scheduled makes
