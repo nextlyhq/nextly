@@ -281,7 +281,9 @@ The tests run in two GitHub Actions workflows on every PR:
 - [`ci.yml`](.github/workflows/ci.yml) — lint, typecheck, build, and the unit test suite. Its `CI gate` job is the check `main` requires.
 - [`integration.yml`](.github/workflows/integration.yml) — the integration suite, one job per dialect: Postgres 17, MySQL 8.4 and SQLite. Postgres 15 runs locally only, with `pnpm test:integration:postgres15`.
 
-`CI gate` covers the `ci.yml` jobs. `main` also requires the integration jobs, the secret scan and the other checks listed under [Branch protection](#branch-protection), and the merge queue runs all of them. `node scripts/verify-merge.mjs <pr-number>` reads the same checks for a pull request before it joins the queue, and checks that a merged one landed whole.
+`CI gate` collects the `ci.yml` jobs a merge needs: the change filter, the comment check, `Lint / Typecheck / Test / Build`, the nextly and admin unit tests, and the CLI entry-guard smoke test. The browser tests and the scaffold and dev-script smoke tests report on their own and are not required to merge. `main` also requires the integration jobs, the secret scan and the other checks listed under [Branch protection](#branch-protection), and the merge queue runs them all.
+
+Before a pull request joins the queue, `node scripts/verify-merge.mjs <pr-number>` checks that every review thread is resolved, and that the checks whose absence would mean no coverage reported: `Lint / Typecheck / Test / Build`, `gitleaks`, the comment check, the three integration jobs and the PR title. It doesn't cover the independent review, which runs only in the queue. After a merge, it checks that the pull request landed whole.
 
 ---
 
@@ -429,7 +431,7 @@ No CI job requires a changeset to be there, so reviewers check it. CI's `Changes
 pnpm changeset
 ```
 
-The CLI will ask which packages changed. Because of `fixed[]`, whichever package you pick will pull the others along at publish time — just pick the primary one. Then choose the semver bump (`patch` / `minor` / `major`) and write a short user-facing summary.
+The CLI asks which packages changed. Select every package in `fixed[]`, the lockstep group, private ones such as `@nextlyhq/tsconfig` included, and choose `patch`: while the packages are in alpha every changeset is `patch`. CI refuses a changeset that leaves out a package of the group, or uses another bump. Then write a short user-facing summary. A pull request that changes no published package (tests, CI, docs or internal tooling only) needs no changeset.
 
 Commit the generated `.changeset/*.md` file with your PR.
 

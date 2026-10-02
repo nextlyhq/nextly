@@ -18,7 +18,7 @@
 
 ## Changeset
 
-This repo uses [Changesets](https://github.com/changesets/changesets). A PR that changes a published package under `packages/*` includes **one** changeset that lists every published package, since they version in lockstep, with the bump `patch` while the packages are in alpha. A PR that only changes tests, CI or docs gets none.
+This repo uses [Changesets](https://github.com/changesets/changesets). A PR that changes a published package under `packages/*` includes **one** changeset that lists every package in the lockstep group, the `fixed` list in `.changeset/config.json` (private packages such as `@nextlyhq/tsconfig` included), with the bump `patch` while the packages are in alpha. A PR that changes no published package (tests, CI, docs or internal tooling only) gets none.
 
 ```bash
 pnpm changeset
@@ -26,9 +26,9 @@ pnpm changeset
 
 Then commit the generated `.changeset/*.md` file.
 
-- [ ] I added one `patch` changeset covering every published package (or this PR only changes tests, CI or docs)
+- [ ] I added one `patch` changeset covering the whole lockstep group (or this PR changes no published package)
 
-> No CI job requires a changeset, so your reviewer checks it. CI does refuse a changeset you add that leaves out a package of the lockstep group.
+> No CI job requires a changeset, so your reviewer checks it. CI does refuse a changeset you add that leaves out a package of the lockstep group, or uses a bump other than `patch`.
 
 ## Test plan
 
