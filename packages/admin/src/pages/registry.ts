@@ -594,22 +594,23 @@ export const routeConfig: Record<string, RouteConfig> = {
   },
 };
 
-// D4 (§4.12.4): the visual schema builder is development-only. Drop its
-// editor routes in production so they never mount (data editing is
-// unaffected; only the schema-builder pages are removed).
-if (process.env.NODE_ENV === "production") {
-  const devOnlyBuilderRoutes = [
-    ROUTES.BUILDER_COLLECTIONS_NEW,
-    ROUTES.BUILDER_COLLECTIONS_EDIT,
-    ROUTES.BUILDER_SINGLES_NEW,
-    ROUTES.BUILDER_SINGLES_EDIT,
-    ROUTES.BUILDER_FIELD_GROUPS_NEW,
-    ROUTES.BUILDER_FIELD_GROUPS_EDIT,
-  ];
-  for (const key of devOnlyBuilderRoutes) {
-    delete routeConfig[key];
-  }
-}
+// The builder's editor routes stay in the table unconditionally, and nothing
+// here may consult NODE_ENV to drop them. This package is PREBUILT: tsup folds
+// `process.env.NODE_ENV` at package build time, so a module-load env check in
+// the dist answers where the LIBRARY was built, never where it is RUNNING —
+// the published bundle carried the folded "development" for months, then a
+// production-folding define silently deleted these routes for every consumer
+// (the sidebar's Builders links and /admin/builder/* still resolved, but every
+// New/Edit entry fell through routing to NotFound).
+//
+// Availability is a runtime question with runtime answers at every layer that
+// needs one: the route entries below carry `requiresBuilder: true`, so
+// RootLayout wraps them in BuilderGuard, which reads the host's
+// `admin.branding.showBuilder` answer; the sidebar hides its Builders section
+// on the same value; and the server refuses builder mutations through
+// `isBuilderEnabled()` regardless of what any client renders. Dropping routes
+// here would add a fourth, build-time answer that can only disagree with the
+// other three.
 
 // Legacy export for backward compatibility
 const registry: Record<string, React.ComponentType<PageProps>> = Object.entries(

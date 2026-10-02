@@ -14,7 +14,7 @@ import { PublicRoute } from "../components/guards/PublicRoute";
 import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar";
 import { Toaster } from "../components/ui/toaster";
 import { BrandingProvider } from "../context/providers/BrandingProvider";
-import { GeneralSettingsSyncProvider } from "../context/providers/GeneralSettingsSyncProvider";
+import { GeneralSettingsSync } from "../context/providers/GeneralSettingsSyncProvider";
 import { ThemeProvider, useTheme } from "../context/providers/ThemeProvider";
 import { RestartProvider } from "../context/RestartContext";
 import { fieldGroupKeys } from "../hooks/queries";
@@ -117,6 +117,35 @@ function AdminAppContent() {
     return componentElement;
   };
 
+  // Everything the settings sync would wrap. Held in a variable because the
+  // provider around it is now conditional — see the comment at its use.
+  const content = (
+    <>
+      {/* Conditional wrapper: Public routes need centering and padding, private routes don't */}
+      {routeType === "public" ? (
+        <div className="min-h-screen bg-background flex flex-col justify-center text-foreground">
+          {renderComponent()}
+        </div>
+      ) : (
+        <div className="h-screen overflow-hidden bg-background text-foreground flex flex-col">
+          {renderComponent()}
+        </div>
+      )}
+      {/* Restart overlay for schema save flow */}
+      <Suspense fallback={null}>
+        <RestartOverlay />
+      </Suspense>
+      {/* Toaster uses default position (bottom-right) per component spec */}
+      <Toaster richColors />
+      {/* Portal root for dialogs, dropdowns, etc. Synchronized with theme class. */}
+      <div
+        id="nextly-admin-portal-root"
+        ref={setPortalRoot}
+        className={cn("nextly-admin", isDark && "dark")}
+      />
+    </>
+  );
+
   return (
     <div
       className={cn("nextly-admin", isDark && "dark")}
@@ -126,30 +155,20 @@ function AdminAppContent() {
         <BrandingProvider>
           {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
           <PluginPageRegistrar />
-          <GeneralSettingsSyncProvider>
-            {/* Conditional wrapper: Public routes need centering and padding, private routes don't */}
-            {routeType === "public" ? (
-              <div className="min-h-screen bg-background flex flex-col justify-center text-foreground">
-                {renderComponent()}
-              </div>
-            ) : (
-              <div className="h-screen overflow-hidden bg-background text-foreground flex flex-col">
-                {renderComponent()}
-              </div>
-            )}
-            {/* Restart overlay for schema save flow */}
-            <Suspense fallback={null}>
-              <RestartOverlay />
-            </Suspense>
-            {/* Toaster uses default position (bottom-right) per component spec */}
-            <Toaster richColors />
-            {/* Portal root for dialogs, dropdowns, etc. Synchronized with theme class. */}
-            <div
-              id="nextly-admin-portal-root"
-              ref={setPortalRoot}
-              className={cn("nextly-admin", isDark && "dark")}
-            />
-          </GeneralSettingsSyncProvider>
+          {/* The settings sync applies the admin timezone to date rendering,
+                and mounting it starts the ["generalSettings"] query — an
+                endpoint gated by settings permissions, so on the signed-out
+                screens (login, register, forgot password, setup) the query
+                can only fail and retry once while the form waits on nothing
+                it needs. The sync is a null-rendering SIBLING rather than a
+                wrapper, and that shape is load-bearing: the public/private
+                flip re-renders this tree in place — logout and the
+                signed-in redirect are pushState navigations, not full page
+                loads — and a swapped element type around the subtree would
+                remount all of it, Toaster and portal root included,
+                dropping whatever toast was in flight across the flip. */}
+          {routeType !== "public" && <GeneralSettingsSync />}
+          {content}
         </BrandingProvider>
       </PortalProvider>
     </div>

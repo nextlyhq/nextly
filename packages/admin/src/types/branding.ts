@@ -257,6 +257,18 @@ export interface AdminBranding {
   showBuilder?: boolean;
 
   /**
+   * Whether the RUNNING server says the dev-reload stream exists, from the
+   * session-gated half alone.
+   *
+   * The client cannot answer this for itself: its `NODE_ENV` was folded into
+   * the published dist at package build time, which says where the library
+   * was built, never where the host is running. Only an explicit `true` may
+   * open the dev-reload stream — `undefined` means the workspace answer has
+   * not arrived yet, not that the server is in development.
+   */
+  devReload?: boolean;
+
+  /**
    * INSTALLED plugin metadata, for sidebar rendering and plugin settings pages.
    *
    * Comes from the session-gated half alone, so its absence means the list has

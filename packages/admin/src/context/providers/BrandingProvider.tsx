@@ -11,6 +11,7 @@ import {
 } from "@admin/hooks/useSchemaUpdateInvalidation";
 
 import { useAuthSession } from "../../hooks/queries/useAuthSession";
+import { enableDevReload } from "../../lib/api/fetcher";
 import { protectedApi } from "../../lib/api/protectedApi";
 import { publicApi } from "../../lib/api/publicApi";
 import {
@@ -287,6 +288,21 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
 
   useColorInjection(brandingData?.colors);
   useFaviconInjection(brandingData?.favicon);
+
+  // The dev-reload subscription is the SERVER's call, not the bundle's. The
+  // workspace half carries the running server's answer (`devReload`, computed
+  // from the same runtime comparison that gates the route), and only an
+  // explicit `true` opens the stream: `undefined` means the answer has not
+  // arrived yet, and dialing on it would hit a route that may not exist. The
+  // stream itself is dev-only, so this stays inert in every production host —
+  // which is the point: the fold this replaces once silenced consumer dev
+  // builds as a side effect of silencing production.
+  const workspaceDevReload = workspaceData?.devReload;
+  useEffect(() => {
+    if (workspaceDevReload === true) {
+      enableDevReload();
+    }
+  }, [workspaceDevReload]);
 
   // Memoized because the value is an object built here rather than either
   // query's stable `data` reference: without this every consumer of the
