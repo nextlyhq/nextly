@@ -867,8 +867,8 @@ jobs:
 
   # The gates `.husky/pre-push` runs, on Windows, so a change that breaks them
   # there shows on its pull request rather than on a teammate's machine. The
-  # hook itself skips in CI, so its gates are listed here; a gate added to the
-  # hook belongs here too.
+  # hook itself skips in CI, so its gates are listed here, and
+  # `scripts/windows-gates-match-hook.test.mjs` fails when the two lists differ.
   #
   # Every gate runs even when one before it failed, so one run reports all of
   # them. Gated on the same `changes` decision as the Linux jobs: a change
