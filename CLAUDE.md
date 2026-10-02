@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (accb48958a6a51e6). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (fa5a3f316a557f9b). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -221,8 +221,10 @@ budget, the overrides and each operating system's caveats: the
   database, and make no N+1 round trips. Filtering or sorting a large table on
   an unindexed column is slow: say so in the PR.
 - Never hard-code or log a secret, and redact tokens and credentials in logs
-  and errors. Return one only to its owner, once, where the feature exists to
-  hand it over: a new API key, a webhook's signing secret at creation.
+  and errors. Return one only through a route that exists to hand it over, to
+  a caller allowed to have it: a new API key once at creation; a webhook's
+  signing secrets at creation and through the session-only, `update-webhooks`
+  reveal.
 - Admin styling is token-driven: use `--nx-*` custom properties (defined for
   light AND dark in `packages/ui/src/styles/theme.css`). Zero hardcoded
   colors, and every visual change must work in both modes.
