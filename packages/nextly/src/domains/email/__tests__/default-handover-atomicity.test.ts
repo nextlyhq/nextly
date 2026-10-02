@@ -13,8 +13,8 @@
  * that then matches nothing throws, which takes the demotion back with it.
  *
  * A write that hands nothing over gets no transaction at all: on SQLite that
- * would be `BEGIN IMMEDIATE` on the one shared connection, and a second
- * ordinary write arriving mid-window could not begin.
+ * would hold the one shared connection, and a second ordinary write arriving
+ * mid-window would have to wait behind it or run inside it.
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -53,7 +53,20 @@ function makeAdapter(db: ReturnType<typeof drizzle>): DrizzleAdapter {
     connect: async () => {},
     disconnect: async () => {},
     executeQuery: async () => [],
-    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
+    // As the SQLite adapter runs one, which `withTransaction` goes through on
+    // this dialect: BEGIN IMMEDIATE on the one connection, COMMIT when the
+    // work resolves, ROLLBACK when it throws.
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      db.$client.exec("BEGIN IMMEDIATE");
+      try {
+        const result = await fn(db);
+        db.$client.exec("COMMIT");
+        return result;
+      } catch (error) {
+        db.$client.exec("ROLLBACK");
+        throw error;
+      }
+    },
   } as unknown as DrizzleAdapter;
 }
 
@@ -166,9 +179,10 @@ describe("a promotion whose row disappears first", () => {
   it("lets two ordinary writes overlap", async () => {
     // Neither of these hands the default over, so neither has anything to make
     // atomic WITH. Opening a transaction anyway is not free on SQLite:
-    // `withTransaction` issues `BEGIN IMMEDIATE` on the one shared connection,
-    // so a second write arriving between the first BEGIN and its COMMIT cannot
-    // begin at all and is refused — on the most ordinary path there is.
+    // `withTransaction` holds the one shared connection from its BEGIN to its
+    // COMMIT. This fixture's transaction does not queue, so a second write
+    // opening one in that window is refused — which a write that opens none
+    // never is.
     const outcomes = await Promise.allSettled([
       service.createProvider({
         name: "A",

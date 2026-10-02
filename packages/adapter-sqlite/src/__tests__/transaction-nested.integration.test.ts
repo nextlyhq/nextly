@@ -112,17 +112,135 @@ describe("SQLite nested transaction()", () => {
     expect(await ids()).toEqual([]);
   });
 
-  it("serializes sibling nested calls fanned out at once", async () => {
+  // Sibling savepoints share one connection, so they form a stack and must
+  // run one after another: interleaved, the failing one's rollback would undo
+  // the other's write and keep its own.
+  it("undoes only the failing one of sibling calls fanned out at once", async () => {
     await adapter.transaction(async () => {
-      await Promise.all(
-        ["a", "b", "c"].map(id =>
-          adapter.transaction(async () => {
-            await insert(id);
-          })
-        )
-      );
+      await Promise.allSettled([
+        adapter.transaction(async () => {
+          await insert("a");
+          await new Promise(resolve => setTimeout(resolve, 10));
+          throw new Error("a failed");
+        }),
+        adapter.transaction(async () => {
+          await insert("b");
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }),
+      ]);
     });
-    expect(await ids()).toEqual(["a", "b", "c"]);
+    expect(await ids()).toEqual(["b"]);
+  });
+
+  // A call made later from inside a savepoint that has since released joins
+  // the innermost scope still open. Queued on the instance instead, it waits
+  // behind that transaction: awaited there, neither settles and every later
+  // transaction hangs; not awaited, it commits on its own after a rollback.
+  // Queued on the nearest open ancestor, it waits behind a later sibling
+  // savepoint that may be the one awaiting it. Each of these tests gets its
+  // own adapter, so a hang cannot reach the other tests.
+  const deadline = <T>(promise: Promise<T>) =>
+    Promise.race([
+      promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("timed out")), 1000)
+      ),
+    ]);
+
+  it("joins the open transaction from a savepoint that has released", async () => {
+    const own = createSqliteAdapter({ memory: true });
+    await own.connect();
+    try {
+      await own.executeQuery(`CREATE TABLE ${TABLE} (id text PRIMARY KEY)`);
+      let later: Promise<unknown> | undefined;
+      await deadline(
+        own.transaction(async () => {
+          await own.transaction(async () => {
+            later = (async () => {
+              await pause();
+              return own.transaction(async () => {
+                await own.executeQuery(`INSERT INTO ${TABLE} (id) VALUES (?)`, [
+                  "late",
+                ]);
+              });
+            })();
+          });
+          await later;
+        })
+      );
+      await deadline(own.transaction(async () => undefined));
+      const rows = await own.executeQuery<{ id: string }>(
+        `SELECT id FROM ${TABLE}`
+      );
+      expect(rows.map(row => row.id)).toEqual(["late"]);
+    } finally {
+      await own.disconnect();
+    }
+  });
+
+  it("runs a call from a released savepoint inside the later sibling awaiting it", async () => {
+    const own = createSqliteAdapter({ memory: true });
+    await own.connect();
+    try {
+      await own.executeQuery(`CREATE TABLE ${TABLE} (id text PRIMARY KEY)`);
+      let later: Promise<unknown> | undefined;
+      await deadline(
+        own.transaction(async () => {
+          await own.transaction(async () => {
+            later = (async () => {
+              await pause();
+              return own.transaction(async () => {
+                await own.executeQuery(`INSERT INTO ${TABLE} (id) VALUES (?)`, [
+                  "late",
+                ]);
+              });
+            })();
+          });
+          await own.transaction(async () => {
+            await later;
+          });
+        })
+      );
+      await deadline(own.transaction(async () => undefined));
+      const rows = await own.executeQuery<{ id: string }>(
+        `SELECT id FROM ${TABLE}`
+      );
+      expect(rows.map(row => row.id)).toEqual(["late"]);
+    } finally {
+      await own.disconnect();
+    }
+  });
+
+  it("rolls back a later call from a released savepoint with the transaction", async () => {
+    await expect(
+      adapter.transaction(async () => {
+        await adapter.transaction(async () => {
+          void (async () => {
+            await pause();
+            await adapter.transaction(async () => {
+              await insert("late");
+            });
+          })().catch(() => undefined);
+        });
+        await settle();
+        throw new Error("outer failed");
+      })
+    ).rejects.toThrow("outer failed");
+    await settle();
+    expect(await ids()).toEqual([]);
+  });
+
+  it("reports whether a call made here would join an open transaction", async () => {
+    const seen: boolean[] = [];
+    seen.push(adapter.inTransaction());
+    await adapter.transaction(async () => {
+      seen.push(adapter.inTransaction());
+      await adapter.transaction(async () => {
+        seen.push(adapter.inTransaction());
+      });
+    });
+    seen.push(adapter.inTransaction());
+    expect(seen).toEqual([false, true, true, false]);
   });
 
   it("leaves a later, unrelated transaction its own", async () => {

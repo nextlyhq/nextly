@@ -347,4 +347,28 @@ describe("a SQLite-shaped transaction runner", () => {
     expect(order[order.length - 1]).toBe("commit");
     expect(order).toContain("work");
   });
+
+  it("rejects with what the mutation threw, not the runner's wrapping of it", async () => {
+    // The adapter's runner classifies an error it did not raise into a
+    // generic database error; Drizzle's transaction on PostgreSQL and MySQL
+    // hands back what was thrown, and so must this path.
+    const thrown = new Error("computeRows refused");
+    const classifying = async <T>(work: () => Promise<T>): Promise<T> => {
+      try {
+        return await work();
+      } catch {
+        throw new Error("generic database error");
+      }
+    };
+
+    const store = createPluginSettingsStore(
+      recordingDb().db,
+      "sqlite",
+      classifying
+    );
+
+    await expect(
+      store.mutate("p", ["k"], () => Promise.reject(thrown))
+    ).rejects.toBe(thrown);
+  });
 });

@@ -12,6 +12,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq } from "drizzle-orm";
 
 import { pluginSettingsTables } from "../../schemas/plugin-settings";
+import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction";
 
 import type { PluginSettingRow, PluginSettingsStore } from "./settings-service";
 
@@ -237,7 +238,10 @@ export function createPluginSettingsStore(
       // transaction callback, so the adapter's manual `BEGIN IMMEDIATE`
       // runner carries the same sequence, with the store's own handle bound
       // to the one shared connection the transaction is open on.
-      if (beginTransaction) return beginTransaction(() => run(database));
+      // What `run` throws is rethrown as thrown, as Drizzle's transaction does.
+      if (beginTransaction) {
+        return runAdapterTransaction(beginTransaction, () => run(database));
+      }
       return database.transaction(run);
     },
   };

@@ -512,12 +512,13 @@ export class SqliteAdapter extends DrizzleAdapter {
     // rejected value). We attach a no-op `.catch` so the chain stays
     // resolved while the actual error propagates back to the original
     // caller through the inner promise.
-    const outer = this.transactionScope.getStore();
-    if (outer?.active) {
-      // Nested calls of one transaction are serialized among themselves too:
-      // savepoints on one connection form a stack, and two interleaved ones
-      // would release or roll back each other.
-      return enqueueIn(outer, () => this.runSavepoint(work, outer.depth + 1));
+    // A call made inside an open transaction's work joins it as a savepoint;
+    // see `nestingScope` for which scope it joins.
+    const parent = this.nestingScope();
+    if (parent) {
+      // Nested calls of one scope are serialized among themselves too: two
+      // interleaved savepoints would release or roll back each other.
+      return enqueueIn(parent, () => this.runSavepoint(work, parent));
     }
     const run = async (): Promise<T> => this.runTransaction(work);
     const next = this.transactionQueue.then(run, run);
@@ -526,23 +527,53 @@ export class SqliteAdapter extends DrizzleAdapter {
   }
 
   /**
+   * Whether a `transaction()` call made here would join an open transaction
+   * as a savepoint. On SQLite it would: the connection is the only one, so a
+   * transaction open on it encloses whatever the async chain that opened it
+   * starts.
+   */
+  override inTransaction(): boolean {
+    return this.nestingScope() !== undefined;
+  }
+
+  /**
+   * The scope a `transaction()` call made here nests in, or none when it
+   * opens a transaction of its own.
+   *
+   * A call made later from inside a savepoint that has since released runs
+   * inside the innermost scope open on the connection. Queued on an enclosing
+   * scope, or on the instance, it would wait behind the scope running there,
+   * which may be the one awaiting it. Savepoints on one connection form a
+   * stack, so whatever opens now is inside that innermost scope anyway; when
+   * none is open the call queues on the instance.
+   *
+   * The innermost open scope need not be related to the call. When it is a
+   * sibling savepoint that later rolls back, the call's write rolls back with
+   * it, although the call itself already resolved. Waiting for an unrelated
+   * scope instead could wait on the very scope that awaits the call.
+   */
+  private nestingScope(): TransactionScope | undefined {
+    const own = this.transactionScope.getStore();
+    return own?.active ? own : own?.open.at(-1);
+  }
+
+  /**
    * Run `work` as a savepoint of the active transaction: released when it
    * resolves, rolled back to when it throws.
    */
   private async runSavepoint<T>(
     work: (tx: TransactionContext) => Promise<T>,
-    depth: number
+    parent: TransactionScope
   ): Promise<T> {
     const db = this.ensureDb();
+    const depth = parent.depth + 1;
     const name = `nextly_sp_${depth}`;
-    const scope: TransactionScope = {
-      active: true,
-      depth,
-      queue: Promise.resolve(),
-    };
     try {
       const ctx = this.createTransactionContext(db);
       db.exec(`SAVEPOINT ${name}`);
+      // Open only once the savepoint exists, so a failed SAVEPOINT leaves no
+      // scope behind for a later call to nest in.
+      const scope = openScope(depth, parent.open);
       try {
         const result = await this.transactionScope.run(scope, () => work(ctx));
         await settleNested(scope);
@@ -587,11 +618,7 @@ export class SqliteAdapter extends DrizzleAdapter {
       db.exec("BEGIN IMMEDIATE");
 
       // The scope nested `transaction()` calls from this work join.
-      const scope: TransactionScope = {
-        active: true,
-        depth: 0,
-        queue: Promise.resolve(),
-      };
+      const scope = openScope(0, []);
       try {
         const result = await this.transactionScope.run(scope, () => work(ctx));
         // Anything the work started and did not wait for is part of this
@@ -1155,6 +1182,25 @@ interface TransactionScope {
   depth: number;
   /** Serializes the calls nested directly inside this transaction. */
   queue: Promise<unknown>;
+  /**
+   * The scopes open on this connection, outermost first, shared by the
+   * transaction and every savepoint inside it. Each scope runs inside the
+   * one before it: a scope runs one nested call at a time, so the scopes
+   * still running form a single chain and the last one open is the innermost.
+   */
+  open: TransactionScope[];
+}
+
+/** Open a scope at `depth` and record it among the connection's open scopes. */
+function openScope(depth: number, open: TransactionScope[]): TransactionScope {
+  const scope: TransactionScope = {
+    active: true,
+    depth,
+    queue: Promise.resolve(),
+    open,
+  };
+  open.push(scope);
+  return scope;
 }
 
 /** Chain `run` onto a scope's queue, keeping the queue itself unrejected. */
@@ -1169,9 +1215,13 @@ function enqueueIn<T>(
 
 /**
  * Close a scope to new nested calls and wait for those already queued. A call
- * arriving after this goes to the instance queue, behind the transaction.
+ * arriving after this joins the innermost scope still open on the connection,
+ * or, when none is, goes to the instance queue behind the transaction.
  */
 async function settleNested(scope: TransactionScope): Promise<void> {
   scope.active = false;
+  // A failed RELEASE or COMMIT settles the same scope a second time.
+  const index = scope.open.indexOf(scope);
+  if (index !== -1) scope.open.splice(index, 1);
   await scope.queue;
 }

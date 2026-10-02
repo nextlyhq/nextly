@@ -382,6 +382,27 @@ export abstract class DrizzleAdapter {
   ): Promise<T>;
 
   /**
+   * Whether a `transaction()` call made from the current async context would
+   * join a transaction already open on this adapter, as a savepoint, rather
+   * than open one of its own.
+   *
+   * A caller about to do something no rollback can undo — removing a stored
+   * file, say — asks this first: work that joins an enclosing transaction is
+   * undone with it, while the effect it performs after its own savepoint
+   * releases is not.
+   *
+   * False here. Concrete rather than abstract so existing adapters keep
+   * working unchanged, and false is right for a pooled adapter: a call made
+   * inside another transaction's work opens its own transaction on its own
+   * connection, which commits independently.
+   *
+   * @returns True when the call would nest in an open transaction
+   */
+  inTransaction(): boolean {
+    return false;
+  }
+
+  /**
    * Get database capabilities.
    *
    * @remarks
