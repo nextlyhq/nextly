@@ -204,6 +204,22 @@ budget, the overrides and each operating system's caveats: the
 - API responses use the canonical envelopes in
   `packages/nextly/src/api/response-shapes.ts` (`{ items, meta }` for lists,
   `{ message, item }` for mutations). Never invent a new response shape.
+- Parse outside input with `zod` at the boundary: a request body, a query,
+  config, plugin options, a provider's response, a webhook payload. Past it,
+  trust no client-supplied id, role or redirect target.
+- A `NextlyError`'s `publicMessage` stays generic where it could leak account
+  state or internals; the detail goes in `logMessage` and `logContext`.
+- Inside a transaction, hand nested work its `tx`; never open a second
+  transaction. On PostgreSQL and MySQL a nested `transaction()` takes another
+  connection and cannot see the outer's writes; on SQLite it waits behind the
+  outer, which is waiting for it.
+- Make retried work (jobs, webhook handlers, event subscribers) idempotent: a
+  repeated delivery adds no second row or side effect.
+- Queries select only the columns they need, filter and paginate in the
+  database, make no N+1 round trips, and filter or sort on indexed columns.
+  Say in the PR when a change could be slow on a large table.
+- Never hard-code, log or return a secret; redact tokens and credentials in
+  logs and errors.
 - Admin styling is token-driven: use `--nx-*` custom properties (defined for
   light AND dark in `packages/ui/src/styles/theme.css`). Zero hardcoded
   colors, and every visual change must work in both modes.
