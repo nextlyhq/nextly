@@ -281,7 +281,9 @@ The tests run in two GitHub Actions workflows on every PR:
 - [`ci.yml`](.github/workflows/ci.yml) — lint, typecheck, build, and the unit test suite. Its `CI gate` job is the check `main` requires.
 - [`integration.yml`](.github/workflows/integration.yml) — the integration suite, one job per dialect: Postgres 17, MySQL 8.4 and SQLite. Postgres 15 runs locally only, with `pnpm test:integration:postgres15`.
 
-`CI gate` does not cover the integration jobs or the secret scan yet, so before a PR merges, `node scripts/verify-merge.mjs <pr-number>` checks those too.
+`CI gate` collects the `ci.yml` jobs a merge needs: the change filter, the comment check, `Lint / Typecheck / Test / Build`, the nextly and admin unit tests, and the CLI entry-guard smoke test. The browser tests and the scaffold and dev-script smoke tests report on their own and are not required to merge. `main` also requires the integration jobs, the secret scan and the other checks listed under [Branch protection](#branch-protection), and the merge queue runs them all.
+
+Before a pull request joins the queue, `node scripts/verify-merge.mjs <pr-number>` checks that every review thread is resolved, and that the checks whose absence would mean no coverage reported: `Lint / Typecheck / Test / Build`, `gitleaks`, the comment check, the three integration jobs and the PR title. It doesn't cover the independent review, which runs only in the queue. After a merge, it checks that the pull request landed whole.
 
 ---
 
@@ -389,17 +391,21 @@ A feature too large for one pull request lands as several, each complete, tested
 - At least one maintainer approval is required before merge, from a code owner for the files [`.github/CODEOWNERS`](.github/CODEOWNERS) names.
 - All conversations resolved.
 - All CI checks passing (no `continue-on-error` workarounds).
-- Branch up to date with `main` before it merges (see [Merge strategy](#merge-strategy)).
+- No need to bring a branch up to date with `main` by hand: the merge queue tests it on top of the latest `main` (see [Merge strategy](#merge-strategy)).
 
 ### Merge strategy
 
 Every pull request is squash-merged into `main`, the Version Packages pull request included. Its title becomes the commit message, so make sure it follows [Conventional Commits](#commit-messages).
 
-Merges go through GitHub's merge queue once it is switched on for `main`: it runs the required checks on each pull request combined with the latest `main`, and merges only what passes. Until then, a maintainer brings the branch up to date with `main` and merges it by hand once every check passes on the result.
+Every pull request merges through GitHub's merge queue: it runs the required checks on each pull request combined with the latest `main`, and squash-merges only what passes. Once a pull request is approved and its checks are green, choose **Merge when ready** to add it to the queue.
 
 ### Branch protection
 
-`main` is protected. Direct pushes and force-pushes to it are blocked, so every change reaches it through a pull request, which merges only once the `CI gate` check passes, a maintainer has approved it, and every conversation is resolved.
+`main` is protected by a ruleset. Direct pushes, force-pushes and deletion are blocked, so every change reaches it through a pull request. A pull request merges only through the merge queue, and only once:
+
+- a maintainer has approved it, and a code owner too for the files [`.github/CODEOWNERS`](.github/CODEOWNERS) names;
+- every conversation is resolved;
+- these checks pass: `CI gate`, `Comment convention (describes code, not process)`, `Integration (mysql)`, `Integration (postgres)`, `Integration (sqlite)`, `Validate PR title follows Conventional Commits`, `Independent review of the revision being merged`, `gitleaks` and `No AI credit`.
 
 ---
 
@@ -425,7 +431,7 @@ No CI job requires a changeset to be there, so reviewers check it. CI's `Changes
 pnpm changeset
 ```
 
-The CLI will ask which packages changed. Because of `fixed[]`, whichever package you pick will pull the others along at publish time — just pick the primary one. Then choose the semver bump (`patch` / `minor` / `major`) and write a short user-facing summary.
+The CLI asks which packages changed. Select every package in `fixed[]`, the lockstep group, private ones such as `@nextlyhq/tsconfig` included, and choose `patch`: while the packages are in alpha every changeset is `patch`. CI refuses a changeset that leaves out a package of the group, or uses another bump. Then write a short user-facing summary. A pull request that changes no published package (tests, CI, docs or internal tooling only) needs no changeset.
 
 Commit the generated `.changeset/*.md` file with your PR.
 
