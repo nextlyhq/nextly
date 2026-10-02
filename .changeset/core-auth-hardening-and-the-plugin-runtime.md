@@ -32,11 +32,13 @@ Core authentication hardening, and the runtime surface a stateful plugin needs.
 ## Upgrading
 
 **Run `nextly migrate` before deploying this release.** It adds the nullable
-`users.deactivated_at` column and the `nextly_plugin_settings` table. Unless
-`db.runMigrationsOnBoot` is on and the app runs with `NODE_ENV=production`,
-boot only warns about a schema that is behind,
-and password login and token refresh read whole `users` rows, so on an
-unmigrated database every login and refresh fails until the migration runs.
+`users.deactivated_at` column and the `nextly_plugin_settings` table. Boot
+applies it on its own in two cases: with `NODE_ENV=production` when
+`db.runMigrationsOnBoot` is on, and with `NODE_ENV=development` unless
+`NEXTLY_DISABLE_BOOT_APPLY=1` is set or the app has no migrations directory.
+Otherwise boot only warns about a schema that is behind, and password login
+and token refresh read whole `users` rows, so on an unmigrated database every
+login and refresh fails until the migration runs.
 
 ## Breaking changes
 
@@ -44,20 +46,47 @@ Each is described in its section below; listed here so none is missed.
 
 - **Plugin routes check the request origin by default** for unsafe methods
   from a session-cookie caller, and answer `403 CSRF_FAILED` when it is not
-  this site or an allowed origin. A route whose callers bring their own
-  credential (a webhook, an API key) sets `csrf: false`.
+  this site or an allowed origin. API-key and webhook callers are never
+  checked and need no opt-out; a webhook route is `public: true`.
+  `csrf: false` makes a route refuse every unsafe request the session cookie
+  authenticates, and cannot be combined with `public: true`: boot refuses
+  such a route, naming the plugin and the route.
 - **A `customizeClaims` hook can only add claims.** Every claim core built —
-  identity, `roleIds`, claims from custom user fields, and the token claims —
-  is restored as core built it, and the reserved token claims cannot be
-  added. Add your own claim beside a core one instead of changing it.
+  identity, `roleIds` and the token claims — is restored as core built it, a
+  claim named after a configured user field can be neither added nor changed,
+  and the reserved token claims cannot be added. Add your own claim beside a core one instead of changing it.
 - **An `afterAuthenticate` hook that returns another account fails the
   login.** Change the user's details, never its id.
 - **Challenge views no longer post the answer.** They receive
   `resolve(response)` and call it; `pendingToken` is deprecated.
+- **A wrong code at `POST /auth/challenge/resolve` answers in the canonical
+  error envelope.** The 401 was a top-level
+  `{ status, challengeType, pendingToken, error: "Invalid code." }`; it is now
+  `{ error: { code: "AUTH_INVALID_CREDENTIALS", message, requestId, data } }`,
+  where `data` is `{ status, challengeType, pendingToken }`, with no
+  `pendingToken` when the pending token came from the cookie, which the
+  re-issued one replaces. A view that still posts its own answer reads the
+  next token from `error.data.pendingToken`.
+- **`routeAuthRequest` and `AuthRouterDeps`, exported from `nextly/auth`, are
+  marked `@experimental`, and `AuthRouterDeps` changed.** It requires
+  `fetchAccountState` and `withSessionRowTransaction`, and `findUserByEmail`
+  returns a `CredentialUserRow`, which adds `deactivatedAt` and
+  `passwordUpdatedAt` and makes `passwordHash` nullable. Code that builds the
+  deps itself supplies both and handles a row with no password;
+  `CredentialUserRow`, `AccountState`, `SessionRowTransaction` and
+  `WithSessionRowTransaction` are exported from `nextly/auth` to name them.
+  `AccountState.passwordUpdatedAt` is required (`Date | null`), so
+  `fetchAccountState` and `withSessionRowTransaction` return the column as
+  stored, and `setInitialPassword` returns `{ userId, passwordUpdatedAt }`.
 - **`createLocalUser` defaults to an unverified address** for a caller that
   says nothing. `nextly.users.create` and `ctx.services.users.create` still
   default to `admin-vouched`, because they are the host's own server code;
   pass `emailVerification: "pending"` there for a self-supplied address.
+- **`nextly.login()` applies the login endpoint's account checks.** It
+  refuses a locked, deactivated or unverified account, and one that must
+  replace an admin-set password, and a wrong password counts toward the
+  lockout. Bring the account into a usable state first, or sign the person in
+  through the login page.
 - **`runStrategyChain` returns `{ outcome, strategyName }`.** Read `.outcome`.
 - **`ctx.db` without `capabilities.db.rawSql` is a restricted handle** with
   `select`, `insert`, `update`, `delete` and `transaction` only: `execute`,
@@ -105,7 +134,9 @@ same way.
 Resending a verification email now does nothing for an address that is
 already verified, answering the same as for an unknown one; previously it
 mailed a fresh link to any account. The resend endpoint is also held to the
-same per-IP budget as `forgot-password`, since both send an email on request.
+same per-IP budget as `forgot-password`, since both send an email on request,
+and so is `verify-email`, which consumes a single-use token as
+`reset-password` does.
 
 An administrator's deactivation now outlasts the account's own links. The
 `users` table gains a nullable `deactivated_at` column, added in place by the
@@ -122,10 +153,34 @@ what protects them.
 
 A refresh whose account is no longer usable now deletes the refresh row and
 clears the cookies rather than answering 401 and leaving both alive.
-Deactivating an account, or an administrator setting its password, also
+Deactivating an account, or setting its password — by an administrator
+(`updateUser` or `PATCH /api/users/:id/password`), by the user changing their
+own, by a reset, by accepting an invite or by setting an initial password —
 deletes its refresh tokens in the same transaction, so a reactivation does not
-bring old sessions back. An access token already issued stays valid for the
-rest of its fifteen minutes. The password
+bring old sessions back. Every one of these password writes also clears
+`mustChangePassword` and stamps `passwordUpdatedAt`;
+`PATCH /api/users/:id/password` used to set only the hash. A user's own password change
+through `userService.changePassword` is refused for a deactivated account, as
+`changePassword` already was, and the Direct API's `changePassword` and
+`resetPassword` end the account's other sessions too, as the REST endpoints
+did. An administrator who sets their own password on the user edit page is
+signed out and sent to sign in again, as is one who deactivates their own
+account there. A refresh token is spent once: a rotation hands out its new
+token only if it removed the presented row, so two requests presenting one
+token get one rotation, and the one that loses the race answers 401
+`REFRESH_SUPERSEDED` and leaves the cookies alone. The admin retries with the
+cookies it now holds; any other client should retry once with its current
+cookies. A spent token replayed later is still refused with its cookies
+cleared. A sign-in or a rotation in
+flight when the account is deactivated or its password set does not leave a
+session behind: each writes its refresh row in one transaction that locks the
+account's row (`FOR SHARE` on PostgreSQL and MySQL) and checks the account
+again. A password sign-in, including one paused for a second factor, is
+refused if the password changed after it was proven, and so is the session the
+forced first-sign-in change issues if the password is set again before it is
+written. An access token already issued stays valid until it expires,
+within fifteen minutes; a token from the Direct API's `nextly.login()` lasts
+30 days and is not ended early. The password
 attempt lockout applies to password logins only: a refresh is not a password
 attempt, and someone else guessing a password must not end a session that is
 already established.
@@ -136,8 +191,10 @@ told about, and the account-state endpoint did not check even that, so a token
 minted for a different job — a mid-challenge pending token, or anything a
 future flow signs with the same secret — could be presented as a sign-in.
 
-Every token now carries a JWS `typ` header naming what it is for, and a token
-is verified for one purpose: a header naming another purpose is refused. The
+Session tokens and second-factor pending tokens now carry a JWS `typ` header
+naming what each is for, and a token is verified for one purpose: a header
+naming another purpose is refused. Preview tokens are kept apart by their own
+derived key and audience. The
 signing algorithm is pinned explicitly at the same time, so a token declaring
 `alg: "none"` cannot talk the verifier out of checking the signature.
 
@@ -150,11 +207,12 @@ A custom user field named `typ` can no longer reach the claims, where it would
 have been read as a token kind.
 
 A `customizeClaims` hook can add claims but no longer change any claim core
-built. `sub`, `email`, `name`, `image`, `roleIds`, the claims built from the
-user's custom fields, and the token's own `iat`, `exp` and `jti` are restored
-as core built them after every hook has run, whether a hook replaced, changed
-in place or deleted them; the reserved `nbf`, `aud`, `iss` and `typ` cannot be
-added. A hook that returned a different `sub` or `roleIds` signed a
+built. `sub`, `email`, `name`, `image`, `roleIds`, and the token's own `iat`,
+`exp` and `jti` are restored as core built them after every hook has run,
+whether a hook replaced, changed in place or deleted them; the reserved `nbf`,
+`aud`, `iss` and `typ` cannot be added. A claim named after a configured user
+field can be neither added nor changed by a hook, and one whose value could
+not be read is left out rather than set to null. A hook that returned a different `sub` or `roleIds` signed a
 session for another account, or with other roles, that the account-state gate
 never saw. A plugin that renamed a core claim now adds its own spelling beside
 it instead.
@@ -222,7 +280,12 @@ A login interrupted by a second factor now resumes without a token ever
 appearing in a URL. The pending token travels in an HttpOnly cookie and the
 login page asks `GET /auth/pending` which challenge is outstanding, and that
 endpoint never returns the token itself. (A password login still returns its
-challenge token in the response body, as before.)
+challenge token in the response body, as before.) A correct answer whose
+session is refused after it settled the flow clears the pending cookie, and
+`GET /auth/pending` answers 204 for a flow whose attempt budget is spent, so the
+login page stops offering a challenge nothing can finish.
+`RateLimiter.peek(key, windowMs)` is new: it reads a key's count without
+spending an attempt.
 
 `ctx.auth.currentUser(request)` reports the signed-in user for a plugin route
 that behaves differently when someone is already signed in.
@@ -231,7 +294,9 @@ Breaking, for plugins that contribute a challenge view: the host now posts the
 answer, and the component receives `resolve(response)` instead of posting the
 `pendingToken` itself. A resumed login has no token in the browser to hand it.
 `pendingToken` stays in the props for one minor, deprecated, and is undefined
-in resume mode. `onResolved` receives the path to land on.
+in resume mode. When an answer finishes the login, the host navigates to the
+login's destination itself; `onResolved` chooses where to land only for a view
+that still posts its own answer with `pendingToken`.
 
 `createExternalUser` creates an active, email-verified account with no password,
 for an identity a trusted provider has already verified. A passwordless
@@ -261,7 +326,9 @@ is checked before anything reads it, and boot fails with the plugin named for:
 an unknown key anywhere inside `capabilities`, a value of the wrong type, an
 outbound entry that is not a hostname (IP literals included), an empty or
 unparseable `requires` range, secrets without a settings schema, a duplicate,
-unknown or group-naming secret path, a settings key or plugin name too long
+unknown or group-naming secret path, a secret path to a value that cannot
+be a string (a number or a boolean, say), a challenge id core reserves or
+another enabled plugin also declares, a settings key or plugin name too long
 for storage, and a `schemaVersion` that is not a positive integer.
 `nextly plugins info <name>` prints the manifest: outbound hosts, raw SQL,
 whether it finishes logins, secret paths, and what it provides and requires. Capability names are
@@ -278,7 +345,9 @@ Secrets are sealed with AES-256-GCM under a key derived with HKDF once per
 associated data, and labelled with the generation that sealed them. A value
 sealed under `NEXTLY_SECRET_PREVIOUS` is re-sealed under the current secret
 when read; one no configured secret can open shows as
-`{ set: true, readable: false }` and can be overwritten. A value stored
+`{ set: true, readable: false }` and can be overwritten; `get()` logs why
+such a value could not be opened: a malformed envelope, a key the install no
+longer configures, or a failed authentication. A value stored
 encrypted stays encrypted, and redacted in the admin, even after a plugin
 update stops declaring its path. `set` is a JSON merge patch, so `null`
 removes a key at any depth, and an unknown key is refused at any depth. One
@@ -300,13 +369,18 @@ every redirect is re-checked. A redirect
 that would send the request body to a different origin is refused: a body can
 carry a credential — an OAuth `client_secret`, say — as surely as a header,
 and the headers are already dropped at that boundary. A request body over
-10 MB is refused, whatever its type.
+10 MB is refused, whatever its type. The `CONNECT`, `TRACE` and `TRACK`
+methods and caller-set `Upgrade`, `Keep-Alive` and `Expect` headers are
+refused, as is a `Connection` header other than `close` or `keep-alive`; those
+two are dropped, because the transport manages its own connection. An answer
+that switches protocols (`101`) is refused rather than left pending.
 
 **`ctx.audit`**, which writes only the kinds a plugin declared — `<slug>.`
 followed by lowercase letters, digits, `.`, `_` and `-` — with metadata keys
 allowlisted per kind and values with a known credential shape dropped.
 Deleting a user clears the metadata of every plugin row naming them, as actor
-or target.
+or target. A `targetUserId` must name an existing user: a row naming one that
+does not exist is stored without its metadata, and a warning is logged.
 
 **Route options** — `rateLimit`, `rawBody`, `csrf` and `noStore` — the
 protections core's own routes have.
@@ -320,9 +394,13 @@ CSRF applies only to callers the session cookie admitted, because a browser
 cannot attach an API key cross-site. By default an unsafe-method request must
 come from this site or an allowed origin, which the admin's own requests do
 without a token; `csrf: true` also requires the double-submit token, and
-`csrf: false` opts out. A refusal answers `403 CSRF_FAILED` and records a
-`csrf-failed` audit event. A public route skips the default check, and a
-public handler that resolves the session user declares `csrf: true`.
+`csrf: false` refuses every unsafe-method request the session cookie
+authenticates, so the route takes writes only from callers with another
+credential. A refusal answers `403 CSRF_FAILED` and records a `csrf-failed`
+audit event. A public route skips the default check, and a public handler that
+resolves the session user declares `csrf: true`. `csrf: false` cannot be
+combined with `public: true`: boot refuses such a route, naming the plugin and
+the route.
 
 **Declared hook points**, collision-checked and owned by prefix, plus
 `ctx.filters.decide` for seams where handlers veto rather than transform.
@@ -368,12 +446,36 @@ instance. The capability is a declaration a reviewer can read, not a sandbox:
 plugins run as trusted code. `transaction(async tx => ...)` works on every
 dialect, `rawSql` or not; inside it, write through `tx` — another Nextly
 service or `ctx.settings` called there runs on its own connection on
-PostgreSQL and MySQL, outside the transaction.
+PostgreSQL and MySQL, outside the transaction, and commits on its own. With
+`rawSql`, `tx` is the live handle, and its `transaction` nests as a savepoint
+on every dialect.
 
 The SQLite adapter runs a `transaction()` called from inside another
-transaction's work as a savepoint of it. It used to queue behind the
-transaction waiting for it, which hung both and every later transaction on
-the instance.
+transaction's work as a savepoint of it, including one made later from a
+savepoint that has since released, which runs inside the innermost
+transaction or savepoint still open on the connection, and rolls back with it
+if that one does. It used to queue behind the transaction waiting for it, which hung both
+and every later transaction on the instance. Core services' own transactions
+on SQLite go through the adapter too, so one called inside a plugin's
+`ctx.db.transaction` nests as a savepoint, and its rows roll back with it,
+instead of failing with "cannot start a transaction within a transaction".
+What it does after its own write runs when its savepoint is released and is
+not undone if the plugin's transaction then rolls back: collection hooks
+(`afterCreate`, `afterUpdate`, `afterDelete`), events such as `user.created` or
+`plugin.settings.changed`, and cache revalidation. A core media delete
+(`media.delete` or `media.bulkDelete`) called inside the transaction is
+refused with `409 CONFLICT`, so stored files are never removed for a delete
+that rolls back: delete media after the transaction. A focal-point change made
+inside it keeps the superseded image variants rather than deleting them.
+`DrizzleAdapter.inTransaction()` is new: it tells a caller whether a
+`transaction()` made from there would join an open transaction as a savepoint,
+and is false on PostgreSQL and MySQL, where each transaction has its own
+connection. On SQLite a
+plugin's transaction holds the database's only connection until it ends:
+other requests' statements wait for it or run inside it, so keep it short and
+never await network I/O (`ctx.fetch`) inside it. An error the plugin throws inside
+`ctx.db.transaction`, `rawSql` or not, reaches it as thrown, as on PostgreSQL
+and MySQL, rather than as a generic database error.
 
 External identities are not affected: they are the subject of the plugin
 identity tables that arrive with the auth plugin, not of this table.
@@ -432,7 +534,8 @@ The login page lands a resumed second-factor login on its `next` rather than
 the dashboard, keeps the challenge through a network failure, a rate limit or
 a server error, and says so when the attempt has ended. A provider link shows
 its declared icon and starts one sign-in however often it is clicked, and the
-`?error` and `?resume` parameters are removed once read.
+`?error` parameter is removed once read. `?resume` stays, so a reload in the
+middle of a second factor finds the flow again.
 
 The CLI resolves the plugin list a `setup` transformer leaves exactly as the
 boot does, so `nextly migrate`, `build`, `db:sync` and the dev reload refuse a

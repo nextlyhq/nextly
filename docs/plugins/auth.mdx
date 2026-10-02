@@ -158,16 +158,19 @@ or writing a record, and must never do so for an account that cannot sign in.
 Such an account reaches no hook; its attempt is still recorded in the
 `login-failed` audit row.
 
-The password-attempt lockout does NOT apply here. An external login is not a
-password attempt, and otherwise anyone who knows an address could lock its
-owner out of their provider with five wrong guesses.
+The password-attempt lockout does NOT apply here, and a plugin cannot record its
+login as the `password` strategy to switch it on: the strategy must start with
+the plugin's own slug. An external login is not a password attempt, and
+otherwise anyone who knows an address could lock its owner out of their
+provider with five wrong guesses.
 
 It answers every login outcome with a redirect, so every plugin fails the same
 safe way: a refusal lands on `/admin/login?error=signin-failed` with an audit
-row that names no account, and a second factor lands on
-`/admin/login?resume=1` with the pending token in an HttpOnly cookie rather
-than in the URL. A hook that blocks an external login throws a typed 4xx
-`NextlyError` (for example `NextlyError.forbidden`) to be answered that way.
+row that names no account, and a second factor, or an administrator-set
+password that must be replaced first, lands on `/admin/login?resume=1` with
+the pending token in an HttpOnly cookie rather than in the URL. A hook that
+blocks an external login throws a typed 4xx `NextlyError` (for example
+`NextlyError.forbidden`) to be answered that way.
 What is not a login outcome is thrown to the calling route instead: an untyped
 or 5xx error, an `afterAuthenticate` hook returning another account, and a
 plugin calling `completeLogin` without `capabilities.auth.login` or with a
@@ -227,10 +230,12 @@ export const twoFactor = definePlugin({
 1. `POST /auth/login` with valid credentials → the `afterAuthenticate` hook returns
    a challenge, so the response is **not** a session but:
    ```json
-   { "status": "challenge", "challengeType": "totp", "pendingToken": "…" }
+   { "status": "challenge", "challengeType": "totp", "pendingToken": "…", "uiHint": null }
    ```
-   A login finished by `ctx.auth.completeLogin` instead redirects to
-   `/admin/login?resume=1` with the pending token in an HttpOnly cookie.
+   `uiHint` is the challenge's `uiHint`, or `null` when it sets none. A login
+   finished by `ctx.auth.completeLogin` instead redirects to
+   `/admin/login?resume=1` with the pending token in an HttpOnly cookie, as it
+   does for an administrator-set password that must be replaced first.
 2. The login page renders the `challengeViews["totp"]` component with
    `ChallengeViewProps` from `@nextlyhq/plugin-sdk/admin`. The view collects the
    code and calls `resolve({ code })`; the **host** posts it:
@@ -238,8 +243,10 @@ export const twoFactor = definePlugin({
    POST /auth/challenge/resolve   { "pendingToken": "…", "response": { "code": "123456" } }
    ```
    with the pending token from the body, or from the cookie when the login
-   resumed. The view never posts anything itself, and `pendingToken` in its
-   props is deprecated: a resumed login has none to give it.
+   resumed. `pendingToken` in the view's props is deprecated: a resumed login
+   has none to give it. A view that still posts its own answer with it keeps
+   working, and only for such a view does `onResolved` decide where the login
+   lands.
 3. Core verifies the pending token (single-purpose, TTL'd, attempt-capped), runs your
    challenge's `resolve`, and on success issues the real session — identical to a
    direct login — and the host navigates to the login's destination. `resolve`
@@ -271,7 +278,7 @@ and what they return is ignored. `afterAuthenticate` can **challenge**.
 | `afterRegister(user)` | After a successful register | Welcome email, provisioning, CRM sync |
 | `beforeLogout` / `afterLogout` | Around logout | Cleanup, revoke external sessions. `beforeLogout` receives no user |
 | `determineUser(request)` | `GET /auth/session` only | Custom credential (API key, alt token) → return a user or `null`. The returned user must still pass the account gate: an unknown, deactivated, or (where sign-in requires it) unverified account is not answered as a session |
-| `customizeClaims(claims, user)` | Building the JWT (login **and** refresh) | Add JWT claims only. Every claim core built — identity, `roleIds`, claims from custom user fields, and the token claims — is restored as core built it, and the reserved `nbf`, `aud`, `iss` and `typ` cannot be added |
+| `customizeClaims(claims, user)` | Building the JWT (login **and** refresh) | Add JWT claims only. Every claim core built — identity, `roleIds` and the token claims — is restored as core built it. A claim named after a configured user field can be neither added nor changed, and one whose value could not be read is left out rather than set to null. The reserved `nbf`, `aud`, `iss` and `typ` cannot be added |
 
 Hooks observe-or-mutate; they do **not** replace strategies. Use a strategy to
 authenticate, a hook to gate/decorate.
@@ -285,8 +292,11 @@ WordPress draw the line.
 
 ## Security notes
 
-- **Strategies are app-opt-in.** Installing a plugin never silently lets it
-  authenticate users.
+- **Strategies are app-opt-in; a plugin's own login is not.** A strategy
+  authenticates no one until the app lists it, but any installed plugin that
+  declares `capabilities.auth.login` can finish a login with
+  `ctx.auth.completeLogin` for whichever account it names. Check that
+  declaration with `nextly plugins info` before installing.
 - An enabled strategy/hook runs with **full trust** (D34, no sandbox in v1) — vet auth
   plugins like any dependency.
 - Multi-step uses a **single-purpose pending token** (short TTL, attempt-capped) that

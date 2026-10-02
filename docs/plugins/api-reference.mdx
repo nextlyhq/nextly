@@ -50,8 +50,8 @@ interface PluginContributions {
   extend?:      Array<{ target: string | string[]; fields: FieldConfig[] }>;
   permissions?: PluginPermission[];            // { action, resource, label?, description?, group? }
   fieldTypes?:  PluginFieldType[];             // custom field types — see below
-  events?:      Array<{ name: string }>;       // under your own prefix, never a core one
-  routes?:      PluginRoute[];                 // { method, path, handler, requiredPermission?, public?, middleware?, rateLimit?, rawBody?, csrf?, noStore? }
+  events?:      Array<{ name: string }>;       // a core prefix fails boot; use your own by convention
+  routes?:      PluginRoute[];                 // { method, path, handler, requiredPermission?, public?, middleware?, rateLimit?, rawBody?, csrf?, noStore?, formatTimestamps?, mount? }
   auth?:        PluginAuthContributions;       // hooks, challenges, ui — see Auth extensibility
   settings?:    ZodObject;                     // gives ctx.settings
   audit?:       PluginAuditDeclaration;        // gives ctx.audit
@@ -76,7 +76,7 @@ interface PluginContext {
   db: PluginDatabase;             // Drizzle builder + transaction; the live instance only with capabilities.db.rawSql
   auth: PluginAuthApi;            // always present; completeLogin needs capabilities.auth.login
   settings?: PluginSettingsApi;   // with contributes.settings
-  fetch?: typeof fetch;           // with capabilities.net.outbound
+  fetch?: typeof fetch;           // with a non-empty capabilities.net.outbound
   audit?: PluginAuditApi;         // with contributes.audit
   hooks: PluginHookRegistry;      // in-transaction, modify/abort
   events: EventBus;               // post-commit, observe-only, best-effort
@@ -374,11 +374,12 @@ See the [author guide](/docs/plugins/author-guide) for the full workflow and the
 
 ## Runtime surfaces added for stateful plugins
 
-`ctx.settings`, `ctx.fetch` and `ctx.audit` are present only when the plugin
-declares the matching contribution, so a plugin that never asked for one does
-not have it. They are typed as optional on `PluginContext`; read them through a
-guard that names the missing declaration. `ctx.auth` and `ctx.filters` are
-always present.
+`ctx.settings` is present only when the plugin declares
+`contributes.settings`, `ctx.fetch` only with a non-empty
+`capabilities.net.outbound`, and `ctx.audit` only with `contributes.audit`, so
+a plugin that never asked for one does not have it. They are typed as optional
+on `PluginContext`; read them through a guard that names the missing
+declaration. `ctx.auth` and `ctx.filters` are always present.
 
 ### `ctx.settings`
 
@@ -411,7 +412,7 @@ values), and an operator's change is recorded in the activity log by key name.
 
 ### `ctx.fetch`
 
-Declare `capabilities.net.outbound` to get it.
+Declare a non-empty `capabilities.net.outbound` to get it.
 
 ```ts
 if (!ctx.fetch) throw new Error("declare capabilities.net.outbound");
@@ -433,9 +434,12 @@ await ctx.audit.write({
 });
 ```
 
-A kind is the plugin's own admin slug, a `.`, then lowercase letters, digits,
-`.`, `_` and `-`; a kind outside that, longer than the audit column, or declared
-twice fails boot. Undeclared kinds and keys are dropped rather than stored.
+A kind is the plugin's own admin slug, a `.`, a lowercase letter or digit, then
+any of lowercase letters, digits, `.`, `_` and `-`; a kind outside that, longer
+than the audit column, or declared twice fails boot. Undeclared kinds and keys
+are dropped rather than stored. `targetUserId` must name an existing user; a
+row naming one that does not exist is stored without its metadata, and a
+warning is logged.
 
 ### `ctx.auth`
 
