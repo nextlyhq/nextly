@@ -12,7 +12,10 @@
  * script, which is the only way to assert the entry guard and the summary.
  */
 import { execFileSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
 
 import {
   auditFile,
@@ -22,6 +25,7 @@ import {
   emptyPopulations,
   isCommentLine,
   isPluginSurface,
+  listFiles,
   namedColorViolation,
   paletteViolation,
   tokenAlphaSuffixViolation,
@@ -210,6 +214,38 @@ describe("deriveRoots", () => {
     // was missing before the roots were derived.
     expect(roots).toContain("packages/plugin-sdk/src");
     expect(roots).toContain("packages/plugin-seo/src");
+  });
+});
+
+describe("listFiles", () => {
+  // A tree with one of each case: nested sources of each kind, a test, a
+  // declaration file, a `__tests__` file, another extension and a link.
+  const base = mkdtempSync(join(tmpdir(), "lint-design-list-"));
+  afterAll(() => rmSync(base, { recursive: true, force: true }));
+  const root = relative(process.cwd(), join(base, "src")).split("\\").join("/");
+  const files = {
+    "a.css": "",
+    "deep/b.tsx": "",
+    "deep/deeper/c.ts": "",
+    "d.test.ts": "",
+    "e.d.ts": "",
+    "deep/__tests__/f.ts": "",
+    "g.js": "",
+  };
+  for (const [name, text] of Object.entries(files)) {
+    mkdirSync(join(base, "src", name, ".."), { recursive: true });
+    writeFileSync(join(base, "src", name), text);
+  }
+  // Windows lets only an administrator or Developer Mode make a link. Where it
+  // can't be made, the case is absent and the expectation is the same.
+  try {
+    symlinkSync(join(base, "src", "a.css"), join(base, "src", "linked.css"), "file");
+  } catch {
+    // No link on this machine; the files above still cover every other case.
+  }
+
+  it("lists the sources under a root as find did, sorted, with `/` whatever the platform", () => {
+    expect(listFiles([root])).toEqual([`${root}/a.css`, `${root}/deep/b.tsx`, `${root}/deep/deeper/c.ts`]);
   });
 });
 

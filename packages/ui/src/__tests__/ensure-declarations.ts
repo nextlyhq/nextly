@@ -64,7 +64,14 @@
  */
 import { execFileSync } from "node:child_process";
 import { declarationFiles } from "../../scripts/published-entries.js";
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -98,8 +105,18 @@ export const DECLARATION_ENTRIES: string[] = declarationFiles();
 export function buildDeclarations(): string {
   rmSync(OUT_DIR, { recursive: true, force: true });
 
+  // tsup's own entry, run by this Node. Spawning `npx` fails on Windows, where
+  // it is `npx.cmd` and `execFileSync` starts only an executable without a
+  // shell; resolving the package also pins the tsup this package depends on.
+  const tsupPackage = createRequire(join(pkgRoot, "package.json")).resolve(
+    "tsup/package.json"
+  );
+  const { bin } = JSON.parse(readFileSync(tsupPackage, "utf8")) as {
+    bin: { tsup: string };
+  };
+  const tsup = join(dirname(tsupPackage), bin.tsup);
   const run = (args: string[]) =>
-    execFileSync("npx", ["tsup", ...args, "--out-dir", OUT_DIR], {
+    execFileSync(process.execPath, [tsup, ...args, "--out-dir", OUT_DIR], {
       cwd: pkgRoot,
       stdio: "inherit",
     });
