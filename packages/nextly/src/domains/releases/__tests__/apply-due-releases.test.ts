@@ -991,11 +991,14 @@ describe("deciding which due releases a pass may settle", () => {
   });
 
   it("settles a large backlog of empty releases within one pass's deadline, in order", async () => {
-    // Twenty thousand due releases with nothing to apply, the backlog the
-    // discharge bound exists for, against a real clock. A decision that
-    // scanned the due list for each release would grow with the square of the
-    // backlog, seconds at this size, and stop the pass partway through it.
-    const ids = Array.from({ length: 20_000 }, () => crypto.randomUUID());
+    // Sixty thousand due releases with nothing to apply, against a real clock.
+    // A decision that scanned the due list for each release grows with the
+    // square of the backlog and stops the pass partway through it; the linear
+    // one settles them all in a few hundred milliseconds. The deadline is wide
+    // on purpose, so a loaded worker can't fail the linear decision: the test
+    // above proves the growth by counting work, and this one that the pass
+    // reaches the end of the backlog.
+    const ids = Array.from({ length: 60_000 }, () => crypto.randomUUID());
     const marked: string[] = [];
     await applyDueReleases({
       ...deps({
@@ -1004,8 +1007,7 @@ describe("deciding which due releases a pass may settle", () => {
         marked,
       }),
       now: () => new Date(),
-      // About a tenth of a second does it; a second leaves a slow machine room.
-      deadline: new Date(Date.now() + 1_000),
+      deadline: new Date(Date.now() + 10_000),
     });
     expect(marked).toEqual(ids);
   });
