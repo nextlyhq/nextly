@@ -23,13 +23,17 @@
  * pseudonymised data, and a request to erase a person still reaches these
  * rows.
  *
- * **Nothing erases them today.** Deleting a user account strips that person
- * from the audit trail and does not touch this table, and no retention pass
- * prunes it, so a row written for someone stays answerable to
- * `list({ recipient })` for as long as the table does. Said here rather than
- * left for a reader to assume otherwise, for the same reason `retention_class`
- * below says it is inert: a column that looks governed and is not is worse
- * than one that plainly is not.
+ * **Two things erase them, for different populations.** Deleting a user
+ * account overwrites the `recipient_hash` of that person's rows with a
+ * sentinel no address hashes to, in the deletion's own transaction, so the
+ * account is never removed while rows that identify its owner stay behind.
+ * Someone who was only ever a recipient, with no account to delete, is erased
+ * the same way through the delivery service's `eraseRecipient`. Either way the
+ * row stays, because "how many sends failed last week" belongs to the install
+ * rather than to the recipient (`domains/email/erase-recipient.ts`). Apart from
+ * those requests, a retention pass deletes rows by age, scoped by
+ * `retention_class` below, which reaches every row whoever it was written for
+ * (`domains/email/prune.ts`).
  *
  * **The rendered subject.** The template SLUG is recorded instead. A slug says
  * which kind of message this was, is stable across copy edits, and cannot carry

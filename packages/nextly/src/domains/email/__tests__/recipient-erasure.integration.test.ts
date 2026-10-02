@@ -16,10 +16,14 @@
  *
  * Tables are created from the PRODUCTION definitions through drizzle-kit rather
  * than from DDL written here, so the fixture cannot drift from the schema it is
- * meant to be testing. They are REBUILT each run: these are fixed-name system
- * tables and a shared test database keeps whatever shape it was first created
- * with, so reusing one would report the age of that database rather than the
- * correctness of this schema.
+ * meant to be testing. They are built fresh each run, in a database of this
+ * suite's own: a shared test database keeps whatever shape it was first
+ * created with, so reusing one would report the age of that database rather
+ * than the correctness of this schema. And these are fixed-name system tables
+ * that every suite in the run shares, so rebuilding them in place would leave
+ * this suite's shape for the suites after it. Postgres and MySQL get a
+ * database created for the run and dropped after it; SQLite's is in memory,
+ * which is already its own.
  */
 
 import { randomUUID } from "node:crypto";
@@ -30,6 +34,10 @@ import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import {
+  createScratchDatabase,
+  type ScratchDatabase,
+} from "../../../__tests__/helpers/fresh-database";
 import { getDrizzleKitForDialect } from "../../../database/drizzle-kit-lazy";
 import { emailDeliveriesMysql } from "../../../schemas/email-deliveries/mysql";
 import { emailDeliveriesPg } from "../../../schemas/email-deliveries/postgres";
@@ -93,6 +101,7 @@ for (const entry of DIALECTS) {
 
   suite(`erasing a recipient — ${entry.dialect}`, () => {
     let adapter: TestAdapter;
+    let scratch: ScratchDatabase | undefined;
 
     const q = (id: string) =>
       entry.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
@@ -134,17 +143,14 @@ for (const entry of DIALECTS) {
     }
 
     beforeAll(async () => {
-      adapter = entry.make(entry.url as string);
+      if (entry.dialect !== "sqlite") {
+        scratch = await createScratchDatabase(
+          entry.dialect,
+          "nextly_email_erasure"
+        );
+      }
+      adapter = entry.make(scratch?.url ?? (entry.url as string));
       await adapter.connect();
-
-      // Dropped in reference order — deliveries first, since it is the side
-      // holding the key. The other order fails wherever the constraint exists.
-      await adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${q("email_deliveries")}`
-      );
-      await adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${q("email_providers")}`
-      );
 
       const kit = await getDrizzleKitForDialect(
         entry.dialect as "postgresql" | "mysql" | "sqlite"
@@ -159,7 +165,13 @@ for (const entry of DIALECTS) {
     }, 60_000);
 
     afterAll(async () => {
-      await adapter.disconnect();
+      // The database goes even when the setup failed before connecting, or
+      // disconnecting fails.
+      try {
+        await adapter?.disconnect();
+      } finally {
+        await scratch?.drop();
+      }
     });
 
     beforeEach(async () => {

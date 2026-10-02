@@ -21,16 +21,19 @@
  * than from DDL written here, so the fixture cannot drift from the schema it is
  * meant to be testing.
  *
- * They are REBUILT each run rather than reused. These are fixed-name system
- * tables, and a shared test database keeps whatever shape it was first created
- * with — so a table created before this constraint existed is indistinguishable
- * from one whose schema never declared it, and reusing it would report the age
- * of the database instead of the correctness of the schema. That is not
- * hypothetical: the MySQL leg failed on exactly that before this suite started
- * rebuilding, against a table created hours earlier.
+ * They are built fresh each run, in a database of this suite's own. A shared
+ * test database keeps whatever shape it was first created with — so a table
+ * created before this constraint existed is indistinguishable from one whose
+ * schema never declared it, and reusing it would report the age of the
+ * database instead of the correctness of the schema. That is not hypothetical:
+ * the MySQL leg failed on exactly that, against a table created hours earlier.
  *
- * Dropped in reference order, deliveries first. The reverse fails wherever the
- * constraint is present, which is the state this suite exists to produce.
+ * Nor are the shared ones rebuilt in place. These are fixed-name system tables
+ * that every suite in the run shares, and dropping them leaves whatever shape
+ * this suite built for the suites after it — a drop that once passed locally
+ * four times and was refused in CI, where another table depended on them.
+ * Postgres gets a database created for the run and dropped after it; SQLite's
+ * is in memory, which is already its own.
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -39,6 +42,10 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import {
+  createScratchDatabase,
+  type ScratchDatabase,
+} from "../../../__tests__/helpers/fresh-database";
 import { getDrizzleKitForDialect } from "../../../database/drizzle-kit-lazy";
 import { emailDeliveriesPg } from "../../../schemas/email-deliveries/postgres";
 import { emailDeliveriesSqlite } from "../../../schemas/email-deliveries/sqlite";
@@ -77,6 +84,7 @@ for (const entry of DIALECTS) {
 
   suite(`a deleted provider and its deliveries — ${entry.dialect}`, () => {
     let adapter: TestAdapter;
+    let scratch: ScratchDatabase | undefined;
 
     const q = (id: string) =>
       entry.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
@@ -87,25 +95,17 @@ for (const entry of DIALECTS) {
       entry.dialect === "postgresql" ? `$${index}` : "?";
 
     beforeAll(async () => {
-      adapter = entry.make(entry.url as string);
+      // Built fresh rather than reused, because the subject is a CONSTRAINT and
+      // a table that predates it looks identical to one that never declared it
+      // — and in a database of its own, so the shared tables are never touched.
+      if (entry.dialect !== "sqlite") {
+        scratch = await createScratchDatabase(
+          entry.dialect,
+          "nextly_email_provider_ref"
+        );
+      }
+      adapter = entry.make(scratch?.url ?? (entry.url as string));
       await adapter.connect();
-
-      // Rebuilt rather than reused, because the subject is a CONSTRAINT and a
-      // table that predates it looks identical to one that never declared it.
-      // A shared test database keeps whatever shape it was first created with,
-      // so reusing it would report the age of that database instead of the
-      // correctness of this schema.
-      //
-      // Dropped in reference order — deliveries first, since it is the side
-      // that holds the key. The other order fails wherever the constraint is
-      // actually present, which is exactly the case this suite exists to
-      // create.
-      await adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${q("email_deliveries")}`
-      );
-      await adapter.executeQuery(
-        `DROP TABLE IF EXISTS ${q("email_providers")}`
-      );
 
       const kit = await getDrizzleKitForDialect(
         entry.dialect as "postgresql" | "mysql" | "sqlite"
@@ -120,7 +120,13 @@ for (const entry of DIALECTS) {
     });
 
     afterAll(async () => {
-      await adapter.disconnect();
+      // The database goes even when the setup failed before connecting, or
+      // disconnecting fails.
+      try {
+        await adapter?.disconnect();
+      } finally {
+        await scratch?.drop();
+      }
     });
 
     beforeEach(async () => {

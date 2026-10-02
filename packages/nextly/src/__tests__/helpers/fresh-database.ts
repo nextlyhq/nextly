@@ -42,6 +42,69 @@ export function availableDialects(): SupportedDialect[] {
   );
 }
 
+/** A database created beside the integration one, and how to remove it. */
+export interface ScratchDatabase {
+  /** The integration database's URL, pointed at this database instead. */
+  url: string;
+  /** Drop it and close the connection that created it. Never throws. */
+  drop(): Promise<void>;
+}
+
+/**
+ * Create a database of a test's own beside the integration database, for a
+ * suite that connects to it by URL, through the product's adapter, rather than
+ * through the pool `withFreshDatabase` hands its body.
+ *
+ * The name is a prefix; the database created is per run, so two runs — or a
+ * run and an unrelated database of the same name — never collide. A failure
+ * while creating it still closes the connection, so nothing is left open.
+ */
+export async function createScratchDatabase(
+  dialect: "postgresql" | "mysql",
+  name: string
+): Promise<ScratchDatabase> {
+  const adminUrl = readDialectUrl(dialect);
+  if (adminUrl === null) {
+    throw new Error(
+      `${dialect === "postgresql" ? "TEST_POSTGRES_URL" : "TEST_MYSQL_URL"} is unset`
+    );
+  }
+  const dbName = `${name}_${randomBytes(8).toString("hex")}`;
+  const url = new URL(adminUrl);
+  url.pathname = `/${dbName}`;
+  if (dialect === "postgresql") {
+    const { Pool } = await import("pg");
+    const admin = new Pool({ connectionString: adminUrl });
+    const drop = async (): Promise<void> => {
+      await admin.query(`DROP DATABASE IF EXISTS ${dbName}`).catch(() => {});
+      await admin.end().catch(() => {});
+    };
+    try {
+      await admin.query(`CREATE DATABASE ${dbName}`);
+    } catch (error) {
+      await drop();
+      throw error;
+    }
+    return { url: url.toString(), drop };
+  }
+  const { createPool } = await import("mysql2");
+  const admin = createPool({ uri: adminUrl });
+  const drop = async (): Promise<void> => {
+    await admin
+      .promise()
+      .query(`DROP DATABASE IF EXISTS ${dbName}`)
+      .catch(() => {});
+    await new Promise<void>(resolve => admin.end(() => resolve()));
+  };
+  try {
+    await admin.promise().query(`CREATE DATABASE ${dbName}`);
+  } catch (error) {
+    await drop();
+    throw error;
+  }
+  return { url: url.toString(), drop };
+}
+
 /**
  * Create the current core schema the way a fresh install is created —
  * drizzle-kit's own migration from nothing to the canonical definitions —
@@ -98,15 +161,9 @@ export async function withFreshDatabase(
     case "postgresql": {
       const { Pool } = await import("pg");
       const { drizzle } = await import("drizzle-orm/node-postgres");
-      const adminUrl = readDialectUrl(dialect);
-      if (adminUrl === null) throw new Error("TEST_POSTGRES_URL is unset");
-      const dbName = `${name}_${randomBytes(8).toString("hex")}`;
-      const admin = new Pool({ connectionString: adminUrl });
+      const scratch = await createScratchDatabase(dialect, name);
       try {
-        await admin.query(`CREATE DATABASE ${dbName}`);
-        const url = new URL(adminUrl);
-        url.pathname = `/${dbName}`;
-        const pool = new Pool({ connectionString: url.toString() });
+        const pool = new Pool({ connectionString: scratch.url });
         try {
           await body({
             dialect,
@@ -127,23 +184,16 @@ export async function withFreshDatabase(
           await pool.end();
         }
       } finally {
-        await admin.query(`DROP DATABASE IF EXISTS ${dbName}`).catch(() => {});
-        await admin.end();
+        await scratch.drop();
       }
       return;
     }
     case "mysql": {
       const { createPool } = await import("mysql2");
       const { drizzle } = await import("drizzle-orm/mysql2");
-      const adminUrl = readDialectUrl(dialect);
-      if (adminUrl === null) throw new Error("TEST_MYSQL_URL is unset");
-      const dbName = `${name}_${randomBytes(8).toString("hex")}`;
-      const admin = createPool({ uri: adminUrl });
+      const scratch = await createScratchDatabase(dialect, name);
       try {
-        await admin.promise().query(`CREATE DATABASE ${dbName}`);
-        const url = new URL(adminUrl);
-        url.pathname = `/${dbName}`;
-        const pool = createPool({ uri: url.toString() });
+        const pool = createPool({ uri: scratch.url });
         try {
           await body({
             dialect,
@@ -168,11 +218,7 @@ export async function withFreshDatabase(
           await new Promise<void>(resolve => pool.end(() => resolve()));
         }
       } finally {
-        await admin
-          .promise()
-          .query(`DROP DATABASE IF EXISTS ${dbName}`)
-          .catch(() => {});
-        await new Promise<void>(resolve => admin.end(() => resolve()));
+        await scratch.drop();
       }
       return;
     }
