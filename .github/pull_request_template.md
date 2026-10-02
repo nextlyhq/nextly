@@ -18,7 +18,7 @@
 
 ## Changeset
 
-This repo uses [Changesets](https://github.com/changesets/changesets). If your PR changes any publishable package under `packages/*`, you **must** include a changeset:
+This repo uses [Changesets](https://github.com/changesets/changesets). A PR that changes a published package under `packages/*` includes **one** changeset that lists every published package, since they version in lockstep, with the bump `patch` while the packages are in alpha. A PR that only changes tests, CI or docs gets none.
 
 ```bash
 pnpm changeset
@@ -26,10 +26,9 @@ pnpm changeset
 
 Then commit the generated `.changeset/*.md` file.
 
-- [ ] I added a changeset (or this PR only touches non-publishable code: docs, tests, internal tooling, `apps/*`)
-- [ ] I selected the correct semver bump (patch / minor / major)
+- [ ] I added one `patch` changeset covering every published package (or this PR only changes tests, CI or docs)
 
-> The `changeset-check` CI job will fail if a publishable package is modified without a changeset.
+> No CI job requires a changeset, so your reviewer checks it. CI does refuse a changeset you add that leaves out a package of the lockstep group.
 
 ## Test plan
 
@@ -42,7 +41,7 @@ Then commit the generated `.changeset/*.md` file.
 
 ## Checklist
 
-- [ ] I read [CONTRIBUTING](../CONTRIBUTING.md) (if it exists)
+- [ ] I read [CONTRIBUTING](../CONTRIBUTING.md)
 - [ ] My commits follow the [Conventional Commits](https://www.conventionalcommits.org/) spec (enforced by commitlint)
 - [ ] I targeted the `main` branch
 - [ ] I updated relevant documentation
