@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (ce979a1eca343fe1). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (5ab82763b39bba22). Edit that file, never this one. -->
 
 # packages/admin: Agent Guide
 
@@ -29,8 +29,9 @@ matters inside `packages/admin`.
 
 ## Component conventions
 
-- Logic lives in hooks (`src/hooks/`) and services (`src/services/`);
-  components render. Name files and variables by the feature they belong to.
+- Logic lives in hooks, services and utilities, shared ones in `src/hooks/`
+  and `src/services/` and a feature's own beside it; components render. Name
+  files and variables by the feature they belong to.
 - Tables: reset pagination when search or page size changes, set `getRowId`,
   and preserve cross-page selection semantics (follow the existing table
   components).
