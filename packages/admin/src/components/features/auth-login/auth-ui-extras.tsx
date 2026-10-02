@@ -19,23 +19,40 @@ const EMPTY: AuthUiMeta = {
   slots: { beforeForm: [], afterForm: [], branding: [] },
 };
 
+/** The auth-page UI config, and whether the request for it has settled. */
+export interface AuthUiState extends AuthUiMeta {
+  /**
+   * Whether `/auth/ui` has answered, successfully or not.
+   *
+   * The empty shape before it answers is indistinguishable from a server with
+   * no auth-UI plugins, so a page that needs a challenge view has to wait on
+   * this rather than read the empty `challengeViews` as "none registered".
+   * True after a failure as well: a request that will never succeed must not
+   * hold the page in a loading state.
+   */
+  loaded: boolean;
+}
+
 /**
  * Fetch the public auth-page UI config (D57). Returns an empty shape until loaded
  * and on any error (no auth-UI plugins, endpoint unavailable), so the login
- * screen degrades gracefully to the plain password form.
+ * screen degrades gracefully to the plain password form; `loaded` says which
+ * of those the empty shape means.
  */
-export function useAuthUi(): AuthUiMeta {
+export function useAuthUi(): AuthUiState {
   const { api } = useApi();
-  const [ui, setUi] = useState<AuthUiMeta>(EMPTY);
+  const [ui, setUi] = useState<AuthUiState>({ ...EMPTY, loaded: false });
   useEffect(() => {
     let active = true;
     void api.public
       .get<AuthUiMeta>("/auth/ui")
       .then(res => {
-        if (active && res) setUi({ ...EMPTY, ...res });
+        if (active) setUi({ ...EMPTY, ...res, loaded: true });
       })
       .catch(() => {
-        /* degrade to the plain form */
+        // Degrade to the plain form, and stop waiting on a view that will not
+        // arrive.
+        if (active) setUi({ ...EMPTY, loaded: true });
       });
     return () => {
       active = false;
@@ -228,11 +245,14 @@ export interface ChallengeResolveResult {
 
 /**
  * The props a plugin's challenge view receives, registered under
- * `contributes.auth.challengeViews[challengeType]`.
+ * `contributes.auth.ui.challengeViews[challengeType]`.
  *
  * The view collects the factor and calls `resolve` with it; the host posts it
- * to `/auth/challenge/resolve`. When the answer finishes the login, the view
- * calls `onResolved` with where to go next, or `null` for the default.
+ * to `/auth/challenge/resolve`. When that answer finishes the login, the host
+ * navigates to the login's destination itself, and a later `onResolved` call
+ * does not move it. `onResolved` decides where to go only for a view that
+ * posts its own answer with the deprecated `pendingToken`: it passes the path
+ * to land on, or `null` for the default.
  */
 export interface ChallengeViewProps {
   challengeType: string;

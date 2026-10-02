@@ -335,9 +335,16 @@ describe("a terminal failure exits the challenge UI", () => {
       });
     });
 
+    // The shape the server answers a wrong code with: a 401 whose envelope
+    // carries the retry status and the replacement token.
     post.mockRejectedValueOnce(
       Object.assign(new Error("wrong"), {
-        data: { pendingToken: "pt-2" },
+        status: 401,
+        data: {
+          status: "challenge",
+          challengeType: "test-totp",
+          pendingToken: "pt-2",
+        },
       })
     );
 
@@ -346,6 +353,7 @@ describe("a terminal failure exits the challenge UI", () => {
     });
 
     expect(result.current.challenge?.pendingToken).toBe("pt-2");
+    expect(result.current.flowEnded).toBe(false);
   });
 });
 
@@ -361,8 +369,11 @@ describe("a cookie-mode wrong answer", () => {
     });
     expect(result.current.challenge).not.toBeNull();
 
+    // A 401, as the server answers it: the status alone must not read as the
+    // flow ending while the envelope says a challenge is still live.
     post.mockRejectedValueOnce(
       Object.assign(new Error("wrong"), {
+        status: 401,
         data: { status: "challenge", challengeType: "test-totp" },
       })
     );
@@ -371,7 +382,11 @@ describe("a cookie-mode wrong answer", () => {
       await result.current.resolve({ code: "000000" });
     });
 
-    expect(result.current.challenge).not.toBeNull();
+    expect(result.current.challenge).toEqual({
+      challengeType: "test-totp",
+      next: null,
+    });
+    expect(result.current.flowEnded).toBe(false);
   });
 });
 

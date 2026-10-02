@@ -240,7 +240,7 @@ export function Login() {
           // thing left that can help.
           onCredentialRejected={challengeFlow.abandonPasswordChange}
         />
-      ) : challengeFlow.challenge ? (
+      ) : challengeFlow.challenge && authUi.loaded ? (
         <AuthChallenge
           authUi={authUi}
           challengeType={challengeFlow.challenge.challengeType}
@@ -264,10 +264,15 @@ export function Login() {
             window.location.href = next ?? ROUTES.DASHBOARD;
           }}
         />
-      ) : challengeFlow.resuming ? (
+      ) : challengeFlow.resuming || challengeFlow.challenge ? (
         // The outstanding step is still being looked up. Showing the password
         // form meanwhile swapped it out from under the person a moment later,
         // and focus fell to the page.
+        //
+        // A challenge waits here too until `/auth/ui` has answered: before
+        // then no view is registered for anything, so the challenge would
+        // render the "no UI is registered" fallback, whose link back to
+        // sign-in abandons a flow whose view is still on its way.
         <p
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
