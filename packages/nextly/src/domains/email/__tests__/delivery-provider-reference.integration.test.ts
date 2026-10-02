@@ -44,6 +44,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   createScratchDatabase,
+  describeSharedTables,
   type ScratchDatabase,
 } from "../../../__tests__/helpers/fresh-database";
 import { getDrizzleKitForDialect } from "../../../database/drizzle-kit-lazy";
@@ -58,6 +59,9 @@ interface TestAdapter {
   disconnect(): Promise<void>;
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
 }
+
+/** The fixed-name system tables these suites build, which every suite in a run shares. */
+const SHARED_TABLES = ["email_deliveries", "email_providers"];
 
 const DIALECTS: Array<{
   dialect: SupportedDialect;
@@ -85,6 +89,7 @@ for (const entry of DIALECTS) {
   suite(`a deleted provider and its deliveries — ${entry.dialect}`, () => {
     let adapter: TestAdapter;
     let scratch: ScratchDatabase | undefined;
+    let sharedBefore: unknown[] | null = null;
 
     const q = (id: string) =>
       entry.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
@@ -99,6 +104,7 @@ for (const entry of DIALECTS) {
       // a table that predates it looks identical to one that never declared it
       // — and in a database of its own, so the shared tables are never touched.
       if (entry.dialect !== "sqlite") {
+        sharedBefore = await describeSharedTables(entry.dialect, SHARED_TABLES);
         scratch = await createScratchDatabase(
           entry.dialect,
           "nextly_email_provider_ref"
@@ -203,6 +209,26 @@ for (const entry of DIALECTS) {
       expect(after).toHaveLength(1);
       expect(after[0]?.provider_id).toBeNull();
     });
+
+    it.skipIf(entry.dialect === "sqlite")(
+      "builds its tables in a database of its own, and leaves the shared ones as it found them",
+      async () => {
+        // The regression control: every assertion above reads the scratch
+        // database, so a setup that went back to rebuilding the shared tables
+        // would still pass them. This one reads the shared database itself.
+        const [connected] = await adapter.executeQuery<{ name: string }>(
+          entry.dialect === "postgresql"
+            ? "SELECT current_database() AS name"
+            : "SELECT DATABASE() AS name"
+        );
+        expect(connected?.name).not.toBe(
+          new URL(entry.url as string).pathname.slice(1)
+        );
+        expect(
+          await describeSharedTables(entry.dialect, SHARED_TABLES)
+        ).toEqual(sharedBefore);
+      }
+    );
   });
 }
 

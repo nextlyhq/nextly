@@ -106,6 +106,63 @@ export async function createScratchDatabase(
 }
 
 /**
+ * What the integration database itself holds for `tables`, so a suite that
+ * works in a scratch database can show it left the shared ones as it found
+ * them: each table present, its columns, and the constraints on it or pointing
+ * at it. On Postgres the table's oid is read too, so one dropped and rebuilt in
+ * place reads differently even with the same shape; MySQL offers no such
+ * identity to an ordinary user. Null on SQLite, whose in-memory database is
+ * already a suite's own.
+ */
+export async function describeSharedTables(
+  dialect: SupportedDialect,
+  tables: string[]
+): Promise<unknown[] | null> {
+  if (dialect === "sqlite") return null;
+  const url = readDialectUrl(dialect);
+  if (url === null) return null;
+  if (dialect === "postgresql") {
+    const { Pool } = await import("pg");
+    const pool = new Pool({ connectionString: url });
+    try {
+      const { rows } = await pool.query(
+        `SELECT c.relname AS tbl, c.oid::text AS obj,
+           (SELECT string_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END, ', ' ORDER BY a.attnum)
+              FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped) AS cols,
+           (SELECT string_agg(con.conname || ' ' || con.contype || ' on ' || con.conrelid::regclass::text, ', ' ORDER BY con.conname)
+              FROM pg_constraint con WHERE con.conrelid = c.oid OR con.confrelid = c.oid) AS refs
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = current_schema() AND c.relkind = 'r' AND c.relname = ANY($1::text[])
+         ORDER BY c.relname`,
+        [tables]
+      );
+      return rows;
+    } finally {
+      await pool.end();
+    }
+  }
+  const { createPool } = await import("mysql2");
+  const pool = createPool({ uri: url });
+  try {
+    const [rows] = await pool.promise().query(
+      `SELECT t.TABLE_NAME AS tbl,
+         (SELECT GROUP_CONCAT(CONCAT(c.COLUMN_NAME, ' ', c.COLUMN_TYPE, IF(c.IS_NULLABLE = 'NO', ' not null', '')) ORDER BY c.ORDINAL_POSITION SEPARATOR ', ')
+            FROM information_schema.COLUMNS c WHERE c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME) AS cols,
+         (SELECT GROUP_CONCAT(CONCAT(k.CONSTRAINT_NAME, ' on ', k.TABLE_NAME) ORDER BY k.CONSTRAINT_NAME SEPARATOR ', ')
+            FROM information_schema.REFERENTIAL_CONSTRAINTS k
+            WHERE k.CONSTRAINT_SCHEMA = t.TABLE_SCHEMA AND (k.TABLE_NAME = t.TABLE_NAME OR k.REFERENCED_TABLE_NAME = t.TABLE_NAME)) AS refs
+       FROM information_schema.TABLES t
+       WHERE t.TABLE_SCHEMA = DATABASE() AND t.TABLE_NAME IN (?)
+       ORDER BY t.TABLE_NAME`,
+      [tables]
+    );
+    return rows as unknown[];
+  } finally {
+    await new Promise<void>(resolve => pool.end(() => resolve()));
+  }
+}
+
+/**
  * Create the current core schema the way a fresh install is created —
  * drizzle-kit's own migration from nothing to the canonical definitions —
  * so the only differences a test then introduces are the ones it means to.

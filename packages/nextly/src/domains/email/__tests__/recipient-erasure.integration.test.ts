@@ -36,6 +36,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   createScratchDatabase,
+  describeSharedTables,
   type ScratchDatabase,
 } from "../../../__tests__/helpers/fresh-database";
 import { getDrizzleKitForDialect } from "../../../database/drizzle-kit-lazy";
@@ -70,6 +71,9 @@ interface TestAdapter {
 const ERASED = "erase-me@example.com";
 const KEPT = "someone-else@example.com";
 
+/** The fixed-name system tables these suites build, which every suite in a run shares. */
+const SHARED_TABLES = ["email_deliveries", "email_providers"];
+
 const DIALECTS: Array<{
   dialect: SupportedDialect;
   url: string | null;
@@ -102,6 +106,7 @@ for (const entry of DIALECTS) {
   suite(`erasing a recipient — ${entry.dialect}`, () => {
     let adapter: TestAdapter;
     let scratch: ScratchDatabase | undefined;
+    let sharedBefore: unknown[] | null = null;
 
     const q = (id: string) =>
       entry.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
@@ -144,6 +149,7 @@ for (const entry of DIALECTS) {
 
     beforeAll(async () => {
       if (entry.dialect !== "sqlite") {
+        sharedBefore = await describeSharedTables(entry.dialect, SHARED_TABLES);
         scratch = await createScratchDatabase(
           entry.dialect,
           "nextly_email_erasure"
@@ -224,5 +230,25 @@ for (const entry of DIALECTS) {
       expect(ERASED_RECIPIENT_HASH).toMatch(/^[a-z]+$/);
       expect(recipientDigest(ERASED)).toMatch(/^[0-9a-f]{64}$/);
     });
+
+    it.skipIf(entry.dialect === "sqlite")(
+      "builds its tables in a database of its own, and leaves the shared ones as it found them",
+      async () => {
+        // The regression control: every assertion above reads the scratch
+        // database, so a setup that went back to rebuilding the shared tables
+        // would still pass them. This one reads the shared database itself.
+        const [connected] = await adapter.executeQuery<{ name: string }>(
+          entry.dialect === "postgresql"
+            ? "SELECT current_database() AS name"
+            : "SELECT DATABASE() AS name"
+        );
+        expect(connected?.name).not.toBe(
+          new URL(entry.url as string).pathname.slice(1)
+        );
+        expect(
+          await describeSharedTables(entry.dialect, SHARED_TABLES)
+        ).toEqual(sharedBefore);
+      }
+    );
   });
 }

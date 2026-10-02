@@ -23,17 +23,19 @@
  * pseudonymised data, and a request to erase a person still reaches these
  * rows.
  *
- * **Two things erase them, for different populations.** Deleting a user
- * account overwrites the `recipient_hash` of that person's rows with a
- * sentinel no address hashes to, in the deletion's own transaction, so the
- * account is never removed while rows that identify its owner stay behind.
- * Someone who was only ever a recipient, with no account to delete, is erased
- * the same way through the delivery service's `eraseRecipient`. Either way the
- * row stays, because "how many sends failed last week" belongs to the install
- * rather than to the recipient (`domains/email/erase-recipient.ts`). Apart from
- * those requests, a retention pass deletes rows by age, scoped by
- * `retention_class` below, which reaches every row whoever it was written for
- * (`domains/email/prune.ts`).
+ * **Two things erase them, for different populations.** Deleting a user account
+ * overwrites the `recipient_hash` of that person's rows with a sentinel no
+ * address hashes to, in the deletion's own transaction, and once more just
+ * after it commits, for a send that was already in flight. A send that writes
+ * its row after that second pass still leaves a live digest, until the
+ * retention pass removes the row by age: the erasure narrows that window rather
+ * than closing it. Someone who was only ever a recipient, with no account to
+ * delete, is erased the same way through the delivery service's
+ * `eraseRecipient`. Either way the row stays, because "how many sends failed
+ * last week" belongs to the install rather than to the recipient
+ * (`domains/email/erase-recipient.ts`). Apart from those requests, a retention
+ * pass deletes rows by age, scoped by `retention_class` below, which reaches
+ * every row whoever it was written for (`domains/email/prune.ts`).
  *
  * **The rendered subject.** The template SLUG is recorded instead. A slug says
  * which kind of message this was, is stable across copy edits, and cannot carry
