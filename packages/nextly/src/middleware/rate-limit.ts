@@ -114,7 +114,9 @@ export interface RateLimitStore {
    * risking the erasure — stricter, never looser.
    *
    * `allowed` is the store's decision, not a hint: only the store knows whether
-   * the entry was recorded.
+   * the entry was recorded. On a refusal, `count` excludes the refused attempt,
+   * and a `limit` of 0 records nothing — `RateLimiter.peek` reads a key's count
+   * that way.
    */
   consume?(
     key: string,

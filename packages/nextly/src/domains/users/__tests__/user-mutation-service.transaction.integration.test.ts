@@ -237,13 +237,17 @@ describe("UserMutationService.createLocalUser — transaction path regression", 
     // protected `withTransaction` for this test only — the production API
     // surface stays unchanged.
     //
-    // For SQLite this test validates the manual BEGIN IMMEDIATE / ROLLBACK
-    // path in BaseService.withTransaction, which is the only safe route
+    // For SQLite this test validates BaseService.withTransaction's route
+    // through the adapter's transaction, which is the only safe one
     // because Drizzle's native better-sqlite3 `db.transaction(fn)` rejects
     // async callbacks with `TypeError: Transaction function cannot return a
     // promise`. For PG/MySQL the same test would exercise Drizzle's native
     // transaction rollback — the behavior contract is identical from the
     // caller's perspective.
+    //
+    // The caller receives the work's own error, as Drizzle's native
+    // transaction hands it back, not the adapter's classification of it.
+    const deliberate = new Error("deliberate rollback");
     class TxProbe extends UserMutationService {
       public async runTxAndThrow(email: string): Promise<void> {
         await this.withTransaction(async (tx: any) => {
@@ -256,16 +260,14 @@ describe("UserMutationService.createLocalUser — transaction path regression", 
             createdAt: new Date(),
             updatedAt: new Date(),
           });
-          throw new Error("deliberate rollback");
+          throw deliberate;
         });
       }
     }
     const probe = new TxProbe(adapter, silentLogger);
     const ROLLBACK_EMAIL = "rollback-probe@test.local";
 
-    await expect(probe.runTxAndThrow(ROLLBACK_EMAIL)).rejects.toThrow(
-      "deliberate rollback"
-    );
+    await expect(probe.runTxAndThrow(ROLLBACK_EMAIL)).rejects.toBe(deliberate);
 
     // The insert must have been rolled back — no row with that email should
     // exist after the transaction bubbles out with an error.

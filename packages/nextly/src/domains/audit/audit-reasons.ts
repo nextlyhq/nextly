@@ -37,6 +37,9 @@ export const AUDIT_REASONS = [
   "unverified",
   "inactive",
   "locked",
+  // The password was set between the start of a sign-in or refresh and the
+  // write of its session row.
+  "password-changed",
   // Strategy dispatch.
   "strategy-fail",
   "no-strategy-matched",
@@ -46,6 +49,7 @@ export const AUDIT_REASONS = [
   "challenge-wrong-answer",
   "challenge-failed-final",
   "challenge-attempts-exhausted",
+  "challenge-budget-spent",
   "challenge-flow-settled",
   "challenge-user-missing",
   "not-in-must-change-state",

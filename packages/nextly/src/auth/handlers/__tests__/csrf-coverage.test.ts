@@ -61,6 +61,7 @@ function makeStubDeps(
     storeRefreshToken: unreachable as never,
     findRefreshTokenByHash: unreachable as never,
     deleteRefreshToken: unreachable as never,
+    withSessionRowTransaction: unreachable as never,
     deleteRefreshTokenByHash: unreachable as never,
     deleteAllRefreshTokensForUser: unreachable as never,
     // getUserCount has to return 0 so setup does not short-circuit with

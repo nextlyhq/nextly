@@ -6,6 +6,7 @@ import type { AuthUser } from "../../types/auth";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 import type { AuthHookRegistry } from "../pipeline/hooks";
+import { provenPasswordVersion } from "../pipeline/password-strategy";
 import {
   mintPendingToken,
   MUST_CHANGE_PASSWORD_CHALLENGE,
@@ -78,7 +79,12 @@ export interface LoginHandlerDeps extends IssueSessionDeps {
  */
 async function pauseWithPendingToken(
   deps: Pick<LoginHandlerDeps, "secret" | "challengeTokenTTL">,
-  claims: { userId: string; challengeId: string; strategy?: string }
+  claims: {
+    userId: string;
+    challengeId: string;
+    strategy?: string;
+    passwordUpdatedAt?: Date | null;
+  }
 ): Promise<string> {
   return mintPendingToken(
     // A fresh FLOW per pause: each interrupted login is its own attempt
@@ -89,6 +95,13 @@ async function pauseWithPendingToken(
     // one flow guessing far past the cap.
     {
       ...claims,
+      // Epoch milliseconds in the token; the session the answer mints is
+      // judged against it (see `PendingClaims.passwordUpdatedAt`).
+      passwordUpdatedAt:
+        claims.passwordUpdatedAt === undefined ||
+        claims.passwordUpdatedAt === null
+          ? claims.passwordUpdatedAt
+          : claims.passwordUpdatedAt.getTime(),
       attempts: 0,
       flow: newChallengeFlowId(),
       flowExpiresAt: Math.floor(Date.now() / 1000) + deps.challengeTokenTTL,
@@ -120,6 +133,8 @@ async function interruptedLogin(
     strategy?: string;
     requestId: string;
     mustChangePassword: boolean;
+    /** The password version the session will be judged against. */
+    passwordUpdatedAt: Date | null;
   }
 ): Promise<LoginContinuation> {
   const { afterAuth, strategy, requestId, mustChangePassword } = args;
@@ -130,6 +145,9 @@ async function interruptedLogin(
       userId: ch.userId,
       challengeId: ch.id,
       strategy,
+      // Carried to the session the answer mints: a password set while the
+      // second factor is outstanding ends the sign-in the old one started.
+      passwordUpdatedAt: args.passwordUpdatedAt,
     });
     return { interrupted: challengeResponse(ch, pendingToken, requestId) };
   }
@@ -247,11 +265,16 @@ export async function handleLogin(
       // person a second-factor prompt to solve before the refusal arrived,
       // and sent the code the challenge exists to verify. The password
       // lockout stays a password-strategy concern, as it is at session time.
-      await gateAccountForSession(deps, outcome.challenge.userId, strategy);
+      const challengedState = await gateAccountForSession(
+        deps,
+        outcome.challenge.userId,
+        strategy
+      );
       const pendingToken = await pauseWithPendingToken(deps, {
         userId: outcome.challenge.userId,
         challengeId: outcome.challenge.id,
         strategy,
+        passwordUpdatedAt: challengedState.passwordUpdatedAt,
       });
       await stallResponse(startTime, deps.loginStallTimeMs);
       return challengeResponse(outcome.challenge, pendingToken, requestId);
@@ -268,6 +291,13 @@ export async function handleLogin(
       outcome.user.id,
       strategy
     );
+    // The password version this sign-in earned its session against: the one
+    // the password strategy proved, read in the same row as the hash it
+    // compared, or for any other strategy the one the gate just read. A
+    // password set after it refuses the session at its refresh-row write.
+    const proven = provenPasswordVersion(outcome.user);
+    const passwordUpdatedAt =
+      proven !== undefined ? proven : accountState.passwordUpdatedAt;
     const afterAuth = await deps.authHooks.runAfterAuthenticate(
       outcome.user,
       deps.pluginCtx
@@ -282,6 +312,7 @@ export async function handleLogin(
       // not re-read it — an admin-set temporary password stayed usable
       // through a benign profile-transforming hook.
       mustChangePassword: accountState.mustChangePassword === true,
+      passwordUpdatedAt,
     });
     if ("interrupted" in continuation) {
       await stallResponse(startTime, deps.loginStallTimeMs);
@@ -293,7 +324,7 @@ export async function handleLogin(
       deps,
       request,
       requestId,
-      { strategy }
+      { strategy, passwordUpdatedAt }
     );
     await stallResponse(startTime, deps.loginStallTimeMs);
     return response;

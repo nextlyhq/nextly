@@ -20,6 +20,8 @@ export interface UserUpdateData {
   image?: string | null;
   emailVerified?: Date | null;
   passwordHash?: string;
+  /** When the password was last set. */
+  passwordUpdatedAt?: Date;
   isActive?: boolean;
   /** When an administrator deactivated the account; null once reactivated. */
   deactivatedAt?: Date | null;

@@ -19,7 +19,10 @@
 import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 
-/** The account facts the gate decides on, as stored on the user row. */
+/**
+ * @experimental The account facts the gate decides on, as stored on the user
+ * row.
+ */
 export interface AccountState {
   userId: string;
   isActive: boolean;
@@ -39,6 +42,17 @@ export interface AccountState {
    * any other deactivated account instead.
    */
   deactivatedAt?: Date | null;
+  /**
+   * When the account's password was last set; null when it never has been.
+   * The session-row write compares it with the value read when the sign-in
+   * or refresh began, so a password set in between refuses the session the
+   * old credentials were about to receive. The column holds whole seconds on
+   * MySQL and SQLite, so two writes within one second read as one.
+   *
+   * Required, so a state read that leaves it out fails to compile rather
+   * than reading as "never set" and refusing, or admitting, every session.
+   */
+  passwordUpdatedAt: Date | null;
 }
 
 export interface AccountGateOptions {
@@ -112,5 +126,28 @@ export function assertAccountUsable(
     throw NextlyError.invalidCredentials({
       logContext: { userId: state.userId, reason: auditReason("inactive") },
     });
+  }
+}
+
+/**
+ * The gate as a question rather than an error: whether an account may hold a
+ * session, for a caller that refuses in its own way rather than by throwing —
+ * a refresh ending the session it was asked to renew, a session check
+ * answering a plugin-resolved user as nobody.
+ *
+ * `null`, an account that no longer exists, may not. An error that is not the
+ * gate's own refusal is rethrown: a failure to judge is not a judgement.
+ */
+export function accountMayHoldSession(
+  state: AccountState | null,
+  opts: AccountGateOptions
+): boolean {
+  if (!state) return false;
+  try {
+    assertAccountUsable(state, opts);
+    return true;
+  } catch (error) {
+    if (!NextlyError.is(error)) throw error;
+    return false;
   }
 }

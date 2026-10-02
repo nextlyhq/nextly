@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../errors/nextly-error";
+import { fakeSessionRows } from "../handlers/__tests__/session-row-fake";
 import { AuthHookRegistry } from "../pipeline/hooks";
 import {
   createPluginAuthApi,
@@ -44,6 +45,11 @@ function makeDeps(o: Overrides = {}): CompleteLoginDeps {
     lockedUntil: null,
     emailVerified: new Date("2026-01-01T00:00:00Z"),
   };
+  const sessionRows = fakeSessionRows(async userId => ({
+    userId,
+    passwordUpdatedAt: null,
+    ...state,
+  }));
   return {
     secret: SECRET,
     isProduction: false,
@@ -54,10 +60,14 @@ function makeDeps(o: Overrides = {}): CompleteLoginDeps {
     trustedProxyIps: [],
     requireEmailVerification: true,
     findUserById: vi.fn(async () => user),
-    fetchAccountState: vi.fn(async (userId: string) => ({ userId, ...state })),
+    fetchAccountState: vi.fn(async (userId: string) => ({
+      userId,
+      passwordUpdatedAt: null,
+      ...state,
+    })),
     fetchRoleIds: vi.fn(async () => []),
     fetchCustomFields: vi.fn(async () => ({})),
-    storeRefreshToken: vi.fn(async () => {}),
+    withSessionRowTransaction: sessionRows.withSessionRowTransaction,
     authHooks: o.hooks ?? new AuthHookRegistry(),
     pluginCtx: {} as never,
     auditLog: { write: vi.fn(async () => {}) } as never,

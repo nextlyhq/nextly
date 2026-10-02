@@ -42,14 +42,15 @@ export interface SetInitialPasswordDeps extends IssueSessionDeps {
   loginStallTimeMs: number;
   auditLog: AuditLogWriter;
   /**
-   * Replaces the admin-set password and clears the must-change flag. Throws
+   * Replaces the admin-set password and clears the must-change flag, and
+   * returns the `passwordUpdatedAt` it wrote, read back as stored. Throws
    * NextlyError(VALIDATION_ERROR) on a weak password and NextlyError(INVALID_INPUT)
    * when the account is no longer in the must-change state.
    */
   setInitialPassword: (
     userId: string,
     newPassword: string
-  ) => Promise<{ userId: string }>;
+  ) => Promise<{ userId: string; passwordUpdatedAt: Date | null }>;
   findUserById: (userId: string) => Promise<{
     id: string;
     email: string;
@@ -128,8 +129,9 @@ export async function handleSetInitialPassword(
     // afterwards, for a change of state in between.
     await gateAccountForSession(deps, pending.userId, pending.strategy);
 
+    let written;
     try {
-      await deps.setInitialPassword(pending.userId, newPassword);
+      written = await deps.setInitialPassword(pending.userId, newPassword);
     } catch (err) {
       // Only a stale/replayed flow (the account is no longer in the must-change
       // state) collapses to the generic invalid-credentials response. A
@@ -182,7 +184,15 @@ export async function handleSetInitialPassword(
       deps,
       request,
       requestId,
-      pending,
+      // The version this request wrote, not one read afterwards: a reset
+      // committed between the change and the session would otherwise be the
+      // version the session is judged against, and the session would
+      // outlive it.
+      {
+        strategy: pending.strategy,
+        next: pending.next,
+        passwordUpdatedAt: written.passwordUpdatedAt?.getTime() ?? null,
+      },
       startTime
     );
   } catch (err) {

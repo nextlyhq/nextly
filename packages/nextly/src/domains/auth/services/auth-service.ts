@@ -25,6 +25,12 @@ import type { Logger } from "../../../services/shared";
 import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { auditReason } from "../../audit/audit-reasons";
+import {
+  passwordColumns,
+  updateUserEndingSessions,
+  type PasswordWriteTx,
+} from "../../users/services/password-write";
+import { UserAccountService } from "../../users/services/user-account-service";
 import { UserQueryService } from "../../users/services/user-query-service";
 import { generateInviteTokenValue, hashInviteToken } from "../lib/invite-token";
 
@@ -73,12 +79,16 @@ interface AcceptInviteResult {
  * is dialect-specific; narrowing to the methods actually called keeps the body
  * typed without an `any`.
  */
-interface TransactionLike {
-  update(table: unknown): {
-    set(data: unknown): { where(condition: unknown): Promise<unknown> };
-  };
-  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+interface TransactionLike extends PasswordWriteTx {
   insert(table: unknown): { values(data: unknown): Promise<unknown> };
+  // Only the password-version read back after a forced change selects.
+  select(fields: { passwordUpdatedAt: unknown }): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(count: number): Promise<{ passwordUpdatedAt: Date | null }[]>;
+      };
+    };
+  };
 }
 
 /**
@@ -118,7 +128,7 @@ export class AuthService extends BaseService {
   }
 
   // withTransaction is inherited from BaseService which routes through
-  // Drizzle native on PG/MySQL and manual BEGIN/COMMIT on SQLite.
+  // Drizzle native on PG/MySQL and the adapter's transaction on SQLite.
   // Do NOT override it here — the base class's dialect-aware routing
   // is what makes async transaction callbacks work on all three dialects.
 
@@ -359,35 +369,21 @@ export class AuthService extends BaseService {
 
     const newPasswordHash = await hashPasswordBcrypt(newPassword);
 
-    let changed: unknown;
-    try {
-      // Conditional on the account not being deactivated, in the same
-      // statement. A deactivated account's credentials are frozen, as they are
-      // for a reset link, an invite and the forced first-sign-in change: an
-      // access token still inside its lifetime, or a Direct API token, must
-      // not set a password for a later reactivation to switch on. Decided by
-      // the write rather than a read before it, which could not see a
-      // deactivation landing while the password was hashed.
-      changed = await this.db
-        .update(this.tables.users)
-        .set({
-          passwordHash: newPasswordHash,
-          passwordUpdatedAt: new Date(),
-          // The user chose this password themselves, so any admin-set
-          // must-change requirement is satisfied.
-          mustChangePassword: false,
-        })
-        .where(
-          and(
-            eq(this.tables.users.id, userId),
-            isNull(this.tables.users.deactivatedAt)
-          )
-        );
-    } catch (error) {
-      // Normalise raw driver errors before mapping.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
-    }
-    if (affectedRowCount(changed, this.dialect) !== 1) {
+    // The users service's own-password write, so both services that change
+    // a user's own password make the one write: conditional on the account
+    // not being deactivated, in the same statement, and ending every session
+    // the account holds in the same transaction. A deactivated account's
+    // credentials are frozen, as they are for a reset link, an invite and the
+    // forced first-sign-in change: an access token still inside its
+    // lifetime, or a Direct API token, must not set a password for a later
+    // reactivation to switch on. Decided by the write rather than a read
+    // before it, which could not see a deactivation landing while the
+    // password was hashed.
+    const changed = await new UserAccountService(
+      this.adapter,
+      this.logger
+    ).changeOwnPasswordHash(userId, newPasswordHash);
+    if (!changed) {
       throw NextlyError.invalidCredentials({
         logContext: { reason: auditReason("inactive"), userId },
       });
@@ -628,29 +624,19 @@ export class AuthService extends BaseService {
     try {
       const passwordHash = await hashPasswordBcrypt(newPassword);
 
-      // Update password by user ID (same pattern as changePassword — avoids
-      // transaction/email-matching issues that caused the update to silently
-      // affect 0 rows). Conditional on the account not being deactivated, in
-      // the same statement that sets the password: an administrator may have
-      // switched the account off while the new password was being hashed,
-      // and the read above would not have seen it. The credentials stay
-      // frozen in that window too.
-      const reset = await this.db
-        .update(this.tables.users)
-        .set({
-          passwordHash,
-          passwordUpdatedAt: new Date(),
-          // Resetting via an emailed link means the user set this password
-          // themselves — clear any admin-set must-change requirement.
-          mustChangePassword: false,
-        })
-        .where(
-          and(
-            eq(this.tables.users.id, targetUser.id),
-            isNull(this.tables.users.deactivatedAt)
-          )
-        );
-      if (affectedRowCount(reset, this.dialect) !== 1) {
+      // The own-password write `changePassword` makes: conditional on the
+      // account not being deactivated, in the same statement that sets the
+      // password, and ending every session the account holds. An
+      // administrator may have switched the account off while the new
+      // password was being hashed, and the read above would not have seen
+      // it; the credentials stay frozen in that window too. Whoever asked
+      // for the reset may not be the only one holding a session, so the
+      // reset ends them all on every path that resets.
+      const reset = await new UserAccountService(
+        this.adapter,
+        this.logger
+      ).changeOwnPasswordHash(targetUser.id, passwordHash);
+      if (!reset) {
         throw NextlyError.validation({
           errors: [
             {
@@ -1086,23 +1072,24 @@ export class AuthService extends BaseService {
         // administrator, in the same statement that sets the password: an
         // invite must not set credentials on, or re-activate, an account an
         // administrator switched off. Throwing here rolls the claim back too,
-        // and the refusal reads like any other dead invite.
-        const accepted = await tx
-          .update(this.tables.users)
-          .set({
-            passwordHash,
-            passwordUpdatedAt: new Date(),
-            emailVerified: new Date(),
-            isActive: true,
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(this.tables.users.id, invite.userId),
-              isNull(this.tables.users.deactivatedAt)
-            )
-          );
-        if (affectedRowCount(accepted, this.dialect) !== 1) {
+        // and the refusal reads like any other dead invite. Through the
+        // shared password write, so any session the account already holds
+        // ends with the password it was issued under.
+        const accepted = await updateUserEndingSessions(
+          tx,
+          this.tables,
+          this.dialect,
+          {
+            userId: invite.userId,
+            set: {
+              ...passwordColumns(passwordHash),
+              emailVerified: new Date(),
+              isActive: true,
+            },
+            unlessDeactivated: true,
+          }
+        );
+        if (accepted !== 1) {
           throw this.invalidInviteError({
             inviteId: invite.id,
             reason: "account-deactivated",
@@ -1135,6 +1122,10 @@ export class AuthService extends BaseService {
    * after it has already been changed — exactly one call flips the flag, and
    * only that one writes the new password.
    *
+   * Returns the password version it wrote, as stored, so the session the
+   * change goes on to issue is judged against this password and not against
+   * whatever a later read finds.
+   *
    * @throws NextlyError(VALIDATION_ERROR) on a weak password.
    * @throws NextlyError(INVALID_INPUT) when the account is not (or is no longer)
    *   in the must-change state.
@@ -1142,7 +1133,7 @@ export class AuthService extends BaseService {
   async setInitialPassword(
     userId: string,
     newPassword: string
-  ): Promise<{ userId: string }> {
+  ): Promise<{ userId: string; passwordUpdatedAt: Date | null }> {
     const passwordStrength = validatePasswordStrength(newPassword);
     if (!passwordStrength.ok) {
       throw NextlyError.validation({
@@ -1189,38 +1180,44 @@ export class AuthService extends BaseService {
 
     const passwordHash = await hashPasswordBcrypt(newPassword);
 
-    let changed = false;
+    // The version as stored, read back in the transaction that wrote it:
+    // MySQL and SQLite keep whole seconds, so the value written here is not
+    // the one a later read compares against.
+    let written: { passwordUpdatedAt: Date | null } | undefined;
     try {
       await this.withTransaction(async txRaw => {
         const tx = txRaw as TransactionLike;
-        const claim = await tx
-          .update(this.tables.users)
-          .set({
-            passwordHash,
-            mustChangePassword: false,
-            passwordUpdatedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(this.tables.users.id, userId),
-              eq(this.tables.users.mustChangePassword, true),
-              // Conditional on the account not being deactivated, in the
-              // same statement: an administrator may have switched it off
-              // after the pending token was issued, and a zero-row write
-              // falls to the not-in-must-change-state refusal below — no
-              // password planted for a later reactivation to switch on.
-              isNull(this.tables.users.deactivatedAt)
-            )
-          );
-        if (affectedRowCount(claim, this.dialect) !== 1) return;
-        changed = true;
+        // Through the shared password write, so the account's sessions end
+        // with the admin-set password. Conditional on the flag still being
+        // set and, in the same statement, on the account not being
+        // deactivated: an administrator may have switched it off after the
+        // pending token was issued, and a zero-row write falls to the
+        // not-in-must-change-state refusal below — no password planted for a
+        // later reactivation to switch on.
+        const claimed = await updateUserEndingSessions(
+          tx,
+          this.tables,
+          this.dialect,
+          {
+            userId,
+            set: passwordColumns(passwordHash),
+            unlessDeactivated: true,
+            when: eq(this.tables.users.mustChangePassword, true),
+          }
+        );
+        if (claimed !== 1) return;
+        const [row] = await tx
+          .select({ passwordUpdatedAt: this.tables.users.passwordUpdatedAt })
+          .from(this.tables.users)
+          .where(eq(this.tables.users.id, userId))
+          .limit(1);
+        written = row;
       });
     } catch (error) {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
-    if (!changed) {
+    if (!written) {
       throw new NextlyError({
         code: "INVALID_INPUT",
         publicMessage: "This request is no longer valid. Please sign in again.",
@@ -1228,7 +1225,7 @@ export class AuthService extends BaseService {
       });
     }
 
-    return { userId };
+    return { userId, passwordUpdatedAt: written.passwordUpdatedAt };
   }
 
   /**

@@ -49,6 +49,8 @@ import { verifyCredentials } from "../../credentials/verify-credentials";
 import { AuthHookRegistry } from "../../pipeline/hooks";
 import { createPasswordStrategy } from "../../pipeline/password-strategy";
 
+import { fakeSessionRows } from "./session-row-fake";
+
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 
 /**
@@ -56,14 +58,17 @@ const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
  * assert response shapes rather than account state, so the gate is given a
  * usable account and the shape under test is what decides the result.
  */
+const usableAccount = async (userId: string) => ({
+  userId,
+  isActive: true,
+  lockedUntil: null,
+  emailVerified: new Date("2026-01-01T00:00:00Z"),
+});
 const usableAccountGate = {
   requireEmailVerification: true,
-  fetchAccountState: async (userId: string) => ({
-    userId,
-    isActive: true,
-    lockedUntil: null,
-    emailVerified: new Date("2026-01-01T00:00:00Z"),
-  }),
+  fetchAccountState: usableAccount,
+  withSessionRowTransaction:
+    fakeSessionRows(usableAccount).withSessionRowTransaction,
 };
 
 /**
@@ -93,6 +98,7 @@ function loginPipelineDeps(lockoutDeps: {
         name: u.name,
         image: u.image,
         mustChangePassword: u.mustChangePassword,
+        passwordUpdatedAt: u.passwordUpdatedAt,
       };
     },
   });
@@ -651,7 +657,6 @@ describe("refresh handler: respondData shape", () => {
       }),
       deleteRefreshToken: vi.fn().mockResolvedValue(undefined),
       deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
-      storeRefreshToken: vi.fn().mockResolvedValue(undefined),
       findUserById: vi.fn().mockResolvedValue({
         id: "u1",
         email: "a@example.com",
@@ -691,7 +696,7 @@ describe("refresh handler: respondData shape", () => {
   it("returns 503 (and does NOT delete old refresh token or clear cookies) when findUserById throws", async () => {
     const tokenHash = hashRefreshToken("raw-refresh-token");
     const deleteRefreshToken = vi.fn().mockResolvedValue(undefined);
-    const storeRefreshToken = vi.fn().mockResolvedValue(undefined);
+    const rows = fakeSessionRows(usableAccount);
     const deps = {
       secret: SECRET,
       isProduction: false,
@@ -706,7 +711,7 @@ describe("refresh handler: respondData shape", () => {
       }),
       deleteRefreshToken,
       deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
-      storeRefreshToken,
+      withSessionRowTransaction: rows.withSessionRowTransaction,
       findUserById: vi.fn().mockRejectedValue(new Error("connection lost")),
       fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
       fetchCustomFields: vi.fn().mockResolvedValue({}),
@@ -732,7 +737,7 @@ describe("refresh handler: respondData shape", () => {
     expect(setCookie).not.toMatch(/nextly_refresh=;/);
     // Old token must remain in the DB so the next attempt can find it.
     expect(deleteRefreshToken).not.toHaveBeenCalled();
-    expect(storeRefreshToken).not.toHaveBeenCalled();
+    expect(rows.calls).toEqual([]);
   });
 });
 
@@ -995,8 +1000,6 @@ describe("reset-password handler: respondAction shape", () => {
       resetPasswordWithToken: vi
         .fn()
         .mockResolvedValue({ email: "a@example.com" }),
-      deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
-      findUserByEmail: vi.fn().mockResolvedValue({ id: "u1" }),
     };
     const req = makeRequest("POST", {
       token: "t",
@@ -1169,7 +1172,6 @@ describe("change-password handler: respondAction shape", () => {
       secret: SECRET,
       allowedOrigins: ALLOWED_ORIGINS,
       changePassword: vi.fn().mockResolvedValue({ success: true }),
-      deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
       auditLog: { write: vi.fn().mockResolvedValue(undefined) },
       trustProxy: false,
       trustedProxyIps: [],

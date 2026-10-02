@@ -28,7 +28,11 @@ import { readCsrfCookie, readCsrfFromRequest } from "./csrf/csrf-cookie";
 import { readCsrfBody } from "./csrf/read-csrf-body";
 import { validateCsrf } from "./csrf/validate";
 import { recordLoginFailure } from "./handlers/handler-utils";
-import { mintSession, type IssueSessionDeps } from "./handlers/issue-session";
+import {
+  gateAccountForSession,
+  mintSession,
+  type IssueSessionDeps,
+} from "./handlers/issue-session";
 import type { AuthHookRegistry } from "./pipeline/hooks";
 import {
   MUST_CHANGE_PASSWORD_CHALLENGE,
@@ -36,7 +40,6 @@ import {
   newChallengeFlowId,
 } from "./pipeline/pending-token";
 import { sanitizeAdminPath } from "./redirect/sanitize-admin-path";
-import { assertAccountUsable } from "./session/account-state";
 import { getSession } from "./session/get-session";
 
 /** @experimental What `ctx.auth.completeLogin` takes besides the user id. */
@@ -63,7 +66,8 @@ export interface PluginAuthApi {
    * Order, preconditions first:
    *   1. load the user by id (callers cannot fabricate profile fields);
    *   2. the account-state gate (inactive and unverified refused; the password
-   *      lockout does not apply);
+   *      lockout applies only to a login recorded as the `password` strategy,
+   *      as at the session mint);
    *   3. the beforeLogin hooks (maintenance mode and IP allowlists apply to
    *      an external login too);
    *   4. the afterAuthenticate hooks (second factor);
@@ -200,15 +204,9 @@ async function loadUsableUser(
 
   // The account gate runs BEFORE any hook: a `beforeLogin` handler may act —
   // send a code, write a record — and must never do so for an account that
-  // cannot sign in.
-  const state = await deps.fetchAccountState(user.id);
-  if (!state) throw refusal();
-  assertAccountUsable(state, {
-    requireEmailVerification: deps.requireEmailVerification,
-    // An external login is not a password attempt, so wrong passwords typed
-    // at this address must not block it.
-    enforcePasswordLockout: false,
-  });
+  // cannot sign in. The session mint asks the same gate with the same
+  // strategy, so the two cannot disagree about one account.
+  await gateAccountForSession(deps, user.id, opts.strategy);
 
   await deps.authHooks.runBeforeLogin(
     { request: opts.request, body: {}, strategyName: opts.strategy },

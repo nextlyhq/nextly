@@ -13,6 +13,8 @@ import {
   type ChallengeResolveDeps,
 } from "../challenge-resolve";
 
+import { fakeSessionRows } from "./session-row-fake";
+
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 
 function makeDeps() {
@@ -22,6 +24,15 @@ function makeDeps() {
     resolve: async ({ response }) =>
       response.code === "123456" ? { ok: true } : { ok: false },
   });
+  const fetchAccountState = vi.fn().mockResolvedValue({
+    userId: "u1",
+    isActive: true,
+    lockedUntil: null,
+    emailVerified: new Date("2026-01-01T00:00:00Z"),
+  });
+  // The locked re-read answers what the plain read answers, including what a
+  // case installs on it.
+  const sessionRows = fakeSessionRows(userId => fetchAccountState(userId));
   return {
     secret: SECRET,
     isProduction: false,
@@ -31,7 +42,8 @@ function makeDeps() {
     trustedProxyIps: [],
     fetchRoleIds: vi.fn().mockResolvedValue(["editor"]),
     fetchCustomFields: vi.fn().mockResolvedValue({}),
-    storeRefreshToken: vi.fn().mockResolvedValue(undefined),
+    withSessionRowTransaction: sessionRows.withSessionRowTransaction,
+    sessionRows,
     authHooks: new AuthHookRegistry(),
     pluginCtx: {} as never,
     challengeRegistry,
@@ -48,18 +60,16 @@ function makeDeps() {
       isActive: true,
     }),
     requireEmailVerification: true,
-    fetchAccountState: vi.fn().mockResolvedValue({
-      userId: "u1",
-      isActive: true,
-      lockedUntil: null,
-      emailVerified: new Date("2026-01-01T00:00:00Z"),
-    }),
+    fetchAccountState,
     // DECLARED here, though it starts undefined, so the cases that install a
     // counter are assigning to a known property rather than widening the
     // inferred literal — which is what left their callback parameters
     // implicitly `any` and the assignment itself an error.
     countChallengeAttempt: undefined as
       | ChallengeResolveDeps["countChallengeAttempt"]
+      | undefined,
+    peekChallengeAttempts: undefined as
+      | ChallengeResolveDeps["peekChallengeAttempts"]
       | undefined,
   };
 }
@@ -376,10 +386,9 @@ describe("the challenge budget as a precondition", () => {
       makeRequest({ pendingToken, response: { code } }),
       withCounter as never
     );
-    // Budget spends only: once the budget refuses, the settle mark is asked
-    // whether a success caused it, which spends nothing.
-    const budget = seen.filter(key => !key.endsWith(":settled"));
-    return { status: res.status, spent: seenAtResolve ?? budget.length };
+    // A refused attempt never reaches the resolver, and consults the counter
+    // only for the budget.
+    return { status: res.status, spent: seenAtResolve ?? seen.length };
   }
 
   it("spends the budget on a CORRECT answer too", async () => {
@@ -649,34 +658,19 @@ describe("a cookie-mode flow that fails for good", () => {
     // challenge after every reload — the login page hiding its password and
     // provider options behind a continuation nothing can finish.
     const deps = makeDeps();
-    // The budget is spent, and no correct answer ever settled the flow.
-    deps.countChallengeAttempt = async key => ({
-      allowed: key.endsWith(":settled"),
-    });
-
+    deps.countChallengeAttempt = async () => ({ allowed: true });
+    // The token's own count says the flow is over.
     const pendingToken = await mint({
       userId: "u1",
       challengeId: "totp",
-      attempts: 0,
+      attempts: 5,
       flow: "f1",
     });
-    const request = new Request(
-      "http://localhost:3000/admin/api/auth/challenge/resolve",
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          cookie: `nextly_csrf=tok; nextly_pending=${pendingToken}`,
-          origin: "http://localhost:3000",
-        },
-        body: JSON.stringify({
-          csrfToken: "tok",
-          response: { code: "123456" },
-        }),
-      }
-    );
 
-    const res = await handleChallengeResolve(request, deps);
+    const res = await handleChallengeResolve(
+      makeCookieRequest(pendingToken, { code: "123456" }),
+      deps
+    );
     expect(res.status).toBe(401);
     // The clear-serialization the cookie helper emits: empty value, gone at
     // once. What matters is that a Set-Cookie for the pending cookie is on
@@ -684,6 +678,31 @@ describe("a cookie-mode flow that fails for good", () => {
     expect(res.headers.getSetCookie().join("\n")).toMatch(
       /nextly_pending=;.*Max-Age=0/
     );
+  });
+
+  it("keeps the cookie when a spent budget may be a settled flow's", async () => {
+    // A full budget is also what a correct answer leaves behind, and the
+    // winner of two simultaneous answers may have just set this cookie for
+    // the next step. An injected counter with no peek cannot say which.
+    const deps = makeDeps();
+    deps.countChallengeAttempt = async () => ({ allowed: false });
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow: "f2",
+    });
+
+    const res = await handleChallengeResolve(
+      makeCookieRequest(pendingToken, { code: "123456" }),
+      deps
+    );
+    expect(res.status).toBe(401);
+    expect(res.headers.getSetCookie().join("\n")).not.toMatch(
+      /nextly_pending=;/
+    );
+    expect(failureRows(deps)).toEqual([
+      expect.objectContaining({ reason: "challenge-budget-spent" }),
+    ]);
   });
 });
 
@@ -768,12 +787,14 @@ describe("the flow lifetime on the pending-status path", () => {
   it("still reports a live flow", async () => {
     const { handlePending } = await import("../pending");
     const deps = makeDeps() as never;
+    // A flow of its own: the default counter keeps every case's budget in
+    // one process, and a flow another case spent is no longer live.
     const live = await mintPendingToken(
       {
         userId: "u1",
         challengeId: "totp",
         attempts: 0,
-        flow: "f1",
+        flow: "pending-live-flow",
         flowExpiresAt: Math.floor(Date.now() / 1000) + 300,
       },
       SECRET,
@@ -990,7 +1011,7 @@ describe("a pending token after its challenge succeeded", () => {
     expect(replay.status).toBe(401);
     // Refused before the resolver: a replay never reaches plugin code.
     expect(resolve).not.toHaveBeenCalled();
-    expect(deps.storeRefreshToken).toHaveBeenCalledTimes(1);
+    expect(deps.sessionRows.committed).toHaveLength(1);
   });
 
   it("mints one session when two correct answers arrive together", async () => {
@@ -1015,7 +1036,7 @@ describe("a pending token after its challenge succeeded", () => {
     ).map(res => res.status);
 
     expect(statuses.sort()).toEqual([200, 401]);
-    expect(deps.storeRefreshToken).toHaveBeenCalledTimes(1);
+    expect(deps.sessionRows.committed).toHaveLength(1);
   });
 
   it("does not clear the winner's cookie from the losing response", async () => {
@@ -1078,5 +1099,388 @@ describe("the reserved challenge id", () => {
         resolve: async () => ({ ok: true }),
       })
     ).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR" }));
+  });
+});
+
+describe("a flow whose budget is spent", () => {
+  /** A body-mode resolve of `token` with `code`. */
+  function answer(
+    deps: ReturnType<typeof makeDeps>,
+    token: string,
+    code: string
+  ): Promise<Response> {
+    return handleChallengeResolve(
+      makeRequest({ pendingToken: token, response: { code } }),
+      deps
+    );
+  }
+
+  it("lets the correct last answer through when it is submitted twice", async () => {
+    // The default counter, as production keeps it without a shared store.
+    // Four wrong answers leave one attempt; a double-submitted correct code
+    // spends it once and is refused once. The refused request must not take
+    // the settle mark, or the one holding the last attempt finds it taken.
+    const deps = makeDeps();
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow: "double-submit-last",
+    });
+    for (let i = 0; i < 4; i++) {
+      expect((await answer(deps, pendingToken, "000000")).status).toBe(401);
+    }
+    // The second submission arrives while the first, holding the last
+    // attempt, is inside the resolver, and finishes before it.
+    let second: Response | undefined;
+    const resolve = deps.challengeRegistry.resolve.bind(deps.challengeRegistry);
+    vi.spyOn(deps.challengeRegistry, "resolve").mockImplementationOnce(
+      async (...args) => {
+        second = await answer(deps, pendingToken, "123456");
+        return resolve(...args);
+      }
+    );
+
+    const first = await answer(deps, pendingToken, "123456");
+
+    expect(second?.status).toBe(401);
+    expect(first.status).toBe(200);
+    expect(deps.sessionRows.committed).toHaveLength(1);
+  });
+
+  it("lets the correct last answer through in cookie mode too", async () => {
+    // The refused submission must not take the settle mark, or the request
+    // holding the last attempt finds it taken and is refused as a replay.
+    const deps = makeDeps();
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow: "double-submit-last-cookie",
+    });
+    for (let i = 0; i < 4; i++) {
+      await handleChallengeResolve(
+        makeRequest({ pendingToken, response: { code: "000000" } }),
+        deps
+      );
+    }
+    let second: Response | undefined;
+    const resolve = deps.challengeRegistry.resolve.bind(deps.challengeRegistry);
+    vi.spyOn(deps.challengeRegistry, "resolve").mockImplementationOnce(
+      async (...args) => {
+        second = await handleChallengeResolve(
+          makeCookieRequest(pendingToken, { code: "123456" }),
+          deps
+        );
+        return resolve(...args);
+      }
+    );
+
+    const first = await handleChallengeResolve(
+      makeCookieRequest(pendingToken, { code: "123456" }),
+      deps
+    );
+
+    expect(second?.status).toBe(401);
+    expect(first.status).toBe(200);
+    expect(deps.sessionRows.committed).toHaveLength(1);
+  });
+
+  it("leaves the next-step cookie to the correct last answer when it is submitted twice", async () => {
+    // A must-change account in cookie mode. The second submission is refused
+    // for the spent budget before the first, holding the last attempt, has
+    // settled the flow. A clear sent with that refusal can reach the browser
+    // after the first's cookie for the password-change step and erase it.
+    const deps = makeDeps();
+    deps.findUserById = vi.fn().mockResolvedValue({
+      id: "u1",
+      email: "a@b.c",
+      name: "A",
+      image: null,
+      isActive: true,
+      mustChangePassword: true,
+    });
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow: "double-submit-last-must-change",
+    });
+    for (let i = 0; i < 4; i++) {
+      await handleChallengeResolve(
+        makeCookieRequest(pendingToken, { code: "000000" }),
+        deps
+      );
+    }
+    let second: Response | undefined;
+    const resolve = deps.challengeRegistry.resolve.bind(deps.challengeRegistry);
+    vi.spyOn(deps.challengeRegistry, "resolve").mockImplementationOnce(
+      async (...args) => {
+        second = await handleChallengeResolve(
+          makeCookieRequest(pendingToken, { code: "123456" }),
+          deps
+        );
+        return resolve(...args);
+      }
+    );
+
+    const first = await handleChallengeResolve(
+      makeCookieRequest(pendingToken, { code: "123456" }),
+      deps
+    );
+
+    expect(second?.status).toBe(401);
+    expect(second?.headers.getSetCookie().join("\n")).not.toMatch(
+      /nextly_pending=/
+    );
+    expect(first.status).toBe(200);
+    const nextStep = /nextly_pending=([^;]+)/.exec(
+      first.headers.getSetCookie().join("\n")
+    )?.[1];
+    expect(nextStep).toBeTypeOf("string");
+    const claims = await verifyPendingToken(nextStep as string, SECRET);
+    expect(claims.challengeId).toBe("must-change-password");
+  });
+
+  it("records replays of a flow exhausted by wrong answers as a spent budget", async () => {
+    // No correct answer settled this flow, so no row may say one did.
+    const deps = makeDeps();
+    const first = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow: "exhausted-replays",
+    });
+    let token = first;
+    for (let i = 0; i < 5; i++) {
+      const res = await answer(deps, token, "000000");
+      const body = (await res.json()) as Record<string, unknown>;
+      token = retryPayload(body).pendingToken ?? token;
+    }
+    deps.auditLog.write.mockClear();
+
+    await answer(deps, first, "000000");
+    await answer(deps, first, "000000");
+
+    expect(failureRows(deps).map(row => row.reason)).toEqual([
+      "challenge-budget-spent",
+      "challenge-budget-spent",
+    ]);
+  });
+});
+
+describe("a password set while the second factor is outstanding", () => {
+  const JAN = new Date("2026-01-01T00:00:00Z");
+  const FEB = new Date("2026-02-01T00:00:00Z");
+
+  function depsWithPasswordSetAt(passwordUpdatedAt: Date) {
+    const deps = makeDeps();
+    deps.fetchAccountState.mockResolvedValue({
+      userId: "u1",
+      isActive: true,
+      lockedUntil: null,
+      emailVerified: JAN,
+      passwordUpdatedAt,
+    });
+    return deps;
+  }
+
+  it("refuses the session when the password changed since the sign-in proved it", async () => {
+    // The paused sign-in proved the January password. An administrator's
+    // reset in February must end it, though the reset revoked no session
+    // the sign-in held yet.
+    const deps = depsWithPasswordSetAt(FEB);
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      passwordUpdatedAt: JAN.getTime(),
+    });
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(res.status).toBe(401);
+    expect(deps.sessionRows.committed).toHaveLength(0);
+  });
+
+  it("issues the session when the password is the one proven", async () => {
+    // The control: the same flow with no reset in between signs in.
+    const deps = depsWithPasswordSetAt(JAN);
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      passwordUpdatedAt: JAN.getTime(),
+    });
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(res.status).toBe(200);
+    expect(deps.sessionRows.committed).toHaveLength(1);
+  });
+
+  it("carries the proven version on the token a wrong answer re-issues", async () => {
+    const deps = depsWithPasswordSetAt(JAN);
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      passwordUpdatedAt: JAN.getTime(),
+    });
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "000000" } }),
+      deps
+    );
+    const body = (await res.json()) as Record<string, unknown>;
+    const reissued = await verifyPendingToken(
+      retryPayload(body).pendingToken as string,
+      SECRET
+    );
+
+    expect(reissued.passwordUpdatedAt).toBe(JAN.getTime());
+  });
+});
+
+describe("a cookie-mode flow that can no longer succeed", () => {
+  const JAN = new Date("2026-01-01T00:00:00Z");
+  const FEB = new Date("2026-02-01T00:00:00Z");
+
+  /** What `/auth/pending` answers for a browser holding `token`. */
+  async function pendingStatus(
+    deps: ReturnType<typeof makeDeps>,
+    token: string
+  ): Promise<number> {
+    const { handlePending } = await import("../pending");
+    const res = await handlePending(
+      new Request("http://localhost:3000/admin/api/auth/pending", {
+        headers: { cookie: `nextly_pending=${token}` },
+      }),
+      deps
+    );
+    return res.status;
+  }
+
+  it("reports the flow over once failures that re-issue no token spent the budget", async () => {
+    // A resolver that errors answers 500 and re-issues nothing, so the
+    // token's own count never moves while the server-side budget fills.
+    // The default counter, as production keeps it without a shared store.
+    // The refusal leaves the cookie, since a spent budget may be a correct
+    // answer's still setting the next step's; `/auth/pending` reporting the
+    // flow over is what releases the login page.
+    const deps = makeDeps();
+    const resolve = vi.spyOn(deps.challengeRegistry, "resolve");
+    for (let i = 0; i < 5; i++) {
+      resolve.mockRejectedValueOnce(new Error("provider down"));
+    }
+    const token = await mint({ userId: "u1", challengeId: "totp" });
+    for (let i = 0; i < 5; i++) {
+      const failed = await handleChallengeResolve(
+        makeCookieRequest(token, { code: "123456" }),
+        deps
+      );
+      expect(failed.status).toBe(500);
+    }
+
+    const last = await handleChallengeResolve(
+      makeCookieRequest(token, { code: "123456" }),
+      deps
+    );
+
+    expect(last.status).toBe(401);
+    expect(last.headers.getSetCookie().join("\n")).not.toMatch(
+      /nextly_pending=/
+    );
+    expect(await pendingStatus(deps, token)).toBe(204);
+  });
+
+  it("reports the flow over when an injected counter says its budget is spent", async () => {
+    const deps = makeDeps();
+    deps.countChallengeAttempt = async () => ({ allowed: false });
+    // The budget full and no settle mark taken: the refusal still cannot
+    // know whether a correct answer is about to take it.
+    deps.peekChallengeAttempts = async key =>
+      key.endsWith(":settled") ? 0 : 5;
+    const token = await mint({ userId: "u1", challengeId: "totp" });
+
+    const res = await handleChallengeResolve(
+      makeCookieRequest(token, { code: "123456" }),
+      deps
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.headers.getSetCookie().join("\n")).not.toMatch(
+      /nextly_pending=/
+    );
+    expect(await pendingStatus(deps, token)).toBe(204);
+    // Still recorded as the spent budget it is.
+    expect(failureRows(deps)).toEqual([
+      expect.objectContaining({ reason: "challenge-budget-spent" }),
+    ]);
+  });
+
+  it("still reports a flow with attempts left as resumable", async () => {
+    // The control for the pending check: one wrong answer spends one of
+    // five, which leaves the flow live.
+    const deps = makeDeps();
+    const token = await mint({ userId: "u1", challengeId: "totp" });
+    await handleChallengeResolve(
+      makeCookieRequest(token, { code: "000000" }),
+      deps
+    );
+
+    expect(await pendingStatus(deps, token)).toBe(200);
+  });
+
+  it("clears the cookie when the session is refused after the flow settled", async () => {
+    // The answer was right and settled the flow, spending its budget; the
+    // password was set again since the sign-in proved it, so the session is
+    // refused. Nothing the token presents can succeed after that.
+    const deps = makeDeps();
+    deps.fetchAccountState.mockResolvedValue({
+      userId: "u1",
+      isActive: true,
+      lockedUntil: null,
+      emailVerified: JAN,
+      passwordUpdatedAt: FEB,
+    });
+    const token = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      passwordUpdatedAt: JAN.getTime(),
+    });
+
+    const res = await handleChallengeResolve(
+      makeCookieRequest(token, { code: "123456" }),
+      deps
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.headers.getSetCookie().join("\n")).toMatch(/nextly_pending=;/);
+    expect(await pendingStatus(deps, token)).toBe(204);
+  });
+
+  it("clears the cookie when the account is deactivated after the flow settled", async () => {
+    const deps = makeDeps();
+    const active = {
+      userId: "u1",
+      isActive: true,
+      lockedUntil: null,
+      emailVerified: JAN,
+      passwordUpdatedAt: null,
+    };
+    // Usable when the flow is gated before the resolver, deactivated by the
+    // time the session is.
+    deps.fetchAccountState
+      .mockResolvedValueOnce(active)
+      .mockResolvedValue({ ...active, isActive: false });
+    const token = await mint({ userId: "u1", challengeId: "totp" });
+
+    const res = await handleChallengeResolve(
+      makeCookieRequest(token, { code: "123456" }),
+      deps
+    );
+
+    expect(res.status).toBe(401);
+    expect(res.headers.getSetCookie().join("\n")).toMatch(/nextly_pending=;/);
   });
 });

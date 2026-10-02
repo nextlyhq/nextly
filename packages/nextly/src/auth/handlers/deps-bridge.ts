@@ -11,6 +11,7 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import type { eq as drizzleEq } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
 import type { NextlyServiceConfig } from "../../di/register";
@@ -27,6 +28,8 @@ import {
   type PluginContext,
   type PluginDefinition,
 } from "../../plugins/plugin-context";
+import { affectedRowCount } from "../../shared/lib/affected-row-count";
+import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction";
 import type { AuthUser } from "../../types/auth";
 import { readProxyTrustSettings } from "../../utils/proxy-trust";
 import { passwordCredentialDeps } from "../credentials/credential-deps";
@@ -35,9 +38,11 @@ import { ChallengeRegistry } from "../pipeline/challenge";
 import { AuthHookRegistry } from "../pipeline/hooks";
 import { createPasswordStrategy } from "../pipeline/password-strategy";
 import type { AuthHooks, ChallengeDefinition } from "../pipeline/types";
+import type { AccountState } from "../session/account-state";
 
 import { aggregateAuthUi } from "./auth-ui";
 import type { AuthRouterDeps } from "./router";
+import type { SessionRowTransaction } from "./session-row";
 
 /**
  * Build AuthRouterDeps from the DI container services.
@@ -108,20 +113,8 @@ export function buildAuthRouterDeps(
       // returning null would be read as "account unusable" and tear down a
       // healthy session on a transient hiccup.
       const adapter = getService("adapter");
-      const db = adapter.getDrizzle();
-      const schema = getDialectTables();
       const { eq } = await import("drizzle-orm");
-      const result = await db
-        .select({
-          userId: schema.users.id,
-          isActive: schema.users.isActive,
-          lockedUntil: schema.users.lockedUntil,
-          emailVerified: schema.users.emailVerified,
-          mustChangePassword: schema.users.mustChangePassword,
-        })
-        .from(schema.users)
-        .where(eq(schema.users.id, userId))
-        .limit(1);
+      const result = await accountStateQuery(adapter.getDrizzle(), eq, userId);
       return result[0] || null;
     },
 
@@ -149,6 +142,11 @@ export function buildAuthRouterDeps(
     },
 
     fetchCustomFields: async (userId: string) => {
+      // No key for a value that is not known — no `user_ext` row, fields not
+      // loaded, an unreadable row — rather than a null, which a rule would
+      // read as a value: `doc.tenantId === user.tenantId` matches every
+      // document without a tenant. A hook cannot fill the gap either: the
+      // registry reserves every configured field's claim name.
       try {
         // user_ext is a dynamic table created at runtime when custom user
         // fields are configured via defineConfig({ users: { fields: [...] } }).
@@ -214,13 +212,22 @@ export function buildAuthRouterDeps(
     },
 
     deleteRefreshToken: async (id: string) => {
-      const adapter = getService("adapter");
-      const db = adapter.getDrizzle();
-      const schema = getDialectTables();
+      await deleteRefreshTokenById(getService, id);
+    },
+
+    withSessionRowTransaction: async work => {
+      const adapter = getService("adapter") as SessionRowAdapter;
+      const dialect = adapter.getCapabilities().dialect;
       const { eq } = await import("drizzle-orm");
-      await db
-        .delete(schema.refreshTokens)
-        .where(eq(schema.refreshTokens.id, id));
+      // The work's own error, not the adapter's classification of it, so a
+      // refusal raised inside reaches the caller as the refusal it is.
+      return runAdapterTransaction(
+        run =>
+          adapter.transaction(tx =>
+            run(sessionRowTransaction(tx.getDrizzle(), dialect, eq))
+          ),
+        work
+      );
     },
 
     deleteRefreshTokenByHash: async (tokenHash: string) => {
@@ -401,6 +408,7 @@ export function buildAuthRouterDeps(
         name: u.name,
         image: u.image,
         mustChangePassword: u.mustChangePassword,
+        passwordUpdatedAt: u.passwordUpdatedAt,
       };
     },
   });
@@ -444,7 +452,9 @@ export function buildAuthRouterDeps(
   // page — which filters disabled plugins — had no view for it, leaving that
   // login unfinishable until the plugin was removed or enabled.
   const config = readServiceConfig(getService);
-  const authHooks = new AuthHookRegistry();
+  const authHooks = new AuthHookRegistry({
+    userFieldClaims: userFieldClaimNames(config),
+  });
   const challengeRegistry = new ChallengeRegistry();
   for (const plugin of (config?.plugins ?? []).filter(
     p => p.enabled !== false
@@ -511,6 +521,111 @@ export function assertConfiguredStrategyNames(
       });
     }
   }
+}
+
+/**
+ * The Drizzle surface the session-row operations use. Structural, because the
+ * concrete database types differ per dialect while this fluent API does not.
+ */
+interface SessionRowDb {
+  select(fields: unknown): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        // `.for("share")` exists on the Postgres and MySQL builders. SQLite
+        // has no row lock and never reaches the call.
+        limit(count: number): Promise<AccountState[]> & {
+          for(strength: "share"): Promise<AccountState[]>;
+        };
+      };
+    };
+  };
+  insert(table: unknown): { values(data: unknown): Promise<unknown> };
+  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+}
+
+/** The adapter surface the session-row transaction runs on. */
+interface SessionRowAdapter {
+  getCapabilities(): { dialect: SupportedDialect };
+  transaction<T>(work: (tx: { getDrizzle<D>(): D }) => Promise<T>): Promise<T>;
+}
+
+// Type only: the bridge loads drizzle-orm lazily, on first use.
+type Eq = typeof drizzleEq;
+
+/**
+ * The account-state read, as one query for both its uses: the plain read the
+ * gate makes, and the read under a row lock the session-row write makes.
+ */
+function accountStateQuery(db: SessionRowDb, eq: Eq, userId: string) {
+  const { users } = getDialectTables();
+  return db
+    .select({
+      userId: users.id,
+      isActive: users.isActive,
+      lockedUntil: users.lockedUntil,
+      emailVerified: users.emailVerified,
+      mustChangePassword: users.mustChangePassword,
+      passwordUpdatedAt: users.passwordUpdatedAt,
+    })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+}
+
+/**
+ * The session-row operations bound to one transaction's Drizzle handle.
+ *
+ * The account read takes `FOR SHARE` on Postgres and MySQL: a revocation's
+ * update of the same user row waits for this transaction, and this read waits
+ * for a revocation already holding it, then reads what it committed. SQLite's
+ * transaction holds the database's write lock from its `BEGIN IMMEDIATE`, so
+ * the plain read is already serialised against every writer.
+ */
+function sessionRowTransaction(
+  db: SessionRowDb,
+  dialect: SupportedDialect,
+  eq: Eq
+): SessionRowTransaction {
+  const { refreshTokens } = getDialectTables();
+  return {
+    lockAccountState: async userId => {
+      const query = accountStateQuery(db, eq, userId);
+      const rows =
+        dialect === "sqlite" ? await query : await query.for("share");
+      return rows[0] ?? null;
+    },
+    insertRefreshToken: async record => {
+      await db.insert(refreshTokens).values(record);
+    },
+    // The count is what spends a token once: two rotations racing on one row
+    // both run this delete, and only one of them removes it. Read through
+    // `affectedRowCount`, since each driver reports it in a different field.
+    consumeRefreshToken: async id =>
+      affectedRowCount(
+        await db.delete(refreshTokens).where(eq(refreshTokens.id, id)),
+        dialect
+      ) === 1,
+  };
+}
+
+/** Delete one refresh row by id. */
+async function deleteRefreshTokenById(
+  getService: (name: string) => unknown,
+  id: string
+): Promise<void> {
+  const adapter = getService("adapter") as {
+    getDrizzle: () => {
+      delete: (table: unknown) => {
+        where: (cond: unknown) => Promise<unknown>;
+      };
+    };
+  };
+  const schema = getDialectTables();
+  const { eq } = await import("drizzle-orm");
+  await adapter
+    .getDrizzle()
+    .delete(schema.refreshTokens)
+    .where(eq(schema.refreshTokens.id, id));
 }
 
 /** Read the sanitized NextlyServiceConfig from the DI container, if present. */
@@ -727,4 +842,18 @@ export function bindChallengeToContext(
     id: def.id,
     resolve: (args, _ctx) => def.resolve(args, ctx),
   };
+}
+
+/**
+ * The claim names the configured custom user fields are carried under: each
+ * field's name, which is the key the `user_ext` read returns its value under.
+ */
+function userFieldClaimNames(
+  config: NextlyServiceConfig | undefined
+): string[] {
+  return (config?.users?.fields ?? []).flatMap(field =>
+    "name" in field && typeof field.name === "string" && field.name
+      ? [field.name]
+      : []
+  );
 }

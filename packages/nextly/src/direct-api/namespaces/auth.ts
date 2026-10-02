@@ -34,11 +34,13 @@ import type { NextlyContext } from "./context";
  * The token is a session, so the credentials are checked by the login
  * endpoint's own `verifyCredentials`, over the same dependencies: a wrong
  * password counts toward the lockout, and a locked, deactivated or unverified
- * account is refused with the `AUTH_INVALID_CREDENTIALS` error a wrong
- * password gets.
+ * account is refused as the endpoint refuses it. That is the
+ * `AUTH_INVALID_CREDENTIALS` error a wrong password gets, except an unverified
+ * address on an account no administrator deactivated, which is named
+ * `EMAIL_NOT_VERIFIED` once the password is proven.
  *
- * An account that must replace an admin-set password is refused the same
- * way. The endpoint answers it with the forced-change step, which a
+ * An account that must replace an admin-set password is refused with
+ * `AUTH_INVALID_CREDENTIALS` too. The endpoint answers it with the forced-change step, which a
  * server-side call cannot complete, and a token issued here would skip it.
  *
  * Unlike the endpoint, this runs no plugin login hooks and no second-factor
@@ -54,6 +56,8 @@ export async function login(
   );
   if (verified.mustChangePassword) {
     throw NextlyError.invalidCredentials({
+      // A plain reason, not the audit vocabulary: this call writes no
+      // audit row for the reason to be kept on.
       logContext: { userId: verified.id, reason: "must-change-password" },
     });
   }

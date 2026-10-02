@@ -33,7 +33,7 @@ vi.mock("../../../../auth/password", async importOriginal => {
   };
 });
 
-import { hashPassword } from "../../../../auth/password";
+import { hashPassword, verifyPassword } from "../../../../auth/password";
 
 import {
   createTestNextly,
@@ -41,6 +41,10 @@ import {
 } from "../../../../plugins/test-nextly";
 import { refreshTokens } from "../../../../schemas/auth-tokens/sqlite";
 import { users } from "../../../../schemas/users/sqlite";
+import { ServiceContainer } from "../../../../services/index";
+import { consoleLogger } from "../../../../services/shared";
+import { UserAccountService } from "../../../users/services/user-account-service";
+import { UserService } from "../../../users/services/user-service";
 import type { AuthService } from "../auth-service";
 
 /** Minimal slice of the Drizzle instance these tests drive. */
@@ -94,6 +98,41 @@ function deactivateDuringHash(t: TestNextly): void {
   };
 }
 
+/** Give the account one live refresh row, as a signed-in browser has. */
+async function signIn(db: TestDb): Promise<void> {
+  await db.insert(refreshTokens).values({
+    id: `rt-${String(Math.random()).slice(2)}`,
+    userId: USER_ID,
+    tokenHash: `hash-${String(Math.random()).slice(2)}`,
+    expiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+  });
+}
+
+async function sessionCount(db: TestDb): Promise<number> {
+  return (
+    await db
+      .select()
+      .from(refreshTokens)
+      .where(eq(refreshTokens.userId, USER_ID))
+  ).length;
+}
+
+/**
+ * The users service's password change, with the production hasher.
+ *
+ * The harness configures no hasher, so the service is assembled here around
+ * the real account service; the query and mutation services are not reached
+ * by a password change.
+ */
+function usersService(t: TestNextly): UserService {
+  return new UserService(
+    {} as never,
+    {} as never,
+    new UserAccountService(t.adapter, consoleLogger),
+    { hash: hashPassword, verify: verifyPassword }
+  );
+}
+
 describe("a password-reset link racing a deactivation", () => {
   it("sets no password when the account is deactivated mid-hash", async () => {
     const { t, auth, db } = await setup({
@@ -119,25 +158,6 @@ describe("a password-reset link racing a deactivation", () => {
 });
 
 describe("the sessions of an account an administrator changes", () => {
-  /** Give the account one live refresh row, as a signed-in browser has. */
-  async function signIn(db: TestDb): Promise<void> {
-    await db.insert(refreshTokens).values({
-      id: `rt-${String(Math.random()).slice(2)}`,
-      userId: USER_ID,
-      tokenHash: "hash",
-      expiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
-    });
-  }
-
-  async function sessionCount(db: TestDb): Promise<number> {
-    return (
-      await db
-        .select()
-        .from(refreshTokens)
-        .where(eq(refreshTokens.userId, USER_ID))
-    ).length;
-  }
-
   it("end when the account is deactivated, and stay ended when it is reactivated", async () => {
     // Only the row a refused refresh presented was deleted, so every other
     // browser's session came back with the reactivation.
@@ -168,6 +188,28 @@ describe("the sessions of an account an administrator changes", () => {
     });
 
     expect(await sessionCount(db)).toBe(0);
+  });
+
+  it("end when an administrator sets a password hash directly", async () => {
+    // `PATCH /users/:id/password`, which sets a hash directly.
+    const { t, db } = await setup({
+      passwordHash: null,
+      mustChangePassword: true,
+    });
+    await signIn(db);
+    const hash = await hashPassword("Str0ngPassw0rd!");
+
+    await new ServiceContainer(t.adapter).users.updatePasswordHash(
+      USER_ID,
+      hash
+    );
+
+    expect(await sessionCount(db)).toBe(0);
+    const user = await row(db);
+    expect(user.passwordHash).toBe(hash);
+    // The same columns `updateUser` writes when it sets a password.
+    expect(user.mustChangePassword).toBe(false);
+    expect(user.passwordUpdatedAt).toBeTruthy();
   });
 
   it("survive an update that changes neither", async () => {
@@ -247,5 +289,111 @@ describe("a forced first-sign-in change racing a deactivation", () => {
     expect(user.deactivatedAt).toBeTruthy();
     expect(user.passwordHash).toBe(temporary);
     expect(user.mustChangePassword).toBe(true);
+  });
+});
+
+describe("the sessions of an account whose own password changes", () => {
+  const CURRENT = "Curr3nt!Password";
+
+  it("end on the auth service's change", async () => {
+    const { auth, db } = await setup({
+      passwordHash: await hashPassword(CURRENT),
+      mustChangePassword: false,
+    });
+    await signIn(db);
+    await signIn(db);
+
+    await auth.changePassword(USER_ID, CURRENT, "Str0ngPassw0rd!");
+
+    expect(await sessionCount(db)).toBe(0);
+  });
+
+  it("end on the users service's change", async () => {
+    const { t, db } = await setup({
+      passwordHash: await hashPassword(CURRENT),
+      mustChangePassword: false,
+    });
+    await signIn(db);
+
+    await usersService(t).changePassword(USER_ID, CURRENT, "Str0ngPassw0rd!");
+
+    expect(await sessionCount(db)).toBe(0);
+  });
+
+  it("end on a reset through its link", async () => {
+    // Through the service, as the Direct API resets: the HTTP handler is not
+    // the only way in.
+    const { auth, db } = await setup({
+      passwordHash: await hashPassword(CURRENT),
+      mustChangePassword: false,
+    });
+    await signIn(db);
+    const { token } = await auth.generatePasswordResetToken(EMAIL, {
+      disableEmail: true,
+    });
+
+    await auth.resetPasswordWithToken(token as string, "Str0ngPassw0rd!");
+
+    expect(await sessionCount(db)).toBe(0);
+  });
+
+  it("survive a refused change", async () => {
+    // The control: a change that ended sessions before checking the current
+    // password would pass every case above.
+    const { auth, db } = await setup({
+      passwordHash: await hashPassword(CURRENT),
+      mustChangePassword: false,
+    });
+    await signIn(db);
+
+    await expect(
+      auth.changePassword(USER_ID, "Wr0ng!Password", "Str0ngPassw0rd!")
+    ).rejects.toMatchObject({ code: "AUTH_INVALID_CREDENTIALS" });
+
+    expect(await sessionCount(db)).toBe(1);
+  });
+});
+
+describe("a users-service password change on a deactivated account", () => {
+  const CURRENT = "Curr3nt!Password";
+
+  it("is refused once the account is deactivated", async () => {
+    const { t, db } = await setup({
+      passwordHash: await hashPassword(CURRENT),
+      mustChangePassword: false,
+    });
+    const before = (await row(db)).passwordHash;
+    await t.nextly.users.update({ id: USER_ID, data: { isActive: false } });
+
+    await expect(
+      usersService(t).changePassword(USER_ID, CURRENT, "Str0ngPassw0rd!")
+    ).rejects.toMatchObject({ code: "AUTH_INVALID_CREDENTIALS" });
+    expect((await row(db)).passwordHash).toBe(before);
+  });
+
+  it("is refused when the deactivation lands mid-hash", async () => {
+    const { t, db } = await setup({
+      passwordHash: await hashPassword(CURRENT),
+      mustChangePassword: false,
+    });
+    const before = (await row(db)).passwordHash;
+    deactivateDuringHash(t);
+
+    await expect(
+      usersService(t).changePassword(USER_ID, CURRENT, "Str0ngPassw0rd!")
+    ).rejects.toMatchObject({ code: "AUTH_INVALID_CREDENTIALS" });
+    expect((await row(db)).passwordHash).toBe(before);
+  });
+
+  it("still changes the password of an active account", async () => {
+    const { t, db } = await setup({
+      passwordHash: await hashPassword(CURRENT),
+      mustChangePassword: false,
+    });
+    const before = (await row(db)).passwordHash;
+
+    await usersService(t).changePassword(USER_ID, CURRENT, "Str0ngPassw0rd!");
+
+    expect((await row(db)).passwordHash).not.toBe(before);
   });
 });

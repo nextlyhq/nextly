@@ -16,7 +16,6 @@
  * silently auto-login users. See `attemptDevAutoLogin` below.
  */
 import { respondData } from "../../api/response-shapes";
-import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext } from "../../plugins/plugin-context";
 import {
   clearAccessTokenCookie,
@@ -28,7 +27,7 @@ import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import {
-  assertAccountUsable,
+  accountMayHoldSession,
   type AccountState,
 } from "../session/account-state";
 import { getSession } from "../session/get-session";
@@ -94,30 +93,6 @@ export type SessionHandlerDeps = Pick<
 // across the next devAutoLogin re-issue.
 type FailureReason = "no_token" | "expired" | "invalid" | "user_gone";
 
-/**
- * The account gate as a question rather than an error: `true` when an
- * account a plugin resolved may be answered as the session user. A
- * password lockout does not disqualify — someone else's wrong guesses must
- * not end a session the credential itself still holds, the same terms a
- * refresh is judged on.
- */
-function accountMayHoldSession(
-  state: AccountState | null,
-  requireEmailVerification: boolean
-): boolean {
-  if (!state) return false;
-  try {
-    assertAccountUsable(state, {
-      requireEmailVerification,
-      enforcePasswordLockout: false,
-    });
-    return true;
-  } catch (error) {
-    if (!NextlyError.is(error)) throw error;
-    return false;
-  }
-}
-
 export async function handleSession(
   request: Request,
   deps: SessionHandlerDeps
@@ -132,7 +107,15 @@ export async function handleSession(
     );
     if (custom && deps.fetchAccountState) {
       const state = await deps.fetchAccountState(custom.id);
-      if (accountMayHoldSession(state, deps.requireEmailVerification ?? true)) {
+      // A password lockout does not disqualify: someone else's wrong guesses
+      // must not end a session the credential itself still holds, the same
+      // terms a refresh is judged on.
+      if (
+        accountMayHoldSession(state, {
+          requireEmailVerification: deps.requireEmailVerification ?? true,
+          enforcePasswordLockout: false,
+        })
+      ) {
         return respondData({
           user: {
             id: custom.id,

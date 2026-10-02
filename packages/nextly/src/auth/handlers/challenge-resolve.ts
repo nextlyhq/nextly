@@ -19,8 +19,8 @@ import {
 import {
   jsonResponse,
   stallResponse,
-  buildAuthErrorResponse,
   csrfRefusal,
+  loginFailureResponse,
   recordLoginFailure,
 } from "./handler-utils";
 import {
@@ -53,6 +53,20 @@ export interface ChallengeResolveDeps extends IssueSessionDeps {
     limit: number,
     windowMs: number
   ) => Promise<{ allowed: boolean }>;
+  /**
+   * How many attempts a key holds in its window, recording none; `undefined`
+   * when the counter cannot tell without recording one.
+   *
+   * Asked only by `/auth/pending`, to report a flow whose budget is spent as
+   * over. Never a probe that counts: recording an attempt to learn the count
+   * would spend the budget it reads. Defaulted to the shared limiter's own
+   * peek; a caller that injects `countChallengeAttempt` without this one gets
+   * `undefined`, because the default would read a different counter.
+   */
+  peekChallengeAttempts?: (
+    key: string,
+    windowMs: number
+  ) => Promise<number | undefined>;
   /**
    * Where the attempt window lives, when one is configured.
    *
@@ -216,39 +230,16 @@ async function spendChallengeAttempt(
     deps.challengeTokenTTL * 1000
   );
   if (!verdict.allowed) {
+    // Its own reason, and not a terminal one. The budget is full both when
+    // the flow can no longer succeed and when a correct answer settled it,
+    // and the second may be a request still in flight that is about to hand
+    // the browser a cookie for the next step, so this refusal leaves the
+    // cookie alone. `/auth/pending` reports a spent budget as over, which is
+    // what releases the login page.
     throw NextlyError.invalidCredentials({
-      logContext: {
-        reason: (await flowWasSettled(deps, pending))
-          ? auditReason("challenge-flow-settled")
-          : auditReason("challenge-attempts-exhausted"),
-      },
+      logContext: { reason: auditReason("challenge-budget-spent") },
     });
   }
-}
-
-/**
- * Whether a correct answer settled this flow, asked once its budget refuses.
- *
- * A settled flow's budget is full, so a token presented after the success is
- * refused here rather than at the settle mark — and that refusal must not be
- * read as the flow running out of attempts: the winning answer may have just
- * set the cookie for the next step, and a terminal refusal clears it.
- *
- * The store can only count, not read, so this takes the settle mark with a
- * limit of one: refused means a correct answer took it first. On a flow that
- * was NOT settled it takes the mark itself, which is harmless — the budget is
- * already spent, so this flow can never succeed and settle.
- */
-async function flowWasSettled(
-  deps: AttemptCounterDeps,
-  pending: PendingFlow
-): Promise<boolean> {
-  const mark = await attemptCounter(deps)(
-    `${challengeFlowKey(pending)}:settled`,
-    1,
-    deps.challengeTokenTTL * 1000
-  );
-  return !mark.allowed;
 }
 
 /** What counting against a challenge flow's budget needs. */
@@ -257,6 +248,7 @@ type AttemptCounterDeps = Pick<
   | "challengeTokenTTL"
   | "maxChallengeAttempts"
   | "countChallengeAttempt"
+  | "peekChallengeAttempts"
   | "authRateLimit"
 >;
 
@@ -287,6 +279,44 @@ function attemptCounter(
       return authRateLimiter(store).check(key, limit, windowMs);
     })
   );
+}
+
+/**
+ * How many attempts `key` holds, recording none; `undefined` when that cannot
+ * be known.
+ *
+ * Read from the counter the budget is kept in, so a counter injected without
+ * its own peek answers `undefined` rather than the default store's count of a
+ * window it never wrote. A failure to read is also `undefined`: the answer is
+ * advisory, and every caller keeps the flow resumable when it is not known.
+ */
+async function peekAttempts(
+  deps: AttemptCounterDeps,
+  key: string
+): Promise<number | undefined> {
+  const windowMs = deps.challengeTokenTTL * 1000;
+  try {
+    if (deps.peekChallengeAttempts) {
+      return await deps.peekChallengeAttempts(key, windowMs);
+    }
+    if (deps.countChallengeAttempt) return undefined;
+    const { authRateLimiter } = await import("../middleware/rate-limiter");
+    return await authRateLimiter(deps.authRateLimit?.store).peek(key, windowMs);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether a flow's attempt budget is spent, so no answer it presents can be
+ * examined again. Unknown reads as not spent.
+ */
+export async function challengeBudgetSpent(
+  deps: AttemptCounterDeps,
+  pending: PendingFlow
+): Promise<boolean> {
+  const count = await peekAttempts(deps, challengeFlowKey(pending));
+  return count !== undefined && count >= deps.maxChallengeAttempts;
 }
 
 /**
@@ -347,6 +377,33 @@ async function settleChallengeFlow(
 }
 
 /**
+ * Whether a refusal ended its flow for good, so a cookie-mode flow's pending
+ * cookie goes with it.
+ *
+ * The token still verifies until its TTL expires, so a cookie left behind
+ * kept `/auth/pending` reporting a challenge nothing can finish, the login
+ * page hiding its other sign-in options behind it. A flow is over when:
+ *
+ *  - this request settled it and was refused afterwards — by the session
+ *    gate, or by a password set since the sign-in — or failed outright: the
+ *    settle spent what was left of the budget, so no retry can succeed;
+ *  - the token's own count or lifetime says so (`terminalChallengeFailure`).
+ *
+ * Anything else keeps the cookie: a wrong answer replaces it with its retry
+ * token, and a transient failure must not throw away an attempt the person
+ * still has. A spent budget keeps it too. Its refusal cannot know whether a
+ * correct answer holding the last attempt is still on its way to setting the
+ * cookie for the next step, and a clear sent now could land after that
+ * cookie and erase it. `/auth/pending` answers 204 for a spent budget
+ * instead, so the login page shows its other sign-in options without the
+ * clear.
+ */
+function flowOverForGood(err: unknown, settledHere: boolean): boolean {
+  if (settledHere) return true;
+  return NextlyError.is(err) && terminalChallengeFailure(err);
+}
+
+/**
  * Answer a wrong challenge response: one more attempt, or a final refusal.
  *
  * The attempt counter lives in the token rather than in a row, so advancing it
@@ -368,6 +425,7 @@ async function wrongAnswer(
       next?: string;
       flow?: string;
       flowExpiresAt?: number;
+      passwordUpdatedAt?: number | null;
     };
     usedCookie: boolean;
     requestId: string;
@@ -401,6 +459,11 @@ async function wrongAnswer(
       // the attempt budget is enforced within — stays where the pause set it.
       ...(args.pending.flowExpiresAt !== undefined
         ? { flowExpiresAt: args.pending.flowExpiresAt }
+        : {}),
+      // The password version the paused sign-in proved, carried unchanged so
+      // the session the answer mints is still judged against it.
+      ...(args.pending.passwordUpdatedAt !== undefined
+        ? { passwordUpdatedAt: args.pending.passwordUpdatedAt }
         : {}),
     },
     deps.secret,
@@ -439,6 +502,10 @@ export async function handleChallengeResolve(
   // final refusal raise errors that know nothing about it, and the failure row
   // still has to say which method the attempt belonged to.
   let strategy: string | undefined;
+  // Whether this request settled the flow: a refusal raised after the settle
+  // ends the flow for good, since the settle spent what was left of its
+  // budget.
+  let settledHere = false;
 
   try {
     const body = (await request.json()) as Record<string, unknown>;
@@ -534,6 +601,7 @@ export async function handleChallengeResolve(
     // could be replayed to mint a second session, or a second set-password
     // step, from the same flow.
     await settleChallengeFlow(deps, pending);
+    settledHere = true;
 
     // Forced first-sign-in password change (ASVS 6.4.1) applies here too: a
     // must-change account that clears a post-auth challenge (e.g. 2FA) must
@@ -567,49 +635,21 @@ export async function handleChallengeResolve(
   } catch (err) {
     await stallResponse(startTime, deps.loginStallTimeMs);
     await recordLoginFailure(deps, request, err, requestId, strategy);
-    return challengeErrorResponse(err, requestId, usedCookie);
+    const response = loginFailureResponse(err, requestId);
+    if (usedCookie && flowOverForGood(err, settledHere)) {
+      response.headers.append("Set-Cookie", clearPendingCookie());
+    }
+    return response;
   }
 }
 
 /**
- * The catch path's answer: the canonical error envelope, plus the cookie a
- * terminal cookie-mode failure owes the browser.
+ * Whether an error is a challenge token's own FINAL refusal — its count or
+ * lifetime exhausted, or its last permitted wrong answer spent.
  *
- * A cookie-mode flow that failed FOR GOOD takes its cookie with it. The
- * terminal token still verifies until its TTL expires, so leaving the cookie
- * in place kept `/auth/pending` reporting the exhausted challenge after
- * every reload — the login page hiding its password and provider options
- * behind a continuation nothing can finish. Only the terminal refusals clear
- * it: a wrong answer REPLACES the cookie with its retry token, and clearing
- * on transient failures would throw away an attempt the person still has.
- */
-function challengeErrorResponse(
-  err: unknown,
-  requestId: string,
-  usedCookie: boolean
-): Response {
-  if (!NextlyError.is(err)) {
-    return buildAuthErrorResponse(
-      NextlyError.internal({ cause: err as Error }),
-      requestId
-    );
-  }
-  const response = buildAuthErrorResponse(err, requestId);
-  if (usedCookie && terminalChallengeFailure(err)) {
-    response.headers.append("Set-Cookie", clearPendingCookie());
-  }
-  return response;
-}
-
-/**
- * Whether an error is a challenge flow's FINAL refusal — the attempt budget
- * exhausted, or the last permitted wrong answer spent — so its pending cookie
- * can go.
- *
- * Not a flow ALREADY SETTLED by a correct answer: that refusal is only ever
- * the loser of two simultaneous correct answers, and the winner may have just
- * set the cookie for the next step (a forced password change). Clearing it
- * from the losing response left that step with no token.
+ * Not a flow ALREADY SETTLED by a correct answer, and not a spent budget:
+ * either can be the loser of two simultaneous answers, and the winner may be
+ * setting the cookie for the next step (a forced password change).
  *
  * A narrow test on the audit reason, because that is the identity the throw
  * sites already share and nothing else in this handler's catch should take a

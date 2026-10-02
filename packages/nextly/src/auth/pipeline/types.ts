@@ -75,8 +75,9 @@ export type AuthHookName =
 
 /**
  * @experimental Auth-flow hooks (normal contribution). Each hook may modify
- * (return a new value), abort (throw → generic public error), or — for
- * `afterAuthenticate` — return a `{ challenge }` to require a second step.
+ * (return a new value), abort (throw: a `NextlyError` keeps its own code,
+ * anything else becomes a generic error), or — for `afterAuthenticate` —
+ * return a `{ challenge }` to require a second step.
  */
 export interface AuthHooks {
   /** Runs before any strategy. Throw to abort. */
@@ -111,8 +112,8 @@ export interface AuthHooks {
   /** Runs after logout. */
   afterLogout?: (ctx: PluginContext) => Promise<void> | void;
   /**
-   * Custom current-user resolution for session/refresh. Return `null` to fall
-   * through to core cookie/JWT resolution.
+   * Custom current-user resolution for `GET /auth/session` only. Return
+   * `null` to fall through to core cookie/JWT resolution.
    */
   determineUser?: (
     request: Request,

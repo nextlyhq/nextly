@@ -22,19 +22,23 @@ const RESERVED_CLAIMS: readonly string[] = [
 
 /**
  * `customized` with every claim core built put back as core had it, and every
- * reserved claim core did not build removed.
+ * `reserved` claim core did not build removed.
  *
  * Every claim core built, not only the reserved ones: the claims built from a
  * user's custom fields reach `custom` access rules as the caller's identity —
  * a tenant id is identity in practice — so a hook replacing one would sign a
- * session that the rules judge as another tenant. A hook may still ADD claims.
+ * session that the rules judge as another tenant. A hook may still ADD claims,
+ * but not under a configured custom field's name: where core built none for
+ * it — the user has no value, or it could not be read — the token carries
+ * none, rather than whatever a hook supplied.
  */
 function withCoreClaims(
   customized: Record<string, unknown>,
-  core: Record<string, unknown>
+  core: Record<string, unknown>,
+  reserved: readonly string[]
 ): Record<string, unknown> {
   const out = { ...customized };
-  for (const key of new Set([...RESERVED_CLAIMS, ...Object.keys(core)])) {
+  for (const key of new Set([...reserved, ...Object.keys(core)])) {
     if (key in core) out[key] = core[key];
     else delete out[key];
   }
@@ -65,6 +69,17 @@ function assertSameAccount(authenticatedId: string, returnedId: unknown): void {
  */
 export class AuthHookRegistry {
   #hooks: AuthHooks[] = [];
+  // The claims no `customizeClaims` hook may add or change.
+  readonly #reserved: readonly string[];
+
+  /**
+   * @param options.userFieldClaims - The names of the configured custom user
+   *   fields, which the claims carry under the same names. Reserved like the
+   *   identity claims, whether or not core built a claim for one.
+   */
+  constructor(options: { userFieldClaims?: readonly string[] } = {}) {
+    this.#reserved = [...RESERVED_CLAIMS, ...(options.userFieldClaims ?? [])];
+  }
 
   add(hooks: AuthHooks): void {
     this.#hooks.push(hooks);
@@ -121,9 +136,9 @@ export class AuthHookRegistry {
   /**
    * Thread the claims through every `customizeClaims` hook. Hooks may add
    * claims; every claim core built comes back as core built it, and the
-   * reserved ones a hook added are removed, whatever a hook returned or
-   * changed in place, because the snapshot is a deep copy taken before any
-   * hook runs.
+   * reserved ones a hook added — identity claims, and the configured custom
+   * fields' — are removed, whatever a hook returned or changed in place,
+   * because the snapshot is a deep copy taken before any hook runs.
    */
   async runCustomizeClaims(
     claims: Record<string, unknown>,
@@ -136,7 +151,7 @@ export class AuthHookRegistry {
       if (h.customizeClaims)
         current = await h.customizeClaims(current, user, ctx);
     }
-    return withCoreClaims(current, core);
+    return withCoreClaims(current, core, this.#reserved);
   }
 
   async runDetermineUser(

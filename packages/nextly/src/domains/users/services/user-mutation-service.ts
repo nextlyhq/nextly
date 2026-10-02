@@ -86,6 +86,7 @@ import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-li
 import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
+import { passwordColumns, updateUserEndingSessions } from "./password-write";
 import { activationChanges } from "./user-activation";
 import type { UserExtSchemaService } from "./user-ext-schema-service";
 
@@ -1553,11 +1554,10 @@ export class UserMutationService extends BaseService {
         const rawPassword =
           typeof changes.password === "string" ? changes.password.trim() : "";
         if (rawPassword.length > 0) {
-          updateData.passwordHash = await hashPassword(rawPassword);
-          // Changing the password satisfies any admin-set must-change
-          // requirement, so this update must not leave the account forced
-          // through the first-sign-in flow again.
-          updateData.mustChangePassword = false;
+          Object.assign(
+            updateData,
+            passwordColumns(await hashPassword(rawPassword))
+          );
         }
       }
 
@@ -1631,16 +1631,13 @@ export class UserMutationService extends BaseService {
         const endsSessions =
           changes.isActive === false || updateData.passwordHash !== undefined;
         if (endsSessions) {
-          const { refreshTokens } = this.tables;
           await this.withTransaction(async tx => {
-            const txDb = tx as DrizzleTransactionLike;
-            await txDb
-              .update(users)
-              .set(updateData)
-              .where(eq(users.id, currentUser.id));
-            await txDb
-              .delete(refreshTokens)
-              .where(eq(refreshTokens.userId, String(currentUser.id)));
+            await updateUserEndingSessions(
+              tx as DrizzleTransactionLike,
+              this.tables,
+              this.dialect,
+              { userId: currentUser.id, set: updateData }
+            );
           });
         } else {
           await this.db

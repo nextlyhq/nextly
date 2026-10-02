@@ -24,17 +24,16 @@ import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import {
-  assertAccountUsable,
+  accountMayHoldSession,
+  type AccountGateOptions,
   type AccountState,
 } from "../session/account-state";
-import {
-  hashRefreshToken,
-  generateRefreshToken,
-  generateRefreshTokenId,
-} from "../session/refresh";
+import { hashRefreshToken } from "../session/refresh";
 import { evaluateRefreshBinding } from "../session/refresh-binding";
 
 import { buildCookieHeaders, buildAuthErrorResponse } from "./handler-utils";
+import { newRefreshToken } from "./issue-session";
+import { writeSessionRow, type WithSessionRowTransaction } from "./session-row";
 
 export interface RefreshHandlerDeps {
   secret: string;
@@ -50,14 +49,11 @@ export interface RefreshHandlerDeps {
   } | null>;
   deleteRefreshToken: (id: string) => Promise<void>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
-  storeRefreshToken: (record: {
-    id: string;
-    userId: string;
-    tokenHash: string;
-    userAgent: string | null;
-    ipAddress: string | null;
-    expiresAt: Date;
-  }) => Promise<void>;
+  /**
+   * Runs the rotation's write — the new row in, the presented row spent — in
+   * one transaction under a lock on the user row (see `writeSessionRow`).
+   */
+  withSessionRowTransaction: WithSessionRowTransaction;
   findUserById: (userId: string) => Promise<{
     id: string;
     email: string;
@@ -172,73 +168,31 @@ export async function handleRefresh(
     // long as it keeps refreshing. Refused here rather than by the generic
     // catch below, which would answer 401 and leave both the refresh row and
     // the cookies alive.
+    const gate = refreshGateOptions(deps);
     const accountState = await deps.fetchAccountState(user.id);
-    try {
-      if (!accountState) throw NextlyError.invalidCredentials();
-      assertAccountUsable(accountState, {
-        requireEmailVerification: deps.requireEmailVerification,
-        // A refresh is not a password attempt. A lockout triggered by someone
-        // else guessing passwords must not end a session already established.
-        enforcePasswordLockout: false,
-      });
-    } catch (error) {
-      if (!NextlyError.is(error)) throw error;
-      await deps.deleteRefreshToken(tokenRecord.id);
-      return clearAndDeny("Account may no longer hold a session");
+    if (!accountState || !accountMayHoldSession(accountState, gate)) {
+      return refuseAccount(deps, tokenRecord.id);
     }
     const [roleIds, customFields] = await Promise.all([
       deps.fetchRoleIds(user.id),
       deps.fetchCustomFields(user.id),
     ]);
 
-    let claims = buildClaims({
-      userId: user.id,
-      email: user.email,
-      name: user.name,
-      image: user.image,
-      roleIds,
-      customFields,
-    });
-    // customizeClaims (D71) — re-apply plugin claim customization on rotation so
-    // refreshed tokens keep the same custom claims a login would mint.
-    if (deps.authHooks && deps.pluginCtx) {
-      claims = await deps.authHooks.runCustomizeClaims(
-        claims,
-        {
-          id: user.id as AuthUser["id"],
-          email: user.email,
-          name: user.name,
-          image: user.image,
-        },
-        deps.pluginCtx
-      );
-    }
+    const claims = await refreshedClaims(deps, user, roleIds, customFields);
     const accessToken = await signAccessToken(
       claims,
       deps.secret,
       deps.accessTokenTTL
     );
 
-    const newRawToken = generateRefreshToken();
-    const newTokenHash = hashRefreshToken(newRawToken);
-
-    // Write phase: delete the consumed token, then persist the new one.
-    // Sequential rather than transactional -- the auth handler layer has
-    // no transaction primitive today. If the second write fails, the
-    // user lands in the "no valid refresh token" state on the next
-    // attempt and falls back to login.
-    await deps.deleteRefreshToken(tokenRecord.id);
-    await deps.storeRefreshToken({
-      id: generateRefreshTokenId(),
+    const rotated = await rotateRefreshRow(deps, request, {
+      presentedId: tokenRecord.id,
       userId: user.id,
-      tokenHash: newTokenHash,
-      userAgent: request.headers.get("user-agent"),
-      ipAddress: getTrustedClientIp(request, {
-        trustProxy: deps.trustProxy,
-        trustedProxyIps: deps.trustedProxyIps,
-      }),
-      expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
+      gate,
+      passwordUpdatedAt: accountState.passwordUpdatedAt,
     });
+    if (rotated instanceof Response) return rotated;
+    const newRawToken = rotated.rawToken;
 
     const cookies = [
       setAccessTokenCookie(
@@ -289,6 +243,121 @@ export async function handleRefresh(
     });
     return buildAuthErrorResponse(nextlyErr, requestId);
   }
+}
+
+/**
+ * The claims a rotated access token carries: the ones a login would mint,
+ * with plugin claim customization (D71) re-applied so refreshed tokens keep
+ * the same custom claims.
+ */
+async function refreshedClaims(
+  deps: RefreshHandlerDeps,
+  user: { id: string; email: string; name: string; image: string | null },
+  roleIds: string[],
+  customFields: Record<string, unknown>
+): Promise<ReturnType<typeof buildClaims>> {
+  const claims = buildClaims({
+    userId: user.id,
+    email: user.email,
+    name: user.name,
+    image: user.image,
+    roleIds,
+    customFields,
+  });
+  if (!deps.authHooks || !deps.pluginCtx) return claims;
+  return deps.authHooks.runCustomizeClaims(
+    claims,
+    {
+      id: user.id as AuthUser["id"],
+      email: user.email,
+      name: user.name,
+      image: user.image,
+    },
+    deps.pluginCtx
+  );
+}
+
+/**
+ * Put the new refresh row in and spend the presented one, in one transaction
+ * that first judges the account again under a lock on its user row.
+ *
+ * A deactivation or a password set while the request read and signed is seen
+ * there and refuses the rotation, as the first gate would have; one that
+ * commits after waits for this transaction and then deletes the new row with
+ * the account's others. Returns the new raw token, or the refusal to answer
+ * with.
+ */
+async function rotateRefreshRow(
+  deps: RefreshHandlerDeps,
+  request: Request,
+  args: {
+    presentedId: string;
+    userId: string;
+    gate: AccountGateOptions;
+    passwordUpdatedAt: Date | null;
+  }
+): Promise<{ rawToken: string } | Response> {
+  const { rawToken, record } = newRefreshToken(deps, args.userId, request);
+  let written;
+  try {
+    written = await writeSessionRow(deps.withSessionRowTransaction, {
+      record,
+      gate: args.gate,
+      passwordUpdatedAt: args.passwordUpdatedAt,
+      consumeId: args.presentedId,
+    });
+  } catch (error) {
+    if (!NextlyError.isCode(error, "AUTH_INVALID_CREDENTIALS")) throw error;
+    return refuseAccount(deps, args.presentedId);
+  }
+  return written === "consumed-elsewhere" ? supersededDeny() : { rawToken };
+}
+
+/**
+ * The gate options a refresh is judged with, when it starts and again as its
+ * row is written.
+ */
+function refreshGateOptions(deps: RefreshHandlerDeps): AccountGateOptions {
+  return {
+    requireEmailVerification: deps.requireEmailVerification,
+    // A refresh is not a password attempt. A lockout triggered by someone
+    // else guessing passwords must not end a session already established.
+    enforcePasswordLockout: false,
+  };
+}
+
+/**
+ * End the refreshing session of an account that may no longer hold one: its
+ * presented row deleted and its cookies cleared.
+ */
+async function refuseAccount(
+  deps: RefreshHandlerDeps,
+  presentedId: string
+): Promise<Response> {
+  await deps.deleteRefreshToken(presentedId);
+  return clearAndDeny("Account may no longer hold a session");
+}
+
+/**
+ * The answer to a rotation that lost its presented row to another rotation.
+ *
+ * The other request — a second tab refreshing at the same moment — has just
+ * set fresh cookies on this browser, so clearing them here would sign the
+ * winner out too. The cookies are left alone and the code says why, so a
+ * client can retry with the cookies it now holds. A token that is replayed
+ * after its rotation is not this case: its row is gone before the lookup,
+ * which answers with the cookie-clearing refusal.
+ */
+function supersededDeny(): Response {
+  return new Response(
+    JSON.stringify({
+      error: {
+        code: "REFRESH_SUPERSEDED",
+        message: "Refresh token already rotated",
+      },
+    }),
+    { status: 401, headers: { "Content-Type": "application/json" } }
+  );
 }
 
 function clearAndDeny(message: string): Response {

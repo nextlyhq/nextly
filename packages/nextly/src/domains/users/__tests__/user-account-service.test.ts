@@ -10,7 +10,7 @@
  * - updateCurrentUser with image change
  * - updateCurrentUser with both name and image
  * - updateCurrentUser for non-existent user (404)
- * - updatePasswordHash success
+ * - updatePasswordHash success, ending the account's sessions
  * - updatePasswordHash for non-existent user (404)
  * - hasPassword returns true when password exists
  * - hasPassword returns false when no password
@@ -88,7 +88,10 @@ function createChainableMock(resolveData: () => Record<string, unknown>[]) {
   return chain;
 }
 
-/** Creates a chainable update mock: db.update(table).set(data).where(cond) */
+/**
+ * Creates a chainable update mock: db.update(table).set(data).where(cond).
+ * Resolves to better-sqlite3's run result, one row changed.
+ */
 function createUpdateChain() {
   const chain: Record<string, ReturnType<typeof vi.fn>> = {};
   chain.set = vi.fn().mockReturnValue(chain);
@@ -100,7 +103,7 @@ function createUpdateChain() {
         resolve: (value: unknown) => unknown,
         reject?: (reason: unknown) => unknown
       ) => {
-        return Promise.resolve(undefined).then(resolve, reject);
+        return Promise.resolve({ changes: 1 }).then(resolve, reject);
       }
     );
   return chain;
@@ -135,6 +138,11 @@ const usersColumns = {
   createdAt: Symbol("users.createdAt"),
   updatedAt: Symbol("users.updatedAt"),
   passwordHash: Symbol("users.passwordHash"),
+  deactivatedAt: Symbol("users.deactivatedAt"),
+};
+
+const refreshTokensColumns = {
+  userId: Symbol("refreshTokens.userId"),
 };
 
 const rolesColumns = {
@@ -160,6 +168,7 @@ const mockTables = {
   roles: rolesColumns,
   userRoles: userRolesColumns,
   accounts: accountsColumns,
+  refreshTokens: refreshTokensColumns,
 };
 
 // ── Mock DB ────────────────────────────────────────────────────────────
@@ -203,6 +212,11 @@ function createMockAdapter() {
     getDrizzle: vi.fn().mockReturnValue(mockDb),
     getDb: vi.fn().mockReturnValue(mockDb),
     getTables: vi.fn().mockReturnValue(mockTables),
+    // The adapter's own transaction, which a SQLite service's
+    // `withTransaction` runs its work in, over the same handle.
+    transaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) =>
+      work(mockDb)
+    ),
     getCapabilities: vi.fn().mockReturnValue({
       dialect: "sqlite",
       supportsIlike: false,
@@ -393,6 +407,8 @@ describe("UserAccountService", () => {
       ).resolves.toBeUndefined();
 
       expect(mockDb.update).toHaveBeenCalled();
+      // An administrator's new password ends the account's sessions.
+      expect(mockDb.delete).toHaveBeenCalledWith(refreshTokensColumns);
     });
 
     it("should throw NextlyError(NOT_FOUND) when user not found", async () => {

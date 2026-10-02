@@ -13,7 +13,10 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
-import { userInviteTokens } from "../../../../schemas/auth-tokens/sqlite";
+import {
+  refreshTokens,
+  userInviteTokens,
+} from "../../../../schemas/auth-tokens/sqlite";
 import { users } from "../../../../schemas/users/sqlite";
 import type { AuthService } from "../auth-service";
 
@@ -112,6 +115,28 @@ describe("acceptInvite", () => {
 
     const [invite] = await db.select().from(userInviteTokens);
     expect(invite.usedAt).toBeTruthy();
+  });
+
+  it("ends every session the account already holds", async () => {
+    // A password write like any other: a session issued before the invite
+    // was accepted must not keep renewing under the password it replaced.
+    const { auth, db, userId } = await setup();
+    await db.insert(refreshTokens).values({
+      id: "rt-before-invite",
+      userId,
+      tokenHash: "hash-before-invite",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const { token } = await auth.generateInviteToken(userId);
+
+    await auth.acceptInvite(token, STRONG);
+
+    expect(
+      await db
+        .select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.userId, userId))
+    ).toEqual([]);
   });
 
   it("refuses an account an administrator deactivated, and changes nothing", async () => {

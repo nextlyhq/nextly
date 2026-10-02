@@ -50,6 +50,7 @@ import type {
   Logger,
 } from "../../../services/shared";
 import { consoleLogger } from "../../../services/shared";
+import { auditReason } from "../../audit/audit-reasons";
 
 import type { UserAccountService } from "./user-account-service";
 import type {
@@ -568,14 +569,23 @@ export class UserService {
 
     if (!isValid) {
       throw NextlyError.invalidCredentials({
-        logContext: { userId, reason: "wrong-current-password" },
+        logContext: {
+          userId,
+          reason: auditReason("current-password-mismatch"),
+        },
       });
     }
 
-    // Hash and update new password. updatePasswordHash now returns void and
-    // throws NextlyError on DB failure or missing user; just propagate.
+    // The user's own-password write the auth service makes too: refused for
+    // a deactivated account in the same statement, and ending every session
+    // the account holds. The administrator's write would set a password on a
+    // deactivated account, for a later reactivation to switch on.
     const newHash = await this.passwordHasher.hash(newPassword);
-    await this.accountService.updatePasswordHash(userId, newHash);
+    if (!(await this.accountService.changeOwnPasswordHash(userId, newHash))) {
+      throw NextlyError.invalidCredentials({
+        logContext: { userId, reason: auditReason("inactive") },
+      });
+    }
 
     this.logger.info("Password changed", { userId });
   }

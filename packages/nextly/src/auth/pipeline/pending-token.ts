@@ -76,6 +76,15 @@ export interface PendingClaims {
    * whose lifetime is over even when the token presenting it is still fresh.
    */
   flowExpiresAt?: number;
+  /**
+   * When the password the paused sign-in proved was set, as epoch
+   * milliseconds; null when the account's password was never set. The session
+   * the answer mints is refused if the password has been set again since, so
+   * a reset during the challenge ends the sign-in the old password started.
+   * Absent on a token from a sign-in that proved no password, or minted before
+   * the claim existed; the session then compares against its own first read.
+   */
+  passwordUpdatedAt?: number | null;
 }
 
 /**
@@ -99,6 +108,9 @@ export async function mintPendingToken(
       ...(claims.flow ? { flow: claims.flow } : {}),
       ...(claims.flowExpiresAt !== undefined
         ? { flowExpiresAt: claims.flowExpiresAt }
+        : {}),
+      ...(claims.passwordUpdatedAt !== undefined
+        ? { passwordUpdatedAt: claims.passwordUpdatedAt }
         : {}),
     },
     secret,
@@ -147,5 +159,22 @@ export async function verifyPendingToken(
       typeof result.payload.flowExpiresAt === "number"
         ? result.payload.flowExpiresAt
         : undefined,
+    passwordUpdatedAt:
+      typeof result.payload.passwordUpdatedAt === "number" ||
+      result.payload.passwordUpdatedAt === null
+        ? result.payload.passwordUpdatedAt
+        : undefined,
   };
+}
+
+/**
+ * The password version a pending token carries, in the form a session takes:
+ * `undefined` when the token carries none.
+ */
+export function pendingPasswordVersion(
+  claims: Pick<PendingClaims, "passwordUpdatedAt">
+): Date | null | undefined {
+  const value = claims.passwordUpdatedAt;
+  if (value === undefined || value === null) return value;
+  return new Date(value);
 }

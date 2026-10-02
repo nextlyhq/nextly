@@ -14,10 +14,14 @@ import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
 import { buildClaims } from "../jwt/claims";
 import { signAccessTokenWithExpiry } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
-import type { PendingClaims } from "../pipeline/pending-token";
+import {
+  pendingPasswordVersion,
+  type PendingClaims,
+} from "../pipeline/pending-token";
 import { sanitizeAdminPath } from "../redirect/sanitize-admin-path";
 import {
   assertAccountUsable,
+  type AccountGateOptions,
   type AccountState,
 } from "../session/account-state";
 import {
@@ -27,6 +31,7 @@ import {
 } from "../session/refresh";
 
 import { buildCookieHeaders, stallResponse } from "./handler-utils";
+import { writeSessionRow, type WithSessionRowTransaction } from "./session-row";
 
 /** A refresh token as stored: its hash, never the token itself. */
 export interface RefreshTokenRecord {
@@ -47,32 +52,53 @@ export interface RefreshTokenStoreDeps {
 }
 
 /**
- * Mint a refresh token for a user, store its hash with the request's client
- * details, and return the raw token for the cookie.
+ * Mint a refresh token for a user and the row that stores its hash with the
+ * request's client details. Returns the raw token for the cookie beside it.
  *
- * Shared by the sign-in paths that record a client — a login, a resolved
- * challenge, the first-run setup — so the stored row is written the same way,
- * and the client address read under the same proxy settings, on each. The
- * development auto-login records no client and writes its own row.
+ * Shared by every path that records a client — a login, a resolved challenge,
+ * a refresh, the first-run setup — so the row is built the same way, and the
+ * client address read under the same proxy settings, on each. The development
+ * auto-login records no client and writes its own row.
+ */
+export function newRefreshToken(
+  deps: Omit<RefreshTokenStoreDeps, "storeRefreshToken">,
+  userId: string,
+  request: Request
+): { rawToken: string; record: RefreshTokenRecord } {
+  const rawToken = generateRefreshToken();
+  return {
+    rawToken,
+    record: {
+      id: generateRefreshTokenId(),
+      userId,
+      tokenHash: hashRefreshToken(rawToken),
+      userAgent: request.headers.get("user-agent"),
+      ipAddress: getTrustedClientIp(request, {
+        trustProxy: deps.trustProxy,
+        trustedProxyIps: deps.trustedProxyIps,
+      }),
+      expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
+    },
+  };
+}
+
+/**
+ * Store a new refresh token for a user and return the raw token for the
+ * cookie: {@link newRefreshToken}, written as one plain insert.
+ *
+ * For the first-run setup, whose account is created by the same request. A
+ * session for an account that existed before the request is written through
+ * {@link writeSessionRow} instead, which judges the account again as it
+ * writes.
  */
 export async function storeNewRefreshToken(
   deps: RefreshTokenStoreDeps,
   userId: string,
   request: Request
 ): Promise<string> {
-  const rawRefreshToken = generateRefreshToken();
-  await deps.storeRefreshToken({
-    id: generateRefreshTokenId(),
-    userId,
-    tokenHash: hashRefreshToken(rawRefreshToken),
-    userAgent: request.headers.get("user-agent"),
-    ipAddress: getTrustedClientIp(request, {
-      trustProxy: deps.trustProxy,
-      trustedProxyIps: deps.trustedProxyIps,
-    }),
-    expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
-  });
-  return rawRefreshToken;
+  const { rawToken, record } = newRefreshToken(deps, userId, request);
+  await deps.storeRefreshToken(record);
+  return rawToken;
 }
 
 /**
@@ -96,7 +122,11 @@ export interface IssueSessionDeps {
   fetchAccountState: (userId: string) => Promise<AccountState | null>;
   fetchRoleIds: (userId: string) => Promise<string[]>;
   fetchCustomFields: (userId: string) => Promise<Record<string, unknown>>;
-  storeRefreshToken: (record: RefreshTokenRecord) => Promise<void>;
+  /**
+   * Runs the session's refresh-row write in one transaction, under a lock on
+   * the user row (see {@link writeSessionRow}).
+   */
+  withSessionRowTransaction: WithSessionRowTransaction;
   /** Auth-flow hooks; `customizeClaims` runs over the claims before signing. */
   authHooks: AuthHookRegistry;
   /** The plugin context handed to auth hooks. */
@@ -137,6 +167,13 @@ export interface IssueSessionOptions {
    * login was originally headed for.
    */
   next?: string;
+  /**
+   * The password version the sign-in proved, when it proved one before this
+   * call: the session is refused if the account's password was set again
+   * before its refresh row is written. Absent, the version this call's own
+   * gate reads is the one compared.
+   */
+  passwordUpdatedAt?: Date | null;
 }
 
 /** A minted session: the cookies to set, and the body a login response returns. */
@@ -183,11 +220,22 @@ export async function gateAccountForSession(
       logContext: { userId, reason: auditReason("user-not-found") },
     });
   }
-  assertAccountUsable(state, {
+  assertAccountUsable(state, sessionGateOptions(deps, strategy));
+  return state;
+}
+
+/**
+ * The gate options a sign-in's session is judged with, both when it starts
+ * and again as its refresh row is written.
+ */
+function sessionGateOptions(
+  deps: Pick<IssueSessionDeps, "requireEmailVerification">,
+  strategy: string | undefined
+): AccountGateOptions {
+  return {
     requireEmailVerification: deps.requireEmailVerification,
     enforcePasswordLockout: strategy === undefined || strategy === "password",
-  });
-  return state;
+  };
 }
 
 /**
@@ -207,7 +255,7 @@ export async function mintSession(
   // Preconditions run first, before any token or refresh row exists. Every
   // strategy reaches a session through here, so this is the one place that can
   // refuse an account no matter which path authenticated it.
-  await gateAccountForSession(deps, user.id, opts?.strategy);
+  const gated = await gateAccountForSession(deps, user.id, opts?.strategy);
 
   const [roleIds, customFields] = await Promise.all([
     deps.fetchRoleIds(user.id),
@@ -232,7 +280,24 @@ export async function mintSession(
   const { token: accessToken, expiresAt: accessTokenExpiresAt } =
     await signAccessTokenWithExpiry(claims, deps.secret, deps.accessTokenTTL);
 
-  const rawRefreshToken = await storeNewRefreshToken(deps, user.id, request);
+  // Judged again as the row is written, under a lock on the user row: a
+  // deactivation or a password set while the roles, the hooks and the
+  // signing ran above would otherwise be outlived by the row written after
+  // its revocation deleted the account's others. Before the post-login hooks
+  // and the success record, so a refusal here leaves neither behind.
+  const { rawToken: rawRefreshToken, record } = newRefreshToken(
+    deps,
+    user.id,
+    request
+  );
+  await writeSessionRow(deps.withSessionRowTransaction, {
+    record,
+    gate: sessionGateOptions(deps, opts?.strategy),
+    passwordUpdatedAt:
+      opts?.passwordUpdatedAt !== undefined
+        ? opts.passwordUpdatedAt
+        : gated.passwordUpdatedAt,
+  });
 
   // Last, after the post-login hooks. A hook that throws sends the caller into
   // its failure path, which returns an error and records a failure — the client
@@ -359,12 +424,13 @@ export async function finishResumedSignIn(
   deps: IssueSessionDeps & { loginStallTimeMs: number },
   request: Request,
   requestId: string,
-  pending: Pick<PendingClaims, "strategy" | "next">,
+  pending: Pick<PendingClaims, "strategy" | "next" | "passwordUpdatedAt">,
   startTime: number
 ): Promise<Response> {
   const response = await issueSession(user, deps, request, requestId, {
     strategy: pending.strategy,
     next: pending.next,
+    passwordUpdatedAt: pendingPasswordVersion(pending),
   });
   response.headers.append("Set-Cookie", clearPendingCookie());
   await stallResponse(startTime, deps.loginStallTimeMs);

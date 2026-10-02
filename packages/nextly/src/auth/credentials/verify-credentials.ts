@@ -17,11 +17,18 @@ export interface VerifiedUser {
   isActive: boolean;
   /** True when the account still holds an admin-set password to replace. */
   mustChangePassword: boolean;
+  /**
+   * When the password just proven was set, read in the same row as its hash.
+   * A session issued for this proof is refused if the account's password has
+   * been set again by the time its refresh row is written.
+   */
+  passwordUpdatedAt: Date | null;
 }
 
 /**
- * The user row a password sign-in reads: the widest shape any auth handler
- * needs from a lookup by email, so the router's lookup is typed by it too.
+ * @experimental The user row a password sign-in reads: the widest shape any
+ * auth handler needs from a lookup by email, so the router's lookup is typed
+ * by it too.
  */
 export interface CredentialUserRow {
   id: string;
@@ -41,6 +48,8 @@ export interface CredentialUserRow {
   lockedUntil: Date | null;
   /** When an administrator deactivated the account; null when none has. */
   deactivatedAt: Date | null;
+  /** When the password was last set; null when it never has been. */
+  passwordUpdatedAt: Date | null;
 }
 
 /** What a password sign-in needs from the database, and its limits. */
@@ -144,6 +153,7 @@ export async function verifyCredentials(
       lockedUntil: user.lockedUntil,
       emailVerified: user.emailVerified,
       deactivatedAt: user.deactivatedAt,
+      passwordUpdatedAt: user.passwordUpdatedAt,
     },
     {
       requireEmailVerification: deps.requireEmailVerification,
@@ -165,5 +175,6 @@ export async function verifyCredentials(
     emailVerified: user.emailVerified,
     isActive: user.isActive,
     mustChangePassword: user.mustChangePassword ?? false,
+    passwordUpdatedAt: user.passwordUpdatedAt,
   };
 }

@@ -18,7 +18,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq } from "drizzle-orm";
 
 import type { MinimalUser, UserAccount } from "@nextly/types/auth";
-import type { DatabaseInstance } from "@nextly/types/database-operations";
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
@@ -28,6 +27,11 @@ import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 
+import {
+  passwordColumns,
+  updateUserEndingSessions,
+  type PasswordWriteTx,
+} from "./password-write";
 import { UserQueryService } from "./user-query-service";
 
 /**
@@ -142,7 +146,11 @@ export class UserAccountService extends BaseService {
   // ========================================
 
   /**
-   * Update a user's password hash.
+   * Set a user's password hash, as an administrator does, ending every
+   * session the account holds.
+   *
+   * The same write `updateUser` makes when it sets a password, so the
+   * raw-hash route cannot set one and leave the old sessions renewing.
    *
    * @throws NextlyError(NOT_FOUND) when the user does not exist.
    * @throws NextlyError on DB errors via fromDatabaseError.
@@ -151,8 +159,6 @@ export class UserAccountService extends BaseService {
     userId: number | string,
     passwordHash: string
   ): Promise<void> {
-    const { users } = this.tables;
-
     // Check if user exists. §13.8 + spec note: user existence is sensitive,
     // so the public message stays generic; the id flows through logContext.
     let user;
@@ -173,15 +179,54 @@ export class UserAccountService extends BaseService {
     }
 
     try {
-      // Update password
-      await (this.db as DatabaseInstance)
-        .update(users)
-        .set({ passwordHash })
-        .where(eq(users.id, userId));
+      await this.withTransaction(async tx => {
+        await updateUserEndingSessions(
+          tx as PasswordWriteTx,
+          this.tables,
+          this.dialect,
+          { userId, set: passwordColumns(passwordHash) }
+        );
+      });
     } catch (err) {
       // Normalise raw driver errors so the kind is preserved.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
+  }
+
+  /**
+   * Set the password a user chose for their own account, ending every
+   * session it holds.
+   *
+   * Conditional on the account not being deactivated, in the same statement:
+   * an access token still inside its lifetime must not set a password for a
+   * later reactivation to switch on.
+   *
+   * @returns Whether the password was set; `false` when the account is
+   *   deactivated or gone.
+   * @throws NextlyError on DB errors via fromDatabaseError.
+   */
+  async changeOwnPasswordHash(
+    userId: number | string,
+    passwordHash: string
+  ): Promise<boolean> {
+    let changed = 0;
+    try {
+      await this.withTransaction(async tx => {
+        changed = await updateUserEndingSessions(
+          tx as PasswordWriteTx,
+          this.tables,
+          this.dialect,
+          {
+            userId,
+            set: passwordColumns(passwordHash),
+            unlessDeactivated: true,
+          }
+        );
+      });
+    } catch (err) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
+    return changed === 1;
   }
 
   /**

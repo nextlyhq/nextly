@@ -7,9 +7,17 @@ import {
 } from "../../pipeline/pending-token";
 import { handleSetInitialPassword } from "../set-initial-password";
 
+import { fakeSessionRows } from "./session-row-fake";
+
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 
 function makeDeps(state: { isActive: boolean; emailVerified: Date | null }) {
+  const sessionRows = fakeSessionRows(async userId => ({
+    userId,
+    lockedUntil: null,
+    passwordUpdatedAt: null,
+    ...state,
+  }));
   return {
     secret: SECRET,
     isProduction: false,
@@ -19,7 +27,8 @@ function makeDeps(state: { isActive: boolean; emailVerified: Date | null }) {
     trustedProxyIps: [],
     fetchRoleIds: vi.fn().mockResolvedValue([]),
     fetchCustomFields: vi.fn().mockResolvedValue({}),
-    storeRefreshToken: vi.fn().mockResolvedValue(undefined),
+    withSessionRowTransaction: sessionRows.withSessionRowTransaction,
+    sessionRows,
     authHooks: new AuthHookRegistry(),
     pluginCtx: {} as never,
     allowedOrigins: ["http://localhost:3000"],
@@ -29,9 +38,12 @@ function makeDeps(state: { isActive: boolean; emailVerified: Date | null }) {
     fetchAccountState: vi.fn().mockResolvedValue({
       userId: "u1",
       lockedUntil: null,
+      passwordUpdatedAt: null,
       ...state,
     }),
-    setInitialPassword: vi.fn().mockResolvedValue({ userId: "u1" }),
+    setInitialPassword: vi
+      .fn()
+      .mockResolvedValue({ userId: "u1", passwordUpdatedAt: null }),
     findUserById: vi.fn().mockResolvedValue({
       id: "u1",
       email: "a@b.c",
@@ -84,7 +96,7 @@ describe("the forced first-sign-in password change", () => {
 
     expect(res.status).toBe(401);
     expect(deps.setInitialPassword).not.toHaveBeenCalled();
-    expect(deps.storeRefreshToken).not.toHaveBeenCalled();
+    expect(deps.sessionRows.insertRefreshToken).not.toHaveBeenCalled();
   });
 
   it("changes the password and signs in a usable account", async () => {
