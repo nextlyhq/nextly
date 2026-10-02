@@ -283,7 +283,7 @@ The tests run in two GitHub Actions workflows on every PR:
 
 `CI gate` collects the `ci.yml` jobs a merge needs: the change filter, the comment check, `Lint / Typecheck / Test / Build`, the nextly and admin unit tests, and the CLI entry-guard smoke test. The browser tests and the scaffold and dev-script smoke tests report on their own and are not required to merge. `main` also requires the integration jobs, the secret scan and the other checks listed under [Branch protection](#branch-protection), and the merge queue runs them all.
 
-Before a pull request joins the queue, `node scripts/verify-merge.mjs <pr-number>` checks that every review thread is resolved, and that the checks whose absence would mean no coverage reported: `Lint / Typecheck / Test / Build`, `gitleaks`, the comment check, the three integration jobs and the PR title. It doesn't cover the independent review, which runs only in the queue. After a merge, it checks that the pull request landed whole.
+Before a pull request joins the queue, `node scripts/verify-merge.mjs <pr-number>` checks that every blocking review thread is resolved, and that every check whose absence would mean no coverage has reported. Threads from advisory reviewers (CodeRabbit by default, set by `CI_VERDICT_ADVISORY`) don't count toward its verdict, but `main` still requires every conversation resolved before a merge, so resolve those too. The checks it requires are `Lint / Typecheck / Test / Build`, `gitleaks`, the comment check, the three integration jobs and the PR title. It doesn't cover the independent review, which runs only in the queue. After a merge, it checks that the pull request landed whole.
 
 ---
 
