@@ -913,6 +913,20 @@ jobs:
         id: install
         run: pnpm install --frozen-lockfile
 
+      # The hook's own limits on concurrent package tasks and test workers, so
+      # a suite that only times out under unbounded contention does not fail
+      # here when it would pass in the hook.
+      - name: Size the gates as the hook does
+        id: limits
+        if: steps.install.outcome == 'success'
+        shell: bash
+        run: |
+          concurrency="$(node scripts/local-limits.mjs --concurrency)"
+          workers="$(node scripts/local-limits.mjs --max-workers)"
+          case "$concurrency$workers" in ''|*[!0-9]*) echo "could not derive the hook's limits" >&2; exit 1;; esac
+          echo "TURBO_CONCURRENCY=$concurrency" >> "$GITHUB_ENV"
+          echo "VITEST_WORKERS=$workers" >> "$GITHUB_ENV"
+
       - name: Design lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:design
@@ -926,19 +940,22 @@ jobs:
         run: pnpm lint:scripts
 
       - name: Build
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        id: build
+        if: ${{ !cancelled() && steps.limits.outcome == 'success' }}
         run: pnpm run build
         env:
           TURBO_CACHE_DIR: .turbo
 
+      # These read what the build wrote, so after a failed build they would
+      # report its missing output rather than failures of their own.
       - name: Package lint
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm turbo lint --continue --filter=./packages/*
         env:
           TURBO_CACHE_DIR: .turbo
 
       - name: Typecheck
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm turbo check-types --continue
         env:
           TURBO_CACHE_DIR: .turbo
@@ -946,8 +963,9 @@ jobs:
       # Every workspace's suite, as the hook runs when a push changes the
       # workspace or task graph.
       - name: Unit suites
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: pnpm turbo test --continue
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: pnpm turbo test --continue -- --maxWorkers="$VITEST_WORKERS"
         env:
           TURBO_CACHE_DIR: .turbo
 
