@@ -1,26 +1,37 @@
 /**
  * Whether a requested retired-table drop actually reaches the database.
  *
- * Every assertion here is about REACHABILITY rather than about the SQL. The
+ * Most assertions here are about REACHABILITY rather than about the SQL. The
  * planner in `init/retired-auth-tables` was already tested and already
  * correct; what nothing covered was whether `reconcileCore` ever calls it. It
  * did not — the guard returned on operations the CLI never supplied, and the
  * no-diff path returned before the cleanup — so the documented
  * `NEXTLY_ALLOW_CORE_DESTRUCTIVE` flow dropped nothing and reported nothing.
+ * The schema-ledger cases check what each drop leaves on record.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getCoreSchema } from "../../../../schemas";
 import { reconcileCore } from "../core-reconcile";
 
-// The ledger write that follows a successful apply. Stubbed so the apply path
-// can run without a database; nothing here is about what the ledger records.
+// The schema ledger, written after a successful apply and after each drop.
+// Spies rather than a database, so the rows a drop records can be read back.
+const ledger = vi.hoisted(() => ({
+  recordStart: vi.fn<(event: Record<string, unknown>) => Promise<string>>(),
+  markApplied:
+    vi.fn<(id: string, result: Record<string, unknown>) => Promise<void>>(),
+}));
 vi.mock("../../events/schema-events-repository", () => ({
   SchemaEventsRepository: class {
-    recordStart = () => Promise.resolve("event-1");
-    markApplied = () => Promise.resolve();
+    recordStart = ledger.recordStart;
+    markApplied = ledger.markApplied;
   },
 }));
+
+beforeEach(() => {
+  ledger.recordStart.mockReset().mockResolvedValue("event-1");
+  ledger.markApplied.mockReset().mockResolvedValue(undefined);
+});
 
 /** The retired names, as the production planner knows them. */
 const RETIRED = ["accounts", "sessions"];
@@ -165,6 +176,53 @@ describe("a retired-table drop the operator asked for", () => {
     });
     await reconcileCore(args as never);
     expect(executed).toHaveLength(2);
+  });
+
+  describe("the schema ledger", () => {
+    it("records each drop as a core change to that table", async () => {
+      // The ledger is the record of what changed the schema; a drop missing
+      // from it is a table that vanished with nothing saying when or how.
+      const { args } = deps();
+      await reconcileCore(args as never);
+
+      expect(ledger.recordStart.mock.calls.map(([event]) => event)).toEqual([
+        {
+          eventType: "core_apply",
+          source: "cli-migrate",
+          scopeKind: "core",
+          scopeSlug: "accounts",
+        },
+        {
+          eventType: "core_apply",
+          source: "cli-migrate",
+          scopeKind: "core",
+          scopeSlug: "sessions",
+        },
+      ]);
+      expect(ledger.markApplied.mock.calls).toEqual([
+        ["event-1", { statementsExecuted: 1 }],
+        ["event-1", { statementsExecuted: 1 }],
+      ]);
+    });
+
+    it("warns, and still drops the rest, when a row cannot be written", async () => {
+      // The table is already gone by then; failing the command would report a
+      // run that did what it was asked as failed.
+      ledger.recordStart.mockRejectedValue(new Error("ledger unavailable"));
+      const warned: string[] = [];
+      const { args, executed } = deps({
+        logger: { info: () => {}, warn: (m: string) => warned.push(m) },
+      });
+
+      await expect(reconcileCore(args as never)).resolves.toEqual({
+        changed: true,
+      });
+      expect(executed).toHaveLength(2);
+      expect(ledger.markApplied).not.toHaveBeenCalled();
+      expect(warned.join(" ")).toMatch(
+        /Dropped retired auth table accounts, but could not record it in the schema ledger: ledger unavailable/
+      );
+    });
   });
 
   describe("when the core schema also needs changing", () => {

@@ -46,6 +46,9 @@ export function publicCallerCredential(request: Request): CallerCredential {
   return request.headers.get("authorization") ? "bearer" : "none";
 }
 
+/** The cross-site rule {@link routeCsrfMode} decides for one request. */
+export type RouteCsrfMode = "none" | "origin" | "token" | "refuse";
+
 /**
  * Which cross-site check a request to this route must pass.
  *
@@ -57,8 +60,15 @@ export function publicCallerCredential(request: Request): CallerCredential {
  *   the token those handlers also require.
  * - `"token"` — the route set `csrf: true`: a double-submit token as well as
  *   the origin, the protection core's `/auth/*` handlers take.
- * - `"none"` — the route opted out with `csrf: false`, the method changes
- *   nothing, or the caller did not authenticate with the session cookie.
+ * - `"refuse"` — the route set `csrf: false` and the session cookie is the
+ *   credential. A route that opts out of the check accepts no write the
+ *   session cookie authenticates: without the check, any page the browser
+ *   counts as same-site (a sibling subdomain, say) could make one, and the
+ *   callers an opt-out is for — an API key, a Bearer token — carry no session
+ *   cookie. `csrf: false` cannot be combined with `public: true`;
+ *   {@link validateRouteOptions} refuses the pair when routes are collected.
+ * - `"none"` — the method changes nothing, the caller did not authenticate
+ *   with the session cookie, or a public route did not set `csrf: true`.
  *
  * Only a cookie travels automatically, so only a cookie-authenticated request
  * can be made by a site the user did not intend to act on. The RESOLVED
@@ -70,16 +80,17 @@ export function routeCsrfMode(
   route: PluginRoute,
   request: Request,
   credential: CallerCredential
-): "none" | "origin" | "token" {
-  // A route whose callers bring their own credential (an API key, a signed
-  // webhook) opts out with `csrf: false`.
-  if (route.csrf === false) return "none";
+): RouteCsrfMode {
   if (!UNSAFE_METHODS.has(request.method.toUpperCase())) return "none";
   if (credential !== "cookie") return "none";
   if (route.csrf === true) return "token";
-  // A public route skips the DEFAULT: it authenticated no one, and a cookie on
-  // the request says nothing about what admitted it. A public handler that
-  // resolves the session user and acts on them declares `csrf: true`.
+  // Ahead of the public rule: collection refuses `csrf: false` on a public
+  // route, and a route that reached here regardless still holds to it.
+  if (route.csrf === false) return "refuse";
+  // A public route skips the default: it authenticated no one, and a cookie
+  // on the request — even an expired one — says nothing about what admitted
+  // it. A public handler that resolves the session user and acts on them
+  // declares `csrf: true`.
   if (route.public === true) return "none";
   return "origin";
 }
@@ -97,6 +108,12 @@ export function checkRouteCsrf(
   // an ambient Authorization header slip past the check just demanded.
   const mode = routeCsrfMode(route, request, credential);
   if (mode === "none") return { valid: true };
+  if (mode === "refuse") {
+    return {
+      valid: false,
+      error: "Route does not accept writes authenticated by the session cookie",
+    };
+  }
   if (mode === "origin") {
     return validateOrigin(request, allowedOrigins)
       ? { valid: true }
@@ -193,6 +210,14 @@ function isRouteAllowance(value: unknown): boolean {
 export function validateRouteOptions(route: PluginRoute): string | null {
   if (route.rawBody === true && !UNSAFE_METHODS.has(route.method)) {
     return `rawBody is only meaningful on a method with a body, not ${route.method}`;
+  }
+  // `csrf: false` refuses writes the session cookie authenticates, while a
+  // public route checks nothing by default: on a public route the opt-out
+  // reads as switching protection off where it would switch a refusal on.
+  // Refused rather than guessed — a public handler that acts on the signed-in
+  // user declares `csrf: true`, and one that does not leaves `csrf` unset.
+  if (route.public === true && route.csrf === false) {
+    return "csrf: false cannot be combined with public: true; declare csrf: true if the handler acts on the signed-in user, or leave csrf unset";
   }
   // The union is a TYPESCRIPT guarantee, and an unchecked JavaScript plugin
   // has none: a typo like "authn" parsed happily, made `rateLimitKey` answer

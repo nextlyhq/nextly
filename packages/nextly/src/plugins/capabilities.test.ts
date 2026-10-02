@@ -705,6 +705,21 @@ describe("validateCapabilities: secrets and the settings schema", () => {
         providers: z.record(z.string(), z.object({ s: z.string() })),
       }),
     ],
+    [
+      "every member of an object of groups",
+      "providers.*",
+      z.object({
+        providers: z.object({ google: z.object({ clientId: z.string() }) }),
+      }),
+    ],
+    [
+      "a group among the top-level keys",
+      "*",
+      z.object({
+        apiKey: z.string(),
+        providers: z.object({ google: z.object({ clientId: z.string() }) }),
+      }),
+    ],
   ])("refuses a secret path naming %s", (_label, path, settings) => {
     expect(
       reasonOf(() =>
@@ -716,6 +731,58 @@ describe("validateCapabilities: secrets and the settings schema", () => {
         ])
       )
     ).toBe("secret-path-names-group");
+  });
+
+  it.each([
+    ["a number", "port", z.object({ port: z.number() })],
+    ["an optional boolean", "tls", z.object({ tls: z.boolean().optional() })],
+    [
+      "a number among an object's members",
+      "keys.*",
+      z.object({ keys: z.object({ primary: z.string(), count: z.number() }) }),
+    ],
+  ])("refuses a secret path naming %s", (_label, path, settings) => {
+    // Booted, and then every save failed with "A secret setting must be a
+    // string".
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({
+            capabilities: { secrets: [path] },
+            contributes: { settings },
+          }),
+        ])
+      )
+    ).toBe("secret-path-not-string");
+  });
+
+  it.each([
+    ["*", z.object({ apiKey: z.string(), signingKey: z.string() })],
+    [
+      "keys.*",
+      z.object({ keys: z.object({ primary: z.string(), backup: z.string() }) }),
+    ],
+    [
+      "providers.*.clientSecret",
+      z.object({
+        providers: z.object({
+          google: z.object({ clientId: z.string(), clientSecret: z.string() }),
+          port: z.number(),
+        }),
+      }),
+    ],
+  ])("accepts %s over members that are all strings", (path, settings) => {
+    // The control: a wildcard over an object is refused for what its members
+    // are, not for being a wildcard over an object. The last case's `port`
+    // does not contain `clientSecret`, so the path does not name it.
+    expect(() =>
+      validateCapabilities([
+        plugin({
+          capabilities: { secrets: [path] },
+          contributes: { settings },
+        }),
+      ])
+    ).not.toThrow();
   });
 
   it("accepts a secret path naming the value inside a group", () => {

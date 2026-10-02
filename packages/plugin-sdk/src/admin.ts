@@ -32,8 +32,8 @@ export type { ComponentPath } from "@nextlyhq/admin";
  * The props a sign-in challenge view receives, and what its `resolve` call
  * answers (@experimental).
  *
- * A plugin registering a view under `contributes.auth.challengeViews` types
- * it with these, so a change to the contract, and the deprecation of
+ * A plugin registering a view under `contributes.auth.ui.challengeViews`
+ * types it with these, so a change to the contract, and the deprecation of
  * `pendingToken`, reaches its author through the compiler.
  */
 export type {

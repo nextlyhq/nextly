@@ -314,7 +314,8 @@ export class SafeFetchError extends NextlyError {
  * the socket to dial the exact address `validateExternalUrl` already vetted,
  * closing the DNS-rebinding window where a second resolution at connect time
  * could return a private IP. Not re-exported from the package barrel; exported
- * here so the rebinding invariant can be unit-tested directly.
+ * for the plugin `ctx.fetch` transport, which pins its vetted address the same
+ * way, and so the rebinding invariant can be unit-tested directly.
  */
 export function createPinnedLookup(ip: string, family: 4 | 6): LookupFunction {
   return (_hostname, options, callback) => {

@@ -132,8 +132,8 @@ export function collectPluginRoutes(
       assertPathUsable(plugin.name, route);
       // Before the route is registered. An option that cannot mean what it
       // says — a raw body on a method with no body, a rate-limit mode that
-      // does not exist — would otherwise look like protection while
-      // protecting nothing.
+      // does not exist, a CSRF opt-out on a public route — would otherwise
+      // look like a decision the route does not carry out.
       const optionProblem = validateRouteOptions(route);
       if (optionProblem) {
         throw resolutionError(

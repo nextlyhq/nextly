@@ -15,6 +15,8 @@
  * failures, so a botched fix here stops auth logging with nothing but a warning
  * and a single-dialect suite would not notice.
  */
+import { randomUUID } from "crypto";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -22,6 +24,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { getNextlyLogger } from "../../../observability/logger";
 import { buildAuditLogWriter } from "../audit-log-writer";
 
 let current: TestNextly | undefined;
@@ -35,6 +38,7 @@ afterEach(async () => {
 interface AuditRow {
   kind: string;
   actorUserId: string | null;
+  targetUserId: string | null;
   ipAddress: string | null;
   userAgent: string | null;
   identityErasedAt: unknown;
@@ -42,6 +46,30 @@ interface AuditRow {
 }
 
 const ACTOR = { id: "audit-late-write-actor", email: "late@example.test" };
+
+/** Run `work`, returning every warning the core logger received meanwhile. */
+async function warningsDuring(work: () => Promise<void>): Promise<unknown[]> {
+  const warnings: unknown[] = [];
+  const logger = getNextlyLogger();
+  const originalWarn = logger.warn.bind(logger);
+  logger.warn = (payload: unknown) => {
+    warnings.push(payload);
+    return originalWarn(payload as never);
+  };
+  try {
+    await work();
+  } finally {
+    logger.warn = originalWarn;
+  }
+  return warnings;
+}
+
+/** The warning a plugin row whose target names no account raises. */
+function droppedMetadataWarnings(warnings: unknown[]): unknown[] {
+  return warnings.filter(
+    w => (w as { kind?: string }).kind === "plugin-audit-metadata-dropped"
+  );
+}
 
 /** The rows this test wrote — `audit_log` is a fixed, unprefixed system table. */
 async function rowsFor(
@@ -161,6 +189,119 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(await rowsFor(current, marker)).toHaveLength(1);
+    });
+
+    it.each([
+      ["no actor", null],
+      ["a live actor", ACTOR.id],
+    ])(
+      "stores no plugin metadata once the TARGET is gone, with %s",
+      async (_, actorUserId) => {
+        // An SSO plugin unlinking a deleted user's identity names them as the
+        // target, and its metadata — an email, a provider subject — is theirs.
+        // Deletion clears such a row's metadata, so a write landing after the
+        // deletion's sweep must not store it.
+        current = await createTestNextly({ dialect });
+        await current.adapter.insert("users", {
+          id: ACTOR.id,
+          email: ACTOR.email,
+          is_active: true,
+        });
+        const target = `plugin-late-target-${dialect}-${Date.now()}`;
+
+        const warnings = await warningsDuring(() =>
+          buildAuditLogWriter((name: string) =>
+            current!.getService(name as Parameters<TestNextly["getService"]>[0])
+          ).write({
+            kind: "acme-sso.identity-unlinked" as never,
+            actorUserId,
+            targetUserId: target,
+            ipAddress: "203.0.113.21",
+            metadata: { email: "gone@example.test" },
+          })
+        );
+
+        // A target that was deleted and one that is not a user id at all look
+        // the same, so the operator is told which row lost its metadata —
+        // without the metadata, which stays out of the log as it stays out of
+        // the row, and without the target, which may be just as personal.
+        expect(droppedMetadataWarnings(warnings)).toEqual([
+          {
+            kind: "plugin-audit-metadata-dropped",
+            eventKind: "acme-sso.identity-unlinked",
+            reason: "target-account-absent",
+            targetLength: target.length,
+            targetIsUserIdShaped: false,
+          },
+        ]);
+        expect(JSON.stringify(warnings)).not.toContain("gone@example.test");
+        expect(JSON.stringify(warnings)).not.toContain(target);
+
+        const rows = (
+          await current.adapter.select<AuditRow>("audit_log")
+        ).filter(row => row.targetUserId === target);
+        expect(rows).toHaveLength(1);
+        expect(rows[0].metadata).toBeNull();
+        // The address is the actor's, and the actor, if any, still exists.
+        expect(rows[0].ipAddress).toBe("203.0.113.21");
+        expect(rows[0].identityErasedAt).toBeFalsy();
+      }
+    );
+
+    it("says a missing target had a user id's shape, still without naming it", async () => {
+      // The other half of what the warning tells the operator: a deleted
+      // account's id has a user id's shape, an email or provider subject does
+      // not. A warning that always said "not shaped" would pass the case above.
+      current = await createTestNextly({ dialect });
+      const target = randomUUID();
+
+      const warnings = await warningsDuring(() =>
+        buildAuditLogWriter((name: string) =>
+          current!.getService(name as Parameters<TestNextly["getService"]>[0])
+        ).write({
+          kind: "acme-sso.identity-unlinked" as never,
+          targetUserId: target,
+          metadata: { email: "gone@example.test" },
+        })
+      );
+
+      expect(droppedMetadataWarnings(warnings)).toEqual([
+        {
+          kind: "plugin-audit-metadata-dropped",
+          eventKind: "acme-sso.identity-unlinked",
+          reason: "target-account-absent",
+          targetLength: 36,
+          targetIsUserIdShaped: true,
+        },
+      ]);
+      expect(JSON.stringify(warnings)).not.toContain(target);
+    });
+
+    it("keeps a plugin's metadata while its target exists", async () => {
+      // The control for the case above, on the path that had no decision at
+      // all: no actor.
+      current = await createTestNextly({ dialect });
+      await current.adapter.insert("users", {
+        id: ACTOR.id,
+        email: ACTOR.email,
+        is_active: true,
+      });
+      const marker = `plugin-target-present-${dialect}-${Date.now()}`;
+
+      const warnings = await warningsDuring(() =>
+        buildAuditLogWriter((name: string) =>
+          current!.getService(name as Parameters<TestNextly["getService"]>[0])
+        ).write({
+          kind: "acme-sso.identity-unlinked" as never,
+          targetUserId: ACTOR.id,
+          metadata: { marker },
+        })
+      );
+
+      expect(await rowsFor(current, marker)).toHaveLength(1);
+      // And no warning: one raised for every plugin row with a target would
+      // pass the case above while telling the operator nothing.
+      expect(droppedMetadataWarnings(warnings)).toEqual([]);
     });
 
     it("stores an unattributed event as it is, with no erasure stamp", async () => {

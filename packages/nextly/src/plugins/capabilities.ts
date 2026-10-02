@@ -156,7 +156,7 @@ function isOutboundEntry(entry: string): boolean {
 
 /**
  * Refuse a secret path that is empty, repeated, absent from the schema, or
- * names a group rather than a value.
+ * names a group or a value that cannot be a string.
  */
 function assertSecretPaths(plugin: PluginDefinition): void {
   const secrets = plugin.capabilities?.secrets ?? [];
@@ -176,7 +176,10 @@ function assertSecretPaths(plugin: PluginDefinition): void {
   }
 }
 
-/** Refuse one secret path that is empty, repeated, unknown, or a group. */
+/**
+ * Refuse one secret path that is empty, repeated, unknown, a group, or a
+ * value that cannot be a string.
+ */
 function assertSecretPath(
   plugin: PluginDefinition,
   path: string,
@@ -207,50 +210,82 @@ function assertSecretPath(
       { plugin: plugin.name, path }
     );
   }
-  // A secret is a credential, which is a string. A path naming a group
-  // booted, and then every save failed with "A secret setting must be a
-  // string" — found by the operator, not the author.
-  if (pathEndsInGroup(plugin.contributes?.settings, path)) {
+  // A secret is a credential, which is a string. A path naming a group or a
+  // number booted, and then every save failed with "A secret setting must be
+  // a string" — found by the operator, not the author.
+  const target = secretPathTarget(
+    plugin.contributes?.settings,
+    path.split(".")
+  );
+  if (target === "group") {
     throw resolutionError(
       "secret-path-names-group",
       `Plugin "${plugin.name}" declares the secret path "${path}", which names a group of settings rather than one value; name the value inside it.`,
       { plugin: plugin.name, path }
     );
   }
-}
-
-/**
- * Whether a path, followed through object shapes, records and arrays, ends at
- * an object, record or array — a group rather than a value.
- *
- * Answers only where the walk is certain. A union, a pipe or a lazy schema on
- * the way answers false, leaving those to the existence check above and to
- * the write-time refusal of a non-string secret.
- */
-function pathEndsInGroup(schema: unknown, path: string): boolean {
-  if (!schema) return false;
-  let current: unknown = schema;
-  for (const segment of path.split(".")) {
-    current = groupMember(current, segment);
-    if (current === null) return false;
+  if (target === "non-string") {
+    throw resolutionError(
+      "secret-path-not-string",
+      `Plugin "${plugin.name}" declares the secret path "${path}", which names a value that cannot be a string; a secret is stored as a string.`,
+      { plugin: plugin.name, path }
+    );
   }
-  return isGroupSchema(current);
 }
 
+/** What a secret path reaches, where the walk is certain of it. */
+type SecretPathTarget = "group" | "non-string" | null;
+
 /**
- * The schema a segment reaches inside a node: a named key of an object, or
- * the entries of a record or array for `*`. Null where the walk is not
- * certain, which makes the caller answer "not a group".
+ * What a path, followed through object shapes, records and arrays, ends at:
+ * `"group"` for an object, record or array, `"non-string"` for a leaf that
+ * cannot hold a string, and null for anything else.
+ *
+ * A `*` over an object shape stands for every member, so each member is
+ * followed and the path is refused when any of them ends badly: `mapSecrets`
+ * hands each one to the sealer. A member that does not contain the rest of
+ * the path is not one the path names.
+ *
+ * Answers null where the walk is not certain. A union, a pipe or a lazy schema
+ * on the way is left to the existence check above and to the write-time
+ * refusal of a non-string secret.
  */
-function groupMember(node: unknown, segment: string): unknown {
+function secretPathTarget(
+  node: unknown,
+  segments: readonly string[]
+): SecretPathTarget {
+  if (!node) return null;
+  if (segments.length === 0) return finalTarget(node);
+  const [segment, ...rest] = segments;
   const shape = objectShape(node);
-  if (shape !== null) {
-    return segment !== "*" && Object.hasOwn(shape, segment)
-      ? shape[segment]
+  if (shape === null) {
+    return segment === "*"
+      ? secretPathTarget(
+          recordValueSchema(node) ?? arrayElementSchema(node),
+          rest
+        )
       : null;
   }
-  if (segment !== "*") return null;
-  return recordValueSchema(node) ?? arrayElementSchema(node);
+  if (segment !== "*") {
+    return Object.hasOwn(shape, segment)
+      ? secretPathTarget(shape[segment], rest)
+      : null;
+  }
+  return worstTarget(
+    Object.values(shape).map(member => secretPathTarget(member, rest))
+  );
+}
+
+/** What the node a secret path ends at is, where that is certain. */
+function finalTarget(node: unknown): SecretPathTarget {
+  if (isGroupSchema(node)) return "group";
+  return isNonStringLeaf(node) ? "non-string" : null;
+}
+
+/** The answer for a wildcard: a group anywhere first, then a non-string. */
+function worstTarget(targets: readonly SecretPathTarget[]): SecretPathTarget {
+  if (targets.includes("group")) return "group";
+  return targets.includes("non-string") ? "non-string" : null;
 }
 
 /** Whether a schema node is an object, record or array. */
@@ -414,12 +449,13 @@ const LEAF_SCHEMA_TYPES = new Set([
 ]);
 
 /**
- * Whether a schema node is a LEAF that no further segment can descend into.
+ * The type name of a schema node that is a LEAF no further segment can
+ * descend into, or null when it is not one.
  *
  * Unwraps the same wrappers the probes above unwrap before reading the type
  * name, so an optional string is a leaf exactly where a required one is.
  */
-function isLeafSchema(node: unknown): boolean {
+function leafType(node: unknown): string | null {
   let current = node;
   for (let depth = 0; depth < 10; depth += 1) {
     const def = (
@@ -431,9 +467,24 @@ function isLeafSchema(node: unknown): boolean {
       current = def.innerType;
       continue;
     }
-    return typeof def?.type === "string" && LEAF_SCHEMA_TYPES.has(def.type);
+    return typeof def?.type === "string" && LEAF_SCHEMA_TYPES.has(def.type)
+      ? def.type
+      : null;
   }
-  return false;
+  return null;
+}
+
+/**
+ * Leaf types that may hold a string. A literal is kept here whatever its
+ * value: telling a string literal from a numeric one is not worth a second
+ * reading of the definition, and the write-time check still refuses it.
+ */
+const STRING_LEAF_TYPES = new Set(["string", "literal"]);
+
+/** Whether a schema node is a leaf that can never hold a string. */
+function isNonStringLeaf(node: unknown): boolean {
+  const type = leafType(node);
+  return type !== null && !STRING_LEAF_TYPES.has(type);
 }
 
 /**
@@ -542,7 +593,7 @@ function nonObjectStep(
     const suffix = rest === "" ? segment : `${segment}.${rest}`;
     return { match: options.some(option => schemaHasPathFrom(option, suffix)) };
   }
-  if (isLeafSchema(node)) return { match: false };
+  if (leafType(node) !== null) return { match: false };
   return { match: true };
 }
 

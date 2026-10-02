@@ -1,5 +1,6 @@
 import { MUST_CHANGE_PASSWORD_CHALLENGE } from "../auth/pipeline/pending-token";
 import { collectPluginAuditKinds } from "../domains/audit/plugin-audit";
+import type { NextlyError } from "../errors/nextly-error";
 import { isReservedEventName } from "../events/event-bus";
 
 import { validateCapabilities, validateRequires } from "./capabilities";
@@ -96,10 +97,11 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // a role legitimately lacking access looks like.
   validatePluginMenus(plugins);
   // A challenge under core's own password-change id would be offered in
-  // place of that step. The registry refuses it too, but only when the auth
-  // dependencies are first built — on the first sign-in request, which then
-  // failed every sign-in on the site. Refused here, it fails the boot instead.
-  assertNoReservedChallengeIds(plugins);
+  // place of that step, and two under one id leave the registry unable to say
+  // which one a pending token names. The registry refuses both too, but only
+  // when the auth dependencies are built — on every `/auth/*` request, each of
+  // which then failed. Refused here, they fail the boot instead.
+  assertChallengeIds(plugins);
   // A declared event under a core prefix boots, appears in the generated
   // types, and is then refused on every emit — the per-plugin bus will not
   // let a plugin speak for core. Refused here, the mistake is named at boot.
@@ -122,8 +124,13 @@ function assertNoReservedEventNames(plugins: PluginDefinition[]): void {
   }
 }
 
-/** Refuse a plugin challenge declared under an id core reserves. */
-function assertNoReservedChallengeIds(plugins: PluginDefinition[]): void {
+/**
+ * Refuse a plugin challenge declared under an id core reserves, or under an
+ * id another enabled challenge already declares. Enabled plugins only, the
+ * set the auth registry is built from.
+ */
+function assertChallengeIds(plugins: PluginDefinition[]): void {
+  const owners = new Map<string, string>();
   for (const plugin of plugins) {
     if (plugin.enabled === false) continue;
     for (const challenge of plugin.contributes?.auth?.challenges ?? []) {
@@ -134,8 +141,28 @@ function assertNoReservedChallengeIds(plugins: PluginDefinition[]): void {
           { plugin: plugin.name, challengeId: challenge.id }
         );
       }
+      const owner = owners.get(challenge.id);
+      if (owner !== undefined) {
+        throw duplicateChallengeIdError(challenge.id, owner, plugin.name);
+      }
+      owners.set(challenge.id, plugin.name);
     }
   }
+}
+
+/** The refusal for a challenge id declared twice, naming both declarers. */
+function duplicateChallengeIdError(
+  challengeId: string,
+  first: string,
+  second: string
+): NextlyError {
+  return resolutionError(
+    "plugin-challenge-id-duplicate",
+    first === second
+      ? `Plugin "${first}" declares the challenge id "${challengeId}" more than once.`
+      : `Plugins "${first}" and "${second}" both declare the challenge id "${challengeId}".`,
+    { plugins: [first, second], challengeId }
+  );
 }
 
 /**

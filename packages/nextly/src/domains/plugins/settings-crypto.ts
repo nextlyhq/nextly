@@ -96,20 +96,30 @@ export function sealSetting(
   return `${VERSION}:${kid}:${iv.toString("base64url")}.${tag.toString("base64url")}.${ciphertext.toString("base64url")}`;
 }
 
+/**
+ * Why an envelope did not open. Each points the operator somewhere else: a
+ * malformed envelope is a damaged or hand-edited row, an unknown key id is a
+ * generation the install no longer configures (a rotation without
+ * `NEXTLY_SECRET_PREVIOUS`), and a failed authentication is a value tampered
+ * with or moved from another plugin or path under a key the install has.
+ */
+export type UnreadableReason = "malformed" | "unknown-key" | "auth-failed";
+
 /** The outcome of opening one envelope. */
 export type OpenedSetting =
   | { readable: true; plaintext: string; stale: boolean }
-  | { readable: false };
+  | { readable: false; reason: UnreadableReason };
 
 /**
  * Open one envelope with whichever configured generation wrote it.
  *
  * `stale` when that generation is not the current one: the caller re-seals
  * the value under the current key, so a retired secret can eventually be
- * dropped. Unreadable — reported, never thrown — when no configured
- * generation has the envelope's id, or when the value fails authentication
- * (tampered, or moved from another plugin or path); the caller decides what
- * an unreadable secret means for the operation at hand.
+ * dropped. Unreadable — reported with its reason, never thrown — when the
+ * envelope is malformed, when no configured generation has its id, or when
+ * the value fails authentication (tampered, or moved from another plugin or
+ * path); the caller decides what an unreadable secret means for the
+ * operation at hand.
  */
 export function openSetting(
   envelope: string,
@@ -118,11 +128,11 @@ export function openSetting(
   path: readonly string[]
 ): OpenedSetting {
   const match = /^v2:([0-9a-f]{16}):([^.]+)\.([^.]+)\.([^.]*)$/.exec(envelope);
-  if (!match) return { readable: false };
+  if (!match) return { readable: false, reason: "malformed" };
   const [, kid, ivText, tagText, ciphertextText] = match;
 
   const index = secrets.findIndex(secret => generationKey(secret).kid === kid);
-  if (index === -1) return { readable: false };
+  if (index === -1) return { readable: false, reason: "unknown-key" };
 
   try {
     const decipher = createDecipheriv(
@@ -139,6 +149,6 @@ export function openSetting(
     ]).toString("utf8");
     return { readable: true, plaintext, stale: index !== 0 };
   } catch {
-    return { readable: false };
+    return { readable: false, reason: "auth-failed" };
   }
 }

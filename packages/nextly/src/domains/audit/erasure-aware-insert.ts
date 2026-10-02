@@ -16,7 +16,7 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { eq, sql, type Column, type Table } from "drizzle-orm";
+import { eq, sql, type Column, type SQL, type Table } from "drizzle-orm";
 
 /**
  * The Drizzle surface an erasure-aware write needs.
@@ -66,12 +66,61 @@ export interface ErasureAwareInsert {
    * write — so there is nothing to erase against and nothing to stamp.
    */
   actorUserId?: string | null;
+  /**
+   * Columns that may name the actor OR the target — a plugin's metadata, which
+   * holds whatever the plugin chose within its declared keys. Stored as given
+   * while every account the row names exists, and NULL once either does not,
+   * as the deletion of either clears them.
+   */
+  namesEitherParty?: Record<string, unknown>;
+  /**
+   * The account this row is about, when it is not the actor's own. Decides
+   * {@link namesEitherParty} only: the address and the client belong to the
+   * actor.
+   */
+  targetUserId?: string | null;
+}
+
+/** What a write learned that its caller may want to report. */
+export interface ErasureAwareOutcome {
+  /**
+   * The target names no existing account, so {@link
+   * ErasureAwareInsert.namesEitherParty} was stored as NULL. False whenever
+   * the target decided nothing: no target, no such columns, or the actor.
+   */
+  targetAbsent: boolean;
+}
+
+/**
+ * The target whose account decides {@link ErasureAwareInsert.namesEitherParty},
+ * or null when no separate target does: the row names none, has no such
+ * columns, or is about the actor, whose own look already answers for it.
+ */
+function decidingTarget(input: ErasureAwareInsert): string | null {
+  const { actorUserId, targetUserId } = input;
+  if (targetUserId == null || targetUserId === actorUserId) return null;
+  return Object.keys(input.namesEitherParty ?? {}).length > 0
+    ? targetUserId
+    : null;
+}
+
+/**
+ * Whether a write needs the account rows locked, and so a transaction around
+ * it, on Postgres and MySQL. True when the row names an account whose
+ * deletion would erase part of it; a row naming nobody is stored as given.
+ */
+export function erasureNeedsLock(input: ErasureAwareInsert): boolean {
+  return input.actorUserId != null || decidingTarget(input) !== null;
 }
 
 /**
  * Append one row, deciding what identity it may carry as part of the write.
  *
- * **Postgres and MySQL** take a SHARED lock on the account row first. The
+ * The actor's account decides `identity` and `identityFromAccount`, and the
+ * erasure stamp; the actor's and the target's together decide
+ * `namesEitherParty`.
+ *
+ * **Postgres and MySQL** take a SHARED lock on each account row first. The
  * deletion takes an EXCLUSIVE lock before it erases anything, so the two cannot
  * be in flight at once: either this lock is taken first and the deletion waits,
  * so its erasure covers a row that already exists, or the deletion holds the row
@@ -87,73 +136,187 @@ export interface ErasureAwareInsert {
  *
  * The caller owns the transaction. On Postgres and MySQL the lock is only worth
  * anything while one is open, so a caller that has none must supply one.
+ *
+ * Resolves with whether the target named no account. On SQLite that is read
+ * after the insert, since the statement decided it itself; an account cannot
+ * reappear, so a target absent then was absent at the insert, or was deleted
+ * just after and its deletion cleared the same columns.
  */
 export async function insertErasureAware(
   db: ErasureAwareDb,
   dialect: SupportedDialect,
   input: ErasureAwareInsert
-): Promise<void> {
-  const { table, users, row, actorUserId } = input;
-  const identity = input.identity ?? {};
-  const fromAccount = input.identityFromAccount ?? {};
-
+): Promise<ErasureAwareOutcome> {
   // A row naming nobody has no account to outlive. Storing an erasure stamp
   // would claim a person was removed from a row that never held one.
-  if (actorUserId === undefined || actorUserId === null) {
-    await db
-      .insert(table)
-      .values({ ...row, ...identity, identityErasedAt: null });
-    return;
+  if (!erasureNeedsLock(input)) {
+    await db.insert(input.table).values({
+      ...input.row,
+      ...input.identity,
+      ...input.namesEitherParty,
+      identityErasedAt: null,
+    });
+    return { targetAbsent: false };
   }
-
   if (dialect === "sqlite") {
-    const now = new Date();
-    const actorIsGone = sql`NOT EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${actorUserId})`;
+    await db
+      .insert(input.table)
+      .values(decidedRow(input, lookInStatement(input)));
+    const target = await readAccount(db, input.users, decidingTarget(input), {
+      lock: false,
+    });
+    return { targetAbsent: target.gone };
+  }
+  const looks = await lookUnderLock(db, input);
+  await db.insert(input.table).values(decidedRow(input, looks));
+  return { targetAbsent: looks.targetGone === true };
+}
+
+/**
+ * Whether an account is gone: a boolean read under a lock, or, on SQLite, a
+ * condition the insert evaluates itself. `false` for an account the row does
+ * not name.
+ */
+type Gone = boolean | SQL;
+
+/** What the write learned about the accounts the row names. */
+interface AccountLooks {
+  actorGone: Gone;
+  targetGone: Gone;
+  /** The actor's own values for `identityFromAccount`, by trail column. */
+  fromAccount: Record<string, unknown>;
+  /** The stamp to store when the actor is gone. */
+  erasedAt: unknown;
+}
+
+/**
+ * SQLite: decide inside the statement. One writer means the insert cannot
+ * interleave with a deletion, so the conditions it evaluates are the answer.
+ */
+function lookInStatement(input: ErasureAwareInsert): AccountLooks {
+  const { users, actorUserId } = input;
+  const targetUserId = decidingTarget(input);
+  const isGone = (userId: string) =>
+    sql`NOT EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${userId})`;
+  const fromAccount: Record<string, unknown> = {};
+  for (const [column, source] of Object.entries(
+    input.identityFromAccount ?? {}
+  )) {
+    fromAccount[column] =
+      actorUserId == null
+        ? null
+        : sql`(SELECT ${source} FROM ${users} WHERE ${users.id} = ${actorUserId})`;
+  }
+  return {
+    actorGone: actorUserId == null ? false : isGone(actorUserId),
+    targetGone: targetUserId == null ? false : isGone(targetUserId),
+    fromAccount,
     // Encoded through the column itself: the stamp is an epoch integer here,
     // and an SQL fragment bypasses the mapping Drizzle would otherwise apply.
-    const erasedAt = table.identityErasedAt.mapToDriverValue(now);
-    const decided: Record<string, unknown> = {};
-    for (const [column, value] of Object.entries(identity)) {
-      decided[column] =
-        sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${value} END`;
-    }
-    for (const [column, source] of Object.entries(fromAccount)) {
-      decided[column] =
-        sql`CASE WHEN ${actorIsGone} THEN NULL ELSE (SELECT ${source} FROM ${users} WHERE ${users.id} = ${actorUserId}) END`;
-    }
-    await db.insert(table).values({
-      ...row,
-      ...decided,
-      identityErasedAt: sql`CASE WHEN ${actorIsGone} THEN ${erasedAt} ELSE NULL END`,
-    });
-    return;
-  }
+    erasedAt: input.table.identityErasedAt.mapToDriverValue(new Date()),
+  };
+}
 
-  const account = await db
-    .select({ id: users.id, ...fromAccount })
-    .from(users)
-    .where(eq(users.id, actorUserId))
-    .limit(1)
-    .for("share");
-  // Read AFTER the lock is granted. Acquiring it can wait out a whole deletion,
-  // and a stamp taken before the wait would claim the identity was erased at a
-  // moment that precedes the deletion it records.
-  const settled = new Date();
-  const stillExists = account.length > 0;
-  // Plain values, decided in JS: the lock makes the answer stable for the rest
-  // of this transaction. Deciding it in SQL instead would need the same CASE
-  // the SQLite path uses, whose untyped branches Postgres cannot infer a
-  // parameter type for.
-  const decided: Record<string, unknown> = {};
-  for (const column of Object.keys(identity)) {
-    decided[column] = stillExists ? identity[column] : null;
-  }
-  for (const column of Object.keys(fromAccount)) {
-    decided[column] = stillExists ? (account[0]?.[column] ?? null) : null;
-  }
-  await db.insert(table).values({
-    ...row,
-    ...decided,
-    identityErasedAt: stillExists ? null : settled,
+/**
+ * Postgres and MySQL: read each account the row names under a shared lock,
+ * which holds the answer for the rest of the caller's transaction.
+ */
+async function lookUnderLock(
+  db: ErasureAwareDb,
+  input: ErasureAwareInsert
+): Promise<AccountLooks> {
+  const { users, actorUserId } = input;
+  const fromAccount = input.identityFromAccount ?? {};
+  const actor = await readAccount(db, users, actorUserId, {
+    lock: true,
+    columns: fromAccount,
   });
+  // Only a target that decides something is locked: a row with no columns
+  // naming either party, or one about the actor, takes no lock on it.
+  const target = await readAccount(db, users, decidingTarget(input), {
+    lock: true,
+  });
+  const values: Record<string, unknown> = {};
+  for (const column of Object.keys(fromAccount)) {
+    values[column] = actor.row?.[column] ?? null;
+  }
+  return {
+    actorGone: actor.gone,
+    targetGone: target.gone,
+    fromAccount: values,
+    // Read AFTER the locks are granted. Acquiring one can wait out a whole
+    // deletion, and a stamp taken before the wait would claim the identity
+    // was erased at a moment that precedes the deletion it records.
+    erasedAt: new Date(),
+  };
+}
+
+/**
+ * Read one account, with the columns asked for, under a shared lock when
+ * `lock` is set. An account the row does not name is not gone.
+ */
+async function readAccount(
+  db: ErasureAwareDb,
+  users: ErasureAwareInsert["users"],
+  userId: string | null | undefined,
+  options: { lock: boolean; columns?: Record<string, Column> }
+): Promise<{ gone: boolean; row?: Record<string, unknown> }> {
+  if (userId == null) return { gone: false };
+  const query = db
+    .select({ id: users.id, ...options.columns })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  const [row] = await (options.lock ? query.for("share") : query);
+  return { gone: row === undefined, row };
+}
+
+/**
+ * The row to insert, with each identity column decided by the accounts it
+ * names. Under a lock the answers are plain booleans and the values are
+ * decided here: deciding them in SQL would need a CASE whose untyped branches
+ * Postgres cannot infer a parameter type for.
+ */
+function decidedRow(
+  input: ErasureAwareInsert,
+  looks: AccountLooks
+): Record<string, unknown> {
+  const decided: Record<string, unknown> = {};
+  for (const [column, value] of Object.entries(input.identity ?? {})) {
+    decided[column] = unlessGone(value, looks.actorGone);
+  }
+  for (const [column, value] of Object.entries(looks.fromAccount)) {
+    decided[column] = unlessGone(value, looks.actorGone);
+  }
+  const eitherGone = anyGone(looks.actorGone, looks.targetGone);
+  for (const [column, value] of Object.entries(input.namesEitherParty ?? {})) {
+    decided[column] = unlessGone(value, eitherGone);
+  }
+  return {
+    ...input.row,
+    ...decided,
+    identityErasedAt: whenGone(looks.erasedAt, looks.actorGone),
+  };
+}
+
+/** The value while the account exists, NULL once it is gone. */
+function unlessGone(value: unknown, gone: Gone): unknown {
+  if (gone === false) return value;
+  if (gone === true) return null;
+  return sql`CASE WHEN ${gone} THEN NULL ELSE ${value} END`;
+}
+
+/** The value once the account is gone, NULL while it exists. */
+function whenGone(value: unknown, gone: Gone): unknown {
+  if (gone === false) return null;
+  if (gone === true) return value;
+  return sql`CASE WHEN ${gone} THEN ${value} ELSE NULL END`;
+}
+
+/** Gone when either account is. */
+function anyGone(a: Gone, b: Gone): Gone {
+  if (a === true || b === true) return true;
+  if (a === false) return b;
+  if (b === false) return a;
+  return sql`(${a} OR ${b})`;
 }

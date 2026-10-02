@@ -131,7 +131,6 @@ export type {
   PluginDeclaration,
   PluginCategory,
   PluginContext,
-  PluginDatabase,
   PluginHookRegistry,
   PluginPermission,
   PluginRole,
@@ -169,6 +168,14 @@ export type {
   PluginAuditDeclaration,
   PluginHookPointDeclaration,
 } from "nextly";
+
+/**
+ * The raw database handle `ctx.db` is typed as.
+ * @experimental `PluginDatabase` — kept experimental on purpose (D56): a
+ *   plugin reads and writes through `ctx.services`, and the raw handle is for
+ *   aggregations beyond `count` (see STABILITY.md).
+ */
+export type { PluginDatabase } from "nextly";
 
 /**
  * Field authoring — the factories and `FieldConfig` type a plugin uses to build
@@ -464,10 +471,20 @@ export {
   DocumentEvents,
   AuthEvents,
   MediaEvents,
-  UserEvents,
   type DocumentEventName,
   type AuthEventName,
   type MediaEventName,
+} from "nextly";
+
+/**
+ * Account lifecycle events — `user.created` and `user.deleted`, which core
+ * emits after the change commits, with `{ userId }`.
+ * @experimental `UserEvents`, `UserEventName`, `UserCreatedPayload`,
+ *   `UserDeletedPayload` — held experimental until a first-party plugin
+ *   subscribes to them (see STABILITY.md).
+ */
+export {
+  UserEvents,
   type UserEventName,
   type UserCreatedPayload,
   type UserDeletedPayload,

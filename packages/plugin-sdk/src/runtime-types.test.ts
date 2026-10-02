@@ -43,18 +43,32 @@ interface PaymentsSurface {
   answer: ChallengeResolveResult;
 }
 
+/** A settings group declared as an interface rather than a type literal. */
+interface SmtpSettings {
+  host: string;
+  password: string;
+}
+
 /**
  * A typed plugin writes merge patches: a nested partial, and `null` to
- * remove. Never called; the compiler is what checks it.
+ * remove. Never called; the compiler is what checks it. The optional,
+ * nullable and interface groups are each patched with one member alone,
+ * which a patch type that stops at them refuses as incomplete.
  */
 function patchesCompile(
   api: PluginSettingsApi<{
     providers: Record<string, { clientId: string; clientSecret: string }>;
     port: number;
+    sso?: { clientId: string; clientSecret: string };
+    saml: { entityId: string; certificate: string } | null;
+    smtp: SmtpSettings;
   }>
 ): void {
   void api.set({ providers: { github: null } });
   void api.set({ providers: { google: { clientId: "g" } }, port: null });
+  void api.set({ sso: { clientId: "g" } });
+  void api.set({ saml: { entityId: "e" } });
+  void api.set({ smtp: { host: "smtp.example.com" } });
 }
 
 describe("the runtime types a plugin names", () => {

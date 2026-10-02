@@ -1018,6 +1018,7 @@ describe("the encrypted envelope", () => {
       logContext: expect.objectContaining({
         reason: "stored-secret-unreadable",
         paths: ["clientSecret"],
+        reasons: { clientSecret: "auth-failed" },
       }),
     });
   });
@@ -1112,6 +1113,20 @@ describe("a secret no configured generation can open", () => {
     });
   });
 
+  it("makes get() log that its key is not configured", async () => {
+    // Told apart from a tampered value, which fails authentication under a
+    // key the install does have.
+    const store = await lostSecretStore();
+    await expect(service(store, [KEY_A]).get()).rejects.toMatchObject({
+      logContext: expect.objectContaining({
+        reasons: {
+          clientSecret: "unknown-key",
+          "providers.google.clientSecret": "unknown-key",
+        },
+      }),
+    });
+  });
+
   it("does not block a write of an unrelated key", async () => {
     const store = await lostSecretStore();
     await service(store, [KEY_A]).set({ port: 8443 });
@@ -1152,6 +1167,146 @@ describe("a secret no configured generation can open", () => {
         ],
       },
     });
+  });
+});
+
+/**
+ * The same lost secret under a schema with an object-level rule. zod refuses
+ * to make keys of a refined object optional, and that refusal must not cost
+ * the operator the form or every unrelated save.
+ */
+describe("a lost secret under a refined schema", () => {
+  const refined = z
+    .object({
+      clientSecret: z.string().default(""),
+      port: z.number().default(443),
+      tls: z.boolean().default(true),
+    })
+    .refine(value => value.tls || value.port !== 443, {
+      message: "Port 443 needs TLS.",
+    });
+  function refinedService(store: PluginSettingsStore, secrets: string[]) {
+    return new PluginSettingsService({
+      owner: "@test/p",
+      schema: refined,
+      secretPaths: ["clientSecret"],
+      store,
+      secrets: () => secrets,
+    });
+  }
+  async function lostStore() {
+    const store = memoryStore();
+    await refinedService(store, [KEY_B]).set({ clientSecret: SECRET_VALUE });
+    return store;
+  }
+
+  it("still renders the view", async () => {
+    const store = await lostStore();
+    const view = await refinedService(store, [KEY_A]).view();
+    expect(view.settings).toMatchObject({
+      clientSecret: { set: true, readable: false },
+      port: 443,
+    });
+  });
+
+  it("does not block a write of an unrelated key", async () => {
+    const store = await lostStore();
+    await refinedService(store, [KEY_A]).set({ port: 8443 });
+    expect(store.rows.find(r => r.key === "port")?.value).toBe("8443");
+  });
+
+  it("is still held to the rule while every key is readable", async () => {
+    // The control: the rule is set aside only for a read or write that
+    // cannot see every key, not for every write.
+    const store = memoryStore();
+    await expect(
+      refinedService(store, [KEY_A]).set({ tls: false })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+});
+
+/**
+ * A lost secret under a key the current schema no longer declares. Nothing
+ * of the current schema is missing, so its object-level rule still holds.
+ */
+describe("a lost secret under a key a plugin update dropped", () => {
+  const v1 = z.object({
+    legacy: z.string().default(""),
+    port: z.number().default(443),
+    tls: z.boolean().default(true),
+  });
+  const v2 = z
+    .object({
+      port: z.number().default(443),
+      tls: z.boolean().default(true),
+    })
+    .refine(value => value.tls || value.port !== 443, {
+      message: "Port 443 needs TLS.",
+    });
+  function make(
+    store: PluginSettingsStore,
+    schemaFor: typeof v1 | typeof v2,
+    secretPaths: string[],
+    secrets: string[]
+  ) {
+    return new PluginSettingsService({
+      owner: "@test/p",
+      schema: schemaFor,
+      secretPaths,
+      store,
+      secrets: () => secrets,
+    });
+  }
+
+  it("still refuses a write that breaks the current rule", async () => {
+    // Setting the rule aside here accepted the write, and every read after
+    // it then failed as stored-settings-invalid.
+    const store = memoryStore();
+    await make(store, v1, ["legacy"], [KEY_B]).set({ legacy: SECRET_VALUE });
+    const current = make(store, v2, [], [KEY_A]);
+
+    await expect(current.set({ tls: false })).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+    expect(store.rows.find(r => r.key === "tls")).toBeUndefined();
+    await expect(current.get()).resolves.toEqual({ port: 443, tls: true });
+  });
+
+  it("accepts a write the current rule allows", async () => {
+    // The control: a service refusing every write while a dropped key is
+    // unreadable passes the case above too.
+    const store = memoryStore();
+    await make(store, v1, ["legacy"], [KEY_B]).set({ legacy: SECRET_VALUE });
+
+    await make(store, v2, [], [KEY_A]).set({ tls: false, port: 8443 });
+
+    expect(store.rows.find(r => r.key === "tls")?.value).toBe("false");
+  });
+});
+
+/**
+ * A root `.passthrough()` keeps undeclared keys. Setting aside a lost secret
+ * must not quietly change that into the default strip, which refuses them.
+ */
+describe("a lost secret under a passthrough schema", () => {
+  it("still accepts an undeclared key", async () => {
+    const passthrough = z
+      .object({ clientSecret: z.string().default("") })
+      .passthrough();
+    const make = (secrets: string[]) =>
+      new PluginSettingsService({
+        owner: "@test/p",
+        schema: passthrough,
+        secretPaths: ["clientSecret"],
+        store,
+        secrets: () => secrets,
+      });
+    const store = memoryStore();
+    await make([KEY_B]).set({ clientSecret: SECRET_VALUE });
+
+    await make([KEY_A]).set({ region: "eu" });
+
+    expect(store.rows.find(r => r.key === "region")?.value).toBe('"eu"');
   });
 });
 
@@ -1221,6 +1376,77 @@ describe("an unknown key below the top level", () => {
       },
     });
     expect(store.rows).toHaveLength(0);
+  });
+});
+
+/**
+ * An unknown key inside a list item. A patch replaces an array whole, so a
+ * dropped key there is not merged back from storage: a misspelled credential
+ * field lost the stored credential with no error.
+ */
+describe("an unknown key inside an array element", () => {
+  const listSchema = z.object({
+    tokens: z
+      .array(z.object({ name: z.string(), token: z.string().optional() }))
+      .default([]),
+  });
+  function listService(store: PluginSettingsStore) {
+    return new PluginSettingsService({
+      owner: "@test/p",
+      schema: listSchema,
+      secretPaths: ["tokens.*.token"],
+      store,
+      secrets: () => [KEY_A],
+    });
+  }
+
+  it("is refused, naming the element, and the stored list is kept", async () => {
+    const store = memoryStore();
+    await listService(store).set({
+      tokens: [{ name: "ci", token: SECRET_VALUE }],
+    });
+
+    await expect(
+      listService(store).set({
+        tokens: [{ name: "ci", tokenn: ROTATED_SECRET_VALUE }],
+      } as never)
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "tokens.0.tokenn",
+            code: "UNKNOWN_KEY",
+          }),
+        ],
+      },
+    });
+    const settings = await listService(store).get<{
+      tokens: Array<{ name: string; token?: string }>;
+    }>();
+    expect(settings.tokens).toEqual([{ name: "ci", token: SECRET_VALUE }]);
+  });
+
+  it("is not looked for when a transform changed the list's length", async () => {
+    // Index `i` of the patch is no longer index `i` of the result, so a
+    // declared key would be reported against an unrelated element.
+    const filtered = z.object({
+      tags: z
+        .array(z.object({ name: z.string(), note: z.string().optional() }))
+        .transform(tags => tags.filter(tag => tag.name !== "drop"))
+        .default([]),
+    });
+    const store = memoryStore();
+    await new PluginSettingsService({
+      owner: "@test/p",
+      schema: filtered,
+      secretPaths: [],
+      store,
+      secrets: () => [KEY_A],
+    }).set({ tags: [{ name: "drop", note: "n" }, { name: "keep" }] });
+
+    expect(store.rows.find(r => r.key === "tags")?.value).toBe(
+      '[{"name":"keep"}]'
+    );
   });
 });
 

@@ -99,9 +99,39 @@ describe("routeCsrfMode", () => {
     ).toBe("none");
   });
 
-  it("checks nothing on a route that opted out", () => {
+  it("refuses a cookie-authenticated write to a route that opted out", () => {
+    // Without the check, a page the browser counts as same-site could make
+    // the write with the signed-in user's cookie.
     expect(
       routeCsrfMode(route({ csrf: false }), request("POST"), "cookie")
+    ).toBe("refuse");
+  });
+
+  it("refuses a cookie write to a public route that opted out regardless", () => {
+    // Collection refuses the pair; a route that reached the dispatcher anyway
+    // keeps the opt-out rather than falling back to the public default.
+    expect(
+      routeCsrfMode(
+        route({ csrf: false, public: true }),
+        request("POST"),
+        "cookie"
+      )
+    ).toBe("refuse");
+  });
+
+  it("leaves other callers and reads alone on a route that opted out", () => {
+    expect(
+      routeCsrfMode(route({ csrf: false }), request("POST"), "bearer")
+    ).toBe("none");
+    expect(routeCsrfMode(route({ csrf: false }), request("POST"), "none")).toBe(
+      "none"
+    );
+    expect(
+      routeCsrfMode(
+        route({ csrf: false, method: "GET" as never }),
+        request("GET"),
+        "cookie"
+      )
     ).toBe("none");
   });
 
@@ -207,6 +237,17 @@ describe("validateRouteOptions", () => {
     expect(
       validateRouteOptions(route({ csrf: true, public: true }))
     ).toBeNull();
+  });
+
+  it("refuses csrf: false on a public route", () => {
+    expect(validateRouteOptions(route({ csrf: false, public: true }))).toMatch(
+      /csrf: false cannot be combined with public: true/
+    );
+  });
+
+  it("accepts csrf: false on a route that is not public", () => {
+    // The control: a check refusing every opt-out would pass the case above.
+    expect(validateRouteOptions(route({ csrf: false }))).toBeNull();
   });
 
   it("refuses rawBody on a method with no body", () => {

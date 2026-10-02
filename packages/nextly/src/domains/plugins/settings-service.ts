@@ -23,12 +23,17 @@ import { secretGenerations } from "../../shared/lib/secret-generations";
 
 import {
   hasSecretValue,
+  isSecretPath,
   mapSecrets,
   redactSecrets,
   topLevelKeyHoldsSecret,
   valueAtPath,
 } from "./secret-paths";
-import { openSetting, sealSetting } from "./settings-crypto";
+import {
+  openSetting,
+  sealSetting,
+  type UnreadableReason,
+} from "./settings-crypto";
 import { OWNER_LOCK_KEY } from "./settings-store";
 
 /** One stored top-level key. */
@@ -199,19 +204,31 @@ function deepMergeSettings(
  * typo one level down — `providers.google.clientSecrett` — parsed happily and
  * the value it carried was silently dropped. A deletion (`null`) names a key
  * on purpose to remove it, so it is not an unknown key.
+ *
+ * Arrays are walked too, element by element with the index as the segment: a
+ * typo inside a list item is dropped the same way, and since a patch replaces
+ * an array whole, element `i` of the patch is element `i` of the result. Only
+ * when the lengths agree, though: a transform that filters or extends a list
+ * leaves no pairing by index to trust. Like the object walk, this reads the
+ * parsed value as the patch's own structure, which a transform that moves
+ * items or renames keys does not keep.
  */
 function unknownPatchPaths(
-  patch: Record<string, unknown>,
-  parsed: Record<string, unknown>,
+  patch: unknown,
+  parsed: unknown,
   prefix: string[] = []
 ): string[] {
+  if (Array.isArray(patch) && Array.isArray(parsed)) {
+    if (patch.length !== parsed.length) return [];
+    return patch.flatMap((item, i) =>
+      unknownPatchPaths(item, parsed[i], [...prefix, String(i)])
+    );
+  }
+  if (!isPlainObject(patch) || !isPlainObject(parsed)) return [];
   return Object.entries(patch).flatMap(([key, value]) => {
     if (value === null || UNSAFE_KEYS.has(key)) return [];
     if (!Object.hasOwn(parsed, key)) return [[...prefix, key].join(".")];
-    const next = parsed[key];
-    return isPlainObject(value) && isPlainObject(next)
-      ? unknownPatchPaths(value, next, [...prefix, key])
-      : [];
+    return unknownPatchPaths(value, parsed[key], [...prefix, key]);
   });
 }
 
@@ -288,34 +305,13 @@ function defaultedAndPruned(
 }
 
 /**
- * Whether a concrete path (dot segments, array indices as segments) is
- * matched by a declared secret path, on the one rule storage and the
- * redactor both use: a wildcard segment stands for exactly one segment.
- * The pruned view then behaves like the successful-parse path beside it,
- * neither stricter nor looser — a group whose key merely collides with a
- * secret field name is left alone, the same way redaction leaves it.
+ * A copied default with everything a secret path reaches marked unset.
+ *
+ * Matched with `isSecretPath`, the rule storage and the redactor use, so the
+ * pruned view behaves like the successful-parse path beside it: a group whose
+ * key merely collides with a secret field name is left alone, the same way
+ * redaction leaves it.
  */
-function secretPathMatches(
-  secretPaths: readonly string[],
-  path: string[]
-): boolean {
-  const matches = (declared: string[], concrete: string[]): boolean => {
-    if (declared.length === 0) return concrete.length === 0;
-    if (declared[0] === "*") {
-      return (
-        concrete.length > 0 && matches(declared.slice(1), concrete.slice(1))
-      );
-    }
-    return (
-      concrete.length > 0 &&
-      declared[0] === concrete[0] &&
-      matches(declared.slice(1), concrete.slice(1))
-    );
-  };
-  return secretPaths.some(declared => matches(declared.split("."), path));
-}
-
-/** A copied default with everything a secret path reaches marked unset. */
 function pruneSecretPaths(
   node: unknown,
   prefix: string[],
@@ -331,7 +327,7 @@ function pruneSecretPaths(
   for (const [k, v] of Object.entries(node)) {
     // Marked rather than cut: the operator still has to see the credential
     // is missing, or the form offers no place to learn it needs configuring.
-    out[k] = secretPathMatches(secretPaths, [...prefix, k])
+    out[k] = isSecretPath([...prefix, k], secretPaths)
       ? { set: false }
       : pruneSecretPaths(v, [...prefix, k], secretPaths);
   }
@@ -344,6 +340,8 @@ interface DecodedSettings {
   values: Record<string, unknown>;
   /** Top-level keys holding a secret no configured generation can open. */
   unreadableKeys: Set<string>;
+  /** Why each unreadable leaf did not open, by its dot-joined path. */
+  unreadableReasons: Map<string, UnreadableReason>;
   /** Top-level keys holding a secret opened with a RETIRED generation. */
   staleKeys: Set<string>;
   /**
@@ -372,7 +370,8 @@ export class PluginSettingsService {
    * plugin said neither which plugin nor what to do about it.
    */
   async get<T extends Record<string, unknown>>(): Promise<T> {
-    const { values, unreadableKeys } = await this.readStored();
+    const { values, unreadableKeys, unreadableReasons } =
+      await this.readStored();
     // Only keys the schema still declares: a key a newer plugin version
     // dropped is not read, so a lost secret under it must not fail the read —
     // and it could not be entered again, since a write refuses the key.
@@ -380,8 +379,14 @@ export class PluginSettingsService {
       .filter(key => Object.hasOwn(this.deps.schema.shape, key))
       .flatMap(key => unreadablePaths(values[key], [key]));
     if (unreadable.length > 0) {
+      const paths = unreadable.map(path => path.join("."));
+      // The reason beside each path: a lost key, a tampered value and a
+      // damaged envelope are fixed in different places.
       throw this.misconfigured("stored-secret-unreadable", {
-        paths: unreadable.map(path => path.join(".")),
+        paths,
+        reasons: Object.fromEntries(
+          paths.map(path => [path, unreadableReasons.get(path)])
+        ),
       });
     }
     const parsed = this.deps.schema.safeParse(omitKeys(values, unreadableKeys));
@@ -510,14 +515,28 @@ export class PluginSettingsService {
    * For validating what CAN be read: a key holding a secret nothing can
    * decrypt has no value to check, and demanding one refused every other
    * write and read until the operator had somehow re-entered it first.
+   *
+   * The object-level refinements (`.refine`, `.superRefine`) are left out of
+   * this schema: zod's `.partial()` throws on an object that carries them,
+   * which turned one unreadable key into a failed view and a refusal of every
+   * unrelated write. A rule spanning keys cannot be checked while one of them
+   * has no value anyway. The clone keeps the rest of the definition, so a
+   * root `.strict()`, `.passthrough()` or `.catchall()` still applies.
+   *
+   * Only keys the schema declares count. When none of `keys` is declared — a
+   * lost secret under a key a plugin update dropped — every key the schema
+   * checks has its value, so the full schema applies, refinements included:
+   * setting them aside then accepted a write that every later `get()`
+   * refused.
    */
   private schemaWithout(keys: ReadonlySet<string>): ZodObject<ZodRawShape> {
-    if (keys.size === 0) return this.deps.schema;
+    const { schema } = this.deps;
     const mask: Record<string, true> = {};
     for (const key of keys) {
-      if (Object.hasOwn(this.deps.schema.shape, key)) mask[key] = true;
+      if (Object.hasOwn(schema.shape, key)) mask[key] = true;
     }
-    return this.deps.schema.partial(mask);
+    if (Object.keys(mask).length === 0) return schema;
+    return schema.clone({ ...schema.def, checks: [] }).partial(mask);
   }
 
   /**
@@ -925,6 +944,7 @@ export class PluginSettingsService {
     const decoded: DecodedSettings = {
       values: {},
       unreadableKeys: new Set(),
+      unreadableReasons: new Map(),
       staleKeys: new Set(),
       sealedPaths: new Map(),
     };
@@ -1011,6 +1031,7 @@ export class PluginSettingsService {
     );
     if (!opened.readable) {
       decoded.unreadableKeys.add(key);
+      decoded.unreadableReasons.set(path.join("."), opened.reason);
       return UNREADABLE;
     }
     if (opened.stale) decoded.staleKeys.add(key);

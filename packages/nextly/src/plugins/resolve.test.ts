@@ -169,6 +169,63 @@ describe("a plugin challenge under core's reserved id", () => {
   });
 });
 
+describe("two plugin challenges under one id", () => {
+  const declaring = (name: string, ids: string[], enabled?: boolean) =>
+    p(name, {
+      ...(enabled === undefined ? {} : { enabled }),
+      contributes: {
+        auth: {
+          challenges: ids.map(id => ({
+            id,
+            resolve: async () => ({ ok: true }),
+          })),
+        },
+      },
+    } as never);
+
+  it("fails resolution, naming both plugins, rather than every auth request", () => {
+    expect(() =>
+      assertPluginManifests([
+        declaring("@t/2fa", ["totp"]),
+        declaring("@t/other-2fa", ["totp"]),
+      ])
+    ).toThrow(
+      expect.objectContaining({
+        logContext: expect.objectContaining({
+          reason: "plugin-challenge-id-duplicate",
+          plugins: ["@t/2fa", "@t/other-2fa"],
+          challengeId: "totp",
+        }),
+      })
+    );
+  });
+
+  it("fails resolution when one plugin declares an id twice", () => {
+    expect(() =>
+      assertPluginManifests([declaring("@t/2fa", ["totp", "totp"])])
+    ).toThrow(
+      expect.objectContaining({
+        logContext: expect.objectContaining({
+          reason: "plugin-challenge-id-duplicate",
+        }),
+      })
+    );
+  });
+
+  it("accepts distinct ids, and a duplicate from a disabled plugin", () => {
+    // The control: refusing any second challenge would satisfy the cases
+    // above. A disabled plugin registers nothing, so its ids collide with
+    // nothing at runtime.
+    expect(() =>
+      assertPluginManifests([
+        declaring("@t/2fa", ["totp"]),
+        declaring("@t/webauthn", ["webauthn"]),
+        declaring("@t/old-2fa", ["totp"], false),
+      ])
+    ).not.toThrow();
+  });
+});
+
 describe("a plugin event under a reserved prefix", () => {
   const declaring = (name: string) =>
     p("@t/cache", { contributes: { events: [{ name }] } } as never);

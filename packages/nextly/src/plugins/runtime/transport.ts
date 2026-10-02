@@ -26,6 +26,7 @@ import {
 } from "node:zlib";
 
 import { NextlyError } from "../../errors/nextly-error";
+import { createPinnedLookup } from "../../utils/validate-external-url";
 
 import { abortReason, type ResolvedAddress } from "./fetch";
 
@@ -81,6 +82,13 @@ const DECODABLE_CODINGS = "gzip, deflate, br";
  * compressed body expand far past it. Codings are undone in reverse order of
  * application, as the header lists them. A coding this module cannot decode
  * is refused rather than handed back as bytes the caller would misread.
+ *
+ * Deliberately stricter than the decoder `safeFetch` uses in
+ * `utils/validate-external-url.ts`, which passes an unknown coding through
+ * undecoded: this one answers a plugin, asks only for the codings it decodes,
+ * and treats anything else as a response it will not hand across. Its status
+ * handling differs the same way — `buildResponse` refuses a status outside
+ * 200–599 where `safeFetch` answers 502 in its place.
  */
 function decodeBody(
   raw: Buffer,
@@ -219,6 +227,86 @@ const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 //
 const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
 
+/**
+ * Methods this transport never sends, the set the platform's `fetch` refuses.
+ *
+ * `CONNECT` asks the destination to turn the connection into a tunnel, and
+ * `node:http` hands whatever answers it to a `connect` listener rather than to
+ * the response callback, so no response would ever arrive here. `TRACE` and
+ * `TRACK` echo the request back, credentials included. Upper-case because the
+ * comparison is case-insensitive, as `fetch`'s is.
+ */
+const REFUSED_METHODS = new Set(["CONNECT", "TRACE", "TRACK"]);
+
+/**
+ * Request headers that manage the connection itself, refused as the platform's
+ * `fetch` refuses them.
+ *
+ * The connection is this transport's: its agents open one socket per request
+ * to the vetted address and close it after. `Upgrade` asks the destination to
+ * switch protocols, `Keep-Alive` tunes a reuse that never happens, and
+ * `Expect` holds the body back for an interim answer. `Connection` is judged
+ * by its value instead (see `isManagedConnection`). `Transfer-Encoding` is not
+ * here: the transport frames the body it writes itself, so a caller's is
+ * dropped rather than refused (see `requestHeaders`). Lower-case because
+ * `Headers` reports names that way.
+ */
+const REFUSED_REQUEST_HEADERS = new Set(["expect", "keep-alive", "upgrade"]);
+
+/**
+ * `Connection` values the platform's `fetch` accepts, lower-case.
+ *
+ * Both only state a preference about reusing the socket, which this transport
+ * decides on its own: the header is dropped rather than sent (see
+ * `requestHeaders`), because a caller's `keep-alive` would otherwise ask
+ * `node:http` to hold open a socket the agents never reuse.
+ */
+const MANAGED_CONNECTION_TOKENS = new Set(["close", "keep-alive"]);
+
+/**
+ * Whether a `Connection` value only asks for what the transport manages.
+ *
+ * Compared token by token and case-insensitively, so `Close` and
+ * `close, keep-alive` are accepted; any other token — `upgrade`, or a header
+ * name the caller wants stripped by a proxy — is refused.
+ */
+function isManagedConnection(value: string): boolean {
+  return value
+    .split(",")
+    .every(token => MANAGED_CONNECTION_TOKENS.has(token.trim().toLowerCase()));
+}
+
+/**
+ * Refuse a request this transport will not send, before anything is read or
+ * written for it.
+ */
+function assertSendable(init: RequestInit, url: URL): void {
+  const method = (init.method ?? "GET").toUpperCase();
+  if (REFUSED_METHODS.has(method)) {
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "outbound-method-refused",
+        host: url.hostname,
+        method,
+      },
+    });
+  }
+  for (const [header, value] of Object.entries(toHeaders(init))) {
+    const refused =
+      header === "connection"
+        ? !isManagedConnection(value)
+        : REFUSED_REQUEST_HEADERS.has(header);
+    if (!refused) continue;
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "outbound-header-refused",
+        host: url.hostname,
+        header,
+      },
+    });
+  }
+}
+
 export interface SendArgs {
   url: URL;
   address: ResolvedAddress;
@@ -337,6 +425,9 @@ function requestHeaders(
   // goes with it: both together describe the same bytes two ways, which a
   // destination is entitled to refuse.
   delete headers["transfer-encoding"];
+  // A `Connection` that reached here only asks for socket handling the
+  // transport decides itself (see `isManagedConnection`), so it is not sent.
+  delete headers.connection;
   if (body !== null) {
     headers["content-length"] = String(Buffer.byteLength(body));
   } else {
@@ -523,6 +614,9 @@ function responseHeaderTuples(
  */
 export async function sendVetted(args: SendArgs): Promise<Response> {
   const { url, address, init, deadlineAt, maxBodyBytes } = args;
+  // First: a request this transport will not send is refused before its body
+  // is read or a socket exists, whether or not the caller also cancelled it.
+  assertSendable(init, url);
   // The CALLER'S cancellation, honoured at every phase the deadline is. Before
   // it was consulted nowhere: a plugin aborting because its own incoming
   // request disconnected left the outbound call running — DNS, socket and all
@@ -548,6 +642,7 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
 
   return new Promise<Response>((resolve, reject) => {
     let cancelledByCaller = false;
+    let responded = false;
     const req = send(
       {
         protocol: url.protocol,
@@ -561,31 +656,18 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
         agent: url.protocol === "https:" ? pinnedHttpsAgent : pinnedHttpAgent,
         // The whole point: connect to the address already judged, and never
         // consult the resolver a second time.
-        lookup: (_hostname, options, callback) => {
-          // TWO shapes, because `net` asks for both. With `autoSelectFamily`
-          // — on by default since Node 20 — it passes `all: true` and expects
-          // an ARRAY; the three-argument form then lands as `undefined` and
-          // the connection fails with "Invalid IP address". Answering only
-          // the older shape meant every outbound plugin call broke on a
-          // default-configured runtime, and no test ran this function to say
-          // so.
-          const entry = { address: address.address, family: address.family };
-          if ((options as { all?: boolean }).all === true) {
-            (
-              callback as unknown as (
-                error: null,
-                addresses: { address: string; family: number }[]
-              ) => void
-            )(null, [entry]);
-            return;
-          }
-          callback(null, address.address, address.family);
-        },
+        // Both callback shapes `net` asks for — the array one with
+        // `autoSelectFamily`, on by default since Node 20 — are the shared
+        // pinned lookup's to answer.
+        lookup: createPinnedLookup(address.address, address.family),
         // Matched on the original name, or a certificate valid for the site
         // would be rejected because the socket was opened by address.
         servername: url.hostname,
       },
       response => {
+        // Before anything else, so the `close` handler below knows a
+        // response exists to settle the promise.
+        responded = true;
         const chunks: Buffer[] = [];
         let size = 0;
         response.on("data", (chunk: Buffer) => {
@@ -692,7 +774,24 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
       clearTimeout(timer);
       caller?.removeEventListener("abort", onCallerAbort);
     };
-    req.on("close", done);
+    // A request that closes without a response is refused, because nothing
+    // else will settle it. `node:http` gives a `101 Switching Protocols`
+    // answer to an `upgrade` listener rather than to the response callback,
+    // and with none attached it destroys the socket with no `error` — only
+    // this `close` — after which neither the deadline nor the caller's abort
+    // is still listening. A response that has already begun settles through
+    // its own `end` or `error` instead, both of which can arrive after this.
+    // Every other path that ends the request settles before it closes, so
+    // the rejection here is then a no-op.
+    req.on("close", () => {
+      done();
+      if (responded) return;
+      reject(
+        NextlyError.forbidden({
+          logContext: { reason: "outbound-bad-response", host: url.hostname },
+        })
+      );
+    });
     req.on("error", error => {
       done();
       reject(cancelledByCaller ? abortReason(caller as AbortSignal) : error);

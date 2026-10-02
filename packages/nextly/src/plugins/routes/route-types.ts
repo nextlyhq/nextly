@@ -219,11 +219,16 @@ export interface PluginRoute {
    */
   rateLimit?: "general" | "auth" | PluginRouteRateLimit;
   /**
-   * @experimental Hand the handler the untouched request body.
+   * @experimental Declare that the handler reads the request body as the
+   * exact bytes sent.
    *
-   * For a signed webhook, whose signature is computed over the exact bytes
-   * sent: anything that parses and re-serialises the body first changes them,
-   * and the signature then never matches.
+   * Every plugin handler is given the untouched `Request`, flag or not: core
+   * never parses or re-serialises a plugin route's body before the handler
+   * runs (a CSRF token check reads a clone), so a signed webhook can verify
+   * its signature over `await request.arrayBuffer()` or `request.text()`. The
+   * flag states that intent, and is validated: a `GET` route declaring it is
+   * refused when the plugin's routes are collected, since that method carries
+   * no body.
    */
   rawBody?: boolean;
   /**
@@ -236,8 +241,12 @@ export interface PluginRoute {
    * - `true` also requires a valid double-submit CSRF token, in the
    *   `x-csrf-token` header or as `csrfToken` in a JSON body. On a `public`
    *   route it applies to callers carrying the session cookie.
-   * - `false` checks nothing, for a route whose callers bring their own
-   *   credential (an API key, a signed webhook).
+   * - `false` refuses every unsafe-method request the session cookie
+   *   authenticates, from any origin, so the route takes writes only from
+   *   callers with another credential. It cannot be combined with
+   *   `public: true`: the pair is refused when routes are collected, and
+   *   the app does not boot. API-key and webhook callers need no opt-out:
+   *   they are never checked, and a webhook route is `public: true`.
    *
    * A refusal answers 403 `CSRF_FAILED` and records a `csrf-failed` audit
    * event. API-key and Bearer callers are exempt, because a browser cannot

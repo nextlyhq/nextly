@@ -83,6 +83,28 @@ describe("what migrateCore hands the core reconcile", () => {
       .calls[0]?.[0] as Record<string, unknown>;
     expect(withFlag.allowDropNonEmptyRetired).toBe(true);
   });
+
+  it("forwards the drop flag only when the operator set it", async () => {
+    // The opt-in the whole cleanup waits on: without it the retired-table
+    // drop returns before logging anything, so a caller that lost the flag
+    // would drop nothing and say nothing.
+    const off = deps({
+      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
+    });
+    await migrateCore(off as never);
+    const withoutFlag = (off.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as Record<string, unknown>;
+    expect(withoutFlag.dropRetiredAuthTables).toBeUndefined();
+
+    const on = deps({
+      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
+      dropRetiredAuthTables: true,
+    });
+    await migrateCore(on as never);
+    const withFlag = (on.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as Record<string, unknown>;
+    expect(withFlag.dropRetiredAuthTables).toBe(true);
+  });
 });
 
 describe("migrateCore", () => {

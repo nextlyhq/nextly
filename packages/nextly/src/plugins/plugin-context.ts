@@ -37,6 +37,8 @@ import type { EmailService } from "../services/email/email-service";
 import type { MediaService } from "../services/media/media-service";
 import type { Logger } from "../services/shared";
 import type { UserService } from "../services/users/user-service";
+import { runInPluginTransaction } from "../shared/lib/plugin-transaction-scope";
+import { runAdapterTransaction } from "../shared/lib/run-adapter-transaction";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
@@ -443,6 +445,13 @@ export interface PluginAuditApi {
   write(event: {
     kind: string;
     actorUserId?: string | null;
+    /**
+     * The account the event is about. Must be an existing user's id, or the
+     * row is stored without its `metadata` and a warning is logged naming the
+     * kind, with only this value's length and whether it has a user id's
+     * shape, never the value: a deleted target and one that never existed
+     * look the same, and neither may keep data about them.
+     */
     targetUserId?: string | null;
     request?: Request;
     metadata?: Record<string, string | number | boolean>;
@@ -455,14 +464,21 @@ export interface PluginAuditApi {
  * whole.
  */
 export type SettingsPatch<T> = {
-  [K in keyof T]?:
-    | (T[K] extends readonly unknown[]
-        ? T[K]
-        : T[K] extends Record<string, unknown>
-          ? SettingsPatch<T[K]>
-          : T[K])
-    | null;
+  [K in keyof T]?: SettingsPatchValue<T[K]> | null;
 };
+
+/**
+ * What a patch may hold for one member. `V` is a naked type parameter, so the
+ * conditional distributes over a union: an optional or nullable group is a
+ * partial in its object branch while `undefined` and `null` stay as they are.
+ * `object` rather than `Record<string, unknown>`, which a group declared as an
+ * interface does not satisfy.
+ */
+type SettingsPatchValue<V> = V extends readonly unknown[]
+  ? V
+  : V extends object
+    ? SettingsPatch<V>
+    : V;
 
 /** @experimental Reading and writing one plugin's settings. */
 export interface PluginSettingsApi<
@@ -987,9 +1003,23 @@ export interface PluginDatabase extends DatabaseInstance {
   /**
    * Run `work` in one transaction: it commits when `work` resolves and rolls
    * back when it throws. The handle `work` receives is the restricted builder,
-   * without a nested `transaction`. Write through it: another service or
+   * without a nested `transaction`; with `rawSql` it is the live handle, whose
+   * `transaction` nests as a savepoint. Write through it: another service or
    * `ctx.settings` called inside runs on its own connection on PostgreSQL and
    * MySQL, outside this transaction.
+   *
+   * On SQLite the transaction holds the database's only connection until it
+   * ends. A service or `ctx.settings` called inside joins it as a savepoint,
+   * and its rows roll back with it; what it does after its write (hooks,
+   * events, cache revalidation) runs when the savepoint is released and is
+   * not undone by a later rollback. Deleting media is refused inside it,
+   * including from a collection hook a service runs inside it, since a
+   * rollback could not bring the stored files back with the row, and a
+   * focal-point change keeps the superseded image variants rather than
+   * deleting them. Core's own transactions are unaffected: a collection hook
+   * that deletes media outside a plugin's transaction still deletes it.
+   * Other requests' statements wait for it or run inside it.
+   * Keep it short, and never await network I/O (`ctx.fetch`) inside it.
    */
   transaction<T>(work: (tx: DatabaseInstance) => Promise<T>): Promise<T>;
 }
@@ -1047,7 +1077,11 @@ function fluentOnly(handle: DatabaseInstance): DatabaseInstance {
  * several writes atomic. Its handle is restricted the same way. On SQLite it
  * runs through the adapter's `BEGIN IMMEDIATE` runner, since Drizzle's
  * better-sqlite3 transaction refuses an async callback, and the builder shares
- * the connection that runner opened.
+ * the connection that runner opened. What the work throws reaches the plugin
+ * as thrown, as Drizzle's transaction hands it back on PostgreSQL and MySQL,
+ * rather than as the adapter's classification of it. The work runs marked as
+ * a plugin transaction (`runInPluginTransaction`), so a service it calls can
+ * refuse what a rollback of the plugin's transaction could not undo.
  */
 function restrictDatabase(
   raw: DatabaseInstance,
@@ -1060,16 +1094,21 @@ function restrictDatabase(
     // is better-sqlite3's synchronous one, which refuses the async callback
     // `PluginDatabase` documents — so declaring raw SQL took away the
     // transaction every other plugin has. Everything else reaches the
-    // instance unchanged.
-    return new Proxy(raw as PluginDatabase, {
+    // instance unchanged. The work's handle is this same proxy, so its
+    // `transaction` nests as a savepoint, as a Drizzle transaction's does on
+    // PostgreSQL and MySQL, instead of reaching the synchronous one.
+    const live: PluginDatabase = new Proxy(raw as PluginDatabase, {
       get(target, property, receiver) {
         if (property === "transaction" && dialect() === "sqlite") {
           return <T>(work: (tx: DatabaseInstance) => Promise<T>) =>
-            adapterTransaction()(() => work(raw));
+            runAdapterTransaction(adapterTransaction(), () =>
+              runInPluginTransaction(() => work(live))
+            );
         }
         return Reflect.get(target, property, receiver) as unknown;
       },
     });
+    return live;
   }
   const native = raw as DatabaseInstance & {
     transaction: <T>(work: (tx: DatabaseInstance) => Promise<T>) => Promise<T>;
@@ -1078,7 +1117,9 @@ function restrictDatabase(
     ...fluentOnly(raw),
     transaction: work =>
       dialect() === "sqlite"
-        ? adapterTransaction()(() => work(fluentOnly(raw)))
+        ? runAdapterTransaction(adapterTransaction(), () =>
+            runInPluginTransaction(() => work(fluentOnly(raw)))
+          )
         : native.transaction(tx => work(fluentOnly(tx))),
   };
 }

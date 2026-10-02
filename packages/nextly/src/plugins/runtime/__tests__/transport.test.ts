@@ -8,7 +8,7 @@
  * torn down — and every one of those was wrong while that suite was green.
  */
 import { createServer, type Server } from "node:http";
-import { AddressInfo } from "node:net";
+import { AddressInfo, createServer as createNetServer } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -561,5 +561,145 @@ describe("the caller's own cancellation is honoured", () => {
     const controller = new AbortController();
     const response = await send(url, { signal: controller.signal });
     expect(await response.text()).toBe("ok");
+  });
+});
+
+describe("an answer that switches protocols", () => {
+  it("is refused within the deadline instead of hanging", async () => {
+    // `node:http` hands a 101 to an `upgrade` listener rather than to the
+    // response callback, and with none attached it destroys the socket and
+    // emits only `close`. Nothing settled the call then: not the deadline,
+    // not the caller's abort. A raw socket, because `node:http`'s own server
+    // will not send a 101 to a request that did not ask to upgrade.
+    const raw = createNetServer(socket => {
+      socket.once("data", () => {
+        socket.write(
+          "HTTP/1.1 101 Switching Protocols\r\n" +
+            "Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n"
+        );
+      });
+    });
+    await new Promise<void>(resolve => {
+      raw.listen(0, "127.0.0.1", () => {
+        resolve();
+      });
+    });
+    const { port } = raw.address() as AddressInfo;
+
+    try {
+      const started = Date.now();
+      const refusal = await send(
+        new URL(`http://localhost:${String(port)}/`),
+        { signal: AbortSignal.timeout(10_000) },
+        10_000
+      ).then(
+        () => null,
+        (err: unknown) => err
+      );
+
+      expect(refusal).toMatchObject({
+        logContext: { reason: "outbound-bad-response" },
+      });
+      // Settled by the close, not by either timer: both are ten seconds out.
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      await new Promise<void>(resolve => {
+        raw.close(() => {
+          resolve();
+        });
+      });
+    }
+  }, 15_000);
+});
+
+describe("requests the transport will not send", () => {
+  /** Refusal of `init`, with how many requests reached the server. */
+  async function refusalFor(
+    init: RequestInit
+  ): Promise<{ refusal: unknown; requests: number }> {
+    let requests = 0;
+    const url = await listen((_req, res) => {
+      requests += 1;
+      res.end();
+    });
+    const refusal = await send(url, init).then(
+      () => null,
+      (err: unknown) => err
+    );
+    return { refusal, requests };
+  }
+
+  it.each(["CONNECT", "connect", "TRACE", "TRACK", "track"])(
+    "refuses the %s method before sending anything",
+    async method => {
+      // CONNECT's answer goes to a `connect` listener, never to a response,
+      // and TRACE and TRACK echo the request back, credentials included.
+      const { refusal, requests } = await refusalFor({ method });
+      expect(refusal).toMatchObject({
+        logContext: {
+          reason: "outbound-method-refused",
+          method: method.toUpperCase(),
+        },
+      });
+      expect(requests).toBe(0);
+    }
+  );
+
+  it.each([
+    ["Upgrade", "websocket"],
+    ["Connection", "Upgrade"],
+    ["Connection", "upgrade"],
+    ["Connection", "close, x-secret"],
+    ["Keep-Alive", "timeout=5"],
+    ["Expect", "100-continue"],
+  ])("refuses a caller-set %s header", async (name, value) => {
+    // The connection is the transport's own: one socket per request, to the
+    // vetted address, closed after. A caller asking to switch or keep it is
+    // refused as the platform's `fetch` refuses it.
+    const { refusal, requests } = await refusalFor({
+      headers: { [name]: value },
+    });
+    expect(refusal).toMatchObject({
+      logContext: {
+        reason: "outbound-header-refused",
+        header: name.toLowerCase(),
+      },
+    });
+    expect(requests).toBe(0);
+  });
+
+  it.each(["close", "keep-alive", "Keep-Alive", "close, keep-alive"])(
+    "sends a request whose Connection is %s, without forwarding it",
+    async value => {
+      // The platform's `fetch` accepts both values, so refusing them broke
+      // ordinary calls. The socket is still the transport's own: the agents
+      // close it after one request, so what reaches the destination is
+      // `close` whatever the caller asked, and a caller's `keep-alive` is
+      // never written.
+      const url = await listen((req, res) => {
+        res.end(JSON.stringify({ connection: req.headers.connection }));
+      });
+      const response = await send(url, { headers: { Connection: value } });
+      expect(await response.json()).toEqual({ connection: "close" });
+    }
+  );
+
+  it("still sends the methods and headers a request ordinarily carries", async () => {
+    // The control: a transport refusing every method, or every header,
+    // passes the refusals above while breaking every real call.
+    const url = await listen((req, res) => {
+      res.end(
+        JSON.stringify({ method: req.method, auth: req.headers.authorization })
+      );
+    });
+    const response = await send(url, {
+      method: "PATCH",
+      headers: { authorization: "Bearer t", accept: "application/json" },
+      body: "{}",
+    });
+    expect(await response.json()).toEqual({
+      method: "PATCH",
+      auth: "Bearer t",
+    });
   });
 });

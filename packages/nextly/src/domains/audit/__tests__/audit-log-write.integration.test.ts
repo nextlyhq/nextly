@@ -276,11 +276,14 @@ describe("projectAuditMetadata", () => {
       "challenge-failed-final",
       "challenge-user-missing",
       "challenge-wrong-answer",
+      "challenge-budget-spent",
       "challenge-flow-settled",
       // auth/handlers/set-initial-password.ts
       "pending-token-wrong-challenge",
       "not-in-must-change-state",
       "user-missing",
+      // auth/handlers/session-row.ts, recorded by every sign-in that mints
+      "password-changed",
     ];
 
     for (const reason of reachable) {
