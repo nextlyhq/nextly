@@ -111,9 +111,12 @@ export async function createScratchDatabase(
  * them: each table present, its columns, its indexes (its primary key among
  * them), and the constraints on it or pointing at it. Each table's identity is
  * read too, so one dropped and rebuilt in place reads differently even with the
- * same shape: its oid on Postgres, and on MySQL its creation time, to the
- * second, read with the session's statistics cache off, since MySQL otherwise
- * serves that column from a cache that can outlive the table. Null on SQLite, whose in-memory
+ * same shape: its oid on Postgres, and on MySQL its creation time, read with
+ * the session's statistics cache off, since MySQL otherwise serves that column
+ * from a cache that can outlive the table. That time is to the second, so when
+ * a table was created in the second the snapshot is taken, it waits for the
+ * server's clock to move on: a rebuild after the snapshot then always reads a
+ * later time. Null on SQLite, whose in-memory
  * database is already a suite's own.
  */
 export async function describeSharedTables(
@@ -168,6 +171,17 @@ export async function describeSharedTables(
          ORDER BY t.TABLE_NAME`,
         [tables]
       );
+      // A rebuild in the second a table was created would keep its creation time. Two
+      // seconds always cross one, so the wait is bounded whatever the server's clock.
+      for (let tries = 0; tries < 8; tries += 1) {
+        const [fresh] = await connection.query(
+          "SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (?) AND CREATE_TIME >= DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s')",
+          [tables]
+        );
+        if (Number((fresh as Array<{ n: number | string }>)[0]?.n ?? 0) === 0)
+          break;
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
       return rows as unknown[];
     } finally {
       connection.release();
