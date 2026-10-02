@@ -216,10 +216,13 @@ budget, the overrides and each operating system's caveats: the
 - Make retried work (jobs, webhook handlers, event subscribers) idempotent: a
   repeated delivery adds no second row or side effect.
 - Queries select only the columns they need, filter and paginate in the
-  database, make no N+1 round trips, and filter or sort on indexed columns.
-  Say in the PR when a change could be slow on a large table.
-- Never hard-code, log or return a secret; redact tokens and credentials in
-  logs and errors.
+  database, and make no N+1 round trips. Filtering or sorting a large table on
+  an unindexed column is slow: say so in the PR.
+- Never hard-code or log a secret, and redact tokens and credentials in logs
+  and errors. Return one only through a route that exists to hand it over, to
+  a caller allowed to have it: a new API key once at creation; a webhook's
+  signing secrets at creation and through the session-only, `update-webhooks`
+  reveal.
 - Admin styling is token-driven: use `--nx-*` custom properties (defined for
   light AND dark in `packages/ui/src/styles/theme.css`). Zero hardcoded
   colors, and every visual change must work in both modes.
