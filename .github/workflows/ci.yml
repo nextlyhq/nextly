@@ -865,6 +865,100 @@ jobs:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
+  # The gates `.husky/pre-push` runs, on Windows, so a change that breaks them
+  # there shows on its pull request rather than on a teammate's machine. The
+  # hook itself skips in CI, so its gates are listed here; a gate added to the
+  # hook belongs here too.
+  #
+  # Every gate runs even when one before it failed, so one run reports all of
+  # them. Gated on the same `changes` decision as the Linux jobs: a change
+  # that can affect nothing skips it, and a skipped job is accepted by branch
+  # protection. `.gitattributes` and this workflow are never inert, so a change
+  # to how files are checked out, or to this job, runs it.
+  #
+  # Not among the jobs `gate` waits on, so its result informs a pull request
+  # without holding its merge.
+  windows-gates:
+    name: Pre-push gates (windows-latest)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        id: install
+        run: pnpm install --frozen-lockfile
+
+      - name: Design lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm lint:design
+
+      - name: Workspace lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm lint:workspace
+
+      - name: Scripts lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm lint:scripts
+
+      - name: Build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm run build
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      - name: Package lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm turbo lint --continue --filter=./packages/*
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      - name: Typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm turbo check-types --continue
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Every workspace's suite, as the hook runs when a push changes the
+      # workspace or task graph.
+      - name: Unit suites
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm turbo test --continue
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Only a job whose gates all passed publishes what it learned.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
   # The one check that can block a merge, standing for all of them.
   #
   # 🔴 Measured before this existed: the only required status check on `main`
