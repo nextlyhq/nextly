@@ -52,6 +52,7 @@ We don't yet have a formal RFC process; significant proposals are discussed in G
   `pnpm-workspace.yaml`, since pnpm reads only auth and registry settings from
   `.npmrc`.
 - Docker Desktop, optional. Only needed if you want to test against PostgreSQL or MySQL via `pnpm dev:postgres` / `pnpm dev:mysql`, or run the full integration test matrix. SQLite (the default) needs none.
+- On Windows, `.gitattributes` checks text files out with LF line endings, whatever `core.autocrlf` says, so the tests read files as they read them on Linux and macOS. A clone made before `.gitattributes` said so keeps its CRLF files until they are checked out again. With nothing uncommitted, run this once in the clone: `git rm -r -q --cached . && git reset -q --hard`.
 
 ### One-command boot
 

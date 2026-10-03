@@ -1,3 +1,10 @@
+# Text files are checked out with LF on every platform, as the repository
+# stores them. Git for Windows otherwise checks text out with CRLF
+# (`core.autocrlf=true`), and a test that reads a source, a workflow or a
+# template line by line then meets a trailing `\r` that nothing here writes.
+# `text=auto` leaves a file git reads as binary as it is.
+* text=auto eol=lf
+
 # Source is text, even when a file contains a byte git reads as binary.
 #
 # Git decides binary-or-text by sniffing for a NUL, so one NUL anywhere in a
@@ -7,8 +14,8 @@
 # change, and a code search for anything inside it returns nothing at all.
 #
 # `diff` is the attribute that settles it: a path it is set on is treated as
-# text however it is spelled. Deliberately not `text`, which is about end-of-line
-# normalisation and would rewrite line endings on checkout.
+# text however it is spelled. It changes how such a file is shown, not how it is
+# checked out, which `text=auto` above decides.
 *.ts diff
 *.tsx diff
 *.js diff
