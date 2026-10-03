@@ -1,7 +1,7 @@
 /**
  * User identity tables — PostgreSQL.
  *
- * Tables: users, accounts, sessions.
+ * Tables: users.
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
@@ -17,7 +17,6 @@
 
 import {
   pgTable,
-  serial,
   text,
   timestamp,
   integer,
@@ -43,6 +42,12 @@ export const users = pgTable(
     // applies it cleanly.
     passwordHash: text("password_hash"),
     isActive: boolean("is_active").notNull().default(false),
+    // When an administrator deactivated the account; null when none has. Kept
+    // apart from is_active because that flag is also false for an account
+    // still waiting on its verification link or invite, and only this says
+    // whether following one may switch the account on. Nullable, so adding it
+    // to an existing table rewrites no row.
+    deactivatedAt: timestamp("deactivated_at", { withTimezone: false }),
     // Set when an admin creates the account with a password they chose: the
     // person must replace it on first sign-in (ASVS 6.4.1). Nullable so the
     // column can be added to an existing table without a data-losing default;
@@ -62,45 +67,4 @@ export const users = pgTable(
     uniqueIndex("users_email_unique").on(t.email),
     index("users_created_at_idx").on(t.createdAt),
   ]
-);
-
-export const accounts = pgTable(
-  "accounts",
-  {
-    id: serial("id").primaryKey(),
-    userId: text("user_id").notNull(),
-    type: text("type").notNull(),
-    provider: text("provider").notNull(),
-    providerAccountId: text("provider_account_id").notNull(),
-    refresh_token: text("refresh_token"),
-    access_token: text("access_token"),
-    expires_at: integer("expires_at"),
-    token_type: text("token_type"),
-    scope: text("scope"),
-    id_token: text("id_token"),
-    session_state: text("session_state"),
-    createdAt: timestamp("created_at", { withTimezone: false })
-      .defaultNow()
-      .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: false })
-      .defaultNow()
-      .notNull(),
-  },
-  t => [
-    uniqueIndex("accounts_provider_providerAccountId_unique").on(
-      t.provider,
-      t.providerAccountId
-    ),
-    index("accounts_user_id_idx").on(t.userId),
-  ]
-);
-
-export const sessions = pgTable(
-  "sessions",
-  {
-    sessionToken: text("session_token").primaryKey(),
-    userId: text("user_id").notNull(),
-    expires: timestamp("expires", { withTimezone: false }).notNull(),
-  },
-  t => [index("sessions_user_id_idx").on(t.userId)]
 );

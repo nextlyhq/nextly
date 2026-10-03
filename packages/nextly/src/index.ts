@@ -456,6 +456,14 @@ export {
 export type { BlockDocument } from "@nextlyhq/blocks-engine";
 
 // Plugin System - Types and helpers for creating plugins
+// One implementation of "is this a safe place to send a finished login". A
+// plugin keeping its own copy is a second answer to a question with one right
+// answer, and the copy is the one that gets it wrong.
+export {
+  DEFAULT_ADMIN_PATH,
+  sanitizeAdminPath,
+} from "./auth/redirect/sanitize-admin-path";
+
 export {
   AdminPlacement,
   collectDeclarations,
@@ -469,8 +477,16 @@ export {
   type PluginAdminAppearance,
   type PluginAdminConfig,
   type PluginCategory,
+  type PluginAuditApi,
+  type PluginAuditDeclaration,
+  type PluginAuthApi,
+  type PluginCapabilities,
+  type CompleteLoginOptions,
   type PluginContext,
   type PluginContributions,
+  type PluginDatabase,
+  type PluginHookPointDeclaration,
+  type PluginSettingsApi,
   type PluginDeclaration,
   type PluginDefinition,
   type PluginPermission,
@@ -496,6 +512,7 @@ export {
   type PluginRouteContext,
   type PluginRouteHandler,
   type PluginRouteMount,
+  type PluginRouteRateLimit,
   type Middleware,
   type RouteMethod,
   type ComponentPath,
@@ -858,9 +875,13 @@ export {
   DocumentEvents,
   AuthEvents,
   MediaEvents,
+  UserEvents,
   type DocumentEventName,
   type AuthEventName,
   type MediaEventName,
+  type UserEventName,
+  type UserCreatedPayload,
+  type UserDeletedPayload,
 } from "./events";
 
 // Plugin filter/action registry (D63) — ctx.filters / ctx.actions surface + seam types.
@@ -869,6 +890,7 @@ export {
   getFilterRegistry,
   resetFilterRegistry,
   FilterSeams,
+  type Decision,
   type Filter,
   type Action,
   type FilterName,

@@ -21,6 +21,14 @@ function info(overrides: Partial<PluginInfo> = {}): PluginInfo {
     adminPageCount: 1,
     hasSettings: true,
     renamed: {},
+    manifest: {
+      outbound: [],
+      rawSql: false,
+      completesLogins: false,
+      secrets: [],
+      provides: [],
+      requires: {},
+    },
     ...overrides,
   };
 }
@@ -82,5 +90,40 @@ describe("renderPluginInfo (D48)", () => {
     expect(kv["settings page"]).toBe("yes");
     // Permissions are itemized.
     expect(logger.item).toHaveBeenCalledWith("export-submissions", 1);
+  });
+
+  it("prints the manifest an operator reviews before installing", () => {
+    const logger = {
+      header: vi.fn(),
+      keyValue: vi.fn(),
+      item: vi.fn(),
+      info: vi.fn(),
+    };
+    renderPluginInfo(
+      info({
+        manifest: {
+          outbound: ["api.stripe.com"],
+          rawSql: true,
+          completesLogins: true,
+          secrets: ["apiKey"],
+          provides: ["acme/payments"],
+          requires: { "acme/webhooks": ">=2.0.0" },
+        },
+      }),
+      logger
+    );
+
+    const kv = Object.fromEntries(logger.keyValue.mock.calls);
+    expect(kv["raw SQL"]).toBe("declared");
+    expect(kv["finishes logins"]).toBe("declared");
+    const items = logger.item.mock.calls.map(call => call[0]);
+    expect(items).toEqual(
+      expect.arrayContaining([
+        "api.stripe.com",
+        "apiKey",
+        "acme/payments",
+        "acme/webhooks >=2.0.0",
+      ])
+    );
   });
 });

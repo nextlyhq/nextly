@@ -101,6 +101,24 @@ export function renderPluginInfo(
   logger.keyValue("admin menu items", String(info.adminMenuCount));
   logger.keyValue("admin pages", String(info.adminPageCount));
   logger.keyValue("settings page", info.hasSettings ? "yes" : "no");
+
+  // The manifest, which is what an operator reviews before installing: a
+  // reach the plugin declared but nobody can see is not reviewable.
+  const { manifest } = info;
+  list("outbound hosts", manifest.outbound);
+  logger.keyValue("raw SQL", manifest.rawSql ? "declared" : "no");
+  logger.keyValue(
+    "finishes logins",
+    manifest.completesLogins ? "declared" : "no"
+  );
+  list("secret settings", manifest.secrets);
+  list("provides", manifest.provides);
+  list(
+    "requires",
+    Object.entries(manifest.requires).map(
+      ([capability, range]) => `${capability} ${range}`
+    )
+  );
 }
 
 /** Load config + introspect all plugins (shared by list + info). */

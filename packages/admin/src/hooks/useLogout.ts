@@ -12,11 +12,18 @@ import { ROUTES } from "../constants/routes";
 
 import { useApi } from "./useApi";
 
+/**
+ * Sign the current user out: end the session server-side, drop every cached
+ * query, and land on the login page with a toast.
+ *
+ * `message` replaces the toast's text, for a sign-out the user did not ask for
+ * directly — one that follows a change which ended their own sessions.
+ */
 export function useLogout() {
   const { api } = useApi();
   const queryClient = useQueryClient();
 
-  const logout = async () => {
+  const logout = async (opts?: { message?: string }) => {
     try {
       // Use the shared CSRF helper so the wire-shape contract lives in
       // one place (lib/api/csrf.ts). Pre-Phase-4 this hook duplicated the
@@ -32,7 +39,7 @@ export function useLogout() {
       resetSetupStatusCache();
       queryClient.clear();
       // Show success message and redirect
-      toast.success("You have been logged out successfully.");
+      toast.success(opts?.message ?? "You have been logged out successfully.");
       // Redirect to login page
       navigateTo(ROUTES.LOGIN);
     } catch (_error: unknown) {

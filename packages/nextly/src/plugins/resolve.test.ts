@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import type { PluginDefinition } from "./plugin-context";
-import { resolvePlugins } from "./resolve";
+import { z } from "zod";
+
+import { assertPluginManifests, resolvePlugins } from "./resolve";
 
 const p = (
   name: string,
@@ -48,5 +50,201 @@ describe("resolvePlugins", () => {
         coreVersion: "1.0.0",
       })
     ).toThrow(/Plugin configuration is invalid/i);
+  });
+
+  /**
+   * The wiring again, and the disabled case beside it, because the two
+   * together are what make the refusal safe to have at boot.
+   */
+  describe("audit kinds", () => {
+    const withAuditKind = (name: string, kind: string, enabled?: boolean) =>
+      p(name, {
+        ...(enabled === undefined ? {} : { enabled }),
+        contributes: { audit: { kinds: [{ kind }] } },
+      } as Partial<PluginDefinition>);
+
+    it("refuses a kind outside the declaring plugin's prefix", () => {
+      // Asserts `resolvePlugins` actually performs the check: without this,
+      // removing the call leaves the collector's own suite green while
+      // nothing at boot runs it.
+      expect(() =>
+        resolvePlugins([withAuditKind("@acme/auth", "other-plugin.thing")], {
+          coreVersion: "1.0.0",
+        })
+      ).toThrow(/Plugin configuration is invalid/i);
+    });
+
+    it("ignores a DISABLED plugin's declarations", () => {
+      // A plugin that is off contributes no `ctx.audit`, so there is no trail
+      // for a bad declaration to be missing from — and refusing it would let
+      // something nobody is running stop the application from starting.
+      // `collectHookPoints` skips disabled plugins for the same reason.
+      expect(() =>
+        resolvePlugins(
+          [withAuditKind("@acme/auth", "other-plugin.thing", false)],
+          { coreVersion: "1.0.0" }
+        )
+      ).not.toThrow();
+    });
+
+    it("accepts a correctly prefixed kind on an ENABLED plugin", () => {
+      // The control: skipping every plugin would satisfy the disabled case
+      // above while making the refusal unreachable.
+      expect(() =>
+        resolvePlugins([withAuditKind("@acme/auth", "acme-auth.thing")], {
+          coreVersion: "1.0.0",
+        })
+      ).not.toThrow();
+    });
+  });
+});
+
+describe("assertPluginManifests", () => {
+  /**
+   * The checks a boot must apply to the list it USES, not the list it was
+   * handed. A `setup` transformer can add, rename or replace plugins, so
+   * `register.ts` calls this again on the transformed config.
+   */
+  const withSecretPath = (path: string) =>
+    ({
+      name: "@acme/thing",
+      version: "1.0.0",
+      nextly: ">=0.0.1",
+      capabilities: { secrets: [path] },
+      contributes: {
+        settings: z.object({ clientSecret: z.string().default("") }),
+      },
+    }) as unknown as PluginDefinition;
+
+  it("REFUSES a secret path the settings schema does not have", () => {
+    // The reason this set is re-run after transforms. A path that matches
+    // nothing is not inert: `ctx.settings` then stores the credential it names
+    // as ordinary text and hands it back verbatim, and nothing at runtime says
+    // so. A typo introduced by a transformer used to reach exactly that.
+    expect(() =>
+      assertPluginManifests([withSecretPath("clientSecrets")])
+    ).toThrow(/Plugin configuration is invalid/i);
+  });
+
+  it("accepts a secret path the schema does have", () => {
+    // The control: refusing every declaration would satisfy the test above
+    // while making encrypted settings undeclarable.
+    expect(() =>
+      assertPluginManifests([withSecretPath("clientSecret")])
+    ).not.toThrow();
+  });
+
+  it("is idempotent, so running it twice changes nothing", () => {
+    // `resolvePlugins` calls it and `register.ts` calls it again on the
+    // transformed list. A second pass that threw — on a hook point already
+    // published, say — would make the re-check impossible to add.
+    const plugins = [withSecretPath("clientSecret")];
+    assertPluginManifests(plugins);
+    expect(() => assertPluginManifests(plugins)).not.toThrow();
+  });
+});
+
+describe("a plugin challenge under core's reserved id", () => {
+  const challenge = (id: string) =>
+    p("@t/2fa", {
+      contributes: {
+        auth: { challenges: [{ id, resolve: async () => ({ ok: true }) }] },
+      },
+    } as never);
+
+  it("fails resolution, rather than the first sign-in request", () => {
+    expect(() =>
+      assertPluginManifests([challenge("must-change-password")])
+    ).toThrow(
+      expect.objectContaining({
+        logContext: expect.objectContaining({
+          reason: "plugin-challenge-id-reserved",
+        }),
+      })
+    );
+  });
+
+  it("accepts any other id", () => {
+    expect(() => assertPluginManifests([challenge("totp")])).not.toThrow();
+  });
+});
+
+describe("two plugin challenges under one id", () => {
+  const declaring = (name: string, ids: string[], enabled?: boolean) =>
+    p(name, {
+      ...(enabled === undefined ? {} : { enabled }),
+      contributes: {
+        auth: {
+          challenges: ids.map(id => ({
+            id,
+            resolve: async () => ({ ok: true }),
+          })),
+        },
+      },
+    } as never);
+
+  it("fails resolution, naming both plugins, rather than every auth request", () => {
+    expect(() =>
+      assertPluginManifests([
+        declaring("@t/2fa", ["totp"]),
+        declaring("@t/other-2fa", ["totp"]),
+      ])
+    ).toThrow(
+      expect.objectContaining({
+        logContext: expect.objectContaining({
+          reason: "plugin-challenge-id-duplicate",
+          plugins: ["@t/2fa", "@t/other-2fa"],
+          challengeId: "totp",
+        }),
+      })
+    );
+  });
+
+  it("fails resolution when one plugin declares an id twice", () => {
+    expect(() =>
+      assertPluginManifests([declaring("@t/2fa", ["totp", "totp"])])
+    ).toThrow(
+      expect.objectContaining({
+        logContext: expect.objectContaining({
+          reason: "plugin-challenge-id-duplicate",
+        }),
+      })
+    );
+  });
+
+  it("accepts distinct ids, and a duplicate from a disabled plugin", () => {
+    // The control: refusing any second challenge would satisfy the cases
+    // above. A disabled plugin registers nothing, so its ids collide with
+    // nothing at runtime.
+    expect(() =>
+      assertPluginManifests([
+        declaring("@t/2fa", ["totp"]),
+        declaring("@t/webauthn", ["webauthn"]),
+        declaring("@t/old-2fa", ["totp"], false),
+      ])
+    ).not.toThrow();
+  });
+});
+
+describe("a plugin event under a reserved prefix", () => {
+  const declaring = (name: string) =>
+    p("@t/cache", { contributes: { events: [{ name }] } } as never);
+
+  it("fails resolution, rather than every emit", () => {
+    expect(() =>
+      assertPluginManifests([declaring("plugin.cache.cleared")])
+    ).toThrow(
+      expect.objectContaining({
+        logContext: expect.objectContaining({
+          reason: "plugin-event-name-reserved",
+        }),
+      })
+    );
+  });
+
+  it("accepts the plugin's own namespace", () => {
+    expect(() =>
+      assertPluginManifests([declaring("t-cache.cleared")])
+    ).not.toThrow();
   });
 });

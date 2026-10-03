@@ -27,6 +27,10 @@
       "types": "./dist/runtime.d.ts",
       "import": "./dist/runtime.mjs"
     },
+    "./db-operators": {
+      "types": "./dist/db-operators.d.ts",
+      "import": "./dist/db-operators.mjs"
+    },
     "./route-path": {
       "types": "./dist/route-path.d.ts",
       "import": "./dist/runtime/routing/slug-param.mjs"
@@ -226,6 +230,10 @@
     "./api/jobs-list-types": {
       "types": "./dist/api/jobs-list-types.d.ts",
       "import": "./dist/api/jobs-list-types.mjs"
+    },
+    "./api/auth-ui-types": {
+      "types": "./dist/api/auth-ui-types.d.ts",
+      "import": "./dist/api/auth-ui-types.mjs"
     }
   },
   "files": [

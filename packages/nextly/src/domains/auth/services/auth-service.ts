@@ -25,6 +25,12 @@ import type { Logger } from "../../../services/shared";
 import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { auditReason } from "../../audit/audit-reasons";
+import {
+  passwordColumns,
+  updateUserEndingSessions,
+  type PasswordWriteTx,
+} from "../../users/services/password-write";
+import { UserAccountService } from "../../users/services/user-account-service";
 import { UserQueryService } from "../../users/services/user-query-service";
 import { generateInviteTokenValue, hashInviteToken } from "../lib/invite-token";
 
@@ -73,12 +79,16 @@ interface AcceptInviteResult {
  * is dialect-specific; narrowing to the methods actually called keeps the body
  * typed without an `any`.
  */
-interface TransactionLike {
-  update(table: unknown): {
-    set(data: unknown): { where(condition: unknown): Promise<unknown> };
-  };
-  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+interface TransactionLike extends PasswordWriteTx {
   insert(table: unknown): { values(data: unknown): Promise<unknown> };
+  // Only the password-version read back after a forced change selects.
+  select(fields: { passwordUpdatedAt: unknown }): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(count: number): Promise<{ passwordUpdatedAt: Date | null }[]>;
+      };
+    };
+  };
 }
 
 /**
@@ -118,7 +128,7 @@ export class AuthService extends BaseService {
   }
 
   // withTransaction is inherited from BaseService which routes through
-  // Drizzle native on PG/MySQL and manual BEGIN/COMMIT on SQLite.
+  // Drizzle native on PG/MySQL and the adapter's transaction on SQLite.
   // Do NOT override it here — the base class's dialect-aware routing
   // is what makes async transaction callbacks work on all three dialects.
 
@@ -205,6 +215,10 @@ export class AuthService extends BaseService {
         email: userData.email,
         name: userData.name ?? "User",
         password: userData.password,
+        // Self-registration: the person supplied this address and nothing has
+        // established it is theirs. The verification email sent below is what
+        // proves it, and until then the account stays unverified.
+        emailVerification: "pending",
       });
     } catch (error) {
       if (NextlyError.is(error)) {
@@ -242,8 +256,10 @@ export class AuthService extends BaseService {
    *   canonical "Invalid email or password." message comes from the
    *   factory and never reveals which leg failed (§13.8).
    *
-   * NOTE: Per the migration spec, account-state checks (locked / disabled
-   * accounts, etc.) move to PR 5 — this method preserves today's behavior.
+   * Checks the password only: it neither counts a failed attempt nor decides
+   * whether the account may hold a session (locked, deactivated,
+   * unverified). Anything that issues a session signs in through
+   * `auth/credentials/verify-credentials`, which does all three.
    */
   async verifyCredentials(
     email: string,
@@ -353,20 +369,24 @@ export class AuthService extends BaseService {
 
     const newPasswordHash = await hashPasswordBcrypt(newPassword);
 
-    try {
-      await this.db
-        .update(this.tables.users)
-        .set({
-          passwordHash: newPasswordHash,
-          passwordUpdatedAt: new Date(),
-          // The user chose this password themselves, so any admin-set
-          // must-change requirement is satisfied.
-          mustChangePassword: false,
-        })
-        .where(eq(this.tables.users.id, userId));
-    } catch (error) {
-      // Normalise raw driver errors before mapping.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    // The users service's own-password write, so both services that change
+    // a user's own password make the one write: conditional on the account
+    // not being deactivated, in the same statement, and ending every session
+    // the account holds in the same transaction. A deactivated account's
+    // credentials are frozen, as they are for a reset link, an invite and the
+    // forced first-sign-in change: an access token still inside its
+    // lifetime, or a Direct API token, must not set a password for a later
+    // reactivation to switch on. Decided by the write rather than a read
+    // before it, which could not see a deactivation landing while the
+    // password was hashed.
+    const changed = await new UserAccountService(
+      this.adapter,
+      this.logger
+    ).changeOwnPasswordHash(userId, newPasswordHash);
+    if (!changed) {
+      throw NextlyError.invalidCredentials({
+        logContext: { reason: auditReason("inactive"), userId },
+      });
     }
 
     emitAuthEvent("passwordChanged", { userId });
@@ -550,7 +570,7 @@ export class AuthService extends BaseService {
 
     const targetUser = await this.db.query.users.findFirst({
       where: { email: requireFilterValue(email, "email") },
-      columns: { id: true },
+      columns: { id: true, deactivatedAt: true },
     });
 
     if (!targetUser) {
@@ -569,6 +589,27 @@ export class AuthService extends BaseService {
       });
     }
 
+    if (targetUser.deactivatedAt) {
+      // A deactivated account's credentials are frozen: a link minted
+      // before the deactivation may still arrive, but it can no longer set
+      // a password or clear an admin-set must-change requirement. The wire
+      // stays the generic invalid-link answer, so the account's state is
+      // not confirmed to whoever holds the link.
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "token",
+            code: "INVALID",
+            message: "The reset link is invalid.",
+          },
+        ],
+        logContext: {
+          reason: "reset-token-deactivated",
+          tokenId: resetToken.id,
+        },
+      });
+    }
+
     const passwordStrength = validatePasswordStrength(newPassword);
     if (!passwordStrength.ok) {
       throw NextlyError.validation({
@@ -583,19 +624,33 @@ export class AuthService extends BaseService {
     try {
       const passwordHash = await hashPasswordBcrypt(newPassword);
 
-      // Update password by user ID (same pattern as changePassword — avoids
-      // transaction/email-matching issues that caused the update to silently
-      // affect 0 rows)
-      await this.db
-        .update(this.tables.users)
-        .set({
-          passwordHash,
-          passwordUpdatedAt: new Date(),
-          // Resetting via an emailed link means the user set this password
-          // themselves — clear any admin-set must-change requirement.
-          mustChangePassword: false,
-        })
-        .where(eq(this.tables.users.id, targetUser.id));
+      // The own-password write `changePassword` makes: conditional on the
+      // account not being deactivated, in the same statement that sets the
+      // password, and ending every session the account holds. An
+      // administrator may have switched the account off while the new
+      // password was being hashed, and the read above would not have seen
+      // it; the credentials stay frozen in that window too. Whoever asked
+      // for the reset may not be the only one holding a session, so the
+      // reset ends them all on every path that resets.
+      const reset = await new UserAccountService(
+        this.adapter,
+        this.logger
+      ).changeOwnPasswordHash(targetUser.id, passwordHash);
+      if (!reset) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "token",
+              code: "INVALID",
+              message: "The reset link is invalid.",
+            },
+          ],
+          logContext: {
+            reason: "reset-token-deactivated",
+            tokenId: resetToken.id,
+          },
+        });
+      }
 
       await this.db
         .update(this.tables.passwordResetTokens)
@@ -604,6 +659,7 @@ export class AuthService extends BaseService {
         })
         .where(eq(this.tables.passwordResetTokens.id, resetToken.id));
     } catch (error) {
+      if (NextlyError.is(error)) throw error;
       // Normalise raw driver errors before mapping.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
@@ -635,8 +691,8 @@ export class AuthService extends BaseService {
     try {
       const user = await queryService.findByEmail(email);
 
-      if (!user) {
-        // Silent success — never reveal whether the email is registered.
+      // Silent success either way, so neither case reveals the account.
+      if (!user || !(await this.awaitsVerificationLink(user))) {
         return {};
       }
 
@@ -667,45 +723,12 @@ export class AuthService extends BaseService {
         return { token: rawToken };
       }
 
-      if (this.emailService) {
-        let delivered = false;
-        try {
-          // Same reasoning as the password-reset path: a provider failure
-          // arrives as `{ success: false }`, not as a throw, so the result is
-          // the only evidence that nothing reached the user.
-          const result = await this.emailService.sendEmailVerificationEmail(
-            email,
-            { name: user.name, email: user.email },
-            rawToken,
-            { path: options?.redirectPath }
-          );
-          delivered = result.success;
-          if (!delivered) {
-            this.logger.error("Email verification message was not delivered", {
-              event: "auth.email_verification.email_failed",
-              reason: "not-delivered-to-recipient",
-            });
-          }
-        } catch (emailError) {
-          this.logger.error("Failed to send email verification email", {
-            event: "auth.email_verification.email_failed",
-            error:
-              emailError instanceof Error
-                ? emailError.message
-                : String(emailError),
-          });
-        }
-
-        if (delivered) return {};
-
-        return this.undeliveredTokenFallback(rawToken);
-      }
-
-      this.logger.warn(
-        "No email provider is configured, so the verification token could not be delivered",
-        { event: "auth.email_verification.email_unconfigured" }
+      return await this.deliverVerificationEmail(
+        email,
+        { name: user.name, email: user.email },
+        rawToken,
+        options?.redirectPath
       );
-      return this.undeliveredTokenFallback(rawToken);
     } catch (error) {
       // A malformed address surfaces as the resolver's VALIDATION_ERROR, not
       // as a database failure dressed up as a 500.
@@ -713,6 +736,76 @@ export class AuthService extends BaseService {
       // Normalise raw driver errors so the DB kind is preserved.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+  }
+
+  /**
+   * Whether a verification link would do anything for this account.
+   *
+   * Not for an address already verified: the link would mail someone who only
+   * forgot their password. Not for an account an administrator deactivated:
+   * following the link no longer switches it on, so it would only invite the
+   * owner to try.
+   */
+  private async awaitsVerificationLink(user: {
+    id: string | number;
+    emailVerified?: Date | string | null;
+  }): Promise<boolean> {
+    if (user.emailVerified) return false;
+    const row = await this.db.query.users.findFirst({
+      where: { id: requireFilterValue(String(user.id), "userId") },
+      columns: { deactivatedAt: true },
+    });
+    return !row?.deactivatedAt;
+  }
+
+  /**
+   * Send the verification link, or hand back the token when nothing could.
+   *
+   * Separate from issuing the token so that method reads as the decision —
+   * which account, and whether it needs a link at all — and this one as the
+   * delivery and its fallback.
+   */
+  private async deliverVerificationEmail(
+    email: string,
+    recipient: { name: string | null; email: string },
+    rawToken: string,
+    redirectPath: string | undefined
+  ): Promise<{ token?: string }> {
+    if (!this.emailService) {
+      this.logger.warn(
+        "No email provider is configured, so the verification token could not be delivered",
+        { event: "auth.email_verification.email_unconfigured" }
+      );
+      return this.undeliveredTokenFallback(rawToken);
+    }
+
+    let delivered = false;
+    try {
+      // Same reasoning as the password-reset path: a provider failure
+      // arrives as `{ success: false }`, not as a throw, so the result is
+      // the only evidence that nothing reached the user.
+      const result = await this.emailService.sendEmailVerificationEmail(
+        email,
+        recipient,
+        rawToken,
+        { path: redirectPath }
+      );
+      delivered = result.success;
+      if (!delivered) {
+        this.logger.error("Email verification message was not delivered", {
+          event: "auth.email_verification.email_failed",
+          reason: "not-delivered-to-recipient",
+        });
+      }
+    } catch (emailError) {
+      this.logger.error("Failed to send email verification email", {
+        event: "auth.email_verification.email_failed",
+        error:
+          emailError instanceof Error ? emailError.message : String(emailError),
+      });
+    }
+
+    return delivered ? {} : this.undeliveredTokenFallback(rawToken);
   }
 
   /**
@@ -777,18 +870,28 @@ export class AuthService extends BaseService {
       // fluent query API as this.db.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await this.withTransaction(async (tx: any) => {
-        // IMPORTANT: Mark email as verified AND activate the user. Self-verification
+        // Mark the email verified, and activate the account. Self-verification
         // (whether initiated by /auth/register or by an admin invite with
         // sendWelcomeEmail=true) is what activates the account — both
         // paths funnel through here. An admin can still manually activate
         // a user without email verification via the user-mutation path.
         await tx
           .update(this.tables.users)
-          .set({
-            emailVerified: new Date(),
-            isActive: true,
-          })
+          .set({ emailVerified: new Date() })
           .where(eq(this.tables.users.email, email));
+        // Activation is conditional in the statement itself: an account an
+        // administrator deactivated stays inactive, including when its link
+        // was sent before the deactivation. The address is still verified —
+        // following the link proved it — so reactivating needs no new link.
+        await tx
+          .update(this.tables.users)
+          .set({ isActive: true })
+          .where(
+            and(
+              eq(this.tables.users.email, email),
+              isNull(this.tables.users.deactivatedAt)
+            )
+          );
 
         await tx
           .delete(this.tables.emailVerificationTokens)
@@ -821,10 +924,21 @@ export class AuthService extends BaseService {
     const user = await this.db.query.users.findFirst({
       // rqb v2 object filter (drizzle v1)
       where: { id: requireFilterValue(userId, "userId") },
-      columns: { id: true },
+      columns: { id: true, deactivatedAt: true },
     });
     if (!user) {
       throw NextlyError.notFound({ logContext: { userId } });
+    }
+    // Accepting an invite is refused while the account is deactivated, so a
+    // link minted now could only ever fail for the person it was sent to.
+    // The administrator is told instead, while they can still act on it.
+    if (user.deactivatedAt) {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "This account is deactivated. Activate it before sending an invite.",
+        logContext: { userId },
+      });
     }
 
     const {
@@ -882,9 +996,13 @@ export class AuthService extends BaseService {
    * password in one transaction — there is no separate verification round trip,
    * and no window where the account has a password but still cannot sign in.
    *
+   * An account an administrator deactivated is refused instead, without
+   * setting the password: an invite must not set credentials on, or switch
+   * back on, an account someone turned off.
+   *
    * The failure messages do not distinguish "never existed" from "already
-   * used" from "expired-by-a-second", to avoid confirming which invites are
-   * live to whoever holds a guessed token.
+   * used" from "expired-by-a-second" from "deactivated", to avoid confirming
+   * which invites are live to whoever holds a guessed token.
    */
   async acceptInvite(
     token: string,
@@ -950,18 +1068,36 @@ export class AuthService extends BaseService {
         if (affectedRowCount(claim, this.dialect) !== 1) return;
         claimed = true;
 
-        await tx
-          .update(this.tables.users)
-          .set({
-            passwordHash,
-            passwordUpdatedAt: new Date(),
-            emailVerified: new Date(),
-            isActive: true,
-            updatedAt: new Date(),
-          })
-          .where(eq(this.tables.users.id, invite.userId));
+        // Conditional on the account not being deactivated by an
+        // administrator, in the same statement that sets the password: an
+        // invite must not set credentials on, or re-activate, an account an
+        // administrator switched off. Throwing here rolls the claim back too,
+        // and the refusal reads like any other dead invite. Through the
+        // shared password write, so any session the account already holds
+        // ends with the password it was issued under.
+        const accepted = await updateUserEndingSessions(
+          tx,
+          this.tables,
+          this.dialect,
+          {
+            userId: invite.userId,
+            set: {
+              ...passwordColumns(passwordHash),
+              emailVerified: new Date(),
+              isActive: true,
+            },
+            unlessDeactivated: true,
+          }
+        );
+        if (accepted !== 1) {
+          throw this.invalidInviteError({
+            inviteId: invite.id,
+            reason: "account-deactivated",
+          });
+        }
       });
     } catch (error) {
+      if (NextlyError.is(error)) throw error;
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
@@ -986,6 +1122,10 @@ export class AuthService extends BaseService {
    * after it has already been changed — exactly one call flips the flag, and
    * only that one writes the new password.
    *
+   * Returns the password version it wrote, as stored, so the session the
+   * change goes on to issue is judged against this password and not against
+   * whatever a later read finds.
+   *
    * @throws NextlyError(VALIDATION_ERROR) on a weak password.
    * @throws NextlyError(INVALID_INPUT) when the account is not (or is no longer)
    *   in the must-change state.
@@ -993,7 +1133,7 @@ export class AuthService extends BaseService {
   async setInitialPassword(
     userId: string,
     newPassword: string
-  ): Promise<{ userId: string }> {
+  ): Promise<{ userId: string; passwordUpdatedAt: Date | null }> {
     const passwordStrength = validatePasswordStrength(newPassword);
     if (!passwordStrength.ok) {
       throw NextlyError.validation({
@@ -1040,32 +1180,44 @@ export class AuthService extends BaseService {
 
     const passwordHash = await hashPasswordBcrypt(newPassword);
 
-    let changed = false;
+    // The version as stored, read back in the transaction that wrote it:
+    // MySQL and SQLite keep whole seconds, so the value written here is not
+    // the one a later read compares against.
+    let written: { passwordUpdatedAt: Date | null } | undefined;
     try {
       await this.withTransaction(async txRaw => {
         const tx = txRaw as TransactionLike;
-        const claim = await tx
-          .update(this.tables.users)
-          .set({
-            passwordHash,
-            mustChangePassword: false,
-            passwordUpdatedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(this.tables.users.id, userId),
-              eq(this.tables.users.mustChangePassword, true)
-            )
-          );
-        if (affectedRowCount(claim, this.dialect) !== 1) return;
-        changed = true;
+        // Through the shared password write, so the account's sessions end
+        // with the admin-set password. Conditional on the flag still being
+        // set and, in the same statement, on the account not being
+        // deactivated: an administrator may have switched it off after the
+        // pending token was issued, and a zero-row write falls to the
+        // not-in-must-change-state refusal below — no password planted for a
+        // later reactivation to switch on.
+        const claimed = await updateUserEndingSessions(
+          tx,
+          this.tables,
+          this.dialect,
+          {
+            userId,
+            set: passwordColumns(passwordHash),
+            unlessDeactivated: true,
+            when: eq(this.tables.users.mustChangePassword, true),
+          }
+        );
+        if (claimed !== 1) return;
+        const [row] = await tx
+          .select({ passwordUpdatedAt: this.tables.users.passwordUpdatedAt })
+          .from(this.tables.users)
+          .where(eq(this.tables.users.id, userId))
+          .limit(1);
+        written = row;
       });
     } catch (error) {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
-    if (!changed) {
+    if (!written) {
       throw new NextlyError({
         code: "INVALID_INPUT",
         publicMessage: "This request is no longer valid. Please sign in again.",
@@ -1073,7 +1225,7 @@ export class AuthService extends BaseService {
       });
     }
 
-    return { userId };
+    return { userId, passwordUpdatedAt: written.passwordUpdatedAt };
   }
 
   /**

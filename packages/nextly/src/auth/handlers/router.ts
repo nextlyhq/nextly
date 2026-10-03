@@ -2,10 +2,12 @@ import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { PluginContext } from "../../plugins/plugin-context";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
+import type { CredentialUserRow } from "../credentials/verify-credentials";
 import { authRateLimiter } from "../middleware/rate-limiter";
 import type { ChallengeRegistry } from "../pipeline/challenge";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import type { AuthStrategy } from "../pipeline/types";
+import type { AccountState } from "../session/account-state";
 
 import { handleAcceptInvite } from "./accept-invite";
 import { handleAuthUi, type AuthUiMeta } from "./auth-ui";
@@ -13,12 +15,15 @@ import { handleChallengeResolve } from "./challenge-resolve";
 import { handleChangePassword } from "./change-password";
 import { handleCsrf } from "./csrf";
 import { handleForgotPassword } from "./forgot-password";
+import type { RefreshTokenRecord } from "./issue-session";
 import { handleLogin } from "./login";
 import { handleLogout } from "./logout";
+import { handlePending } from "./pending";
 import { handleRefresh } from "./refresh";
 import { handleRegister } from "./register";
 import { handleResetPassword } from "./reset-password";
 import { handleSession } from "./session";
+import type { WithSessionRowTransaction } from "./session-row";
 import { handleSetInitialPassword } from "./set-initial-password";
 import { handleSetupStatus, handleSetup } from "./setup";
 import { handleVerifyEmail, handleResendVerification } from "./verify-email";
@@ -34,6 +39,12 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
   "login",
   "register",
   "forgot-password",
+  // Sends an email on request, like forgot-password: unlimited, it is a way
+  // to mail any registered address as often as someone likes.
+  "verify-email/resend",
+  // Consumes the single-use verification token, as reset-password consumes
+  // its own: the same grind surface for an attacker holding no token.
+  "verify-email",
   "reset-password",
   // Same bucket as reset-password: both consume a token, so both are
   // grind-able by an attacker holding no token at all.
@@ -45,10 +56,13 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
 ]);
 
 /**
- * Combined dependency interface for all auth handlers.
+ * @experimental Combined dependency interface for all auth handlers.
  * Defined as a standalone interface (not multi-extends) to avoid TS2320 conflicts
  * where the same method name has different return types across handler deps.
  * The route handler builds this from the DI container services and config.
+ *
+ * Experimental while the auth pipeline (D71) it carries is: its members follow
+ * the handlers, and change with them.
  */
 export interface AuthRouterDeps {
   secret: string;
@@ -124,18 +138,7 @@ export interface AuthRouterDeps {
   authUi: AuthUiMeta;
 
   // User lookups (widest return type to satisfy all handlers)
-  findUserByEmail: (email: string) => Promise<{
-    id: string;
-    email: string;
-    name: string;
-    image: string | null;
-    passwordHash: string;
-    emailVerified: Date | null;
-    isActive: boolean;
-    mustChangePassword: boolean | null;
-    failedLoginAttempts: number;
-    lockedUntil: Date | null;
-  } | null>;
+  findUserByEmail: (email: string) => Promise<CredentialUserRow | null>;
   findUserById: (userId: string) => Promise<{
     id: string;
     email: string;
@@ -144,6 +147,17 @@ export interface AuthRouterDeps {
     isActive: boolean;
     mustChangePassword: boolean | null;
   } | null>;
+  /**
+   * The account facts the shared session gate decides on, read fresh at the
+   * moment a session is issued rather than carried from whichever strategy
+   * authenticated the user.
+   *
+   * `passwordUpdatedAt` is the column as stored, `null` only when no password
+   * was ever set. It is the version a session is earned against, and the
+   * row lock in {@link withSessionRowTransaction} compares it with the value
+   * read there, so both must read the same column the same way.
+   */
+  fetchAccountState: (userId: string) => Promise<AccountState | null>;
 
   incrementFailedAttempts: (userId: string) => Promise<void>;
   lockAccount: (userId: string, lockedUntil: Date) => Promise<void>;
@@ -152,14 +166,7 @@ export interface AuthRouterDeps {
   fetchRoleIds: (userId: string) => Promise<string[]>;
   fetchCustomFields: (userId: string) => Promise<Record<string, unknown>>;
 
-  storeRefreshToken: (record: {
-    id: string;
-    userId: string;
-    tokenHash: string;
-    userAgent: string | null;
-    ipAddress: string | null;
-    expiresAt: Date;
-  }) => Promise<void>;
+  storeRefreshToken: (record: RefreshTokenRecord) => Promise<void>;
   findRefreshTokenByHash: (tokenHash: string) => Promise<{
     id: string;
     userId: string;
@@ -168,6 +175,23 @@ export interface AuthRouterDeps {
     ipAddress: string | null;
   } | null>;
   deleteRefreshToken: (id: string) => Promise<void>;
+  /**
+   * Runs a session's refresh-row write — for a sign-in or a rotation — in one
+   * transaction that first locks the user row and re-reads its account state.
+   *
+   * The contract a replacement must keep, because the session refuses or
+   * survives a concurrent revocation on it:
+   *
+   * - Every operation `work` receives runs in the ONE transaction, and a
+   *   throw from `work` rolls back everything it wrote.
+   * - `lockAccountState` locks the user row before reading it: `FOR SHARE` on
+   *   PostgreSQL and MySQL, so a deactivation or a password set waits for the
+   *   write and the write waits for one already holding the row; on SQLite
+   *   the transaction itself must hold the write lock (`BEGIN IMMEDIATE`).
+   * - It returns `passwordUpdatedAt` as {@link fetchAccountState} does. A
+   *   different value there refuses the session as a password changed since.
+   */
+  withSessionRowTransaction: WithSessionRowTransaction;
   deleteRefreshTokenByHash: (tokenHash: string) => Promise<void>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
 
@@ -199,10 +223,15 @@ export interface AuthRouterDeps {
     token: string,
     newPassword: string
   ) => Promise<{ userId: string }>;
+  /**
+   * Replaces an admin-set password and clears the must-change flag. Returns
+   * the `passwordUpdatedAt` it wrote, read back as stored: the session the
+   * change issues is judged against that version.
+   */
   setInitialPassword: (
     userId: string,
     newPassword: string
-  ) => Promise<{ userId: string }>;
+  ) => Promise<{ userId: string; passwordUpdatedAt: Date | null }>;
   changePassword: (
     userId: string,
     currentPassword: string,
@@ -218,7 +247,7 @@ export interface AuthRouterDeps {
 }
 
 /**
- * Route an auth request to the appropriate handler.
+ * @experimental Route an auth request to the appropriate handler.
  * Returns null if the path doesn't match any auth route (caller handles 404).
  *
  * @param request - The incoming HTTP request
@@ -252,6 +281,11 @@ async function dispatchAuthRequest(
       case "ui":
         // Public (pre-auth): the login screen fetches the auth-page UI config.
         return handleAuthUi(request, deps);
+      case "pending":
+        // Public (pre-auth): the login page asks which challenge, if any, an
+        // interrupted login left outstanding. Answers from the HttpOnly
+        // cookie and never returns the token itself.
+        return handlePending(request, deps);
       default:
         return null;
     }

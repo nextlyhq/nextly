@@ -20,7 +20,11 @@ export interface UserUpdateData {
   image?: string | null;
   emailVerified?: Date | null;
   passwordHash?: string;
+  /** When the password was last set. */
+  passwordUpdatedAt?: Date;
   isActive?: boolean;
+  /** When an administrator deactivated the account; null once reactivated. */
+  deactivatedAt?: Date | null;
   /** Cleared to false once the user replaces an admin-set password. */
   mustChangePassword?: boolean;
   updatedAt?: Date;
@@ -111,50 +115,10 @@ export interface AccountQueryResult {
 
 // Database instance types
 export interface DatabaseInstance {
-  query: {
-    users: {
-      findMany: (options: {
-        columns: Record<string, boolean>;
-        where?: unknown;
-      }) => Promise<UserQueryResult[]>;
-      findFirst: (options: {
-        where?: unknown;
-        columns: Record<string, boolean>;
-      }) => Promise<UserQueryResult | undefined>;
-    };
-    accounts: {
-      findMany: (options: {
-        where?: unknown;
-        columns: Record<string, boolean>;
-      }) => Promise<AccountQueryResult[]>;
-    };
-    passwordResetTokens: {
-      findFirst: (options: {
-        where: unknown;
-        columns: Record<string, boolean>;
-      }) => Promise<
-        | {
-            id: string;
-            identifier: string;
-            expires: Date;
-          }
-        | undefined
-      >;
-    };
-    emailVerificationTokens: {
-      findFirst: (options: {
-        where: unknown;
-        columns: Record<string, boolean>;
-      }) => Promise<
-        | {
-            id: string;
-            identifier: string;
-            expires: Date;
-          }
-        | undefined
-      >;
-    };
-  };
+  // The relational `query` namespace is deliberately absent. It described a
+  // handful of core tables by name, so it could never answer about a plugin's
+  // own tables, and the account entries it carried had no live consumer.
+  // Reads go through the fluent API below, or through the typed services.
   update: (table: unknown) => {
     set: (data: unknown) => {
       where: (condition: unknown) => Promise<void>;

@@ -150,6 +150,34 @@ export type {
 } from "nextly";
 
 /**
+ * The runtime surfaces a plugin receives when it declares them, and the
+ * declarations that ask for them.
+ * @experimental `PluginSettingsApi` (`ctx.settings`), `PluginAuditApi`
+ *   (`ctx.audit`), `PluginAuthApi` and `CompleteLoginOptions` (`ctx.auth`),
+ *   `PluginCapabilities` (`capabilities`), `PluginAuditDeclaration`
+ *   (`contributes.audit`) and `PluginHookPointDeclaration`
+ *   (`contributes.hookPoints`). Held experimental until a first-party plugin
+ *   exercises them (see STABILITY.md).
+ */
+export type {
+  PluginSettingsApi,
+  PluginAuditApi,
+  PluginAuthApi,
+  CompleteLoginOptions,
+  PluginCapabilities,
+  PluginAuditDeclaration,
+  PluginHookPointDeclaration,
+} from "nextly";
+
+/**
+ * The raw database handle `ctx.db` is typed as.
+ * @experimental `PluginDatabase` — kept experimental on purpose (D56): a
+ *   plugin reads and writes through `ctx.services`, and the raw handle is for
+ *   aggregations beyond `count` (see STABILITY.md).
+ */
+export type { PluginDatabase } from "nextly";
+
+/**
  * Field authoring — the factories and `FieldConfig` type a plugin uses to build
  * the fields it contributes (`contributes.collections` / `contributes.extend`).
  * @public Exercised by `plugin-seo` (its `seo` field group). Field factories
@@ -343,6 +371,7 @@ export type {
   PluginRouteContext,
   PluginRouteHandler,
   PluginRouteMount,
+  PluginRouteRateLimit,
   Middleware,
   RouteMethod,
   AuthenticatedScope,
@@ -448,12 +477,27 @@ export {
 } from "nextly";
 
 /**
+ * Account lifecycle events — `user.created` and `user.deleted`, which core
+ * emits after the change commits, with `{ userId }`.
+ * @experimental `UserEvents`, `UserEventName`, `UserCreatedPayload`,
+ *   `UserDeletedPayload` — held experimental until a first-party plugin
+ *   subscribes to them (see STABILITY.md).
+ */
+export {
+  UserEvents,
+  type UserEventName,
+  type UserCreatedPayload,
+  type UserDeletedPayload,
+} from "nextly";
+
+/**
  * Filter/action registry (D63) — `ctx.filters` / `ctx.actions` surface + seam types.
  * @experimental No first-party plugin contributes a filter/action through this
  *   surface yet (see STABILITY.md).
  */
 export {
   FilterSeams,
+  type Decision,
   type Filter,
   type Action,
   type CoreFilterSeam,
@@ -613,3 +657,19 @@ export {
   type PluginWidgetSource,
   type ReadCaller,
 } from "nextly";
+
+/**
+ * Where a finished login may land.
+ * @experimental Re-exported so a plugin never keeps its own copy of the rule
+ *   that decides whether a redirect is an open one.
+ */
+export { sanitizeAdminPath, DEFAULT_ADMIN_PATH } from "nextly";
+
+/**
+ * Reading what other plugins declared — an identity provider discovering
+ * another plugin's declarations, a dashboard listing what it can integrate
+ * with — because a plugin may import only from the SDK. `PluginDeclaration`
+ * is exported above with the rest of the declaration types.
+ * @experimental
+ */
+export { collectDeclarations } from "nextly";

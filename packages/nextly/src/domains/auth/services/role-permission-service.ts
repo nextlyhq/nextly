@@ -116,9 +116,9 @@ export class RolePermissionService extends BaseService {
       // synchronous and rejects any callback returning a promise, so calling
       // the driver directly threw `Transaction function cannot return a
       // promise` on SQLite — this whole branch, the one that CREATES the
-      // permission, was unreachable there. The base-service helper opens
-      // `BEGIN IMMEDIATE` on the shared connection for that dialect and uses
-      // the native transaction on Postgres and MySQL.
+      // permission, was unreachable there. The base-service helper runs it
+      // through the adapter's transaction on that dialect and uses the
+      // native transaction on Postgres and MySQL.
       // The gate wraps the TRANSACTION, not the statement inside it. Retiring
       // the caches before the commit would leave a window in which a check
       // refills them from the state this is replacing, and the refilled answer

@@ -17,12 +17,24 @@ describe("aggregateAuthUi (D57)", () => {
   it("concats providers, merges challengeViews, collects slots into arrays", () => {
     const meta = aggregateAuthUi([
       pluginWith({
-        providers: [{ strategy: "oauth-google", label: "Google" }],
+        providers: [
+          {
+            strategy: "oauth-google",
+            label: "Google",
+            href: "/sso/oauth-google",
+          },
+        ],
         challengeViews: { totp: "@a/admin#Totp" },
         slots: { afterForm: "@a/admin#Legal" },
       }),
       pluginWith({
-        providers: [{ strategy: "oauth-github", label: "GitHub" }],
+        providers: [
+          {
+            strategy: "oauth-github",
+            label: "GitHub",
+            href: "/sso/oauth-github",
+          },
+        ],
         challengeViews: { sms: "@b/admin#Sms" },
         slots: { afterForm: "@b/admin#Promo", branding: "@b/admin#Logo" },
       }),
@@ -51,7 +63,13 @@ describe("aggregateAuthUi (D57)", () => {
 
   it("handleAuthUi serves the aggregated meta as public JSON", async () => {
     const authUi: AuthUiMeta = {
-      providers: [{ strategy: "oauth-google", label: "Google" }],
+      providers: [
+        {
+          strategy: "oauth-google",
+          label: "Google",
+          href: "/sso/oauth-google",
+        },
+      ],
       challengeViews: { totp: "@a/admin#Totp" },
       slots: { beforeForm: [], afterForm: [], branding: [] },
     };
@@ -59,5 +77,55 @@ describe("aggregateAuthUi (D57)", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
     expect(await res.json()).toEqual(authUi);
+  });
+});
+
+describe("a disabled plugin contributes no auth UI", () => {
+  const disabled = (
+    ui: NonNullable<NonNullable<PluginDefinition["contributes"]>["auth"]>["ui"]
+  ): PluginDefinition =>
+    ({ ...pluginWith(ui), name: "@t/off", enabled: false }) as PluginDefinition;
+
+  it("publishes nothing from it", () => {
+    // Route and runtime registration skip a disabled plugin, so its provider
+    // button pointed at a start route that was never registered.
+    const meta = aggregateAuthUi([
+      disabled({
+        providers: [
+          { strategy: "oauth-off", label: "Off", href: "/sso/oauth-off" },
+        ],
+        challengeViews: { totp: "@off/admin#Totp" },
+        slots: { branding: "@off/admin#Logo" },
+      }),
+    ]);
+
+    expect(meta.providers).toEqual([]);
+    expect(meta.challengeViews).toEqual({});
+    expect(meta.slots.branding).toEqual([]);
+  });
+
+  it("cannot overwrite an ENABLED plugin's challenge view", () => {
+    // The ordering case, and the one with teeth: the disabled plugin is last,
+    // so `Object.assign` would have replaced a view that IS served with one
+    // that is not.
+    const meta = aggregateAuthUi([
+      pluginWith({ challengeViews: { totp: "@on/admin#Totp" } }),
+      disabled({ challengeViews: { totp: "@off/admin#Totp" } }),
+    ]);
+
+    expect(meta.challengeViews).toEqual({ totp: "@on/admin#Totp" });
+  });
+
+  it("still publishes an ENABLED plugin's UI", () => {
+    // The control: skipping everything would satisfy both tests above while
+    // emptying the login page.
+    const meta = aggregateAuthUi([
+      pluginWith({
+        providers: [
+          { strategy: "oauth-on", label: "On", href: "/sso/oauth-on" },
+        ],
+      }),
+    ]);
+    expect(meta.providers.map(p => p.strategy)).toEqual(["oauth-on"]);
   });
 });

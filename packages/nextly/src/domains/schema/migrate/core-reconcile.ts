@@ -43,6 +43,30 @@ export interface ReconcileCoreDeps {
   logger?: LoggerLike;
   /** NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 lets a destructive core change proceed. */
   allowDestructive?: boolean;
+  /**
+   * NEXTLY_DROP_RETIRED_AUTH_TABLES=1: drop the retired `accounts` and
+   * `sessions` tables. Its own flag rather than `allowDestructive`, which
+   * accepts destructive changes to the core schema — a different decision,
+   * that an operator makes for a different reason.
+   */
+  dropRetiredAuthTables?: boolean;
+  /**
+   * NEXTLY_DROP_NONEMPTY_RETIRED=1: also drop a retired table that still holds
+   * rows. Separate again, because losing rows is a different decision from
+   * removing an empty table.
+   */
+  allowDropNonEmptyRetired?: boolean;
+  /** Whether a table is present. Supplied by the CLI; absent in tests that do not exercise the drop. */
+  tableExists?: (table: string) => Promise<boolean>;
+  /** Row count for a table, for deciding whether a retired one is empty. */
+  countRows?: (db: unknown, dialect: Dialect, table: string) => Promise<number>;
+  /**
+   * A table's live column names, so a table that only shares a retired name
+   * is left alone. Read from the database catalogue when not supplied.
+   */
+  columnsOf?: (table: string) => Promise<string[]>;
+  /** Executes one DDL statement. Only used for the retired-table drop. */
+  executeSql?: (sql: string) => Promise<unknown>;
   /** Classifier mode for the core diff. Default: "production-strict". */
   mode?: ClassifierMode;
   /**
@@ -107,8 +131,21 @@ export async function reconcileCore(
   const ops = diffSnapshots(live, desired);
 
   if (ops.length === 0) {
-    logger?.info?.("Core schema up to date.");
-    return { changed: false };
+    // The retired tables are NOT part of the core schema, so the diff above
+    // can never mention them and "up to date" says nothing about them. Run
+    // the cleanup before returning, or the ordinary upgrade — a database
+    // already carrying the current core schema — is exactly the one where a
+    // requested drop silently does nothing.
+    const dropped = await executeRetiredDrops(
+      deps,
+      await decideRetiredDrops(deps)
+    );
+    logger?.info?.(
+      dropped.length > 0
+        ? `Core schema up to date; dropped retired auth tables: ${dropped.join(", ")}.`
+        : "Core schema up to date."
+    );
+    return { changed: dropped.length > 0 };
   }
 
   const mode: ClassifierMode = deps.mode ?? "production-strict";
@@ -185,7 +222,6 @@ export async function reconcileCore(
     logger?.info?.(
       `Core schema reconciled (${result.statementsExecuted.length} statements).`
     );
-    return { changed: true };
   } catch (err) {
     // applyCore/bootstrap may have failed before the ledger exists, so we
     // can't reliably record a failed event — surface the error instead.
@@ -194,5 +230,141 @@ export async function reconcileCore(
       code: "NEXTLY_MIGRATION_APPLY_FAILED",
       publicMessage: `Core schema apply failed: ${message}`,
     });
+  }
+
+  // Only once the core apply has succeeded. The drop is irreversible and the
+  // apply is not guaranteed: dropping first, a failed apply would leave a
+  // database without the retired tables' rows AND without the core update,
+  // with no way back to where it started. Outside the `try`, so a failed drop
+  // is reported as itself rather than as a failed apply. Decided here, on
+  // counts taken after the apply, so a table that gained rows in the meantime
+  // is kept rather than dropped on a stale count.
+  await executeRetiredDrops(deps, await decideRetiredDrops(deps));
+  return { changed: true };
+}
+
+/**
+ * The operations the retired-table cleanup needs, when it was asked for and
+ * the caller can run it; null otherwise.
+ *
+ * A caller without these operations cannot do this work, which is true of the
+ * in-process boot path. Said rather than thrown, because what actually went
+ * wrong was that the CLI supplied none of them: the cleanup returned here and
+ * the documented flow dropped nothing. That is now covered by asserting what
+ * the CLI passes, which is the thing that regressed.
+ */
+function retiredDropOps(deps: ReconcileCoreDeps): {
+  tableExists: NonNullable<ReconcileCoreDeps["tableExists"]>;
+  countRows: NonNullable<ReconcileCoreDeps["countRows"]>;
+} | null {
+  if (!deps.dropRetiredAuthTables) return null;
+  const { tableExists, countRows, executeSql } = deps;
+  if (!tableExists || !countRows || !executeSql) {
+    deps.logger?.info?.(
+      "Retired-table cleanup skipped: this caller supplies no table-existence, row-count or statement operations."
+    );
+    return null;
+  }
+  return { tableExists, countRows };
+}
+
+/**
+ * The retired auth tables to drop, when the operator has asked for it.
+ * Deciding only: the caller drops them, once nothing else can fail.
+ *
+ * A table holding rows the operator has not agreed to lose is KEPT, with a
+ * warning, rather than refused: the drop is a cleanup the operator opted into,
+ * and failing the run over it would hold back a core change that has nothing
+ * to do with these tables.
+ *
+ * Separate from the diff above because these tables are no longer part of the
+ * core schema: `getCoreTableNames` does not name them, so the introspection
+ * never looks for them and the diff has nothing to say. Without this they
+ * would simply sit in an existing database forever, which is the right default
+ * but a poor only option.
+ */
+async function decideRetiredDrops(
+  deps: ReconcileCoreDeps
+): Promise<readonly string[]> {
+  const ops = retiredDropOps(deps);
+  if (!ops) return [];
+
+  const {
+    findRetiredAuthTables,
+    planRetiredAuthTableDrop,
+    formatRetiredAuthTablesKept,
+    liveColumnsOf,
+  } = await import("../../../init/retired-auth-tables");
+
+  const found = await findRetiredAuthTables(deps.db, deps.dialect, {
+    tableExists: ops.tableExists,
+    columnsOf: deps.columnsOf ?? liveColumnsOf(deps.db, deps.dialect),
+    countRows: ops.countRows,
+  });
+  const plan = planRetiredAuthTableDrop(found, {
+    dropRequested: true,
+    allowNonEmpty: deps.allowDropNonEmptyRetired === true,
+  });
+  if (plan.kept.length > 0) {
+    deps.logger?.warn?.(formatRetiredAuthTablesKept(plan.kept));
+  }
+  return plan.drop;
+}
+
+/**
+ * Execute the drops the plan settled on.
+ *
+ * Separate from deciding them, so the guards above read as the DECISION they
+ * make and this reads as what carries it out.
+ */
+async function executeRetiredDrops(
+  deps: ReconcileCoreDeps,
+  tables: readonly string[]
+): Promise<string[]> {
+  if (tables.length === 0) return [];
+  // Asked of the same generator the diff engine uses, rather than composed
+  // here. Each dialect already spells this differently — PostgreSQL appends
+  // CASCADE, MySQL and SQLite do not — and a second spelling in a domain
+  // service is a second thing to keep in step with the dialects.
+  const { generateSQL } = await import("../pipeline/sql-templates");
+  const dropped: string[] = [];
+  for (const table of tables) {
+    await deps.executeSql?.(
+      generateSQL({ type: "drop_table", tableName: table }, deps.dialect)
+    );
+    dropped.push(table);
+    deps.logger?.warn?.(`Dropped retired auth table ${table}.`);
+    // Recorded as each one goes, so a later drop that fails leaves the
+    // earlier ones on record.
+    await recordRetiredDrop(deps, table);
+  }
+  return dropped;
+}
+
+/**
+ * Record one drop in the schema ledger, as the core change it is.
+ *
+ * After the fact and never fatal: the table is already gone, and failing the
+ * command now would report a run that did what it was asked as failed. The
+ * log line before it has already said what happened either way.
+ */
+async function recordRetiredDrop(
+  deps: ReconcileCoreDeps,
+  table: string
+): Promise<void> {
+  try {
+    await deps.ensureLedger?.();
+    const repo = new SchemaEventsRepository(deps.db, deps.dialect);
+    const id = await repo.recordStart({
+      eventType: "core_apply",
+      source: "cli-migrate",
+      scopeKind: "core",
+      scopeSlug: table,
+    });
+    await repo.markApplied(id, { statementsExecuted: 1 });
+  } catch (error) {
+    deps.logger?.warn?.(
+      `Dropped retired auth table ${table}, but could not record it in the schema ledger: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }

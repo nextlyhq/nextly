@@ -49,7 +49,27 @@ import { verifyCredentials } from "../../credentials/verify-credentials";
 import { AuthHookRegistry } from "../../pipeline/hooks";
 import { createPasswordStrategy } from "../../pipeline/password-strategy";
 
+import { fakeSessionRows } from "./session-row-fake";
+
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
+
+/**
+ * The account-state gate every session-issuing path now runs. These fixtures
+ * assert response shapes rather than account state, so the gate is given a
+ * usable account and the shape under test is what decides the result.
+ */
+const usableAccount = async (userId: string) => ({
+  userId,
+  isActive: true,
+  lockedUntil: null,
+  emailVerified: new Date("2026-01-01T00:00:00Z"),
+});
+const usableAccountGate = {
+  requireEmailVerification: true,
+  fetchAccountState: usableAccount,
+  withSessionRowTransaction:
+    fakeSessionRows(usableAccount).withSessionRowTransaction,
+};
 
 /**
  * Build the auth-pipeline deps a login-path test needs: the built-in password
@@ -78,6 +98,7 @@ function loginPipelineDeps(lockoutDeps: {
         name: u.name,
         image: u.image,
         mustChangePassword: u.mustChangePassword,
+        passwordUpdatedAt: u.passwordUpdatedAt,
       };
     },
   });
@@ -144,6 +165,7 @@ describe("login handler: respondAction shape", () => {
     const resetFailedAttempts = vi.fn().mockResolvedValue(undefined);
 
     const deps = {
+      ...usableAccountGate,
       secret: SECRET,
       isProduction: false,
       accessTokenTTL: 900,
@@ -226,6 +248,7 @@ describe("login handler: respondAction shape", () => {
       requireEmailVerification: true,
     });
     const deps = {
+      ...usableAccountGate,
       secret: SECRET,
       accessTokenTTL: 900,
       refreshTokenTTL: 604800,
@@ -299,6 +322,7 @@ describe("login handler: respondAction shape", () => {
       },
     } as never);
     const deps = {
+      ...usableAccountGate,
       secret: SECRET,
       accessTokenTTL: 900,
       refreshTokenTTL: 604800,
@@ -414,7 +438,12 @@ describe("login handler: respondAction shape", () => {
       .map(([event]: [{ kind: string; metadata?: unknown }]) => event)
       .find(event => event.kind === "login-failed");
 
-    expect(recorded?.metadata).toEqual({ code: "INTERNAL_ERROR" });
+    // The strategy that decided is kept: a core-shaped method name, stated by
+    // the handler rather than taken from the plugin's error.
+    expect(recorded?.metadata).toEqual({
+      code: "INTERNAL_ERROR",
+      strategy: "password",
+    });
     expect(JSON.stringify(recorded)).not.toContain("ada@example.com");
     expect(JSON.stringify(recorded)).not.toContain("u-77");
     expect(JSON.stringify(recorded)).not.toContain("acct-8891-ada");
@@ -461,6 +490,16 @@ describe("login handler: respondAction shape", () => {
       fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
       fetchCustomFields: vi.fn().mockResolvedValue({}),
       storeRefreshToken,
+      // Read earlier than the session path now: the account-state gate runs
+      // before any continuation is minted, so these deps carry it even for
+      // a login that pauses before a session.
+      fetchAccountState: vi.fn().mockResolvedValue({
+        userId: "u1",
+        isActive: true,
+        lockedUntil: null,
+        emailVerified: fakeUser.emailVerified,
+        mustChangePassword: true,
+      }),
       ...loginPipelineDeps({
         findUserByEmail,
         incrementFailedAttempts,
@@ -498,6 +537,93 @@ describe("login handler: respondAction shape", () => {
   });
 });
 
+/**
+ * What the login page is told about an unverified account. Through the real
+ * strategy pipeline, because the distinct code is only useful if it survives
+ * the chain and reaches the response the page reads.
+ */
+describe("login handler: an unverified account", () => {
+  async function loginAsUnverified(
+    password: string,
+    deactivatedAt: Date | null = null
+  ): Promise<Response> {
+    const passwordHash = await hashPassword("Pass1234!");
+    const fakeUser = {
+      id: "u1",
+      email: "a@example.com",
+      name: "A",
+      image: null,
+      passwordHash,
+      emailVerified: null,
+      isActive: false,
+      mustChangePassword: false,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+      deactivatedAt,
+    };
+    const lockout = {
+      findUserByEmail: vi.fn().mockResolvedValue(fakeUser),
+      incrementFailedAttempts: vi.fn().mockResolvedValue(undefined),
+      lockAccount: vi.fn().mockResolvedValue(undefined),
+      resetFailedAttempts: vi.fn().mockResolvedValue(undefined),
+      maxLoginAttempts: 5,
+      lockoutDurationSeconds: 900,
+      requireEmailVerification: true,
+    };
+    const deps = {
+      secret: SECRET,
+      isProduction: false,
+      accessTokenTTL: 900,
+      refreshTokenTTL: 604800,
+      loginStallTimeMs: 0,
+      allowedOrigins: ALLOWED_ORIGINS,
+      trustProxy: false,
+      trustedProxyIps: [],
+      fetchRoleIds: vi.fn().mockResolvedValue([]),
+      fetchCustomFields: vi.fn().mockResolvedValue({}),
+      storeRefreshToken: vi.fn().mockResolvedValue(undefined),
+      fetchAccountState: vi.fn().mockResolvedValue({
+        userId: "u1",
+        isActive: false,
+        lockedUntil: null,
+        emailVerified: null,
+      }),
+      ...lockout,
+      ...loginPipelineDeps(lockout),
+    };
+    return handleLogin(
+      makeRequest("POST", { email: "a@example.com", password }),
+      deps
+    );
+  }
+
+  async function codeOf(res: Response): Promise<unknown> {
+    const body = (await res.json()) as { error?: { code?: string } };
+    return body.error?.code;
+  }
+
+  it("is named to a caller who gave the right password", async () => {
+    // The login page offers to resend the verification link on this code.
+    const res = await loginAsUnverified("Pass1234!");
+    expect(res.status).toBe(403);
+    expect(await codeOf(res)).toBe("EMAIL_NOT_VERIFIED");
+  });
+
+  it("is not named for an account an administrator deactivated", async () => {
+    // No verification link is sent to it, so the resend the page would offer
+    // could never arrive: it is refused like any deactivated account.
+    const res = await loginAsUnverified("Pass1234!", new Date());
+    expect(res.status).toBe(401);
+    expect(await codeOf(res)).toBe("AUTH_INVALID_CREDENTIALS");
+  });
+
+  it("is not named to a caller who gave the wrong one", async () => {
+    const res = await loginAsUnverified("Wrong1234!");
+    expect(res.status).toBe(401);
+    expect(await codeOf(res)).toBe("AUTH_INVALID_CREDENTIALS");
+  });
+});
+
 describe("logout handler: respondAction shape", () => {
   it("returns just { message }", async () => {
     const deps = {
@@ -517,6 +643,7 @@ describe("refresh handler: respondData shape", () => {
   it("returns { user, accessToken, refreshToken, expiresAt } with no message", async () => {
     const tokenHash = hashRefreshToken("raw-refresh-token");
     const deps = {
+      ...usableAccountGate,
       secret: SECRET,
       isProduction: false,
       accessTokenTTL: 900,
@@ -530,7 +657,6 @@ describe("refresh handler: respondData shape", () => {
       }),
       deleteRefreshToken: vi.fn().mockResolvedValue(undefined),
       deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
-      storeRefreshToken: vi.fn().mockResolvedValue(undefined),
       findUserById: vi.fn().mockResolvedValue({
         id: "u1",
         email: "a@example.com",
@@ -570,7 +696,7 @@ describe("refresh handler: respondData shape", () => {
   it("returns 503 (and does NOT delete old refresh token or clear cookies) when findUserById throws", async () => {
     const tokenHash = hashRefreshToken("raw-refresh-token");
     const deleteRefreshToken = vi.fn().mockResolvedValue(undefined);
-    const storeRefreshToken = vi.fn().mockResolvedValue(undefined);
+    const rows = fakeSessionRows(usableAccount);
     const deps = {
       secret: SECRET,
       isProduction: false,
@@ -585,7 +711,7 @@ describe("refresh handler: respondData shape", () => {
       }),
       deleteRefreshToken,
       deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
-      storeRefreshToken,
+      withSessionRowTransaction: rows.withSessionRowTransaction,
       findUserById: vi.fn().mockRejectedValue(new Error("connection lost")),
       fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
       fetchCustomFields: vi.fn().mockResolvedValue({}),
@@ -611,7 +737,7 @@ describe("refresh handler: respondData shape", () => {
     expect(setCookie).not.toMatch(/nextly_refresh=;/);
     // Old token must remain in the DB so the next attempt can find it.
     expect(deleteRefreshToken).not.toHaveBeenCalled();
-    expect(storeRefreshToken).not.toHaveBeenCalled();
+    expect(rows.calls).toEqual([]);
   });
 });
 
@@ -874,8 +1000,6 @@ describe("reset-password handler: respondAction shape", () => {
       resetPasswordWithToken: vi
         .fn()
         .mockResolvedValue({ email: "a@example.com" }),
-      deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
-      findUserByEmail: vi.fn().mockResolvedValue({ id: "u1" }),
     };
     const req = makeRequest("POST", {
       token: "t",
@@ -1048,7 +1172,6 @@ describe("change-password handler: respondAction shape", () => {
       secret: SECRET,
       allowedOrigins: ALLOWED_ORIGINS,
       changePassword: vi.fn().mockResolvedValue({ success: true }),
-      deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
       auditLog: { write: vi.fn().mockResolvedValue(undefined) },
       trustProxy: false,
       trustedProxyIps: [],
@@ -1124,3 +1247,71 @@ describe("csrf handler: respondData shape", () => {
 void setCsrfCookie;
 void setAccessTokenCookie;
 void setRefreshTokenCookie;
+
+describe("the account-state gate before continuations", () => {
+  it("refuses an INACTIVE account before any hook or challenge runs", async () => {
+    // A custom strategy authenticating an inactive account used to reach the
+    // challenge/hook machinery before the session-time gate refused: the
+    // person got a second-factor prompt to solve — and the code the
+    // challenge sent — before learning they could not sign in at all.
+    const seen: string[] = [];
+    const custom = {
+      name: "header-token",
+      authenticate: async () => ({
+        type: "authenticated",
+        user: { id: "u1", email: "a@b.c", name: "A", image: null },
+      }),
+    };
+    const hooks = new AuthHookRegistry();
+    hooks.add({
+      afterAuthenticate: async user => {
+        seen.push("afterAuthenticate");
+        return user;
+      },
+    });
+
+    // The handler answers its failures with a Response rather than a throw,
+    // so the refusal is the status — and the hook list stays empty either
+    // way, which is the separating assertion.
+    const res = await handleLogin(
+      makeRequest("POST", { email: "a@b.c", password: "x" }),
+      {
+        ...usableAccountGate,
+        secret: SECRET,
+        isProduction: false,
+        accessTokenTTL: 900,
+        refreshTokenTTL: 604800,
+        maxLoginAttempts: 5,
+        lockoutDurationSeconds: 900,
+        loginStallTimeMs: 0,
+        requireEmailVerification: true,
+        allowedOrigins: ALLOWED_ORIGINS,
+        trustProxy: false,
+        trustedProxyIps: [],
+        findUserByEmail: vi.fn().mockResolvedValue(null),
+        incrementFailedAttempts: vi.fn().mockResolvedValue(undefined),
+        lockAccount: vi.fn().mockResolvedValue(undefined),
+        resetFailedAttempts: vi.fn().mockResolvedValue(undefined),
+        fetchRoleIds: vi.fn().mockResolvedValue([]),
+        fetchCustomFields: vi.fn().mockResolvedValue({}),
+        storeRefreshToken: vi.fn().mockResolvedValue(undefined),
+        authStrategies: [custom] as never,
+        authHooks: hooks,
+        pluginCtx: {} as never,
+        challengeTokenTTL: 300,
+        auditLog: { write: vi.fn().mockResolvedValue(undefined) },
+        fetchAccountState: async (userId: string) => ({
+          userId,
+          isActive: false,
+          lockedUntil: null,
+          emailVerified: new Date("2026-01-01T00:00:00Z"),
+        }),
+      } as never
+    );
+
+    expect(res.status).toBe(401);
+    // The hook never ran: the refusal arrived before anything was done on
+    // the account's behalf.
+    expect(seen).toEqual([]);
+  });
+});

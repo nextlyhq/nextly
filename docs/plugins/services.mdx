@@ -239,4 +239,34 @@ for things the services layer doesn't cover yet (aggregations beyond `count`). I
 find yourself needing it often, that's a signal worth raising — the goal (D56) is that
 most plugins never touch it.
 
+It is Drizzle's fluent API for the configured dialect: `select`, `insert`,
+`update`, `delete`, and `transaction(async tx => { ... })`, which commits the
+work as one unit and rolls it back if the work throws, on every dialect and
+with or without `rawSql`. Inside it, write through `tx`. Without `rawSql`, `tx`
+has no nested `transaction`; with it, `tx` is the live handle and its
+`transaction` nests as a savepoint. Another service or `ctx.settings` called
+there runs on its own connection on PostgreSQL and MySQL, outside the
+transaction, and commits on its own.
+
+On SQLite the transaction holds the database's only connection until it ends.
+A service or `ctx.settings` called inside joins it as a savepoint, and its rows
+roll back with it. What a service does after its own write runs when its
+savepoint is released, though, and is not undone if your transaction then rolls
+back: collection hooks (`afterCreate`, `afterUpdate`, `afterDelete`), events
+such as `user.created` or `plugin.settings.changed`, and cache revalidation.
+Call such services after the transaction, not inside it. A media delete
+(`ctx.services.media.delete` or `bulkDelete`) called inside it is refused with
+`409 CONFLICT`, so stored files are never removed for a delete that rolls back:
+delete media after the transaction. A focal-point change made inside it keeps
+the superseded image variants rather than deleting them. Statements from other requests wait for the transaction or run
+inside it. Keep it short, and never await network I/O such as `ctx.fetch`
+inside it.
+
+There is no relational `query` namespace: the one that used to exist named a
+few core tables, so it could never answer about a plugin's own tables.
+
+Without `capabilities.db.rawSql` the handle has no `execute` or `run`; with it,
+`ctx.db` is the live Drizzle instance. The capability is a declaration a
+reviewer can read, not an enforced boundary: plugins run as trusted code.
+
 See also: [Permissions](/docs/plugins/permissions) · [HTTP routes](/docs/plugins/routes).

@@ -954,11 +954,10 @@ export class EmailProviderService extends BaseService {
         });
       } else {
         // No handover, so nothing to make atomic WITH. Opening a transaction
-        // anyway costs correctness on SQLite, where `withTransaction` issues
-        // `BEGIN IMMEDIATE` on the one shared connection: a second write that
-        // arrives while the first is between its BEGIN and COMMIT cannot
-        // begin, and is refused outright. A single statement has no such
-        // window.
+        // anyway is not free on SQLite, where `withTransaction` holds the one
+        // shared connection from its BEGIN to its COMMIT: every other write
+        // arriving in that window waits behind it or runs inside it. A single
+        // statement has no such window.
         await this.db.insert(this.emailProviders).values(values);
       }
     } catch (error) {
@@ -1323,9 +1322,9 @@ export class EmailProviderService extends BaseService {
         });
       } else {
         // No handover, so nothing to make atomic WITH -- and a transaction
-        // here costs correctness on SQLite, where `withTransaction` issues
-        // `BEGIN IMMEDIATE` on the one shared connection and a second write
-        // arriving mid-window cannot begin at all.
+        // here is not free on SQLite, where `withTransaction` holds the one
+        // shared connection and every other write arriving mid-window waits
+        // behind it or runs inside it.
         const result = await this.db
           .update(this.emailProviders)
           .set(updateData)

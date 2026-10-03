@@ -21,6 +21,20 @@ export interface PluginAuthContributions {
       label: string;
       icon?: string;
       component?: ComponentPath;
+      /**
+       * A same-origin absolute path the button navigates to, for a provider
+       * whose sign-in starts with a redirect rather than a form.
+       *
+       * Without it a plain provider button renders and does nothing: the host
+       * has no handler to give it, so the only working buttons were the ones
+       * that shipped their own component.
+       *
+       * The rule is a path starting with a single `/`, with no scheme, no
+       * `//` and no backslash. It is deliberately NOT tied to `/admin/api`:
+       * the API base path is configurable, and a plugin may mount its routes
+       * at the root.
+       */
+      href?: string;
     }>;
     /** Map of `challengeType -> component` for rendering a challenge step. */
     challengeViews?: Record<string, ComponentPath>;

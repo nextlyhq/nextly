@@ -1,7 +1,7 @@
 /**
  * User identity tables — MySQL.
  *
- * Tables: users, accounts, sessions.
+ * Tables: users.
  * Moved verbatim from packages/nextly/src/database/schema/mysql.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
@@ -19,7 +19,6 @@ import {
   datetime,
   index,
   uniqueIndex,
-  text,
   boolean,
   timestamp,
 } from "drizzle-orm/mysql-core";
@@ -36,6 +35,12 @@ export const users = mysqlTable(
     image: varchar("image", { length: 255 }),
     passwordHash: varchar("password_hash", { length: 255 }),
     isActive: boolean("is_active").notNull().default(false),
+    // When an administrator deactivated the account; null when none has. Kept
+    // apart from is_active because that flag is also false for an account
+    // still waiting on its verification link or invite, and only this says
+    // whether following one may switch the account on. Nullable, so adding it
+    // to an existing table rewrites no row.
+    deactivatedAt: datetime("deactivated_at"),
     // Set when an admin creates the account with a password they chose: the
     // person must replace it on first sign-in (ASVS 6.4.1). Nullable so the
     // column can be added to an existing table without a data-losing default;
@@ -51,41 +56,4 @@ export const users = mysqlTable(
     uniqueIndex("users_email_unique").on(t.email),
     index("users_created_at_idx").on(t.createdAt),
   ]
-);
-
-export const accounts = mysqlTable(
-  "accounts",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    userId: varchar("user_id", { length: 191 }).notNull(),
-    type: varchar("type", { length: 191 }).notNull(),
-    provider: varchar("provider", { length: 191 }).notNull(),
-    providerAccountId: varchar("provider_account_id", {
-      length: 191,
-    }).notNull(),
-    refresh_token: text("refresh_token"),
-    access_token: text("access_token"),
-    expires_at: int("expires_at"),
-    token_type: varchar("token_type", { length: 191 }),
-    scope: text("scope"),
-    id_token: text("id_token"),
-    session_state: varchar("session_state", { length: 255 }),
-  },
-  t => [
-    uniqueIndex("accounts_provider_providerAccountId_unique").on(
-      t.provider,
-      t.providerAccountId
-    ),
-    index("accounts_user_id_idx").on(t.userId),
-  ]
-);
-
-export const sessions = mysqlTable(
-  "sessions",
-  {
-    sessionToken: varchar("session_token", { length: 255 }).primaryKey(),
-    userId: varchar("user_id", { length: 191 }).notNull(),
-    expires: datetime("expires").notNull(),
-  },
-  t => [index("sessions_user_id_idx").on(t.userId)]
 );

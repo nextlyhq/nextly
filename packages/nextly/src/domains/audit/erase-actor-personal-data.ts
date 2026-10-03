@@ -22,6 +22,7 @@ import {
   eq,
   isNotNull,
   isNull,
+  like,
   or,
   type Column,
   type Table,
@@ -49,7 +50,10 @@ export interface ErasableAuditTables {
     identityErasedAt: Column;
   };
   auditLog?: Table & {
+    kind: Column;
     actorUserId: Column;
+    targetUserId: Column;
+    metadata: Column;
     ipAddress: Column;
     userAgent: Column;
     identityErasedAt: Column;
@@ -169,6 +173,30 @@ export async function eraseActorPersonalData(
                 isNull(auditLog.identityErasedAt)
               )
             : or(isNotNull(auditLog.ipAddress), isNotNull(auditLog.userAgent))
+        )
+      );
+
+    // A PLUGIN's row carries metadata the plugin chose, within the keys it
+    // declared — an email, a provider subject — so its metadata is erased
+    // whole on every plugin row naming the account, as actor OR as target. An
+    // identity a plugin linked records the person it was linked to as the
+    // target, and that is exactly the row an erasure must reach.
+    //
+    // Core's own rows are left alone: their metadata is core's fixed,
+    // identifier-free projection, and it is the record of what happened. A
+    // plugin's kind always carries its `<slug>.` prefix and no core kind
+    // contains a dot, so the dot is what tells the two apart.
+    await db
+      .update(auditLog)
+      .set({ metadata: null })
+      .where(
+        and(
+          like(auditLog.kind, "%.%"),
+          or(
+            eq(auditLog.actorUserId, userId),
+            eq(auditLog.targetUserId, userId)
+          ),
+          isNotNull(auditLog.metadata)
         )
       );
   }

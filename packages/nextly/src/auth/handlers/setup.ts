@@ -15,17 +15,13 @@ import { validateCsrf } from "../csrf/validate";
 import { buildClaims } from "../jwt/claims";
 import { signAccessTokenWithExpiry } from "../jwt/sign";
 // hashPassword not needed here -- seedSuperAdmin handles hashing internally
-import {
-  generateRefreshToken,
-  hashRefreshToken,
-  generateRefreshTokenId,
-} from "../session/refresh";
 
 import {
   jsonResponse,
   buildCookieHeaders,
   buildAuthErrorResponse,
 } from "./handler-utils";
+import { storeNewRefreshToken } from "./issue-session";
 
 export interface SetupHandlerDeps {
   /**
@@ -186,19 +182,13 @@ export async function handleSetup(
   const { token: accessToken, expiresAt: accessTokenExpiresAt } =
     await signAccessTokenWithExpiry(claims, deps.secret, deps.accessTokenTTL);
 
-  const rawRefreshToken = generateRefreshToken();
-  await deps.storeRefreshToken({
-    id: generateRefreshTokenId(),
-    userId: user.id,
-    tokenHash: hashRefreshToken(rawRefreshToken),
-    userAgent: request.headers.get("user-agent"),
-    ipAddress: getTrustedClientIp(request, {
-      trustProxy: deps.trustProxy,
-      trustedProxyIps: deps.trustedProxyIps,
-    }),
-    expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
-  });
+  const rawRefreshToken = await storeNewRefreshToken(deps, user.id, request);
 
+  // The shared account-state gate does not run here, because this session is
+  // handed to the account setup just created: active, and verified by the
+  // operator who reached the setup route at all. There is no earlier state for
+  // the gate to refuse.
+  //
   // Setup issues a real session, so it is a completed login and belongs in the
   // trail like any other. It does not route through `issueSession` because it
   // is account creation rather than authentication — different status, message,

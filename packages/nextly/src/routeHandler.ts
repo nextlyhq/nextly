@@ -906,6 +906,25 @@ async function resolveAuthorization(
     return requirePermission(req, "manage", "settings");
   }
 
+  // --- Plugin settings → the SETTINGS permissions ---
+  //
+  // Without this branch these routes fell through to the default mapping,
+  // which asks for `read-pluginSettings` / `update-pluginSettings`. Neither is
+  // seeded — the repository seeds `manage-settings` and `read-settings` — so
+  // every settings administrator got a 403 and only the super-admin bypass
+  // could use the API at all.
+  if (service === "pluginSettings") {
+    if (httpMethod === "GET") {
+      return requireAnyPermission(req, [
+        { action: "read", resource: "settings" },
+        { action: "manage", resource: "settings" },
+      ]);
+    }
+    // A write to a plugin's configuration is a settings change, so it takes
+    // the same permission a settings change takes anywhere else.
+    return requirePermission(req, "manage", "settings");
+  }
+
   // --- Email providers → manage-email-providers ---
   if (service === "emailProviders") {
     // The provider catalog is the one read a CREATOR also needs. The

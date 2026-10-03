@@ -165,6 +165,7 @@ For rate-limited responses (`code: "RATE_LIMITED"`, status 429) the runtime also
 | `400` | `VALIDATION_ERROR` | Body or query failed validation. |
 | `401` | `AUTH_REQUIRED`, `AUTH_INVALID_CREDENTIALS` | Missing or bad credentials. |
 | `403` | `FORBIDDEN` | Authenticated but lacks permission. |
+| `403` | `EMAIL_NOT_VERIFIED` | Login with the correct password for an address not yet verified. |
 | `404` | `NOT_FOUND` | Resource does not exist. |
 | `409` | `CONFLICT`, `DUPLICATE` | Concurrent edit, duplicate email, etc. |
 | `413` | `PAYLOAD_TOO_LARGE` | Upload bigger than configured cap. |
@@ -185,12 +186,17 @@ The catch-all dispatches every URL under `/api/` to one of these endpoint groups
 | `POST` | `/api/auth/setup` | Run the first-boot setup wizard (creates super admin). | Public, one-shot |
 | `GET` | `/api/auth/session` | Current session info from the cookie. | Cookie |
 | `GET` | `/api/auth/csrf` | CSRF token (when applicable). | Public |
+| `GET` | `/api/auth/ui` | Login page UI: provider buttons, challenge views, slots. | Public |
+| `GET` | `/api/auth/pending` | Which second factor an interrupted sign-in left outstanding; 204 when none is, or its attempt budget is spent. | Public |
 | `POST` | `/api/auth/login` | Email + password login. Sets cookies. | Public |
+| `POST` | `/api/auth/challenge/resolve` | Answer a second factor with the pending token. Sets cookies. | Pending token |
+| `POST` | `/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in. Sets cookies. | Pending token |
 | `POST` | `/api/auth/logout` | Clear cookies. | Cookie |
 | `POST` | `/api/auth/refresh` | Rotate the access token. | Cookie |
 | `POST` | `/api/auth/register` | Public registration. | Public |
 | `POST` | `/api/auth/forgot-password` | Send password-reset email. | Public |
 | `POST` | `/api/auth/reset-password` | Consume reset token and set new password. | Public |
+| `POST` | `/api/auth/accept-invite` | Consume invite token and set a password. | Public |
 | `POST` | `/api/auth/verify-email` | Consume email-verification token. | Public |
 | `POST` | `/api/auth/verify-email/resend` | Resend the verification email. | Public |
 | `PATCH` | `/api/auth/change-password` | Change current user's password. | Cookie |
@@ -203,8 +209,6 @@ The catch-all dispatches every URL under `/api/` to one of these endpoint groups
 | `PATCH` | `/api/users/{id}` | Update user. | `update-users` |
 | `DELETE` | `/api/users/{id}` | Delete user. | `delete-users` |
 | `PATCH` | `/api/users/{id}/password` | Set password hash directly. | `update-users` |
-| `GET` | `/api/users/{id}/accounts` | List linked accounts. | `read-users` |
-| `DELETE` | `/api/users/{id}/accounts/{provider}/{providerAccountId}` | Unlink account. | `update-users` |
 | `GET` | `/api/users/{id}/roles` | List user roles. | `read-roles` |
 | `POST` | `/api/users/{id}/roles` | Assign role to user. | `update-users` |
 | `DELETE` | `/api/users/{id}/roles/{roleId}` | Unassign role. | `update-users` |

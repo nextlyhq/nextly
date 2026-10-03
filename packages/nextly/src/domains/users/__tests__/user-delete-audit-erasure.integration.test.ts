@@ -18,7 +18,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../../database/index";
 import { NextlyError } from "../../../errors";
@@ -35,10 +35,7 @@ import {
   roles as rolesSqlite,
   userRoles as userRolesSqlite,
 } from "../../../schemas/rbac/sqlite";
-import {
-  accounts as accountsSqlite,
-  users as usersSqlite,
-} from "../../../schemas/users/sqlite";
+import { users as usersSqlite } from "../../../schemas/users/sqlite";
 import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
 import { ActivityLogService } from "../../../services/dashboard/activity-log-service";
 import { allResources } from "../../../services/dashboard/readable-resources";
@@ -63,7 +60,6 @@ async function ddl(): Promise<string[]> {
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
       users: usersSqlite,
-      accounts: accountsSqlite,
       roles: rolesSqlite,
       userRoles: userRolesSqlite,
       activityLog: activityLogSqlite,
@@ -581,5 +577,158 @@ describe("deleting a user erases them from the activity log without erasing the 
     expect(untouched[0].user_name).toBe("Staying");
     expect(untouched[0].user_email).toBe("erasure-staying@test.local");
     expect(untouched[0].identity_erased_at).toBeNull();
+  });
+
+  it("clears a plugin row's metadata wherever the account is actor or target", async () => {
+    // A plugin's metadata is what the plugin chose to keep within its declared
+    // keys — an email, a provider subject — and a linked identity names its
+    // person as the TARGET. Erasing only the actor's request identifiers left
+    // both behind for as long as the row is retained.
+    const leaving = await users.createLocalUser({
+      email: "plugin-erasure-leaving@test.local",
+      name: "Leaving",
+      password: "TestPassword123!",
+      isActive: true,
+    });
+    const admin = await users.createLocalUser({
+      email: "plugin-erasure-admin@test.local",
+      name: "Admin",
+      password: "TestPassword123!",
+      isActive: true,
+    });
+    const personal = { email: "leaving@example.test", subject: "1029384756" };
+    await auditWriter.write({
+      kind: "acme-auth.identity-linked" as never,
+      actorUserId: String(leaving.id),
+      metadata: personal,
+    });
+    await auditWriter.write({
+      kind: "acme-auth.identity-unlinked" as never,
+      actorUserId: String(admin.id),
+      targetUserId: String(leaving.id),
+      metadata: personal,
+    });
+    // Controls: core's own row keeps its metadata, and so does a plugin row
+    // about someone else.
+    await auditWriter.write({
+      kind: "password-changed",
+      actorUserId: String(leaving.id),
+      metadata: { strategy: "password" },
+    });
+    await auditWriter.write({
+      kind: "acme-auth.identity-linked" as never,
+      actorUserId: String(admin.id),
+      metadata: { email: "admin@example.test" },
+    });
+
+    await users.deleteUser(leaving.id);
+
+    const rows = await adapter.executeQuery<{
+      kind: string;
+      actor_user_id: string;
+      metadata: string | null;
+    }>(
+      `SELECT kind, actor_user_id, metadata FROM audit_log
+        WHERE actor_user_id IN (?, ?) OR target_user_id = ?
+        ORDER BY kind, actor_user_id`,
+      [String(leaving.id), String(admin.id), String(leaving.id)]
+    );
+    const metadataOf = (kind: string, actor: string) =>
+      rows.find(r => r.kind === kind && r.actor_user_id === actor)?.metadata;
+
+    expect(
+      metadataOf("acme-auth.identity-linked", String(leaving.id))
+    ).toBeNull();
+    expect(
+      metadataOf("acme-auth.identity-unlinked", String(admin.id))
+    ).toBeNull();
+    expect(metadataOf("password-changed", String(leaving.id))).toContain(
+      "password"
+    );
+    expect(metadataOf("acme-auth.identity-linked", String(admin.id))).toContain(
+      "admin@example.test"
+    );
+  });
+
+  describe("the retired accounts and sessions tables", () => {
+    // Hand-written DDL on purpose: the production definitions of these tables
+    // were removed so nothing creates them again, and these stand in for an
+    // upgraded database that still has them, or for a host app's own tables.
+    afterEach(async () => {
+      await adapter.executeQuery("DROP TABLE IF EXISTS accounts");
+      await adapter.executeQuery("DROP TABLE IF EXISTS sessions");
+    });
+
+    it("erases the deleted user's rows from both, in Nextly's shape", async () => {
+      await adapter.executeQuery(
+        `CREATE TABLE accounts (id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+           type TEXT, provider TEXT NOT NULL, provider_account_id TEXT NOT NULL,
+           access_token TEXT)`
+      );
+      await adapter.executeQuery(
+        `CREATE TABLE sessions (session_token TEXT PRIMARY KEY,
+           user_id TEXT NOT NULL, expires INTEGER NOT NULL)`
+      );
+      const leaving = await users.createLocalUser({
+        email: "retired-tables-leaving@test.local",
+        name: "Leaving",
+        password: "TestPassword123!",
+        isActive: true,
+      });
+      await adapter.executeQuery(
+        "INSERT INTO accounts VALUES (?, ?, ?, ?, ?, ?)",
+        ["a-1", String(leaving.id), "oauth", "google", "g-1", "tok"]
+      );
+      await adapter.executeQuery("INSERT INTO sessions VALUES (?, ?, ?)", [
+        "s-1",
+        String(leaving.id),
+        0,
+      ]);
+
+      await users.deleteUser(leaving.id);
+
+      expect(
+        await adapter.executeQuery(
+          "SELECT id FROM accounts WHERE user_id = ?",
+          [String(leaving.id)]
+        )
+      ).toEqual([]);
+      expect(
+        await adapter.executeQuery(
+          "SELECT session_token FROM sessions WHERE user_id = ?",
+          [String(leaving.id)]
+        )
+      ).toEqual([]);
+    });
+
+    it("leaves a host app's table of the same name alone, and still deletes", async () => {
+      // The name alone used to decide: a DELETE ... WHERE user_id = ? ran
+      // against a table with no such column, and every deletion failed.
+      await adapter.executeQuery(
+        "CREATE TABLE accounts (id TEXT PRIMARY KEY, owner_id TEXT, balance INTEGER)"
+      );
+      await adapter.executeQuery("INSERT INTO accounts VALUES (?, ?, ?)", [
+        "host-1",
+        "someone",
+        100,
+      ]);
+      const leaving = await users.createLocalUser({
+        email: "host-accounts-leaving@test.local",
+        name: "Leaving",
+        password: "TestPassword123!",
+        isActive: true,
+      });
+
+      await users.deleteUser(leaving.id);
+
+      expect(await adapter.executeQuery("SELECT id FROM accounts")).toEqual([
+        { id: "host-1" },
+      ]);
+      expect(
+        await adapter.executeQuery("SELECT id FROM users WHERE id = ?", [
+          String(leaving.id),
+        ])
+      ).toEqual([]);
+    });
   });
 });

@@ -4,6 +4,7 @@ export {
   resetFilterRegistry,
   type Filter,
   type Action,
+  type Decision,
   type FilterName,
   type FilterLogger,
 } from "./filter-registry";

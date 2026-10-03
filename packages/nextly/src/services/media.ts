@@ -49,6 +49,7 @@ import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
 import { keysToSnakeCase } from "../lib/case-conversion";
+import { inPluginTransaction } from "../shared/lib/plugin-transaction-scope";
 import { refusesUpload } from "../storage/image-processor";
 import { isImageMimeType, validateFileSize } from "../types/media";
 import type {
@@ -139,6 +140,18 @@ export class MediaService extends BaseService {
     private readonly maxUploadBytes?: number
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * Whether this service's writes would join a plugin's `ctx.db.transaction`
+   * as a savepoint the plugin can still roll back. Both conditions hold only
+   * on SQLite: the plugin's work is marked as running in its transaction, and
+   * the adapter reports one open on the connection this service writes
+   * through. On PostgreSQL and MySQL the service writes on its own connection
+   * and commits independently, so the adapter reports none.
+   */
+  private joinsPluginTransaction(): boolean {
+    return inPluginTransaction() && this.adapter.inTransaction();
   }
 
   /**
@@ -772,6 +785,14 @@ export class MediaService extends BaseService {
         changes,
         updateData
       );
+      // Inside a plugin's `ctx.db.transaction` on SQLite the update below is
+      // a savepoint of it, and the plugin's later rollback restores the row's
+      // old variant paths. The superseded files are then kept, left orphaned
+      // if the transaction commits, rather than deleted while a rollback could
+      // still need them. Core's own enclosing transactions delete them as
+      // before, and on PostgreSQL and MySQL the update commits on its own
+      // connection, where the adapter reports no enclosing transaction.
+      const keepSuperseded = this.joinsPluginTransaction();
 
       // Commit the row update and its outbox event in one transaction so the
       // event is durable exactly when the change commits. The row is locked and
@@ -879,8 +900,9 @@ export class MediaService extends BaseService {
       }
 
       // The row now durably references the new variants, so the superseded old
-      // ones can be deleted (keeping any path the new set reuses).
-      if (regeneratedSizes && replacedSizes) {
+      // ones can be deleted (keeping any path the new set reuses) — unless a
+      // plugin's enclosing transaction can still roll the row back to them.
+      if (regeneratedSizes && replacedSizes && !keepSuperseded) {
         await this.deleteSupersededVariants(replacedSizes, regeneratedSizes);
       }
 
@@ -908,11 +930,29 @@ export class MediaService extends BaseService {
 
   /**
    * Delete media file (removes from storage and database)
+   *
+   * Refused inside a plugin's `ctx.db.transaction` on SQLite, which this
+   * delete would join. Its row delete would be a savepoint of that
+   * transaction, but the stored files go when the savepoint releases: the
+   * plugin's later rollback would bring the row back pointing at files that
+   * no longer exist. Core's own enclosing transactions (a collection hook
+   * deleting media during an entry write) are not refused.
    */
   async deleteMedia(
     mediaId: string,
     actor?: RequestActor
   ): Promise<DeleteMediaResponse> {
+    // A precondition, ahead of every read and write, so a refused delete
+    // touches neither the row nor storage.
+    if (this.joinsPluginTransaction()) {
+      return {
+        success: false,
+        statusCode: 409,
+        code: "CONFLICT",
+        message:
+          "Media cannot be deleted inside a database transaction. Delete it after the transaction, not inside it.",
+      };
+    }
     try {
       const existing = await this.getMediaById(mediaId);
       if (!existing.success || !existing.data) {
