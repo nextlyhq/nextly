@@ -34,6 +34,7 @@
     "build:css:watch": "node scripts/build-css-watch.mjs",
     "dev": "node scripts/dev.mjs",
     "check-types": "tsc --noEmit",
+    "check:published-build": "node scripts/check-published-build.mjs",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",

@@ -1107,6 +1107,80 @@ jobs:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
+  # What `@nextlyhq/admin` would publish, read as a production application gets
+  # it. The package ships prebuilt, and its build settles what a production
+  # user sees: built in development mode it shows an error's message and stack
+  # trace and the query developer tools, and dials a development-only route.
+  # The unit suites import the admin's source and the playground loads its
+  # source, so nothing else here reads the built files.
+  #
+  # The last step turns the check on itself. It builds the admin in development
+  # mode and requires the check to refuse that build, so a check that stopped
+  # recognising the failure it exists for fails here, not in silence.
+  #
+  # `needs: changes`, not `needs: ci`: it runs beside the Linux jobs, and it is
+  # among the jobs `gate` waits on, so its failure holds a merge. It runs the
+  # same steps on a merge-queue run as on a pull request.
+  admin-published-build:
+    name: Published admin build
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # A release builds with `NODE_ENV` unset, and the admin's build reads it,
+      # so it is unset here whatever the runner carries.
+      - name: Build the admin as a release does
+        run: env -u NODE_ENV pnpm turbo build --filter=@nextlyhq/admin...
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Packs the package as `pnpm publish` would, and reads the packed files.
+      - name: Check what the packed admin gives a production application
+        run: pnpm --filter @nextlyhq/admin check:published-build
+
+      # `tsup` alone, without the stylesheet step: the check is asked only for
+      # the two kinds a development-mode build must be refused for.
+      - name: The check refuses a build made in development mode
+        run: |
+          NODE_ENV=development pnpm --filter @nextlyhq/admin exec tsup
+          pnpm --filter @nextlyhq/admin check:published-build --packed . --must-fail-with error-detail,developer-tools
+
+      # Only a job whose checks passed publishes what it learned.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
   # The one check that can block a merge, standing for all of them.
   #
   # 🔴 Measured before this existed: the only required status check on `main`
@@ -1161,6 +1235,7 @@ jobs:
       - ci
       - unit-tests-nextly
       - unit-tests-admin
+      - admin-published-build
       - entry-guard-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 5
