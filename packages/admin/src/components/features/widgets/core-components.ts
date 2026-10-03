@@ -21,7 +21,6 @@ import { CollectionQuickLinks } from "@admin/components/features/dashboard/Colle
 import { OnboardingChecklist } from "@admin/components/features/dashboard/OnboardingChecklist";
 import { QuickCreate } from "@admin/components/features/dashboard/QuickCreate";
 import { RecentActivity } from "@admin/components/features/dashboard/RecentActivity";
-import { SeedDemoContentCard } from "@admin/components/features/dashboard/SeedDemoContentCard";
 import { SinglesQuickLinks } from "@admin/components/features/dashboard/SinglesQuickLinks";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
@@ -35,7 +34,6 @@ import { registerCoreComponent } from "@admin/lib/plugins/component-registry-int
  * one card reports itself and the dashboard stands.
  */
 export function registerCoreWidgetComponents(): void {
-  registerCoreComponent("core#SeedDemoContentCard", SeedDemoContentCard);
   registerCoreComponent("core#OnboardingChecklist", OnboardingChecklist);
   registerCoreComponent("core#CollectionQuickLinks", CollectionQuickLinks);
   registerCoreComponent("core#SinglesQuickLinks", SinglesQuickLinks);

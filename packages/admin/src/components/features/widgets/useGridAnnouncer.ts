@@ -5,7 +5,8 @@
  *
  * Its own hook because announcing is a subject rather than a step: it decides
  * when silence is right, it dedupes a repeated sentence, and it is shared by
- * two very different events — a batch settling, and a reader moving a card.
+ * very different events — a batch settling, a reader moving a card, and the
+ * empty dashboard's demo content loading.
  * Left inline it was four more pieces of state and branching in a component the
  * complexity gate was already objecting to.
  *
@@ -58,6 +59,15 @@ export interface GridAnnouncer {
    * reader deciding whether to undo needs to hear which one happened.
    */
   announceRemoved: (title: string) => void;
+  /**
+   * Say a sentence about the dashboard as a whole.
+   *
+   * For a change that belongs to no card and moves no focus -- the empty
+   * dashboard's demo content loading, landing or failing. Through this region
+   * rather than one of its own, so it cannot talk over what the grid says
+   * about a card.
+   */
+  announceStatus: (text: string) => void;
 }
 
 /**
@@ -169,11 +179,17 @@ export function useGridAnnouncer(
     []
   );
 
+  const announceStatus = useCallback(
+    (text: string) => setAnnouncement(current => alternate(current, text)),
+    []
+  );
+
   return {
     announcement,
     announceMove,
     announceColumn,
     announceHidden,
     announceRemoved,
+    announceStatus,
   };
 }

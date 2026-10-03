@@ -204,4 +204,17 @@ export interface DashboardLayoutResponse {
    * than this layout, and is read again.
    */
   audience: string;
+  /**
+   * Whether this reader can see no content anywhere.
+   *
+   * The SERVER's reader-scoped answer, from the same condition pass that
+   * decides which transient cards are offered -- so a reader who may read one
+   * collection and nothing else is asked about that collection alone, and a
+   * draft counts as content.
+   *
+   * Optional, and absent reads as `false`: a server that predates the field
+   * draws the grid exactly as it did before the empty dashboard existed,
+   * rather than blanking it on the strength of a field it never sent.
+   */
+  contentEmpty?: boolean;
 }

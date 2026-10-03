@@ -12,6 +12,9 @@
  * exists. A condition that always said `true` would satisfy the empty case and
  * fail the second.
  *
+ * The layout read asks the same condition for the dashboard itself, whether or
+ * not a widget names it, so `layoutConditions` is asked here with no widgets.
+ *
  * @module domains/widgets/__tests__/conditions-content.integration.test
  */
 
@@ -24,7 +27,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { refreshCollectionSources } from "../collection-sources";
-import { evaluateConditions } from "../conditions";
+import { evaluateConditions, layoutConditions } from "../conditions";
 
 const NOTES = "notes";
 /** A collection whose rows the reader under test may NOT read. */
@@ -151,5 +154,19 @@ describe("content:empty against a real instance", () => {
     await write(t, { title: "unpublished", status: "draft" });
 
     expect(await contentEmpty()).toBe(false);
+  });
+});
+
+describe("the layout read's own content answer", () => {
+  it("is asked with no widget naming it, and counts only what the reader may read", async () => {
+    // A row the reader may not read leaves the install empty for them; a row
+    // they may read is what moves it. Both against one instance, so an answer
+    // that never reached the collections cannot satisfy the pair.
+    const t = await boot();
+    await write(t, { title: "not for you" }, SECRETS);
+    expect((await layoutConditions([], admin)).contentEmpty).toBe(true);
+
+    await write(t, { title: "the first note" });
+    expect((await layoutConditions([], admin)).contentEmpty).toBe(false);
   });
 });

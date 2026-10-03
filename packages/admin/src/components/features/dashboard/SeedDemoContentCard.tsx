@@ -2,56 +2,172 @@
 
 import { Card, CardContent, CardHeader } from "@nextlyhq/ui";
 import { Check, RotateCcw, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 
-import { useSeedStatus } from "@admin/hooks/queries/useSeedStatus";
+import type { OfferedSeedStatus } from "@admin/hooks/queries/useSeedStatus";
 import { cn } from "@admin/lib/utils";
+import type { SeedResult, SeedSummary } from "@admin/services/seedApi";
 
 import { AccentBar } from "./seed-card/AccentBar";
 import { Eyebrow, type EyebrowState } from "./seed-card/Eyebrow";
 import { ProgressList } from "./seed-card/ProgressList";
 import { StatChip } from "./seed-card/StatChip";
 
+export interface SeedDemoContentCardProps {
+  status: OfferedSeedStatus;
+  onSeed: () => void;
+  onSkip: () => void;
+  /** Leaves the offer for the dashboard, once a seed has succeeded. */
+  onContinue: () => void;
+}
+
+/** The heading each state opens with. */
+const HEADINGS: Record<EyebrowState, string> = {
+  idle: "Welcome to Nextly.",
+  seeding: "Loading demo content…",
+  success: "Demo content seeded.",
+  "success-partial": "Demo content seeded with warnings.",
+  error: "Couldn't seed demo content.",
+};
+
+/** The counts a finished seed reports as chips, in the order they are drawn. */
+const COUNTED: ReadonlyArray<readonly [keyof SeedSummary, string]> = [
+  ["rolesCreated", "Roles"],
+  ["usersCreated", "Users"],
+  ["categoriesCreated", "Categories"],
+  ["tagsCreated", "Tags"],
+  ["postsCreated", "Posts"],
+];
+
 /**
- * SeedDemoContentCard — discoverable replacement for the deleted
- * /welcome page's seed button. Renders above the OnboardingChecklist
- * on /admin for any non-blank template (probe gates visibility), and
- * disappears forever once the user clicks Seed or Skip.
- *
- * State machine lives in useSeedStatus; this component just maps each
- * `status.kind` to markup. Auto-hide-on-success has a 5s delay so the
- * user can read the stat chips before the card collapses.
+ * The eyebrow a state wears. A success that left warnings is its own state, so
+ * the warnings are read before the offer is let go.
  */
+function eyebrowFor(status: OfferedSeedStatus): EyebrowState {
+  if (status.kind !== "success") return status.kind;
+  return status.result.warnings.length > 0 ? "success-partial" : "success";
+}
 
-const AUTO_HIDE_MS = 5000;
+/** The one filled action a state offers: seed, retry, or continue. */
+function PrimaryAction({
+  onClick,
+  children,
+}: {
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-xs font-bold tracking-[0.05em] text-primary-foreground hover:bg-primary/85 hover:-translate-y-0.5 transition-all"
+    >
+      {children}
+    </button>
+  );
+}
 
-export function SeedDemoContentCard() {
-  const { status, startSeed, skip } = useSeedStatus();
-  const [autoHidden, setAutoHidden] = useState(false);
+/** Declining the offer, as a quiet text action beside the filled one. */
+function SkipAction({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-xs font-semibold tracking-[0.04em] text-muted-foreground underline underline-offset-4 decoration-1 decoration-muted-foreground/30 hover:text-foreground hover:decoration-foreground"
+    >
+      Skip — I&rsquo;ll add my own content
+    </button>
+  );
+}
 
-  useEffect(() => {
-    if (status.kind !== "success") return;
-    // Partial success → keep the card around so the user reads warnings.
-    if (status.result.warnings.length > 0) return;
-    const t = setTimeout(() => setAutoHidden(true), AUTO_HIDE_MS);
-    return () => clearTimeout(t);
-  }, [status]);
+/** What a finished seed created, what it warned about, and the way on. */
+function SeededSummary({
+  result,
+  onContinue,
+}: {
+  result: SeedResult;
+  onContinue: () => void;
+}) {
+  const { summary, warnings } = result;
+  const media = summary.mediaUploaded + summary.mediaSkipped;
 
-  if (status.kind === "loading" || status.kind === "hidden" || autoHidden) {
-    return null;
-  }
+  return (
+    <>
+      <div className="flex flex-wrap gap-2">
+        {COUNTED.filter(([key]) => summary[key] > 0).map(([key, label]) => (
+          <StatChip key={key} count={summary[key]} label={label} />
+        ))}
+        {media > 0 && (
+          <StatChip
+            count={`${summary.mediaUploaded}/${media}`}
+            label="Media"
+            tone={summary.mediaSkipped > 0 ? "warning" : "neutral"}
+          />
+        )}
+      </div>
 
-  const eyebrowState: EyebrowState =
-    status.kind === "success" && status.result.warnings.length > 0
-      ? "success-partial"
-      : status.kind === "success"
-        ? "success"
-        : status.kind === "seeding"
-          ? "seeding"
-          : status.kind === "error"
-            ? "error"
-            : "idle";
+      {warnings.length > 0 && (
+        <details className="text-sm text-muted-foreground max-w-xl group/warnings">
+          <summary className="cursor-pointer text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors">
+            View {warnings.length} warning
+            {warnings.length === 1 ? "" : "s"} →
+          </summary>
+          <ul className="mt-3 font-mono text-xs text-muted-foreground space-y-1 pl-4 border-l border-border">
+            {warnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        </details>
+      )}
 
+      <p className="text-sm text-muted-foreground max-w-xl">
+        Visit your{" "}
+        <a
+          href="/"
+          className="font-bold text-foreground underline underline-offset-4 decoration-foreground/30 hover:decoration-foreground"
+        >
+          site
+        </a>{" "}
+        or browse{" "}
+        <a
+          href="/admin/collections/posts"
+          className="font-bold text-foreground underline underline-offset-4 decoration-foreground/30 hover:decoration-foreground"
+        >
+          posts in admin
+        </a>
+        .
+      </p>
+
+      <div className="pt-1">
+        <PrimaryAction onClick={onContinue}>
+          Continue to your dashboard
+          <span aria-hidden="true">→</span>
+        </PrimaryAction>
+      </div>
+    </>
+  );
+}
+
+/**
+ * The demo-content offer, drawn for the state it is in.
+ *
+ * Presentational: the state and every action arrive as props. The empty
+ * dashboard owns `useSeedStatus`, because the instance that runs the seed has
+ * to be the one choosing what the page shows -- its mid-flight state lives in
+ * that instance, and a second one would see the offer answered and swap this
+ * card out while it was still reporting how the seed went.
+ *
+ * Leaving is the dashboard's decision for the same reason: it holds this on
+ * screen through a seed and lets it go on Continue, on Skip, or a few seconds
+ * after a success with nothing to read.
+ */
+export function SeedDemoContentCard({
+  status,
+  onSeed,
+  onSkip,
+  onContinue,
+}: SeedDemoContentCardProps) {
+  const eyebrowState = eyebrowFor(status);
   const accentState =
     eyebrowState === "success-partial" ? "success" : eyebrowState;
 
@@ -63,9 +179,8 @@ export function SeedDemoContentCard() {
         // Subtle hairline tint — no gradient flood. The accent bar at
         // the top carries the dominant color cue; the card body stays
         // neutral so the eye reads the content first, status second.
-        (eyebrowState === "success" || eyebrowState === "success-partial") &&
-          "border-success",
-        eyebrowState === "error" && "border-destructive"
+        status.kind === "success" && "border-success",
+        status.kind === "error" && "border-destructive"
       )}
     >
       <AccentBar state={accentState} />
@@ -84,29 +199,29 @@ export function SeedDemoContentCard() {
             }
           />
           <h2 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-3">
-            {(eyebrowState === "success" ||
-              eyebrowState === "success-partial") && (
+            {status.kind === "success" && (
               <Check
                 className="h-[18px] w-[18px] text-success shrink-0"
                 strokeWidth={2.5}
                 aria-hidden="true"
               />
             )}
-            {eyebrowState === "idle" && "Welcome to Nextly."}
-            {eyebrowState === "seeding" && "Loading demo content…"}
-            {eyebrowState === "success" && "Demo content seeded."}
-            {eyebrowState === "success-partial" &&
-              "Demo content seeded with warnings."}
-            {eyebrowState === "error" && "Couldn't seed demo content."}
+            {HEADINGS[eyebrowState]}
           </h2>
         </div>
 
-        {eyebrowState !== "seeding" && (
+        {/* Only where declining is still a choice. Mid-seed there is nothing
+            to decline, and after a success Continue is the way on -- a skip
+            there would record the offer as declined after it was accepted. */}
+        {(status.kind === "idle" || status.kind === "error") && (
           <button
             type="button"
-            onClick={skip}
+            onClick={onSkip}
             aria-label="Skip seeding"
-            className="rounded-md h-8 w-8 flex items-center justify-center text-primary/20 hover:text-primary hover:bg-primary/5 opacity-0 group-hover/card:opacity-100 transition-all duration-500"
+            // Revealed on keyboard focus as well as on hover: a control that
+            // appears only under a pointer is invisible to a reader who tabs
+            // onto it.
+            className="rounded-md h-8 w-8 flex items-center justify-center text-primary/20 hover:text-primary focus-visible:text-primary hover:bg-primary/5 opacity-0 group-hover/card:opacity-100 focus-visible:opacity-100 transition-all duration-500"
           >
             <X className="h-4 w-4" />
           </button>
@@ -125,21 +240,11 @@ export function SeedDemoContentCard() {
               explore how everything fits together. You can delete it later.
             </p>
             <div className="flex flex-wrap items-center gap-x-6 gap-y-3 pt-1">
-              <button
-                type="button"
-                onClick={startSeed}
-                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-xs font-bold tracking-[0.05em] text-primary-foreground hover:bg-primary/85 hover:-translate-y-0.5 transition-all"
-              >
+              <PrimaryAction onClick={onSeed}>
                 Seed demo content
                 <span aria-hidden="true">→</span>
-              </button>
-              <button
-                type="button"
-                onClick={skip}
-                className="text-xs font-semibold tracking-[0.04em] text-muted-foreground underline underline-offset-4 decoration-1 decoration-muted-foreground/30 hover:text-foreground hover:decoration-foreground"
-              >
-                Skip — I&rsquo;ll add my own content
-              </button>
+              </PrimaryAction>
+              <SkipAction onClick={onSkip} />
             </div>
           </>
         )}
@@ -162,88 +267,7 @@ export function SeedDemoContentCard() {
         )}
 
         {status.kind === "success" && (
-          <>
-            <div className="flex flex-wrap gap-2">
-              {status.result.summary.rolesCreated > 0 && (
-                <StatChip
-                  count={status.result.summary.rolesCreated}
-                  label="Roles"
-                />
-              )}
-              {status.result.summary.usersCreated > 0 && (
-                <StatChip
-                  count={status.result.summary.usersCreated}
-                  label="Users"
-                />
-              )}
-              {status.result.summary.categoriesCreated > 0 && (
-                <StatChip
-                  count={status.result.summary.categoriesCreated}
-                  label="Categories"
-                />
-              )}
-              {status.result.summary.tagsCreated > 0 && (
-                <StatChip
-                  count={status.result.summary.tagsCreated}
-                  label="Tags"
-                />
-              )}
-              {status.result.summary.postsCreated > 0 && (
-                <StatChip
-                  count={status.result.summary.postsCreated}
-                  label="Posts"
-                />
-              )}
-              {status.result.summary.mediaUploaded +
-                status.result.summary.mediaSkipped >
-                0 && (
-                <StatChip
-                  count={`${status.result.summary.mediaUploaded}/${
-                    status.result.summary.mediaUploaded +
-                    status.result.summary.mediaSkipped
-                  }`}
-                  label="Media"
-                  tone={
-                    status.result.summary.mediaSkipped > 0
-                      ? "warning"
-                      : "neutral"
-                  }
-                />
-              )}
-            </div>
-
-            {status.result.warnings.length > 0 && (
-              <details className="text-sm text-muted-foreground max-w-xl group/warnings">
-                <summary className="cursor-pointer text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors">
-                  View {status.result.warnings.length} warning
-                  {status.result.warnings.length === 1 ? "" : "s"} →
-                </summary>
-                <ul className="mt-3 font-mono text-xs text-muted-foreground space-y-1 pl-4 border-l border-border">
-                  {status.result.warnings.map((w, i) => (
-                    <li key={i}>{w}</li>
-                  ))}
-                </ul>
-              </details>
-            )}
-
-            <p className="text-sm text-muted-foreground max-w-xl">
-              Visit your{" "}
-              <a
-                href="/"
-                className="font-bold text-foreground underline underline-offset-4 decoration-foreground/30 hover:decoration-foreground"
-              >
-                site
-              </a>{" "}
-              or browse{" "}
-              <a
-                href="/admin/collections/posts"
-                className="font-bold text-foreground underline underline-offset-4 decoration-foreground/30 hover:decoration-foreground"
-              >
-                posts in admin
-              </a>
-              .
-            </p>
-          </>
+          <SeededSummary result={status.result} onContinue={onContinue} />
         )}
 
         {status.kind === "error" && (
@@ -256,21 +280,11 @@ export function SeedDemoContentCard() {
               {status.message}
             </div>
             <div className="flex flex-wrap items-center gap-x-6 gap-y-3 pt-1">
-              <button
-                type="button"
-                onClick={startSeed}
-                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-xs font-bold tracking-[0.05em] text-primary-foreground hover:bg-primary/85 hover:-translate-y-0.5 transition-all"
-              >
+              <PrimaryAction onClick={onSeed}>
                 <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
                 Retry seed
-              </button>
-              <button
-                type="button"
-                onClick={skip}
-                className="text-xs font-semibold tracking-[0.04em] text-muted-foreground underline underline-offset-4 decoration-1 decoration-muted-foreground/30 hover:text-foreground hover:decoration-foreground"
-              >
-                Skip — I&rsquo;ll add my own content
-              </button>
+              </PrimaryAction>
+              <SkipAction onClick={onSkip} />
             </div>
           </>
         )}
