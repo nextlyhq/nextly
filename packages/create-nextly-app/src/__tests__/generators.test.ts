@@ -255,7 +255,7 @@ describe("generateAdminPage", () => {
 
     const [pagePath] = mockWriteFile.mock.calls[0];
     expect(posix(pagePath)).toContain("app/admin/[[...params]]/page.tsx");
-    expect(pagePath).not.toContain("src/app");
+    expect(posix(pagePath)).not.toContain("src/app");
 
     // Without src/, config import should be 3 levels up
     const [, layoutContent] = mockWriteFile.mock.calls[1];
@@ -671,7 +671,7 @@ describe("generateTypesDirectory", () => {
 
     const ensureDirPath = mockEnsureDir.mock.calls[0][0];
     expect(posix(ensureDirPath)).toContain("types/generated");
-    expect(ensureDirPath).not.toContain("src/types");
+    expect(posix(ensureDirPath)).not.toContain("src/types");
   });
 
   it("should not overwrite existing files", async () => {
