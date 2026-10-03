@@ -3,8 +3,12 @@
 import type React from "react";
 import { useEffect } from "react";
 
+import { PageErrorFallback } from "@admin/components/shared/error-fallbacks/PageErrorFallback";
 import { ROUTES } from "@admin/constants/routes";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import { navigateTo } from "@admin/lib/navigation";
 
 interface BuilderGuardProps {
@@ -21,13 +25,16 @@ interface BuilderGuardProps {
  *
  * The server refuses the schema writes regardless; this is about not showing a
  * page whose every action would fail.
+ *
+ * The page is shown only on the server's explicit `true`. `showBuilder` is
+ * `undefined` in three cases that look alike here: the answer is in flight,
+ * the session has not settled so the request has not started, and the request
+ * failed. None of them says the builder is on, so none of them shows it.
  */
 export function BuilderGuard({ children }: BuilderGuardProps) {
-  const branding = useBranding();
-  // `undefined` means admin-meta is still in flight, not that the builder is
-  // off — redirecting then would bounce people out of a legitimate page during
-  // the load gap. Only an explicit `false` from the server is a decision.
-  const isDisabled = branding.showBuilder === false;
+  const { showBuilder } = useBranding();
+  const { isPending } = useBrandingStatus();
+  const isDisabled = showBuilder === false;
 
   useEffect(() => {
     if (isDisabled) {
@@ -37,5 +44,27 @@ export function BuilderGuard({ children }: BuilderGuardProps) {
 
   if (isDisabled) return null;
 
-  return <>{children}</>;
+  if (showBuilder === true) return <>{children}</>;
+
+  // The empty themed container `PrivateRoute` and `PublicRoute` hold a visit
+  // on. It is sized to the content area, since the dashboard's frame is
+  // already on screen around it.
+  if (isPending) {
+    return (
+      <div
+        data-slot="builder-guard-pending"
+        aria-busy="true"
+        className="min-h-[60vh] bg-background"
+      />
+    );
+  }
+
+  // Settled with no answer. Redirecting would read a failed request as "the
+  // builder is off", which nothing said either.
+  return (
+    <PageErrorFallback
+      title="The schema builder could not be loaded"
+      description="The admin could not find out whether the schema builder is available on this server. Reload the page to try again."
+    />
+  );
 }
