@@ -85,6 +85,10 @@ const NO_EXTERNAL_DEPS = [
   "@shadcn/ui",
 ];
 
+// A probe, not for merging: every build of the admin comes out in development
+// mode unless the caller sets a mode of its own.
+process.env.NODE_ENV ??= "development";
+
 export default defineConfig(options => [
   // Main admin bundle - ESM only due to top-level await in Lexical
   // Note: CSS is built separately by scripts/build-css.mjs using Tailwind CLI
