@@ -36,14 +36,14 @@ jobs:
       # The change, with its whole history so both ends of its range are
       # present. Nothing from it runs.
       - name: Checkout the change
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'merge_group' && github.ref || format('refs/pull/{0}/head', github.event.pull_request.number) }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Checkout the checker from main
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.repository.default_branch }}
           path: trusted
