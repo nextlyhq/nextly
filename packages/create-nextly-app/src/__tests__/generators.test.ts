@@ -13,6 +13,9 @@ import { generateRoutes } from "../generators/routes";
 import { generateTypesDirectory } from "../generators/types";
 import type { ProjectInfo, DatabaseConfig } from "../types";
 
+/** A path in `/` form, so expectations written with `/` hold on Windows too, where `path.join` gives `\\`. */
+const posix = (p: unknown) => String(p).replaceAll("\\", "/");
+
 // Mock fs-extra
 vi.mock("fs-extra", () => ({
   default: {
@@ -140,7 +143,7 @@ describe("generateRoutes", () => {
     expect(mockWriteFile).toHaveBeenCalledTimes(1);
 
     const [path, content] = mockWriteFile.mock.calls[0];
-    expect(path).toContain("src/app/admin/api/[[...params]]/route.ts");
+    expect(posix(path)).toContain("src/app/admin/api/[[...params]]/route.ts");
     expect(content).toContain(
       'import { createDynamicHandlers } from "nextly/runtime"'
     );
@@ -166,8 +169,8 @@ describe("generateRoutes", () => {
     await generateRoutes("/test/project", projectInfo);
 
     const [path] = mockWriteFile.mock.calls[0];
-    expect(path).toContain("app/admin/api/[[...params]]/route.ts");
-    expect(path).not.toContain("src/app");
+    expect(posix(path)).toContain("app/admin/api/[[...params]]/route.ts");
+    expect(posix(path)).not.toContain("src/app");
   });
 
   it("should throw error if route already exists", async () => {
@@ -215,7 +218,7 @@ describe("generateAdminPage", () => {
 
     // Check page.tsx
     const [pagePath, pageContent] = mockWriteFile.mock.calls[0];
-    expect(pagePath).toContain("src/app/admin/[[...params]]/page.tsx");
+    expect(posix(pagePath)).toContain("src/app/admin/[[...params]]/page.tsx");
     expect(pageContent).toContain('"use client"');
     expect(pageContent).toContain('import "@nextlyhq/admin/style.css"');
     expect(pageContent).toContain(
@@ -225,7 +228,9 @@ describe("generateAdminPage", () => {
 
     // Check layout.tsx
     const [layoutPath, layoutContent] = mockWriteFile.mock.calls[1];
-    expect(layoutPath).toContain("src/app/admin/[[...params]]/layout.tsx");
+    expect(posix(layoutPath)).toContain(
+      "src/app/admin/[[...params]]/layout.tsx"
+    );
     expect(layoutContent).toContain(
       'import { getBrandingCss } from "nextly/config"'
     );
@@ -249,7 +254,7 @@ describe("generateAdminPage", () => {
     await generateAdminPage("/test/project", projectInfo);
 
     const [pagePath] = mockWriteFile.mock.calls[0];
-    expect(pagePath).toContain("app/admin/[[...params]]/page.tsx");
+    expect(posix(pagePath)).toContain("app/admin/[[...params]]/page.tsx");
     expect(pagePath).not.toContain("src/app");
 
     // Without src/, config import should be 3 levels up
@@ -637,7 +642,7 @@ describe("generateTypesDirectory", () => {
 
     expect(mockEnsureDir).toHaveBeenCalled();
     const ensureDirPath = mockEnsureDir.mock.calls[0][0];
-    expect(ensureDirPath).toContain("src/types/generated");
+    expect(posix(ensureDirPath)).toContain("src/types/generated");
 
     // Should create .gitkeep and placeholder
     expect(mockWriteFile).toHaveBeenCalledTimes(2);
@@ -665,7 +670,7 @@ describe("generateTypesDirectory", () => {
     await generateTypesDirectory("/test/project", projectInfo);
 
     const ensureDirPath = mockEnsureDir.mock.calls[0][0];
-    expect(ensureDirPath).toContain("types/generated");
+    expect(posix(ensureDirPath)).toContain("types/generated");
     expect(ensureDirPath).not.toContain("src/types");
   });
 
