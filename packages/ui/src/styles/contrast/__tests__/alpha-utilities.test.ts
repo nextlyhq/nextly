@@ -12,7 +12,7 @@
  * in a scanned call-site package invalidates the cached result. It is a
  * supplementary call-site guard for text, border, and ring color utilities.
  */
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,11 +57,14 @@ const repo = resolve(here, "../../../../../..");
  * empty string, and every assertion here reads emptiness as "no violations".
  */
 function scanTracked(pattern: string, paths: readonly string[]): string {
-  const listed = execSync(`git ls-files -z -- ${paths.join(" ")}`, {
-    cwd: repo,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  // Listed by git directly, each directory as a glob pathspec, so no shell has
+  // to expand `packages/*/src`: `cmd.exe`, which runs `execSync` on Windows,
+  // leaves it literal, and git then lists nothing.
+  const listed = execFileSync(
+    "git",
+    ["ls-files", "-z", "--", ...paths.map(path => `:(glob)${path}/**`)],
+    { cwd: repo, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+  );
   const tracked = listed.split("\0").filter(Boolean);
   if (tracked.length === 0) {
     throw new Error(`no tracked files under: ${paths.join(", ")}`);
