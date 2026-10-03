@@ -92,8 +92,10 @@ function scanTracked(pattern: string, paths: readonly string[]): string {
   // Running grep directly also keeps the pattern away from a shell, so a
   // backslash in it means what the regex means.
   const found: string[] = [];
-  for (let from = 0; from < files.length; from += FILES_PER_GREP) {
-    const batch = files.slice(from, from + FILES_PER_GREP);
+  for (const batch of batchesWithin(
+    files,
+    GREP_COMMAND_LINE_BUDGET - pattern.length
+  )) {
     try {
       found.push(
         execFileSync("grep", ["-HoE", pattern, ...batch], {
@@ -113,13 +115,33 @@ function scanTracked(pattern: string, paths: readonly string[]): string {
 }
 
 /**
- * How many paths one `grep` is given.
+ * The most characters of paths one `grep` is given.
  *
- * Small enough to stay well inside the argument-length limit on every platform
- * this runs on, large enough that the repository is a handful of invocations
- * rather than hundreds.
+ * Measured in characters rather than files: Windows caps a command line at
+ * 32,767 characters, and 500 paths there passed it (`spawnSync grep
+ * ENAMETOOLONG`). This leaves room for the pattern and the program, on every
+ * platform, while the repository is still a handful of invocations rather than
+ * hundreds.
  */
-const FILES_PER_GREP = 500;
+const GREP_COMMAND_LINE_BUDGET = 24_000;
+
+/** The files in order, split so that each batch's paths, with a space each, fit the budget. */
+function batchesWithin(files: string[], budget: number): string[][] {
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let used = 0;
+  for (const file of files) {
+    if (batch.length > 0 && used + file.length + 1 > budget) {
+      batches.push(batch);
+      batch = [];
+      used = 0;
+    }
+    batch.push(file);
+    used += file.length + 1;
+  }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
+}
 
 const css = readFileSync(resolve(here, "../../theme.css"), "utf8");
 const { light, dark } = parseThemeTokens(css);
