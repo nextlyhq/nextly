@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -364,7 +365,8 @@ describe("buildBlockManifestArtifact", () => {
       "/app/src/nextly-types.ts"
     );
 
-    expect(artifact?.path).toBe(`/app/src/${BLOCK_MANIFEST_FILENAME}`);
+    // Built as the artifact builds it, so the separator is the platform's.
+    expect(artifact?.path).toBe(join("/app/src", BLOCK_MANIFEST_FILENAME));
     expect(artifact?.code.endsWith("\n")).toBe(true);
     expect(JSON.parse(String(artifact?.code)).blocks).toHaveLength(1);
   });
