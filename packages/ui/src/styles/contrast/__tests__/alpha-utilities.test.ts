@@ -48,9 +48,10 @@ const repo = resolve(here, "../../../../../..");
  * 🔴 The FILE LIST comes from git and the matching does not. `git grep` has its
  * own engine and does not accept `\b`, so switching to it silently matched
  * NOTHING — measured, 0 hits against 466 for the same pattern — and an empty
- * scan is what a clean repository looks like here. The same `grep -E` runs, on
- * a narrower set, so every pattern in this file keeps the meaning it was
- * written with; verified equal on a clean tree, 61 hits either way.
+ * scan is what a clean repository looks like here. The matching is Node's own
+ * `RegExp`, in which every pattern in this file means what it means as an ERE:
+ * on a clean tree its output equals `grep -HoE`'s byte for byte, 60, 129 and 1
+ * hits for the three scans here (2026-10-03).
  *
  * An EMPTY file list throws rather than returning nothing. A pathspec that
  * matches no tracked file and a repository with no violations produce the same
@@ -81,69 +82,20 @@ function scanTracked(pattern: string, paths: readonly string[]): string {
   // catches a pathspec that names nothing at all.
   const files = tracked.filter(file => existsSync(resolve(repo, file)));
 
-  // Batched and invoked DIRECTLY rather than piped through `xargs`, so each
-  // grep's own status is read.
-  //
-  // 🔴 `xargs` collapses them: it exits 123 when ANY invocation exited 1-125,
-  // so one batch with no match makes the whole pipeline look like a failure
-  // while the others were producing hits. Treating that as "nothing found"
-  // discards every match they made — and an empty scan is exactly what a clean
-  // repository looks like here, so the assertions would pass having examined
-  // nothing. Measured on this tree: five grep invocations for the repo-wide
-  // scan, so a silent batch is ordinary rather than hypothetical.
-  //
-  // Running grep directly also keeps the pattern away from a shell, so a
-  // backslash in it means what the regex means.
+  // Matched in Node, line by line, each match reported as `file:match` as
+  // `grep -HoE` reported it. No external `grep`: on Windows, Git's MSYS `grep`
+  // returned no match at all for these patterns, and a long file list passed
+  // the command line's length limit.
+  const regex = new RegExp(pattern, "g");
   const found: string[] = [];
-  for (const batch of batchesWithin(
-    files,
-    GREP_COMMAND_LINE_BUDGET - pattern.length
-  )) {
-    try {
-      found.push(
-        execFileSync("grep", ["-HoE", pattern, ...batch], {
-          cwd: repo,
-          encoding: "utf8",
-          maxBuffer: 64 * 1024 * 1024,
-        })
-      );
-    } catch (error) {
-      // 1 is "no lines selected" for THIS batch and says nothing about the
-      // others. Anything else is a real failure and must not read as silence.
-      if ((error as { status?: number }).status === 1) continue;
-      throw error;
+  for (const file of files) {
+    for (const line of readFileSync(resolve(repo, file), "utf8").split("\n")) {
+      for (const match of line.matchAll(regex)) {
+        found.push(`${file}:${match[0]}\n`);
+      }
     }
   }
   return found.join("");
-}
-
-/**
- * The most characters of paths one `grep` is given.
- *
- * Measured in characters rather than files: Windows caps a command line at
- * 32,767 characters, and 500 paths there passed it (`spawnSync grep
- * ENAMETOOLONG`). This leaves room for the pattern and the program, on every
- * platform, while the repository is still a handful of invocations rather than
- * hundreds.
- */
-const GREP_COMMAND_LINE_BUDGET = 24_000;
-
-/** The files in order, split so that each batch's paths, with a space each, fit the budget. */
-function batchesWithin(files: string[], budget: number): string[][] {
-  const batches: string[][] = [];
-  let batch: string[] = [];
-  let used = 0;
-  for (const file of files) {
-    if (batch.length > 0 && used + file.length + 1 > budget) {
-      batches.push(batch);
-      batch = [];
-      used = 0;
-    }
-    batch.push(file);
-    used += file.length + 1;
-  }
-  if (batch.length > 0) batches.push(batch);
-  return batches;
 }
 
 const css = readFileSync(resolve(here, "../../theme.css"), "utf8");
@@ -762,6 +714,10 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
       const pkg = /(?:^|\/)packages\/([^/]+)\/src\//.exec(path)?.[1];
       if (pkg) used.add(pkg);
     }
+    // An empty scan would satisfy every check below, and on Windows it once
+    // did: the repository uses these utilities, so finding none means the scan
+    // read nothing.
+    expect(used.size).toBeGreaterThan(0);
     const scanned = new Set(
       SCANNED_DIRS.map(d => /packages\/([^/]+)\/src/.exec(d)?.[1])
     );
@@ -771,8 +727,8 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
         `package "${p}" uses alpha color utilities but is not in SCANNED_DIRS`
       ).toBe(true);
     }
-    // A whole-monorepo `grep` in a subprocess, so the budget is I/O rather than
-    // work this test controls. Vitest's 5s default left it about twice its own
+    // A whole-monorepo scan of every tracked source file, so the budget is I/O
+    // rather than work this test controls. Vitest's 5s default left it about twice its own
     // measured runtime, which any parallel suite on the same machine can take
     // away; stated explicitly so a slower neighbour reads as a slower neighbour
     // rather than as this scan failing.
