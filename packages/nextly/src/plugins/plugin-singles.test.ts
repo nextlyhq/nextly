@@ -408,10 +408,15 @@ describe("what a listed field publishes", () => {
   }
 
   it("carries only the declared members, not everything the registry stored", async () => {
-    // `pluginOptions` is documented on `PluginFieldInput` as "Options belonging
-    // to the field's own plugin type". Publishing it here hands one plugin's
-    // configuration to a different one, and `admin` and `required` are simply
-    // more than this surface declares.
+    // Two kinds of key and the split is the point. `required` DESCRIBES the
+    // value, so it is published: a consumer deciding whether it may omit a
+    // field needs it, and withholding it was the same omission that lost a
+    // select's options and a relationship's target.
+    //
+    // `admin` and `pluginOptions` are neither. One is how the field renders,
+    // and the other is documented as "Options belonging to the field's own
+    // plugin type" — publishing it hands one plugin's configuration to a
+    // different one.
     const published = await listFirstField({
       name: "title",
       type: "text",
@@ -420,7 +425,7 @@ describe("what a listed field publishes", () => {
       pluginOptions: { apiKey: "private" },
     });
 
-    expect(Object.keys(published).sort()).toEqual(["name", "type"]);
+    expect(Object.keys(published).sort()).toEqual(["name", "required", "type"]);
   });
 
   it("omits an absent name rather than writing the key as undefined", async () => {
