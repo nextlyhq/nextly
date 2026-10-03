@@ -12,7 +12,7 @@
  * in a scanned call-site package invalidates the cached result. It is a
  * supplementary call-site guard for text, border, and ring color utilities.
  */
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,11 +57,14 @@ const repo = resolve(here, "../../../../../..");
  * empty string, and every assertion here reads emptiness as "no violations".
  */
 function scanTracked(pattern: string, paths: readonly string[]): string {
-  const listed = execSync(`git ls-files -z -- ${paths.join(" ")}`, {
-    cwd: repo,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  // Listed by git directly, each directory as a glob pathspec, so no shell has
+  // to expand `packages/*/src`: `cmd.exe`, which runs `execSync` on Windows,
+  // leaves it literal, and git then lists nothing.
+  const listed = execFileSync(
+    "git",
+    ["ls-files", "-z", "--", ...paths.map(path => `:(glob)${path}/**`)],
+    { cwd: repo, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+  );
   const tracked = listed.split("\0").filter(Boolean);
   if (tracked.length === 0) {
     throw new Error(`no tracked files under: ${paths.join(", ")}`);
@@ -92,8 +95,10 @@ function scanTracked(pattern: string, paths: readonly string[]): string {
   // Running grep directly also keeps the pattern away from a shell, so a
   // backslash in it means what the regex means.
   const found: string[] = [];
-  for (let from = 0; from < files.length; from += FILES_PER_GREP) {
-    const batch = files.slice(from, from + FILES_PER_GREP);
+  for (const batch of batchesWithin(
+    files,
+    GREP_COMMAND_LINE_BUDGET - pattern.length
+  )) {
     try {
       found.push(
         execFileSync("grep", ["-HoE", pattern, ...batch], {
@@ -113,13 +118,33 @@ function scanTracked(pattern: string, paths: readonly string[]): string {
 }
 
 /**
- * How many paths one `grep` is given.
+ * The most characters of paths one `grep` is given.
  *
- * Small enough to stay well inside the argument-length limit on every platform
- * this runs on, large enough that the repository is a handful of invocations
- * rather than hundreds.
+ * Measured in characters rather than files: Windows caps a command line at
+ * 32,767 characters, and 500 paths there passed it (`spawnSync grep
+ * ENAMETOOLONG`). This leaves room for the pattern and the program, on every
+ * platform, while the repository is still a handful of invocations rather than
+ * hundreds.
  */
-const FILES_PER_GREP = 500;
+const GREP_COMMAND_LINE_BUDGET = 24_000;
+
+/** The files in order, split so that each batch's paths, with a space each, fit the budget. */
+function batchesWithin(files: string[], budget: number): string[][] {
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let used = 0;
+  for (const file of files) {
+    if (batch.length > 0 && used + file.length + 1 > budget) {
+      batches.push(batch);
+      batch = [];
+      used = 0;
+    }
+    batch.push(file);
+    used += file.length + 1;
+  }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
+}
 
 const css = readFileSync(resolve(here, "../../theme.css"), "utf8");
 const { light, dark } = parseThemeTokens(css);
