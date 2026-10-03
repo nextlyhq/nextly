@@ -7,8 +7,8 @@ import { expect, test } from "@playwright/test";
  * The admin learns that from a request it makes after sign-in, and the visit
  * must end on the dashboard without the builder's page having been drawn in
  * the gap. On a fast machine the gap is a frame or two, which a test would
- * pass or fail by luck, so this holds the server's answer back long enough for
- * the page to load and draw if anything let it.
+ * pass or fail by luck, so this holds the server's answer until the guard has
+ * rendered without it, and only then lets it through.
  *
  * Only the production suite can ask this: under `next dev` the builder is on,
  * and the page is supposed to show.
@@ -18,11 +18,14 @@ import { expect, test } from "@playwright/test";
 
 const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
-/** The page this opens is a dialog, so one attached under a builder address is the builder. */
-const BUILDER_ADDRESS = "/admin/builder/collections/new";
-
-/** Long enough for the builder's lazy page to load and open its dialog. */
-const ANSWER_HELD_MS = 3_000;
+/**
+ * The builder's collections list. Its page is imported with the route table,
+ * not lazily, so a guard that lets it through draws it in the same render:
+ * there is no chunk to wait for, and so no delay that is long enough on one
+ * machine and too short on another. Its heading is the only `h1` that can be
+ * in `main` under a builder address while the answer is held.
+ */
+const BUILDER_ADDRESS = "/admin/builder/collections";
 
 declare global {
   interface Window {
@@ -53,28 +56,35 @@ test.describe("a builder address where the builder is off", () => {
       new MutationObserver(() => {
         const underBuilder =
           window.location.pathname.startsWith("/admin/builder");
-        if (underBuilder && document.querySelector('[role="dialog"]')) {
+        if (underBuilder && document.querySelector("main h1")) {
           window.reportBuilderDrawn?.();
         }
       }).observe(document, { childList: true, subtree: true });
     });
 
+    // Held until this test lets it through, rather than for a fixed time.
+    let releaseAnswer = () => {};
+    const answerReleased = new Promise<void>(resolve => {
+      releaseAnswer = resolve;
+    });
     let answersHeld = 0;
     await page.route("**/admin/api/admin-meta/workspace", async route => {
       answersHeld += 1;
-      await new Promise(resolve => setTimeout(resolve, ANSWER_HELD_MS));
+      await answerReleased;
       await route.continue();
     });
 
     await page.goto(BUILDER_ADDRESS);
 
-    // The guard's own waiting state, so the gap below is known to have been
-    // spent waiting on the answer rather than on a page that never loaded.
-    // Soft, so a run that fails here still reports whether the builder drew.
+    // The guard's own waiting state: once it is on screen the guard has
+    // rendered with no answer, which is the moment a guard that showed the
+    // page would have drawn it. Soft, so a run that fails here still goes on
+    // to report whether the builder drew.
     await expect
       .soft(page.locator('[data-slot="builder-guard-pending"]'))
       .toBeVisible();
 
+    releaseAnswer();
     await page.waitForURL(url => url.pathname === "/admin");
     await expect(page.locator("main")).toBeVisible();
 
