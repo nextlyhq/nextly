@@ -1,5 +1,24 @@
 # playground
 
+## 0.1.2-alpha.11
+
+### Patch Changes
+
+- Updated dependencies [[`ce962c7`](https://github.com/nextlyhq/nextly/commit/ce962c7c0eda26659674261f544ea545e48afa2e), [`c753694`](https://github.com/nextlyhq/nextly/commit/c7536940991ac40a815df4b08202ce135b508881), [`14f98f7`](https://github.com/nextlyhq/nextly/commit/14f98f7c1d0444330509289895c22140b82a2425), [`285b88b`](https://github.com/nextlyhq/nextly/commit/285b88bde0f5ac2690eb98041d70910ca33f5fba), [`9225d83`](https://github.com/nextlyhq/nextly/commit/9225d83bcf412df81cda8b841fceb3725e13c6d6), [`04ac714`](https://github.com/nextlyhq/nextly/commit/04ac7145684096ed3887fe6c2faf0dffb740f5b0), [`7b578bf`](https://github.com/nextlyhq/nextly/commit/7b578bfefda0e48bcff3d1cccce2d6fbb15097aa), [`95a3318`](https://github.com/nextlyhq/nextly/commit/95a3318f5278a49fb82a5fa4ccd3093ef8f75ae8), [`109ff0a`](https://github.com/nextlyhq/nextly/commit/109ff0ac4fe2f3b238c7afcf7e47068eb892f3bd)]:
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.67
+  - @nextlyhq/adapter-mysql@0.0.2-alpha.67
+  - @nextlyhq/adapter-postgres@0.0.2-alpha.67
+  - @nextlyhq/adapter-sqlite@0.0.2-alpha.67
+  - @nextlyhq/admin@0.0.2-alpha.67
+  - @nextlyhq/blocks-engine@0.0.2-alpha.67
+  - @nextlyhq/blocks-react@0.0.2-alpha.67
+  - @nextlyhq/builder@0.0.2-alpha.67
+  - nextly@0.0.2-alpha.67
+  - @nextlyhq/plugin-form-builder@0.0.2-alpha.67
+  - @nextlyhq/plugin-page-builder@0.0.2-alpha.67
+  - @nextlyhq/plugin-sdk@0.0.2-alpha.67
+  - @nextlyhq/ui@0.0.2-alpha.67
+
 ## 0.1.2-alpha.10
 
 ### Patch Changes
