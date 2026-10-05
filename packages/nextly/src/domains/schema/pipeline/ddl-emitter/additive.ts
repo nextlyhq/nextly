@@ -26,7 +26,10 @@
 import { NextlyError } from "../../../../errors";
 import { isPreResolutionOp } from "../diff/types";
 import type { IndexSpec, Operation, TableSpec } from "../diff/types";
+import { createIndexSql } from "../sql-templates/create-index";
+import { columnDefinition } from "../sql-templates/create-table-body";
 
+import { createTableStatement, tableIndexStatements } from "./create-table";
 import { quoteIdent, quoteIdentMysql } from "./identifiers";
 
 export type AdditiveDialect = "sqlite" | "mysql";
@@ -37,92 +40,17 @@ function quote(identifier: string, dialect: AdditiveDialect): string {
     : quoteIdent(identifier);
 }
 
-// Render a single CREATE [UNIQUE] INDEX statement. SQLite supports
-// IF NOT EXISTS on CREATE INDEX; MySQL 8 does not, so it emits the plain
-// form — the diff only plans add_index when the live table lacks it, so a
-// duplicate-name failure means the diff and the DB genuinely disagree and
-// should surface loudly.
+// Render a single CREATE [UNIQUE] INDEX statement through the shared
+// renderer, which owns IF NOT EXISTS (SQLite yes, MySQL has no such form),
+// predicates, expressions and MySQL's TEXT/BLOB key prefix.
 function createIndexStatement(
   tableName: string,
   index: IndexSpec,
-  dialect: AdditiveDialect,
-  // Column types, when the caller knows them (an `add_table` carries its own
-  // column list). MySQL refuses to index a TEXT/BLOB column without a key
-  // length, so those are indexed by prefix — 191 characters, the same bound
-  // the Builder's DDL uses: the longest prefix that fits InnoDB's 767-byte
-  // index limit under utf8mb4 on every row format. Absent types mean the
-  // caller could not know them, and routing keeps such an apply away from
-  // this emitter on MySQL rather than guessing.
-  //
-  // The prefix is only safe because routing also keeps UNIQUE indexes on
-  // those columns away: on a unique index the prefix would constrain the
-  // data, rejecting rows that differ only past character 191. Non-unique
-  // indexes just index less of the value, which is the intended behavior.
-  columnTypes?: ReadonlyMap<string, string>
+  dialect: AdditiveDialect
 ): string {
-  const cols = index.columns
-    .map(c => {
-      const quoted = quote(c, dialect);
-      if (dialect !== "mysql") return quoted;
-      const type = columnTypes?.get(c);
-      return type && /\b(text|blob)\b/i.test(type) ? `${quoted}(191)` : quoted;
-    })
-    .join(", ");
-  const ifNotExists = dialect === "sqlite" ? "IF NOT EXISTS " : "";
-  return (
-    `CREATE ${index.unique ? "UNIQUE " : ""}INDEX ${ifNotExists}` +
-    `${quote(index.name, dialect)} ON ${quote(tableName, dialect)} (${cols})`
+  return createIndexSql(tableName, index, dialect, name =>
+    quote(name, dialect)
   );
-}
-
-// Render the column tail shared by ADD COLUMN and CREATE TABLE column
-// lists: `<type> [NOT NULL] [DEFAULT <expr>]`. `type` and `default` are
-// dialect-ready tokens produced by diff/build-from-fields.ts (SQLite and
-// MySQL both accept them verbatim — `text`, `integer`, `varchar(255)`,
-// `'draft'`, `0`).
-function columnTail(col: {
-  type: string;
-  nullable: boolean;
-  default?: string;
-}): string {
-  let s = col.type;
-  if (col.nullable === false) s += " NOT NULL";
-  if (col.default !== undefined) s += ` DEFAULT ${col.default}`;
-  return s;
-}
-
-// Render one CREATE TABLE column expression. `<type> PRIMARY KEY NOT NULL`
-// matches the wire form the wizard/DDL services emit (`text ...` on SQLite,
-// `varchar(36) ...` on MySQL), keeping kit re-introspection diff-free
-// afterwards; a default on the key column is rendered rather than dropped.
-// Which column is the key is decided by the caller — see `primaryKeyOf`.
-function createTableColumn(
-  col: { name: string; type: string; nullable: boolean; default?: string },
-  dialect: AdditiveDialect,
-  isPrimaryKey: boolean
-): string {
-  if (isPrimaryKey) {
-    const def = col.default !== undefined ? ` DEFAULT ${col.default}` : "";
-    return `${quote(col.name, dialect)} ${col.type} PRIMARY KEY NOT NULL${def}`;
-  }
-  return `${quote(col.name, dialect)} ${columnTail(col)}`;
-}
-
-// The name of the table's primary-key column, from the spec's `primaryKey`
-// flag — the column descriptor owns that decision, so reading it here keeps
-// a key named something other than `id` from silently losing its PRIMARY
-// KEY, and a user field named `id` from accidentally becoming one.
-//
-// Specs written before the flag existed leave it undefined throughout (the
-// same vintage as the absent-`indexes` sentinel handled below). Only for
-// those does the historical `id` convention still decide, so an older
-// snapshot cannot produce a table with no primary key at all.
-function primaryKeyOf(spec: TableSpec): string | null {
-  const declared = spec.columns.find(c => c.primaryKey === true);
-  if (declared) return declared.name;
-  const anyDeclared = spec.columns.some(c => c.primaryKey !== undefined);
-  if (anyDeclared) return null;
-  return spec.columns.some(c => c.name === "id") ? "id" : null;
 }
 
 // Emit Nextly's canonical secondary indexes for a managed table when the
@@ -154,6 +82,25 @@ function createTableCanonicalIndexes(
   return stmts;
 }
 
+/**
+ * A new table: its CREATE statement, then its indexes. Where its checks and
+ * foreign keys go is `createTableStatement`'s to say.
+ */
+function createTableStatements(
+  table: TableSpec,
+  dialect: AdditiveDialect
+): string[] {
+  const q = (name: string) => quote(name, dialect);
+  const createTable = createTableStatement(table, dialect, q);
+  // Render the table's tracked indexes; fall back to the canonical
+  // slug/created_at pair when the snapshot predates index tracking.
+  const indexStmts =
+    table.indexes !== undefined
+      ? tableIndexStatements(table, dialect, q)
+      : createTableCanonicalIndexes(table, dialect);
+  return [createTable, ...indexStmts];
+}
+
 export function emitAdditiveDdl(
   op: Operation,
   dialect: AdditiveDialect
@@ -180,29 +127,11 @@ export function emitAdditiveDdl(
     case "add_column":
       return [
         `ALTER TABLE ${quote(op.tableName, dialect)} ADD COLUMN ` +
-          `${quote(op.column.name, dialect)} ${columnTail(op.column)}`,
+          columnDefinition(op.column, name => quote(name, dialect)),
       ];
 
-    case "add_table": {
-      const pkName = primaryKeyOf(op.table);
-      const cols = op.table.columns.map(c =>
-        createTableColumn(c, dialect, c.name === pkName)
-      );
-      const createTable = `CREATE TABLE ${quote(op.table.name, dialect)} (\n  ${cols.join(",\n  ")}\n)`;
-      // The table's own columns answer MySQL's key-length question for its
-      // indexes; a standalone add_index has no such list, which is why
-      // routing keeps those off this emitter there.
-      const columnTypes = new Map(op.table.columns.map(c => [c.name, c.type]));
-      // Render the table's tracked indexes; fall back to the canonical
-      // slug/created_at pair when the snapshot predates index tracking.
-      const indexStmts =
-        op.table.indexes !== undefined
-          ? op.table.indexes.map(i =>
-              createIndexStatement(op.table.name, i, dialect, columnTypes)
-            )
-          : createTableCanonicalIndexes(op.table, dialect);
-      return [createTable, ...indexStmts];
-    }
+    case "add_table":
+      return createTableStatements(op.table, dialect);
 
     case "add_index":
       return [createIndexStatement(op.tableName, op.index, dialect)];
@@ -220,11 +149,16 @@ export function emitAdditiveDdl(
     case "change_column_nullable":
     case "change_column_default":
     case "change_foreign_key_action":
+    case "add_check":
+    case "add_foreign_key":
+    case "drop_check":
+    case "drop_foreign_key":
       // Not emittable on SQLite (table rebuild) / MySQL (full MODIFY
       // definition) — canEmitWithoutDrizzleKit routes these to drizzle-kit.
       // A referential-action change is not additive either: it drops a live
       // constraint before redeclaring it, so it never belongs in the pass that
-      // only adds things.
+      // only adds things. Check DDL alters a live constraint for the same
+      // reason, and the apply routes it through the statement templates.
       throw NextlyError.internal({
         logContext: {
           reason: "op-not-additive-emittable",

@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
+import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import { createLogger } from "../../utils/logger";
 import { migrateCore } from "../migrate";
 
 function deps(over: Record<string, unknown> = {}) {
   return {
+    extensionSchema: undefined,
     dialect: "postgresql" as const,
     // Answers the catalog probe the way a database with no field-group
     // registry does. Inert would let the resolution throw, and this orchestration
@@ -17,6 +20,7 @@ function deps(over: Record<string, unknown> = {}) {
     lockMode: "fail-fast" as const,
     reconcileCoreFn: vi.fn(async () => ({ changed: false })),
     runFileMigrationsFn: vi.fn(async () => 0),
+    syncElementOwnersFn: vi.fn(async () => {}),
     reconcileMetadataFn: vi.fn(async () => ({
       collectionsRegistered: 0,
       singlesRegistered: 0,
@@ -240,5 +244,102 @@ describe("migrateCore", () => {
     const passed = (d.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as Record<string, unknown>;
     expect(passed.tableExists).toBeUndefined();
+  });
+});
+
+describe("the extension schema migrateCore is handed", () => {
+  // Handed, not read from the process-wide active schema — which only a
+  // server boot publishes, so a CLI run saw none and both checks below
+  // silently did nothing. No active schema is set anywhere in this file.
+  const pluginSchema = () =>
+    buildExtensionSchema({
+      dialect: "postgresql",
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [
+        {
+          owner: { kind: "plugin", id: "fx" },
+          tables: [defineTable("notes", { id: col.id() })],
+        },
+      ],
+    });
+
+  it("refuses a plugin table with no migrations before anything runs", async () => {
+    const d = deps({ extensionSchema: await pluginSchema() });
+    await expect(migrateCore(d as never)).rejects.toMatchObject({
+      code: "PLUGIN_MIGRATIONS_UNAVAILABLE",
+    });
+    expect(d.reconcileCoreFn).not.toHaveBeenCalled();
+    expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a plugin that only contributes an element and ships no migrations", async () => {
+    // It owns no table, so a table-only check let it through, and its column
+    // reached development through push and production never.
+    const d = deps({
+      extensionSchema: await buildExtensionSchema({
+        dialect: "postgresql",
+        coreTableNames: [],
+        entities: [],
+        pluginPrefixes: new Map([
+          ["host", "host"],
+          ["contrib", "contrib"],
+        ]),
+        dependencies: new Map([["contrib", new Set(["host"])]]),
+        plugins: [
+          {
+            owner: { kind: "plugin", id: "host" },
+            tables: [defineTable("items", { id: col.id() })],
+          },
+          {
+            owner: { kind: "plugin", id: "contrib" },
+            extend: [
+              ({ schema }) => {
+                schema.extendTable("host__items", {
+                  columns: { extra: col.shortText({ nullable: true }) },
+                });
+              },
+            ],
+          },
+        ],
+      }),
+      // The table's owner ships migrations; the contributor does not.
+      pluginsWithMigrations: new Set(["host"]),
+    });
+    await expect(migrateCore(d as never)).rejects.toMatchObject({
+      code: "PLUGIN_MIGRATIONS_UNAVAILABLE",
+    });
+    expect(d.reconcileCoreFn).not.toHaveBeenCalled();
+  });
+
+  it("lets the same table through when its plugin ships migrations", async () => {
+    const d = deps({
+      extensionSchema: await pluginSchema(),
+      pluginsWithMigrations: new Set(["fx"]),
+      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
+    });
+    await expect(migrateCore(d as never)).resolves.toBeDefined();
+  });
+});
+
+describe("element owner rows", () => {
+  it("are synced after the app's files apply, never before", async () => {
+    // A row must exist exactly when its element does: recorded before the
+    // app's files, it named an element not yet created; retired before them,
+    // it could strip one a pending drop still expects.
+    const order: string[] = [];
+    const d = deps({
+      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
+      runFileMigrationsFn: vi.fn(async () => {
+        order.push("files");
+        return 0;
+      }),
+      syncElementOwnersFn: vi.fn(async () => {
+        order.push("owners");
+      }),
+    });
+    await migrateCore(d as never);
+    expect(order).toEqual(["files", "owners"]);
   });
 });

@@ -64,10 +64,10 @@ const globalForBoot = globalThis as unknown as {
  * The blocks of the booted config this store republishes, WHOLE.
  *
  * An earlier version kept entity SLUGS only, reasoning that the permission fold
- * was the sole reader. It is not: `getHandlerConfig()` has six readers, and one
- * hands its result to `runProdMigrationsIfEnabled`, whose `resolveDeclaredSchema`
- * reads `dbName` and a relationship's `junctionTable`. Projecting those away
- * made drift verification look for a table that never existed.
+ * was the sole reader. It is not: `getHandlerConfig()` has several readers, and
+ * a reader resolving a table name needs the definition's `dbName` and a
+ * relationship's `junctionTable`. Projecting those away made one of them look
+ * for a table that never existed.
  *
  * So what is bounded here is WHICH blocks travel, never how much of each. The
  * bound is type compatibility and the compiler checks it: the transformed
@@ -505,24 +505,14 @@ async function initializeServicesOnce(): Promise<void> {
     const { runBootTimeApplyIfDev } = await import("../init/boot-apply");
     await runBootTimeApplyIfDev({ caller: "auth-handler" });
 
-    // Production sibling: apply committed migrations on boot when opted in
-    // (db.runMigrationsOnBoot). No-op in dev. Failure-safe.
-    const handlerConfig = getHandlerConfig();
-    if (handlerConfig) {
-      const { runProdMigrationsIfEnabled } = await import(
-        "../init/prod-migrations"
-      );
-      await runProdMigrationsIfEnabled({
-        config: handlerConfig,
-        adapter: getService("adapter"),
-        logger: {
-          info: m => console.log(m),
-          warn: m => console.warn(m),
-          error: m => console.error(m),
-          debug: m => console.debug(m),
-        },
-      });
-    }
+    // No production migration call here. `registerServices` above already ran
+    // them — before any plugin initialised, from the `db` block
+    // `requestPathServiceConfig` forwards and the schema the boot actually runs
+    // (transformed plugins, folded entities, deferred Builder extends). A
+    // second run from this store would compile a narrower schema than the one
+    // just applied, and the instrumentation boot (`getNextly`) makes no such
+    // second call, so both boot paths apply migrations exactly once, the same
+    // way.
 
     // Open the HMR listener so live edits to nextly.config.ts during a
     // running dev session reach reloadNextlyConfig(). Without this, only

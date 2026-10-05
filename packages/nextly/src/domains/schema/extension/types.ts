@@ -1,0 +1,176 @@
+/**
+ * The dialect-neutral description of a table a plugin or app adds.
+ *
+ * Deliberately limited to the column kinds the collection pipeline already
+ * renders on all three dialects, so a declaration is portable by construction:
+ * what cannot be expressed here cannot drift between dialects. A plugin author
+ * working on Postgres therefore cannot express a table that fails only once
+ * somebody deploys it on MySQL.
+ *
+ * Kept free of Drizzle imports on purpose. This is the model every consumer
+ * agrees on — the diff engine, the runtime registry and the migration
+ * generator — and a Drizzle type reaching in here would make one of them the
+ * privileged reader.
+ *
+ * @module domains/schema/extension/types
+ * @since 1.0.0
+ */
+import type { ForeignKeySpec } from "../pipeline/diff/types";
+import type { ColumnKind } from "../services/field-column-descriptor";
+
+import type { TableRelationInput } from "./dsl";
+
+/**
+ * The kinds an extension column may take.
+ *
+ * `skip` and `fkSingle` are excluded because neither is a thing an author
+ * declares: `skip` means a field stores its values in another table, and
+ * `fkSingle` is emitted by the relation machinery rather than written down.
+ */
+export type ExtensionColumnKind = Exclude<ColumnKind, "skip" | "fkSingle">;
+
+/**
+ * A default no dialect stores literally, filled in per dialect at compile time.
+ *
+ * `now` becomes that dialect's current-timestamp expression.
+ */
+export interface DefaultToken {
+  token: "now";
+}
+
+export interface ExtensionColumn {
+  /** Property name as authored (camelCase allowed); `name` is the SQL column. */
+  key: string;
+  name: string;
+  kind: ExtensionColumnKind;
+  nullable: boolean;
+  primaryKey?: boolean;
+  /**
+   * A literal default, or a portable token.
+   *
+   * The token is TAGGED rather than spelled as a magic string, because a magic
+   * string cannot be told apart from a value: `"now"` is a perfectly ordinary
+   * default for a text column, and an untagged union would render it as
+   * CURRENT_TIMESTAMP. The tag makes the two representable at once.
+   */
+  default?: string | number | boolean | DefaultToken;
+  generated?: "uuidv7";
+  /**
+   * The values an `enum` column permits.
+   *
+   * Carried to the compiler because the constraint that enforces them is
+   * derived here: an enum is stored as text and constrained by a CHECK, which
+   * is the one mechanism all three dialects have. Declared and never read,
+   * the values reached no spec and the column was text with nothing stopping
+   * any string going into it.
+   */
+  enumValues?: readonly string[];
+  /**
+   * The name of the CHECK the values become, in place of the column's.
+   *
+   * Scoped per table: the constraint is named `ck_<table>_<enumName>`,
+   * shortened with a hash when longer than 63 characters, exactly as a
+   * declared check's name is. MySQL requires check names to be unique across
+   * the schema, so a name used verbatim could not be shared between tables.
+   */
+  enumName?: string;
+  /**
+   * Refreshed on every update, as a portable token.
+   *
+   * Written here rather than left to the caller because an `updated_at` that
+   * only some writers remember to set is worse than none: it reads as accurate.
+   */
+  onUpdate?: "now";
+  length?: number;
+  precision?: number;
+  scale?: number;
+  /**
+   * Whether this column is hidden from the entry API.
+   *
+   * True for a column added to a table its owner did not declare — an entity
+   * or an extendable core table. An entity read is `db.select().from(table)`,
+   * so an unhidden extension column would appear in every REST response,
+   * every Direct API read, every version and every webhook payload; and
+   * keeping it out of the runtime table instead would make the next dev push
+   * propose DROPPING it.
+   *
+   * Hiding it at the row mapper is the only place both problems are solved at
+   * once: the column exists everywhere the schema machinery looks, and
+   * nowhere an entry is produced.
+   */
+  hidden?: boolean;
+
+  /**
+   * Who CONTRIBUTED this hidden column to a table another owner declared —
+   * set only for foreign-table contributions, and what the per-element owner
+   * rows are written from.
+   */
+  contributedBy?: SchemaOwner;
+
+  /**
+   * Documentation-only target of a reference column.
+   *
+   * Never a database constraint: `IndexSpec` cannot express a foreign key and
+   * the Drizzle round-trip drops one, so emitting it would produce a constraint
+   * the diff engine could neither see nor drop. Part C adds real FKs.
+   */
+  references?: string;
+}
+
+/** A foreign key as DECLARED: its name is derived at compile time from the final table name unless given. */
+export interface DeclaredForeignKey extends Omit<ForeignKeySpec, "name"> {
+  name?: string;
+}
+
+/** A check as DECLARED: the compile step derives the ck_<table>_<name> form. */
+export interface DeclaredCheck {
+  /** The author’s semantic name, not the final SQL constraint name. */
+  name: string;
+  sql: string;
+}
+
+export interface ExtensionIndex {
+  /** SQL column names. Order is significant — it decides left-prefix lookups. */
+  columns: string[];
+  unique: boolean;
+  /** Optional explicit name; otherwise derived with the portable index-name rules. */
+  name?: string;
+  /**
+   * Partial-index predicate. Refused at declaration on every extension table,
+   * because MySQL has none and declarations are checked for all dialects.
+   */
+  where?: string;
+  /** Expression index: per-dialect SQL in place of columns. */
+  expression?: string;
+  /**
+   * Who CONTRIBUTED this element to a table somebody else owns — set only
+   * for app-contributed indexes on plugin tables, and what the per-element
+   * owner rows are written from.
+   */
+  contributedBy?: SchemaOwner;
+}
+
+/** Who added a table or index, recorded on every one of them. */
+export type SchemaOwner = { kind: "plugin"; id: string } | { kind: "app" };
+
+export interface ExtensionTable {
+  /** Final SQL table name (prefix applied for plugins). */
+  name: string;
+  /**
+   * The name as the author wrote it, before any prefix.
+   *
+   * Recorded rather than recovered by splitting the SQL name on the
+   * separator: that split is a PROXY for the naming rules, and a proxy that
+   * disagrees with them fails on exactly the tables it was written for.
+   */
+  authored: string;
+  owner: SchemaOwner;
+  columns: ExtensionColumn[];
+  indexes: ExtensionIndex[];
+  /** Foreign keys declared with the table; undefined = none declared. */
+  foreignKeys?: DeclaredForeignKey[];
+  /** Check constraints declared with the table; undefined = none declared. */
+  checks?: DeclaredCheck[];
+  /** Relation edges declared with the table; undefined = none declared. */
+  relations?: TableRelationInput[];
+}

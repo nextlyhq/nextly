@@ -70,6 +70,7 @@ import * as net from "node:net";
 
 import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 // F17: connect-time DB version check shared across all adapters.
+import { assertSchemaName } from "@nextlyhq/adapter-drizzle/schema-name";
 import type {
   PostgresAdapterConfig,
   DatabaseCapabilities,
@@ -408,6 +409,15 @@ export class PostgresAdapter extends DrizzleAdapter {
         const client = await this.pool.connect();
         try {
           await client.query("SELECT 1");
+          // Before anything writes. `search_path` naming a schema that is not
+          // there does not fail — it falls through to whatever else is on the
+          // path — so the first migration would create its tables in `public`
+          // and the setting would appear to do nothing.
+          if (this.config.schema) {
+            await client.query(
+              `CREATE SCHEMA IF NOT EXISTS ${assertSchemaName(this.config.schema)}`
+            );
+          }
           await checkDialectVersion(client, "postgresql", {
             // Why: route any future variant warnings through the adapter's
             // logger. PG has no recognized variants today, but this keeps
@@ -684,6 +694,21 @@ export class PostgresAdapter extends DrizzleAdapter {
   }
 
   /**
+   * The schema set as `search_path` on every pooled connection.
+   *
+   * @remarks
+   * Answers with the same test `buildPoolConfig` applies, so an empty string
+   * reports `undefined` exactly as it sets no `search_path`: the value
+   * reported is the one the connections actually use.
+   *
+   * @returns The configured schema, or `undefined` when the server's default
+   *   `search_path` applies
+   */
+  getConfiguredSchema(): string | undefined {
+    return this.config.schema ? this.config.schema : undefined;
+  }
+
+  /**
    * Returns connection pool statistics.
    *
    * @returns Pool stats or null if not connected
@@ -882,6 +907,19 @@ export class PostgresAdapter extends DrizzleAdapter {
       config.application_name = this.config.applicationName;
     }
 
+    // The schema every unqualified name resolves in, set as a STARTUP option
+    // rather than by issuing `SET search_path`. A SET belongs to whichever
+    // pooled connection ran it, so the next checkout would see the default
+    // again — and the query that noticed would be whichever one happened to
+    // land on a fresh connection, which is the least reproducible failure
+    // this setting could have.
+    //
+    // Validated before it gets here: the value is interpolated, and a startup
+    // option is not a place to discover that it needed quoting.
+    if (this.config.schema) {
+      config.options = `-c search_path=${assertSchemaName(this.config.schema)}`;
+    }
+
     // User config beats provider default; both beat "unset".
     // Why: provider.ts:58 declared a Neon statementTimeoutMs default but the
     // adapter previously ignored it, leaving stuck queries to pin pool slots
@@ -971,10 +1009,13 @@ export class PostgresAdapter extends DrizzleAdapter {
     // rows. getDrizzle() wraps the pool, which would use a different connection.
     // Built lazily and memoized: transactions that use only raw execute/insert
     // never construct it.
-    const buildTxExecutor = () => drizzle({ client });
-    let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
-    const txDb = () => (txExecutor ??= buildTxExecutor());
+    const txHandles = this.transactionDrizzleHandles(relations =>
+      relations ? drizzle({ client, relations }) : drizzle({ client })
+    );
+    const txDb = txHandles.bare;
     return {
+      ...txHandles.context,
+
       execute: async <T = unknown>(
         sql: string,
         params: SqlParam[] = []

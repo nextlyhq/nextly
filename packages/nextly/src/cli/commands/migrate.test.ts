@@ -5,7 +5,13 @@
 // now pins the command registration surface.
 
 import { Command } from "commander";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import { executeTransaction } from "../../domains/schema/migrate/migration-transaction";
+import {
+  assertRunnableStatements,
+  statementRefusals,
+} from "../../domains/schema/migrate/split-sql";
 
 import { registerMigrateCommand, splitSqlStatements } from "./migrate";
 
@@ -334,5 +340,388 @@ describe("a doubled delimiter escapes the delimiter, it does not end the literal
     // adjacent to another would swallow the boundary between two statements.
     const sql = `INSERT INTO "t" ("d") VALUES ('a');INSERT INTO "t" ("d") VALUES ('b');`;
     expect(splitSqlStatements(sql, "postgresql")).toHaveLength(2);
+  });
+
+  it("keeps every statement with text outside its comments, whatever its keyword", () => {
+    const sql = [
+      `CALL cleanup_plugin_data();`,
+      `COMMENT ON TABLE "t" IS 'drop; me';`,
+      `DO 'noop';`,
+      `-- a trailing note, not a statement`,
+    ].join("\n");
+    const statements = splitSqlStatements(sql, "postgresql");
+    expect(statements).toEqual([
+      "CALL cleanup_plugin_data()",
+      `COMMENT ON TABLE "t" IS 'drop; me'`,
+      "DO 'noop'",
+    ]);
+  });
+
+  it("drops a fragment that is only comments", () => {
+    const sql = `CREATE TABLE "a" ("id" TEXT);\n/* closing note */\n-- and another`;
+    expect(splitSqlStatements(sql, "postgresql")).toEqual([
+      `CREATE TABLE "a" ("id" TEXT)`,
+    ]);
+  });
+
+  it("leaves a file's own transaction brackets to the runner's transaction", () => {
+    const sql = [
+      `BEGIN;`,
+      `ALTER TABLE "t" ADD COLUMN "a" TEXT;`,
+      `COMMIT;`,
+      `START TRANSACTION;`,
+      `ALTER TABLE "t" ADD COLUMN "b" TEXT;`,
+      `END TRANSACTION;`,
+    ].join("\n");
+    expect(splitSqlStatements(sql, "postgresql")).toEqual([
+      `ALTER TABLE "t" ADD COLUMN "a" TEXT`,
+      `ALTER TABLE "t" ADD COLUMN "b" TEXT`,
+    ]);
+  });
+
+  it("keeps a statement that would undo or split the runner's transaction, for the runner to refuse", () => {
+    // Splitting never refuses: a dry run splits to preview, and must not
+    // throw. The refusal is `statementRefusals`', below.
+    expect(
+      splitSqlStatements(
+        `ALTER TABLE "t" ADD COLUMN "a" TEXT;\nROLLBACK;\nSAVEPOINT s1;`
+      )
+    ).toEqual([
+      `ALTER TABLE "t" ADD COLUMN "a" TEXT`,
+      "ROLLBACK",
+      "SAVEPOINT s1",
+    ]);
+  });
+
+  it.each([
+    ["sqlite", "BEGIN IMMEDIATE TRANSACTION"],
+    ["sqlite", "BEGIN EXCLUSIVE"],
+    ["sqlite", "BEGIN DEFERRED"],
+    ["postgresql", "BEGIN ISOLATION LEVEL SERIALIZABLE"],
+    ["postgresql", "BEGIN WORK READ WRITE"],
+    ["postgresql", "START TRANSACTION ISOLATION LEVEL REPEATABLE READ"],
+    ["mysql", "START TRANSACTION READ WRITE"],
+    ["mysql", "START TRANSACTION WITH CONSISTENT SNAPSHOT"],
+    ["mysql", "COMMIT WORK AND NO CHAIN"],
+    ["postgresql", "/* opens */ BEGIN"],
+  ] as const)(
+    "leaves out %s's transaction bracket `%s`",
+    (dialect, bracket) => {
+      expect(
+        splitSqlStatements(
+          `${bracket};\nALTER TABLE t ADD COLUMN a TEXT;\nCOMMIT;`,
+          dialect
+        )
+      ).toEqual(["ALTER TABLE t ADD COLUMN a TEXT"]);
+    }
+  );
+
+  it("keeps a PostgreSQL dollar-quoted body whole, whatever it holds", () => {
+    const body = `DO $$\nBEGIN\n  UPDATE "t" SET "a" = 'x;y';\n  IF true THEN RAISE NOTICE 'done'; END IF;\nEND\n$$`;
+    const fn = `CREATE FUNCTION f() RETURNS trigger AS $fn$ BEGIN NEW.a := 1; RETURN NEW; END $fn$ LANGUAGE plpgsql`;
+    expect(
+      splitSqlStatements(`${body};\n${fn};\nSELECT 1;`, "postgresql")
+    ).toEqual([body, fn, "SELECT 1"]);
+  });
+
+  it("does not read a dollar sign inside a name as a body", () => {
+    // `a$b$` continues a word, and `$1` is a parameter: neither opens a body.
+    expect(
+      splitSqlStatements(`SELECT a$b$c FROM t;SELECT $1;`, "postgresql")
+    ).toEqual(["SELECT a$b$c FROM t", "SELECT $1"]);
+  });
+  it("keeps a line beginning -- that closes a block comment", () => {
+    // The `--` is inside the block comment; the `*/` after it ends that
+    // comment, and the statement after it is SQL. (No DDL keyword on the
+    // line, which would keep it for another reason.)
+    const sql = `/* a note\n-- */ SELECT 1;\nSELECT 2;`;
+    expect(splitSqlStatements(sql, "postgresql")).toEqual([
+      `/* a note\n-- */ SELECT 1`,
+      "SELECT 2",
+    ]);
+  });
+
+  it("does not strip a breakpoint marker inside a block comment", () => {
+    const sql = `/* x;--> statement-breakpoint */ SELECT 1;`;
+    expect(splitSqlStatements(sql, "postgresql")).toEqual([
+      "/* x;--> statement-breakpoint */ SELECT 1",
+    ]);
+  });
+
+  it("reads MySQL's # comments and keeps its versioned comments", () => {
+    const sql = [
+      "/*!40000 ALTER TABLE `t` DISABLE KEYS */;",
+      "ALTER TABLE `t` ADD COLUMN `a` TEXT; # adds a; not a statement",
+      "# a closing note",
+    ].join("\n");
+    expect(splitSqlStatements(sql, "mysql")).toEqual([
+      "/*!40000 ALTER TABLE `t` DISABLE KEYS */",
+      "ALTER TABLE `t` ADD COLUMN `a` TEXT",
+    ]);
+  });
+});
+
+describe("routine and trigger bodies", () => {
+  const sqliteTrigger = [
+    "CREATE TRIGGER fx_touch AFTER UPDATE ON fx__notes FOR EACH ROW",
+    "BEGIN",
+    "  UPDATE fx__notes SET updated = CASE WHEN NEW.a > 0 THEN 1 ELSE 0 END WHERE id = NEW.id;",
+    "  INSERT INTO fx__log (id) VALUES (NEW.id);",
+    "END",
+  ].join("\n");
+  const mysqlProcedure = [
+    "CREATE DEFINER = `root`@`%` PROCEDURE fx_cleanup(IN n INT)",
+    "BEGIN",
+    "  DECLARE done INT DEFAULT 0;",
+    "  IF n > 0 THEN",
+    "    DELETE FROM fx__notes WHERE id < n;",
+    "  END IF;",
+    "  lbl: LOOP",
+    "    SET done = done + 1;",
+    "    IF done > 3 THEN LEAVE lbl; END IF;",
+    "  END LOOP lbl;",
+    "  CASE n WHEN 1 THEN SET done = 0; ELSE SET done = 1; END CASE;",
+    "  BEGIN",
+    "    SELECT 1;",
+    "  END;",
+    "END",
+  ].join("\n");
+  const postgresAtomic = [
+    "CREATE FUNCTION fx_count() RETURNS bigint LANGUAGE sql",
+    "BEGIN ATOMIC",
+    "  SELECT count(*) FROM fx__notes;",
+    "END",
+  ].join("\n");
+
+  it.each([
+    ["sqlite", sqliteTrigger],
+    ["mysql", mysqlProcedure],
+    ["postgresql", postgresAtomic],
+  ] as const)(
+    "keeps a %s body whole, END included, and splits after it",
+    (dialect, routine) => {
+      expect(
+        splitSqlStatements(`SELECT 0;\n${routine};\nSELECT 1;`, dialect)
+      ).toEqual(["SELECT 0", routine, "SELECT 1"]);
+    }
+  );
+
+  it("reads a column called begin or end as a name, not a block keyword", () => {
+    const trigger = [
+      "CREATE TRIGGER fx_span AFTER UPDATE ON fx__spans FOR EACH ROW",
+      "BEGIN",
+      "  UPDATE fx__log SET begin = NEW.begin, finish = NEW.end WHERE id = OLD.id;",
+      "  INSERT INTO fx__log (id, begin) SELECT NEW.id, NEW.begin;",
+      "END",
+    ].join("\n");
+    expect(splitSqlStatements(`${trigger};\nSELECT 1;`, "sqlite")).toEqual([
+      trigger,
+      "SELECT 1",
+    ]);
+  });
+
+  it("still splits a MySQL trigger whose body is one statement, with no BEGIN", () => {
+    const trigger =
+      "CREATE TRIGGER fx_bi BEFORE INSERT ON fx__notes FOR EACH ROW SET NEW.a = 1";
+    expect(splitSqlStatements(`${trigger};\nSELECT 1;`, "mysql")).toEqual([
+      trigger,
+      "SELECT 1",
+    ]);
+  });
+
+  it("reads BEGIN and END as nesting only in a routine or trigger definition", () => {
+    // Anywhere else a leading BEGIN/END is a transaction bracket and a `;`
+    // ends the statement.
+    expect(
+      splitSqlStatements(
+        "BEGIN;\nUPDATE t SET a = CASE WHEN b THEN 1 END;\nEND;",
+        "sqlite"
+      )
+    ).toEqual(["UPDATE t SET a = CASE WHEN b THEN 1 END"]);
+  });
+});
+
+describe("statementRefusals", () => {
+  it.each([
+    ["postgresql", "ROLLBACK", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    ["postgresql", "ABORT", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    ["postgresql", "SAVEPOINT s1", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    ["mysql", "RELEASE SAVEPOINT s1", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    ["postgresql", "COMMIT PREPARED 'x'", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    [
+      "postgresql",
+      "PREPARE TRANSACTION 'x'",
+      "TRANSACTION_CONTROL_IN_MIGRATION",
+    ],
+    ["mysql", "XA START 'x'", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    ["mysql", "SET FOREIGN_KEY_CHECKS = 0", "SESSION_SETTING_IN_MIGRATION"],
+    [
+      "mysql",
+      "/*!40014 SET FOREIGN_KEY_CHECKS=0 */",
+      "SESSION_SETTING_IN_MIGRATION",
+    ],
+    ["mysql", "SET SESSION sql_mode = ''", "SESSION_SETTING_IN_MIGRATION"],
+    [
+      "mysql",
+      "SET @@session.time_zone = '+00:00'",
+      "SESSION_SETTING_IN_MIGRATION",
+    ],
+    ["postgresql", "SET search_path TO other", "SESSION_SETTING_IN_MIGRATION"],
+    [
+      "postgresql",
+      "SET SESSION statement_timeout = 0",
+      "SESSION_SETTING_IN_MIGRATION",
+    ],
+    ["postgresql", "RESET ALL", "SESSION_SETTING_IN_MIGRATION"],
+    ["postgresql", "VACUUM ANALYZE t", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+    [
+      "postgresql",
+      "CREATE INDEX CONCURRENTLY i ON t (a)",
+      "NOT_TRANSACTIONAL_IN_MIGRATION",
+    ],
+    [
+      "postgresql",
+      "CREATE UNIQUE INDEX CONCURRENTLY i ON t (a)",
+      "NOT_TRANSACTIONAL_IN_MIGRATION",
+    ],
+    [
+      "postgresql",
+      "DROP INDEX CONCURRENTLY i",
+      "NOT_TRANSACTIONAL_IN_MIGRATION",
+    ],
+    [
+      "postgresql",
+      "REINDEX (CONCURRENTLY) TABLE t",
+      "NOT_TRANSACTIONAL_IN_MIGRATION",
+    ],
+    ["postgresql", "CREATE DATABASE other", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+    [
+      "postgresql",
+      "ALTER SYSTEM SET work_mem = '64MB'",
+      "NOT_TRANSACTIONAL_IN_MIGRATION",
+    ],
+    ["sqlite", "VACUUM", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+    ["sqlite", "ATTACH DATABASE 'x.db' AS x", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+    ["mysql", "LOCK TABLES t WRITE", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+    ["mysql", "UNLOCK TABLES", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+  ] as const)("refuses on %s: %s", (dialect, statement, code) => {
+    expect(statementRefusals([statement], dialect).map(r => r.code)).toEqual([
+      code,
+    ]);
+    expect(() =>
+      assertRunnableStatements([statement], dialect, "0001_x.sql")
+    ).toThrow(/0001_x\.sql was refused/);
+  });
+
+  it("names the statement and what to write instead", () => {
+    const [fk] = statementRefusals(
+      ["/*!40014 SET FOREIGN_KEY_CHECKS=0 */"],
+      "mysql"
+    );
+    expect(fk?.message).toContain('"/*!40014 SET FOREIGN_KEY_CHECKS=0 */"');
+    expect(fk?.message).toContain("(FOREIGN_KEY_CHECKS)");
+    expect(fk?.message).toMatch(/drop the foreign key and add it back/);
+
+    const [path] = statementRefusals(
+      ["SET SESSION search_path TO other"],
+      "postgresql"
+    );
+    expect(path?.message).toContain('"SET SESSION search_path TO other"');
+    expect(path?.message).toContain("SET LOCAL search_path");
+
+    const [rollback] = statementRefusals(["ROLLBACK TO s1"], "postgresql");
+    expect(rollback?.message).toContain('"ROLLBACK TO s1"');
+  });
+
+  it.each([
+    ["postgresql", "SET LOCAL search_path TO other"],
+    ["postgresql", "SET CONSTRAINTS ALL DEFERRED"],
+    ["postgresql", "CREATE INDEX i ON t (a)"],
+    ["postgresql", "ALTER TYPE mood ADD VALUE 'meh'"],
+    ["postgresql", "COMMENT ON TABLE t IS 'VACUUM me'"],
+    ["postgresql", "DO $$ BEGIN ROLLBACK; END $$"],
+    ["postgresql", `ALTER TABLE "t" ADD COLUMN "a" TEXT`],
+    ["mysql", "SET @renamed = 1"],
+    ["mysql", "/*!40000 ALTER TABLE `t` DISABLE KEYS */"],
+    ["sqlite", "PRAGMA foreign_keys = OFF"],
+    ["sqlite", "UPDATE t SET a = 1"],
+  ] as const)("allows on %s: %s", (dialect, statement) => {
+    // The control: statements a migration may hold, through the same check.
+    expect(statementRefusals([statement], dialect)).toEqual([]);
+  });
+});
+
+describe("executeTransaction", () => {
+  /**
+   * A pooled adapter in miniature: `executeQuery` takes whichever pooled
+   * connection is free, `transaction` reserves one for its callback.
+   */
+  function pooledAdapter() {
+    const calls: string[] = [];
+    const adapter = {
+      getCapabilities: () => ({ dialect: "postgresql" }),
+      executeQuery: vi.fn(async (statement: string) => {
+        calls.push(`pool: ${statement}`);
+        return [];
+      }),
+      transaction: async <T>(
+        work: (ctx: {
+          execute: (statement: string) => Promise<unknown[]>;
+          drizzle: () => unknown;
+        }) => Promise<T>
+      ): Promise<T> => {
+        calls.push("reserved: BEGIN");
+        try {
+          const result = await work({
+            execute: async statement => {
+              calls.push(`reserved: ${statement}`);
+              return [];
+            },
+            drizzle: () => "reserved-handle",
+          });
+          calls.push("reserved: COMMIT");
+          return result;
+        } catch (error) {
+          calls.push("reserved: ROLLBACK");
+          throw error;
+        }
+      },
+    };
+    return { adapter, calls };
+  }
+
+  it("runs every statement, and hands out the handle, on the reserved connection", async () => {
+    // Sent through `executeQuery`, BEGIN, the statements and COMMIT could each
+    // land on a different pooled connection, and nothing would be atomic.
+    const { adapter, calls } = pooledAdapter();
+    let handle: unknown;
+    await executeTransaction(adapter as never, async tx => {
+      await tx.execute("CREATE TABLE a (id int)");
+      await tx.execute("CREATE TABLE b (id int)");
+      handle = tx.db;
+    });
+    expect(calls).toEqual([
+      "reserved: BEGIN",
+      "reserved: CREATE TABLE a (id int)",
+      "reserved: CREATE TABLE b (id int)",
+      "reserved: COMMIT",
+    ]);
+    expect(handle).toBe("reserved-handle");
+    expect(adapter.executeQuery).not.toHaveBeenCalled();
+  });
+
+  it("rolls back on the same connection when a statement fails", async () => {
+    const { adapter, calls } = pooledAdapter();
+    await expect(
+      executeTransaction(adapter as never, async tx => {
+        await tx.execute("CREATE TABLE a (id int)");
+        throw new Error("second statement failed");
+      })
+    ).rejects.toThrow("second statement failed");
+    expect(calls).toEqual([
+      "reserved: BEGIN",
+      "reserved: CREATE TABLE a (id int)",
+      "reserved: ROLLBACK",
+    ]);
   });
 });

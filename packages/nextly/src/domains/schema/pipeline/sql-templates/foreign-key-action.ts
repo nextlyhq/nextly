@@ -114,12 +114,19 @@ export function changeForeignKeyActionSql(
  * Shared because the three dispatchers spelled the identical block, and a
  * message that drifts between them is a message that names the wrong function.
  */
-export function unsupportedOperation(generator: string, op: never): never {
+export function unsupportedOperation(
+  generator: string,
+  // `{ type }` rather than `never`: `never` stays assignable (the default
+  // branches keep their exhaustiveness guarantee), and a dialect can refuse
+  // an op EXPLICITLY — SQLite and in-place constraint DDL — without hand-
+  // rolling its own error.
+  op: { type: string }
+): never {
   throw NextlyError.internal({
     logContext: {
       reason: "unsupported-sql-template-op",
       generator,
-      op: (op as { type: string }).type,
+      op: op.type,
     },
   });
 }

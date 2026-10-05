@@ -25,31 +25,15 @@ import {
   boolean,
   varchar,
   type AnyPgColumn,
+  type PgBuildExtraConfigColumns,
 } from "drizzle-orm/pg-core";
 
+import { MEDIA_INDEXES, pgIndexes } from "../_internal/core-indexes";
 import { users } from "../users/postgres";
 
-/**
- * Media table for storing uploaded files and images
- *
- * Supports various storage backends (Vercel Blob, S3, R2, local filesystem)
- * Stores file metadata in database, actual files in configured storage
- *
- * @example
- * const media = await db.insert(media).values({
- *   filename: 'abc123.png',
- *   originalFilename: 'profile-photo.png',
- *   mimeType: 'image/png',
- *   size: 102400,
- *   width: 1920,
- *   height: 1080,
- *   url: 'https://blob.vercel-storage.com/abc123.png',
- *   uploadedBy: userId,
- * });
- */
-export const media = pgTable(
-  "media",
-  {
+/** `media` columns, a fresh builder record per call (see `core-table-contributions`). */
+export function mediaColumns() {
+  return {
     id: text("id")
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
@@ -101,16 +85,42 @@ export const media = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: false })
       .defaultNow()
       .notNull(),
-  },
-  t => [
-    // Performance indexes for common queries
-    index("media_uploaded_by_idx").on(t.uploadedBy), // Filter by uploader
-    index("media_mime_type_idx").on(t.mimeType), // Filter by file type (image/*, video/*, etc.)
-    index("media_uploaded_at_idx").on(t.uploadedAt), // Sort by upload date
-    index("media_tags_idx").on(t.tags), // Search by tags
-    index("media_folder_id_idx").on(t.folderId), // Filter by folder
-  ]
-);
+  };
+}
+
+/** `media` indexes, from `MEDIA_INDEXES`. */
+export function mediaExtraConfig(
+  t: PgBuildExtraConfigColumns<ReturnType<typeof mediaColumns>>
+) {
+  return pgIndexes(
+    [
+      ...MEDIA_INDEXES,
+      // Search by tags.
+      { name: "media_tags_idx", columns: ["tags"] },
+    ] as const,
+    t
+  );
+}
+
+/**
+ * Media table for storing uploaded files and images
+ *
+ * Supports various storage backends (Vercel Blob, S3, R2, local filesystem)
+ * Stores file metadata in database, actual files in configured storage
+ *
+ * @example
+ * const media = await db.insert(media).values({
+ *   filename: 'abc123.png',
+ *   originalFilename: 'profile-photo.png',
+ *   mimeType: 'image/png',
+ *   size: 102400,
+ *   width: 1920,
+ *   height: 1080,
+ *   url: 'https://blob.vercel-storage.com/abc123.png',
+ *   uploadedBy: userId,
+ * });
+ */
+export const media = pgTable("media", mediaColumns(), mediaExtraConfig);
 
 /**
  * Media Folders table for organizing media files

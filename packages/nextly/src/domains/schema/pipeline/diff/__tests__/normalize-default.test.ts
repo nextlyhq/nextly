@@ -322,3 +322,80 @@ describe("normalizeDefault — MySQL equivalences", () => {
     expect(normalizeDefault("1")).toBe("1");
   });
 });
+
+describe("normalizeDefault — a numeric column's default is the number", () => {
+  // Each pair is the declared default and the column_default the server
+  // reported for it, recorded from PostgreSQL 17 (information_schema.columns)
+  // and MySQL 8.0.46 (SHOW CREATE TABLE, whose value information_schema
+  // reports unquoted).
+  it("reads PostgreSQL's quoted, cast negative number as the number", () => {
+    expect(normalizeDefault("'-1'::integer", "int4")).toBe(
+      normalizeDefault("-1", "int4")
+    );
+    expect(normalizeDefault("'-3'::integer", "int2")).toBe(
+      normalizeDefault("-3", "int2")
+    );
+    expect(normalizeDefault("'-1.5'::numeric", "numeric")).toBe(
+      normalizeDefault("-1.5", "numeric(10, 2)")
+    );
+    expect(normalizeDefault("'-2.5'::numeric", "float4")).toBe(
+      normalizeDefault("-2.5", "float4")
+    );
+    expect(normalizeDefault("'1000'::numeric", "int4")).toBe(
+      normalizeDefault("1e3", "int4")
+    );
+  });
+
+  it("reads MySQL's decimal padded to its scale as the number", () => {
+    expect(normalizeDefault("1.50", "decimal(10,2)")).toBe(
+      normalizeDefault("1.5", "decimal(10,2)")
+    );
+    expect(normalizeDefault("1.50", "numeric")).toBe(
+      normalizeDefault("1.5", "numeric(10, 2)")
+    );
+    // A qualified integer type is still numeric.
+    expect(normalizeDefault("'5'", "int unsigned")).toBe(
+      normalizeDefault("5", "int")
+    );
+  });
+
+  it("still tells different numbers apart", () => {
+    expect(normalizeDefault("1.50", "decimal(10,2)")).not.toBe(
+      normalizeDefault("1.05", "decimal(10,2)")
+    );
+    expect(normalizeDefault("'-1'::integer", "int4")).not.toBe(
+      normalizeDefault("1", "int4")
+    );
+    // Exact, not through a JavaScript number, which cannot tell these apart.
+    expect(normalizeDefault("0.10000000000000000001", "numeric")).not.toBe(
+      normalizeDefault("0.1", "numeric")
+    );
+  });
+
+  it("leaves a text column's numeric-looking strings as different strings", () => {
+    // The control: in a text column '1.50' and '1.5' are two values.
+    expect(normalizeDefault("'1.50'::text", "text")).not.toBe(
+      normalizeDefault("'1.5'", "text")
+    );
+  });
+});
+
+describe("normalizeDefault — MySQL's hex string default", () => {
+  it("reads the reported convert(0x...) as the CONVERT(X'...') written", () => {
+    // Written for a TEXT or JSON column, which MySQL accepts only as an
+    // expression default; SHOW CREATE TABLE on 8.0.46 reports
+    // `(convert(0x78 using utf8mb4))` for `(CONVERT(X'78' USING utf8mb4))`.
+    expect(normalizeDefault("(convert(0x78 using utf8mb4))", "text")).toBe(
+      normalizeDefault("(CONVERT(X'78' USING utf8mb4))", "text")
+    );
+    expect(normalizeDefault("(convert(0x7b7d using utf8mb4))", "json")).toBe(
+      normalizeDefault("(CONVERT(X'7B7D' USING utf8mb4))", "json")
+    );
+  });
+
+  it("still tells two different values apart", () => {
+    expect(normalizeDefault("(convert(0x79 using utf8mb4))", "text")).not.toBe(
+      normalizeDefault("(CONVERT(X'78' USING utf8mb4))", "text")
+    );
+  });
+});

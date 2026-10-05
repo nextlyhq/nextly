@@ -44,6 +44,8 @@ import {
 } from "../../../database/drizzle-kit-lazy";
 import { isMissingColumnError } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
+import { pluginMigratedTableSet } from "../ownership/drop-guard";
+import { activePostgresSchema } from "../services/postgres-schema";
 
 import { currentMysqlDatabaseName } from "./database-url";
 import {
@@ -145,7 +147,14 @@ async function applyPushResult(
 ): Promise<FreshPushResult> {
   const desiredTableNames = drizzleTableNames(schema);
   const pieces = splitStatements(result.sqlStatements);
-  const safe = filterUnsafeStatements(pieces, desiredTableNames);
+  // Plugin-migrated tables are never dropped by push, whatever the desired
+  // set says; an unreadable registry reads as "nothing claimed".
+  const safe = filterUnsafeStatements(
+    pieces,
+    desiredTableNames,
+    await pluginMigratedTableSet(db, dialect),
+    dialect
+  );
 
   // Boot-safety: strip (never execute) destructive statements the kit
   // emitted unexpectedly, and surface them via hints + warn. See the
@@ -222,7 +231,10 @@ async function pushForDialect(
       // fresh-push is create-only reconcile — orphans are none of its
       // business.
       return kit.pushSchema(schema, db, {
-        schemas: ["public"],
+        // The configured schema, for the same reason the pipeline's Phase D
+        // uses it: the adapter writes through `search_path`, so introspecting
+        // `public` would compare against a namespace nothing is in.
+        schemas: [activePostgresSchema()],
         tables: drizzleTableNames(schema),
       });
     }

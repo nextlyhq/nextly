@@ -730,10 +730,13 @@ export class SqliteAdapter extends DrizzleAdapter {
     // keeps the three adapters consistent and correct if that ever changes.
     // Built lazily and memoized: transactions that use only raw execute/insert
     // never construct it.
-    const buildTxExecutor = () => drizzle({ client: db });
-    let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
-    const txDb = () => (txExecutor ??= buildTxExecutor());
+    const txHandles = this.transactionDrizzleHandles(relations =>
+      relations ? drizzle({ client: db, relations }) : drizzle({ client: db })
+    );
+    const txDb = txHandles.bare;
     return {
+      ...txHandles.context,
+
       // SQLite has no row-level locking and needs none here: `withTransaction`
       // opens SQLite transactions with BEGIN IMMEDIATE, which takes the write
       // lock up front and serializes writers for the whole transaction.

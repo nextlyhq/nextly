@@ -23,6 +23,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
+import { sql } from "drizzle-orm";
 
 import { getDialectTablesForPush } from "../../../database/index";
 import { NextlyError } from "../../../errors";
@@ -39,6 +40,18 @@ import {
   chooseTypeColumns,
   resolveRegistryNameFromCatalog,
 } from "../../field-groups/storage/resolve-storage-names";
+import { getActiveExtensionSchema } from "../extension/build-extension-schema";
+import { withEntityContributions } from "../extension/entity-contributions";
+import {
+  refusingNewDanglingReferences,
+  type SqliteForeignKeySession,
+  withSqliteForeignKeysOff,
+} from "../migrate/sqlite-foreign-keys";
+import {
+  dropsPluginMigratedTable,
+  pluginMigratedTableSet,
+} from "../ownership/drop-guard";
+import { activePostgresSchema } from "../services/postgres-schema";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
@@ -57,7 +70,7 @@ import {
 } from "./diff/build-from-fields";
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
-import type { Operation, NextlySchemaSnapshot } from "./diff/types";
+import type { Operation, NextlySchemaSnapshot, TableSpec } from "./diff/types";
 import { describePrecondition } from "./errors";
 // Index restore uses the all-dialect templates, not ddl-emitter/: that module
 // is the PostgreSQL fast path and throws for the dialect this exists for.
@@ -67,10 +80,13 @@ import {
   findUnexpectedDestructiveStatements,
   getDrizzleTableName,
   isDrizzleTable,
+  stripKitDropsOfDeclaredConstraints,
   stripKitDropsOfDeclaredIndexes,
 } from "./filter-unsafe-statements";
 import { indexRestoreStatements } from "./index-restore";
+import { kitRouteConstraintStatements } from "./kit-route-constraints";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
+import { assertPreCleanupAccepted } from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
 import { executePreResolutionOps } from "./pre-resolution/executor";
@@ -93,6 +109,12 @@ import type {
 } from "./pushschema-pipeline-interfaces";
 import { builtByFor } from "./registered-collections";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
+import {
+  sqliteRebuiltTables,
+  untrackedConstraintCounts,
+  untrackedConstraintRefusal,
+  withoutDropsLeftToRebuild,
+} from "./sql-templates/sqlite-rebuild";
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
 
@@ -245,6 +267,69 @@ class DdlExecutionError extends Error {
 // Orphan-DROP statement patterns the unsafe-statement filter scans for.
 // Both forms accept an optional schema-qualifier and quote style; the
 // captured group is the bare object name used for owner-table inference.
+/**
+ * The table whose rebuild an operation approves, if any: a change to one of
+ * its columns on every dialect, and on SQLite a change to a check or a
+ * foreign key, which SQLite can only apply by rebuilding the table.
+ */
+function rebuildApprovedBy(op: Operation, dialect: SupportedDialect): string[] {
+  switch (op.type) {
+    case "change_column_type":
+    case "change_column_nullable":
+    case "change_column_default":
+      return [op.tableName.toLowerCase()];
+    case "add_check":
+    case "drop_check":
+    case "add_foreign_key":
+    case "drop_foreign_key":
+    case "change_foreign_key_action":
+      return dialect === "sqlite" ? [op.tableName.toLowerCase()] : [];
+    default:
+      return [];
+  }
+}
+
+/**
+ * The SQLite tables whose checks or foreign keys this apply changes. SQLite
+ * changes either only by rebuilding the table, which the kit does from the
+ * desired definition. Which operations those are is decided once, beside the
+ * migration templates' own rebuild (`sqliteRebuiltTables`).
+ */
+function sqliteConstraintRebuilds(
+  ops: readonly Operation[],
+  dialect: SupportedDialect
+): Set<string> {
+  return dialect === "sqlite" ? sqliteRebuiltTables(ops) : new Set();
+}
+
+/**
+ * The operations the pre-resolution phase runs, less the column drops SQLite
+ * must leave to a table rebuild — the same rule the migration templates apply
+ * (`withoutDropsLeftToRebuild`). When this apply changes a table's constraints
+ * the kit rebuilds that table from the desired definition, which no longer has
+ * the column, so the drop happens there, approved by `rebuildApprovedBy`.
+ */
+function withoutSqliteDropsLeftToRebuild(
+  ops: Operation[],
+  dialect: SupportedDialect
+): Operation[] {
+  const rebuilt = sqliteConstraintRebuilds(ops, dialect);
+  return rebuilt.size === 0 ? ops : withoutDropsLeftToRebuild(ops, rebuilt);
+}
+
+/**
+ * A pre-cleanup refusal or failure, as the apply reports it. An abort is not a
+ * DDL failure: it keeps its own type so the outer mapper classifies it as
+ * CONFIRMATION_DECLINED.
+ */
+function preCleanupFailure(err: unknown): Error {
+  if (err instanceof PromptCancelledError) return err;
+  return new DdlExecutionError(
+    err instanceof Error ? err.message : String(err),
+    err
+  );
+}
+
 // Gated debug log for which route (`useFastPath`) the apply took. Operators
 // set DEBUG_SCHEMA=1 to enable both this and drizzle-kit's chatter inside
 // withCapturedStdout. The non-additive enumeration on the fallback path
@@ -307,7 +392,8 @@ export interface PushSchemaPipelineTestHooks {
   _executePreResolutionOverride?: (
     txOrDb: unknown,
     ops: Operation[],
-    dialect: SupportedDialect
+    dialect: SupportedDialect,
+    leadingStatements?: readonly string[]
   ) => Promise<number>;
   // Test seam: inject a pre-built resolvedOps array to bypass the diff +
   // resolution pipeline. Lets unit tests exercise the scope-reduction and
@@ -350,6 +436,14 @@ export function computeJournalSummaryFromOperations(
         break;
       case "add_index":
         added++;
+        break;
+      case "add_check":
+      case "add_foreign_key":
+        added++;
+        break;
+      case "drop_check":
+      case "drop_foreign_key":
+        removed++;
         break;
       case "rename_table":
       case "rename_column":
@@ -431,6 +525,11 @@ export function operationTargetTable(op: Operation): string | null {
     case "change_foreign_key_action":
     case "add_index":
     case "drop_index":
+      return op.tableName;
+    case "add_check":
+    case "add_foreign_key":
+    case "drop_check":
+    case "drop_foreign_key":
       return op.tableName;
     default: {
       // Exhaustiveness check: a new Operation kind must be classified here.
@@ -534,6 +633,13 @@ export class PushSchemaPipeline {
     // inside either leaves the other on the raw fields, so a table would converge and then report a
     // type change against itself on every following diff.
     const desired = args.desired;
+    // Merged HERE rather than at each call site. `apply` has many callers —
+    // HMR, the collection/single/component dispatchers, the dev server, the
+    // DI registration — and adding extensions at each would miss some: a UI
+    // save of a Builder table would then plan a `drop_index` for a plugin's
+    // index on that table, because the desired state it built knew nothing
+    // about it.
+    const extensions = getActiveExtensionSchema(dialect);
     const scope = computeJournalScope(
       source,
       args.uiTargetSlug,
@@ -567,8 +673,16 @@ export class PushSchemaPipeline {
     //
     // Reference: Payload's pushDevSchema pattern in
     // packages/drizzle/src/utilities/pushDevSchema.ts.
+    // Keyed on the desired schema AND the compiled extension fingerprint.
+    // Without the fingerprint, editing only a schema hook leaves `desired`
+    // byte-identical and the push is skipped, so the hook's change never
+    // reaches the database and nothing reports that it did not.
+    const cacheKey = {
+      desired,
+      extensions: extensions?.fingerprint ?? null,
+    };
     const cachedSnapshot = getCachedSnapshot();
-    if (cachedSnapshot !== undefined && dequal(desired, cachedSnapshot)) {
+    if (cachedSnapshot !== undefined && dequal(cacheKey, cachedSnapshot)) {
       console.log(
         "[Nextly schema] No changes detected since last apply; skipping push (dequal cache hit)."
       );
@@ -605,6 +719,10 @@ export class PushSchemaPipeline {
         ...Object.values(desired.collections).map(c => c.tableName),
         ...Object.values(desired.singles).map(s => s.tableName),
         ...Object.values(desired.components).map(c => c.tableName),
+        // Without these the live snapshot omits extension tables, so the
+        // diff compares a declared table against nothing and proposes
+        // creating it on every single apply.
+        ...(extensions?.specs.map(spec => spec.name) ?? []),
       ];
 
       // Phase A: our diff. Reuse the cached live snapshot when the outer
@@ -668,57 +786,88 @@ export class PushSchemaPipeline {
           : identifierCaseRules({ dialect })
       );
 
+      // What hooks contributed to each entity table — columns, their
+      // defaults, their enum checks and indexes — applied by the one helper
+      // the app's migration stream applies them with, for all three entity
+      // kinds, so dev push and a generated migration cannot describe the
+      // table differently. Checks are merged over the LIVE table's, so
+      // tracking them does not propose dropping ones this pipeline never
+      // declared.
+      const liveTablesByName = new Map(
+        liveSnapshot.tables.map(table => [table.name, table])
+      );
+      const withContributions = (spec: TableSpec): TableSpec =>
+        withEntityContributions(
+          spec,
+          extensions,
+          liveTablesByName.get(spec.name),
+          dialect
+        );
+
       const desiredSnapshot: NextlySchemaSnapshot = {
         tables: [
           ...Object.values(desired.collections).map(c =>
-            buildDesiredTableFromFields(
-              c.tableName,
-              // FieldConfig has the shape buildDesiredTableFromFields expects;
-              // cast through unknown for the structural-vs-nominal type gap.
-              c.fields as unknown as Parameters<
-                typeof buildDesiredTableFromFields
-              >[1],
-              dialect,
-              // Thread the status flag so the diff includes the status system
-              // column when Draft/Published is enabled. Thread `localized` so a
-              // localized collection's translatable columns are omitted from the
-              // main table's desired snapshot (they live in the companion
-              // `_locales` table) rather than being re-added by the diff.
-              {
-                builtBy: builtByFor("collection", c.builderOwned),
-                hasStatus: c.status === true,
-                localized: c.localized === true,
-              }
+            withContributions(
+              buildDesiredTableFromFields(
+                c.tableName,
+                // FieldConfig has the shape buildDesiredTableFromFields expects;
+                // cast through unknown for the structural-vs-nominal type gap.
+                c.fields as unknown as Parameters<
+                  typeof buildDesiredTableFromFields
+                >[1],
+                dialect,
+                // Thread the status flag so the diff includes the status system
+                // column when Draft/Published is enabled. Thread `localized` so a
+                // localized collection's translatable columns are omitted from the
+                // main table's desired snapshot (they live in the companion
+                // `_locales` table) rather than being re-added by the diff.
+                {
+                  builtBy: builtByFor("collection", c.builderOwned),
+                  hasStatus: c.status === true,
+                  localized: c.localized === true,
+                  // Config-declared compound indexes name FIELDS.
+                  indexes: [...(c.indexes ?? [])],
+                }
+              )
             )
           ),
           ...Object.values(desired.singles).map(s =>
-            buildDesiredTableFromFields(
-              s.tableName,
-              s.fields as unknown as Parameters<
-                typeof buildDesiredTableFromFields
-              >[1],
-              dialect,
-              {
-                builtBy: builtByFor("single", s.builderOwned),
-                hasStatus: s.status === true,
-                localized: (s as { localized?: boolean }).localized === true,
-              }
+            withContributions(
+              buildDesiredTableFromFields(
+                s.tableName,
+                s.fields as unknown as Parameters<
+                  typeof buildDesiredTableFromFields
+                >[1],
+                dialect,
+                {
+                  builtBy: builtByFor("single", s.builderOwned),
+                  hasStatus: s.status === true,
+                  localized: (s as { localized?: boolean }).localized === true,
+                }
+              )
             )
           ),
           ...Object.values(desired.components).map(c =>
-            buildDesiredTableFromComponentFields(
-              c.tableName,
-              c.fields as unknown as Parameters<
-                typeof buildDesiredTableFromComponentFields
-              >[1],
-              dialect,
-              {
-                builtBy: builtByFor("fieldGroup", c.builderOwned),
-                localized: (c as { localized?: boolean }).localized === true,
-                typeColumn: fieldGroupTypeColumns.get(c.tableName),
-              }
+            withContributions(
+              buildDesiredTableFromComponentFields(
+                c.tableName,
+                c.fields as unknown as Parameters<
+                  typeof buildDesiredTableFromComponentFields
+                >[1],
+                dialect,
+                {
+                  builtBy: builtByFor("fieldGroup", c.builderOwned),
+                  localized: (c as { localized?: boolean }).localized === true,
+                  typeColumn: fieldGroupTypeColumns.get(c.tableName),
+                }
+              )
             )
           ),
+          // Already compiled, so they are appended rather than rebuilt: the
+          // spec the diff compares and the Drizzle table drizzle-kit pushes
+          // come from one compiler, and rebuilding either here would make
+          // them two.
+          ...(extensions?.specs ?? []),
         ],
       };
 
@@ -866,6 +1015,10 @@ export class PushSchemaPipeline {
           case "change_foreign_key_action":
           case "add_index":
           case "drop_index":
+          case "add_check":
+          case "drop_check":
+          case "add_foreign_key":
+          case "drop_foreign_key":
             affectedTableNames.add(op.tableName);
             break;
           default: {
@@ -911,30 +1064,50 @@ export class PushSchemaPipeline {
       const isSqlite = dialect === "sqlite";
 
       const runApply = async (tx: unknown): Promise<number> => {
-        // Phase C: pre-resolution executor runs renames + drops.
-        const preResExecutor =
-          this.testHooks._executePreResolutionOverride ??
-          executePreResolutionOps;
-        try {
-          await preResExecutor(tx, resolvedOps, dialect);
-        } catch (err) {
-          // A refusal is not a failed statement. The pre-resolution phase can decline to start —
-          // when the stored values would not survive a conversion, for instance — and that answer
-          // carries the column, the reason and what to do about it. Wrapping it as a DDL failure
-          // replaces all of that with a generic message about a statement that never ran.
-          if (NextlyError.isValidation(err)) throw err;
-          throw new DdlExecutionError(
-            err instanceof Error ? err.message : String(err),
-            err
+        // Route: fast in-memory DDL emission for the common Builder op set
+        // on PostgreSQL (skips drizzle-kit's ~10s catalog re-introspection),
+        // or fall back to drizzle-kit's pushSchema for anything outside
+        // that set. Decided here, from the resolved operations alone, because
+        // the kit route's constraint drops run ahead of every other statement.
+        const useFastPath = canEmitWithoutDrizzleKit(resolvedOps, dialect);
+        logApplyRoute(useFastPath, resolvedOps);
+        // The kit route's checks and foreign keys, which the kit never
+        // applies on PostgreSQL and MySQL. The fast path plans none — its op
+        // set excludes them, and a new table's own come from the emitter.
+        const constraints = useFastPath
+          ? { before: [], after: [] }
+          : kitRouteConstraintStatements(
+              resolvedOps,
+              liveSnapshot.tables,
+              dialect
+            );
+        // Resolved BEFORE anything below writes. The import carries MySQL's
+        // `databaseName` precondition, and a refusal after the first DDL would
+        // leave that DDL behind on a dialect that commits it as it runs. The
+        // fast path never needs the kit, so a kit-free apply still never
+        // evaluates the precondition at all.
+        const kit = useFastPath ? undefined : await getKit();
+
+        // A SQLite rebuild on the kit route is made from the runtime tables,
+        // which declare only what the schema tracks. Refused here, before
+        // anything writes, when a table it would rebuild holds a foreign key
+        // or check the schema does not describe — the same question, asked
+        // by the same expressions, that guards a migration's rebuild.
+        if (kit !== undefined && dialect === "sqlite") {
+          await refuseKitRebuildsLosingConstraints(
+            sqliteSessionOf(tx),
+            resolvedOps,
+            desiredSnapshot.tables
           );
         }
 
-        // Phase D' (F5 PR 4): pre-cleanup executor runs UPDATE/DELETE for
-        // provide_default + delete_nonconforming resolutions. Snapshot
-        // patching for make_optional was already applied above by patching
-        // `desired` before drizzleSchema was built. Aggregate fields across
-        // all collections so the executor can validate provide_default
-        // values against field types.
+        // Pre-cleanup's refusals, asked before the first statement below: on
+        // MySQL every rename, drop and lifted foreign key commits as it runs,
+        // so a resolution refused after them would leave them behind a failed
+        // apply. Snapshot patching for make_optional was already applied above
+        // by patching `desired` before drizzleSchema was built. Aggregate
+        // fields across all collections so a provide_default value is
+        // validated against its field's type.
         // FieldConfig.name is typed string|undefined (some field types like
         // row containers have no name); filter to only named fields, which
         // are the only ones the classifier could have emitted events for.
@@ -955,6 +1128,46 @@ export class PushSchemaPipeline {
             .map(f => ({ name: f.name, type: f.type }))
         );
         try {
+          assertPreCleanupAccepted({
+            resolutions: dispatchResult.resolutions,
+            events: classificationResult.events,
+            fields: aggregatedFields,
+          });
+        } catch (err) {
+          throw preCleanupFailure(err);
+        }
+
+        // Phase C: pre-resolution executor runs renames + drops, led by the
+        // kit route's check and foreign-key drops: a constraint still in
+        // place blocks dropping, or on MySQL retyping, a column it names. The
+        // executor runs them after its own refusals, so a refused apply has
+        // changed nothing.
+        const preResExecutor =
+          this.testHooks._executePreResolutionOverride ??
+          executePreResolutionOps;
+        try {
+          await preResExecutor(
+            tx,
+            withoutSqliteDropsLeftToRebuild(resolvedOps, dialect),
+            dialect,
+            constraints.before
+          );
+        } catch (err) {
+          // A refusal is not a failed statement. The pre-resolution phase can decline to start —
+          // when the stored values would not survive a conversion, for instance — and that answer
+          // carries the column, the reason and what to do about it. Wrapping it as a DDL failure
+          // replaces all of that with a generic message about a statement that never ran.
+          if (NextlyError.isValidation(err)) throw err;
+          throw new DdlExecutionError(
+            err instanceof Error ? err.message : String(err),
+            err
+          );
+        }
+
+        // Phase D' (F5 PR 4): pre-cleanup executor runs UPDATE/DELETE for
+        // provide_default + delete_nonconforming resolutions, every one of
+        // them already accepted before the first statement above.
+        try {
           await this.deps.preCleanupExecutor.execute({
             tx,
             desiredSnapshot,
@@ -967,11 +1180,7 @@ export class PushSchemaPipeline {
           // PromptCancelledError from abort is not a DDL failure — let it
           // propagate with its original type so the outer error mapper
           // classifies it as CONFIRMATION_DECLINED.
-          if (err instanceof PromptCancelledError) throw err;
-          throw new DdlExecutionError(
-            err instanceof Error ? err.message : String(err),
-            err
-          );
+          throw preCleanupFailure(err);
         }
 
         // Phase D: pushSchema for purely-additive remainder.
@@ -999,14 +1208,9 @@ export class PushSchemaPipeline {
         //
         const desiredTableNames = Object.keys(effectiveDrizzleSchema);
 
-        // Route: fast in-memory DDL emission for the common Builder op set
-        // on PostgreSQL (skips drizzle-kit's ~10s catalog re-introspection),
-        // or fall back to drizzle-kit's pushSchema for anything outside
-        // that set. Stations 1-7 (diff, rename detect, classifier, prompt,
-        // pre-resolution) are upstream and unaffected either way;
+        // Stations 1-7 (diff, rename detect, classifier, prompt,
+        // pre-resolution) are upstream of the route and unaffected by it;
         // filterUnsafeStatements still runs on the result.
-        const useFastPath = canEmitWithoutDrizzleKit(resolvedOps, dialect);
-        logApplyRoute(useFastPath, resolvedOps);
 
         let emittedStatements: string[];
         let pushResult: PushSchemaPassResult | undefined;
@@ -1014,17 +1218,9 @@ export class PushSchemaPipeline {
         // add_table pre-creation below) — counted into the journal's
         // executed total alongside the post-filter batch.
         let preCreatedStatements = 0;
-        if (useFastPath) {
+        if (kit === undefined) {
           emittedStatements = emitDdl(resolvedOps, dialect);
         } else {
-          // Resolved BEFORE the pre-creation below writes anything. The
-          // import carries MySQL's `databaseName` precondition, and running
-          // it after the CREATEs would leave those tables behind on a
-          // dialect whose DDL auto-commits when the precondition then
-          // fails. The fast path never reaches this branch, so a kit-free
-          // apply still never evaluates the precondition at all.
-          const kit = await getKit();
-
           // v1 kit crash guard (SQLite/MySQL only — PG scopes the kit's
           // introspection with a tables filter): drizzle-kit v1's differ
           // sees the WHOLE live DB on these dialects, so any live table
@@ -1049,10 +1245,22 @@ export class PushSchemaPipeline {
           // apply without these statements in `statements_executed`, which
           // counts only a successful pass.
           if (dialect !== "postgresql") {
-            const addTableOps = resolvedOps.filter(
-              op => op.type === "add_table"
+            // A SQLite table rebuilt for a constraint change keeps its dropped
+            // columns for the kit to remove, so its added columns are created
+            // here too: a table the kit sees both lose and gain a column sends
+            // its rename resolver down the same crash as a lost-and-gained
+            // table.
+            const rebuiltForConstraints = sqliteConstraintRebuilds(
+              resolvedOps,
+              dialect
             );
-            if (addTableOps.length > 0) {
+            const preCreateOps = resolvedOps.filter(
+              op =>
+                op.type === "add_table" ||
+                (op.type === "add_column" &&
+                  rebuiltForConstraints.has(op.tableName.toLowerCase()))
+            );
+            if (preCreateOps.length > 0) {
               // This branch runs for tables the routing decision may have
               // REJECTED, so it cannot emit them verbatim: a MySQL UNIQUE
               // index over a TEXT/BLOB column is exactly what sent such an
@@ -1061,7 +1269,7 @@ export class PushSchemaPipeline {
               // still pre-created (that is the crash guard); drizzle-kit adds
               // the stripped index from its own introspection.
               const createStatements = emitDdl(
-                addTableOps.map(op => withoutUnemittableIndexes(op, dialect)),
+                preCreateOps.map(op => withoutUnemittableIndexes(op, dialect)),
                 dialect
               );
               try {
@@ -1117,7 +1325,13 @@ export class PushSchemaPipeline {
             pushResult.sqlStatements,
             desiredSnapshot
           );
-          emittedStatements = stripped.kept;
+          // Likewise the declared checks and foreign keys, which the kit's
+          // runtime tables do not carry on PostgreSQL and MySQL either.
+          const keptConstraints = stripKitDropsOfDeclaredConstraints(
+            stripped.kept,
+            desiredSnapshot
+          );
+          emittedStatements = keptConstraints.kept;
           if (stripped.strippedCount > 0) {
             // Once per apply, not per statement: enough to see the guard
             // acted without turning a routine emission into log noise.
@@ -1125,6 +1339,13 @@ export class PushSchemaPipeline {
               `[Nextly schema] Kept ${stripped.strippedCount} tracked index(es) ` +
                 `drizzle-kit emitted a DROP INDEX for (they are declared in the ` +
                 `desired schema; only a drop_index operation removes one).`
+            );
+          }
+          if (keptConstraints.strippedCount > 0) {
+            console.debug(
+              `[Nextly schema] Kept ${keptConstraints.strippedCount} declared ` +
+                `check or foreign-key element(s) drizzle-kit emitted a drop for ` +
+                `(only a drop_check or drop_foreign_key operation removes one).`
             );
           }
         }
@@ -1164,14 +1385,7 @@ export class PushSchemaPipeline {
         // table is the kit encoding a column drop we never approved
         // (rc.4 emits exactly that shape; probe-verified).
         const allowedRebuildTables = new Set(
-          resolvedOps
-            .filter(
-              op =>
-                op.type === "change_column_type" ||
-                op.type === "change_column_nullable" ||
-                op.type === "change_column_default"
-            )
-            .map(op => op.tableName.toLowerCase())
+          resolvedOps.flatMap(op => rebuildApprovedBy(op, dialect))
         );
         // Tables this apply is answerable for. On a UI save the locked ones are
         // excluded: their statements are dropped below and never execute, so
@@ -1197,9 +1411,26 @@ export class PushSchemaPipeline {
         // emitted from those approved operations, so there is no orphan to
         // find; the destructive scan and the lock filter below still apply to
         // both routes.
+        // Plugin-migrated tables are never dropped by dev push, whatever the
+        // desired set says: their removal is `nextly plugins uninstall`'s decision,
+        // not a reload's side effect. The kit route enforces this inside
+        // filterUnsafeStatements; the fast path bypasses that filter (its
+        // statements come from approved operations), so it gets the same
+        // refusal applied directly to its drops.
+        const pluginMigrated = await pluginMigratedTableSet(db, dialect);
         const unlocked = useFastPath
-          ? emittedStatements
-          : filterUnsafeStatements(emittedStatements, desiredTableNames);
+          ? pluginMigrated
+            ? emittedStatements.filter(
+                statement =>
+                  !dropsPluginMigratedTable(statement, pluginMigrated, dialect)
+              )
+            : emittedStatements
+          : filterUnsafeStatements(
+              emittedStatements,
+              desiredTableNames,
+              pluginMigrated,
+              dialect
+            );
         // Op-level lock filtering covers what this pipeline decided to do, but
         // drizzle-kit re-derives drift from the full desired schema, so on the
         // kit path it can still emit DDL for a locked table. Scope reduction
@@ -1256,9 +1487,12 @@ export class PushSchemaPipeline {
           safe,
           useFastPath ? [] : resolvedOps
         );
-
         try {
-          await this.deps.executor.executeStatements(tx, [...safe, ...restore]);
+          await this.deps.executor.executeStatements(tx, [
+            ...safe,
+            ...restore,
+            ...constraints.after,
+          ]);
         } catch (err) {
           throw new DdlExecutionError(
             err instanceof Error ? err.message : String(err),
@@ -1273,20 +1507,51 @@ export class PushSchemaPipeline {
         // would report a mismatch on every apply that had to put an index
         // back; the pre-created CREATEs WERE planned (add_table ops) and
         // executed, so they count.
-        return safe.length + preCreatedStatements;
+        return (
+          safe.length +
+          preCreatedStatements +
+          constraints.before.length +
+          constraints.after.length
+        );
       };
 
       let statementsExecuted: number;
 
       if (isSqlite) {
         // SQLite: skip db.transaction() per F3 PR-4 (PRAGMA-vs-tx
-        // compatibility). Wrap in foreign_keys = OFF/ON instead.
-        await this.runSqlitePragma(db, "PRAGMA foreign_keys = OFF");
-        try {
-          statementsExecuted = await runApply(db);
-        } finally {
-          await this.runSqlitePragma(db, "PRAGMA foreign_keys = ON");
-        }
+        // compatibility), and apply under SQLite's schema-change contract —
+        // the same one a migration runs under: foreign keys off for the
+        // whole apply, so a table rebuild cannot cascade into the rows of
+        // tables that reference it, then `PRAGMA foreign_key_check` once
+        // every statement has run, and the previous setting restored.
+        //
+        // With no transaction there is nothing to roll back: a refusal here
+        // reports an apply that has already landed, so the operator learns
+        // which references are dangling instead of the push reading as clean.
+        const session = sqliteSessionOf(db);
+        statementsExecuted = await withSqliteForeignKeysOff(
+          session,
+          async () => {
+            try {
+              return await refusingNewDanglingReferences(
+                session,
+                () => runApply(db),
+                (count, pairs) =>
+                  `This schema change left ${String(count)} row(s) referencing rows that do not exist (${pairs}). SQLite applies a dev push without a transaction, so the change is in place: remove or repair those rows.`
+              );
+            } catch (err) {
+              // Only the reference check's own refusal is re-classified;
+              // anything `runApply` threw keeps the type it was thrown with.
+              if (
+                err instanceof NextlyError &&
+                err.code === "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION"
+              ) {
+                throw new DdlExecutionError(err.message, err);
+              }
+              throw err;
+            }
+          }
+        );
       } else {
         // PG / MySQL: db.transaction() for atomicity (PG only; MySQL DDL
         // is auto-committed regardless. F15 adds MySQL pre-flight).
@@ -1306,7 +1571,7 @@ export class PushSchemaPipeline {
       // the top of this method. We only set the cache on the success
       // path — failed applies leave the cache untouched so the next
       // call retries the full pipeline.
-      setCachedSnapshot(desired);
+      setCachedSnapshot(cacheKey);
 
       await this.deps.migrationJournal.recordEnd(journalId, {
         success: true,
@@ -1379,15 +1644,6 @@ export class PushSchemaPipeline {
         },
       };
     }
-  }
-
-  private async runSqlitePragma(db: unknown, pragma: string): Promise<void> {
-    interface SqliteRunClient {
-      run(query: unknown): unknown;
-    }
-    const { sql: sqlTag } = await import("drizzle-orm");
-    const dbTyped = db as SqliteRunClient;
-    dbTyped.run(sqlTag.raw(pragma));
   }
 
   private buildDrizzleSchema(
@@ -1509,6 +1765,18 @@ export class PushSchemaPipeline {
       );
       out[c.tableName] = componentTable;
     }
+
+    // The same resolution the desired snapshot above read. The comment on
+    // `apply` requires both builders to agree, and taking them from one
+    // compiled result is what makes that true rather than merely intended.
+    // These carry COLUMNS ONLY — indexes live on the spec, because
+    // drizzle-kit would otherwise emit its own CREATE INDEX beside the
+    // replayed one, and MySQL has no IF NOT EXISTS.
+    for (const [name, table] of Object.entries(
+      getActiveExtensionSchema(dialect)?.drizzle ?? {}
+    )) {
+      out[name] = table;
+    }
     return out;
   }
 
@@ -1530,7 +1798,11 @@ export class PushSchemaPipeline {
           // which on v1 throws its resolver's HintsHandler internal error.
           pushSchema: (schema, db, tablesFilter) =>
             kit.pushSchema(schema, db, {
-              schemas: ["public"],
+              // The CONFIGURED schema, not a hard-coded "public". The adapter
+              // puts every table in it through `search_path`, so a kit still
+              // introspecting `public` compared an empty namespace against a
+              // full desired set and proposed creating everything, forever.
+              schemas: [activePostgresSchema()],
               tables: tablesFilter,
             }),
         };
@@ -1615,3 +1887,69 @@ function toRenameResolutions(
 }
 
 export { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable };
+
+/**
+ * The dev-push SQLite handle as the schema-change contract reads it. The
+ * better-sqlite3 Drizzle handle answers synchronously; `all` is the form that
+ * returns rows, `run` the one for a statement that returns none.
+ */
+function sqliteSessionOf(db: unknown): SqliteForeignKeySession {
+  const client = db as {
+    all(query: unknown): unknown;
+    run(query: unknown): unknown;
+  };
+  return {
+    read: <T>(statement: string) =>
+      Promise.resolve(client.all(sql.raw(statement)) as T[]),
+    run: async statement => {
+      await client.run(sql.raw(statement));
+    },
+  };
+}
+
+/**
+ * Refuses a SQLite apply whose drizzle-kit rebuild would drop a live foreign
+ * key or check the desired schema does not declare.
+ *
+ * The kit rebuilds a table whose checks or foreign keys change
+ * (`sqliteRebuiltTables`) from the runtime Drizzle tables, and those carry
+ * only what the schema tracks. A Schema Builder table can hold a
+ * relationship's foreign key or a validation check the schema never
+ * describes, and a rebuild would drop it without a word. Counted against the
+ * live table by `untrackedConstraintCounts`, the rule a migration's rebuild
+ * guard applies, so the two routes cannot disagree about what would be lost.
+ */
+async function refuseKitRebuildsLosingConstraints(
+  session: SqliteForeignKeySession,
+  ops: readonly Operation[],
+  desiredTables: readonly TableSpec[]
+): Promise<void> {
+  for (const table of sqliteRebuiltTables(ops)) {
+    const spec = desiredTables.find(t => t.name.toLowerCase() === table);
+    if (spec === undefined) continue;
+    const counts = untrackedConstraintCounts(spec, ops);
+    const [row] = await session.read<{
+      foreign_keys: number;
+      checks: number;
+    }>(
+      `SELECT ${counts.foreignKeys} AS "foreign_keys", ${counts.checks} AS "checks"`
+    );
+    const lost =
+      Number(row?.foreign_keys) > 0
+        ? "foreign keys"
+        : Number(row?.checks) > 0
+          ? "checks"
+          : undefined;
+    if (lost === undefined) continue;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `schema.${spec.name}`,
+          code: "SQLITE_REBUILD_WOULD_DROP_UNTRACKED_CONSTRAINTS",
+          message: untrackedConstraintRefusal(spec.name, lost),
+        },
+      ],
+      logContext: { table: spec.name, lost },
+    });
+  }
+}

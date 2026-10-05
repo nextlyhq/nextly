@@ -161,6 +161,31 @@ describe("resolveMigration", () => {
       expect(rows.some(x => x.status === "applied")).toBe(false);
     });
 
+    it("records a plugin module's rollback under its qualified key", async () => {
+      // A plugin module's ledger key is `plugin:<name>/<module>`, with no
+      // extension. Recorded under any other spelling, the rollback finds no
+      // applied row to retire, and the module's newest state stays `applied`.
+      const { repo, base } = makeDeps(testDb);
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: "plugin:@acme/fx/001_init",
+        startedAt: new Date(1),
+      });
+      const r = await resolveMigration({
+        mode: "rolled-back",
+        filename: "plugin:@acme/fx/001_init",
+        ...base,
+      });
+      expect(r.kind).toBe("rolled-back");
+      const rows = await repo.findFileApplies("plugin:@acme/fx/001_init");
+      expect(rows.map(x => x.status).sort()).toEqual([
+        "rolled_back",
+        "superseded",
+      ]);
+    });
+
     it("throws PRECONDITION when no applied row exists", async () => {
       const { base } = makeDeps(testDb);
       await expect(

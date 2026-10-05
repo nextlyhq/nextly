@@ -13,6 +13,9 @@
 // NOT Object.keys() — bundle keys are JS export names (e.g. dynamicCollections),
 // not SQL names (dynamic_collections), and include non-table exports.
 
+import type { SupportedDialect } from "../../../database/schema-registry";
+import { dropsPluginMigratedTable } from "../ownership/drop-guard";
+
 import { isCompanionTable, isManagedTable } from "./managed-tables";
 
 const ORPHAN_DROP_PATTERNS: ReadonlyArray<{
@@ -28,6 +31,23 @@ const ORPHAN_DROP_PATTERNS: ReadonlyArray<{
     re: /^DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i,
   },
 ];
+
+/**
+ * A `DROP SCHEMA`, in any spelling the kit or a dialect produces.
+ *
+ * Nextly never drops a schema — not the one it runs in, not any other — so
+ * this is refused whatever the desired set says. drizzle-kit emits one when
+ * the schema it was asked to reconcile holds nothing it recognises as wanted,
+ * which is a disagreement about where the tables live, never an instruction.
+ * Executed, it removes the namespace every later statement resolves in.
+ * MySQL's `DROP DATABASE` is the same act under its other name.
+ */
+const DROP_SCHEMA = /^\s*DROP\s+(?:SCHEMA|DATABASE)\b/i;
+
+/** Whether a statement drops a schema (or, on MySQL, a database). */
+export function isDropSchemaStatement(statement: string): boolean {
+  return DROP_SCHEMA.test(statement);
+}
 
 /** Cheap structural check for Drizzle tables (carry Symbol.for("drizzle:Name")). */
 export function isDrizzleTable(value: unknown): boolean {
@@ -116,14 +136,60 @@ function inferOwnerTableFromObjectName(
  * which fails with PG 2BP01 because `accounts.id` still depends on it). We
  * infer the owner table from the object name; custom-named objects that don't
  * share a prefix with any managed table are blocked + warned (fail-safe).
+ *
+ * Plugin-migrated tables: when the caller passes them, with the dialect the
+ * statements will run on, any statement that drops one is refused, whatever
+ * the desired set says. Dev push reconciles what the CONFIG describes, and a
+ * plugin removed from config is exactly the moment its tables' data is most
+ * at risk — the plugin is being uninstalled, and that is a decision for
+ * `nextly plugins uninstall`, not a side effect of a reload. The question is
+ * answered by `dropsPluginMigratedTable`, the reader the fast path and the
+ * migration guard use, so both push routes give it the same answer: that
+ * includes withholding a statement the reader cannot read. Absent (or empty)
+ * = no stream has claimed anything, which is the pre-registry behaviour
+ * exactly.
  */
 export function filterUnsafeStatements(
   statements: string[],
   desiredTableNames: string[]
+): string[];
+export function filterUnsafeStatements(
+  statements: string[],
+  desiredTableNames: string[],
+  /** Tables whose owner rows name a plugin migration stream, lower-cased. */
+  pluginMigratedTables: ReadonlySet<string> | undefined,
+  dialect: SupportedDialect
+): string[];
+export function filterUnsafeStatements(
+  statements: string[],
+  desiredTableNames: string[],
+  pluginMigratedTables?: ReadonlySet<string>,
+  dialect?: SupportedDialect
 ): string[] {
   const desiredSet = new Set(desiredTableNames.map(t => t.toLowerCase()));
 
   return statements.filter(stmt => {
+    // ── DROP SCHEMA ─────────────────────────────────────────────────
+    // First and unconditional: no desired set makes this intended.
+    if (isDropSchemaStatement(stmt)) {
+      console.warn(
+        `[Nextly schema] Blocked a statement that drops a schema, emitted by drizzle-kit pushSchema: ${stmt}. Nextly never drops a schema; if one should go, drop it manually.`
+      );
+      return false;
+    }
+
+    // ── Plugin-migrated tables ──────────────────────────────────────
+    if (
+      pluginMigratedTables !== undefined &&
+      dialect !== undefined &&
+      dropsPluginMigratedTable(stmt, pluginMigratedTables, dialect)
+    ) {
+      console.warn(
+        `[Nextly schema] Blocked a statement that drops a table whose owner row names a plugin migration stream, or that the drop reader cannot read: ${stmt}. Plugin tables are removed by \`nextly plugins uninstall\`, never by dev push.`
+      );
+      return false;
+    }
+
     // ── DROP TABLE ──────────────────────────────────────────────────
     const dropMatch = stmt.match(
       /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
@@ -276,6 +342,71 @@ export function stripKitDropsOfDeclaredIndexes(
   return { kept, strippedCount };
 }
 
+/**
+ * Remove drizzle-kit's drops of the checks and foreign keys the desired
+ * schema declares.
+ *
+ * The same reasoning as {@link stripKitDropsOfDeclaredIndexes}, for the other
+ * two kinds of element the snapshot tracks. On PostgreSQL and MySQL the
+ * runtime tables carry no constraints — they are created by their own
+ * statements — so the kit reads every live check and foreign key on a table
+ * it compares as undeclared and drops it. Only this pipeline's own
+ * `drop_check` / `drop_foreign_key` removes one. MySQL also backs a foreign
+ * key with an index of the same name, and the kit drops that alongside it.
+ *
+ * Matched per table, because a constraint name is only unique within one on
+ * MySQL. A statement this does not recognise is KEPT, the same fail-safe
+ * direction as the index guard.
+ */
+export function stripKitDropsOfDeclaredConstraints(
+  statements: string[],
+  desired: NextlyConstraintSnapshotLike
+): { kept: string[]; strippedCount: number } {
+  const declared = new Set<string>();
+  const foreignKeyNames = new Set<string>();
+  for (const table of desired.tables) {
+    const tableName = table.name.toLowerCase();
+    for (const check of table.checks ?? []) {
+      declared.add(`${tableName}.${check.name.toLowerCase()}`);
+    }
+    for (const fk of table.foreignKeys ?? []) {
+      declared.add(`${tableName}.${fk.name.toLowerCase()}`);
+      foreignKeyNames.add(`${tableName}.${fk.name.toLowerCase()}`);
+    }
+  }
+  if (declared.size === 0) return { kept: statements, strippedCount: 0 };
+
+  let strippedCount = 0;
+  const kept = statements.filter(stmt => {
+    const alter = stmt.match(
+      /^ALTER\s+TABLE\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s+DROP\s+(?:CONSTRAINT|FOREIGN\s+KEY|CHECK)\s+(?:IF\s+EXISTS\s+)?["`]?(\w+)["`]?\s*;?\s*$/i
+    );
+    const index = alter
+      ? null
+      : stmt.match(
+          /^DROP\s+INDEX\s+["`]?(\w+)["`]?\s+ON\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s*;?\s*$/i
+        );
+    const isDeclared = alter
+      ? declared.has(`${alter[1].toLowerCase()}.${alter[2].toLowerCase()}`)
+      : index !== null &&
+        foreignKeyNames.has(
+          `${index[2].toLowerCase()}.${index[1].toLowerCase()}`
+        );
+    if (isDeclared) strippedCount++;
+    return !isDeclared;
+  });
+  return { kept, strippedCount };
+}
+
+/** The snapshot slice {@link stripKitDropsOfDeclaredConstraints} reads. */
+interface NextlyConstraintSnapshotLike {
+  tables: ReadonlyArray<{
+    name: string;
+    checks?: ReadonlyArray<{ name: string }>;
+    foreignKeys?: ReadonlyArray<{ name: string }>;
+  }>;
+}
+
 /** The snapshot slice {@link stripKitDropsOfDeclaredIndexes} reads. */
 interface NextlySnapshotLike {
   tables: ReadonlyArray<{
@@ -401,6 +532,15 @@ export function rebuiltTableNames(statements: readonly string[]): Set<string> {
 }
 
 /**
+ * A statement with the contents of every single-quoted string literal
+ * removed, the quotes kept. A doubled quote inside a literal is part of it.
+ * Identifiers are quoted with `"` or backticks and are left as they are.
+ */
+function withoutStringLiterals(statement: string): string {
+  return statement.replace(/'(?:[^']|'')*'/g, "''");
+}
+
+/**
  * v1 drizzle-kit INCLUDES destructive statements in sqlStatements (hints are
  * empty even for drops — observed on SQLite, Postgres and MySQL, 2026-07).
  * By the time the pipeline's Phase D runs, every user-approved destructive
@@ -445,7 +585,17 @@ export function findUnexpectedDestructiveStatements(
 
   const rebuildTargets = rebuiltTableNames(statements);
   const offenders: string[] = [];
-  for (const s of statements) {
+  for (const statement of statements) {
+    // Matched with its string literals blanked, so the text inside one — a
+    // check admitting the value 'drop off' — is never read as a statement's
+    // own verb. Reported as written.
+    const s = withoutStringLiterals(statement);
+    // Whatever `managedTables` says: a schema is not a table, and dropping one
+    // takes every managed table in it along.
+    if (isDropSchemaStatement(s)) {
+      offenders.push(statement);
+      continue;
+    }
     const dropTable = s.match(
       // Skip an optional schema qualifier so `DROP TABLE "main"."posts"`
       // captures `posts`, not `main`.
@@ -459,7 +609,7 @@ export function findUnexpectedDestructiveStatements(
       const isRebuild = rebuildTargets.has(target);
       const rebuildApproved =
         allowedRebuildTables === undefined || allowedRebuildTables.has(target);
-      if (!isRebuild || !rebuildApproved) offenders.push(s);
+      if (!isRebuild || !rebuildApproved) offenders.push(statement);
       continue;
     }
     // The COLUMN keyword is OPTIONAL in both PG and MySQL
@@ -470,19 +620,22 @@ export function findUnexpectedDestructiveStatements(
     const alterDropColumn = s.match(
       /\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?[^;]*\bDROP\s+(?:COLUMN\s+)?[`"]?[A-Za-z0-9_]+[`"]?/i
     );
-    if (
-      alterDropColumn &&
-      !/\bDROP\s+(?:CONSTRAINT|INDEX|KEY|FOREIGN\s+KEY|PRIMARY\s+KEY|CHECK|DEFAULT|NOT\s+NULL)\b/i.test(
+    // Judged per DROP clause: one ALTER can drop a constraint AND a column,
+    // and excluding the whole statement for its constraint clause let the
+    // column drop through.
+    const dropsAColumn =
+      /\bDROP\s+(?!(?:CONSTRAINT|INDEX|KEY|FOREIGN\s+KEY|PRIMARY\s+KEY|CHECK|DEFAULT|NOT\s+NULL)\b)(?:COLUMN\b|[`"]?[A-Za-z0-9_]+)/i.test(
         s
-      )
-    ) {
-      if (targetsManaged(alterDropColumn[1] ?? "")) offenders.push(s);
+      );
+    if (alterDropColumn && dropsAColumn) {
+      if (targetsManaged(alterDropColumn[1] ?? "")) offenders.push(statement);
       continue;
     }
     const truncate = s.match(
       /\bTRUNCATE\s+(?:TABLE\s+)?(?:[`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]+)[`"]?/i
     );
-    if (truncate && targetsManaged(truncate[1] ?? "")) offenders.push(s);
+    if (truncate && targetsManaged(truncate[1] ?? ""))
+      offenders.push(statement);
   }
   return offenders;
 }

@@ -55,6 +55,11 @@
       "types": "./dist/widgets.d.ts",
       "import": "./dist/widgets.mjs",
       "default": "./dist/widgets.mjs"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.mjs",
+      "default": "./dist/schema.mjs"
     }
   },
   "files": [

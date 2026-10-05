@@ -38,6 +38,10 @@ import {
   snapshotFieldTypes,
   withoutDisabledBehavior,
 } from "../../domains/schema/field-types/field-type-registry";
+import {
+  resolvePostgresSchema,
+  setActivePostgresSchema,
+} from "../../domains/schema/services/postgres-schema";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
 import { NextlyError, describeError } from "../../errors/index";
@@ -593,13 +597,24 @@ async function loadConfigInternal(
       // start on.
       assertAdminWidgets(transformedConfig.plugins ?? []);
 
+      // The effective plugin list: the transformed one, resolved again by the
+      // same resolver and options the runtime boot re-resolves it with
+      // (`register.ts`), so a plugin a `setup` transformer added or replaced is
+      // version-checked, ordered and folded here exactly as it is at boot.
+      // Everything below reads this list; folding with the pre-transformer
+      // list would compile a different schema from the one the app boots.
+      const effectivePlugins = orderConfigPlugins(
+        (transformedConfig.plugins ?? []) as PluginDefinition[]
+      );
+      transformedConfig = { ...transformedConfig, plugins: effectivePlugins };
+
       // Fold plugin contributions. Extend targets that aren't code/plugin
       // entities are DEFERRED (candidate Builder/UI-schema targets) rather than
       // thrown, so a plugin may extend/relate to a Builder-made collection
       // (P8/D3/R2).
       const folded = applyPluginSchemaContributionsDeferred(
         transformedConfig,
-        plugins
+        effectivePlugins
       );
       config = applyFoldedToBase(config, folded.config, transformedConfig);
       deferredExtends = folded.deferredExtends;
@@ -609,7 +624,7 @@ async function loadConfigInternal(
       // storage primitive when reading ui-schema.json — parity with runtime boot
       // (di/register.ts). Clear-and-rebuild; ALL plugins (incl. disabled, per
       // D49) since field types are declarative + schema-affecting.
-      for (const fieldTypePlugin of plugins) {
+      for (const fieldTypePlugin of effectivePlugins) {
         for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
           registerFieldType(
             withoutDisabledBehavior(fieldType, fieldTypePlugin)
@@ -644,11 +659,11 @@ async function loadConfigInternal(
         ),
         builderCollectionSlugs(builderEntities)
       );
-      validateCrossPluginRelations(plugins);
+      validateCrossPluginRelations(effectivePlugins);
 
       // Fail fast on invalid plugin-declared custom permissions (D36) — same
       // collector the runtime boot runs (register.ts), so both paths agree (D50).
-      collectCustomPermissions(config, plugins);
+      collectCustomPermissions(config, effectivePlugins);
 
       debugLog(
         options,
@@ -690,6 +705,42 @@ async function loadConfigInternal(
       cause: error instanceof Error ? error : undefined,
     });
   }
+}
+
+/**
+ * Make the config's PostgreSQL schema the one this CLI process resolves in.
+ *
+ * The runtime publishes the same value at boot, from the dialect the adapter
+ * reports. A CLI command has no adapter yet when it loads the config, so it
+ * resolves against the dialect the environment names — the same answer, taken
+ * one step earlier.
+ *
+ * Without this the application ran in `cms` while `migrate`, `migrate:down`
+ * and the status commands worked through `public`: a split lock, a split
+ * ledger, and DDL applied to a namespace nothing reads.
+ */
+function publishConfiguredPostgresSchema(config: {
+  db?: { postgres?: { schema?: string } };
+}): void {
+  const dialect =
+    process.env.DB_DIALECT ??
+    (process.env.DATABASE_URL?.startsWith("postgres") === true
+      ? "postgresql"
+      : "sqlite");
+  // Published on EVERY load, including one that names no schema.
+  //
+  // Returning early when the key was absent made the value sticky: a process
+  // that loaded a config naming `cms` and then loaded one without the key kept
+  // `cms` active, so the second config's commands read and wrote a schema it
+  // never asked for — its migrations and ledger landing somewhere its own
+  // settings do not describe. The CLI reloads config (watch mode, a second
+  // command in one process), so this is reachable, not theoretical.
+  //
+  // `resolvePostgresSchema` already answers `public` for `undefined`, so the
+  // absent case has a value; it was simply never being published.
+  setActivePostgresSchema(
+    resolvePostgresSchema(config.db?.postgres?.schema, dialect)
+  );
 }
 
 /**
@@ -744,6 +795,12 @@ export async function loadConfig(
     // This config is now the installed one, so its registry is what a
     // superseded reload has to put back if it finishes after the swap.
     markInstalledFieldTypes(loaded);
+    // And its PostgreSQL schema is now the one every CLI command resolves in.
+    // Published HERE because this is the one place every command that reads
+    // `nextly.config.ts` passes through: the adapter factory and the schema
+    // pipeline both read the active value, so `migrate` cannot end up applying
+    // DDL to `public` while the application it is migrating runs in `cms`.
+    publishConfiguredPostgresSchema(loaded.config);
     return loaded;
   });
 

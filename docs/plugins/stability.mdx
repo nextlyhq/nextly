@@ -53,6 +53,14 @@ These ship today but carry no guarantee yet — use them, but expect change:
 - Client UX (`@nextlyhq/plugin-sdk/client`): `useCan`, `<Can>`
 - Admin dashboard widgets (`PluginAdminWidget`, D22 — rendered; shape still settling)
 - `contributes.events`, `dependsOn` / `optionalDependsOn`, `plugin.rename` (D54)
+- Schema extensibility (P2): `contributes.schema` (`tables`, `extend`,
+  `migrations`), the `defineTable` / `col.*` DSL, `schema.extendTable`,
+  `schema.adoptTable` and `db.schema.afterDrizzle`
+- `contributes.transforms` — changing entities another plugin declared
+- `ctx.db.contributed(table, columns)` — reading and writing the hidden
+  columns a plugin contributed to a table it does not own
+- Collection `db` options: `db.idType`, `db.allowIdOnCreate`
+- `db.postgres.schema` (accepts only `"public"` for now)
 
 Each graduates once a first-party plugin exercises it.
 

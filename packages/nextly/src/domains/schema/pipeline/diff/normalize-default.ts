@@ -28,6 +28,17 @@
 //     ONLY when the column's type is boolean: for an integer column a default
 //     of `1` means the number one, and treating it as `true` would hide a real
 //     change. Hence the optional column-type argument.
+//   - A hex string default, `(CONVERT(X'7b7d' USING utf8mb4))`, which is how a
+//     TEXT or JSON column's default is written because MySQL takes only an
+//     expression there, is reported back as `convert(0x7b7d using utf8mb4)`.
+//
+// And one both servers share: a NUMERIC column's default is reported in the
+// server's own spelling of the number. PostgreSQL quotes a negative one and
+// casts it (`'-1'::integer` for `-1`), and MySQL pads a decimal to its scale
+// (`1.50` for `1.5`). On a numeric column those denote one value, so they are
+// compared as numbers — gated on the column type exactly as the boolean
+// collapse is, because in a text column `'1.50'` and `'1.5'` are different
+// strings.
 
 import { normalizeType } from "./normalize-type";
 
@@ -96,6 +107,10 @@ export function normalizeDefault(
   // deliberately leaves alone — is not reduced into the expression it spells.
   normalised = stripWrappingParens(normalised);
 
+  // Step 3b: MySQL's report of a hex string default, in the one spelling the
+  // desired side writes it with.
+  normalised = canonicalHexConvert(normalised);
+
   // Step 4: lowercase the built-in keywords, which the dialects report back in
   // whatever case they please — MySQL renders a DATETIME default as
   // `current_timestamp(3)` where the schema wrote `CURRENT_TIMESTAMP(3)`.
@@ -138,7 +153,99 @@ export function normalizeDefault(
     if (b === "0" || b === "false") return "false";
   }
 
+  // Step 7: a numeric column's default, as the number it denotes.
+  if (isNumericColumnType(columnType)) {
+    const number = canonicalNumber(normalised);
+    if (number !== undefined) return number;
+  }
+
   return normalised;
+}
+
+/**
+ * Column types whose default is a number, as `normalizeType` reports them.
+ *
+ * The canonical PostgreSQL and SQLite tokens, plus MySQL's spellings that
+ * `normalizeType` passes through (`double`, `float`, `tinyint`, `mediumint`).
+ * `tinyint(1)` is absent on purpose: it normalises to `bool`, which step 6
+ * has already answered.
+ */
+const NUMERIC_COLUMN_TYPES = new Set([
+  "int2",
+  "int4",
+  "int8",
+  "numeric",
+  "float4",
+  "float8",
+  "double",
+  "float",
+  "tinyint",
+  "mediumint",
+]);
+
+function isNumericColumnType(columnType: string | undefined): boolean {
+  // MySQL may qualify an integer type (`int unsigned`, `bigint zerofill`);
+  // the qualifier constrains the range, not how a default is spelled.
+  const base = normalizeType(
+    columnType?.replace(/\s+(?:unsigned|signed|zerofill)\b/gi, "")
+  );
+  return base !== undefined && NUMERIC_COLUMN_TYPES.has(base);
+}
+
+/**
+ * A number literal, bare or single-quoted, in one spelling per value.
+ *
+ * Exact rather than through a JavaScript number, which would round: two
+ * decimals that differ in the twentieth digit are different defaults. The
+ * digits are stripped of leading and trailing zeros and any exponent is
+ * applied, so `1.50`, `1.5` and `15e-1` all read `1.5`, and `1e3` reads
+ * `1000`. Undefined for anything that is not a single number.
+ */
+function canonicalNumber(expr: string): string | undefined {
+  const match = /^\s*(?:'([^']*)'|(\S+))\s*$/.exec(expr);
+  const text = match?.[1] ?? match?.[2];
+  if (text === undefined) return undefined;
+  const parts = /^([-+]?)(\d*)(?:\.(\d*))?(?:e([-+]?\d+))?$/i.exec(text.trim());
+  if (parts === null) return undefined;
+  const [, sign, whole = "", fraction = "", exponent = "0"] = parts;
+  if (whole === "" && fraction === "") return undefined;
+  const allDigits = `${whole}${fraction}`;
+  const significant = allDigits.replace(/^0+/, "");
+  if (significant === "") return "0";
+  const trimmed = significant.replace(/0+$/, "");
+  const scale =
+    Number(exponent) - fraction.length + (significant.length - trimmed.length);
+  const minus = sign === "-" ? "-" : "";
+  // Written out in positional notation, so an integer default reads as the
+  // integer; an exponent too large to spell out keeps exponent form, which is
+  // still one spelling per value.
+  if (Math.abs(scale) > MAX_POSITIONAL_SCALE) {
+    return `${minus}${trimmed}e${String(scale)}`;
+  }
+  if (scale >= 0) return `${minus}${trimmed}${"0".repeat(scale)}`;
+  const padded = trimmed.padStart(-scale + 1, "0");
+  return `${minus}${padded.slice(0, scale)}.${padded.slice(scale)}`;
+}
+
+/** The widest exponent {@link canonicalNumber} writes out in full. */
+const MAX_POSITIONAL_SCALE = 400;
+
+/**
+ * `CONVERT(X'<hex>' USING <charset>)`, as written, and
+ * `convert(0x<hex> using <charset>)`, as MySQL reports it, in one spelling.
+ *
+ * Only this exact shape: a hex literal converted to a named character set.
+ * The bytes are compared case-insensitively because hex digits are, and the
+ * character set name is an identifier MySQL matches without regard to case.
+ */
+function canonicalHexConvert(expr: string): string {
+  const match =
+    /^\s*convert\s*\(\s*(?:x'([0-9a-f]*)'|0x([0-9a-f]*))\s+using\s+(\w+)\s*\)\s*$/i.exec(
+      expr
+    );
+  if (match === null) return expr;
+  const hex = (match[1] ?? match[2] ?? "").toLowerCase();
+  return `convert(0x${hex} using ${(match[3] ?? "").toLowerCase()})`;
 }
 
 /**
