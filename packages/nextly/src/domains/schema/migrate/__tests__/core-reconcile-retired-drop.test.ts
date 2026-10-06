@@ -64,6 +64,9 @@ function deps(over: Record<string, unknown> = {}) {
       // path, which is a different branch and would not test this at all.
       introspect: () => Promise.resolve(getCoreSchema("postgresql", {})),
       applyCore: () => Promise.resolve({ statementsExecuted: [] as string[] }),
+      // No database behind `db` here, and no row to fill in: the drop is the
+      // only thing these cases change.
+      markUnrecordedVerifications: () => Promise.resolve(0),
       ...over,
     },
   };

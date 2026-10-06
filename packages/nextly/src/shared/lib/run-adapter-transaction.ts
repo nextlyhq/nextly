@@ -11,6 +11,7 @@
  *
  * @module shared/lib/run-adapter-transaction
  */
+import { getNextlyLogger } from "../../observability/logger";
 
 /**
  * The adapter's transaction runner, bound to its adapter. `Tx` is the handle
@@ -45,4 +46,65 @@ export async function runAdapterTransaction<T, Tx = void>(
   } catch (error) {
     throw failure ? failure.error : error;
   }
+}
+
+/** The adapter surface {@link serializeOnSqlite} needs. */
+export interface SerializingAdapter {
+  getCapabilities(): { dialect: string };
+  transaction<R>(work: () => Promise<R>): Promise<R>;
+}
+
+/**
+ * Run a write that must not be undone by another request's rollback.
+ *
+ * On SQLite every request shares the one connection, so a plain statement
+ * issued while another request's transaction is open runs inside that
+ * transaction, and its rollback undoes it: a deleted refresh row comes back,
+ * a failed-attempt count returns to zero. Run through the adapter's own
+ * transaction, the write queues behind the open one instead, and commits on
+ * its own. A call already inside a transaction this request opened nests in
+ * it as a savepoint, and stands or falls with it, as it should.
+ *
+ * PostgreSQL and MySQL give each statement a pooled connection of its own,
+ * where another transaction cannot reach it, so there `work` runs directly.
+ */
+export function serializeOnSqlite<T>(
+  adapter: SerializingAdapter,
+  work: () => Promise<T>
+): Promise<T> {
+  if (adapter.getCapabilities().dialect !== "sqlite") return work();
+  return runAdapterTransaction(run => adapter.transaction(() => run()), work);
+}
+
+/** The adapter surface {@link afterCommit} needs. */
+export interface AfterCommitAdapter {
+  afterCommit(
+    effect: () => unknown,
+    onDeferredFailure?: (error: unknown) => void
+  ): Promise<void>;
+}
+
+/**
+ * Run what a write does outside the database — an event, an after-hook, a
+ * cache flush, a webhook drain — once that write is durable.
+ *
+ * Call it after the service's own transaction has resolved. On PostgreSQL and
+ * MySQL that transaction had its own connection and has committed, so
+ * `effect` runs now and its failure reaches the caller as before. On SQLite a
+ * service called inside an enclosing transaction (a plugin's
+ * `ctx.db.transaction`) wrote in a savepoint that the enclosing transaction
+ * can still roll back: `effect` then waits for the outermost commit, never
+ * runs for a change that was rolled back, and a failure after that commit is
+ * logged rather than thrown, since the caller has long had its answer.
+ */
+export function afterCommit(
+  adapter: AfterCommitAdapter,
+  effect: () => unknown
+): Promise<void> {
+  return adapter.afterCommit(effect, error => {
+    getNextlyLogger().error({
+      kind: "after-commit-effect-failed",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
 }

@@ -92,6 +92,12 @@ export const nextlyTables: TableDefinition[] = [
         type: "timestamp",
       },
       {
+        // Nullable, as on the real table: set with email_verified, cleared
+        // with it, and "legacy" for an address verified before it existed.
+        name: "email_verified_via",
+        type: "text",
+      },
+      {
         name: "password_updated_at",
         type: "timestamp",
       },

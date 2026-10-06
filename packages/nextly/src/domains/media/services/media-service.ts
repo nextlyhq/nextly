@@ -252,13 +252,20 @@ export class MediaService {
    * committed media write into an error. Mirrors the collection write path.
    */
   private async afterWrite(): Promise<void> {
-    // Only offer the fast drain when a media write would have recorded an event
-    // (an endpoint exists, or audit is on). Media has no per-entity opt-out, so
-    // this sync check equals the recorder's result; without it an install with
-    // no webhooks pays a fresh `nextly_webhooks` query on every media write.
-    // Retention still runs — it prunes prior rows regardless.
-    if (isUnscopedRecordingActive()) this.fastDrainScheduler?.offer();
-    await this.retentionRunner?.maybeRun(MediaService.WRITE_PATH_PRUNE_BATCHES);
+    // Once the write is durable: inside an enclosing SQLite transaction, once
+    // it commits, so a drain never delivers an outbox row it rolls back.
+    await this.legacyMediaService.whenCommitted(async () => {
+      // Only offer the fast drain when a media write would have recorded an
+      // event (an endpoint exists, or audit is on). Media has no per-entity
+      // opt-out, so this sync check equals the recorder's result; without it
+      // an install with no webhooks pays a fresh `nextly_webhooks` query on
+      // every media write. Retention still runs — it prunes prior rows
+      // regardless.
+      if (isUnscopedRecordingActive()) this.fastDrainScheduler?.offer();
+      await this.retentionRunner?.maybeRun(
+        MediaService.WRITE_PATH_PRUNE_BATCHES
+      );
+    });
   }
 
   /**
@@ -435,10 +442,15 @@ export class MediaService {
       filename: result.data.filename,
     });
 
-    emitMediaEvent("uploaded", {
+    // Announced once the row is durable, and never for one an enclosing
+    // SQLite transaction rolls back.
+    const uploaded = {
       mediaId: result.data.id,
       filename: result.data.filename,
-    });
+    };
+    await this.legacyMediaService.whenCommitted(() =>
+      emitMediaEvent("uploaded", uploaded)
+    );
 
     // The upload committed a media.uploaded outbox row; drain and prune it.
     await this.afterWrite();
@@ -628,7 +640,10 @@ export class MediaService {
 
     this.logger.info("Media file deleted", { mediaId });
 
-    emitMediaEvent("deleted", { mediaId });
+    // Announced once the removal is durable, like the upload above.
+    await this.legacyMediaService.whenCommitted(() =>
+      emitMediaEvent("deleted", { mediaId })
+    );
 
     // The delete committed a media.deleted outbox row; drain and prune it.
     await this.afterWrite();

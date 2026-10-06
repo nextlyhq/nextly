@@ -15,8 +15,13 @@
  * @module domains/audit/erasure-aware-insert
  */
 
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { eq, sql, type Column, type SQL, type Table } from "drizzle-orm";
+
+import {
+  readUnderRowLock,
+  type LockableRead,
+  type RowLockServer,
+} from "../../shared/lib/row-lock";
 
 /**
  * The Drizzle surface an erasure-aware write needs.
@@ -30,11 +35,7 @@ export interface ErasureAwareDb {
   select(fields: unknown): {
     from(table: unknown): {
       where(condition: unknown): {
-        limit(count: number): Promise<Record<string, unknown>[]> & {
-          // `.for("share")` exists on the Postgres and MySQL builders. SQLite
-          // has no row lock and never reaches the call.
-          for(strength: "share"): Promise<Record<string, unknown>[]>;
-        };
+        limit(count: number): LockableRead<Record<string, unknown>[]>;
       };
     };
   };
@@ -120,16 +121,18 @@ export function erasureNeedsLock(input: ErasureAwareInsert): boolean {
  * erasure stamp; the actor's and the target's together decide
  * `namesEitherParty`.
  *
- * **Postgres and MySQL** take a SHARED lock on each account row first. The
- * deletion takes an EXCLUSIVE lock before it erases anything, so the two cannot
- * be in flight at once: either this lock is taken first and the deletion waits,
- * so its erasure covers a row that already exists, or the deletion holds the row
- * and this waits for its commit and then correctly finds the account gone. That
- * closes the gap a single statement cannot — its subquery is answered when it
- * STARTS while its row becomes visible when it COMMITS, so an insert spanning
- * the deletion's commit satisfies neither the deletion's erasure nor its sweep.
- * Shared rather than exclusive so concurrent writes naming the same person do
- * not serialise against each other; only the deletion has to exclude them.
+ * **Postgres and MySQL** lock each account row first, with the existence-check
+ * row lock (`readUnderRowLock`). The deletion takes an EXCLUSIVE lock before it
+ * erases anything, so the two cannot be in flight at once: either this lock is
+ * taken first and the deletion waits, so its erasure covers a row that already
+ * exists, or the deletion holds the row and this waits for its commit and then
+ * correctly finds the account gone. That closes the gap a single statement
+ * cannot — its subquery is answered when it STARTS while its row becomes
+ * visible when it COMMITS, so an insert spanning the deletion's commit
+ * satisfies neither the deletion's erasure nor its sweep. The lock is shared
+ * wherever the server accepts it, so concurrent writes naming the same person
+ * do not serialise against each other; on MariaDB and TiDB, which reject
+ * `FOR SHARE`, it is `FOR UPDATE`, and they take turns on the account row.
  *
  * **SQLite** has one writer, so its insert cannot interleave with the deletion
  * at all and needs no lock. It decides inside the statement instead.
@@ -144,7 +147,7 @@ export function erasureNeedsLock(input: ErasureAwareInsert): boolean {
  */
 export async function insertErasureAware(
   db: ErasureAwareDb,
-  dialect: SupportedDialect,
+  server: RowLockServer,
   input: ErasureAwareInsert
 ): Promise<ErasureAwareOutcome> {
   // A row naming nobody has no account to outlive. Storing an erasure stamp
@@ -158,16 +161,16 @@ export async function insertErasureAware(
     });
     return { targetAbsent: false };
   }
-  if (dialect === "sqlite") {
+  if (server.dialect === "sqlite") {
     await db
       .insert(input.table)
       .values(decidedRow(input, lookInStatement(input)));
     const target = await readAccount(db, input.users, decidingTarget(input), {
-      lock: false,
+      lockOn: null,
     });
     return { targetAbsent: target.gone };
   }
-  const looks = await lookUnderLock(db, input);
+  const looks = await lookUnderLock(db, server, input);
   await db.insert(input.table).values(decidedRow(input, looks));
   return { targetAbsent: looks.targetGone === true };
 }
@@ -218,24 +221,36 @@ function lookInStatement(input: ErasureAwareInsert): AccountLooks {
 }
 
 /**
- * Postgres and MySQL: read each account the row names under a shared lock,
- * which holds the answer for the rest of the caller's transaction.
+ * Postgres and MySQL: read each account the row names under the
+ * existence-check row lock, which holds the answer for the rest of the
+ * caller's transaction.
  */
 async function lookUnderLock(
   db: ErasureAwareDb,
+  server: RowLockServer,
   input: ErasureAwareInsert
 ): Promise<AccountLooks> {
   const { users, actorUserId } = input;
   const fromAccount = input.identityFromAccount ?? {};
-  const actor = await readAccount(db, users, actorUserId, {
-    lock: true,
-    columns: fromAccount,
-  });
   // Only a target that decides something is locked: a row with no columns
   // naming either party, or one about the actor, takes no lock on it.
-  const target = await readAccount(db, users, decidingTarget(input), {
-    lock: true,
-  });
+  const targetUserId = decidingTarget(input);
+  const readActor = () =>
+    readAccount(db, users, actorUserId, {
+      lockOn: server,
+      columns: fromAccount,
+    });
+  const readTarget = () =>
+    readAccount(db, users, targetUserId, { lockOn: server });
+  // Two accounts are locked in id order, so two writes naming the same pair in
+  // opposite roles take the locks in the same order. Where the lock is
+  // exclusive (MariaDB, TiDB), taking them actor first would let each write
+  // hold one account while waiting for the other.
+  const targetFirst =
+    actorUserId != null && targetUserId != null && targetUserId < actorUserId;
+  let target = targetFirst ? await readTarget() : undefined;
+  const actor = await readActor();
+  target ??= await readTarget();
   const values: Record<string, unknown> = {};
   for (const column of Object.keys(fromAccount)) {
     values[column] = actor.row?.[column] ?? null;
@@ -252,14 +267,15 @@ async function lookUnderLock(
 }
 
 /**
- * Read one account, with the columns asked for, under a shared lock when
- * `lock` is set. An account the row does not name is not gone.
+ * Read one account, with the columns asked for, under the existence-check row
+ * lock of the `lockOn` server, or without a lock when it is null. An account
+ * the row does not name is not gone.
  */
 async function readAccount(
   db: ErasureAwareDb,
   users: ErasureAwareInsert["users"],
   userId: string | null | undefined,
-  options: { lock: boolean; columns?: Record<string, Column> }
+  options: { lockOn: RowLockServer | null; columns?: Record<string, Column> }
 ): Promise<{ gone: boolean; row?: Record<string, unknown> }> {
   if (userId == null) return { gone: false };
   const query = db
@@ -267,7 +283,9 @@ async function readAccount(
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
-  const [row] = await (options.lock ? query.for("share") : query);
+  const [row] = await (options.lockOn === null
+    ? query
+    : readUnderRowLock(query, options.lockOn, "existence-check"));
   return { gone: row === undefined, row };
 }
 

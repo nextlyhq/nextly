@@ -31,6 +31,11 @@ export const users = mysqlTable(
     name: varchar("name", { length: 255 }),
     email: varchar("email", { length: 255 }).notNull(),
     emailVerified: datetime("email_verified"),
+    // How the address came to be verified (see `EmailVerifiedVia`): written in
+    // the same statement as email_verified and cleared with it. Nullable, so
+    // adding it to an existing table rewrites no row; `nextly migrate` then
+    // marks addresses verified before it existed as "legacy".
+    emailVerifiedVia: varchar("email_verified_via", { length: 16 }),
     passwordUpdatedAt: datetime("password_updated_at"),
     image: varchar("image", { length: 255 }),
     passwordHash: varchar("password_hash", { length: 255 }),

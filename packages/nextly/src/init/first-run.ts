@@ -180,9 +180,11 @@ async function runCoreSchemaChecks(
   // these tables are no longer core, so `getCoreTableNames` does not name them
   // and the introspection never looked for them.
   const {
+    ERASE_RETIRED_AUTH_TABLES_ENV,
     findRetiredAuthTables,
     formatRetiredAuthTablesWarning,
     liveColumnsOf,
+    retiredTablesNamedForErasure,
   } = await import("./retired-auth-tables");
   const retiredAuth = await findRetiredAuthTables(
     adapter.getDrizzle(),
@@ -194,7 +196,12 @@ async function runCoreSchemaChecks(
     }
   );
   if (retiredAuth.length > 0) {
-    logger.warn(formatRetiredAuthTablesWarning(retiredAuth));
+    logger.warn(
+      formatRetiredAuthTablesWarning(
+        retiredAuth,
+        retiredTablesNamedForErasure(process.env[ERASE_RETIRED_AUTH_TABLES_ENV])
+      )
+    );
   }
 }
 

@@ -351,6 +351,22 @@ export class CollectionEntryService extends BaseService {
       | BatchOperationResult,
     disableRevalidate = false
   ): Promise<void> {
+    // All of it describes a committed write. A write made inside an enclosing
+    // SQLite transaction is a savepoint that transaction can still undo, so
+    // there it waits for that commit, and never runs for a rollback.
+    await this.afterCommit(() =>
+      this.runPostWriteEffects(result, disableRevalidate)
+    );
+  }
+
+  /** The post-write side effects {@link afterWriteIfRecorded} runs once durable. */
+  private async runPostWriteEffects(
+    result:
+      | CollectionServiceResult<unknown>
+      | BulkOperationResult<unknown>
+      | BatchOperationResult,
+    disableRevalidate: boolean
+  ): Promise<void> {
     // Revalidation flushes whenever a committed write produced intents. It is
     // NOT tied to the outbox-event gate below: an intent is only ever set after
     // a write commits, so its presence is the "content changed" signal, and a

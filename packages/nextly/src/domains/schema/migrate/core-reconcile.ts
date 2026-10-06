@@ -18,6 +18,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { getDialectTablesForPush } from "../../../database/index";
 import { NextlyError } from "../../../errors";
 import { getCoreSchema, getCoreTableNames } from "../../../schemas";
+import { markUnrecordedVerifications } from "../../users/services/email-verification-write";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import {
   classifyForMode,
@@ -107,8 +108,22 @@ export interface ReconcileCoreDeps {
    * pre-creates the ledger).
    */
   ensureLedger?: () => Promise<void>;
+  /**
+   * Injectable for tests. Default: `markUnrecordedVerifications`, which marks
+   * verified addresses with no record of how as `"legacy"`. Returns how many
+   * rows it changed.
+   */
+  markUnrecordedVerifications?: (
+    db: unknown,
+    dialect: Dialect
+  ) => Promise<number>;
 }
 
+/**
+ * Bring the core tables to the current core schema, then fill in the core rows
+ * a new column leaves without a value it can state (see `fillCoreData`), on
+ * every run.
+ */
 export async function reconcileCore(
   deps: ReconcileCoreDeps
 ): Promise<{ changed: boolean }> {
@@ -131,6 +146,10 @@ export async function reconcileCore(
   const ops = diffSnapshots(live, desired);
 
   if (ops.length === 0) {
+    // Rows are not schema, so "up to date" says nothing about them either: a
+    // column added by an earlier run, or by a dev push, still needs its rows
+    // filled in.
+    const filled = await fillCoreData(deps);
     // The retired tables are NOT part of the core schema, so the diff above
     // can never mention them and "up to date" says nothing about them. Run
     // the cleanup before returning, or the ordinary upgrade — a database
@@ -145,7 +164,7 @@ export async function reconcileCore(
         ? `Core schema up to date; dropped retired auth tables: ${dropped.join(", ")}.`
         : "Core schema up to date."
     );
-    return { changed: dropped.length > 0 };
+    return { changed: filled || dropped.length > 0 };
   }
 
   const mode: ClassifierMode = deps.mode ?? "production-strict";
@@ -232,6 +251,11 @@ export async function reconcileCore(
     });
   }
 
+  // After the apply, which is what adds the columns being filled. Outside the
+  // `try`, so a failure here is reported as itself rather than as a failed
+  // apply.
+  await fillCoreData(deps);
+
   // Only once the core apply has succeeded. The drop is irreversible and the
   // apply is not guaranteed: dropping first, a failed apply would leave a
   // database without the retired tables' rows AND without the core update,
@@ -241,6 +265,30 @@ export async function reconcileCore(
   // is kept rather than dropped on a stale count.
   await executeRetiredDrops(deps, await decideRetiredDrops(deps));
   return { changed: true };
+}
+
+/**
+ * Fill in the core rows a column added to the core schema leaves without a
+ * value it can state, and report whether any row changed.
+ *
+ * Run on every reconcile rather than only when the diff adds the column: a dev
+ * push or `db:sync` can add a column without coming through here, and each
+ * step only touches rows still missing their value, so a second run changes
+ * nothing.
+ *
+ * Today one step: `users.email_verified_via` for addresses verified before
+ * that column existed, marked `"legacy"` so a later decision keyed on how an
+ * address was verified can tell an unknown origin from a known one.
+ */
+async function fillCoreData(deps: ReconcileCoreDeps): Promise<boolean> {
+  const mark = deps.markUnrecordedVerifications ?? markUnrecordedVerifications;
+  const marked = await mark(deps.db, deps.dialect);
+  if (marked > 0) {
+    deps.logger?.info?.(
+      `Marked ${marked} previously verified email address${marked === 1 ? "" : "es"} as verified by "legacy" (no record of how).`
+    );
+  }
+  return marked > 0;
 }
 
 /**

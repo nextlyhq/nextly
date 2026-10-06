@@ -1,11 +1,37 @@
 // Database operation types for better type safety
 
+/**
+ * How an account's address came to be verified, stored in
+ * `users.email_verified_via` beside `email_verified`. Null exactly when
+ * `email_verified` is.
+ *
+ * - `"link"`: the person followed a verification link sent to the address.
+ * - `"invite"`: the person accepted an invite link sent to the address.
+ * - `"admin"`: the app vouched for it: an administrator creating or updating
+ *   the account, the app's own server code through the Direct API, first-run
+ *   setup and the seeders.
+ * - `"plugin"`: a plugin vouched for it through `ctx.services.users`.
+ * - `"external"`: a login provider vouched for it (`createExternalUser`).
+ * - `"legacy"`: verified with nothing recording how: before this column
+ *   existed, or by a write outside Nextly's own paths. `nextly migrate` sets it
+ *   on every verified row it finds without a value.
+ */
+export type EmailVerifiedVia =
+  | "link"
+  | "invite"
+  | "admin"
+  | "plugin"
+  | "external"
+  | "legacy";
+
 export interface UserInsertData {
   id: string;
   email: string;
   name: string | null;
   passwordHash: string | null;
   emailVerified: Date | null;
+  /** How the address was verified; null when it is not. */
+  emailVerifiedVia?: EmailVerifiedVia | null;
   image: string | null;
   isActive?: boolean;
   /** True when an admin set the password and the user must replace it on first sign-in. */
@@ -19,6 +45,8 @@ export interface UserUpdateData {
   name?: string | null;
   image?: string | null;
   emailVerified?: Date | null;
+  /** How the address was verified; null when it is not. */
+  emailVerifiedVia?: EmailVerifiedVia | null;
   passwordHash?: string;
   /** When the password was last set. */
   passwordUpdatedAt?: Date;

@@ -2669,14 +2669,18 @@ export class SingleMutationService extends BaseService {
       // 10.1. Field-level afterChange hooks observe the PERSISTED values —
       // run before response expansion so hooks see stored IDs, not the
       // populated media/relationship objects the response returns.
-      await runFieldHooks({
-        kind: "single",
-        slug,
-        phase: "afterChange",
-        data: updatedDoc,
-        operation: "update",
-        user: options.user,
-      });
+      // After the commit: inside an enclosing SQLite transaction, once it
+      // commits, and never for a write it rolls back.
+      await this.afterCommitOver(updatedDoc, committed =>
+        runFieldHooks({
+          kind: "single",
+          slug,
+          phase: "afterChange",
+          data: committed,
+          operation: "update",
+          user: options.user,
+        })
+      );
 
       // 10.5. Expand upload fields with full media data.
       //
@@ -2740,22 +2744,30 @@ export class SingleMutationService extends BaseService {
       );
 
       // 11. Execute afterChange hooks (afterUpdate equivalent for Singles)
+      // Held like the field hooks above. What a hook returns reshapes the
+      // response only when it ran before the call returns.
       if (this.hookRegistry.hasHooks("afterUpdate", hookCollection)) {
-        const afterContext = buildSingleHookContext({
-          collection: hookCollection,
-          operation: "update",
-          data: updatedDoc,
-          originalData: existingDeserialized,
-          user: options.user ?? undefined,
-          context: sharedContext,
-          req: requestFacts,
+        const transformed: { data?: typeof updatedDoc } = {};
+        await this.afterCommitOver(updatedDoc, async committed => {
+          const afterContext = buildSingleHookContext({
+            collection: hookCollection,
+            operation: "update",
+            data: committed,
+            originalData: existingDeserialized,
+            user: options.user ?? undefined,
+            context: sharedContext,
+            req: requestFacts,
+          });
+          const transformedData = await this.hookRegistry.execute(
+            "afterUpdate",
+            afterContext
+          );
+          if (transformedData !== undefined) {
+            transformed.data = transformedData;
+          }
         });
-        const transformedData = await this.hookRegistry.execute(
-          "afterUpdate",
-          afterContext
-        );
-        if (transformedData !== undefined) {
-          updatedDoc = transformedData;
+        if (transformed.data !== undefined) {
+          updatedDoc = transformed.data;
         }
       }
 

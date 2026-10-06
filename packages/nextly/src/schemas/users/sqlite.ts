@@ -27,6 +27,11 @@ export const users = sqliteTable(
     name: text("name"),
     email: text("email").notNull(),
     emailVerified: integer("email_verified", { mode: "timestamp" }),
+    // How the address came to be verified (see `EmailVerifiedVia`): written in
+    // the same statement as email_verified and cleared with it. Nullable, so
+    // adding it to an existing table rewrites no row; `nextly migrate` then
+    // marks addresses verified before it existed as "legacy".
+    emailVerifiedVia: text("email_verified_via"),
     passwordUpdatedAt: integer("password_updated_at", { mode: "timestamp" }),
     image: text("image"),
     passwordHash: text("password_hash"),

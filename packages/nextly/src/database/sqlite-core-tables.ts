@@ -38,6 +38,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "name" TEXT,
       "email" TEXT NOT NULL UNIQUE,
       "email_verified" INTEGER,
+      "email_verified_via" TEXT,
       "password_updated_at" INTEGER,
       "image" TEXT,
       "password_hash" TEXT,

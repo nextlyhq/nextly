@@ -111,6 +111,14 @@ export function renderPluginInfo(
     "finishes logins",
     manifest.completesLogins ? "declared" : "no"
   );
+  // Shown even when absent, so "declares none" reads differently from a
+  // version the operator expected and the plugin left out.
+  logger.keyValue(
+    "schemaVersion",
+    manifest.schemaVersion === undefined
+      ? "not declared"
+      : String(manifest.schemaVersion)
+  );
   list("secret settings", manifest.secrets);
   list("provides", manifest.provides);
   list(

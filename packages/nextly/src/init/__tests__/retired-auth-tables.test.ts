@@ -6,6 +6,7 @@ import {
   formatRetiredAuthTablesWarning,
   planRetiredAuthTableDrop,
   RETIRED_AUTH_TABLES,
+  retiredTablesNamedForErasure,
   type RetiredAuthTable,
 } from "../retired-auth-tables";
 
@@ -136,5 +137,45 @@ describe("formatRetiredAuthTablesWarning", () => {
     expect(warning).toContain("sessions: 4 rows");
     expect(warning).toContain("NEXTLY_DROP_RETIRED_AUTH_TABLES=1");
     expect(warning).toContain("NEXTLY_DROP_NONEMPTY_RETIRED=1");
+  });
+
+  it("says a deletion leaves the rows of a table nobody named", () => {
+    const warning = formatRetiredAuthTablesWarning(
+      [
+        { table: "accounts", rows: 1 },
+        { table: "sessions", rows: 4 },
+      ],
+      new Set(["sessions"])
+    );
+    expect(warning).toContain(
+      "deleting a user does not erase their rows from accounts."
+    );
+    expect(warning).toContain("NEXTLY_ERASE_RETIRED_AUTH_TABLES=accounts");
+    expect(warning).not.toContain("from accounts or sessions");
+  });
+
+  it("says nothing about erasure once every table is named", () => {
+    const warning = formatRetiredAuthTablesWarning(
+      [{ table: "accounts", rows: 1 }],
+      new Set(["accounts"])
+    );
+    expect(warning).not.toContain("does not erase");
+  });
+});
+
+describe("retiredTablesNamedForErasure", () => {
+  it("reads the retired names an operator listed", () => {
+    expect([...retiredTablesNamedForErasure(" accounts ,sessions,")]).toEqual([
+      "accounts",
+      "sessions",
+    ]);
+  });
+
+  it("names nothing when unset, and never a table that is not retired", () => {
+    // Unset is the default: the shape alone does not make a table Nextly's.
+    expect(retiredTablesNamedForErasure(undefined).size).toBe(0);
+    expect([...retiredTablesNamedForErasure("users,accounts")]).toEqual([
+      "accounts",
+    ]);
   });
 });

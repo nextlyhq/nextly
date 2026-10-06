@@ -165,12 +165,28 @@ export class MediaService extends BaseService {
     if (!this.fastDrainScheduler && !this.retentionRunner) {
       return;
     }
-    // Only schedule the fast drain when an event was actually recorded: an
-    // install with no endpoint and audit off records nothing, so offering the
-    // drain would pay a fresh `nextly_webhooks` query on every media write for
-    // no subscriber. Retention still runs — it prunes prior rows regardless.
-    if (recorded) this.fastDrainScheduler?.offer();
-    await this.retentionRunner?.maybeRun(MediaService.WRITE_PATH_PRUNE_BATCHES);
+    // Once the write is durable: a drain started inside an enclosing SQLite
+    // transaction would deliver the outbox row it may still roll back.
+    await this.afterCommit(async () => {
+      // Only schedule the fast drain when an event was actually recorded: an
+      // install with no endpoint and audit off records nothing, so offering
+      // the drain would pay a fresh `nextly_webhooks` query on every media
+      // write for no subscriber. Retention still runs — it prunes prior rows
+      // regardless.
+      if (recorded) this.fastDrainScheduler?.offer();
+      await this.retentionRunner?.maybeRun(
+        MediaService.WRITE_PATH_PRUNE_BATCHES
+      );
+    });
+  }
+
+  /**
+   * Run `effect` once this service's write is durable: now on PostgreSQL and
+   * MySQL, and after the enclosing transaction commits on SQLite. For the
+   * unified media service, whose events follow the writes made here.
+   */
+  whenCommitted(effect: () => unknown): Promise<void> {
+    return this.afterCommit(effect);
   }
 
   /**
@@ -536,7 +552,8 @@ export class MediaService extends BaseService {
 
       // The row is visible to readers the moment the transaction commits, so
       // invalidate here rather than after the drain and retention pass below.
-      await revalidateMedia([mediaId], this.logger);
+      // Inside an enclosing SQLite transaction, "commits" means its commit.
+      await this.afterCommit(() => revalidateMedia([mediaId], this.logger));
 
       // The upload committed a media.uploaded outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
@@ -873,7 +890,10 @@ export class MediaService extends BaseService {
       // Ahead of the variant cleanup below for the same reason the delete path
       // invalidates ahead of its storage work: the row has changed, so a cached
       // page is already wrong, and file cleanup can retry for a long time.
-      if (updatedRow) await revalidateMedia([mediaId], this.logger);
+      // Inside an enclosing SQLite transaction, once that commits.
+      if (updatedRow) {
+        await this.afterCommit(() => revalidateMedia([mediaId], this.logger));
+      }
 
       if (!updatedRow) {
         // Concurrent delete: the row was not updated, so the freshly-uploaded
@@ -1023,8 +1043,9 @@ export class MediaService extends BaseService {
       // so a cached page is already wrong; deferring past storage deletes and
       // their retry backoffs leaves it wrong for as long as that takes, and a
       // storage call that hangs until the request is killed would leave it
-      // wrong permanently despite a committed delete.
-      await revalidateMedia([mediaId], this.logger);
+      // wrong permanently despite a committed delete. Inside an enclosing
+      // SQLite transaction the delete is durable only once that commits.
+      await this.afterCommit(() => revalidateMedia([mediaId], this.logger));
 
       // Best-effort physical cleanup AFTER the row + event have committed.
       // Swallow-and-warn: a storage failure must not fail a delete whose

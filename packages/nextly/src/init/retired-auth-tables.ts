@@ -3,10 +3,9 @@
  * do anything.
  *
  * `accounts` and `sessions` came from an authentication model Nextly no longer
- * uses: sessions are stateless JWTs with an opaque refresh token of their own,
- * and an external identity belongs to the plugin that authenticated it rather
- * than to a core table nothing writes. Nothing has written either table since
- * that change, and nothing reads them now.
+ * uses: sessions are stateless JWTs with an opaque refresh token of their own.
+ * Nothing has written either table since that change, and nothing reads them
+ * now.
  *
  * A fresh install no longer creates them. An existing database keeps them,
  * because dropping a table that may still hold rows is the operator's decision
@@ -18,10 +17,20 @@
  * and how many rows each holds. Reporting only: nothing here changes the
  * database. `nextly migrate` drops them when the operator asks it to.
  *
+ * Nextly keeps no record that it created either table: older versions created
+ * them with `CREATE TABLE IF NOT EXISTS` and a schema push, and the schema
+ * ledger's `core_apply` rows name no tables. Their shape is not proof either,
+ * because it is the shape of the Auth.js (NextAuth) SQL adapters' tables of
+ * the same names, which a host app sharing the database may own. So nothing
+ * here acts on a table by its shape alone: the startup report and the drop
+ * the operator asks for name the table first, and a user deletion erases from
+ * one only when the operator has named it in `NEXTLY_ERASE_RETIRED_AUTH_TABLES`.
+ *
  * @module init/retired-auth-tables
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { z } from "zod";
 
 import { introspectLiveSnapshot } from "../domains/schema/pipeline/diff/introspect-live";
 
@@ -44,13 +53,15 @@ const RETIRED_AUTH_TABLE_SHAPES: Readonly<Record<string, readonly string[]>> = {
 };
 
 /**
- * Whether a table with a retired name is the table Nextly created.
+ * Whether a table with a retired name has the shape Nextly created it with.
  *
- * The one predicate the startup warning, the drop and the erasure all use, so
- * none of them acts on a table another application owns: a host table named
- * `accounts` was reported as Nextly's, dropped by `nextly migrate`, and had
- * `DELETE ... WHERE user_id = ?` run against it on every user deletion — which
- * failed, and took the deletion with it.
+ * NECESSARY rather than sufficient: the startup warning, the drop and the
+ * erasure all require it, so none of them acts on a namesake of another
+ * shape — a host table named `accounts` was reported as Nextly's, dropped by
+ * `nextly migrate`, and had `DELETE ... WHERE user_id = ?` run against it on
+ * every user deletion, which failed and took the deletion with it. An Auth.js
+ * table has this shape too, so the erasure also needs the operator's
+ * {@link retiredTablesNamedForErasure}.
  */
 export function hasRetiredShape(
   table: string,
@@ -81,6 +92,39 @@ export function liveColumnsOf(
         ?.columns.map(column => column.name) ?? []
     );
   };
+}
+
+/** The variable an operator names the retired tables Nextly may erase from in. */
+export const ERASE_RETIRED_AUTH_TABLES_ENV = "NEXTLY_ERASE_RETIRED_AUTH_TABLES";
+
+/** A comma-separated list of names, read as each name trimmed and non-empty. */
+const TABLE_LIST = z
+  .string()
+  .optional()
+  .transform(value =>
+    (value ?? "")
+      .split(",")
+      .map(name => name.trim())
+      .filter(name => name !== "")
+  );
+
+/**
+ * The retired tables the operator has named as Nextly's to erase a deleted
+ * user's rows from.
+ *
+ * Named by the operator because nothing else can tell Nextly's table from a
+ * host app's: no record says Nextly created it, and the shape is the Auth.js
+ * adapters' too. Erasing from a host's table deletes that app's sign-in links
+ * for a person who may still use it, so without a name the rows stay, and the
+ * startup report says so. Only the retired names count; anything else in the
+ * list is ignored, since this never erases from another table.
+ */
+export function retiredTablesNamedForErasure(
+  value: string | undefined
+): ReadonlySet<string> {
+  return new Set(
+    TABLE_LIST.parse(value).filter(name => RETIRED_AUTH_TABLES.includes(name))
+  );
 }
 
 /** A retired table this database still has, and what it still holds. */
@@ -131,8 +175,12 @@ export async function findRetiredAuthTables(
 
 /** The startup warning, naming each table and its row count. */
 export function formatRetiredAuthTablesWarning(
-  found: readonly RetiredAuthTable[]
+  found: readonly RetiredAuthTable[],
+  namedForErasure: ReadonlySet<string> = new Set()
 ): string {
+  const notErased = found
+    .filter(entry => !namedForErasure.has(entry.table))
+    .map(entry => entry.table);
   return [
     "[nextly] Your database still has auth tables this version of Nextly no longer uses.",
     "",
@@ -141,11 +189,19 @@ export function formatRetiredAuthTablesWarning(
         `  ${entry.table}: ${entry.rows} ${entry.rows === 1 ? "row" : "rows"}`
     ),
     "",
-    "  Sessions are stateless JWTs with their own refresh-token table, and an external identity",
-    "  belongs to the plugin that authenticated it. Nothing writes or reads these two tables, and",
-    "  a new install no longer creates them. They are left in place because dropping a table is",
-    "  your decision: `nextly migrate` with NEXTLY_DROP_RETIRED_AUTH_TABLES=1 drops them, and adding",
-    "  NEXTLY_DROP_NONEMPTY_RETIRED=1 is required for one that still holds rows.",
+    "  Sessions are stateless JWTs with their own refresh-token table. Nothing writes or reads",
+    "  these two tables, and a new install no longer creates them. Nextly has no record that it",
+    "  created them, and the Auth.js (NextAuth) SQL adapters use tables of the same names and",
+    "  shape, so check they are not another app's before acting. They are left in place because",
+    "  dropping a table is your decision: `nextly migrate` with NEXTLY_DROP_RETIRED_AUTH_TABLES=1",
+    "  drops them, and adding NEXTLY_DROP_NONEMPTY_RETIRED=1 is required for one that still holds",
+    "  rows.",
+    ...(notErased.length > 0
+      ? [
+          `  Until then, deleting a user does not erase their rows from ${notErased.join(" or ")}.`,
+          `  Set ${ERASE_RETIRED_AUTH_TABLES_ENV}=${notErased.join(",")} if ${notErased.length === 1 ? "it is" : "they are"} Nextly's, so it does.`,
+        ]
+      : []),
   ].join("\n");
 }
 

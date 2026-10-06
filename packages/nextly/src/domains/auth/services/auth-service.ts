@@ -25,6 +25,7 @@ import type { Logger } from "../../../services/shared";
 import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { auditReason } from "../../audit/audit-reasons";
+import { emailVerificationColumns } from "../../users/services/email-verification-write";
 import {
   passwordColumns,
   updateUserEndingSessions,
@@ -877,7 +878,7 @@ export class AuthService extends BaseService {
         // a user without email verification via the user-mutation path.
         await tx
           .update(this.tables.users)
-          .set({ emailVerified: new Date() })
+          .set(emailVerificationColumns(new Date(), "link"))
           .where(eq(this.tables.users.email, email));
         // Activation is conditional in the statement itself: an account an
         // administrator deactivated stays inactive, including when its link
@@ -1083,7 +1084,8 @@ export class AuthService extends BaseService {
             userId: invite.userId,
             set: {
               ...passwordColumns(passwordHash),
-              emailVerified: new Date(),
+              // Receiving the invite at this address is what proves it.
+              ...emailVerificationColumns(new Date(), "invite"),
               isActive: true,
             },
             unlessDeactivated: true,

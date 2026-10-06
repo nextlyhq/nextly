@@ -99,6 +99,11 @@ function makeAdapter(
     dialect: "sqlite" as const,
     getDrizzle: () => ({}),
     inTransaction: () => enclosed,
+    // The ordering under test is the variant cleanup's, not the effects', so
+    // an after-commit effect runs at once.
+    afterCommit: async (effect: () => unknown) => {
+      await effect();
+    },
     transaction: async <T>(fn: (t: typeof tx) => Promise<T>): Promise<T> => {
       const result = await fn(tx);
       if (txBehavior === "throw") {

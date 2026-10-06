@@ -40,6 +40,8 @@ import { getDialectTables } from "../../database/index";
 import { NEXTLY_ERROR_STATUS } from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
+import type { RowLockServer } from "../../shared/lib/row-lock";
+import { serializeOnSqlite } from "../../shared/lib/run-adapter-transaction";
 import { isValidUUID } from "../auth/services/role/utils";
 
 import { isAuditReason } from "./audit-reasons";
@@ -385,6 +387,21 @@ function adapterDialect(adapter: unknown): SupportedDialect | undefined {
 }
 
 /**
+ * The server facts the erasure lock depends on. The adapter reports whether
+ * its server takes a shared row lock; one that does not say is left unknown,
+ * and gets the lock every server accepts.
+ */
+function rowLockServer(
+  adapter: unknown,
+  dialect: SupportedDialect
+): RowLockServer {
+  const capabilities = (
+    adapter as { getCapabilities?: () => { sharedRowLock?: boolean } }
+  ).getCapabilities?.();
+  return { dialect, sharedRowLock: capabilities?.sharedRowLock };
+}
+
+/**
  * Encode `metadata` for whichever column type this dialect uses.
  *
  * The column is `jsonb` on PostgreSQL and `json` on MySQL, where the driver
@@ -576,17 +593,27 @@ export function buildAuditLogWriter(
           return;
         }
         const input = auditRowInput(event, table, usersTable);
+        const server = rowLockServer(adapter, dialect);
         const write = (executor: ErasureAwareDb) =>
-          insertErasureAware(executor, dialect, input);
+          insertErasureAware(executor, server, input);
 
         // The lock the decision rests on is only worth anything inside a
-        // transaction, and this writer owns none. SQLite takes no lock and its
-        // `BEGIN IMMEDIATE` would throw whenever another transaction is open,
-        // which here would become a silently missing audit entry.
+        // transaction, and this writer owns none. On SQLite the write goes
+        // through the adapter's transaction instead: the adapter queues it
+        // behind another request's open transaction rather than letting it run
+        // inside one, whose rollback would erase the audit entry, and its
+        // `BEGIN IMMEDIATE` holds the write lock across the decision and the
+        // insert. A write made inside the caller's own transaction nests in it.
         const outcome =
-          dialect === "sqlite" || !erasureNeedsLock(input)
-            ? await write(db as ErasureAwareDb)
-            : await (db as TransactionalErasureDb).transaction(tx => write(tx));
+          dialect === "sqlite"
+            ? await serializeOnSqlite(adapter, () =>
+                write(db as ErasureAwareDb)
+              )
+            : erasureNeedsLock(input)
+              ? await (db as TransactionalErasureDb).transaction(tx =>
+                  write(tx)
+                )
+              : await write(db as ErasureAwareDb);
         if (outcome.targetAbsent) reportTargetAbsent(event);
 
         // Offer a retention pass, for the same reason content writes do: there

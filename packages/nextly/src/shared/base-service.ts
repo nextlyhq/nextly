@@ -9,7 +9,10 @@ import { getDialectTables } from "../database/index";
 import { resolveRelations } from "../database/resolve-relations";
 
 import { normalizeDbTimestamp } from "./lib/date-formatting";
-import { runAdapterTransaction } from "./lib/run-adapter-transaction";
+import {
+  afterCommit,
+  runAdapterTransaction,
+} from "./lib/run-adapter-transaction";
 import type { Logger } from "./types";
 import type { DatabaseAdapter } from "./types/database-adapter";
 
@@ -332,6 +335,42 @@ export abstract class BaseService<
     // and binds the callback's `tx` to a pooled client that automatically
     // runs BEGIN/COMMIT/ROLLBACK around the callback.
     return this.db.transaction(work);
+  }
+
+  /**
+   * Run what a write does outside the database (an event, an after-hook, a
+   * cache flush, a webhook drain) once the write is durable: now on
+   * PostgreSQL and MySQL, and on SQLite after the outermost transaction
+   * enclosing this call commits, never for one that rolls back. See
+   * {@link afterCommit}.
+   */
+  protected afterCommit(effect: () => unknown): Promise<void> {
+    return afterCommit(this.adapter, effect);
+  }
+
+  /**
+   * Run `effect` over a view of a committed row once the write is durable.
+   *
+   * The view is a shallow copy of `entry` as it stands now. Without an
+   * enclosing transaction holding the effect, it runs before this resolves and
+   * whatever it set on the view is copied onto `entry`, exactly as if it had
+   * run on `entry` itself: a field `afterChange` reshapes the response this
+   * way. Inside an enclosing SQLite transaction it runs once that commits,
+   * after the call has returned, so it sees the row as written rather than
+   * the response the call then built from it in place (parsed, redacted), and
+   * it no longer reshapes that response.
+   */
+  protected async afterCommitOver<E extends Record<string, unknown>>(
+    entry: E,
+    effect: (committed: E) => Promise<unknown>
+  ): Promise<void> {
+    const committed = { ...entry };
+    let ranNow = false;
+    await this.afterCommit(async () => {
+      await effect(committed);
+      ranNow = true;
+    });
+    if (ranNow) Object.assign(entry, committed);
   }
 
   /**

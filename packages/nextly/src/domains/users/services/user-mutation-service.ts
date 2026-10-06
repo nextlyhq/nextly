@@ -57,8 +57,10 @@ import {
   retiredSessionsTable,
 } from "../../../init/retired-accounts-erasure";
 import {
+  ERASE_RETIRED_AUTH_TABLES_ENV,
   hasRetiredShape,
   liveColumnsOf,
+  retiredTablesNamedForErasure,
 } from "../../../init/retired-auth-tables";
 import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
 import {
@@ -86,12 +88,27 @@ import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-li
 import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
+import { emailVerificationColumns } from "./email-verification-write";
 import { passwordColumns, updateUserEndingSessions } from "./password-write";
 import { activationChanges } from "./user-activation";
 import type { UserExtSchemaService } from "./user-ext-schema-service";
 
-/** The one role an external identity may never be given. */
+/** The one role an external identity or a plugin may never give. */
 const SUPER_ADMIN_ROLE_SLUG = "super-admin";
+
+/**
+ * Who a user write is made for.
+ *
+ * `"app"` is core and the app's own code: the admin, the Direct API, setup and
+ * the seeders. `"plugin"` is a plugin through `ctx.services.users`, which may
+ * create and update accounts but may not decide who administers the site: it
+ * cannot create an install's first account (which core makes super-admin),
+ * cannot give a role that reaches `super-admin`, directly or by inheritance,
+ * and cannot take over or remove an account that already reaches it: no
+ * change to its password, email, activation, verification or roles, and no
+ * deletion. An address it vouches for is recorded as verified by `"plugin"`.
+ */
+export type UserWriteCaller = "app" | "plugin";
 
 // ============================================================
 // Drizzle Runtime Types
@@ -766,14 +783,18 @@ export class UserMutationService extends BaseService {
     recorded: boolean,
     userId: string
   ): Promise<void> {
-    await this.retentionRunner?.maybeRun(
-      UserMutationService.WRITE_PATH_PRUNE_BATCHES
-    );
-    // Only the delivery of the outbox row depends on there being one.
-    if (recorded) this.fastDrainScheduler?.offer();
-    // The account exists either way, so in-process subscribers are told.
-    const payload: UserCreatedPayload = { userId };
-    safeEmit(UserEvents.Created, payload);
+    // Once the account is durable: inside an enclosing transaction on SQLite
+    // that is its commit, and a rolled-back account is never announced.
+    await this.afterCommit(async () => {
+      await this.retentionRunner?.maybeRun(
+        UserMutationService.WRITE_PATH_PRUNE_BATCHES
+      );
+      // Only the delivery of the outbox row depends on there being one.
+      if (recorded) this.fastDrainScheduler?.offer();
+      // The account exists either way, so in-process subscribers are told.
+      const payload: UserCreatedPayload = { userId };
+      safeEmit(UserEvents.Created, payload);
+    });
   }
 
   /**
@@ -908,7 +929,7 @@ export class UserMutationService extends BaseService {
     // roles are assigned.
     await this.refuseSuperAdminRoles(
       namedRoles.map(r => r.id),
-      email
+      { reason: "external-user-super-admin-refused", email }
     );
 
     const now = new Date();
@@ -926,34 +947,13 @@ export class UserMutationService extends BaseService {
       await this.withTransaction(async tx => {
         const txDb = tx as DrizzleTransactionLike;
 
-        // Re-checked HERE, holding whatever account it finds. The check above
-        // is a read: the last remaining user could be deleted between it and
-        // this insert, and the provider-created account would become the
-        // install's only one — exactly the first account this path refuses to
-        // create. Setup would then see a non-empty table and decline to make
-        // the super-admin, leaving the install with no administrator.
-        //
-        // Locking the found row is what makes a concurrent deletion WAIT
-        // rather than race: it cannot remove the account this transaction is
-        // holding until the new one is committed beside it.
-        const anchorQuery = txDb
-          .select({ id: users.id })
-          .from(users)
-          .where(isNotNull(users.id))
-          .limit(1);
-        const anchor = (
-          this.dialect === "sqlite"
-            ? await anchorQuery
-            : await anchorQuery.for("update")
-        )[0];
-        if (!anchor) {
-          throw NextlyError.forbidden({
-            logContext: {
-              reason: "external-user-on-empty-install",
-              email,
-            },
-          });
-        }
+        // Re-checked HERE, holding whatever account it finds: the check above
+        // is a read, and the last remaining user could be deleted between it
+        // and this insert.
+        await this.requireExistingAccountInTx(txDb, {
+          reason: "external-user-on-empty-install",
+          email,
+        });
 
         // The roles RE-READ here, holding what exists. MySQL's `user_roles`
         // carries no foreign key, so a role deleted between the pre-flight
@@ -994,7 +994,7 @@ export class UserMutationService extends BaseService {
           passwordHash: null,
           // The provider established the address, so it is verified at
           // creation and the account is usable at once.
-          emailVerified: input.emailVerifiedAt,
+          ...emailVerificationColumns(input.emailVerifiedAt, "external"),
           image: input.image ?? null,
           isActive: true,
           mustChangePassword: false,
@@ -1087,19 +1087,34 @@ export class UserMutationService extends BaseService {
    * @param actor - Who initiated the write, recorded for event attribution.
    *   Omitted for genuinely internal calls (seed, self-registration), which
    *   record no actor.
+   * @param caller - Who the write is made for; see {@link UserWriteCaller}.
    * @throws NextlyError(VALIDATION_ERROR) on input validation / invalid role ids.
    * @throws NextlyError(DUPLICATE) when the email is already registered.
+   * @throws NextlyError(FORBIDDEN) for a `"plugin"` caller on an empty
+   *   install, or with a role that reaches `super-admin`.
    * @throws NextlyError on DB errors via fromDatabaseError.
    */
   async createLocalUser(
     userData: CreateLocalUserData,
-    actor?: RequestActor
+    actor?: RequestActor,
+    caller: UserWriteCaller = "app"
   ): Promise<UserMutationResponse> {
     try {
       // Determine if this is the very first user in the database (existence check)
       const isFirstUser = await this.db.query.users.findFirst({
         columns: { id: true },
       });
+      // The first account is made super-admin below, so a plugin creating it
+      // would decide who administers the site. A cheap refusal before any
+      // work; the binding one runs inside the insert's transaction.
+      if (caller === "plugin" && !isFirstUser) {
+        throw NextlyError.forbidden({
+          logContext: {
+            reason: "plugin-user-on-empty-install",
+            email: userData.email,
+          },
+        });
+      }
 
       // Validate input (merged schema includes custom field validators when configured)
       const validation = this.getCreateSchema().safeParse(userData);
@@ -1215,6 +1230,14 @@ export class UserMutationService extends BaseService {
             logContext: { invalidRoleIds },
           });
         }
+        // Before the insert: the roles are assigned after the account is
+        // committed, so a refusal there would leave the account behind.
+        if (caller === "plugin") {
+          await this.refuseSuperAdminRoles(uniqueRoleIds, {
+            reason: "plugin-user-super-admin-refused",
+            email,
+          });
+        }
       }
 
       // Two ways to provision sign-in, decided by whether a password was
@@ -1246,8 +1269,11 @@ export class UserMutationService extends BaseService {
         // Having a password is NOT on its own evidence of anything: a person
         // registering themselves also supplies one, and treating that as proof
         // let anyone claim any address. Only a caller that explicitly vouches
-        // gets a verified account.
-        emailVerified: isInvite || !adminVouched ? null : now,
+        // gets a verified account, recorded as vouched for by whoever it is.
+        ...emailVerificationColumns(
+          isInvite || !adminVouched ? null : now,
+          caller === "plugin" ? "plugin" : "admin"
+        ),
         image: userData.image ?? null,
         isActive: userData.isActive ?? false,
         // Only true when an admin typed the password for someone else; the
@@ -1296,6 +1322,17 @@ export class UserMutationService extends BaseService {
         });
       };
 
+      // A plugin's create holds an existing account for the length of the
+      // insert, so it can never become the install's first; see
+      // requireExistingAccountInTx. Run by both inserts below.
+      const requireExistingAccount = async (txDb: DrizzleTransactionLike) => {
+        if (caller !== "plugin") return;
+        await this.requireExistingAccountInTx(txDb, {
+          reason: "plugin-user-on-empty-install",
+          email,
+        });
+      };
+
       // Wrap user + user_ext + invite inserts in a transaction for atomicity.
       // tx is a Drizzle transaction (NodePgTransaction / MySql2Transaction /
       // BetterSQLite3Transaction depending on dialect) that exposes the same
@@ -1311,6 +1348,7 @@ export class UserMutationService extends BaseService {
       try {
         await this.withTransaction(async tx => {
           const txDb = tx as DrizzleTransactionLike;
+          await requireExistingAccount(txDb);
           await txDb.insert(users).values(values);
 
           // Always create a user_ext row when custom fields are configured
@@ -1349,6 +1387,7 @@ export class UserMutationService extends BaseService {
           this.userExtDisabled = true;
           await this.withTransaction(async tx => {
             const txDb = tx as DrizzleTransactionLike;
+            await requireExistingAccount(txDb);
             await txDb.insert(users).values(values);
             await insertInviteToken(txDb);
             await recordCreatedEvent(txDb);
@@ -1470,11 +1509,16 @@ export class UserMutationService extends BaseService {
    *   when no actionable changes are provided.
    * @throws NextlyError(NOT_FOUND) when the user does not exist.
    * @throws NextlyError(DUPLICATE) on email conflicts.
+   * @throws NextlyError(FORBIDDEN) for a `"plugin"` caller giving a role that
+   *   reaches `super-admin`.
    * @throws NextlyError on DB errors via fromDatabaseError.
+   *
+   * @param caller - Who the write is made for; see {@link UserWriteCaller}.
    */
   async updateUser(
     userId: number | string,
-    changes: UpdateUserData
+    changes: UpdateUserData,
+    caller: UserWriteCaller = "app"
   ): Promise<UserMutationResponse> {
     try {
       // Validate input (merged schema includes custom field validators when configured)
@@ -1507,6 +1551,38 @@ export class UserMutationService extends BaseService {
         throw NextlyError.notFound({
           logContext: { entity: "user", id: userId },
         });
+      }
+
+      // Before any write: the fields below are written before the roles, so a
+      // refusal at the role step would leave the rest of the update applied.
+      if (caller === "plugin" && changes.roles && changes.roles.length > 0) {
+        await this.refuseSuperAdminRoles(Array.from(new Set(changes.roles)), {
+          reason: "plugin-user-super-admin-refused",
+          userId: currentUser.id,
+        });
+      }
+      // The fields that control an account: whoever sets its password, email,
+      // activation, verification or roles controls it. A plugin may not set
+      // them on an account that reaches super-admin. Checked here, before any
+      // write, and again inside the transaction that writes the fields and the
+      // roles, holding the account's row.
+      const guardsAdministrator =
+        caller === "plugin" &&
+        ((typeof changes.password === "string" &&
+          changes.password.trim().length > 0) ||
+          changes.email !== undefined ||
+          typeof changes.isActive === "boolean" ||
+          changes.emailVerified !== undefined ||
+          (changes.roles !== undefined && changes.roles.length > 0));
+      const administratorRefusal = {
+        reason: "plugin-super-admin-account-refused",
+        userId: currentUser.id,
+      };
+      if (guardsAdministrator) {
+        await this.refuseSuperAdminAccount(
+          currentUser.id,
+          administratorRefusal
+        );
       }
 
       // 2) Build updateData (only include fields that actually change)
@@ -1568,10 +1644,28 @@ export class UserMutationService extends BaseService {
           updateData.image = nextImage;
         }
       }
-      if (Object.prototype.hasOwnProperty.call(changes, "emailVerified"))
-        if (changes.emailVerified !== currentUser.emailVerified) {
-          updateData.emailVerified = changes.emailVerified;
+      if (
+        Object.prototype.hasOwnProperty.call(changes, "emailVerified") &&
+        changes.emailVerified !== currentUser.emailVerified
+      ) {
+        if (changes.emailVerified === undefined) {
+          // Present but undefined: a caller passing through a field it was not
+          // given, as the Direct API and `UserService.update` do. Drizzle
+          // writes nothing for it, and keeping the key keeps such an update
+          // counting as one.
+          updateData.emailVerified = undefined;
+        } else {
+          // With how it was verified, in the same statement: whoever is
+          // updating the account is who vouched for the address.
+          Object.assign(
+            updateData,
+            emailVerificationColumns(
+              changes.emailVerified,
+              caller === "plugin" ? "plugin" : "admin"
+            )
+          );
         }
+      }
 
       // ✅ Handle isActive. A boolean only: callers such as the Direct API
       // pass the key with `undefined` when the caller left it out, and reading
@@ -1619,8 +1713,19 @@ export class UserMutationService extends BaseService {
         }
       }
 
-      if (hasFieldUpdates) {
-        updateData.updatedAt = new Date();
+      // The roles the update asks for; equal to the ones held, nothing is
+      // written for them.
+      const requestedRoleIds =
+        changes.roles && changes.roles.length > 0
+          ? Array.from(new Set(changes.roles))
+          : undefined;
+      let hasRoleUpdates = false;
+      const services = requestedRoleIds
+        ? new ServiceContainer(this.adapter)
+        : undefined;
+
+      if (hasFieldUpdates || requestedRoleIds) {
+        if (hasFieldUpdates) updateData.updatedAt = new Date();
         // A deactivation, or a password an administrator set, ends every
         // session the account holds. The refresh rows are what a session is
         // renewed from; left in place, a deactivated account's sessions
@@ -1630,20 +1735,45 @@ export class UserMutationService extends BaseService {
         // old sessions still valid.
         const endsSessions =
           changes.isActive === false || updateData.passwordHash !== undefined;
-        if (endsSessions) {
-          await this.withTransaction(async tx => {
-            await updateUserEndingSessions(
-              tx as DrizzleTransactionLike,
-              this.tables,
-              this.dialect,
-              { userId: currentUser.id, set: updateData }
+        // One transaction for the fields and the roles. A plugin's write to
+        // an account-controlling field asks about the account again in it,
+        // holding its row, immediately before writing. Removing the roles and
+        // assigning the new ones commit together, and on SQLite the
+        // transaction queues behind any other request's open one rather than
+        // running inside it, where that one's rollback would undo the write
+        // and hand back the roles just removed.
+        await this.withTransaction(async tx => {
+          const txDb = tx as DrizzleTransactionLike;
+          if (guardsAdministrator) {
+            await this.refuseSuperAdminAccount(
+              currentUser.id,
+              administratorRefusal,
+              txDb
             );
-          });
-        } else {
-          await this.db
-            .update(users)
-            .set(updateData)
-            .where(eq(users.id, currentUser.id));
+          }
+          if (hasFieldUpdates && endsSessions) {
+            await updateUserEndingSessions(txDb, this.tables, this.dialect, {
+              userId: currentUser.id,
+              set: updateData,
+            });
+          } else if (hasFieldUpdates) {
+            await txDb
+              .update(users)
+              .set(updateData)
+              .where(eq(users.id, currentUser.id));
+          }
+          if (requestedRoleIds && services) {
+            hasRoleUpdates = await services.userRoles.replaceUserRoles(
+              String(currentUser.id),
+              requestedRoleIds,
+              tx
+            );
+          }
+        });
+        if (hasRoleUpdates && services) {
+          await this.afterCommit(() =>
+            services.userRoles.invalidateRoleCaches(String(currentUser.id))
+          );
         }
       }
 
@@ -1687,61 +1817,6 @@ export class UserMutationService extends BaseService {
             );
             this.userExtDisabled = true;
             hasCustomFieldChanges = false;
-          }
-        }
-      }
-
-      // 3) Handle role updates
-      let hasRoleUpdates = !!(changes.roles && changes.roles.length > 0);
-      if (hasRoleUpdates) {
-        const services = new ServiceContainer(this.adapter);
-        // Compare with current roles to avoid no-op updates
-        let currentRoleIds: string[] = [];
-        try {
-          currentRoleIds = await services.userRoles.listUserRoles(
-            String(currentUser.id)
-          );
-        } catch (err) {
-          // NOT_FOUND means the user has no roles yet — treat as empty.
-          // Re-throw anything else (DB outage, etc.) so it surfaces as 5xx
-          // instead of silently masking the real failure.
-          if (NextlyError.isNotFound(err)) {
-            currentRoleIds = [];
-          } else {
-            throw err;
-          }
-        }
-        const requestedRoleIds = Array.from(new Set(changes.roles ?? []));
-        const currentSet = new Set(currentRoleIds);
-        const requestedSet = new Set(requestedRoleIds);
-        const setsEqual =
-          currentSet.size === requestedSet.size &&
-          [...currentSet].every(id => requestedSet.has(id));
-        if (setsEqual) {
-          hasRoleUpdates = false;
-        }
-
-        if (hasRoleUpdates) {
-          await this.db
-            .delete(this.tables.userRoles)
-            .where(eq(this.tables.userRoles.userId, String(currentUser.id)));
-
-          for (const rid of requestedRoleIds) {
-            try {
-              await services.userRoles.assignRoleToUser(
-                String(currentUser.id),
-                rid
-              );
-            } catch (err) {
-              // NOT_FOUND means the role id doesn't exist — skip silently
-              // since validation above already filtered invalid roles. Re-throw
-              // anything else (DB outage etc.) so transient failures aren't
-              // hidden behind a "no such role" semantic.
-              if (NextlyError.isNotFound(err)) {
-                continue;
-              }
-              throw err;
-            }
           }
         }
       }
@@ -1910,15 +1985,18 @@ export class UserMutationService extends BaseService {
   /**
    * Refuse a role set that reaches `super-admin`, directly or by inheritance.
    *
-   * A login provider must never be able to create an administrator. Checking
-   * the requested roles' own slugs answers a narrower question than the one
-   * that decides at request time: `isSuperAdmin` resolves the user's full role
-   * set, inheritance included, so a role built on top of `super-admin` carries
-   * the bypass while naming itself something else entirely.
+   * Neither a login provider nor a plugin may create an administrator.
+   * Checking the requested roles' own slugs answers a narrower question than
+   * the one that decides at request time: `isSuperAdmin` resolves the user's
+   * full role set, inheritance included, so a role built on top of
+   * `super-admin` carries the bypass while naming itself something else
+   * entirely.
+   *
+   * @param logContext - Where the refusal came from, for the log only.
    */
   private async refuseSuperAdminRoles(
     roleIds: string[],
-    email: string
+    logContext: Record<string, unknown>
   ): Promise<void> {
     const { RoleInheritanceService } = await import(
       "../../auth/services/role-inheritance-service"
@@ -1949,12 +2027,82 @@ export class UserMutationService extends BaseService {
       )) as Array<{ id: string }>;
 
     if (superAdmin.length > 0) {
-      throw NextlyError.forbidden({
-        logContext: {
-          reason: "external-user-super-admin-refused",
-          email,
-        },
-      });
+      throw NextlyError.forbidden({ logContext });
+    }
+  }
+
+  /**
+   * Refuse, inside `txDb`'s transaction, when the install has no account, and
+   * otherwise hold one until the transaction ends.
+   *
+   * For the creates that must never make an install's FIRST account (a login
+   * provider's, a plugin's): that account decides who administers the site.
+   * A read before the transaction cannot settle it, because the last account
+   * could be deleted between the read and the insert; setup would then see a
+   * non-empty table and decline to make the super-admin, leaving the install
+   * with no administrator. Locking the found row makes a concurrent deletion
+   * WAIT until the new account is committed beside it. SQLite takes no lock:
+   * its write transactions are serialized already.
+   *
+   * @param logContext - Where the refusal came from, for the log only.
+   */
+  private async requireExistingAccountInTx(
+    txDb: DrizzleTransactionLike,
+    logContext: Record<string, unknown>
+  ): Promise<void> {
+    const { users } = this.tables;
+    const anchorQuery = txDb
+      .select({ id: users.id })
+      .from(users)
+      .where(isNotNull(users.id))
+      .limit(1);
+    const anchor = (
+      this.dialect === "sqlite"
+        ? await anchorQuery
+        : await anchorQuery.for("update")
+    )[0];
+    if (!anchor) {
+      throw NextlyError.forbidden({ logContext });
+    }
+  }
+
+  /**
+   * Refuse when the account reaches `super-admin`, directly or by
+   * inheritance, through the same resolution the request-time gate uses.
+   *
+   * For a plugin's writes to an administrator's account. Given `txDb`, it asks
+   * inside that transaction, after locking the account's row on PostgreSQL and
+   * MySQL. On PostgreSQL the lock is what makes a concurrent role grant wait:
+   * `user_roles.user_id` references the account, so inserting a grant takes a
+   * key-share lock on the row that this lock excludes, and a grant committed
+   * first is seen by the read after it. MySQL's `user_roles` carries no
+   * foreign key, so there a grant committed between this read and the write is
+   * not excluded. SQLite serializes write transactions.
+   *
+   * The THROWING form of the check, so a read that fails refuses rather than
+   * allows; with an executor it also bypasses the super-admin cache.
+   *
+   * @param logContext - Where the refusal came from, for the log only.
+   */
+  private async refuseSuperAdminAccount(
+    userId: string | number,
+    logContext: Record<string, unknown>,
+    txDb?: DrizzleTransactionLike
+  ): Promise<void> {
+    if (txDb && this.dialect !== "sqlite") {
+      const { users } = this.tables;
+      await txDb
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.id, String(userId)))
+        .limit(1)
+        .for("update");
+    }
+    const { isSuperAdminOrThrow } = await import(
+      "../../../services/lib/permissions"
+    );
+    if (await isSuperAdminOrThrow(String(userId), txDb ?? this.db)) {
+      throw NextlyError.forbidden({ logContext });
     }
   }
 
@@ -1991,15 +2139,22 @@ export class UserMutationService extends BaseService {
   }
 
   /**
-   * Whether a retired table is present AND is the one Nextly created.
+   * Whether the operator has named a retired table as Nextly's, and it is
+   * present in the shape Nextly created.
    *
-   * A fresh install no longer creates these, so the name alone can belong to
-   * a host application's own table — and erasing from that one ran a DELETE
-   * against columns it does not have, which failed every user deletion on
-   * the install. Presence is asked the fail-safe way the other erasures ask
-   * it; the shape is read from the catalogue, and an absent table has none.
+   * The name comes first because nothing else tells Nextly's table from a
+   * host app's: no record says Nextly created it, and an Auth.js table has the
+   * same name and shape, so erasing by shape deleted another app's sign-in
+   * links on every user deletion. Unnamed, nothing is asked of the database,
+   * and the startup report says the rows stay. Named, presence is asked the
+   * fail-safe way the other erasures ask it, and the shape still has to match,
+   * since a DELETE against columns the table lacks fails the deletion.
    */
   private async retiredTableErasable(table: string): Promise<boolean> {
+    const named = retiredTablesNamedForErasure(
+      process.env[ERASE_RETIRED_AUTH_TABLES_ENV]
+    );
+    if (!named.has(table)) return false;
     if (!(await this.tablePresent(table))) return false;
     return hasRetiredShape(
       table,
@@ -2052,9 +2207,24 @@ export class UserMutationService extends BaseService {
    */
   async deleteUser(
     userId: number | string,
-    actor?: RequestActor
+    actor?: RequestActor,
+    caller: UserWriteCaller = "app"
   ): Promise<void> {
     const { users, userRoles, media } = this.tables;
+    // A plugin may not remove an account that reaches super-admin. Checked
+    // before any work, and again inside the deletion's transaction.
+    const administratorRefusal = {
+      reason: "plugin-super-admin-account-refused",
+      userId,
+    };
+    if (caller === "plugin") {
+      await this.refuseSuperAdminAccount(userId, administratorRefusal);
+    }
+    // The same refusal, asked again inside the deletion's transaction.
+    const refuseAdministratorInTx = async (txDb: DrizzleTransactionLike) => {
+      if (caller !== "plugin") return;
+      await this.refuseSuperAdminAccount(userId, administratorRefusal, txDb);
+    };
 
     // Asked once, before the transaction opens, because a failed statement
     // aborts an open Postgres transaction and there would be no way back.
@@ -2157,9 +2327,9 @@ export class UserMutationService extends BaseService {
     // arrives with the plugin runtime, so any database reconciled before it
     // lacks the table while this build's declaration is present either way.
     const settingsExist = await this.tablePresent(PLUGIN_SETTINGS_TABLE);
-    // The RETIRED `accounts` and `sessions` tables, probed for the same
-    // reason and by their shape as well as their name, since either name may
-    // now belong to the host app's own table.
+    // The RETIRED `accounts` and `sessions` tables, erased from only when the
+    // operator has named them as Nextly's, and then probed for the same reason
+    // and by their shape, since either name may belong to the host app.
     const retiredTables = {
       accounts: await this.retiredTableErasable(RETIRED_ACCOUNTS_TABLE),
       sessions: await this.retiredTableErasable(RETIRED_SESSIONS_TABLE),
@@ -2225,6 +2395,7 @@ export class UserMutationService extends BaseService {
             logContext: { entity: "user", id: userId },
           });
         }
+        await refuseAdministratorInTx(txDb);
 
         // Delete user_ext row if custom fields are configured
         if (this.hasCustomFields()) {
@@ -2436,20 +2607,24 @@ export class UserMutationService extends BaseService {
     // reaches nothing inside this process — and whether that outbox accepted a
     // row says nothing about whether the account is gone, so this asks the
     // question it actually means.
-    if (userWasDeleted) {
-      const payload: UserDeletedPayload = { userId: String(userId) };
-      safeEmit(UserEvents.Deleted, payload);
-    }
+    // Inside an enclosing transaction on SQLite, "after the commit" is that
+    // transaction's commit, so neither runs for a deletion it rolls back.
+    await this.afterCommit(async () => {
+      if (userWasDeleted) {
+        const payload: UserDeletedPayload = { userId: String(userId) };
+        safeEmit(UserEvents.Deleted, payload);
+      }
 
-    // The detached files changed, so anything cached against them is stale —
-    // `uploadedBy` is part of the media shape a read returns. AFTER the commit,
-    // because a bust for a detach that then rolled back would be a lie about
-    // rows that never moved; best-effort, because the deletion has already
-    // happened and reporting it as failed would invite a retry that answers
-    // not-found.
-    if (detachedMediaIds.length > 0) {
-      await revalidateMedia(detachedMediaIds, this.logger);
-    }
+      // The detached files changed, so anything cached against them is stale
+      // — `uploadedBy` is part of the media shape a read returns. AFTER the
+      // commit, because a bust for a detach that then rolled back would be a
+      // lie about rows that never moved; best-effort, because the deletion has
+      // already happened and reporting it as failed would invite a retry that
+      // answers not-found.
+      if (detachedMediaIds.length > 0) {
+        await revalidateMedia(detachedMediaIds, this.logger);
+      }
+    });
 
     // The removed account's recovery points, swept once the deletion is
     // visible. Deliberately a DELETE rather than the scrub the audit surfaces
@@ -2531,9 +2706,13 @@ export class UserMutationService extends BaseService {
     // write-triggered-maintenance install still trims the outbox) and the
     // fast-path drain for the recorded event (same rationale as createLocalUser).
     // Retention runs regardless of a recording, the drain only when one happened.
-    await this.retentionRunner?.maybeRun(
-      UserMutationService.WRITE_PATH_PRUNE_BATCHES
-    );
-    if (userDeletedRecorded) this.fastDrainScheduler?.offer();
+    // A drain started before an enclosing SQLite transaction commits would read
+    // and deliver the outbox row that transaction may still roll back.
+    await this.afterCommit(async () => {
+      await this.retentionRunner?.maybeRun(
+        UserMutationService.WRITE_PATH_PRUNE_BATCHES
+      );
+      if (userDeletedRecorded) this.fastDrainScheduler?.offer();
+    });
   }
 }

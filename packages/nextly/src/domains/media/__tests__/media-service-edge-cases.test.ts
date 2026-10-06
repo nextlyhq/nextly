@@ -59,6 +59,10 @@ describe("MediaService — Edge Cases", () => {
       listMedia: vi.fn(),
       updateMedia: vi.fn(),
       deleteMedia: vi.fn(),
+      // Nothing encloses these writes, so their effects run at once.
+      whenCommitted: vi.fn(async (effect: () => unknown) => {
+        await effect();
+      }),
     };
 
     mockLegacyFolder = {

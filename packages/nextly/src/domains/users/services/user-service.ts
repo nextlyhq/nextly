@@ -54,9 +54,8 @@ import { auditReason } from "../../audit/audit-reasons";
 
 import type { UserAccountService } from "./user-account-service";
 import type {
-  CreateExternalUserData,
-  UserMutationResponse,
   UserMutationService,
+  UserWriteCaller,
 } from "./user-mutation-service";
 import type { UserQueryService, ListUsersOptions } from "./user-query-service";
 
@@ -153,13 +152,47 @@ export interface PasswordHasher {
  * - Logging support
  */
 export class UserService {
+  /** The plugin-facing view, built once on first use. */
+  private pluginView?: UserService;
+
+  /**
+   * @param caller - Who this instance writes for. `"plugin"` for the instance
+   *   `ctx.services.users` hands a plugin (see {@link UserService.forPlugins}),
+   *   `"app"` otherwise.
+   */
   constructor(
     private readonly queryService: UserQueryService,
     private readonly mutationService: UserMutationService,
     private readonly accountService: UserAccountService,
     private readonly passwordHasher?: PasswordHasher,
-    private readonly logger: Logger = consoleLogger
+    private readonly logger: Logger = consoleLogger,
+    private readonly caller: UserWriteCaller = "app"
   ) {}
+
+  /**
+   * @internal The same service as plugins receive it in `ctx.services.users`.
+   *
+   * Its writes are made for a plugin, which may create and update accounts
+   * but not decide who administers the site: it refuses to create an
+   * install's first account (core makes that one super-admin), to give a
+   * role that reaches `super-admin`, and to change the password, email,
+   * activation, verification or roles of an account that reaches it, or
+   * delete one, with `NextlyError` code `FORBIDDEN`.
+   * Every other method behaves as on the instance core holds, which the
+   * admin, the Direct API and setup keep using unchanged.
+   */
+  forPlugins(): UserService {
+    if (this.caller === "plugin") return this;
+    this.pluginView ??= new UserService(
+      this.queryService,
+      this.mutationService,
+      this.accountService,
+      this.passwordHasher,
+      this.logger,
+      "plugin"
+    );
+    return this.pluginView;
+  }
 
   // ============================================================
   // User CRUD Operations
@@ -223,7 +256,8 @@ export class UserService {
         // Attribute the write to the authenticated caller so the emitted
         // `user.created` event records who created the account; falls back to
         // `system` only for a genuinely uninitiated write.
-        actorForWrite(undefined, context.user)
+        actorForWrite(undefined, context.user),
+        this.caller
       );
 
       this.logger.info("User created", {
@@ -239,41 +273,6 @@ export class UserService {
       });
       throw err;
     }
-  }
-
-  /**
-   * Create a user for an identity a trusted provider has already verified.
-   *
-   * On THIS service because this is the one `ctx.services.users` resolves to.
-   * The method existed only on the legacy `UsersService`, so a plugin reaching
-   * the supported SDK surface could not call it at all — and the nearest thing
-   * it could call, `create`, makes the local invite shape: inactive, with a
-   * set-password link, and unverified. Which is the opposite of what an
-   * external login needs, and silently so.
-   *
-   * A thin delegation on purpose. Every rule this path enforces — the empty
-   * install, the super-admin prohibition, the roles assigned inside the insert
-   * — belongs to the mutation service, and a second copy of any of them here
-   * would be a second thing to keep right.
-   *
-   * @param input - The verified identity and the roles to grant it.
-   * @param context - Who initiated it, recorded for event attribution.
-   * @throws NextlyError(FORBIDDEN) on an empty install, or a role that reaches
-   *   `super-admin` directly or by inheritance.
-   * @throws NextlyError(VALIDATION_ERROR) on an unknown or empty role list.
-   * @throws NextlyError(DUPLICATE) when the address already has an account.
-   */
-  async createExternalUser(
-    input: CreateExternalUserData,
-    context: RequestContext
-  ): Promise<UserMutationResponse> {
-    this.logger.debug("Creating external user", { email: input.email });
-    return this.mutationService.createExternalUser(
-      input,
-      // Same shape as the other writes on this service: the ACTOR is the
-      // signed-in user the request carries, not the request itself.
-      actorForWrite(undefined, context.user)
-    );
   }
 
   /**
@@ -404,14 +403,18 @@ export class UserService {
     const { email, name, image, emailVerified, isActive, ...customFields } =
       input;
     try {
-      const updated = await this.mutationService.updateUser(userId, {
-        email,
-        name,
-        image,
-        emailVerified,
-        isActive,
-        ...customFields,
-      });
+      const updated = await this.mutationService.updateUser(
+        userId,
+        {
+          email,
+          name,
+          image,
+          emailVerified,
+          isActive,
+          ...customFields,
+        },
+        this.caller
+      );
 
       this.logger.info("User updated", { userId });
       return this.mapToUser(updated);
@@ -439,7 +442,8 @@ export class UserService {
     // emitted `user.deleted` event records who removed the account.
     await this.mutationService.deleteUser(
       userId,
-      actorForWrite(undefined, context.user)
+      actorForWrite(undefined, context.user),
+      this.caller
     );
     this.logger.info("User deleted", { userId });
   }

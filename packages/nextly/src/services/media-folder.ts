@@ -693,9 +693,12 @@ export class MediaFolderService extends BaseService {
       // Delete folder (CASCADE handles subfolder records)
       await this.db.delete(mediaFolders).where(eq(mediaFolders.id, folderId));
 
-      // After the statement, so this only names rows the delete really changed.
+      // After the statement, so this only names rows the delete really changed,
+      // and inside an enclosing SQLite transaction after that commits.
       if (strays.length > 0) {
-        await revalidateMedia(strays.map(record => record.id));
+        await this.afterCommit(() =>
+          revalidateMedia(strays.map(record => record.id))
+        );
       }
 
       return {
@@ -785,8 +788,9 @@ export class MediaFolderService extends BaseService {
           sql`, `
         )})`
       );
-      // After the statement, so this only ever names rows that are gone.
-      await revalidateMedia(chunk);
+      // After the statement, so this only ever names rows that are gone, and
+      // inside an enclosing SQLite transaction after that commits.
+      await this.afterCommit(() => revalidateMedia(chunk));
     }
   }
 
@@ -824,7 +828,7 @@ export class MediaFolderService extends BaseService {
 
       // A direct media-row write that never reaches the media service, so it
       // carries its own invalidation for the same reason the cascade above does.
-      await revalidateMedia([mediaId]);
+      await this.afterCommit(() => revalidateMedia([mediaId]));
 
       return {
         success: true,

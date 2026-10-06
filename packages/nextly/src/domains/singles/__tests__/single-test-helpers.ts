@@ -68,6 +68,11 @@ export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
     // The update takes the row lock before its prior-state read; the real
     // adapter no-ops where locking is unsupported, so a resolved stub matches.
     lockRow: vi.fn().mockResolvedValue(undefined),
+    // No enclosing transaction holds anything here, so an after-commit effect
+    // runs at once, as on PostgreSQL and MySQL.
+    afterCommit: vi.fn().mockImplementation(async (effect: () => unknown) => {
+      await effect();
+    }),
     ...overrides,
   };
   // Run a transaction callback with the adapter itself as the tx context, so

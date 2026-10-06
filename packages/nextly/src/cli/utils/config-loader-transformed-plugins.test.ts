@@ -12,6 +12,7 @@
  * everything under test runs after it.
  */
 import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -31,7 +32,9 @@ vi.mock("node:fs", async importOriginal => {
   return { ...actual, existsSync: vi.fn(actual.existsSync) };
 });
 
-const CONFIG_PATH = "/virtual/nextly.config.ts";
+// Resolved, as the loader resolves `configPath` against `cwd`: on Windows a
+// leading `/` gains the drive letter, and the mocks compare against these.
+const CONFIG_PATH = resolve("/virtual/nextly.config.ts");
 
 /** Plugin A, whose `setup` adds `added` to the config's plugins. */
 function adding(added: Record<string, unknown>) {

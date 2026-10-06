@@ -32,6 +32,11 @@ export const users = pgTable(
     name: text("name"),
     email: text("email").notNull(),
     emailVerified: timestamp("email_verified", { withTimezone: false }),
+    // How the address came to be verified (see `EmailVerifiedVia`): written in
+    // the same statement as email_verified and cleared with it. Nullable, so
+    // adding it to an existing table rewrites no row; `nextly migrate` then
+    // marks addresses verified before it existed as "legacy".
+    emailVerifiedVia: text("email_verified_via"),
     passwordUpdatedAt: timestamp("password_updated_at", {
       withTimezone: false,
     }),
