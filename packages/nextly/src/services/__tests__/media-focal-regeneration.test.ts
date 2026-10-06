@@ -64,6 +64,7 @@ vi.mock("../image-size", () => ({
 }));
 
 import { NextlyError } from "../../errors";
+import { runInPluginTransaction } from "../../shared/lib/plugin-transaction-scope";
 import { MediaService } from "../media";
 
 const OLD_PATH = "OLD/thumb.webp";
@@ -82,7 +83,10 @@ function makeAdapter(
   // The row the in-transaction locked read returns. Defaults to the same row the
   // pre-transaction read saw; a test overrides it to model a concurrent update
   // that committed a different variant set before this transaction locked.
-  lockedRow: typeof existingMedia = existingMedia
+  lockedRow: typeof existingMedia = existingMedia,
+  // Whether the adapter reports an enclosing transaction the update joins, as
+  // on SQLite inside a plugin's `ctx.db.transaction` or core's own one.
+  enclosed = false
 ) {
   const tx = {
     lockRow: async () => {},
@@ -94,6 +98,12 @@ function makeAdapter(
   return {
     dialect: "sqlite" as const,
     getDrizzle: () => ({}),
+    inTransaction: () => enclosed,
+    // The ordering under test is the variant cleanup's, not the effects', so
+    // an after-commit effect runs at once.
+    afterCommit: async (effect: () => unknown) => {
+      await effect();
+    },
     transaction: async <T>(fn: (t: typeof tx) => Promise<T>): Promise<T> => {
       const result = await fn(tx);
       if (txBehavior === "throw") {
@@ -110,7 +120,8 @@ function makeAdapter(
 
 function makeService(
   txBehavior: "commit" | "throw" | "row-gone",
-  lockedRow: typeof existingMedia = existingMedia
+  lockedRow: typeof existingMedia = existingMedia,
+  enclosed = false
 ) {
   const logger = {
     info: () => {},
@@ -119,7 +130,7 @@ function makeService(
     debug: () => {},
   };
   const service = new MediaService(
-    makeAdapter(txBehavior, lockedRow) as never,
+    makeAdapter(txBehavior, lockedRow, enclosed) as never,
     logger as never
   );
   // getMediaById is the pre-transaction existence read; stub it to the image.
@@ -166,6 +177,43 @@ describe("MediaService focal-point regeneration ordering", () => {
     expect(calls.indexOf(`delete:${OLD_PATH}`)).toBeGreaterThan(
       calls.indexOf("update")
     );
+  });
+
+  it("keeps the old variant when a plugin's enclosing transaction can still roll the row back", async () => {
+    // The update is a savepoint of the plugin's transaction, so its later
+    // rollback restores the row's OLD variant paths; deleting their files now
+    // would leave that row pointing at bytes that are gone.
+    const service = makeService("commit", existingMedia, true);
+    const res = await runInPluginTransaction(() =>
+      service.updateMedia("m1", { focalX: 0.5 })
+    );
+
+    expect(res.success).toBe(true);
+    expect(calls).toContain("update");
+    expect(deleteSpy).not.toHaveBeenCalledWith(OLD_PATH);
+  });
+
+  it("deletes the old variant in a plugin's transaction the update does not join", async () => {
+    // On PostgreSQL and MySQL the update commits on its own connection, so the
+    // adapter reports no enclosing transaction and no rollback can reach it.
+    const service = makeService("commit");
+    const res = await runInPluginTransaction(() =>
+      service.updateMedia("m1", { focalX: 0.5 })
+    );
+
+    expect(res.success).toBe(true);
+    expect(deleteSpy).toHaveBeenCalledWith(OLD_PATH);
+  });
+
+  it("deletes the old variant inside core's own enclosing transaction", async () => {
+    // No plugin transaction encloses the update, so nothing rolls the row
+    // back after it returns and the superseded files go as usual.
+    const service = makeService("commit", existingMedia, true);
+    const res = await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(res.success).toBe(true);
+    expect(deleteSpy).toHaveBeenCalledWith(OLD_PATH);
+    expect(deleteSpy).not.toHaveBeenCalledWith(NEW_PATH);
   });
 
   it("cleans up the new (orphaned) variant and keeps the old one when the write fails", async () => {

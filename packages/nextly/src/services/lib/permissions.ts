@@ -1190,61 +1190,7 @@ export async function isSuperAdmin(
   }
 
   try {
-    const checker = new PermissionChecker();
-    const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
-
-    // One decision, asked once: an executor-backed result reflects an
-    // uncommitted transaction, and a result whose rows were invalidated while
-    // this ran is already stale. Neither may be cached.
-    const cacheable = () =>
-      !executor && resolvedUnderCurrentRevision(resolvedUnder);
-
-    if (roleIds.size === 0) {
-      if (cacheable()) {
-        superAdminCache.set(userId, {
-          value: false,
-          expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
-          epoch: currentEpoch(),
-        });
-      }
-      return false;
-    }
-
-    const t = getTablesLazy();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { roles } = t as any;
-
-    const superAdmin = await rbacQuery(executor)
-      .select({ id: roles.id })
-      .from(roles)
-      .where(
-        and(
-          inArray(roles.id, Array.from(roleIds)),
-          eq(roles.slug, "super-admin")
-        )
-      )
-      .limit(1);
-
-    const result = superAdmin.length > 0;
-
-    // Populate the process-wide cache only for pooled checks; an executor-backed
-    // result reflects the caller's uncommitted transaction (see the param note).
-    // And only if nothing invalidated these rows while the reads were running.
-    if (cacheable()) {
-      superAdminCache.set(userId, {
-        value: result,
-        expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
-        epoch: currentEpoch(),
-      });
-
-      // Evict oldest if cache grows too large
-      if (superAdminCache.size > 1000) {
-        const oldest = superAdminCache.keys().next().value;
-        if (oldest) superAdminCache.delete(oldest);
-      }
-    }
-
-    return result;
+    return await decideSuperAdmin(userId, executor, resolvedUnder);
   } catch (error) {
     getAuthLogger()?.log?.("error", {
       category: "auth",
@@ -1254,6 +1200,92 @@ export async function isSuperAdmin(
     });
     return false; // fail-closed
   }
+}
+
+/**
+ * Whether a user holds `super-admin`, THROWING when the answer cannot be read.
+ *
+ * `isSuperAdmin` answers a failed read with `false`, which is the safe answer
+ * for an ACCESS check — denying super-admin denies access. For a REFUSAL gate
+ * — "refuse to create this account if it reaches super-admin" — the same
+ * `false` means "allow", and on MySQL and SQLite a failed read does not abort
+ * the surrounding transaction, so the account would commit. A gate asks this
+ * one, and a read that fails fails the operation.
+ *
+ * The same decision as `isSuperAdmin`, not a second one: both run
+ * `decideSuperAdmin`. Meant for an executor-backed check inside a
+ * transaction, so neither the cache nor the pooled revision is consulted.
+ */
+export async function isSuperAdminOrThrow(
+  userId: string,
+  executor: unknown
+): Promise<boolean> {
+  if (!userId) return false;
+  return decideSuperAdmin(userId, executor, currentEpoch());
+}
+
+/**
+ * The super-admin decision itself: resolve the user's roles (inherited ones
+ * included) and ask whether any is `super-admin`. Throws on a failed read;
+ * each caller decides what a failure means.
+ */
+async function decideSuperAdmin(
+  userId: string,
+  executor: unknown,
+  resolvedUnder: ReturnType<typeof currentEpoch>
+): Promise<boolean> {
+  const checker = new PermissionChecker();
+  const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
+
+  // One decision, asked once: an executor-backed result reflects an
+  // uncommitted transaction, and a result whose rows were invalidated while
+  // this ran is already stale. Neither may be cached.
+  const cacheable = () =>
+    !executor && resolvedUnderCurrentRevision(resolvedUnder);
+
+  if (roleIds.size === 0) {
+    if (cacheable()) {
+      superAdminCache.set(userId, {
+        value: false,
+        expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
+        epoch: currentEpoch(),
+      });
+    }
+    return false;
+  }
+
+  const t = getTablesLazy();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { roles } = t as any;
+
+  const superAdmin = await rbacQuery(executor)
+    .select({ id: roles.id })
+    .from(roles)
+    .where(
+      and(inArray(roles.id, Array.from(roleIds)), eq(roles.slug, "super-admin"))
+    )
+    .limit(1);
+
+  const result = superAdmin.length > 0;
+
+  // Populate the process-wide cache only for pooled checks; an executor-backed
+  // result reflects the caller's uncommitted transaction (see the param note).
+  // And only if nothing invalidated these rows while the reads were running.
+  if (cacheable()) {
+    superAdminCache.set(userId, {
+      value: result,
+      expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
+      epoch: currentEpoch(),
+    });
+
+    // Evict oldest if cache grows too large
+    if (superAdminCache.size > 1000) {
+      const oldest = superAdminCache.keys().next().value;
+      if (oldest) superAdminCache.delete(oldest);
+    }
+  }
+
+  return result;
 }
 
 /**

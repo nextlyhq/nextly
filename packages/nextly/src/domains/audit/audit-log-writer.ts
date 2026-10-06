@@ -40,9 +40,13 @@ import { getDialectTables } from "../../database/index";
 import { NEXTLY_ERROR_STATUS } from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
+import type { RowLockServer } from "../../shared/lib/row-lock";
+import { serializeOnSqlite } from "../../shared/lib/run-adapter-transaction";
+import { isValidUUID } from "../auth/services/role/utils";
 
 import { isAuditReason } from "./audit-reasons";
 import {
+  erasureNeedsLock,
   insertErasureAware,
   type ErasureAwareDb,
   type ErasureAwareInsert,
@@ -83,7 +87,12 @@ export type AuditEventKind =
  * Default-deny, mirroring how webhook payloads are projected. The keys kept are
  * the ones that describe WHAT happened rather than TO WHOM.
  */
-const AUDIT_METADATA_KEYS = ["reason", "originalCode", "legacyCode"] as const;
+const AUDIT_METADATA_KEYS = [
+  "reason",
+  "originalCode",
+  "legacyCode",
+  "strategy",
+] as const;
 
 /**
  * Whether a retained value is one this package controls.
@@ -103,7 +112,20 @@ function isRetainableValue(
   value: unknown
 ): boolean {
   if (key === "reason") return isAuditReason(value);
+  // Strategy names come from application and plugin code, so there is no list
+  // to check against. The SHAPE is bounded instead: a short, lowercase
+  // identifier cannot carry an address, a message or anything else that would
+  // put a person on a row nothing can later find.
+  if (key === "strategy") return isStrategyName(value);
   return isCanonicalErrorCode(value);
+}
+
+/** The shape a strategy name must have to be retained on an audit row. */
+const STRATEGY_NAME_PATTERN = /^[a-z0-9][a-z0-9:_-]{0,63}$/;
+
+/** Whether a value is a strategy name rather than free text wearing the key. */
+export function isStrategyName(value: unknown): value is string {
+  return typeof value === "string" && STRATEGY_NAME_PATTERN.test(value);
 }
 
 /**
@@ -365,6 +387,21 @@ function adapterDialect(adapter: unknown): SupportedDialect | undefined {
 }
 
 /**
+ * The server facts the erasure lock depends on. The adapter reports whether
+ * its server takes a shared row lock; one that does not say is left unknown,
+ * and gets the lock every server accepts.
+ */
+function rowLockServer(
+  adapter: unknown,
+  dialect: SupportedDialect
+): RowLockServer {
+  const capabilities = (
+    adapter as { getCapabilities?: () => { sharedRowLock?: boolean } }
+  ).getCapabilities?.();
+  return { dialect, sharedRowLock: capabilities?.sharedRowLock };
+}
+
+/**
  * Encode `metadata` for whichever column type this dialect uses.
  *
  * The column is `jsonb` on PostgreSQL and `json` on MySQL, where the driver
@@ -436,6 +473,83 @@ function offersRetention(
   );
 }
 
+/**
+ * The audit row for an event, split into what erasure does and does not touch.
+ *
+ * The address and the client NAME the person, so they are decided by the
+ * write rather than stored unconditionally. An attributed event that resolves
+ * its actor before a deletion but lands after both that deletion and its
+ * post-commit sweep would otherwise keep the deleted person's identifiers
+ * permanently — the account they belong to no longer exists for any later
+ * erasure to key on. Unattributed events (a failed sign-in for an address
+ * owning no account) name nobody and are stored as they are.
+ *
+ * A PLUGIN's metadata is decided too, on the actor AND the target, as
+ * deletion clears it for either. Core's projection keeps only values this
+ * package controls, but a plugin row carries what the plugin chose within its
+ * declared keys — an email, a provider subject — which deletion clears and a
+ * write racing it must not put back. The address and the client stay the
+ * actor's alone. A plugin's kind always carries its `<slug>.` prefix, and no
+ * core kind contains a dot.
+ */
+function auditRowInput(
+  event: AuditEvent,
+  table: unknown,
+  usersTable: unknown
+): ErasureAwareInsert {
+  const metadata = encodeMetadata(table, event.metadata);
+  const pluginRow = event.kind.includes(".");
+  const actorUserId = event.actorUserId ?? null;
+  const targetUserId = event.targetUserId ?? null;
+  return {
+    table: table as ErasureAwareInsert["table"],
+    users: usersTable as ErasureAwareInsert["users"],
+    row: {
+      id: randomUUID(),
+      kind: event.kind,
+      actorUserId,
+      targetUserId,
+      ...(pluginRow ? {} : { metadata }),
+      createdAt: new Date(),
+    },
+    identity: {
+      ipAddress: event.ipAddress ?? null,
+      userAgent: event.userAgent ?? null,
+    },
+    ...(pluginRow ? { namesEitherParty: { metadata } } : {}),
+    actorUserId,
+    targetUserId,
+  };
+}
+
+/**
+ * Say that a plugin row was stored without its metadata because its target
+ * names no account.
+ *
+ * Stored that way on purpose: a target deleted before the write and one that
+ * never existed look the same, and neither may keep data about them. But a
+ * plugin passing an identifier that is not a user id — a provider subject, an
+ * email — loses its metadata on every write, so the operator is told. The
+ * metadata values stay out of the log, as they stay out of the row.
+ *
+ * So does the target itself: in exactly the misuse this warning exists for it
+ * is an email, which the row was stored without metadata to avoid keeping.
+ * The warning says only how long it is and whether it has a user id's shape
+ * (a UUID), which tells a deleted account from an identifier that was never
+ * one. Not a hash either: an email is guessable enough that its hash names it.
+ */
+function reportTargetAbsent(event: AuditEvent): void {
+  if (Object.keys(event.metadata ?? {}).length === 0) return;
+  const target = event.targetUserId ?? "";
+  getNextlyLogger().warn({
+    kind: "plugin-audit-metadata-dropped",
+    eventKind: event.kind,
+    reason: "target-account-absent",
+    targetLength: target.length,
+    targetIsUserIdShaped: isValidUUID(target),
+  });
+}
+
 /** The write surface plus the transaction the lock has to be held inside. */
 interface TransactionalErasureDb extends ErasureAwareDb {
   transaction<T>(work: (tx: ErasureAwareDb) => Promise<T>): Promise<T>;
@@ -478,42 +592,29 @@ export function buildAuditLogWriter(
           // running against an older schema bundle. Don't throw.
           return;
         }
-        // The address and the client NAME the person, so they are decided by
-        // the write rather than stored unconditionally. An attributed event
-        // that resolves its actor before a deletion but lands after both that
-        // deletion and its post-commit sweep would otherwise keep the deleted
-        // person's identifiers permanently — the account they belong to no
-        // longer exists for any later erasure to key on. Unattributed events
-        // (a failed sign-in for an address owning no account) name nobody and
-        // are stored as they are.
-        const write = (executor: ErasureAwareDb): Promise<void> =>
-          insertErasureAware(executor, dialect, {
-            table: table as ErasureAwareInsert["table"],
-            users: usersTable as ErasureAwareInsert["users"],
-            row: {
-              id: randomUUID(),
-              kind: event.kind,
-              actorUserId: event.actorUserId ?? null,
-              targetUserId: event.targetUserId ?? null,
-              metadata: encodeMetadata(table, event.metadata),
-              createdAt: new Date(),
-            },
-            identity: {
-              ipAddress: event.ipAddress ?? null,
-              userAgent: event.userAgent ?? null,
-            },
-            actorUserId: event.actorUserId ?? null,
-          });
+        const input = auditRowInput(event, table, usersTable);
+        const server = rowLockServer(adapter, dialect);
+        const write = (executor: ErasureAwareDb) =>
+          insertErasureAware(executor, server, input);
 
         // The lock the decision rests on is only worth anything inside a
-        // transaction, and this writer owns none. SQLite takes no lock and its
-        // `BEGIN IMMEDIATE` would throw whenever another transaction is open,
-        // which here would become a silently missing audit entry.
-        if (dialect === "sqlite" || event.actorUserId == null) {
-          await write(db as ErasureAwareDb);
-        } else {
-          await (db as TransactionalErasureDb).transaction(tx => write(tx));
-        }
+        // transaction, and this writer owns none. On SQLite the write goes
+        // through the adapter's transaction instead: the adapter queues it
+        // behind another request's open transaction rather than letting it run
+        // inside one, whose rollback would erase the audit entry, and its
+        // `BEGIN IMMEDIATE` holds the write lock across the decision and the
+        // insert. A write made inside the caller's own transaction nests in it.
+        const outcome =
+          dialect === "sqlite"
+            ? await serializeOnSqlite(adapter, () =>
+                write(db as ErasureAwareDb)
+              )
+            : erasureNeedsLock(input)
+              ? await (db as TransactionalErasureDb).transaction(tx =>
+                  write(tx)
+                )
+              : await write(db as ErasureAwareDb);
+        if (outcome.targetAbsent) reportTargetAbsent(event);
 
         // Offer a retention pass, for the same reason content writes do: there
         // is no scheduler to hang one off. Every other trigger is a content

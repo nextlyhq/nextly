@@ -4,22 +4,17 @@ import type {
   SqlParam,
   DatabaseCapabilities,
 } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
 
 import { getDialectTables } from "../database/index";
 import { resolveRelations } from "../database/resolve-relations";
 
 import { normalizeDbTimestamp } from "./lib/date-formatting";
+import {
+  afterCommit,
+  runAdapterTransaction,
+} from "./lib/run-adapter-transaction";
 import type { Logger } from "./types";
 import type { DatabaseAdapter } from "./types/database-adapter";
-
-// SQL fragments used by BaseService.withTransaction's SQLite branch.
-// Declared at module scope (not per-call) so we don't allocate a fresh
-// sql template literal on every transaction. `sql.raw` is the documented
-// Drizzle way to inject unparameterized SQL for DDL/DCL statements.
-const sqliteBeginImmediate = sql.raw("BEGIN IMMEDIATE");
-const sqliteCommit = sql.raw("COMMIT");
-const sqliteRollback = sql.raw("ROLLBACK");
 
 /**
  * Base class for all Nextly services providing adapter-based database access.
@@ -245,11 +240,13 @@ export abstract class BaseService<
    * - **SQLite** — better-sqlite3's `db.transaction()` rejects any callback that returns
    *   a promise (`TypeError: Transaction function cannot return a promise`). Since
    *   every Nextly service method is async, we cannot use Drizzle's native SQLite
-   *   transaction. Instead we open the transaction manually via `BEGIN IMMEDIATE`
-   *   on the shared connection, run the callback against `this.db`, and COMMIT or
-   *   ROLLBACK on success/failure. All Drizzle queries against `this.db` during the
-   *   callback window execute on the same synchronous connection and therefore
-   *   participate in the BEGIN/COMMIT boundary.
+   *   transaction. Instead the callback runs inside the adapter's `transaction()`,
+   *   against `this.db`: all Drizzle queries against `this.db` execute on the same
+   *   synchronous connection and therefore participate in that transaction. The
+   *   adapter queues it behind any other transaction on the connection, and runs
+   *   it as a savepoint of the transaction it is called inside, if any — a
+   *   plugin's `ctx.db.transaction` or another service's — so it commits or rolls
+   *   back with that one.
    *
    * ## Why not the adapter's positional `TransactionContext`
    *
@@ -264,7 +261,10 @@ export abstract class BaseService<
    *   Drizzle instance (transaction on PG/MySQL, shared db on SQLite) as `tx`.
    * @returns Promise resolving to the function's return value.
    *
-   * @throws {DatabaseError} If the transaction fails or is rolled back.
+   * @throws What `work` threw, as thrown, on every dialect. A failure of the
+   *   transaction itself — a `COMMIT` that does not go through — is the
+   *   driver's error on PostgreSQL and MySQL and the adapter's `DatabaseError`
+   *   on SQLite.
    *
    * @example Basic insert + insert atomic
    * ```typescript
@@ -316,41 +316,61 @@ export abstract class BaseService<
     // dispatch, etc.), so we can never use Drizzle's native SQLite
     // transaction wrapper.
     //
-    // Fall back to a manual BEGIN IMMEDIATE / COMMIT / ROLLBACK on the
-    // shared connection. We pass `this.db` as the `tx` argument — it is the
-    // same Drizzle instance `BaseService.db` exposes, which means queries
-    // against it during the callback window run on the exact same
-    // synchronous better-sqlite3 connection and therefore participate in
-    // the BEGIN/COMMIT boundary. On the happy path we COMMIT; on thrown
-    // error we ROLLBACK and re-throw so the caller observes the same
-    // rollback semantics as the PG/MySQL branch.
+    // The adapter's own `transaction()` carries async work on the one shared
+    // connection instead. We pass `this.db` as the `tx` argument — the same
+    // Drizzle instance `BaseService.db` exposes, on that same connection, so
+    // its queries participate in the transaction. Opening one here with a
+    // raw BEGIN would bypass the adapter: inside a transaction already open
+    // it fails with "cannot start a transaction within a transaction", and
+    // outside one it races the adapter's queue instead of waiting in it.
     if (this.dialect === "sqlite") {
-      // Drizzle's better-sqlite3 instance exposes `.run(sql`...`)` for raw
-      // SQL execution. Use a template literal with the `sql` helper so the
-      // SQL is statically typed and escaped identically to regular queries.
-      // We import `sql` lazily via `this.db.$client` — actually better to
-      // use drizzle-orm's re-export below.
-      await this.db.run(sqliteBeginImmediate);
-      try {
-        const result = await work(this.db);
-        await this.db.run(sqliteCommit);
-        return result;
-      } catch (err) {
-        try {
-          await this.db.run(sqliteRollback);
-        } catch {
-          // Ignore rollback errors — the transaction may already be
-          // aborted if the underlying error was a constraint violation,
-          // and we always want to surface the original error to the
-          // caller.
-        }
-        throw err;
-      }
+      // The work's own error, not the adapter's classification of it: that is
+      // what PostgreSQL and MySQL hand back.
+      return runAdapterTransaction(
+        run => this.adapter.transaction(() => run()),
+        () => work(this.db)
+      );
     }
     // PG/MySQL: Drizzle's native transaction API supports async callbacks
     // and binds the callback's `tx` to a pooled client that automatically
     // runs BEGIN/COMMIT/ROLLBACK around the callback.
     return this.db.transaction(work);
+  }
+
+  /**
+   * Run what a write does outside the database (an event, an after-hook, a
+   * cache flush, a webhook drain) once the write is durable: now on
+   * PostgreSQL and MySQL, and on SQLite after the outermost transaction
+   * enclosing this call commits, never for one that rolls back. See
+   * {@link afterCommit}.
+   */
+  protected afterCommit(effect: () => unknown): Promise<void> {
+    return afterCommit(this.adapter, effect);
+  }
+
+  /**
+   * Run `effect` over a view of a committed row once the write is durable.
+   *
+   * The view is a shallow copy of `entry` as it stands now. Without an
+   * enclosing transaction holding the effect, it runs before this resolves and
+   * whatever it set on the view is copied onto `entry`, exactly as if it had
+   * run on `entry` itself: a field `afterChange` reshapes the response this
+   * way. Inside an enclosing SQLite transaction it runs once that commits,
+   * after the call has returned, so it sees the row as written rather than
+   * the response the call then built from it in place (parsed, redacted), and
+   * it no longer reshapes that response.
+   */
+  protected async afterCommitOver<E extends Record<string, unknown>>(
+    entry: E,
+    effect: (committed: E) => Promise<unknown>
+  ): Promise<void> {
+    const committed = { ...entry };
+    let ranNow = false;
+    await this.afterCommit(async () => {
+      await effect(committed);
+      ranNow = true;
+    });
+    if (ranNow) Object.assign(entry, committed);
   }
 
   /**

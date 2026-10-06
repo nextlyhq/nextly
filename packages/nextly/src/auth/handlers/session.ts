@@ -1,7 +1,11 @@
 /**
  * GET /auth/session
  * Returns the current session user from the access token.
- * No database hit; purely stateless JWT verification.
+ * The cookie/JWT path is purely stateless — no database hit. The one
+ * exception is a user a plugin resolves from a custom credential
+ * (`determineUser`): that answer is a claim about the account, not proof,
+ * so the account row is re-read and gated before it is answered as a
+ * session.
  *
  * In dev (NODE_ENV !== "production"), this handler also implements
  * `admin.devAutoLogin`: when the user has no valid session and the host
@@ -16,12 +20,15 @@ import type { PluginContext } from "../../plugins/plugin-context";
 import {
   clearAccessTokenCookie,
   readAccessTokenCookie,
-  setAccessTokenCookie,
 } from "../cookies/access-token-cookie";
-import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
+import { sessionCookies } from "../cookies/session-cookies";
 import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
+import {
+  accountMayHoldSession,
+  type AccountState,
+} from "../session/account-state";
 import { getSession } from "../session/get-session";
 import {
   generateRefreshToken,
@@ -65,6 +72,15 @@ export type SessionHandlerDeps = Pick<
   authHooks?: AuthHookRegistry;
   /** Plugin context for {@link authHooks}; supplied alongside `authHooks`. */
   pluginCtx?: PluginContext;
+  /**
+   * Account-state lookup for the plugin-resolved user, the same one the
+   * refresh handler gates with. Optional so legacy fixtures keep working;
+   * the DI path always supplies it. Without it a plugin-resolved identity
+   * cannot be checked, so it is not answered.
+   */
+  fetchAccountState?: (userId: string) => Promise<AccountState | null>;
+  /** Whether an unverified email disqualifies the account, as at sign-in. */
+  requireEmailVerification?: boolean;
 };
 
 // Reasons we treat the request as not-authenticated. The first three
@@ -88,16 +104,31 @@ export async function handleSession(
       request,
       deps.pluginCtx
     );
-    if (custom) {
-      return respondData({
-        user: {
-          id: custom.id,
-          email: custom.email,
-          name: custom.name ?? null,
-          image: custom.image ?? null,
-        },
-        accessToken: null,
-      });
+    if (custom && deps.fetchAccountState) {
+      const state = await deps.fetchAccountState(custom.id);
+      // A password lockout does not disqualify: someone else's wrong guesses
+      // must not end a session the credential itself still holds, the same
+      // terms a refresh is judged on.
+      if (
+        accountMayHoldSession(state, {
+          requireEmailVerification: deps.requireEmailVerification ?? true,
+          enforcePasswordLockout: false,
+        })
+      ) {
+        return respondData({
+          user: {
+            id: custom.id,
+            email: custom.email,
+            name: custom.name ?? null,
+            image: custom.image ?? null,
+          },
+          accessToken: null,
+        });
+      }
+      // The credential names an account that may not hold a session right
+      // now (unknown, deactivated, or unverified where that disqualifies),
+      // so it is not answered as one. The stateless path below returns 401
+      // for a request carrying no cookie/JWT alongside the credential.
     }
   }
 
@@ -231,6 +262,10 @@ async function attemptDevAutoLogin(
     );
   }
 
+  // The shared account-state gate does not run on this path. It mints a
+  // session directly rather than through `issueSession`, and it is hard-blocked
+  // in production above, so the only accounts it can reach are ones a developer
+  // named in their own config.
   const [roleIds, customFields] = await Promise.all([
     deps.fetchRoleIds(user.id),
     deps.fetchCustomFields(user.id),
@@ -261,14 +296,7 @@ async function attemptDevAutoLogin(
     expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
   });
 
-  const cookies = [
-    setAccessTokenCookie(accessToken, deps.refreshTokenTTL, deps.isProduction),
-    setRefreshTokenCookie(
-      rawRefreshToken,
-      deps.refreshTokenTTL,
-      deps.isProduction
-    ),
-  ];
+  const cookies = sessionCookies(accessToken, rawRefreshToken, deps);
 
   // Match the `respondData({ user, accessToken })` shape that the
   // authenticated `handleSession` branch returns above so SDK clients

@@ -34,10 +34,7 @@ import {
   roles as rolesSqlite,
   userRoles as userRolesSqlite,
 } from "../../../schemas/rbac/sqlite";
-import {
-  accounts as accountsSqlite,
-  users as usersSqlite,
-} from "../../../schemas/users/sqlite";
+import { users as usersSqlite } from "../../../schemas/users/sqlite";
 import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
 import { UserMutationService } from "../../users/services/user-mutation-service";
@@ -66,7 +63,6 @@ async function ddl(): Promise<string[]> {
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
       users: usersSqlite,
-      accounts: accountsSqlite,
       roles: rolesSqlite,
       userRoles: userRolesSqlite,
       // The mutation service records user.deleted to the outbox whenever
@@ -162,48 +158,34 @@ describe("deleteUser erases the delivery log (real SQLite)", () => {
     // after the deletion transaction has closed, before the post-commit sweep.
     // The in-transaction erasure cannot have selected it, so only the sweep can
     // reach it.
-    // Hooked at the COMMIT itself rather than at `adapter.transaction`, because
-    // on SQLite `withTransaction` runs a manual BEGIN IMMEDIATE / COMMIT on the
-    // drizzle handle and never calls the adapter method. Injecting immediately
-    // after the commit resolves puts the row exactly where an in-flight send's
-    // would land: too late for the in-transaction erasure, in time for nothing
-    // but the post-commit sweep.
-    // Hooked on `getDrizzle` rather than on a handle, because `BaseService.db`
-    // is a getter that calls `adapter.getDrizzle()` afresh on every access — so
-    // patching one returned instance never reaches the one the commit runs on.
-    // `withTransaction` on SQLite issues a manual BEGIN IMMEDIATE / COMMIT, and
-    // injecting right after that COMMIT resolves puts the row exactly where an
-    // in-flight send's would land: too late for the in-transaction erasure, and
-    // reachable by nothing but the post-commit sweep.
-    const realGetDrizzle = adapter.getDrizzle.bind(adapter);
+    // Hooked on `adapter.transaction`, which `withTransaction` runs the
+    // deletion through on SQLite, and placed after the OUTERMOST call
+    // resolves: a call nested inside it is a savepoint, and resolving it
+    // commits nothing. Injecting right after that commit puts the row exactly
+    // where an in-flight send's would land: too late for the in-transaction
+    // erasure, and reachable by nothing but the post-commit sweep.
+    const realTransaction = adapter.transaction.bind(adapter);
     let injected = false;
-    const wrap = (handle: Record<string, unknown>) => {
-      const realRun = (handle.run as (q: unknown) => Promise<unknown>).bind(
-        handle
-      );
-      return new Proxy(handle, {
-        get(target, prop, receiver) {
-          if (prop !== "run") return Reflect.get(target, prop, receiver);
-          return async (query: unknown) => {
-            const result = await realRun(query);
-            if (!injected && JSON.stringify(query).includes("COMMIT")) {
-              injected = true;
-              await insertDelivery(address);
-            }
-            return result;
-          };
-        },
-      });
-    };
-    adapter.getDrizzle = ((relations?: unknown) =>
-      wrap(
-        realGetDrizzle(relations as never) as Record<string, unknown>
-      )) as typeof adapter.getDrizzle;
+    let open = 0;
+    adapter.transaction = (async (work, options) => {
+      open += 1;
+      let result: unknown;
+      try {
+        result = await realTransaction(work, options);
+      } finally {
+        open -= 1;
+      }
+      if (open === 0 && !injected) {
+        injected = true;
+        await insertDelivery(address);
+      }
+      return result;
+    }) as typeof adapter.transaction;
 
     try {
       await users.deleteUser(created.id);
     } finally {
-      adapter.getDrizzle = realGetDrizzle;
+      adapter.transaction = realTransaction;
     }
 
     expect(injected).toBe(true);

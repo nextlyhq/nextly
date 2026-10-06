@@ -4,11 +4,35 @@ export const COOKIE_NAMES = {
   csrf: "nextly_csrf",
 } as const;
 
+/** The admin panel's base path, which every auth cookie is scoped under. */
+const ADMIN_PATH = "/admin";
+
+/** Where core's `/auth/*` endpoints answer, below the admin's API. */
+const AUTH_API_PATH = `${ADMIN_PATH}/api/auth`;
+
+/**
+ * The path each auth cookie is scoped to.
+ *
+ * The refresh token is scoped to the auth endpoints rather than to `/refresh`
+ * alone, so sign-out receives it too and can delete its row: scoped to
+ * `/refresh`, the browser never sent it to `/logout`, and the row stayed valid
+ * for its whole lifetime after the user signed out. Only core's refresh and
+ * logout handlers read it: auth hooks, strategies and plugin routes, which a
+ * request under that path can reach, receive it without the cookie
+ * (`withoutRefreshCookie`).
+ */
 export const COOKIE_PATHS = {
-  accessToken: "/admin",
-  refreshToken: "/admin/api/auth/refresh",
-  csrf: "/admin",
+  accessToken: ADMIN_PATH,
+  refreshToken: AUTH_API_PATH,
+  csrf: ADMIN_PATH,
 } as const;
+
+/**
+ * The refresh cookie's earlier, narrower path. A browser can still hold a
+ * cookie set there, under the same name; it is cleared wherever the refresh
+ * cookie is set or cleared, so the two never coexist.
+ */
+export const LEGACY_REFRESH_COOKIE_PATH = `${AUTH_API_PATH}/refresh`;
 
 export interface CookieOptions {
   httpOnly: boolean;

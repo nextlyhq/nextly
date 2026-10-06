@@ -5,6 +5,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 import {
+  acceptsForShare,
   checkDialectVersion,
   NEXTLY_MIN_DB_VERSIONS,
   UnsupportedDialectVersionError,
@@ -50,18 +51,18 @@ describe("checkDialectVersion - PostgreSQL", () => {
     const client = pgClient(
       "PostgreSQL 15.0 on x86_64-pc-linux-gnu, compiled by gcc, 64-bit"
     );
-    await expect(
-      checkDialectVersion(client, "postgresql")
-    ).resolves.toBeUndefined();
+    await expect(checkDialectVersion(client, "postgresql")).resolves.toEqual({
+      variant: null,
+    });
   });
 
   it("passes on PostgreSQL 16.1 with extra Debian metadata", async () => {
     const client = pgClient(
       "PostgreSQL 16.1 (Debian 16.1-1.pgdg120+2) on x86_64-pc-linux-gnu, compiled by gcc, 64-bit"
     );
-    await expect(
-      checkDialectVersion(client, "postgresql")
-    ).resolves.toBeUndefined();
+    await expect(checkDialectVersion(client, "postgresql")).resolves.toEqual({
+      variant: null,
+    });
   });
 });
 
@@ -81,7 +82,7 @@ describe("checkDialectVersion - MySQL", () => {
     const onWarning = vi.fn();
     await expect(
       checkDialectVersion(client, "mysql", { onWarning })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ variant: null });
     expect(onWarning).not.toHaveBeenCalled();
   });
 
@@ -90,7 +91,7 @@ describe("checkDialectVersion - MySQL", () => {
     const onWarning = vi.fn();
     await expect(
       checkDialectVersion(client, "mysql", { onWarning })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ variant: "mariadb" });
     expect(onWarning).toHaveBeenCalledTimes(1);
     expect(onWarning.mock.calls[0]?.[0]).toMatch(/mariadb/i);
     expect(onWarning.mock.calls[0]?.[0]).toMatch(
@@ -103,7 +104,7 @@ describe("checkDialectVersion - MySQL", () => {
     const onWarning = vi.fn();
     await expect(
       checkDialectVersion(client, "mysql", { onWarning })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ variant: "tidb" });
     expect(onWarning).toHaveBeenCalledTimes(1);
     expect(onWarning.mock.calls[0]?.[0]).toMatch(/tidb/i);
   });
@@ -113,7 +114,7 @@ describe("checkDialectVersion - MySQL", () => {
     const onWarning = vi.fn();
     await expect(
       checkDialectVersion(client, "mysql", { onWarning })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ variant: "aurora" });
     expect(onWarning).toHaveBeenCalledTimes(1);
     expect(onWarning.mock.calls[0]?.[0]).toMatch(/aurora/i);
   });
@@ -123,7 +124,7 @@ describe("checkDialectVersion - MySQL", () => {
     const onWarning = vi.fn();
     await expect(
       checkDialectVersion(client, "mysql", { onWarning })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ variant: "planetscale" });
     expect(onWarning).toHaveBeenCalledTimes(1);
     // Why: first matching token wins; `planetscale` is checked before `vitess`.
     expect(onWarning.mock.calls[0]?.[0]).toMatch(/planetscale/i);
@@ -132,7 +133,9 @@ describe("checkDialectVersion - MySQL", () => {
   it("variant warning still fires when no onWarning callback provided", async () => {
     const client = mysqlClient("10.11.5-MariaDB");
     // Why: callback is optional; skipping it should NOT throw.
-    await expect(checkDialectVersion(client, "mysql")).resolves.toBeUndefined();
+    await expect(checkDialectVersion(client, "mysql")).resolves.toEqual({
+      variant: "mariadb",
+    });
   });
 });
 
@@ -149,16 +152,16 @@ describe("checkDialectVersion - SQLite", () => {
 
   it("passes on SQLite 3.38.0", async () => {
     const client = sqliteClient("3.38.0");
-    await expect(
-      checkDialectVersion(client, "sqlite")
-    ).resolves.toBeUndefined();
+    await expect(checkDialectVersion(client, "sqlite")).resolves.toEqual({
+      variant: null,
+    });
   });
 
   it("passes on SQLite 3.45.0", async () => {
     const client = sqliteClient("3.45.0");
-    await expect(
-      checkDialectVersion(client, "sqlite")
-    ).resolves.toBeUndefined();
+    await expect(checkDialectVersion(client, "sqlite")).resolves.toEqual({
+      variant: null,
+    });
   });
 });
 
@@ -200,5 +203,20 @@ describe("UnsupportedDialectVersionError", () => {
     expect(typed.requiredVersion).toBe("15.0+");
     expect(typed.kind).toBe("unsupported_version");
     expect(typed.dialect).toBe("postgresql");
+  });
+});
+
+describe("acceptsForShare", () => {
+  it.each([
+    [null, true],
+    ["aurora", true],
+    ["planetscale", true],
+    ["vitess", true],
+    ["mariadb", false],
+    ["tidb", false],
+  ] as const)("%s -> %s", (variant, accepted) => {
+    // MariaDB and TiDB reject `SELECT ... FOR SHARE` as a syntax error, so a
+    // caller asking them for a shared lock would fail every statement.
+    expect(acceptsForShare(variant)).toBe(accepted);
   });
 });

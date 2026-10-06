@@ -32,6 +32,12 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
   },
 }));
 
+// A token in hand, so no write here reaches for `/auth/csrf`: what the token
+// does at the dispatcher is `usePluginRouteMutation.dispatch.test.tsx`'s.
+vi.mock("@admin/lib/api/csrf", () => ({
+  csrfTokenForWrite: () => Promise.resolve("token"),
+}));
+
 import { usePluginRoute } from "../usePluginRoute";
 import { usePluginRouteMutation } from "../usePluginRouteMutation";
 

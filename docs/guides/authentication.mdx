@@ -17,10 +17,10 @@ There is no OAuth provider integration in the runtime. Authentication is local t
 
 Sessions use a two-token architecture:
 
-- **Access token** -- JWT signed with HS256 (jose), 15-minute TTL, stateless verification (no database hit). Sent as the HTTP-only `__nextly_access_token` cookie.
-- **Refresh token** -- opaque random string, 7-day TTL, SHA-256 hashed in the database for revocation support. Sent as the HTTP-only refresh-token cookie.
+- **Access token** -- JWT signed with HS256 (jose), 15-minute TTL, stateless verification (no database hit). Sent as the HTTP-only `nextly_session` cookie.
+- **Refresh token** -- opaque random string, 7-day TTL, SHA-256 hashed in the database for revocation support. Sent as the HTTP-only `nextly_refresh` cookie, scoped to `/admin/api/auth` so that both refresh and sign-out receive it.
 
-When the access token expires, the admin UI silently refreshes it using the refresh token. Users only see a re-login prompt once the refresh token itself expires (7 days of inactivity by default). Every refresh consumes the old refresh token and issues a new one -- if a previously-consumed token is replayed, that's a signal of theft.
+When the access token expires, the admin UI silently refreshes it using the refresh token. Users only see a re-login prompt once the refresh token itself expires (7 days of inactivity by default). Every refresh consumes the old refresh token and issues a new one. A token whose row is gone is refused and logged as `refresh-token-not-found` (see [Refresh-token rotation](#refresh-token-rotation)).
 
 Cookies are scoped to `/admin/*` so Nextly auth never collides with frontend application cookies.
 
@@ -69,6 +69,69 @@ export async function GET(req: Request) {
   return Response.json({ email: user.email });
 }
 ```
+
+## When an account may hold a session
+
+Every path that ends in a session asks the same question first, whether it is a
+password login, a second factor being answered, a forced password change, a
+token refresh, or a plugin finishing an external sign-in. An account is refused
+when it is deactivated, when its address is unverified and verification is
+required, or when it is locked by failed password attempts.
+
+Each refusal answers identically, so the response cannot be used to tell a
+locked account from one that does not exist. Which of the three it was is
+recorded only for the operator: in the server log, and as `metadata.reason` on
+the `login-failed` audit row, which names no account.
+
+The exception is an unverified address when the password was correct: the
+login answers `EMAIL_NOT_VERIFIED`, so the login page can offer to resend the
+verification link. Only someone who already holds the password sees it; a wrong
+password on the same account answers like any other refusal, and a locked
+account, or one an administrator deactivated, answers generically even to the
+right password. Asking for the link again does nothing for an address that is
+already verified.
+
+The lockout is the exception to "every path": it applies to password attempts
+only. A refresh is not a password attempt, and neither is an external sign-in —
+otherwise anyone who knew an address could lock its owner out of their provider
+by typing five wrong passwords.
+
+An account deactivated mid-session loses it at the next token refresh, which
+also deletes the refresh token and clears the cookies rather than leaving them
+to be retried. An access token already issued stays valid until it expires,
+within fifteen minutes; a token from the Direct API's `nextly.login()` is
+valid for 30 days and is not ended early.
+
+A deactivation also outlasts the account's own links. While an administrator
+has an account switched off, following its verification link verifies the
+address without activating the account, no new verification link is sent, and
+an invite link or a password-reset link is refused. Activating the account
+again lifts all of these.
+
+## What a token is for
+
+Session tokens and the pending tokens of a second-factor exchange carry a
+`typ` header naming their purpose, and each is verified for one purpose only,
+so a pending token cannot be presented as a session, whatever else it carries.
+Preview tokens are kept apart by their own derived key and audience.
+
+This release still accepts a session token with no `typ` header, so tokens
+already in circulation keep working. A later release will require it, which
+will stop Direct API tokens minted before this change; browser sessions are
+unaffected, because access tokens rotate every fifteen minutes.
+
+## Signing in with an external provider
+
+A plugin that has authenticated someone elsewhere finishes the login through
+core rather than assembling a session itself, using `ctx.auth.completeLogin`.
+It applies the same account-state rules, hooks and audit trail as a password
+login, so a plugin cannot grant a session core would have refused.
+
+A sign-in interrupted by a second factor resumes on the login page without a
+token ever appearing in a URL: the pending token travels in an HttpOnly cookie
+and the page asks the server which challenge is outstanding.
+
+See [plugin authentication](/docs/plugins/auth) for the full flow.
 
 ## Super-admin setup
 
@@ -204,19 +267,21 @@ Every login response is held for at least 500ms regardless of whether the accoun
 
 ### Per-IP auth-rate-limit
 
-A separate per-IP envelope rate-limits `/auth/login`, `/auth/register`, `/auth/forgot-password`, and `/auth/reset-password` (default: 30 requests/hour, configurable via `security.authRateLimit`). This stops credential-stuffing attacks from a single source even before per-user lockout kicks in.
+A separate per-IP envelope rate-limits `/auth/login`, `/auth/register`, `/auth/forgot-password`, `/auth/verify-email/resend`, `/auth/verify-email`, `/auth/reset-password`, `/auth/accept-invite`, `/auth/challenge/resolve` and `/auth/set-initial-password`, sharing one budget per IP (default: 30 requests/hour, configurable via `security.authRateLimit`). This stops credential-stuffing attacks from a single source even before per-user lockout kicks in.
 
 ### CSRF protection
 
-All state-changing auth endpoints (login, logout, register, setup, password operations) use double-submit CSRF tokens plus Origin/Referer validation. Add additional allowed origins via the `NEXTLY_ALLOWED_ORIGINS` env var (comma-separated).
+All state-changing auth endpoints (login, logout, register, setup, password operations) use double-submit CSRF tokens plus Origin/Referer validation. Add additional allowed origins via the `NEXTLY_ALLOWED_ORIGINS` env var (comma-separated). A self-hosted server (`next start` or standalone) takes its own origin from the address it listens on, not from your public URL, so list the origin browsers use whenever it differs from that address — behind a proxy, by IP or hostname, or in a container — or sign-in and plugin-route writes are refused with `CSRF_FAILED`.
 
 ### Refresh-token rotation
 
-Every successful refresh consumes the old refresh token and issues a new one. Replays of a consumed token are detectable -- if you wire up monitoring on the refresh handler, you can flag these as potential theft.
+Every successful refresh consumes the old refresh token and issues a new one. A token that matches no row answers 401 `REFRESH_FAILED` without clearing the cookies, and logs a `refresh-token-not-found` warning (without the token). Watch that warning for replays of a consumed token, but not every one is theft: it also fires for a second tab a round trip behind a rotation another tab made, for a session that was revoked, and for a cookie holding a value that was never issued. The cookies are left alone because nothing is revoked there, and clearing them would sign out the tab that just rotated.
 
-### Session revocation on password change
+Two refreshes presenting the same token get one rotation. The one that loses the race answers 401 `REFRESH_SUPERSEDED` and leaves the cookies alone. The admin retries with the cookies it now holds; any other client should retry once with its current cookies.
 
-When a user changes their password, all of their refresh tokens are deleted, forcing re-login on every device.
+### Session revocation on password change and deactivation
+
+Every password write ends the account's sessions: an administrator setting it (`updateUser` or `PATCH /api/users/:id/password`), the user changing their own, a reset, accepting an invite, and setting an initial password. Deactivating an account does the same. Each deletes all of the account's refresh tokens in the same transaction as the write, forcing re-login on every device.
 
 ## Password management
 
@@ -267,7 +332,7 @@ Built-in defaults you can rely on (not configurable yet):
 | Variable                 | Required   | Description                                     |
 |--------------------------|------------|-------------------------------------------------|
 | `NEXTLY_SECRET`          | yes (prod) | JWT signing secret. **Min 32 characters in production.** |
-| `NEXTLY_ALLOWED_ORIGINS` | optional   | Comma-separated additional CSRF origins.        |
+| `NEXTLY_ALLOWED_ORIGINS` | self-hosted | Comma-separated additional CSRF origins; include the origin browsers use whenever it differs from the address the server listens on. |
 | `NEXT_PUBLIC_APP_URL`    | yes (prod) | Public URL of the deployment, used in email links. |
 
 Generate `NEXTLY_SECRET` with:
@@ -283,14 +348,19 @@ openssl rand -base64 32
 | GET    | `/api/auth/setup-status`       | Has the first user been created?             |
 | GET    | `/api/auth/session`            | Get the current session.                     |
 | GET    | `/api/auth/csrf`               | Mint a CSRF token.                           |
+| GET    | `/api/auth/pending`            | Which second factor an interrupted sign-in left outstanding. Never returns the token itself. |
+| GET    | `/api/auth/ui`                 | The login page's provider buttons, challenge views and slots. |
 | POST   | `/api/auth/setup`              | Create the first super-admin (auto-logs in). |
 | POST   | `/api/auth/login`              | Email + password login.                      |
+| POST   | `/api/auth/challenge/resolve`  | Answer a second factor with the pending token. |
+| POST   | `/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in. |
 | POST   | `/api/auth/logout`             | Revoke the current session.                  |
 | POST   | `/api/auth/refresh`            | Rotate access + refresh tokens.              |
 | POST   | `/api/auth/register`           | User registration.                           |
 | PATCH  | `/api/auth/change-password`    | Change password (auth required).             |
 | POST   | `/api/auth/forgot-password`    | Request a password-reset email.              |
 | POST   | `/api/auth/reset-password`     | Reset password with the email token.         |
+| POST   | `/api/auth/accept-invite`      | Set a password from an invite link.          |
 | POST   | `/api/auth/verify-email`       | Verify email with the email token.           |
 | POST   | `/api/auth/verify-email/resend`| Resend the verification email.               |
 

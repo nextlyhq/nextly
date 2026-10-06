@@ -72,6 +72,7 @@ import {
 } from "../../../services/lib/permissions";
 import { refreshEpoch, stampIsCurrent } from "../../../services/lib/rbac-epoch";
 import type { Logger } from "../../../services/shared";
+import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
 
 /** The three token types that determine how permissions are resolved at request time. */
 export type ApiKeyTokenType = "read-only" | "full-access" | "role-based";
@@ -661,15 +662,20 @@ export class ApiKeyService extends BaseService {
 
     const now = new Date();
     try {
-      await this.db
-        .update(this.apiKeysTable)
-        .set({ isActive: false, updatedAt: now })
-        .where(
-          and(
-            eq(this.apiKeysTable.id, id),
-            eq(this.apiKeysTable.userId, userId)
+      // Through the adapter on SQLite: a plain update made while another
+      // request's transaction is open runs inside it, and that transaction's
+      // rollback would make the revoked key authenticate again.
+      await serializeOnSqlite(this.adapter, () =>
+        this.db
+          .update(this.apiKeysTable)
+          .set({ isActive: false, updatedAt: now })
+          .where(
+            and(
+              eq(this.apiKeysTable.id, id),
+              eq(this.apiKeysTable.userId, userId)
+            )
           )
-        );
+      );
     } catch (error) {
       // Normalise raw driver errors before mapping so the right NextlyError
       // kind is produced (e.g. fk-violation → 400, not INTERNAL_ERROR).

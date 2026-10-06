@@ -9,6 +9,7 @@
 import { describe, it, expect } from "vitest";
 
 import { NULL_AUDIT_LOG_WRITER } from "../../../domains/audit/audit-log-writer";
+import { InMemoryRateLimitStore } from "../../../middleware/rate-limit";
 import { routeAuthRequest, type AuthRouterDeps } from "../router";
 
 // Spying writer used by the audit-on-CSRF-failure test below. Counts
@@ -60,6 +61,7 @@ function makeStubDeps(
     storeRefreshToken: unreachable as never,
     findRefreshTokenByHash: unreachable as never,
     deleteRefreshToken: unreachable as never,
+    withSessionRowTransaction: unreachable as never,
     deleteRefreshTokenByHash: unreachable as never,
     deleteAllRefreshTokensForUser: unreachable as never,
     // getUserCount has to return 0 so setup does not short-circuit with
@@ -193,4 +195,34 @@ describe("CSRF coverage", () => {
       expect(res!.status).not.toBe(403);
     });
   });
+});
+
+/**
+ * The routes that send an email on request are held to the per-IP budget, so
+ * none of them can be used to mail an address over and over. The budget is
+ * counted before CSRF, so a request refused for its token still spends it.
+ */
+describe("per-IP budget on routes that send email", () => {
+  it.each(["forgot-password", "verify-email/resend"])(
+    "POST /auth/%s is refused once the budget is spent",
+    async path => {
+      const deps: AuthRouterDeps = {
+        ...makeStubDeps(),
+        authRateLimit: {
+          requestsPerHour: 1,
+          windowMs: 3_600_000,
+          store: new InMemoryRateLimitStore(),
+        },
+      };
+      const send = () =>
+        routeAuthRequest(
+          makeRequest("POST", path, { email: "a@b.c" }),
+          path,
+          deps
+        );
+
+      expect((await send())?.status).not.toBe(429);
+      expect((await send())?.status).toBe(429);
+    }
+  );
 });

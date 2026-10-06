@@ -1,0 +1,252 @@
+---
+title: Plugin security
+description: What a plugin can reach, what it must declare, and where the boundaries actually are.
+---
+
+# Plugin security
+
+## Plugins are trusted code
+
+A Nextly plugin runs in your application's own process, with your database
+connection and your file system. It is not sandboxed, and nothing in this page
+should be read as though it were.
+
+That is worth saying plainly, because the features below — declared
+capabilities, a restricted `fetch`, an allowlisted audit surface — look like a
+sandbox and are not one. A plugin that wanted to bypass any of them could
+import Node's modules directly, and nothing would stop it.
+
+**Installing a plugin is the security decision.** Treat it the way you would
+treat adding a dependency that runs on your server, because that is what it is.
+
+## What the manifest is for, then
+
+A manifest makes a plugin's reach **legible before you install it**. Instead of
+reading its source to find out whether it calls an external service, you read
+what it declared:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { z } from "zod";
+
+export default definePlugin({
+  name: "@acme/auth",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.63",
+  contributes: {
+    settings: z.object({
+      providers: z
+        .record(z.string(), z.object({ clientId: z.string(), clientSecret: z.string() }))
+        .default({}),
+    }),
+  },
+  capabilities: {
+    net: { outbound: ["accounts.google.com", "*.googleapis.com"] },
+    secrets: ["providers.*.clientSecret"],
+  },
+  provides: ["acme/auth-provider"],
+  requires: { "acme/webhook-signing": ">=2.0.0" },
+});
+```
+
+The runtime holds the plugin to what it declared, for the things it can:
+`ctx.fetch` exists only with declared hosts and reaches only those, the
+settings store encrypts exactly those keys, `ctx.db` has no `execute` or `run`
+without `rawSql`, and `ctx.auth.completeLogin` refuses a plugin that did not
+declare `auth.login`. An invalid manifest fails boot with the plugin named,
+rather than becoming a surface that quietly does not exist: an unknown key
+anywhere inside `capabilities`, a value of the wrong type, an outbound entry
+that is not a hostname, an empty or unparseable `requires` range, secrets
+without a settings schema, and a secret path that is unknown, repeated, names
+a group rather than one value, or names a value that cannot be a string, such
+as a number or a boolean (an unknown path is caught only where the schema can
+be walked; see [Secrets](#secrets)).
+
+`nextly plugins info <name>` prints a plugin's manifest: the hosts it may
+reach, whether it declares raw SQL, whether it finishes logins, its secret
+paths, what it provides and requires, and its `schemaVersion`.
+
+Capability names are global, and two plugins cannot provide the same one, so
+prefix them with your vendor (`acme/auth-provider`). `requires` is checked at
+boot; it does not change the order plugins initialise in, which `dependsOn`
+decides.
+
+## Outbound requests
+
+`ctx.fetch` exists only for a plugin that declared a non-empty
+`capabilities.net.outbound`.
+
+A hostname allowlist on its own does not prevent server-side request forgery: a
+name the plugin declared can resolve to an address inside your network, and can
+resolve differently on the second lookup than it did on the check. So the
+decision is made about the resolved **address**, and the request is sent to the
+address that was vetted rather than to the name again.
+
+Refused by construction:
+
+- anything that is not `https:` (when `NODE_ENV` is `development` or `test`,
+  `http:` to `localhost` on any port is allowed if `localhost` is listed in
+  `capabilities.net.outbound`, so a fake provider can be used in tests; with
+  `NODE_ENV` unset or any other value it is refused);
+- a host not on the allowlist, matched on whole labels — `*.example.com` covers
+  `a.example.com` and not `example.com.evil.com`;
+- a port the entry does not name: `api.example.com` allows only the scheme's
+  default port, and `api.example.com:8443` allows that port instead;
+- private, loopback, link-local, carrier-NAT, benchmark, documentation
+  (TEST-NET), multicast and reserved addresses, including `169.254.169.254`, which on most cloud providers answers
+  with the instance's own credentials;
+- the IPv6 ways of writing those — IPv4-mapped, IPv4-compatible, NAT64 and
+  6to4 are each judged as the IPv4 address they carry;
+- a name that answers with one public address and one internal one;
+- a redirect to anything the rules above refuse — each hop is re-checked;
+- a redirect that would send the request body to a different origin (a 307 or
+  308, or a 301 or 302 that keeps its method). A body can carry a credential
+  as surely as a header, so it never crosses an origin; send the request again
+  to the new address if that is what you meant;
+- the `CONNECT`, `TRACE` and `TRACK` methods, the `Upgrade`, `Keep-Alive`
+  and `Expect` request headers, and a `Connection` header other than `close`
+  or `keep-alive` (those two are dropped, since the transport manages its own
+  connection); an answer that switches protocols (`101`) is refused rather
+  than awaited;
+- a request body over 10 MB, more than three redirects, a response over 10 MB,
+  or 30 seconds.
+
+`ctx.fetch` connects directly. It does not use an egress proxy, and ignores
+`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`: a proxy would connect to the name
+again, and the address it reached would not be the one that was vetted.
+
+## Route protections
+
+A plugin route can ask for the same protections core's own routes have:
+
+```ts
+{
+  method: "POST",
+  path: "/callback",
+  public: true,        // a webhook signs its body; it carries no session
+  rateLimit: "auth",   // core's auth limit, counted per route and client
+  rawBody: true,       // declares a signed body; the bytes always arrive untouched
+  noStore: true,       // never cached
+}
+```
+
+Two things are worth knowing. By default, an authenticated route checks the
+**origin** of every unsafe request from a session-cookie caller: it must come
+from your site or from an origin listed in `NEXTLY_ALLOWED_ORIGINS`. Browsers
+send `Origin` (or `Referer`) on cross-site writes, so a forged request is
+refused, while a same-origin write passes without sending a token. This is
+the origin half of what core's `/auth/*` routes check. Declare
+`csrf: true` to require a double-submit CSRF token as well, the protection
+core's `/auth/*` routes take. Only **cookie**-authenticated callers are
+checked: a browser cannot attach an API key cross-site, so there is no
+cross-site request to forge, and API-key and webhook callers need no opt-out.
+`csrf: false` makes a route refuse every unsafe request the session cookie
+authenticates, from any origin, so it takes writes only from callers with
+another credential. A refusal answers
+403 with the code `CSRF_FAILED` and records a `csrf-failed` audit event. And
+`rateLimit: "auth"` uses core's limit and window in buckets of the plugin's
+own, so one plugin's traffic cannot exhaust the budget protecting another's —
+or core's login. Each route path and each client has its own bucket, with an
+IPv6 client counted by its /64. The client is known only with
+`security.trustProxy` on: without it no client address is read, so every
+client shares one bucket per route, and boot names each rate-limited route
+when that is the case.
+
+A route your plugin's admin page writes to works with `csrf` unset or `true`
+when the page writes through `usePluginRouteMutation` (from
+`@nextlyhq/plugin-sdk/admin`): it sends `x-csrf-token` on every write, read
+from the `nextly_csrf` cookie or fetched once from `/admin/api/auth/csrf`. A
+page that writes with its own `fetch` either leaves `csrf` unset, or fetches
+`/admin/api/auth/csrf` and sends the token as `x-csrf-token` (or as
+`csrfToken` in a JSON body); with `csrf: true` and no token, every save
+answers 403.
+
+A public route skips the default check — it authenticated no one, and a cookie
+on the request says nothing about what admitted it. A public handler that
+resolves the session user through `ctx.auth.currentUser` is checked there
+instead: a POST, PUT, PATCH or DELETE whose origin is not your site or an
+allowed one, or that names no origin, gets no user (`null`). Declare
+`csrf: true` to require the token as well; only callers carrying the session
+cookie are asked for it, so webhook callers and browsers with only unrelated
+cookies stay free. `csrf: false` cannot be combined with `public: true`: boot refuses
+such a route, naming the plugin and the route.
+`ctx.auth.verifyCsrf` remains the tool when the check must stay conditional
+inside the handler instead.
+
+## Secrets
+
+Settings keys named in `capabilities.secrets` are encrypted at rest with a key
+derived from your `NEXTLY_SECRET`, bound to the plugin and the path they are
+stored at, so a value copied to another plugin or path does not decrypt.
+
+Each value names the secret generation that encrypted it. After a rotation,
+keep the old secret in `NEXTLY_SECRET_PREVIOUS`: values encrypted under it are
+still read, and are re-encrypted under the new secret the next time they are
+read. A value no configured secret can decrypt is shown in the admin as set but
+unreadable, `{ set: true, readable: false }`, and `ctx.settings.get()` refuses
+until it is entered again; saving a new value replaces it.
+
+A secret path may be nested and may use `*` to cover every key of a record:
+`providers.*.clientSecret` encrypts each provider's secret while leaving its
+client id readable in the same stored value.
+
+**A secret is never returned to the browser.** The admin API answers with
+`{ set: true }` or `{ set: false }`, which is what an operator needs in order to
+decide whether to replace it. A path declared as a secret that the settings
+schema does not contain fails boot, because silently storing a credential in
+plain text is the worst way for that mistake to land. The check can only
+follow a schema it can walk: under `z.any()`, `z.unknown()`, a pipe (such as
+`.transform()`) or `z.lazy()`, a path is accepted as written, and a misspelt
+one there matches nothing, so the value it meant is stored in plain text.
+Spell such a path exactly.
+
+## The audit trail
+
+`ctx.audit.write` records only kinds the plugin declared, namespaced under its
+own slug, so one plugin cannot write rows that read as another's — or as core's.
+A kind is `<slug>.` followed by a lowercase letter or digit, then any of
+lowercase letters, digits, `.`, `_` and `-`.
+Metadata keys are allowlisted per kind, strings longer than 256 characters are
+not stored, and a value with one of these credential shapes is dropped: a JWT,
+a `Bearer` or `Basic` authorization value, a PEM block, Stripe secret,
+restricted and webhook keys (`sk_live_`, `sk_test_`, `rk_live_`, `rk_test_`,
+`whsec_`), GitHub, GitLab, Slack and
+npm tokens, AWS access key ids, and Google OAuth access tokens (`ya29.`). That
+is a list of known shapes, not a secret detector: never pass a credential.
+
+The restriction exists because audit rows are retained and some of them
+deliberately name nobody, which means nothing links them to a person and no
+later deletion can find them. What can enter has to be bounded rather than left
+to each plugin.
+
+Deleting a user clears the metadata of every plugin row that names them, as
+actor or as target, while keeping the row itself: what happened, and when.
+`targetUserId` must name an existing user; a row naming one that does not
+exist is stored without its metadata, and a warning is logged.
+
+## Finishing a login
+
+A plugin that authenticated someone elsewhere does not assemble a session
+itself. `ctx.auth.completeLogin` applies the same account-state rules, hooks and
+audit trail as a password login, so a plugin cannot grant a session core would
+have refused. See [plugin authentication](/docs/plugins/auth).
+
+## A checklist before installing
+
+- Read the manifest. Does what it declares match what the plugin says it does?
+- Does it ask for outbound hosts you recognise?
+- Does it finish logins (`capabilities.auth.login`)? That plugin can sign in any
+  account it names, so it should be a sign-in provider you chose.
+- Does it declare raw SQL (`capabilities.db.rawSql`)? Most plugins should not.
+  Either way, read the database access as total: without the capability the
+  plugin still reads and writes every table through the fluent builder. Left
+  out, `ctx.db` has only `select`, `insert`, `update`, `delete` and
+  `transaction`; declared, it is the live Drizzle instance, `execute` and
+  `run` included. The declaration tells you what the plugin means to do; it is
+  not a boundary a determined plugin cannot cross, because plugins run as
+  trusted code.
+- Does the source match the published package?
+- Is it maintained by someone you would give a database credential to?
+
+That last question is the real one. Everything above narrows what a mistake can
+reach; none of it narrows what a decision can.

@@ -49,6 +49,7 @@ import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
 import { keysToSnakeCase } from "../lib/case-conversion";
+import { inPluginTransaction } from "../shared/lib/plugin-transaction-scope";
 import { refusesUpload } from "../storage/image-processor";
 import { isImageMimeType, validateFileSize } from "../types/media";
 import type {
@@ -142,6 +143,18 @@ export class MediaService extends BaseService {
   }
 
   /**
+   * Whether this service's writes would join a plugin's `ctx.db.transaction`
+   * as a savepoint the plugin can still roll back. Both conditions hold only
+   * on SQLite: the plugin's work is marked as running in its transaction, and
+   * the adapter reports one open on the connection this service writes
+   * through. On PostgreSQL and MySQL the service writes on its own connection
+   * and commits independently, so the adapter reports none.
+   */
+  private joinsPluginTransaction(): boolean {
+    return inPluginTransaction() && this.adapter.inTransaction();
+  }
+
+  /**
    * Post-write webhook maintenance for callers that use this service directly:
    * offer the fast drain, then a short retention pass. No-op when no scheduler
    * was injected (the unified media service handles the drain in that path).
@@ -152,12 +165,28 @@ export class MediaService extends BaseService {
     if (!this.fastDrainScheduler && !this.retentionRunner) {
       return;
     }
-    // Only schedule the fast drain when an event was actually recorded: an
-    // install with no endpoint and audit off records nothing, so offering the
-    // drain would pay a fresh `nextly_webhooks` query on every media write for
-    // no subscriber. Retention still runs — it prunes prior rows regardless.
-    if (recorded) this.fastDrainScheduler?.offer();
-    await this.retentionRunner?.maybeRun(MediaService.WRITE_PATH_PRUNE_BATCHES);
+    // Once the write is durable: a drain started inside an enclosing SQLite
+    // transaction would deliver the outbox row it may still roll back.
+    await this.afterCommit(async () => {
+      // Only schedule the fast drain when an event was actually recorded: an
+      // install with no endpoint and audit off records nothing, so offering
+      // the drain would pay a fresh `nextly_webhooks` query on every media
+      // write for no subscriber. Retention still runs — it prunes prior rows
+      // regardless.
+      if (recorded) this.fastDrainScheduler?.offer();
+      await this.retentionRunner?.maybeRun(
+        MediaService.WRITE_PATH_PRUNE_BATCHES
+      );
+    });
+  }
+
+  /**
+   * Run `effect` once this service's write is durable: now on PostgreSQL and
+   * MySQL, and after the enclosing transaction commits on SQLite. For the
+   * unified media service, whose events follow the writes made here.
+   */
+  whenCommitted(effect: () => unknown): Promise<void> {
+    return this.afterCommit(effect);
   }
 
   /**
@@ -523,7 +552,8 @@ export class MediaService extends BaseService {
 
       // The row is visible to readers the moment the transaction commits, so
       // invalidate here rather than after the drain and retention pass below.
-      await revalidateMedia([mediaId], this.logger);
+      // Inside an enclosing SQLite transaction, "commits" means its commit.
+      await this.afterCommit(() => revalidateMedia([mediaId], this.logger));
 
       // The upload committed a media.uploaded outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
@@ -772,6 +802,14 @@ export class MediaService extends BaseService {
         changes,
         updateData
       );
+      // Inside a plugin's `ctx.db.transaction` on SQLite the update below is
+      // a savepoint of it, and the plugin's later rollback restores the row's
+      // old variant paths. The superseded files are then kept, left orphaned
+      // if the transaction commits, rather than deleted while a rollback could
+      // still need them. Core's own enclosing transactions delete them as
+      // before, and on PostgreSQL and MySQL the update commits on its own
+      // connection, where the adapter reports no enclosing transaction.
+      const keepSuperseded = this.joinsPluginTransaction();
 
       // Commit the row update and its outbox event in one transaction so the
       // event is durable exactly when the change commits. The row is locked and
@@ -852,7 +890,10 @@ export class MediaService extends BaseService {
       // Ahead of the variant cleanup below for the same reason the delete path
       // invalidates ahead of its storage work: the row has changed, so a cached
       // page is already wrong, and file cleanup can retry for a long time.
-      if (updatedRow) await revalidateMedia([mediaId], this.logger);
+      // Inside an enclosing SQLite transaction, once that commits.
+      if (updatedRow) {
+        await this.afterCommit(() => revalidateMedia([mediaId], this.logger));
+      }
 
       if (!updatedRow) {
         // Concurrent delete: the row was not updated, so the freshly-uploaded
@@ -879,8 +920,9 @@ export class MediaService extends BaseService {
       }
 
       // The row now durably references the new variants, so the superseded old
-      // ones can be deleted (keeping any path the new set reuses).
-      if (regeneratedSizes && replacedSizes) {
+      // ones can be deleted (keeping any path the new set reuses) — unless a
+      // plugin's enclosing transaction can still roll the row back to them.
+      if (regeneratedSizes && replacedSizes && !keepSuperseded) {
         await this.deleteSupersededVariants(replacedSizes, regeneratedSizes);
       }
 
@@ -908,11 +950,29 @@ export class MediaService extends BaseService {
 
   /**
    * Delete media file (removes from storage and database)
+   *
+   * Refused inside a plugin's `ctx.db.transaction` on SQLite, which this
+   * delete would join. Its row delete would be a savepoint of that
+   * transaction, but the stored files go when the savepoint releases: the
+   * plugin's later rollback would bring the row back pointing at files that
+   * no longer exist. Core's own enclosing transactions (a collection hook
+   * deleting media during an entry write) are not refused.
    */
   async deleteMedia(
     mediaId: string,
     actor?: RequestActor
   ): Promise<DeleteMediaResponse> {
+    // A precondition, ahead of every read and write, so a refused delete
+    // touches neither the row nor storage.
+    if (this.joinsPluginTransaction()) {
+      return {
+        success: false,
+        statusCode: 409,
+        code: "CONFLICT",
+        message:
+          "Media cannot be deleted inside a database transaction. Delete it after the transaction, not inside it.",
+      };
+    }
     try {
       const existing = await this.getMediaById(mediaId);
       if (!existing.success || !existing.data) {
@@ -983,8 +1043,9 @@ export class MediaService extends BaseService {
       // so a cached page is already wrong; deferring past storage deletes and
       // their retry backoffs leaves it wrong for as long as that takes, and a
       // storage call that hangs until the request is killed would leave it
-      // wrong permanently despite a committed delete.
-      await revalidateMedia([mediaId], this.logger);
+      // wrong permanently despite a committed delete. Inside an enclosing
+      // SQLite transaction the delete is durable only once that commits.
+      await this.afterCommit(() => revalidateMedia([mediaId], this.logger));
 
       // Best-effort physical cleanup AFTER the row + event have committed.
       // Swallow-and-warn: a storage failure must not fail a delete whose

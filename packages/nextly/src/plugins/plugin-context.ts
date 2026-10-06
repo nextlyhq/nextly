@@ -9,6 +9,9 @@
  * @since 1.0.0
  */
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
+import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
 import {
@@ -17,9 +20,10 @@ import {
 } from "../direct-api/namespaces/jobs";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
+import { NextlyError } from "../errors/nextly-error";
 import type { EventBus, EventHandler, EventName } from "../events/event-bus";
-import { getEventBus } from "../events/event-bus";
-import type { Action, Filter } from "../filters";
+import { getEventBus, isReservedEventName } from "../events/event-bus";
+import type { Action, Decision, Filter } from "../filters";
 import { getFilterRegistry } from "../filters";
 import type {
   BeforeOperationHandler,
@@ -27,19 +31,37 @@ import type {
   HookHandler,
   HookOwner,
 } from "../hooks/types";
+import { env } from "../lib/env";
 import type { CollectionService } from "../services/collections/collection-service";
 import type { EmailService } from "../services/email/email-service";
 import type { MediaService } from "../services/media/media-service";
 import type { Logger } from "../services/shared";
 import type { UserService } from "../services/users/user-service";
+import { runInPluginTransaction } from "../shared/lib/plugin-transaction-scope";
+import {
+  type AfterCommitAdapter,
+  runAdapterTransaction,
+} from "../shared/lib/run-adapter-transaction";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
+import type {
+  HookPointContext,
+  HookPointNameOf,
+  HookPointPayload,
+  HookPointValue,
+} from "./hook-point-payloads";
+import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
+import { createPluginAudit } from "./plugin-audit-provider";
+import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
+import { createPluginFetchFor } from "./plugin-fetch-provider";
+import { createPluginSettings } from "./plugin-settings-provider";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
+import { isInPluginNamespace } from "./plugin-slug";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
 import {
@@ -182,28 +204,60 @@ export interface PluginHookRegistry {
 /**
  * @experimental Typed filter registry exposed to plugins.
  * Register transforms on named seams, or define + apply your own seams.
+ *
+ * A point listed in `HookPointPayloads` is typed by its entry; any other
+ * name by the type arguments, or by inference from the call. `N` comes last
+ * so explicit `<V, C>` arguments mean what they did before it existed.
  */
 export interface PluginFilterRegistry {
-  add<V = unknown, C = unknown>(name: string, fn: Filter<V, C>): void;
-  remove<V = unknown, C = unknown>(name: string, fn: Filter<V, C>): void;
-  apply<V = unknown, C = unknown>(
-    name: string,
-    value: V,
-    context: C
-  ): Promise<V>;
+  /** Add a handler to a filter point, or to a decision point's chain. */
+  add<V = unknown, C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "filter" | "decision">,
+    fn: Filter<HookPointValue<N, V>, HookPointContext<N, C>>
+  ): void;
+  remove<V = unknown, C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "filter" | "decision">,
+    fn: Filter<HookPointValue<N, V>, HookPointContext<N, C>>
+  ): void;
+  apply<V = unknown, C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "filter">,
+    value: HookPointValue<N, V>,
+    context: HookPointContext<N, C>
+  ): Promise<HookPointValue<N, V>>;
+  /**
+   * Run a VETO point, which fails closed.
+   *
+   * Filters are error-isolated, so a handler that vetoed by throwing would be
+   * skipped and the chain would answer allow. A decision is a value instead: a
+   * throwing handler denies, and a handler may only keep or downgrade the
+   * verdict, so load order cannot decide access.
+   */
+  decide<C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "decision">,
+    initial: Decision,
+    context?: HookPointContext<N, C>
+  ): Promise<Decision>;
 }
 
 /**
  * @experimental Typed action registry exposed to plugins.
  * Register ordered, error-isolated side-effects on named seams, or run your own.
+ *
+ * Typed by `HookPointPayloads` as {@link PluginFilterRegistry} is.
  */
 export interface PluginActionRegistry {
-  add<P = unknown, C = unknown>(name: string, fn: Action<P, C>): void;
-  remove<P = unknown, C = unknown>(name: string, fn: Action<P, C>): void;
-  run<P = unknown, C = unknown>(
-    name: string,
-    payload: P,
-    context: C
+  add<P = unknown, C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "action">,
+    fn: Action<HookPointPayload<N, P>, HookPointContext<N, C>>
+  ): void;
+  remove<P = unknown, C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "action">,
+    fn: Action<HookPointPayload<N, P>, HookPointContext<N, C>>
+  ): void;
+  run<P = unknown, C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "action">,
+    payload: HookPointPayload<N, P>,
+    context: HookPointContext<N, C>
   ): Promise<void>;
 }
 
@@ -275,7 +329,17 @@ export interface PluginContext {
      * `ServiceOpts` (`as`/`user`) — secure-by-default; no-user runs as system.
      */
     collections: PluginCollectionService;
-    /** User service for user management */
+    /**
+     * User service for user management.
+     *
+     * A plugin may create and update accounts, but not decide who administers
+     * the site: a create on an install with no account yet, and a create or
+     * update giving a role that reaches `super-admin` (directly or by
+     * inheritance), and an update to the password, email, activation,
+     * verification or roles of an account that reaches it, or its deletion,
+     * are refused with `NextlyError` code `FORBIDDEN`. An
+     * address a plugin vouches for is recorded as verified by `"plugin"`.
+     */
     users: UserService;
     /** Media service for file operations */
     media: MediaService;
@@ -317,10 +381,18 @@ export interface PluginContext {
   };
 
   /**
-   * @experimental Raw Drizzle database instance — the full escape hatch.
-   * Unmanaged: bypasses validation/hooks/RBAC/events. Prefer `services`.
+   * @experimental Drizzle's fluent query builder: `select`, `insert`,
+   * `update`, `delete`, and `transaction` to make several writes atomic.
+   * Unmanaged: bypasses validation, hooks, access control and events, so
+   * prefer `services`.
+   *
+   * Without `capabilities.db.rawSql` it is a restricted handle that has no
+   * `execute` or `run`. That is a declaration a reviewer can read, not a
+   * sandbox: plugins run as trusted code, and one can still reach raw SQL
+   * through its own `sql` or the builder's internals. With `rawSql` it is the
+   * live Drizzle instance.
    */
-  db: DatabaseInstance;
+  db: PluginDatabase;
 
   /** @experimental Logger for plugin diagnostics. */
   logger: Logger;
@@ -364,6 +436,109 @@ export interface PluginContext {
 
   /** @experimental Typed action registry. Ordered side-effects at named seams. */
   actions: PluginActionRegistry;
+
+  /**
+   * @experimental Finishing a login the plugin authenticated elsewhere, and
+   * reading who is signed in.
+   *
+   * The only supported way for a plugin to turn a verified external identity
+   * into a session: it applies the same account-state rules, hooks and audit
+   * trail as the password path, so a plugin cannot accidentally grant a
+   * session core would have refused.
+   */
+  auth: PluginAuthApi;
+
+  /**
+   * @experimental This plugin's stored configuration.
+   *
+   * Present only when the plugin declares `contributes.settings`. Values are
+   * parsed with that schema, and the keys named in `capabilities.secrets` are
+   * encrypted at rest and never returned to the admin.
+   */
+  settings?: PluginSettingsApi;
+
+  /**
+   * @experimental Outbound HTTP, limited to the hosts this plugin declared in
+   * `capabilities.net.outbound`.
+   *
+   * Undefined for a plugin that declared none, so reaching the network is
+   * something a plugin has to have asked for where a reviewer sees it. Names
+   * are resolved here and every answer vetted, and the request is sent to the
+   * address that was vetted — so a name that resolves differently the second
+   * time cannot redirect it inward.
+   */
+  fetch?: (
+    input: string | URL | Request,
+    init?: RequestInit
+  ) => Promise<Response>;
+
+  /**
+   * @experimental Writing to the audit trail.
+   *
+   * Present only when the plugin declares `contributes.audit`. Never throws,
+   * like the core writer: an audit write is a side effect of whatever the
+   * plugin was really doing, and failing that because a row could not be
+   * stored would be the worse outcome.
+   */
+  audit?: PluginAuditApi;
+}
+
+/** @experimental Writing one plugin's declared audit events. */
+export interface PluginAuditApi {
+  write(event: {
+    kind: string;
+    actorUserId?: string | null;
+    /**
+     * The account the event is about. Must be an existing user's id, or the
+     * row is stored without its `metadata` and a warning is logged naming the
+     * kind, with only this value's length and whether it has a user id's
+     * shape, never the value: a deleted target and one that never existed
+     * look the same, and neither may keep data about them.
+     */
+    targetUserId?: string | null;
+    request?: Request;
+    metadata?: Record<string, string | number | boolean>;
+  }): Promise<void>;
+}
+
+/**
+ * @experimental A JSON merge patch (RFC 7396) of a plugin's settings: any key
+ * may be left out at any depth, and `null` removes it. An array is replaced
+ * whole.
+ */
+export type SettingsPatch<T> = {
+  [K in keyof T]?: SettingsPatchValue<T[K]> | null;
+};
+
+/**
+ * What a patch may hold for one member. `V` is a naked type parameter, so the
+ * conditional distributes over a union: an optional or nullable group is a
+ * partial in its object branch while `undefined` and `null` stay as they are.
+ * `object` rather than `Record<string, unknown>`, which a group declared as an
+ * interface does not satisfy.
+ */
+type SettingsPatchValue<V> = V extends readonly unknown[]
+  ? V
+  : V extends object
+    ? SettingsPatch<V>
+    : V;
+
+/** @experimental Reading and writing one plugin's settings. */
+export interface PluginSettingsApi<
+  T extends Record<string, unknown> = Record<string, unknown>,
+> {
+  /**
+   * Parsed with the declared schema; missing keys take its defaults. Throws
+   * an internal error, with the detail in the log, when the stored settings
+   * no longer fit the schema or hold a secret nothing can decrypt.
+   */
+  get(): Promise<T>;
+  /**
+   * Apply a merge patch: keys left out keep their stored value at every
+   * depth, and `null` removes a key. The result is validated against the
+   * whole schema, its secrets encrypted, and stored.
+   */
+  set(patch: SettingsPatch<T>, opts?: { actorUserId?: string }): Promise<void>;
 }
 
 // ============================================================
@@ -625,6 +800,42 @@ export interface PluginDefinition {
   enabled?: boolean;
 
   /**
+   * @experimental What this plugin may do beyond its own tables and routes.
+   *
+   * A reviewable contract rather than a sandbox: Nextly runs plugins as
+   * trusted code, and this makes their reach legible before installation. The
+   * runtime surfaces read it — `ctx.fetch` exists only for a plugin that
+   * declared the hosts it calls.
+   */
+  capabilities?: PluginCapabilities;
+
+  /** @experimental Capability names this plugin implements, e.g. "auth-provider". */
+  provides?: string[];
+
+  /**
+   * @experimental Capability → the semver range a providing plugin must
+   * satisfy, matched against THAT PLUGIN's version.
+   *
+   * Checked at boot; it does not order initialisation. A plugin that needs
+   * another to have run its `init` first says so with `dependsOn`.
+   */
+  requires?: Record<string, string>;
+
+  /**
+   * @experimental The version of this plugin's own schema, as a positive
+   * integer.
+   *
+   * Validated as a positive integer at resolve time, and recorded — it is NOT
+   * yet compared against what a database has applied, because no plugin
+   * migration state exists to compare it with. A plugin can therefore boot at
+   * a newer code version than its tables, which is exactly the case this field
+   * will stop once that state does exist. Described here as what it does
+   * rather than what it is for, because a contract nothing enforces reads to a
+   * plugin author as a guarantee.
+   */
+  schemaVersion?: number;
+
+  /**
    * @public Declarative contributions — introspectable without running
    * the plugin. Consumed incrementally by later phases. See {@link PluginContributions}.
    */
@@ -667,6 +878,20 @@ export interface PluginDefinition {
    * @param context - PluginContext with services, db, logger, events, config, hooks
    */
   init?: (context: PluginContext) => Promise<void> | void;
+
+  /**
+   * @experimental Runs once per boot, after EVERY plugin's `init` and after
+   * routes are registered.
+   *
+   * `init` cannot see the finished system: plugins initialise in dependency
+   * order, so anything a plugin does there observes only the part of the boot
+   * that has already happened. A plugin that wants to read the assembled
+   * picture — every route, every contributed service — does it here.
+   *
+   * A throw fails boot, exactly as one from `init` does: a plugin that cannot
+   * finish starting has not started.
+   */
+  onReady?: (context: PluginContext) => Promise<void> | void;
 
   /**
    * @public Teardown on shutdown / HMR / test teardown.
@@ -792,12 +1017,164 @@ export const PLUGIN_SERVICE_NAMES = [
   "versionsService",
   "singleRegistryService",
   "db",
+  "dialect",
   "logger",
   "config",
+  "adapter",
 ] as const;
 
 /** One of the names a plugin-context resolver must answer. */
 export type PluginServiceName = (typeof PLUGIN_SERVICE_NAMES)[number];
+
+/**
+ * The slice of the database adapter core's own stores need: a transaction
+ * that can carry awaited work on EVERY dialect. Drizzle's better-sqlite3
+ * transaction cannot (the driver refuses an async callback), so SQLite
+ * writes ride the adapter's manual `BEGIN IMMEDIATE` implementation — this
+ * type names the one method that makes dialect-correct transactions
+ * reachable without binding plugin-context to an adapter class, and the
+ * `afterCommit` a store announces its committed change through.
+ */
+export interface AdapterTransactions extends AfterCommitAdapter {
+  transaction: <T>(work: () => Promise<T>) => Promise<T>;
+}
+
+/**
+ * @experimental The database surface a plugin receives: the fluent builder
+ * and a transaction whose handle is the same restricted builder.
+ */
+export interface PluginDatabase extends DatabaseInstance {
+  /**
+   * Run `work` in one transaction: it commits when `work` resolves and rolls
+   * back when it throws. The handle `work` receives is the restricted builder,
+   * without a nested `transaction`; with `rawSql` it is the live handle, whose
+   * `transaction` nests as a savepoint. Write through it: another service or
+   * `ctx.settings` called inside runs on its own connection on PostgreSQL and
+   * MySQL, outside this transaction.
+   *
+   * On SQLite the transaction holds the database's only connection until it
+   * ends. A service or `ctx.settings` called inside joins it as a savepoint,
+   * and its rows roll back with it; what it does after its write (after
+   * hooks, events, cache revalidation, webhook delivery) waits until this
+   * transaction commits, runs before `transaction` resolves, and never runs if
+   * it rolls back. Deleting media is refused inside it,
+   * including from a collection hook a service runs inside it, since a
+   * rollback could not bring the stored files back with the row, and a
+   * focal-point change keeps the superseded image variants rather than
+   * deleting them. Core's own transactions are unaffected: a collection hook
+   * that deletes media outside a plugin's transaction still deletes it.
+   * Other requests' statements wait for it or run inside it.
+   * On SQLite, nested transactions (a nested `ctx.db.transaction`, or a
+   * service called inside) run one at a time, in the order they are started.
+   * A nested transaction must never wait for one started after it in the same
+   * transaction, such as a memoised promise a later sibling started: neither
+   * settles, the database's only connection stays in the open transaction,
+   * every later transaction waits, and other requests' writes land in it
+   * uncommitted and are lost on restart.
+   * Keep it short, and never await network I/O (`ctx.fetch`) inside it.
+   */
+  transaction<T>(work: (tx: DatabaseInstance) => Promise<T>): Promise<T>;
+}
+
+/**
+ * @experimental What a plugin declares it may do beyond its own tables and
+ * routes: `PluginDefinition.capabilities`.
+ */
+export interface PluginCapabilities {
+  /**
+   * Hosts `ctx.fetch` may reach: an exact hostname or one leading `*.`
+   * wildcard. Absent means `ctx.fetch` is not available at all.
+   */
+  net?: { outbound: string[] };
+  /**
+   * Declares that the plugin runs raw SQL. Default false. Without it,
+   * `ctx.db` has no `execute` or `run`; with it, `ctx.db` is the live
+   * Drizzle instance. A declaration for review, not an enforced boundary.
+   */
+  db?: { rawSql?: boolean };
+  /**
+   * Settings key paths stored encrypted and redacted on read, dot-separated
+   * for nested values (`providers.google.clientSecret`).
+   */
+  secrets?: string[];
+  /**
+   * `login: true` lets the plugin finish logins with
+   * `ctx.auth.completeLogin`, which signs in whichever account it names.
+   * Its strategy names must begin with `<plugin-slug>:`.
+   */
+  auth?: { login?: boolean };
+}
+
+/** The four fluent methods of a Drizzle handle, and nothing else. */
+function fluentOnly(handle: DatabaseInstance): DatabaseInstance {
+  return {
+    update: table => handle.update(table),
+    delete: table => handle.delete(table),
+    insert: table => handle.insert(table),
+    select: columns => handle.select(columns),
+  };
+}
+
+/**
+ * The database surface a plugin actually receives.
+ *
+ * A NEW object exposing the fluent methods and a transaction, rather than the
+ * live instance with its extras hidden by a type, so `execute` and `run` are
+ * absent at runtime as well as in the type. This makes what a plugin declared
+ * legible; it is not a sandbox, because plugins are trusted code and one can
+ * still build raw SQL with its own `sql`. `rawSql` hands back the instance
+ * itself, which is what declaring the capability means.
+ *
+ * The transaction is kept because without it a plugin has no way to make
+ * several writes atomic. Its handle is restricted the same way. On SQLite it
+ * runs through the adapter's `BEGIN IMMEDIATE` runner, since Drizzle's
+ * better-sqlite3 transaction refuses an async callback, and the builder shares
+ * the connection that runner opened. What the work throws reaches the plugin
+ * as thrown, as Drizzle's transaction hands it back on PostgreSQL and MySQL,
+ * rather than as the adapter's classification of it. The work runs marked as
+ * a plugin transaction (`runInPluginTransaction`), so a service it calls can
+ * refuse what a rollback of the plugin's transaction could not undo.
+ */
+function restrictDatabase(
+  raw: DatabaseInstance,
+  rawSqlAllowed: boolean,
+  dialect: () => SupportedDialect,
+  adapterTransaction: () => AdapterTransactions["transaction"]
+): PluginDatabase {
+  if (rawSqlAllowed) {
+    // The live instance, with one exception: on SQLite its own `transaction`
+    // is better-sqlite3's synchronous one, which refuses the async callback
+    // `PluginDatabase` documents — so declaring raw SQL took away the
+    // transaction every other plugin has. Everything else reaches the
+    // instance unchanged. The work's handle is this same proxy, so its
+    // `transaction` nests as a savepoint, as a Drizzle transaction's does on
+    // PostgreSQL and MySQL, instead of reaching the synchronous one.
+    const live: PluginDatabase = new Proxy(raw as PluginDatabase, {
+      get(target, property, receiver) {
+        if (property === "transaction" && dialect() === "sqlite") {
+          return <T>(work: (tx: DatabaseInstance) => Promise<T>) =>
+            runAdapterTransaction(adapterTransaction(), () =>
+              runInPluginTransaction(() => work(live))
+            );
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    return live;
+  }
+  const native = raw as DatabaseInstance & {
+    transaction: <T>(work: (tx: DatabaseInstance) => Promise<T>) => Promise<T>;
+  };
+  return {
+    ...fluentOnly(raw),
+    transaction: work =>
+      dialect() === "sqlite"
+        ? runAdapterTransaction(adapterTransaction(), () =>
+            runInPluginTransaction(() => work(fluentOnly(raw)))
+          )
+        : native.transaction(tx => work(fluentOnly(tx))),
+  };
+}
 
 export function createPluginContext(
   getServiceFn: <T extends PluginServiceName>(
@@ -816,11 +1193,15 @@ export function createPluginContext(
               ? SingleRegistryService
               : T extends "db"
                 ? DatabaseInstance
-                : T extends "logger"
-                  ? Logger
-                  : T extends "config"
-                    ? NextlyServiceConfig
-                    : never,
+                : T extends "dialect"
+                  ? SupportedDialect
+                  : T extends "logger"
+                    ? Logger
+                    : T extends "config"
+                      ? NextlyServiceConfig
+                      : T extends "adapter"
+                        ? AdapterTransactions
+                        : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -910,7 +1291,24 @@ export function createPluginContext(
   const userService = getServiceFn("userService");
   const mediaService = getServiceFn("mediaService");
   const emailService = getServiceFn("emailService");
-  const db = getServiceFn("db");
+  // Restricted unless the plugin DECLARED raw SQL. `DatabaseInstance` already
+  // describes only the fluent surface, but the object handed over was the live
+  // Drizzle instance, which carries `execute`, `run` and its own client, so the
+  // ordinary way to run raw SQL needed no declaration at all. Removing them
+  // makes the manifest the place raw SQL is declared; it does not sandbox a
+  // plugin, which is trusted code.
+  const db = restrictDatabase(
+    getServiceFn("db"),
+    plugin?.capabilities?.db?.rawSql === true,
+    // Both resolved when a transaction starts, not now: the context can be
+    // built before the database is connected. A closure, so the adapter
+    // keeps its receiver.
+    () => getServiceFn("dialect"),
+    () => {
+      const adapter = getServiceFn("adapter");
+      return work => adapter.transaction(work);
+    }
+  );
   const logger = getServiceFn("logger");
   const config = getServiceFn("config");
 
@@ -919,7 +1317,9 @@ export function createPluginContext(
   rawBus.setLogger(logger);
   // Per-plugin event bus: `on()` also records an unsubscribe thunk so the
   // runtime can clear this plugin's subscriptions before it re-initializes on
-  // HMR (B2). Every other method delegates to the shared bus unchanged.
+  // HMR (B2), and `emit()` refuses every name outside the plugin's own
+  // namespace, core's included. Every other method
+  // delegates to the shared bus unchanged.
   const events: EventBus = pluginName
     ? new Proxy(rawBus, {
         get(target, prop) {
@@ -931,31 +1331,91 @@ export function createPluginContext(
               );
             };
           }
+          if (prop === "emit") {
+            return (name: EventName, payload: unknown) => {
+              // Thrown at the plugin author rather than dropped: emitting a
+              // core event is a programming error, and a silent no-op would
+              // leave them debugging a listener that never fires.
+              if (isReservedEventName(name)) {
+                throw NextlyError.forbidden({
+                  logContext: {
+                    reason: "plugin-emit-reserved-event",
+                    plugin: pluginName,
+                    event: name,
+                  },
+                });
+              }
+              // Nor for another plugin: a listener on that plugin's event
+              // would act on something its owner never did.
+              if (!isInPluginNamespace(pluginName, name)) {
+                throw NextlyError.forbidden({
+                  logContext: {
+                    reason: "plugin-emit-outside-namespace",
+                    plugin: pluginName,
+                    event: name,
+                  },
+                });
+              }
+              target.emit(name, payload);
+            };
+          }
           const value = Reflect.get(target, prop, target);
           return typeof value === "function" ? value.bind(target) : value;
         },
       })
     : rawBus;
 
+  // Built once per context rather than per call: it closes over the
+  // allowlist, and nothing about it changes between requests.
+  const pluginFetch = plugin ? createPluginFetchFor(plugin) : undefined;
+
   const filterRegistry = getFilterRegistry();
   filterRegistry.setLogger(logger);
+  // Consults what the plugins DECLARED, which was collected and thrown away —
+  // so a declared payload schema checked nothing. The payload half runs in
+  // development only, and warns once per point; the kind half runs always.
+  // See the checker.
+  const checkPayload = createPayloadChecker(
+    getDeclaredHookPoints(),
+    message => logger.warn(message),
+    { payloads: env.NODE_ENV !== "production" }
+  );
   const pluginFilters: PluginFilterRegistry = {
     add: (name, fn) => filterRegistry.addFilter(name, fn),
     remove: (name, fn) => filterRegistry.removeFilter(name, fn),
-    apply: (name, value, context) =>
-      filterRegistry.applyFilters(name, value, context),
+    apply: (name, value, context) => {
+      // The value handed to a filter IS the payload at this seam. The kind
+      // names THIS registry API, so a point declared otherwise is reported —
+      // a decision run through here loses its fail-closed veto.
+      checkPayload(name, value, "filter");
+      return filterRegistry.applyFilters(name, value, context);
+    },
+    decide: (name, initial, context) => {
+      // The CONTEXT is the payload of a decision point — the subject being
+      // decided — not the verdict, which has one shape for every point.
+      checkPayload(name, context, "decision");
+      return filterRegistry.applyDecision(name, initial, context);
+    },
   };
   const pluginActions: PluginActionRegistry = {
     add: (name, fn) => filterRegistry.addAction(name, fn),
     remove: (name, fn) => filterRegistry.removeAction(name, fn),
-    run: (name, payload, context) =>
-      filterRegistry.runActions(name, payload, context),
+    run: (name, payload, context) => {
+      checkPayload(name, payload, "action");
+      return filterRegistry.runActions(name, payload, context);
+    },
   };
 
   return {
     services: {
       collections: wrapCollectionsForPlugin(collectionService),
-      users: userService,
+      // The plugin view, refusing the writes that decide who administers the
+      // site; core's own callers keep the unrestricted instance. Resolved on
+      // access like `versions` below, so a context built by a caller that
+      // never manages users asks nothing of the service it was handed.
+      get users() {
+        return userService.forPlugins();
+      },
       media: mediaService,
       email: emailService,
       // Resolved on access, not at construction: `createPluginContext` is
@@ -996,5 +1456,35 @@ export function createPluginContext(
     hooks: pluginHooks,
     filters: pluginFilters,
     actions: pluginActions,
+    // A plain property rather than a getter: `runPluginRoute` spreads the base
+    // context on every request, which would evaluate a top-level getter each
+    // time. The instance itself resolves its dependencies lazily instead.
+    // Bound to the plugin, so `completeLogin` answers to its manifest; a
+    // context built for no plugin is core's own and gets the shared one.
+    auth: plugin ? getPluginAuthApiFor(plugin) : getPluginAuthApi(),
+    // Present only when the plugin declared a settings schema: without one
+    // there is nothing to validate a write against, and an untyped bag is
+    // exactly what this store exists to replace.
+    // The UNRESTRICTED handle, deliberately. `restrictDatabase` bounds what the
+    // PLUGIN may issue; this store is core code writing core-owned rows into a
+    // core-owned table, and it needs a transaction to apply a multi-key patch
+    // as one thing. The plugin never receives this handle — only `get` and
+    // `set`, which take a validated patch.
+    ...(plugin?.contributes?.settings
+      ? {
+          settings: createPluginSettings(
+            plugin,
+            getServiceFn("db"),
+            getServiceFn("dialect"),
+            // The adapter, reachable LAZILY like the handle: SQLite writes
+            // need its manual BEGIN IMMEDIATE runner, the change is announced
+            // through its `afterCommit`, and the context can be built before
+            // the database is connected.
+            () => getServiceFn("adapter")
+          ),
+        }
+      : {}),
+    ...(pluginFetch ? { fetch: pluginFetch } : {}),
+    ...(plugin?.contributes?.audit ? { audit: createPluginAudit(plugin) } : {}),
   };
 }

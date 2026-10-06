@@ -98,10 +98,15 @@ export function redirectToLogin(): void {
  * distinguish "session is dead, redirect" from "server hiccupped, keep
  * the session and surface the error to the caller."
  *
- * - `ok`           refresh succeeded; retry the original request.
+ * - `ok`           refresh succeeded, or another tab's concurrent refresh
+ *                  already did (REFRESH_SUPERSEDED); retry the original
+ *                  request.
  * - `auth_failed`  refresh returned 401 (invalid token, expired refresh
- *                  token, binding mismatch, ...). Server has already
- *                  cleared cookies via `clearAndDeny`; redirect to login.
+ *                  token, binding mismatch, ...); redirect to login. The
+ *                  server cleared the cookies when the session has ended,
+ *                  but not for a token it has no row for, which may be one
+ *                  another tab has just rotated: the login page then finds
+ *                  that tab's session and returns to the admin.
  * - `transient`    refresh failed for a non-auth reason (5xx, network
  *                  error). Cookies are intact server-side; do NOT
  *                  redirect -- the caller's original 401 propagates so
@@ -125,11 +130,17 @@ export function refreshAccessToken(): Promise<RefreshResult> {
         credentials: "include",
       });
       if (res.ok) return "ok";
-      // 401 is the only response that means "your session is invalid":
-      // the server's `clearAndDeny` path emits 401 + Set-Cookie clears.
-      // Everything else (503 SERVICE_UNAVAILABLE on DB hiccup, 5xx, ...)
-      // is transient and must not log the user out.
-      return res.status === 401 ? "auth_failed" : "transient";
+      // 401 means "this refresh token is no good": the server clears the
+      // cookies with it unless the token may be one another tab has just
+      // rotated, whose fresh cookies it leaves alone. The one exception is
+      // REFRESH_SUPERSEDED: another tab rotated the same token a moment
+      // earlier and its fresh cookies are already in this browser, so a
+      // retry with them succeeds. Everything else (503 SERVICE_UNAVAILABLE
+      // on DB hiccup, 5xx, ...) is transient and must not log the user out.
+      if (res.status !== 401) return "transient";
+      return (await readAuthErrorCode(res)) === "REFRESH_SUPERSEDED"
+        ? "ok"
+        : "auth_failed";
     } catch {
       // Network error -- cannot reach the server. Definitively transient.
       return "transient";

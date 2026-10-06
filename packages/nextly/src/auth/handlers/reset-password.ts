@@ -6,8 +6,8 @@
  * 400 INVALID_INPUT / "This reset link is invalid or has expired." Internal
  * details (which leg actually failed) live only in logContext.
  *
- * On success, revokes all refresh tokens for the user (force re-login on
- * all devices).
+ * The reset's password write ends every session the account holds, in the
+ * same transaction (force re-login on all devices).
  */
 // CSRF double-submit cookie + origin check. The URL token is already an
 // unguessable secret, but CSRF still prevents cross-origin abuse of the
@@ -25,15 +25,12 @@ export interface ResetPasswordHandlerDeps {
   /**
    * Throws NextlyError on failure (any token-related failure, including
    * expired / unknown / used, must be normalised by the caller into the
-   * INVALID_INPUT shape). Returns the user's email on success so the caller
-   * can wipe their refresh tokens.
+   * INVALID_INPUT shape). Ends every session the account holds on success.
    */
   resetPasswordWithToken: (
     token: string,
     newPassword: string
   ) => Promise<{ email: string }>;
-  deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
-  findUserByEmail: (email: string) => Promise<{ id: string } | null>;
 }
 
 function buildResetErrorResponse(
@@ -117,22 +114,13 @@ export async function handleResetPassword(
       });
     }
 
-    let result: { email: string };
     try {
-      result = await deps.resetPasswordWithToken(token, newPassword);
+      await deps.resetPasswordWithToken(token, newPassword);
     } catch (err) {
       // normaliseTokenFailure either returns the unified INVALID_INPUT error
       // or re-throws (for non-token failures). The thrown re-throw is caught
       // by the outer catch.
       throw normaliseTokenFailure(err);
-    }
-
-    // Revoke all refresh tokens for this user (password changed)
-    if (result.email) {
-      const user = await deps.findUserByEmail(result.email);
-      if (user) {
-        await deps.deleteAllRefreshTokensForUser(user.id);
-      }
     }
 
     // Success body is just `{ message: "Password reset." }` per spec §7.6.

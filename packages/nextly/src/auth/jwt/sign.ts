@@ -2,7 +2,20 @@ import { randomBytes } from "node:crypto";
 
 import { SignJWT } from "jose";
 
-const ALGORITHM = "HS256";
+export const ALGORITHM = "HS256";
+
+/**
+ * JWS `typ` values (RFC 8725 §3.11), one per purpose, so a token minted for
+ * one job cannot verify as another. Without it every HS256 token signed with
+ * `NEXTLY_SECRET` that carries a `sub` is accepted as a session, whatever it
+ * was issued for.
+ */
+export const TOKEN_TYP = {
+  session: "nextly-session+jwt",
+  pending: "nextly-pending+jwt",
+} as const;
+
+export type TokenPurpose = keyof typeof TOKEN_TYP;
 
 /**
  * Convert a string secret to a Uint8Array key for jose.
@@ -23,9 +36,15 @@ export function secretToKey(secret: string): Uint8Array {
 export async function signAccessToken(
   claims: Record<string, unknown>,
   secret: string,
-  ttlSeconds: number = 900
+  ttlSeconds: number = 900,
+  purpose: TokenPurpose = "session"
 ): Promise<string> {
-  const { token } = await signAccessTokenWithExpiry(claims, secret, ttlSeconds);
+  const { token } = await signAccessTokenWithExpiry(
+    claims,
+    secret,
+    ttlSeconds,
+    purpose
+  );
   return token;
 }
 
@@ -47,7 +66,8 @@ export async function signAccessToken(
 export async function signAccessTokenWithExpiry(
   claims: Record<string, unknown>,
   secret: string,
-  ttlSeconds: number = 900
+  ttlSeconds: number = 900,
+  purpose: TokenPurpose = "session"
 ): Promise<{ token: string; expiresAt: Date }> {
   const key = secretToKey(secret);
   const jti = randomBytes(16).toString("hex");
@@ -57,7 +77,7 @@ export async function signAccessTokenWithExpiry(
   const expiresAt = issuedAt + ttlSeconds;
 
   const jwt = new SignJWT(claims)
-    .setProtectedHeader({ alg: ALGORITHM })
+    .setProtectedHeader({ alg: ALGORITHM, typ: TOKEN_TYP[purpose] })
     .setIssuedAt(issuedAt)
     .setExpirationTime(expiresAt)
     .setJti(jti);

@@ -99,6 +99,21 @@ export class RateLimiter {
   }
 
   /**
+   * How many requests `key` holds in the current window, recording none.
+   *
+   * Asked of the store's atomic `consume` with a limit of zero, which its
+   * contract never records under. A store without `consume` can count only
+   * by recording, so there the answer is `undefined`: not known.
+   *
+   * @param key      - The key `check` counts under.
+   * @param windowMs - The window `check` counts within.
+   */
+  async peek(key: string, windowMs: number): Promise<number | undefined> {
+    if (!this.store.consume) return undefined;
+    return (await this.store.consume(key, 0, windowMs)).count;
+  }
+
+  /**
    * Drop all state for a key — a revoked key's slot, or a test's fixture.
    */
   async clear(key: string): Promise<void> {

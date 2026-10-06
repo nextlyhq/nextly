@@ -75,15 +75,18 @@ export type AuthHookName =
 
 /**
  * @experimental Auth-flow hooks (normal contribution). Each hook may modify
- * (return a new value), abort (throw → generic public error), or — for
- * `afterAuthenticate` — return a `{ challenge }` to require a second step.
+ * (return a new value), abort (throw: a `NextlyError` keeps its own code,
+ * anything else becomes a generic error), or — for `afterAuthenticate` —
+ * return a `{ challenge }` to require a second step.
  */
 export interface AuthHooks {
   /** Runs before any strategy. Throw to abort. */
   beforeLogin?: (input: AuthInput, ctx: PluginContext) => Promise<void> | void;
   /**
    * After a user is identified. Return a `{ challenge }` to require a second
-   * step, the (possibly modified) user to continue, or throw to abort.
+   * step, the (possibly modified) user to continue, or throw to abort. The
+   * user returned, and a challenge's `userId`, must be the account that
+   * authenticated: a different id fails the login.
    */
   afterAuthenticate?: (
     user: AuthUser,
@@ -109,14 +112,21 @@ export interface AuthHooks {
   /** Runs after logout. */
   afterLogout?: (ctx: PluginContext) => Promise<void> | void;
   /**
-   * Custom current-user resolution for session/refresh. Return `null` to fall
-   * through to core cookie/JWT resolution.
+   * Custom current-user resolution for `GET /auth/session` only. Return
+   * `null` to fall through to core cookie/JWT resolution.
    */
   determineUser?: (
     request: Request,
     ctx: PluginContext
   ) => Promise<AuthUser | null> | AuthUser | null;
-  /** Add/rename JWT claims. Receives the core claims, returns the final claims. */
+  /**
+   * Add JWT claims. Receives the core claims and returns the final ones.
+   * Every claim core built — `sub`, `email`, `name`, `image`, `roleIds`, the
+   * claims from the user's custom fields, and `iat`, `exp`, `jti` — is
+   * restored as core built it, and the reserved `nbf`, `aud`, `iss` and `typ`
+   * cannot be added, so a hook can add a claim of its own but never change
+   * who the session belongs to or what it may do.
+   */
   customizeClaims?: (
     claims: Record<string, unknown>,
     user: AuthUser,

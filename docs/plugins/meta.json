@@ -7,6 +7,7 @@
     "lifecycle",
     "services",
     "permissions",
+    "security",
     "routes",
     "admin-ui",
     "schema",

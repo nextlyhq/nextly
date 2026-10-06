@@ -9,12 +9,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
-import {
-  sqliteTable,
-  integer,
-  text,
-  index,
-} from "drizzle-orm/sqlite-core";
+import { sqliteTable, integer, text, index } from "drizzle-orm/sqlite-core";
 
 // nextly_meta — runtime key/value flags table.
 // Used for state that doesn't belong in collection schemas. First consumer:

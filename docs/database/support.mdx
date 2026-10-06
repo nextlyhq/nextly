@@ -48,6 +48,8 @@ officially supported in v1 but most operations should work. See
 https://nextlyhq.com/docs/database/support.
 ```
 
+MariaDB and TiDB reject `SELECT ... FOR SHARE` as a syntax error, so the detected variant also decides which row lock Nextly takes. The writes that check an account still exists (audit and activity entries) take `FOR SHARE` on MySQL 8, Aurora and Vitess, and `FOR UPDATE` on MariaDB, on TiDB and on a server whose variant is not yet known; sign-in and token refresh take `FOR UPDATE` on every MySQL-compatible server. The adapter reports which it can take as `getCapabilities().sharedRowLock` (experimental).
+
 If a MySQL response is **completely unparseable** -- no version number AND no variant token detected -- Nextly hard-fails at boot.
 
 If you hit a variant-specific bug, please file an issue with your variant + version. v2 will add opt-in regression coverage for individual variants.

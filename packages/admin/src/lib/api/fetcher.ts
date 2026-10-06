@@ -70,14 +70,17 @@ export async function fetcher<T = unknown>(
   isProtected = false
 ): Promise<T> {
   const fullUrl = `${BASE_URL}${path}`;
+  // Headers MERGED after the rest of the options rather than replaced by them:
+  // spread last, a caller's `headers` dropped the JSON content type, so a write
+  // that added one header sent its JSON body as `text/plain`.
   const fetchOptions: RequestInit = {
     method: "GET",
+    credentials: isProtected ? "include" : "same-origin",
+    ...options,
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {}),
     },
-    credentials: isProtected ? "include" : "same-origin",
-    ...options,
   };
 
   const res = isProtected
