@@ -37,7 +37,10 @@
  *
  * @module plugins/plugin-singles
  */
-import { typeHasNestedFields } from "../collections/fields/guards";
+import {
+  declaredShape,
+  type DeclaredField,
+} from "../collections/fields/declared-shape";
 import type {
   ListSinglesOptions,
   SingleRegistryService,
@@ -56,54 +59,22 @@ import type {
  * anything on a Single's id will work until it meets a Single nobody has edited.
  */
 /**
- * A field as this listing can return it: JSON, with every function gone.
+ * A field as this listing can return it.
  *
- * NOT `FieldConfig`. The registry reads `dynamic_singles.fields`, a JSON
- * column, so a code-first field declaring a function-valued option — a
- * `defaultValue` computed at write time, a custom `validate` — arrives here
- * with that option simply absent. `single-mutation-service.ts` says the same
- * thing from the other side: "serialized field defs drop them".
+ * The shared projection's shape, aliased rather than restated. This surface
+ * publishes what a field DECLARES, and which keys those are is decided in one
+ * place for every consumer that has to describe a field: a copy here would be
+ * a second answer to that question, and two answers diverge the moment
+ * either is extended without the other.
  *
- * Typing this as `FieldConfig` would promise a plugin it may call
- * `field.defaultValue()`, which is a type contract the data cannot honour —
- * and the failure would be a `TypeError` in somebody's plugin rather than a
- * compile error here.
- *
- * Only `name` and `type` are declared, plus `fields` for the container types.
- * Those three survive serialization and are what a consumer looking for a
- * particular field type needs.
- *
- * Deliberately no index signature. Adding one to keep the remaining options
- * reachable as `unknown` reads as generous and costs more than it gives: a
- * closed interface is not assignable to a type carrying an index signature, so
- * the projection would need a double assertion to compile — and a double
- * assertion is what lets an overstated type through unnoticed. A consumer
- * needing an option beyond these three narrows the value itself, where it knows
- * which field type it holds and what that option should be.
+ * It is deliberately OPEN. The registry reads a JSON column, so what a stored
+ * declaration carries depends on its type and on which writer produced it, and
+ * a closed interface would have to name every key of every field type. What it
+ * will never carry is a function: JSON has none, and the projection drops one
+ * that reaches it from an in-memory config rather than publishing a member
+ * that serializes to nothing.
  */
-export interface SerializedFieldConfig {
-  /**
-   * Optional, because a nested field's name is.
-   *
-   * Presentational field types carry no name, so a consumer keying anything on
-   * it — a lookup, a path, a dedup — has to handle its absence.
-   */
-  name?: string;
-  type: string;
-  /**
-   * Nested fields, present only for the CONTAINER types.
-   *
-   * A contributed field type carries an index signature, so it may hold a
-   * `fields` option of any shape as its own private configuration — a record, a
-   * string, anything its plugin reads. Passing that through under this name
-   * would promise an array a caller can `.map()` and hand it something else.
-   *
-   * The projection therefore keeps `fields` only where the type is one the
-   * engine treats as a container AND the value really is an array, which is the
-   * same rule `fields-payload.ts` applies before walking nested fields.
-   */
-  fields?: SerializedFieldConfig[];
-}
+export type SerializedFieldConfig = DeclaredField;
 
 /**
  * A Single as this listing can describe it.
@@ -233,43 +204,17 @@ export interface PluginSinglesService {
  * plumbing.
  *
  */
-/**
- * One field, reduced to what this surface can promise about it.
- *
- * Recursive, because a container's children are fields too and inherit the same
- * uncertainty about their own `fields` option.
- */
-function toSerializedField(
-  field: SerializedFieldConfig
-): SerializedFieldConfig {
-  // BUILT from the declared members rather than spread and trimmed. A spread
-  // publishes every enumerable property and removes the named one, so the
-  // shape a caller receives is whatever the registry happened to store —
-  // including `pluginOptions`, which belongs to the field's own plugin and has
-  // no business reaching a different one. Constructing means a property is
-  // published because it appears here, not because nobody excluded it.
-  const serialized: SerializedFieldConfig = { type: field.type };
-  // Assigned conditionally so an absent name stays absent. Writing `undefined`
-  // would put the key in `Object.keys` and in a `in` check while the type says
-  // the member is optional.
-  if (field.name !== undefined) serialized.name = field.name;
-  const nested = field.fields;
-  if (typeHasNestedFields(field.type) && Array.isArray(nested)) {
-    serialized.fields = nested.map(toSerializedField);
-  }
-  return serialized;
-}
-
 function toPluginRecord(record: DynamicSingleRecord): PluginSingleRecord {
   return {
     id: record.id,
     slug: record.slug,
     label: record.label,
     description: record.description ?? undefined,
-    // Assignable without an assertion: `SerializedFieldConfig` declares only
-    // members every `FieldConfig` arm already satisfies. Each field is then
-    // reduced to what this surface can promise about it.
-    fields: record.fields.map(toSerializedField),
+    // Reduced by the shared projection, which decides once for every surface
+    // which keys a field declaration publishes. A container's children go
+    // through the same rules, so a nested field cannot keep what its parent
+    // gave up.
+    fields: declaredShape(record.fields),
     source: record.source,
   };
 }
