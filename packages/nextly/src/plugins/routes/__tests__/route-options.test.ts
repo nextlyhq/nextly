@@ -250,6 +250,20 @@ describe("validateRouteOptions", () => {
     expect(validateRouteOptions(route({ csrf: false }))).toBeNull();
   });
 
+  it("refuses a method outside the declared set, such as a lowercase one", () => {
+    for (const method of ["post", "OPTIONS", undefined]) {
+      expect(validateRouteOptions(route({ method: method as never }))).toMatch(
+        /method must be one of GET, POST, PATCH, PUT, DELETE/
+      );
+    }
+  });
+
+  it("accepts every declared method", () => {
+    for (const method of ["GET", "POST", "PATCH", "PUT", "DELETE"] as const) {
+      expect(validateRouteOptions(route({ method }))).toBeNull();
+    }
+  });
+
   it("refuses rawBody on a method with no body", () => {
     expect(
       validateRouteOptions(route({ rawBody: true, method: "GET" }))
