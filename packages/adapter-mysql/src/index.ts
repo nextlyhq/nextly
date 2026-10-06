@@ -63,7 +63,10 @@ import {
   type SslConfig,
   isApplicationError,
 } from "@nextlyhq/adapter-drizzle/types";
-import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
+import {
+  acceptsForShare,
+  checkDialectVersion,
+} from "@nextlyhq/adapter-drizzle/version-check";
 import type { AnyRelations, SQL } from "drizzle-orm";
 import { getTableConfig, type MySqlTable } from "drizzle-orm/mysql-core";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
@@ -270,6 +273,12 @@ export class MySqlAdapter extends DrizzleAdapter {
   private connected = false;
 
   /**
+   * Whether the server accepts `SELECT ... FOR SHARE`, read from its version
+   * string at connect. Undefined until then, which callers treat as not known.
+   */
+  private sharedRowLock: boolean | undefined;
+
+  /**
    * Creates a new MySQL adapter instance.
    *
    * @param config - Adapter configuration
@@ -309,11 +318,14 @@ export class MySqlAdapter extends DrizzleAdapter {
       const connection = await this.pool.getConnection();
       try {
         await connection.query("SELECT 1");
-        await checkDialectVersion(connection, "mysql", {
+        const { variant } = await checkDialectVersion(connection, "mysql", {
           // Why: route variant warnings through the adapter's logger so
           // users see a single, consistent log surface.
           onWarning: msg => this.config.logger?.warn?.(msg),
         });
+        // MariaDB and TiDB connect through this adapter too, and reject
+        // `FOR SHARE`; the capability tells callers which lock they can take.
+        this.sharedRowLock = acceptsForShare(variant);
         this.connected = true;
 
         if (this.config.logger?.info) {
@@ -569,6 +581,7 @@ export class MySqlAdapter extends DrizzleAdapter {
       supportsOnConflict: true, // ON DUPLICATE KEY UPDATE
       maxParamsPerQuery: 65535, // MySQL limit
       maxIdentifierLength: 64, // MySQL limit
+      sharedRowLock: this.sharedRowLock, // Known once connected
     };
   }
 

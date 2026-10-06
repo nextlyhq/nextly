@@ -96,6 +96,35 @@ const VARIANT_TOKENS = [
   "vitess",
 ] as const;
 
+/** A MySQL-compatible server the version string names. */
+export type DialectVariant = (typeof VARIANT_TOKENS)[number];
+
+/** What the version check learned about the server it connected to. */
+export interface DialectVersionInfo {
+  /**
+   * The MySQL-compatible variant the version string names, or null for the
+   * dialect's own server (and always null on PostgreSQL and SQLite).
+   */
+  variant: DialectVariant | null;
+}
+
+// What: the variants that reject `SELECT ... FOR SHARE` as a syntax error.
+// Why: MariaDB spells the shared lock `LOCK IN SHARE MODE` only, and TiDB
+// refuses both spellings unless its no-op functions are switched on. MySQL
+// 8, Aurora MySQL and Vitess/PlanetScale accept `FOR SHARE`.
+const VARIANTS_WITHOUT_FOR_SHARE: ReadonlySet<DialectVariant> = new Set([
+  "mariadb",
+  "tidb",
+]);
+
+/**
+ * Whether a MySQL-dialect server accepts `SELECT ... FOR SHARE`: true for
+ * MySQL itself and the variants that do, false for MariaDB and TiDB.
+ */
+export function acceptsForShare(variant: DialectVariant | null): boolean {
+  return variant === null || !VARIANTS_WITHOUT_FOR_SHARE.has(variant);
+}
+
 const POSTGRES_REGEX = /^PostgreSQL (\d+)\.(\d+)/;
 const MYSQL_REGEX = /^(\d+)\.(\d+)\.(\d+)/;
 const SQLITE_REGEX = /^(\d+)\.(\d+)\.(\d+)/;
@@ -123,7 +152,7 @@ function parseSQLite(raw: string): ParsedVersion | null {
   return { major: Number(match[1]), minor: Number(match[2]) };
 }
 
-function detectVariant(raw: string): string | null {
+function detectVariant(raw: string): DialectVariant | null {
   const lower = raw.toLowerCase();
   for (const token of VARIANT_TOKENS) {
     if (lower.includes(token)) return token;
@@ -149,7 +178,7 @@ function meetsMinimum(
 //
 // Decision tree:
 //   1. Variant token present (MariaDB/TiDB/Aurora/PlanetScale/Vitess)?
-//      -> emit warning via options.onWarning, return successfully.
+//      -> emit warning via options.onWarning, return the variant.
 //   2. Strict regex matches and version >= minimum?
 //      -> return successfully.
 //   3. Strict regex matches but version < minimum?
@@ -160,7 +189,7 @@ export async function checkDialectVersion(
   client: VersionQueryClient,
   dialect: SupportedDialect,
   options?: CheckDialectVersionOptions
-): Promise<void> {
+): Promise<DialectVersionInfo> {
   const required = NEXTLY_MIN_DB_VERSIONS[dialect];
   const requiredStr = `${required.major}.${required.minor}+`;
 
@@ -184,7 +213,7 @@ export async function checkDialectVersion(
       `officially supported in v1 but most operations should work. ` +
       `See ${DOCS_URL}.`;
     if (options?.onWarning) options.onWarning(warning);
-    return;
+    return { variant };
   }
 
   // Step 2/3: strict regex parse for real dialects.
@@ -224,6 +253,7 @@ export async function checkDialectVersion(
         `${parsed.major}.${parsed.minor}. See ${DOCS_URL}.`,
     });
   }
+  return { variant: null };
 }
 
 // What: PG version query.
