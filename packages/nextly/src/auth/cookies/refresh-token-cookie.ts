@@ -57,13 +57,17 @@ export function readRefreshTokenCookie(request: Request): string | null {
  * The refresh cookie's path covers every `/auth/*` endpoint, so a request
  * there carries a token that mints sessions for its whole lifetime; only
  * core's refresh and logout handlers read it. Every other cookie and header,
- * the method, the URL and the body are kept. The body is cloned, so the
- * original request stays readable; a body already read cannot be copied, and
- * the copy then has none. The copy is a plain `Request`, without what a
- * framework subclass such as `NextRequest` adds; a request without the cookie
- * is returned as is.
+ * the method, the URL and the body are kept, and the original request stays
+ * readable; a body already read cannot be copied, and the copy then has none.
+ *
+ * The copy is built from the request's values, never from the request
+ * object: a framework hands over an instance of its own `Request` class
+ * (Next.js's), which the global `Request` constructor cannot read. So the
+ * copy is a plain `Request`, without what a subclass such as `NextRequest`
+ * adds, and an unread body is read into memory to carry it over. A request
+ * without the cookie is returned as is.
  */
-export function withoutRefreshCookie(request: Request): Request {
+export async function withoutRefreshCookie(request: Request): Promise<Request> {
   const header = request.headers.get("cookie");
   if (readRefreshTokenCookie(request) === null || header === null) {
     return request;
@@ -77,13 +81,15 @@ export function withoutRefreshCookie(request: Request): Request {
   const headers = new Headers(request.headers);
   if (kept.length > 0) headers.set("cookie", kept.join("; "));
   else headers.delete("cookie");
-  if (request.bodyUsed) {
-    return new Request(request.url, {
-      method: request.method,
-      headers,
-      signal: request.signal,
-      redirect: request.redirect,
-    });
-  }
-  return new Request(request.clone(), { headers });
+  const body =
+    request.bodyUsed || request.body === null
+      ? undefined
+      : await request.clone().arrayBuffer();
+  return new Request(request.url, {
+    method: request.method,
+    headers,
+    body,
+    signal: request.signal,
+    redirect: request.redirect,
+  });
 }
