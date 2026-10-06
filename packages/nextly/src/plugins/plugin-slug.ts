@@ -27,3 +27,15 @@ export function pluginAdminSlug(name: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
+
+/**
+ * Whether a name lies in a plugin's own namespace: it begins with the plugin's
+ * slug and a dot, as `acme-billing.charged` does for `@acme/billing`.
+ *
+ * The one rule for every name a plugin publishes for others to hear or hook —
+ * its hook points and its events — so a name says which plugin it belongs to
+ * and no other plugin can publish under it.
+ */
+export function isInPluginNamespace(pluginName: string, name: string): boolean {
+  return name.startsWith(`${pluginAdminSlug(pluginName)}.`);
+}

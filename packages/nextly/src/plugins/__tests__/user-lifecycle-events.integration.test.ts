@@ -5,6 +5,9 @@
  * against a user: the webhook outbox row is durable but reaches nothing inside
  * this process, so a plugin holding an external identity for a deleted account
  * would keep it forever — and the next person to be given that id inherits it.
+ *
+ * Run on every configured dialect: whether a delete removed a row is read from
+ * each driver's own result, and the event rides on that answer.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -19,7 +22,12 @@ import {
 
 import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-tables";
 import { ServiceContainer } from "../../services/index";
-import { createTestNextly, type TestNextly } from "../test-nextly";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../test-nextly";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -30,10 +38,13 @@ afterEach(async () => {
   resetWebhookActivation();
 });
 
-async function boot(): Promise<TestNextly> {
-  current = await createTestNextly({});
-  for (const statement of generateSqliteCoreTableStatements()) {
-    await current.adapter.executeQuery(statement);
+async function boot(dialect: TestDialect): Promise<TestNextly> {
+  current = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
+  if (dialect === "sqlite") {
+    // The SQLite runtime auto-sync does not create the core auth tables.
+    for (const statement of generateSqliteCoreTableStatements()) {
+      await current.adapter.executeQuery(statement);
+    }
   }
   return current;
 }
@@ -48,8 +59,8 @@ async function boot(): Promise<TestNextly> {
  * use. The presence flag FAILS OPEN until primed, which is why it has to be
  * primed here rather than left at its default.
  */
-async function bootWithRecordingOff(): Promise<TestNextly> {
-  const t = await boot();
+async function bootWithRecordingOff(dialect: TestDialect): Promise<TestNextly> {
+  const t = await boot(dialect);
   setWebhookAuditEnabled(false);
   setEndpointPresenceRefresher(() => Promise.resolve(false));
   await refreshEndpointPresence();
@@ -75,102 +86,104 @@ async function makeUser(t: TestNextly, email: string): Promise<string> {
   return String(created.id);
 }
 
-describe("user lifecycle events", () => {
-  it("tells a subscriber when a user is created", async () => {
-    const t = await boot();
-    const seen: Array<{ userId: string }> = [];
-    t.events.on("user.created", e => {
-      seen.push(e.payload as { userId: string });
+describe.each(getConfiguredTestDialects())("on %s", dialect => {
+  describe("user lifecycle events", () => {
+    it("tells a subscriber when a user is created", async () => {
+      const t = await boot(dialect);
+      const seen: Array<{ userId: string }> = [];
+      t.events.on("user.created", e => {
+        seen.push(e.payload as { userId: string });
+      });
+
+      const userId = await makeUser(t, "created@example.com");
+      await t.events.settle();
+
+      expect(seen).toHaveLength(1);
+      expect(seen[0].userId).toBe(userId);
     });
 
-    const userId = await makeUser(t, "created@example.com");
-    await t.events.settle();
+    it("tells a subscriber when a user is deleted", async () => {
+      const t = await boot(dialect);
+      const userId = await makeUser(t, "deleted@example.com");
 
-    expect(seen).toHaveLength(1);
-    expect(seen[0].userId).toBe(userId);
-  });
+      const seen: Array<{ userId: string }> = [];
+      t.events.on("user.deleted", e => {
+        seen.push(e.payload as { userId: string });
+      });
 
-  it("tells a subscriber when a user is deleted", async () => {
-    const t = await boot();
-    const userId = await makeUser(t, "deleted@example.com");
+      await services(t).users.deleteUser(userId);
+      await t.events.settle();
 
-    const seen: Array<{ userId: string }> = [];
-    t.events.on("user.deleted", e => {
-      seen.push(e.payload as { userId: string });
+      expect(seen).toHaveLength(1);
+      expect(seen[0].userId).toBe(userId);
     });
 
-    await services(t).users.deleteUser(userId);
-    await t.events.settle();
+    it("does not emit for a delete that removed no row", async () => {
+      // Two concurrent deletes both read the account and only one removes it.
+      // Emitting from the loser would hand subscribers a second deletion for a
+      // user that was already gone.
+      const t = await boot(dialect);
+      const userId = await makeUser(t, "once@example.com");
 
-    expect(seen).toHaveLength(1);
-    expect(seen[0].userId).toBe(userId);
-  });
+      const seen: unknown[] = [];
+      t.events.on("user.deleted", e => {
+        seen.push(e.payload);
+      });
 
-  it("does not emit for a delete that removed no row", async () => {
-    // Two concurrent deletes both read the account and only one removes it.
-    // Emitting from the loser would hand subscribers a second deletion for a
-    // user that was already gone.
-    const t = await boot();
-    const userId = await makeUser(t, "once@example.com");
+      await services(t).users.deleteUser(userId);
+      await services(t)
+        .users.deleteUser(userId)
+        .catch(() => undefined);
+      await t.events.settle();
 
-    const seen: unknown[] = [];
-    t.events.on("user.deleted", e => {
-      seen.push(e.payload);
+      expect(seen).toHaveLength(1);
     });
 
-    await services(t).users.deleteUser(userId);
-    await services(t)
-      .users.deleteUser(userId)
-      .catch(() => undefined);
-    await t.events.settle();
+    it("carries only the id, never the person's details", async () => {
+      // The payload outlives the account in whatever a subscriber does with it.
+      const t = await boot(dialect);
+      const seen: Array<Record<string, unknown>> = [];
+      t.events.on("user.created", e => {
+        seen.push(e.payload as Record<string, unknown>);
+      });
 
-    expect(seen).toHaveLength(1);
-  });
+      await makeUser(t, "private@example.com");
+      await t.events.settle();
 
-  it("carries only the id, never the person's details", async () => {
-    // The payload outlives the account in whatever a subscriber does with it.
-    const t = await boot();
-    const seen: Array<Record<string, unknown>> = [];
-    t.events.on("user.created", e => {
-      seen.push(e.payload as Record<string, unknown>);
+      expect(Object.keys(seen[0])).toEqual(["userId"]);
+      expect(JSON.stringify(seen[0])).not.toContain("private@example.com");
     });
 
-    await makeUser(t, "private@example.com");
-    await t.events.settle();
+    it("tells a subscriber even when the webhook outbox took no row", async () => {
+      // The separating property. `recorded` answers whether the outbox accepted
+      // a row, not whether the account was created, so an install with no
+      // webhook endpoint never told its plugins a user existed.
+      const t = await bootWithRecordingOff(dialect);
+      const seen: Array<{ userId: string }> = [];
+      t.events.on("user.created", e => {
+        seen.push(e.payload as { userId: string });
+      });
 
-    expect(Object.keys(seen[0])).toEqual(["userId"]);
-    expect(JSON.stringify(seen[0])).not.toContain("private@example.com");
-  });
+      const userId = await makeUser(t, "no-outbox@example.com");
+      await t.events.settle();
 
-  it("tells a subscriber even when the webhook outbox took no row", async () => {
-    // The separating property. `recorded` answers whether the outbox accepted
-    // a row, not whether the account was created, so an install with no
-    // webhook endpoint never told its plugins a user existed.
-    const t = await bootWithRecordingOff();
-    const seen: Array<{ userId: string }> = [];
-    t.events.on("user.created", e => {
-      seen.push(e.payload as { userId: string });
+      expect(seen).toHaveLength(1);
+      expect(seen[0].userId).toBe(userId);
     });
 
-    const userId = await makeUser(t, "no-outbox@example.com");
-    await t.events.settle();
+    it("tells a subscriber about a DELETE without the outbox too", async () => {
+      const t = await bootWithRecordingOff(dialect);
+      const userId = await makeUser(t, "no-outbox-delete@example.com");
+      const seen: Array<{ userId: string }> = [];
+      t.events.on("user.deleted", e => {
+        seen.push(e.payload as { userId: string });
+      });
 
-    expect(seen).toHaveLength(1);
-    expect(seen[0].userId).toBe(userId);
-  });
+      await services(t).users.deleteUser(userId);
+      await t.events.settle();
 
-  it("tells a subscriber about a DELETE without the outbox too", async () => {
-    const t = await bootWithRecordingOff();
-    const userId = await makeUser(t, "no-outbox-delete@example.com");
-    const seen: Array<{ userId: string }> = [];
-    t.events.on("user.deleted", e => {
-      seen.push(e.payload as { userId: string });
+      expect(seen).toHaveLength(1);
+      expect(seen[0].userId).toBe(userId);
     });
-
-    await services(t).users.deleteUser(userId);
-    await t.events.settle();
-
-    expect(seen).toHaveLength(1);
-    expect(seen[0].userId).toBe(userId);
   });
 });

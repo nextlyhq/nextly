@@ -191,14 +191,35 @@ describe("createPluginContext (P1 reshape)", () => {
       }
     );
 
+    it.each(["nextlyhq-plugin-form-builder.submitted", "billing.charged"])(
+      "cannot emit %s, outside its own namespace",
+      name => {
+        // Another plugin's event, or one a name collision would make another's:
+        // its listeners would act on something its owner never did.
+        const { ctx } = makeCtx(plugin);
+        const heard = vi.fn();
+        ctx.events.on(name, heard);
+        expect(() => ctx.events.emit(name, { formId: "f1" })).toThrow(
+          expect.objectContaining({
+            code: "FORBIDDEN",
+            logContext: expect.objectContaining({
+              reason: "plugin-emit-outside-namespace",
+            }),
+          })
+        );
+        expect(heard).not.toHaveBeenCalled();
+        ctx.events.off(name, heard);
+      }
+    );
+
     it("still emits an event of its own", () => {
       // The control: refusing every emit would pass the cases above.
       const { ctx } = makeCtx(plugin);
       const heard = vi.fn();
-      ctx.events.on("billing.charged", heard);
-      ctx.events.emit("billing.charged", { amount: 10 });
+      ctx.events.on("acme-billing.charged", heard);
+      ctx.events.emit("acme-billing.charged", { amount: 10 });
       expect(heard).toHaveBeenCalledOnce();
-      ctx.events.off("billing.charged", heard);
+      ctx.events.off("acme-billing.charged", heard);
     });
   });
 

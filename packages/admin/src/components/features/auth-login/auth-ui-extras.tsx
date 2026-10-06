@@ -2,7 +2,7 @@
 
 import type { AuthUiMeta, AuthUiProvider } from "nextly/api/auth-ui-types";
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { resolveIconName } from "@admin/components/features/widgets/archetypes/icon";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
@@ -268,6 +268,25 @@ export interface ChallengeViewProps {
   onResolved: (next: string | null) => void;
 }
 
+/** The challenge types whose view has been reported posting its own answer. */
+const selfPostingViewsNoticed = new Set<string>();
+
+/**
+ * Say, once per challenge type, that its view posted its own answer with the
+ * deprecated `pendingToken` rather than through `resolve`.
+ */
+function noticeSelfPostedAnswer(challengeType: string): void {
+  if (selfPostingViewsNoticed.has(challengeType)) return;
+  selfPostingViewsNoticed.add(challengeType);
+  console.warn(
+    `[nextly] The challenge view for "${challengeType}" finished without ` +
+      "calling `resolve`, so it posts its own answer with the deprecated " +
+      "`pendingToken` prop. That prop is removed in a later minor release, " +
+      "and it is undefined for a login resumed from an external provider. " +
+      "Call `resolve(response)` and let the host post the answer."
+  );
+}
+
 /**
  * Render the challenge step (D71 multi-step) when a login is interrupted by a
  * second factor. Resolves `challengeViews[challengeType]` through the component
@@ -278,6 +297,10 @@ export interface ChallengeViewProps {
  * it is in an HttpOnly cookie — so a component that posted its own token could
  * not complete that flow. `pendingToken` remains in the props for one minor,
  * deprecated and undefined in resume mode.
+ *
+ * A view that calls `onResolved` without having called `resolve` posted its
+ * own answer, the deprecated way, and the console says so once per challenge
+ * type.
  */
 export function AuthChallenge({
   authUi,
@@ -286,11 +309,26 @@ export function AuthChallenge({
   resolve,
   onResolved,
 }: ChallengeViewProps & { authUi: AuthUiMeta }): ReactNode {
+  const hostPosted = useRef(false);
+  const resolveThroughHost = useCallback(
+    (response: Record<string, unknown>) => {
+      hostPosted.current = true;
+      return resolve(response);
+    },
+    [resolve]
+  );
+  const resolved = useCallback(
+    (next: string | null) => {
+      if (!hostPosted.current) noticeSelfPostedAnswer(challengeType);
+      onResolved(next);
+    },
+    [challengeType, onResolved]
+  );
   const props: ChallengeViewProps = {
     challengeType,
     pendingToken,
-    resolve,
-    onResolved,
+    resolve: resolveThroughHost,
+    onResolved: resolved,
   };
   return (
     <PluginSlot

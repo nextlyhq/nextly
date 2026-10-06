@@ -37,6 +37,15 @@ export {
   type PluginSettingsApi,
 } from "./plugin-context";
 
+// What each hook point carries, by name; a plugin augments the map.
+export type {
+  HookPointContext,
+  HookPointNameOf,
+  HookPointPayload,
+  HookPointPayloads,
+  HookPointValue,
+} from "./hook-point-payloads";
+
 // What `ctx.auth` offers a plugin that authenticated someone elsewhere.
 export type {
   CompleteLoginOptions,

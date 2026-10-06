@@ -71,7 +71,7 @@ describe("publicCallerCredential", () => {
 
 describe("routeCsrfMode", () => {
   it("checks the ORIGIN by default for a cookie-authenticated write", () => {
-    // The default the admin's own writes must pass: they send no token.
+    // The default a same-origin write without a token must pass.
     expect(routeCsrfMode(route(), request("POST"), "cookie")).toBe("origin");
   });
 
@@ -158,7 +158,7 @@ describe("routeCsrfMode", () => {
 });
 
 describe("checkRouteCsrf: the default origin check", () => {
-  /** The admin's own write: session and csrf cookies, same origin, no token. */
+  /** A plugin page's own write: session and csrf cookies, same origin, no token. */
   function adminWrite(origin: string | null): Request {
     return new Request("http://localhost:3000/admin/api/plugins/x/thing", {
       method: "POST",
@@ -171,9 +171,9 @@ describe("checkRouteCsrf: the default origin check", () => {
     });
   }
 
-  it("admits the admin's own write, which sends no token", () => {
+  it("admits a same-origin write that sends no token", () => {
     // The separating case: token-by-default refused exactly this request,
-    // so every admin page writing through `usePluginRouteMutation` got 403.
+    // so every plugin page writing without a token got 403.
     expect(
       checkRouteCsrf(
         route(),

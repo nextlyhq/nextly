@@ -6,7 +6,7 @@ import { isReservedEventName } from "../events/event-bus";
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
 import type { PluginDefinition } from "./plugin-context";
-import { pluginAdminSlug } from "./plugin-slug";
+import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
 import { resolutionError } from "./resolution-error";
 import { topoSortPlugins } from "./topo-sort";
 import { assertAdminWidgets } from "./validate-admin-widgets";
@@ -102,14 +102,18 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // when the auth dependencies are built — on every `/auth/*` request, each of
   // which then failed. Refused here, they fail the boot instead.
   assertChallengeIds(plugins);
-  // A declared event under a core prefix boots, appears in the generated
-  // types, and is then refused on every emit — the per-plugin bus will not
-  // let a plugin speak for core. Refused here, the mistake is named at boot.
-  assertNoReservedEventNames(plugins);
+  // A declared event under a core prefix, or outside the plugin's own
+  // namespace, boots, appears in the generated types, and is then refused on
+  // every emit — the per-plugin bus lets a plugin speak neither for core nor
+  // for another plugin. Refused here, the mistake is named at boot.
+  assertPluginEventNames(plugins);
 }
 
-/** Refuse a plugin event declared under a prefix core reserves. */
-function assertNoReservedEventNames(plugins: PluginDefinition[]): void {
+/**
+ * Refuse a plugin event declared under a prefix core reserves, or outside the
+ * plugin's own namespace — the two names the per-plugin bus refuses to emit.
+ */
+function assertPluginEventNames(plugins: PluginDefinition[]): void {
   for (const plugin of plugins) {
     if (plugin.enabled === false) continue;
     for (const event of plugin.contributes?.events ?? []) {
@@ -118,6 +122,14 @@ function assertNoReservedEventNames(plugins: PluginDefinition[]): void {
           "plugin-event-name-reserved",
           `Plugin "${plugin.name}" declares the event "${event.name}", whose prefix core reserves for its own events.`,
           { plugin: plugin.name, event: event.name }
+        );
+      }
+      if (!isInPluginNamespace(plugin.name, event.name)) {
+        const prefix = `${pluginAdminSlug(plugin.name)}.`;
+        throw resolutionError(
+          "plugin-event-outside-namespace",
+          `Plugin "${plugin.name}" declares the event "${event.name}", which must start with "${prefix}".`,
+          { plugin: plugin.name, event: event.name, expectedPrefix: prefix }
         );
       }
     }

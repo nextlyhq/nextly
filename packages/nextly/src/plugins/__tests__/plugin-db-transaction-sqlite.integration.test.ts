@@ -160,6 +160,16 @@ describe("a core service inside ctx.db.transaction on sqlite", () => {
     });
     current = await createTestNextly({ plugins: [plugin] });
     if (!captured) throw new Error("the plugin's init did not run");
+    // An existing account, created by core: a plugin may not create an
+    // install's first one.
+    await (current.getService("userService") as UserService).create(
+      {
+        email: "founder@example.com",
+        name: "Founder",
+        password: "Passw0rd!long",
+      },
+      {}
+    );
     return captured;
   }
 

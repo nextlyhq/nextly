@@ -18,14 +18,15 @@ import {
   readCsrfCookie,
   readCsrfFromRequest,
 } from "../../auth/csrf/csrf-cookie";
-import { validateCsrf, validateOrigin } from "../../auth/csrf/validate";
+import {
+  isUnsafeMethod,
+  validateCsrf,
+  validateOrigin,
+} from "../../auth/csrf/validate";
 import { ipv6PrefixHex } from "../../auth/session/refresh-binding";
 import { isReadOperation } from "../../middleware/rate-limit";
 
 import type { PluginRoute } from "./route-types";
-
-/** Methods that change something, and so need CSRF protection. */
-const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /** How a caller proved who they are, which decides whether CSRF applies. */
 export type CallerCredential = "cookie" | "bearer" | "none";
@@ -55,7 +56,7 @@ export type RouteCsrfMode = "none" | "origin" | "token" | "refuse";
  * - `"origin"` — the DEFAULT for an authenticated route: the request must come
  *   from this site or an allowed origin. Browsers send `Origin` (or at least
  *   `Referer`) on every cross-site write, so this refuses a forged request
- *   while the admin's own requests, which send no token, pass. It is the
+ *   while a same-origin write that carries no token passes. It is the
  *   origin check `validateCsrf` applies on core's `/auth/*` handlers, without
  *   the token those handlers also require.
  * - `"token"` — the route set `csrf: true`: a double-submit token as well as
@@ -81,7 +82,7 @@ export function routeCsrfMode(
   request: Request,
   credential: CallerCredential
 ): RouteCsrfMode {
-  if (!UNSAFE_METHODS.has(request.method.toUpperCase())) return "none";
+  if (!isUnsafeMethod(request.method)) return "none";
   if (credential !== "cookie") return "none";
   if (route.csrf === true) return "token";
   // Ahead of the public rule: collection refuses `csrf: false` on a public
@@ -89,8 +90,9 @@ export function routeCsrfMode(
   if (route.csrf === false) return "refuse";
   // A public route skips the default: it authenticated no one, and a cookie
   // on the request — even an expired one — says nothing about what admitted
-  // it. A public handler that resolves the session user and acts on them
-  // declares `csrf: true`.
+  // it. A public handler that resolves the session user does so through
+  // `ctx.auth.currentUser`, which applies the same origin check to a write
+  // and answers a cross-site one with no user; `csrf: true` adds the token.
   if (route.public === true) return "none";
   return "origin";
 }
@@ -208,7 +210,7 @@ function isRouteAllowance(value: unknown): boolean {
 
 /** Why a route's declared options are invalid, or null when they are fine. */
 export function validateRouteOptions(route: PluginRoute): string | null {
-  if (route.rawBody === true && !UNSAFE_METHODS.has(route.method)) {
+  if (route.rawBody === true && !isUnsafeMethod(route.method)) {
     return `rawBody is only meaningful on a method with a body, not ${route.method}`;
   }
   // `csrf: false` refuses writes the session cookie authenticates, while a

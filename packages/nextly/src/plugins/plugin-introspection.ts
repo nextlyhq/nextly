@@ -63,6 +63,8 @@ export interface PluginInfo {
     provides: string[];
     /** Capability → the version range its provider must satisfy. */
     requires: Record<string, string>;
+    /** The plugin's declared schema version; absent when it declares none. */
+    schemaVersion?: number;
   };
 }
 
@@ -76,6 +78,7 @@ function manifestSummary(plugin: PluginDefinition): PluginInfo["manifest"] {
     secrets: capabilities.secrets ?? [],
     provides: plugin.provides ?? [],
     requires: plugin.requires ?? {},
+    schemaVersion: plugin.schemaVersion,
   };
 }
 

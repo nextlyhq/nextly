@@ -116,6 +116,9 @@ describe("the adapter transaction the plugin context hands the store", () => {
           calls.push("commit");
         }
       }
+      async afterCommit(effect: () => unknown): Promise<void> {
+        await effect();
+      }
     }
     const adapter = new Adapter();
     const db = {
@@ -140,9 +143,9 @@ describe("the adapter transaction the plugin context hands the store", () => {
       } as never,
       db,
       "sqlite",
-      // Exactly what plugin-context does: hand back the method from a
-      // resolver. The bug was returning `adapter.transaction` itself.
-      () => work => adapter.transaction(work)
+      // Exactly what plugin-context does: hand back the adapter from a
+      // resolver, whose `transaction` must keep its receiver.
+      () => adapter
     );
 
     await api.set({ port: 2 });

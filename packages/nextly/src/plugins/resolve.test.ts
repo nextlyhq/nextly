@@ -242,6 +242,21 @@ describe("a plugin event under a reserved prefix", () => {
     );
   });
 
+  it("fails resolution outside the plugin's own namespace", () => {
+    // Another plugin's slug, and a bare name that is nobody's: both would be
+    // refused on every emit.
+    for (const name of ["acme-billing.charged", "cache.cleared"]) {
+      expect(() => assertPluginManifests([declaring(name)])).toThrow(
+        expect.objectContaining({
+          logContext: expect.objectContaining({
+            reason: "plugin-event-outside-namespace",
+            expectedPrefix: "t-cache.",
+          }),
+        })
+      );
+    }
+  });
+
   it("accepts the plugin's own namespace", () => {
     expect(() =>
       assertPluginManifests([declaring("t-cache.cleared")])

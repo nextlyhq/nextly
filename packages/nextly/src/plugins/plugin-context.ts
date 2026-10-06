@@ -38,12 +38,21 @@ import type { MediaService } from "../services/media/media-service";
 import type { Logger } from "../services/shared";
 import type { UserService } from "../services/users/user-service";
 import { runInPluginTransaction } from "../shared/lib/plugin-transaction-scope";
-import { runAdapterTransaction } from "../shared/lib/run-adapter-transaction";
+import {
+  type AfterCommitAdapter,
+  runAdapterTransaction,
+} from "../shared/lib/run-adapter-transaction";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
+import type {
+  HookPointContext,
+  HookPointNameOf,
+  HookPointPayload,
+  HookPointValue,
+} from "./hook-point-payloads";
 import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
@@ -52,6 +61,7 @@ import { createPluginFetchFor } from "./plugin-fetch-provider";
 import { createPluginSettings } from "./plugin-settings-provider";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
+import { isInPluginNamespace } from "./plugin-slug";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
 import {
@@ -194,15 +204,26 @@ export interface PluginHookRegistry {
 /**
  * @experimental Typed filter registry exposed to plugins.
  * Register transforms on named seams, or define + apply your own seams.
+ *
+ * A point listed in `HookPointPayloads` is typed by its entry; any other
+ * name by the type arguments, or by inference from the call. `N` comes last
+ * so explicit `<V, C>` arguments mean what they did before it existed.
  */
 export interface PluginFilterRegistry {
-  add<V = unknown, C = unknown>(name: string, fn: Filter<V, C>): void;
-  remove<V = unknown, C = unknown>(name: string, fn: Filter<V, C>): void;
-  apply<V = unknown, C = unknown>(
-    name: string,
-    value: V,
-    context: C
-  ): Promise<V>;
+  /** Add a handler to a filter point, or to a decision point's chain. */
+  add<V = unknown, C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "filter" | "decision">,
+    fn: Filter<HookPointValue<N, V>, HookPointContext<N, C>>
+  ): void;
+  remove<V = unknown, C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "filter" | "decision">,
+    fn: Filter<HookPointValue<N, V>, HookPointContext<N, C>>
+  ): void;
+  apply<V = unknown, C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "filter">,
+    value: HookPointValue<N, V>,
+    context: HookPointContext<N, C>
+  ): Promise<HookPointValue<N, V>>;
   /**
    * Run a VETO point, which fails closed.
    *
@@ -211,20 +232,32 @@ export interface PluginFilterRegistry {
    * throwing handler denies, and a handler may only keep or downgrade the
    * verdict, so load order cannot decide access.
    */
-  decide(name: string, initial: Decision, context?: unknown): Promise<Decision>;
+  decide<C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "decision">,
+    initial: Decision,
+    context?: HookPointContext<N, C>
+  ): Promise<Decision>;
 }
 
 /**
  * @experimental Typed action registry exposed to plugins.
  * Register ordered, error-isolated side-effects on named seams, or run your own.
+ *
+ * Typed by `HookPointPayloads` as {@link PluginFilterRegistry} is.
  */
 export interface PluginActionRegistry {
-  add<P = unknown, C = unknown>(name: string, fn: Action<P, C>): void;
-  remove<P = unknown, C = unknown>(name: string, fn: Action<P, C>): void;
-  run<P = unknown, C = unknown>(
-    name: string,
-    payload: P,
-    context: C
+  add<P = unknown, C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "action">,
+    fn: Action<HookPointPayload<N, P>, HookPointContext<N, C>>
+  ): void;
+  remove<P = unknown, C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "action">,
+    fn: Action<HookPointPayload<N, P>, HookPointContext<N, C>>
+  ): void;
+  run<P = unknown, C = unknown, N extends string = string>(
+    name: HookPointNameOf<N, "action">,
+    payload: HookPointPayload<N, P>,
+    context: HookPointContext<N, C>
   ): Promise<void>;
 }
 
@@ -296,7 +329,17 @@ export interface PluginContext {
      * `ServiceOpts` (`as`/`user`) — secure-by-default; no-user runs as system.
      */
     collections: PluginCollectionService;
-    /** User service for user management */
+    /**
+     * User service for user management.
+     *
+     * A plugin may create and update accounts, but not decide who administers
+     * the site: a create on an install with no account yet, and a create or
+     * update giving a role that reaches `super-admin` (directly or by
+     * inheritance), and an update to the password, email, activation,
+     * verification or roles of an account that reaches it, or its deletion,
+     * are refused with `NextlyError` code `FORBIDDEN`. An
+     * address a plugin vouches for is recorded as verified by `"plugin"`.
+     */
     users: UserService;
     /** Media service for file operations */
     media: MediaService;
@@ -989,9 +1032,10 @@ export type PluginServiceName = (typeof PLUGIN_SERVICE_NAMES)[number];
  * transaction cannot (the driver refuses an async callback), so SQLite
  * writes ride the adapter's manual `BEGIN IMMEDIATE` implementation — this
  * type names the one method that makes dialect-correct transactions
- * reachable without binding plugin-context to an adapter class.
+ * reachable without binding plugin-context to an adapter class, and the
+ * `afterCommit` a store announces its committed change through.
  */
-export interface AdapterTransactions {
+export interface AdapterTransactions extends AfterCommitAdapter {
   transaction: <T>(work: () => Promise<T>) => Promise<T>;
 }
 
@@ -1010,15 +1054,23 @@ export interface PluginDatabase extends DatabaseInstance {
    *
    * On SQLite the transaction holds the database's only connection until it
    * ends. A service or `ctx.settings` called inside joins it as a savepoint,
-   * and its rows roll back with it; what it does after its write (hooks,
-   * events, cache revalidation) runs when the savepoint is released and is
-   * not undone by a later rollback. Deleting media is refused inside it,
+   * and its rows roll back with it; what it does after its write (after
+   * hooks, events, cache revalidation, webhook delivery) waits until this
+   * transaction commits, runs before `transaction` resolves, and never runs if
+   * it rolls back. Deleting media is refused inside it,
    * including from a collection hook a service runs inside it, since a
    * rollback could not bring the stored files back with the row, and a
    * focal-point change keeps the superseded image variants rather than
    * deleting them. Core's own transactions are unaffected: a collection hook
    * that deletes media outside a plugin's transaction still deletes it.
    * Other requests' statements wait for it or run inside it.
+   * On SQLite, nested transactions (a nested `ctx.db.transaction`, or a
+   * service called inside) run one at a time, in the order they are started.
+   * A nested transaction must never wait for one started after it in the same
+   * transaction, such as a memoised promise a later sibling started: neither
+   * settles, the database's only connection stays in the open transaction,
+   * every later transaction waits, and other requests' writes land in it
+   * uncommitted and are lost on restart.
    * Keep it short, and never await network I/O (`ctx.fetch`) inside it.
    */
   transaction<T>(work: (tx: DatabaseInstance) => Promise<T>): Promise<T>;
@@ -1265,7 +1317,8 @@ export function createPluginContext(
   rawBus.setLogger(logger);
   // Per-plugin event bus: `on()` also records an unsubscribe thunk so the
   // runtime can clear this plugin's subscriptions before it re-initializes on
-  // HMR (B2), and `emit()` refuses the names core owns. Every other method
+  // HMR (B2), and `emit()` refuses every name outside the plugin's own
+  // namespace, core's included. Every other method
   // delegates to the shared bus unchanged.
   const events: EventBus = pluginName
     ? new Proxy(rawBus, {
@@ -1287,6 +1340,17 @@ export function createPluginContext(
                 throw NextlyError.forbidden({
                   logContext: {
                     reason: "plugin-emit-reserved-event",
+                    plugin: pluginName,
+                    event: name,
+                  },
+                });
+              }
+              // Nor for another plugin: a listener on that plugin's event
+              // would act on something its owner never did.
+              if (!isInPluginNamespace(pluginName, name)) {
+                throw NextlyError.forbidden({
+                  logContext: {
+                    reason: "plugin-emit-outside-namespace",
                     plugin: pluginName,
                     event: name,
                   },
@@ -1345,7 +1409,13 @@ export function createPluginContext(
   return {
     services: {
       collections: wrapCollectionsForPlugin(collectionService),
-      users: userService,
+      // The plugin view, refusing the writes that decide who administers the
+      // site; core's own callers keep the unrestricted instance. Resolved on
+      // access like `versions` below, so a context built by a caller that
+      // never manages users asks nothing of the service it was handed.
+      get users() {
+        return userService.forPlugins();
+      },
       media: mediaService,
       email: emailService,
       // Resolved on access, not at construction: `createPluginContext` is
@@ -1406,17 +1476,11 @@ export function createPluginContext(
             plugin,
             getServiceFn("db"),
             getServiceFn("dialect"),
-            // The adapter's transaction, reachable LAZILY like the handle:
-            // SQLite writes need the adapter's manual BEGIN IMMEDIATE runner,
-            // and the context can be built before the database is connected.
-            // A CLOSURE over the adapter, never the method itself — an
-            // extracted `transaction` loses its class receiver, and the
-            // SQLite adapter reaches for instance state before it can open
-            // the transaction.
-            () => {
-              const adapter = getServiceFn("adapter");
-              return work => adapter.transaction(work);
-            }
+            // The adapter, reachable LAZILY like the handle: SQLite writes
+            // need its manual BEGIN IMMEDIATE runner, the change is announced
+            // through its `afterCommit`, and the context can be built before
+            // the database is connected.
+            () => getServiceFn("adapter")
           ),
         }
       : {}),

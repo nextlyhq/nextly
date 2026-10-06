@@ -237,7 +237,7 @@ export interface PluginRoute {
    *
    * - Left unset, an authenticated route checks the request's `Origin` (or
    *   `Referer`): it must be this site or one in `NEXTLY_ALLOWED_ORIGINS`.
-   *   The admin's own requests pass it without a token.
+   *   A same-origin write passes it without a token.
    * - `true` also requires a valid double-submit CSRF token, in the
    *   `x-csrf-token` header or as `csrfToken` in a JSON body. On a `public`
    *   route it applies to callers carrying the session cookie.
@@ -247,6 +247,11 @@ export interface PluginRoute {
    *   `public: true`: the pair is refused when routes are collected, and
    *   the app does not boot. API-key and webhook callers need no opt-out:
    *   they are never checked, and a webhook route is `public: true`.
+   *
+   * The admin's `usePluginRouteMutation` sends the token on every write, so a
+   * route the plugin's admin page writes to works with `csrf` unset or
+   * `true`. A page that writes with its own `fetch` either leaves `csrf`
+   * unset or fetches a token from `/auth/csrf` and sends it.
    *
    * A refusal answers 403 `CSRF_FAILED` and records a `csrf-failed` audit
    * event. API-key and Bearer callers are exempt, because a browser cannot

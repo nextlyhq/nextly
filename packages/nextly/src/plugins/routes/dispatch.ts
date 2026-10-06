@@ -6,6 +6,7 @@ import {
   type AuthenticatedScope,
 } from "../../auth/authenticated-scope";
 import { runWithCallerScope } from "../../auth/caller-scope";
+import { withoutRefreshCookie } from "../../auth/cookies/refresh-token-cookie";
 import { readCsrfBody } from "../../auth/csrf/read-csrf-body";
 import {
   isErrorResponse,
@@ -577,9 +578,12 @@ function withNoStore(response: Response, route: PluginRoute): Response {
  * into a Response.
  */
 export async function runPluginRoute(
-  req: Request,
+  incoming: Request,
   matched: RouteMatch
 ): Promise<Response> {
+  // A root route may sit under `/auth`, where the refresh cookie is sent;
+  // nothing past this point is core's refresh or logout handler.
+  const req = withoutRefreshCookie(incoming);
   const auth = await resolvePluginRouteAuth(
     req,
     matched.route,

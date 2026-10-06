@@ -1,11 +1,13 @@
 /**
  * The cross-site check a plugin route applies, driven through the dispatcher.
  *
- * The admin's own writes to plugin routes (`usePluginRouteMutation`) send the
- * session and csrf cookies, the site's own `Origin`, and no token. The default
- * therefore has to be an origin check: a token demanded by default refused
- * every such write with 403, while a forged cross-site write must still be
- * refused, recorded, and answered as `CSRF_FAILED`.
+ * A plugin page's own write to its route — a `fetch` that sends the session
+ * and csrf cookies and the site's own `Origin`, and no token — has to pass
+ * the default, so the default is an origin check: a token demanded by default
+ * refused every such write with 403, while a forged cross-site write must
+ * still be refused, recorded, and answered as `CSRF_FAILED`. The admin's
+ * `usePluginRouteMutation` sends the token as well;
+ * `usePluginRouteMutation.dispatch.test.tsx` in the admin drives it here.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -85,7 +87,7 @@ beforeEach(() => {
 });
 
 describe("a plugin route's default cross-site check", () => {
-  it("admits the admin's own write, which sends no token", async () => {
+  it("admits a same-origin write that sends no token", async () => {
     const res = await runPluginRoute(
       write(ADMIN_COOKIES, "http://localhost:3000"),
       match()

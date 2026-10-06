@@ -11,7 +11,7 @@
  * @since 1.0.0
  */
 import type { PluginDefinition } from "./plugin-context";
-import { pluginAdminSlug } from "./plugin-slug";
+import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
 import { resolutionError } from "./resolution-error";
 
 /** One declared seam, and which plugin published it. */
@@ -67,7 +67,7 @@ function assertPointDeclarable(
   pluginName: string,
   slug: string
 ): void {
-  if (!name.startsWith(`${slug}.`)) {
+  if (!isInPluginNamespace(pluginName, name)) {
     throw resolutionError(
       "hook-point-outside-prefix",
       `Plugin "${pluginName}" declares the hook point "${name}", which must start with "${slug}.".`,

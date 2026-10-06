@@ -188,6 +188,82 @@ describe("AuthChallenge (D71)", () => {
   });
 });
 
+describe("AuthChallenge: a view posting its own answer", () => {
+  /** A view that finishes with `onResolved`, posting through `resolve` or not. */
+  function registerView(path: string, viaHost: boolean) {
+    registerComponent(
+      path,
+      (p: {
+        resolve: (r: Record<string, unknown>) => Promise<unknown>;
+        onResolved: (next: string | null) => void;
+      }) => (
+        <button
+          onClick={() => {
+            void (async () => {
+              if (viaHost) await p.resolve({ code: "123456" });
+              p.onResolved(null);
+            })();
+          }}
+        >
+          finish
+        </button>
+      )
+    );
+  }
+
+  function renderChallenge(challengeType: string, path: string) {
+    const onResolved = vi.fn();
+    render(
+      <AuthChallenge
+        authUi={{ ...base, challengeViews: { [challengeType]: path } }}
+        challengeType={challengeType}
+        pendingToken="pt-123"
+        resolve={async () => ({ ok: true })}
+        onResolved={onResolved}
+      />
+    );
+    return onResolved;
+  }
+
+  async function finish() {
+    await act(async () => {
+      screen.getByRole("button", { name: "finish" }).click();
+      await Promise.resolve();
+    });
+  }
+
+  it("warns once, naming the deprecated pendingToken, and still resolves", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    registerView("@p/auth#SelfPost", false);
+    const onResolved = renderChallenge("self-post", "@p/auth#SelfPost");
+    await screen.findByRole("button", { name: "finish" });
+
+    await finish();
+    await finish();
+
+    const notices = warn.mock.calls.filter(([m]) =>
+      String(m).includes("pendingToken")
+    );
+    expect(notices).toHaveLength(1);
+    expect(String(notices[0][0])).toContain('"self-post"');
+    expect(onResolved).toHaveBeenCalledTimes(2);
+  });
+
+  it("says nothing for a view that answers through resolve", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    registerView("@p/auth#ViaHost", true);
+    const onResolved = renderChallenge("via-host", "@p/auth#ViaHost");
+    await screen.findByRole("button", { name: "finish" });
+
+    await finish();
+
+    expect(onResolved).toHaveBeenCalledWith(null);
+    expect(
+      warn.mock.calls.filter(([m]) => String(m).includes("pendingToken"))
+    ).toEqual([]);
+  });
+});
+
 describe("provider buttons", () => {
   it("navigates when the provider declares an href", () => {
     // Without this a plain provider button rendered and did nothing: the host
