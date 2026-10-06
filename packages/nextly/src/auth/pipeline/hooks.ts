@@ -95,7 +95,7 @@ export class AuthHookRegistry {
   async runBeforeLogin(input: AuthInput, ctx: PluginContext): Promise<void> {
     const hookInput = {
       ...input,
-      request: withoutRefreshCookie(input.request),
+      request: await withoutRefreshCookie(input.request),
     };
     for (const h of this.#hooks) await h.beforeLogin?.(hookInput, ctx);
   }
@@ -165,7 +165,7 @@ export class AuthHookRegistry {
     request: Request,
     ctx: PluginContext
   ): Promise<AuthUser | null> {
-    const hookRequest = withoutRefreshCookie(request);
+    const hookRequest = await withoutRefreshCookie(request);
     for (const h of this.#hooks) {
       const u = await h.determineUser?.(hookRequest, ctx);
       if (u) return u;

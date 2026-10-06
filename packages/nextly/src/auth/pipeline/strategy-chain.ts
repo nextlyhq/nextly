@@ -62,7 +62,7 @@ export async function runStrategyChain(
   input: Omit<AuthInput, "strategyName">,
   ctx: PluginContext
 ): Promise<StrategyChainResult> {
-  const request = withoutRefreshCookie(input.request);
+  const request = await withoutRefreshCookie(input.request);
   for (const strategy of strategies) {
     let outcome: AuthOutcome;
     try {

@@ -583,7 +583,7 @@ export async function runPluginRoute(
 ): Promise<Response> {
   // A root route may sit under `/auth`, where the refresh cookie is sent;
   // nothing past this point is core's refresh or logout handler.
-  const req = withoutRefreshCookie(incoming);
+  const req = await withoutRefreshCookie(incoming);
   const auth = await resolvePluginRouteAuth(
     req,
     matched.route,
