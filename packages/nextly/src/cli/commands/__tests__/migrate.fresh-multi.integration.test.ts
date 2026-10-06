@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { runFileMigrations } from "../migrate";
+import { makeSqliteMigrationAdapter } from "./sqlite-migration-adapter";
 
 const CREATE_ARTICLES =
   'CREATE TABLE "dc_articles" ("id" text PRIMARY KEY, "created_at" integer, ' +
@@ -33,22 +34,8 @@ const logger = {
   success: () => {},
 } as unknown as Parameters<typeof runFileMigrations>[0]["logger"];
 
-// Minimal CLI-adapter surface runFileMigrations touches.
 function makeAdapter() {
-  return {
-    listTables: () =>
-      Promise.resolve(
-        sqlite
-          .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-          .all()
-          .map(r => (r as { name: string }).name)
-      ),
-    executeQuery: (q: string) => {
-      sqlite.exec(q);
-      return Promise.resolve([]);
-    },
-    getDrizzle: () => db,
-  } as unknown as Parameters<typeof runFileMigrations>[0]["adapter"];
+  return makeSqliteMigrationAdapter(sqlite, db);
 }
 
 function snapshotFile(snapshot: unknown): string {

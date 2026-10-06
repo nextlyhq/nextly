@@ -884,9 +884,9 @@ export async function runFileMigrations(args: {
   const dz = adapter as unknown as DrizzleAdapter;
   const executeSql = async (sqlText: string): Promise<number> => {
     const statements = splitSqlStatements(sqlText, dialect);
-    await executeTransaction(dz, dialect, async () => {
+    await executeTransaction(dz, async execute => {
       for (const statement of statements) {
-        await dz.executeQuery(statement);
+        await execute(statement);
       }
     });
     return statements.length;
@@ -1132,28 +1132,25 @@ export function parseSqlSections(content: string): {
   };
 }
 
+/**
+ * Run `fn` inside one transaction, on ONE connection.
+ *
+ * `fn` receives the transaction's executor and must run every statement
+ * through it. `adapter.executeQuery` is pooled: each call checks a connection
+ * out and releases it, so a BEGIN, the statements and the COMMIT or ROLLBACK
+ * sent through it can each land on a different connection. Under concurrent
+ * queries the statements then run in autocommit and survive the ROLLBACK, and
+ * the connection that received BEGIN goes back to the pool idle in
+ * transaction (#1964). `adapter.transaction()` holds one connection for the
+ * whole unit, as `base-registry-service.ts` already relies on.
+ */
 export async function executeTransaction(
   adapter: DrizzleAdapter,
-  dialect: SupportedDialect,
-  fn: () => Promise<void>
+  fn: (execute: (sql: string) => Promise<unknown>) => Promise<void>
 ): Promise<void> {
-  const beginSql =
-    dialect === "mysql" ? "START TRANSACTION" : "BEGIN TRANSACTION";
-  const commitSql = "COMMIT";
-  const rollbackSql = "ROLLBACK";
-
-  try {
-    await adapter.executeQuery(beginSql);
-    await fn();
-    await adapter.executeQuery(commitSql);
-  } catch (error) {
-    try {
-      await adapter.executeQuery(rollbackSql);
-    } catch {
-      // Ignore rollback errors
-    }
-    throw error;
-  }
+  await adapter.transaction(async tx => {
+    await fn(sql => tx.execute(sql));
+  });
 }
 
 /**

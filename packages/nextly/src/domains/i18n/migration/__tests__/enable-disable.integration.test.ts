@@ -7,6 +7,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runFileMigrations } from "../../../../cli/commands/migrate";
+import { makeSqliteMigrationAdapter } from "../../../../cli/commands/__tests__/sqlite-migration-adapter";
 import { getI18nArchiveDdl } from "../../../../schemas/nextly-i18n-archive/ddl";
 import { getSchemaEventsDdl } from "../../../schema/events/schema-events-ddl";
 import { writeLocalizationMigrationFile } from "../write-migration-file";
@@ -23,20 +24,7 @@ const logger = {
 } as unknown as Parameters<typeof runFileMigrations>[0]["logger"];
 
 function makeAdapter() {
-  return {
-    listTables: () =>
-      Promise.resolve(
-        sqlite
-          .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-          .all()
-          .map(r => (r as { name: string }).name)
-      ),
-    executeQuery: (q: string) => {
-      sqlite.exec(q);
-      return Promise.resolve([]);
-    },
-    getDrizzle: () => db,
-  } as unknown as Parameters<typeof runFileMigrations>[0]["adapter"];
+  return makeSqliteMigrationAdapter(sqlite, db);
 }
 
 const spec: CompanionMigrationSpec = {
