@@ -39,21 +39,22 @@ function SingleCard({ single }: { single: ApiSingle }) {
         variant="interactive"
         className="h-full border-0! bg-transparent! transition-colors duration-200 rounded-lg overflow-hidden relative"
       >
-        <CardContent className="p-5 relative z-10">
-          <div className="flex items-start justify-between gap-4">
-            <div className="space-y-1 min-w-0">
-              <h5 className="font-semibold text-base tracking-tight text-foreground truncate transition-colors">
+        <CardContent className="p-4 relative z-10">
+          <div className="flex flex-col gap-2">
+            {/* Icon + label — inline, label wraps fully, never truncates */}
+            <div className="flex items-start gap-1.5">
+              <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
+              <h5 className="min-w-0 flex-1 wrap-break-words font-semibold text-sm tracking-tight text-foreground group-hover:text-foreground transition-colors leading-tight">
                 {single.label || single.slug}
               </h5>
-              {single.description && (
-                <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                  {single.description}
-                </p>
-              )}
             </div>
-            <div className="text-muted-foreground group-hover:text-foreground transition-colors shrink-0">
-              <Icon className="h-5 w-5" />
-            </div>
+
+            {/* Description (optional) — also wraps instead of clamping */}
+            {single.description && (
+              <p className="wrap-break-words text-xs text-muted-foreground leading-relaxed pl-5">
+                {single.description}
+              </p>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -63,8 +64,8 @@ function SingleCard({ single }: { single: ApiSingle }) {
 
 function LoadingSkeleton() {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {Array.from({ length: 3 }, (_, i) => (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+      {Array.from({ length: 5 }, (_, i) => (
         <Skeleton
           key={i}
           className="h-24 rounded-lg bg-muted/30 border border-border"
@@ -117,7 +118,7 @@ export const SinglesQuickLinks: React.FC = () => {
           <span>Couldn&apos;t load singles.</span>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
           {singles.map(single => (
             <SingleCard key={single.id} single={single} />
           ))}

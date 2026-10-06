@@ -35,7 +35,6 @@ function groupCollections(counts: CollectionCount[]): CollectionGroup[] {
   const grouped = new Map<string | null, CollectionCount[]>();
 
   for (const item of counts) {
-    // Everything except "Forms" is treated as "Collections" (null)
     const effectiveGroup = item.group === "Forms" ? "Forms" : null;
     if (!grouped.has(effectiveGroup)) {
       grouped.set(effectiveGroup, []);
@@ -43,7 +42,6 @@ function groupCollections(counts: CollectionCount[]): CollectionGroup[] {
     grouped.get(effectiveGroup)!.push(item);
   }
 
-  // Priorities: null (Collections) -> Forms
   const getPriority = (name: string | null) => {
     if (name === null) return 0;
     if (name === "Forms") return 1;
@@ -62,11 +60,7 @@ function CollectionCard({
   item: CollectionCount;
   collectionConfig?: ApiCollection;
 }) {
-  // Resolve Icon:
-  // 1. From collection metadata (admin.icon)
-  // 2. From group default
   const Icon = useMemo(() => {
-    // 1. From collection metadata (admin.icon)
     if (collectionConfig?.admin?.icon) {
       const ConfiguredIcon = (Icons as Record<string, React.ElementType>)[
         collectionConfig.admin.icon
@@ -74,20 +68,18 @@ function CollectionCard({
       if (ConfiguredIcon) return ConfiguredIcon;
     }
 
-    // 2. Specific item overrides for "Forms" group
     if (item.group === "Forms") {
       if (item.slug.toLowerCase().includes("submission")) return Icons.Inbox;
       return Icons.Clipboard;
     }
 
-    // 3. From group default
     return getGroupDefaultIcon(item.group);
   }, [collectionConfig?.admin?.icon, item.group, item.slug]);
 
   return (
     <Link
       href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: item.slug })}
-      className="block group h-full rounded-lg overflow-hidden  border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary"
+      className="block group h-full rounded-lg overflow-hidden border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary"
     >
       <Card
         variant="interactive"
@@ -95,18 +87,19 @@ function CollectionCard({
           "h-full border-0! bg-transparent! transition-colors duration-200 rounded-lg overflow-hidden relative"
         )}
       >
-        <CardContent className="p-5 relative z-10">
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
-              <span className="text-2xl font-bold tabular-nums tracking-tight text-foreground leading-none transition-colors">
-                {item.count}
-              </span>
-              <h5 className="font-semibold text-xs tracking-tight transition-colors leading-tight text-muted-foreground group-hover:text-foreground pt-1">
+        <CardContent className="p-4 relative z-10">
+          <div className="flex flex-col gap-2">
+            {/* Count — owns the top row */}
+            <span className="text-2xl font-bold tabular-nums tracking-tight text-foreground leading-none transition-colors">
+              {item.count}
+            </span>
+
+            {/* Icon + label — label wraps fully, never truncates */}
+            <div className="flex items-start gap-1.5">
+              <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
+              <h5 className="min-w-0 flex-1 wrap-break-words font-semibold text-xs tracking-tight transition-colors leading-tight text-muted-foreground group-hover:text-foreground">
                 {item.label}
               </h5>
-            </div>
-            <div className="text-muted-foreground group-hover:text-foreground transition-colors pt-1">
-              <Icon className="h-5 w-5 shrink-0" />
             </div>
           </div>
         </CardContent>
@@ -117,11 +110,11 @@ function CollectionCard({
 
 function LoadingSkeleton() {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-      {Array.from({ length: 4 }, (_, i) => (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+      {Array.from({ length: 5 }, (_, i) => (
         <Skeleton
           key={i}
-          className="h-32 rounded-lg bg-muted/30  border border-border"
+          className="h-24 rounded-lg bg-muted/30 border border-border"
         />
       ))}
     </div>
@@ -147,6 +140,7 @@ export const CollectionQuickLinks: React.FC = () => {
     if (allowed.size === 0) return raw;
     return raw.filter(item => allowed.has(item.slug));
   }, [statsData?.collectionCounts, collectionsData?.items]);
+
   const groups = useMemo(() => groupCollections(counts), [counts]);
 
   const collectionsMap = useMemo(() => {
@@ -164,7 +158,7 @@ export const CollectionQuickLinks: React.FC = () => {
       {isLoading ? (
         <LoadingSkeleton />
       ) : statsError ? (
-        <div className="flex items-center gap-2 py-8 text-xs font-bold uppercase tracking-widest text-destructive justify-center bg-destructive/5 rounded-md  border border-border border-destructive">
+        <div className="flex items-center gap-2 py-8 text-xs font-bold uppercase tracking-widest text-destructive justify-center bg-destructive/5 rounded-md border border-destructive">
           <AlertCircle className="h-4 w-4" />
           <span>Connection Error</span>
         </div>
@@ -184,7 +178,7 @@ export const CollectionQuickLinks: React.FC = () => {
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
                 {group.collections.map(item => (
                   <CollectionCard
                     key={item.slug}
