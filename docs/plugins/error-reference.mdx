@@ -9,33 +9,46 @@ Nextly validates plugins **fail-fast at boot** (D7): a bad plugin config stops s
 
 ## Resolution
 
-| Code | Status | Cause | Fix |
-|---|---|---|---|
-| `PLUGIN_RESOLUTION_ERROR` | 500 | A `dependsOn` is missing, a dependency cycle exists, or a `nextly`/dependency version range is incompatible with what's installed. `logContext.reason` ∈ `missing-dependency`, `dependency-cycle`, `invalid-nextly-range`, `core-incompatible`, `version-incompatible`, `optional-version-incompatible`. | Install/declare the missing dependency, break the cycle, or widen/correct the version range. |
+| Code                      | Status | Cause                                                                                                                                                                                                                                                                                                    | Fix                                                                                          |
+| ------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `PLUGIN_RESOLUTION_ERROR` | 500    | A `dependsOn` is missing, a dependency cycle exists, or a `nextly`/dependency version range is incompatible with what's installed. `logContext.reason` ∈ `missing-dependency`, `dependency-cycle`, `invalid-nextly-range`, `core-incompatible`, `version-incompatible`, `optional-version-incompatible`. | Install/declare the missing dependency, break the cycle, or widen/correct the version range. |
 
 ## Schema
 
-| Code | Status | Cause | Fix |
-|---|---|---|---|
-| `NEXTLY_SCHEMA_SLUG_COLLISION` | 409 | Two sources (a plugin and code/another plugin) contribute the same collection/single/component slug. | Rename one entity, or have the integrator `.rename()` the plugin's slug. |
-| `NEXTLY_SCHEMA_RELATION_TARGET_MISSING` | 400 | A `relationTo` points at a slug that isn't in the merged schema. | Point the relationship at an existing slug (core `users`/`media` are always valid). |
-| `NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN` | 400 | `contributes.extend` targets a slug that doesn't exist in the merged schema (e.g. a Builder-only entity during the code-first gap). | Target an existing code/plugin entity, or declare a `dependsOn` on the plugin that owns it. |
-| `NEXTLY_SCHEMA_EXTEND_FIELD_DUPLICATE` | 409 | `contributes.extend` adds a field name already present on the target. | Use a different field name (configurable field names resolve collisions). |
-| `NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION` | 409 | A plugin relates to (or extends with a relation into) another plugin's entity without declaring `dependsOn` on it. | Add the other plugin to `dependsOn`. |
-| `NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET` | 400 | `.rename({ from: to })` names a `from` slug the plugin doesn't contribute. | Rename only slugs the plugin actually declares. |
+| Code                                    | Status | Cause                                                                                                                               | Fix                                                                                         |
+| --------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `NEXTLY_SCHEMA_SLUG_COLLISION`          | 409    | Two sources (a plugin and code/another plugin) contribute the same collection/single/component slug.                                | Rename one entity, or have the integrator `.rename()` the plugin's slug.                    |
+| `NEXTLY_SCHEMA_RELATION_TARGET_MISSING` | 400    | A `relationTo` points at a slug that isn't in the merged schema.                                                                    | Point the relationship at an existing slug (core `users`/`media` are always valid).         |
+| `NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN`   | 400    | `contributes.extend` targets a slug that doesn't exist in the merged schema (e.g. a Builder-only entity during the code-first gap). | Target an existing code/plugin entity, or declare a `dependsOn` on the plugin that owns it. |
+| `NEXTLY_SCHEMA_EXTEND_FIELD_DUPLICATE`  | 409    | `contributes.extend` adds a field name already present on the target.                                                               | Use a different field name (configurable field names resolve collisions).                   |
+| `NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION`   | 409    | A plugin relates to (or extends with a relation into) another plugin's entity without declaring `dependsOn` on it.                  | Add the other plugin to `dependsOn`.                                                        |
+| `NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET`   | 400    | `.rename({ from: to })` names a `from` slug the plugin doesn't contribute.                                                          | Rename only slugs the plugin actually declares.                                             |
+
+## Schema lifecycle
+
+| Code                                 | Status | Cause                                                                                                                                                                                                                                                              | Fix                                                                                                                                                       |
+| ------------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PLUGIN_DEPENDENCY_NOT_INSTALLED`    | 409    | `nextly plugins install` was run for a plugin whose dependency has unapplied migration modules, was uninstalled, or is not configured. Nothing is changed.                                                                                                         | Install each dependency the message lists, in the order it lists them, then install the plugin again.                                                     |
+| `PLUGIN_HAS_DEPENDENTS`              | 409    | `nextly plugins uninstall` was run for a plugin that another enabled plugin depends on.                                                                                                                                                                            | Uninstall or disable the dependents first.                                                                                                                |
+| `PLUGIN_UNINSTALL_IRREVERSIBLE`      | 409    | A full uninstall needs a migration module that has no DOWN statements for this database's dialect, or the plugin's tables were created by a development push and no applied module can undo them (`logContext.reason` is `no-applied-module`). Nothing is changed. | Uninstall with `--keep-data`, or ship a DOWN for that module. For a development push, drop the tables with a migration or reset the development database. |
+| `PLUGIN_UNINSTALL_UNCONFIRMED`       | 409    | `nextly plugins uninstall` would drop tables and was run without `--yes`. The tables are listed before the error. Nothing is changed.                                                                                                                              | Re-run with `--yes` to drop them, or with `--keep-data` to keep them.                                                                                     |
+| `PLUGIN_SCHEMA_BEHIND`               | 409    | At boot, a plugin declares a newer `schemaVersion` than its applied migrations reach.                                                                                                                                                                              | Run `nextly migrate`, or `nextly plugins install <name>`.                                                                                                 |
+| `PLUGIN_SCHEMA_UNINSTALLED`          | 409    | At boot, a plugin that was fully uninstalled is still listed in the config.                                                                                                                                                                                        | Run `nextly plugins install <name>` to reinstate it, or remove it from the config.                                                                        |
+| `PLUGIN_MIGRATIONS_UNAVAILABLE`      | 409    | `nextly migrate` found tables, or columns and indexes added to another plugin's table, from a plugin that ships no migration modules, so production has no way to create them.                                                                                     | Generate the plugin's modules with `nextly migrate:create --plugin <name>`.                                                                               |
+| `PLUGIN_SCHEMA_VERSION_NOT_ADVANCED` | 409    | `nextly migrate:create --plugin` was run without raising the plugin's `schemaVersion` past its last module's.                                                                                                                                                      | Raise `schemaVersion`, then generate again.                                                                                                               |
 
 ## Permissions
 
-| Code | Status | Cause | Fix |
-|---|---|---|---|
-| `NEXTLY_PERMISSION_COLLISION` | 409 | A custom permission duplicates another, targets a reserved system resource, or reuses an auto-seeded CRUD `(action, resource)`. `logContext.reason` ∈ `duplicate-permission`, `system-resource-reserved`, `crud-permission-reserved`. | Choose a unique `(action, resource)`; don't redeclare CRUD permissions (they're auto-seeded). |
+| Code                          | Status | Cause                                                                                                                                                                                                                                 | Fix                                                                                           |
+| ----------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `NEXTLY_PERMISSION_COLLISION` | 409    | A custom permission duplicates another, targets a reserved system resource, or reuses an auto-seeded CRUD `(action, resource)`. `logContext.reason` ∈ `duplicate-permission`, `system-resource-reserved`, `crud-permission-reserved`. | Choose a unique `(action, resource)`; don't redeclare CRUD permissions (they're auto-seeded). |
 
 ## Routes
 
-| Code | Status | Cause | Fix |
-|---|---|---|---|
-| `NEXTLY_ROUTE_COLLISION` | 409 | Two routes share the same `(method, full path)` after namespacing under `/plugins/<name>`. | Give each route a distinct method/path. |
-| `NEXTLY_ROUTE_INVALID_PATH` | 400 | A route `path` does not start with `/`. | Start the path with `/` (e.g. `/export`). |
+| Code                        | Status | Cause                                                                                      | Fix                                       |
+| --------------------------- | ------ | ------------------------------------------------------------------------------------------ | ----------------------------------------- |
+| `NEXTLY_ROUTE_COLLISION`    | 409    | Two routes share the same `(method, full path)` after namespacing under `/plugins/<name>`. | Give each route a distinct method/path.   |
+| `NEXTLY_ROUTE_INVALID_PATH` | 400    | A route `path` does not start with `/`.                                                    | Start the path with `/` (e.g. `/export`). |
 
 ## Inspecting plugins
 

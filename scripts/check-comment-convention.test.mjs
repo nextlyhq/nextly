@@ -224,8 +224,9 @@ describe("the allowlist", () => {
   // 503 -> 498: recorded offences in `services/users.ts`, the Direct API auth
   // namespace and its test, and `auth-service.ts` no longer exist, so the list
   // shrank by five digests. Each entry itself remains, which is why the count
-  // above does not move.
-  const EXPECTED_TOTAL = 498;
+  // above does not move. 498 -> 496: two more recorded offences no longer
+  // exist once the schema-extension work lands on top.
+  const EXPECTED_TOTAL = 496;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

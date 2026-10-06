@@ -110,6 +110,31 @@ describe("FieldGroupDataService", () => {
       expect(row.updated_at).toBeDefined();
     });
 
+    it("does not name a virtual component field in the row it writes", async () => {
+      // The component table has no column for a virtual field, so naming it
+      // would fail the write. `metaTitle` is the control: it must still land.
+      ctx.registry.registerComponent("seo", {
+        ...seoComponentMeta(),
+        fields: [
+          ...seoComponentMeta().fields,
+          { name: "previewLine", type: "text", virtual: true },
+        ],
+      });
+      ctx.adapter.select.mockResolvedValue([]);
+
+      await ctx.service.saveComponentData({
+        parentId: "entry-1",
+        parentTable: "dc_pages",
+        fields: [seoComponentField()],
+        data: { seo: { metaTitle: "About Us", previewLine: "Computed" } },
+      });
+
+      const [, row] = ctx.adapter.insert.mock.calls[0];
+      expect(row.meta_title).toBe("About Us");
+      expect(row).not.toHaveProperty("preview_line");
+      expect(row).not.toHaveProperty("previewLine");
+    });
+
     it("updates an existing instance in-place (preserves id)", async () => {
       ctx.adapter.select.mockResolvedValue([
         {
@@ -439,6 +464,59 @@ describe("FieldGroupDataService", () => {
 
       expect(tx.insert).toHaveBeenCalledTimes(1);
       expect(ctx.adapter.insert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a virtual field-group field", () => {
+    // Stores nothing: its value is computed on read, so a payload carrying it
+    // must not become instance rows. `seo` beside it is the control — the same
+    // call must still write that one, so the absence is the rule and not a
+    // save that wrote nothing at all.
+    const virtualHero = { ...seoComponentField(), name: "hero", virtual: true };
+
+    it("is not written by a pooled save", async () => {
+      ctx.adapter.select.mockResolvedValue([]);
+
+      await ctx.service.saveComponentData({
+        parentId: "entry-1",
+        parentTable: "dc_pages",
+        fields: [seoComponentField(), virtualHero],
+        data: {
+          seo: { metaTitle: "About" },
+          hero: { metaTitle: "Computed" },
+        },
+      });
+
+      const written = ctx.adapter.insert.mock.calls.map(
+        ([, row]) => (row as Record<string, unknown>)._parent_field
+      );
+      expect(written).toEqual(["seo"]);
+    });
+
+    it("is not written by a save inside a transaction", async () => {
+      const tx = createMockTxContext({
+        select: vi.fn().mockResolvedValue([]),
+      });
+
+      await ctx.service.saveComponentDataInTransaction(
+        tx as unknown as Parameters<
+          typeof ctx.service.saveComponentDataInTransaction
+        >[0],
+        {
+          parentId: "entry-1",
+          parentTable: "dc_pages",
+          fields: [seoComponentField(), virtualHero],
+          data: {
+            seo: { metaTitle: "About" },
+            hero: { metaTitle: "Computed" },
+          },
+        }
+      );
+
+      const written = tx.insert.mock.calls.map(
+        ([, row]) => (row as Record<string, unknown>)._parent_field
+      );
+      expect(written).toEqual(["seo"]);
     });
   });
 

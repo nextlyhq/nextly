@@ -45,6 +45,7 @@ import {
 } from "../../webhooks/recording-policy";
 import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
+import type { CollectionDbOptions } from "./collection-id";
 import { resolveDescription } from "./collection-sync-service";
 
 /** Options for updating a collection. */
@@ -73,6 +74,13 @@ export interface CodeFirstCollectionConfig {
   localized?: boolean;
   admin?: DynamicCollectionInsert["admin"];
   configPath?: string;
+  /**
+   * Per-collection database options (id generator, client-supplied ids).
+   * Not stored on the row and not published by the sync: the code config is
+   * their only source, and each lifecycle publishes them from that config at
+   * its own end. See `publishCollectionDbOptions`.
+   */
+  db?: CollectionDbOptions;
   /**
    * Provenance (D14): `"code"` for app code-first collections, `"plugin:<name>"`
    * for plugin-contributed ones. Defaults to `"code"` when omitted.

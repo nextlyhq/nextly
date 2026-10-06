@@ -34,6 +34,7 @@
 import type { BeforeOperationHandler, HookHandler } from "@nextly/hooks/types";
 
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
+import type { CollectionDbOptions } from "../../domains/collections/services/collection-id";
 import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { WebhookEventType } from "../../domains/webhooks/types";
@@ -882,6 +883,16 @@ export interface CollectionConfig {
    * Admin panel configuration options.
    */
   admin?: CollectionAdminOptions;
+
+  /**
+   * @experimental Per-collection database options.
+   *
+   * Storage-level choices that no field expresses: which id a create
+   * generates, and whether a create may supply one. Both leave the column
+   * unchanged — every id here is 36 characters — so neither needs a
+   * migration, and relations pointing at this collection are unaffected.
+   */
+  db?: CollectionDbOptions;
 
   /**
    * Collection-level access control.

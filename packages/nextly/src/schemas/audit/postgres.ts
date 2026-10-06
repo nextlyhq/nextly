@@ -14,14 +14,14 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import { pgTable, text, timestamp, jsonb, varchar } from "drizzle-orm/pg-core";
+import type { PgBuildExtraConfigColumns } from "drizzle-orm/pg-core";
+
 import {
-  pgTable,
-  text,
-  timestamp,
-  jsonb,
-  index,
-  varchar,
-} from "drizzle-orm/pg-core";
+  ACTIVITY_LOG_INDEXES,
+  AUDIT_LOG_INDEXES,
+  pgIndexes,
+} from "../_internal/core-indexes";
 
 // Append-only by application convention, with two exceptions the application
 // itself performs and an operator hardening this table has to allow for:
@@ -45,9 +45,9 @@ import {
 //
 // The append-only posture and these two duties only look contradictory while
 // the grant is all-or-nothing.
-export const auditLog = pgTable(
-  "audit_log",
-  {
+/** `audit_log` columns, a fresh builder record per call (see `core-table-contributions`). */
+export function auditLogColumns() {
+  return {
     id: text("id").primaryKey(),
     kind: varchar("kind", { length: 64 }).notNull(),
     actorUserId: text("actor_user_id"),
@@ -66,46 +66,28 @@ export const auditLog = pgTable(
     identityErasedAt: timestamp("identity_erased_at", {
       withTimezone: false,
     }),
-  },
-  t => [
-    index("audit_log_kind_idx").on(t.kind),
-    index("audit_log_actor_user_id_idx").on(t.actorUserId),
-    index("audit_log_target_user_id_idx").on(t.targetUserId),
-    index("audit_log_created_at_idx").on(t.createdAt),
-  ]
+  };
+}
+
+/** `audit_log` indexes, from `AUDIT_LOG_INDEXES`. */
+export function auditLogExtraConfig(
+  t: PgBuildExtraConfigColumns<ReturnType<typeof auditLogColumns>>
+) {
+  return pgIndexes(AUDIT_LOG_INDEXES, t);
+}
+
+// The same tables in another dialect's Drizzle builders: each dialect's
+// column functions are distinct, so the declarations cannot be shared.
+// fallow-ignore-next-line code-duplication
+export const auditLog = pgTable(
+  "audit_log",
+  auditLogColumns(),
+  auditLogExtraConfig
 );
 
-/**
- * Activity log table for recording user actions across all collections.
- *
- * Used by the dashboard activity feed to show recent create/update/delete
- * operations. User name and email are denormalized to avoid JOINs on every
- * dashboard load. Entry title is a snapshot at action time.
- *
- * `user_id` carries NO foreign key, deliberately. It is an opaque historical
- * reference to whoever acted, and it has to outlive them: a cascade would let
- * the subject of an audit trail erase it by being deleted, and a restricting
- * constraint would make deleting an account that ever did anything fail
- * outright. The actor's identity is instead erased in place —
- * `eraseActorPersonalData` NULLs `user_name` / `user_email` and stamps
- * `identity_erased_at` — so the audit FACT survives while the personal data
- * does not.
- *
- * `user_name` / `user_email` are therefore nullable: NULL means erased, and
- * `identity_erased_at` records when, which is the evidence an erasure request
- * needs and which a bare NULL cannot supply. It times THIS ROW's erasure
- * rather than the account's deletion: for an entry erased by a deletion the
- * two coincide, because the erasure runs inside that transaction, and for one
- * written after the account was already gone nothing retains when that
- * deletion happened — so naming it for the deletion would put a number in an
- * audit field that no record supports.
- *
- * Retention: pruned on the schedule in `audit.retention.activityMaxAgeMs`,
- * 90 days by default.
- */
-export const activityLog = pgTable(
-  "activity_log",
-  {
+/** `activity_log` columns, a fresh builder record per call (see `core-table-contributions`). */
+export function activityLogColumns() {
+  return {
     id: text("id").primaryKey(),
     userId: text("user_id").notNull(),
     /**
@@ -144,10 +126,46 @@ export const activityLog = pgTable(
       .defaultNow()
       .notNull(),
     identityErasedAt: timestamp("identity_erased_at", { withTimezone: false }),
-  },
-  t => [
-    index("idx_activity_log_created_at").on(t.createdAt),
-    index("idx_activity_log_collection").on(t.collection, t.createdAt),
-    index("idx_activity_log_user_id").on(t.userId, t.createdAt),
-  ]
+  };
+}
+
+/** `activity_log` indexes, from `ACTIVITY_LOG_INDEXES`. */
+export function activityLogExtraConfig(
+  t: PgBuildExtraConfigColumns<ReturnType<typeof activityLogColumns>>
+) {
+  return pgIndexes(ACTIVITY_LOG_INDEXES, t);
+}
+
+/**
+ * Activity log table for recording user actions across all collections.
+ *
+ * Used by the dashboard activity feed to show recent create/update/delete
+ * operations. User name and email are denormalized to avoid JOINs on every
+ * dashboard load. Entry title is a snapshot at action time.
+ *
+ * `user_id` carries NO foreign key, deliberately. It is an opaque historical
+ * reference to whoever acted, and it has to outlive them: a cascade would let
+ * the subject of an audit trail erase it by being deleted, and a restricting
+ * constraint would make deleting an account that ever did anything fail
+ * outright. The actor's identity is instead erased in place —
+ * `eraseActorPersonalData` NULLs `user_name` / `user_email` and stamps
+ * `identity_erased_at` — so the audit FACT survives while the personal data
+ * does not.
+ *
+ * `user_name` / `user_email` are therefore nullable: NULL means erased, and
+ * `identity_erased_at` records when, which is the evidence an erasure request
+ * needs and which a bare NULL cannot supply. It times THIS ROW's erasure
+ * rather than the account's deletion: for an entry erased by a deletion the
+ * two coincide, because the erasure runs inside that transaction, and for one
+ * written after the account was already gone nothing retains when that
+ * deletion happened — so naming it for the deletion would put a number in an
+ * audit field that no record supports.
+ *
+ * Retention: pruned on the schedule in `audit.retention.activityMaxAgeMs`,
+ * 90 days by default.
+ */
+export const activityLog = pgTable(
+  "activity_log",
+  activityLogColumns(),
+  activityLogExtraConfig
 );

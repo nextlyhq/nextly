@@ -10,6 +10,7 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { getTableName, type AnyRelations, type Table } from "drizzle-orm";
 
 import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import type { CollectionConfig } from "../collections/config/define-collection";
@@ -18,6 +19,11 @@ import {
   createJobsNamespace,
   type JobsNamespace,
 } from "../direct-api/namespaces/jobs";
+import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
+import type {
+  ExtensionColumn,
+  SchemaOwner,
+} from "../domains/schema/extension/types";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
 import { NextlyError } from "../errors/nextly-error";
@@ -47,6 +53,11 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
+import type { ContributedColumn } from "./database/access";
+import {
+  createPluginDatabase,
+  type PluginDatabase,
+} from "./database/plugin-database";
 import type {
   HookPointContext,
   HookPointNameOf,
@@ -70,6 +81,12 @@ import {
 } from "./service-opts";
 import { buildPluginServicesNamespace } from "./services/plugin-services-registry";
 import { recordPluginSubscription } from "./subscription-tracker";
+
+// The typed surface `ctx.db` is, under the names the package exports.
+export type {
+  PluginDatabase,
+  PluginTransaction,
+} from "./database/plugin-database";
 
 // ============================================================
 // Plugin Hook Registry Interface
@@ -392,7 +409,26 @@ export interface PluginContext {
    * through its own `sql` or the builder's internals. With `rawSql` it is the
    * live Drizzle instance.
    */
-  db: PluginDatabase;
+  /**
+   * Typed, owner-checked access to the tables this plugin declared.
+   *
+   * `db.raw` is the handle this property used to be: the fluent builder and a
+   * transaction, or with `rawSql` the live Drizzle instance. It has no
+   * ownership check and no portability guarantee.
+   */
+  db: PluginDatabase & { raw: PluginRawDatabase };
+
+  /**
+   * Which database this installation runs on.
+   *
+   * Exposed because a plugin cannot always be dialect-blind and had no way to
+   * ask. `isUniqueViolation(dialect, error)` is the case that forced it: the
+   * classification falls back to matching driver MESSAGES for MySQL and
+   * SQLite, so it needs to be told which dialect produced the error, and a
+   * helper guessing across all three would read a MySQL phrase in a
+   * PostgreSQL message as a duplicate key.
+   */
+  dialect: SupportedDialect;
 
   /** @experimental Logger for plugin diagnostics. */
   logger: Logger;
@@ -894,6 +930,29 @@ export interface PluginDefinition {
   onReady?: (context: PluginContext) => Promise<void> | void;
 
   /**
+   * @experimental Runs when the plugin is INSTALLED, after its migrations.
+   *
+   * Never called during an ordinary boot, so it is the right place for
+   * one-time setup — seeding a row, registering with an external service —
+   * that would otherwise run on every start. Must be idempotent regardless: an
+   * install can be retried after a failure part-way through.
+   */
+  onInstall?: (context: PluginContext) => Promise<void> | void;
+
+  /**
+   * @experimental Runs when the plugin is UNINSTALLED, before its down
+   * migrations, so its tables are still readable.
+   *
+   * `keepData` tells it which kind of uninstall this is: with data kept, the
+   * tables survive and an external deregistration may still be wanted; without
+   * it, this is the last moment anything can read them.
+   */
+  onUninstall?: (
+    context: PluginContext,
+    opts: { keepData: boolean }
+  ) => Promise<void> | void;
+
+  /**
    * @public Teardown on shutdown / HMR / test teardown.
    * Invocation is wired.
    */
@@ -1017,11 +1076,155 @@ export const PLUGIN_SERVICE_NAMES = [
   "versionsService",
   "singleRegistryService",
   "db",
+  "relations",
   "dialect",
   "logger",
   "config",
   "adapter",
 ] as const;
+
+/**
+ * Compose the plugin database surface for one plugin.
+ *
+ * Everything the surface needs about the schema is read through a closure
+ * rather than captured, for the reason on the call site: a reload replaces the
+ * active schema and a captured one describes tables that may no longer exist.
+ */
+function buildPluginDatabase(
+  rawDb: PluginRawDatabase,
+  relations: () => AnyRelations,
+  adapter: () => AdapterTransactions,
+  dialect: SupportedDialect,
+  plugin: PluginDefinition | undefined
+): PluginDatabase & { raw: PluginRawDatabase } {
+  const owner: SchemaOwner = plugin
+    ? { kind: "plugin", id: plugin.name }
+    : { kind: "app" };
+  const dependsOn = new Set<string>([
+    ...(plugin?.dependsOn ? Object.keys(plugin.dependsOn) : []),
+    ...(plugin?.optionalDependsOn ? Object.keys(plugin.optionalDependsOn) : []),
+  ]);
+
+  // The schema compiled for the dialect this process runs, asked for by name.
+  // Taking the first dialect that had one returned whichever was compiled
+  // first — a process that had held another dialect's schema served its
+  // tables and its owner rules, refusing this plugin's own tables.
+  const active = () => getActiveExtensionSchema(dialect);
+
+  const surface = createPluginDatabase({
+    dialect,
+    owner,
+    dependsOn,
+    owners: () => active()?.owners ?? new Map(),
+    tables: () => ({
+      ...(active()?.drizzle ?? {}),
+      // Adopted tables are readable through the same owner check as any
+      // other: app-owned, so the app's own `ctx.db` surface reaches them and a
+      // plugin's check does not.
+      ...(active()?.adopted ?? {}),
+    }),
+    // What `ctx.db.contributed` may reach: every column contributed to a
+    // table its contributor does not own, with the contributor each carries —
+    // the hidden columns on entity and extendable core tables, and those on
+    // extension tables (an app's on a plugin's table, a plugin's on a
+    // dependency's). The access rule decides which of them a caller may use.
+    contributions: () => {
+      const schema = active();
+      const byTable = new Map<string, ContributedColumn[]>();
+      const add = (table: string, column: ExtensionColumn): void => {
+        const list = byTable.get(table) ?? [];
+        list.push({
+          name: column.name,
+          key: column.key,
+          contributedBy: column.contributedBy,
+          spec: column,
+        });
+        byTable.set(table, list);
+      };
+      for (const [table, columns] of schema?.entityColumns ?? []) {
+        for (const column of columns) add(table, column);
+      }
+      for (const table of schema?.tables ?? []) {
+        for (const column of table.columns) {
+          if (column.contributedBy !== undefined) add(table.name, column);
+        }
+      }
+      return byTable;
+    },
+    // The runtime table an entity or core table queries through, found in
+    // the relations config the registry assembles from every registered
+    // table — keyed differently for core and dynamic tables, so matched by
+    // the table's SQL name rather than by key.
+    entityTable: tableName =>
+      Object.values(relations()).find(
+        entry => getTableName(entry.table as Table) === tableName
+      )?.table,
+    tableList: () => [
+      ...(active()?.tables ?? []).map(table => ({
+        name: table.name,
+        authored: table.authored,
+        owner: table.owner,
+      })),
+      ...Object.keys(active()?.adopted ?? {}).map(name => ({
+        name,
+        authored: name,
+        owner: { kind: "app" as const },
+      })),
+    ],
+    db: () => rawDb,
+    // The relations-enabled handle behind `ctx.db.query`, rebuilt from the
+    // CURRENT relations on every access. The registry replaces its relations
+    // object when a table is re-registered, and a handle resolved once at
+    // context construction would keep querying through edges that close over
+    // dropped table objects. The adapter memoizes per relations object, so an
+    // unchanged schema resolves to the same instance each time.
+    relationalDb: () => adapter().getDrizzle(relations()),
+    // The ADAPTER's transaction, not a bare call of the callback.
+    //
+    // `fn(rawDb)` opened no transaction at all: a plugin that wrote twice and
+    // then threw kept the first write, which is the opposite of what
+    // `ctx.db.transaction` promises. Core-owned stores already route through
+    // the adapter for the reason that decides it here too — Drizzle's
+    // better-sqlite3 transaction refuses an async callback, so SQLite needs
+    // the adapter's manual `BEGIN IMMEDIATE` path, and a plugin surface that
+    // works on two dialects out of three is not portable.
+    //
+    // Both handles come from the TRANSACTION's context, not the pool.
+    // `adapter.transaction` leases a client, and `tx.drizzle()` is bound to
+    // it; `getDrizzle()` wraps the pool and would use a different connection,
+    // so the plugin's writes would commit on their own and a later throw
+    // would roll back an empty transaction while leaving them in place.
+    //
+    // The relational handle is `tx.drizzleWithRelations(relations)`: the same leased
+    // client, with the relations config that populates `query` — the bare
+    // instance's `query` namespace is empty. A getter, so the relations are
+    // resolved per access as they are outside the transaction, and a
+    // transaction that never touches `query` never builds the instance.
+    //
+    // The work runs through `runAdapterTransaction`, so what it throws reaches
+    // the plugin as thrown rather than as the adapter's classification of it.
+    // On SQLite it also runs marked as a plugin transaction, as `raw`'s does:
+    // a service called inside nests as a savepoint, defers what follows its
+    // write until the commit, and refuses what a rollback could not undo.
+    transaction: fn => {
+      const run = (tx: AdapterTransactionHandles) =>
+        fn({
+          db: tx.drizzle(),
+          get relationalDb() {
+            return tx.drizzleWithRelations(relations());
+          },
+        });
+      const transactions = adapter();
+      return runAdapterTransaction(
+        transactions.transaction.bind(transactions),
+        (tx: AdapterTransactionHandles) =>
+          dialect === "sqlite" ? runInPluginTransaction(() => run(tx)) : run(tx)
+      );
+    },
+  });
+
+  return Object.assign(surface, { raw: rawDb });
+}
 
 /** One of the names a plugin-context resolver must answer. */
 export type PluginServiceName = (typeof PLUGIN_SERVICE_NAMES)[number];
@@ -1036,14 +1239,36 @@ export type PluginServiceName = (typeof PLUGIN_SERVICE_NAMES)[number];
  * `afterCommit` a store announces its committed change through.
  */
 export interface AdapterTransactions extends AfterCommitAdapter {
-  transaction: <T>(work: () => Promise<T>) => Promise<T>;
+  /**
+   * The callback receives the transaction's own context, whose `drizzle()` is
+   * bound to the transaction's connection. Ignoring it and using the pooled
+   * handle runs the work on a DIFFERENT connection on PostgreSQL and MySQL,
+   * outside the transaction. Passing a relations config returns an instance
+   * on that same connection with the relational query API enabled. On SQLite
+   * a call made inside an open transaction nests as a savepoint.
+   */
+  transaction: <T>(
+    work: (tx: AdapterTransactionHandles) => Promise<T>
+  ) => Promise<T>;
+  /**
+   * The pooled Drizzle handle, relations-enabled when given a config. Used
+   * for `ctx.db.query` OUTSIDE a transaction; inside one, the transaction
+   * context's `drizzleWithRelations(relations)` is the handle to use.
+   */
+  getDrizzle: <D = unknown>(relations?: AnyRelations) => D;
+}
+
+/** The Drizzle handles bound to one transaction's connection. */
+export interface AdapterTransactionHandles {
+  drizzle: <D = unknown>() => D;
+  drizzleWithRelations: <D = unknown>(relations: AnyRelations) => D;
 }
 
 /**
- * @experimental The database surface a plugin receives: the fluent builder
- * and a transaction whose handle is the same restricted builder.
+ * @experimental The raw handle a plugin receives as `ctx.db.raw`: the fluent
+ * builder and a transaction whose handle is the same restricted builder.
  */
-export interface PluginDatabase extends DatabaseInstance {
+export interface PluginRawDatabase extends DatabaseInstance {
   /**
    * Run `work` in one transaction: it commits when `work` resolves and rolls
    * back when it throws. The handle `work` receives is the restricted builder,
@@ -1140,16 +1365,16 @@ function restrictDatabase(
   rawSqlAllowed: boolean,
   dialect: () => SupportedDialect,
   adapterTransaction: () => AdapterTransactions["transaction"]
-): PluginDatabase {
+): PluginRawDatabase {
   if (rawSqlAllowed) {
     // The live instance, with one exception: on SQLite its own `transaction`
     // is better-sqlite3's synchronous one, which refuses the async callback
-    // `PluginDatabase` documents — so declaring raw SQL took away the
+    // `PluginRawDatabase` documents — so declaring raw SQL took away the
     // transaction every other plugin has. Everything else reaches the
     // instance unchanged. The work's handle is this same proxy, so its
     // `transaction` nests as a savepoint, as a Drizzle transaction's does on
     // PostgreSQL and MySQL, instead of reaching the synchronous one.
-    const live: PluginDatabase = new Proxy(raw as PluginDatabase, {
+    const live: PluginRawDatabase = new Proxy(raw as PluginRawDatabase, {
       get(target, property, receiver) {
         if (property === "transaction" && dialect() === "sqlite") {
           return <T>(work: (tx: DatabaseInstance) => Promise<T>) =>
@@ -1193,15 +1418,17 @@ export function createPluginContext(
               ? SingleRegistryService
               : T extends "db"
                 ? DatabaseInstance
-                : T extends "dialect"
-                  ? SupportedDialect
-                  : T extends "logger"
-                    ? Logger
-                    : T extends "config"
-                      ? NextlyServiceConfig
-                      : T extends "adapter"
-                        ? AdapterTransactions
-                        : never,
+                : T extends "relations"
+                  ? AnyRelations
+                  : T extends "dialect"
+                    ? SupportedDialect
+                    : T extends "logger"
+                      ? Logger
+                      : T extends "config"
+                        ? NextlyServiceConfig
+                        : T extends "adapter"
+                          ? AdapterTransactions
+                          : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -1291,13 +1518,14 @@ export function createPluginContext(
   const userService = getServiceFn("userService");
   const mediaService = getServiceFn("mediaService");
   const emailService = getServiceFn("emailService");
-  // Restricted unless the plugin DECLARED raw SQL. `DatabaseInstance` already
-  // describes only the fluent surface, but the object handed over was the live
-  // Drizzle instance, which carries `execute`, `run` and its own client, so the
-  // ordinary way to run raw SQL needed no declaration at all. Removing them
-  // makes the manifest the place raw SQL is declared; it does not sandbox a
-  // plugin, which is trusted code.
-  const db = restrictDatabase(
+  // The raw handle is restricted unless the plugin DECLARED raw SQL.
+  // `DatabaseInstance` already describes only the fluent surface, but the
+  // object handed over was the live Drizzle instance, which carries `execute`,
+  // `run` and its own client, so the ordinary way to run raw SQL needed no
+  // declaration at all. Removing them makes the manifest the place raw SQL is
+  // declared; it does not sandbox a plugin, which is trusted code. The typed
+  // surface below exposes this handle as `raw`.
+  const rawDb = restrictDatabase(
     getServiceFn("db"),
     plugin?.capabilities?.db?.rawSql === true,
     // Both resolved when a transaction starts, not now: the context can be
@@ -1308,6 +1536,32 @@ export function createPluginContext(
       const adapter = getServiceFn("adapter");
       return work => adapter.transaction(work);
     }
+  );
+
+  /**
+   * `ctx.db` — the typed, owner-checked surface over the restricted raw
+   * handle.
+   *
+   * Built lazily so it reads the ACTIVE extension schema at call time rather
+   * than at context construction. A context outlives a reload; capturing the
+   * schema here would hand a plugin a view of tables the config no longer
+   * declares, and the failure would be a query against a dropped table.
+   *
+   * `raw` preserves the documented escape hatch this used to BE. Removing a
+   * surface plugins already depend on, in the same change that adds its
+   * replacement, would break every one of them at once.
+   */
+  // The relations config is asked for on every relational access rather than
+  // once here: the registry replaces it when a table is re-registered, and a
+  // context outlives that.
+  const db = buildPluginDatabase(
+    rawDb,
+    () => getServiceFn("relations"),
+    // Resolved on use, like `raw`'s transaction: the context can be built
+    // before the database is connected.
+    () => getServiceFn("adapter"),
+    getServiceFn("dialect"),
+    plugin
   );
   const logger = getServiceFn("logger");
   const config = getServiceFn("config");
@@ -1446,6 +1700,7 @@ export function createPluginContext(
       plugins: buildPluginServicesNamespace(),
     },
     db,
+    dialect: getServiceFn("dialect"),
     logger,
     events,
     nextlyVersion: getCoreVersion(),

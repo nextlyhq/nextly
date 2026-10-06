@@ -35,6 +35,7 @@ interface RawConfigEntity {
   dbName?: string;
   status?: boolean;
   localized?: boolean;
+  indexes?: { fields: string[]; unique?: boolean; name?: string }[];
 }
 
 /**
@@ -77,6 +78,10 @@ export function toMinimalEntities(
       // inside `buildDesiredSnapshotFromConfig`.
       status: e.status === true,
       localized: e.localized === true,
+      // Forwarded so migrate:create and migrate:check agree. Config `indexes`
+      // was validated and then discarded since it was introduced, so an app
+      // that declared one has been running without it.
+      ...(e.indexes !== undefined ? { indexes: e.indexes } : {}),
     };
   });
 }

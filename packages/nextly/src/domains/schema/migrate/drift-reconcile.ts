@@ -58,11 +58,56 @@ export interface ReconcileFileArgs {
   executeSql: (sql: string) => Promise<number>;
   /** Dev/ui/db_sync event ids this file_apply supersedes (ALREADY_APPLIED). */
   supersedableEventIds?: () => Promise<string[]>;
+  /**
+   * The plugin whose module this is, when it is one. A plugin's drift is
+   * recovered differently from an app file's: its modules ship inside the
+   * plugin, so the app's recoveries — re-creating or resolving an app
+   * migration — do nothing for it.
+   */
+  pluginName?: string;
 }
 
-/** Two snapshots are equivalent iff their diff is empty (spec §4.2). */
-function equiv(a: NextlySchemaSnapshot, b: NextlySchemaSnapshot): boolean {
+/**
+ * Two snapshots are equivalent iff their diff is empty (spec §4.2).
+ *
+ * Exported so every caller deciding "does the database stand here" asks this
+ * one function, and none can come to disagree with the reconcile about it.
+ */
+export function snapshotsEquivalent(
+  a: NextlySchemaSnapshot,
+  b: NextlySchemaSnapshot
+): boolean {
   return diffSnapshots(a, b).length === 0;
+}
+
+const equiv = snapshotsEquivalent;
+
+/**
+ * Record a file as applied without running it: the database already holds
+ * what it would produce.
+ *
+ * The one place an adoption is written, whether the reconcile finds the
+ * database at this file's target or a caller finds it further along.
+ */
+export async function recordAlreadyApplied(
+  file: { filename: string; sha256?: string },
+  repo: ReconcileRepo,
+  supersedableEventIds?: () => Promise<string[]>
+): Promise<void> {
+  const id = await repo.recordStart({
+    eventType: "file_apply",
+    source: "cli-migrate",
+    filename: file.filename,
+    sha256: file.sha256 ?? null,
+  });
+  await repo.markApplied(id, {
+    statementsExecuted: 0,
+    uniqueFilename: file.filename,
+  });
+  const supersedable = (await supersedableEventIds?.()) ?? [];
+  if (supersedable.length > 0) {
+    await repo.supersede({ supersededEventIds: supersedable, byEventId: id });
+  }
 }
 
 function toDriftItem(op: Operation): DriftItem {
@@ -133,20 +178,7 @@ export async function reconcileFile(
 
   // ALREADY_APPLIED — live already matches the target → record without running.
   if (equiv(live, target)) {
-    const id = await repo.recordStart({
-      eventType: "file_apply",
-      source: "cli-migrate",
-      filename: file.filename,
-      sha256: file.sha256 ?? null,
-    });
-    await repo.markApplied(id, {
-      statementsExecuted: 0,
-      uniqueFilename: file.filename,
-    });
-    const supersedable = (await args.supersedableEventIds?.()) ?? [];
-    if (supersedable.length > 0) {
-      await repo.supersede({ supersededEventIds: supersedable, byEventId: id });
-    }
+    await recordAlreadyApplied(file, repo, args.supersedableEventIds);
     return { state: "already_applied" };
   }
 
@@ -162,6 +194,7 @@ export async function reconcileFile(
     migration,
     file: file.path,
     driftItems,
+    pluginName: args.pluginName,
     // A database standing before the history started is a different problem
     // from a drifted one, and the recoveries for drift do not solve it.
     unadoptedDatabase: isUnadoptedDatabase({

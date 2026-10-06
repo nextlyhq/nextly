@@ -17,6 +17,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { foreignKeyNameForColumns } from "../../services/index-name";
 import {
   PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT,
   PG_RELATION_THE_WRITES_HIT,
@@ -24,30 +25,408 @@ import {
 
 import { sizeFromDeclaration } from "./declared-size";
 import type {
+  CheckSpec,
   ColumnSpec,
+  ForeignKeySpec,
   IndexSpec,
   NextlySchemaSnapshot,
   TableSpec,
 } from "./types";
 
-/** A single (table, index, column) row from a per-dialect index query. */
+/**
+ * A single (table, index, key) row from a per-dialect index query, in key
+ * order.
+ *
+ * `column` is the key's column name, or — when `expression` is true — the
+ * SQL of an expression key as the server prints it. `predicate` is the
+ * partial-index WHERE, repeated on every row of the index; null or absent for
+ * an index over every row.
+ */
 interface IndexRow {
   table: string;
   index: string;
   unique: boolean;
   column: string;
+  expression?: boolean;
+  predicate?: string | null;
+}
+
+/** pg_constraint's one-char referential actions, in the diff's spelling. */
+const PG_FK_ACTION: Record<string, ForeignKeySpec["onDelete"]> = {
+  a: "no action",
+  r: "restrict",
+  c: "cascade",
+  n: "set null",
+  d: "set default",
+};
+
+/**
+ * Strip pg_get_constraintdef's CHECK wrapper. PG renders `CHECK ((expr))`,
+ * with the expression itself parenthesised, so BOTH layers come off; leaving
+ * one would compare unequal against a declared expression and report drift
+ * no migration could resolve.
+ */
+function pgCheckExpression(definition: string): string {
+  const double = /^CHECK\s*\(\(([\s\S]*)\)\)$/.exec(definition);
+  if (double) return double[1].trim();
+  const single = /^CHECK\s*\(([\s\S]*)\)$/.exec(definition);
+  return (single ? single[1] : definition).trim();
 }
 
 /**
- * Group index rows (one per index column, ordered) by table + index name, and
+ * MySQL's CHECK_CLAUSE with information_schema's own escaping undone.
+ *
+ * The clause is stored ESCAPED a second time: every quote and backslash in the
+ * printed expression carries a backslash, so `s IN ('a')` is reported as
+ * `` (`s` in (_utf8mb4\'a\')) `` and a value `it's` as `_utf8mb4\'it\\\'s\'`.
+ * Measured on MySQL 8.0.46, byte for byte, and identical whether the reading
+ * session runs with NO_BACKSLASH_ESCAPES or without it — the text is stored
+ * data, not something the reading session's mode re-renders. Taking that
+ * layer off leaves the clause as MySQL printed it, which is valid DDL again
+ * under MySQL's default sql_mode.
+ *
+ * Nothing else is rewritten. Backticks, keyword case, charset introducers and
+ * the parentheses MySQL puts around every subexpression stay, because
+ * stripping them as text would also rewrite the contents of string literals;
+ * the diff compares checks through `normalizeCheckExpression`, which reads
+ * each of those as syntax.
+ */
+function mysqlCheckExpression(clause: string): string {
+  return clause.replace(/\\([\s\S])/g, "$1").trim();
+}
+
+/** information_schema's rules already spell the diff's ReferentialAction. */
+const MYSQL_FK_ACTION: Record<string, ForeignKeySpec["onDelete"]> = {
+  CASCADE: "cascade",
+  "SET NULL": "set null",
+  "SET DEFAULT": "set default",
+  RESTRICT: "restrict",
+  "NO ACTION": "no action",
+};
+
+/**
+ * Read foreign keys and checks from information_schema for the snapshot's
+ * tables, with the same empty-array-not-undefined contract as the other
+ * dialects.
+ */
+async function attachMysqlConstraints(
+  db: PgMysqlExecute,
+  snapshot: NextlySchemaSnapshot
+): Promise<void> {
+  // Nothing to attach, and nothing safe to ask: an empty snapshot renders the
+  // predicate below as `TABLE_NAME IN ()`, which MySQL rejects as a syntax
+  // error. The throw came out of introspection, so it took the whole snapshot
+  // with it rather than the constraints it could not read — and a fresh
+  // database, whose snapshot is empty by definition, is exactly when this
+  // runs.
+  if (snapshot.tables.length === 0) return;
+
+  const tableNamesIn = sql.join(
+    snapshot.tables.map(t => sql`${t.name}`),
+    sql`, `
+  );
+  const fkRaw = await db.execute(
+    sql`SELECT kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME,
+               kcu.ORDINAL_POSITION, kcu.REFERENCED_TABLE_NAME,
+               kcu.REFERENCED_COLUMN_NAME, rc.DELETE_RULE, rc.UPDATE_RULE
+        FROM information_schema.KEY_COLUMN_USAGE kcu
+        JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+          ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+          AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
+          AND rc.TABLE_NAME = kcu.TABLE_NAME
+        WHERE kcu.TABLE_SCHEMA = DATABASE()
+          AND kcu.TABLE_NAME IN (${tableNamesIn})
+          AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+        ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION`
+  );
+  const fkRows: Array<{
+    TABLE_NAME: string;
+    CONSTRAINT_NAME: string;
+    COLUMN_NAME: string;
+    REFERENCED_TABLE_NAME: string;
+    REFERENCED_COLUMN_NAME: string;
+    DELETE_RULE: string;
+    UPDATE_RULE: string;
+  }> = (
+    Array.isArray(fkRaw) && Array.isArray((fkRaw as unknown[])[0])
+      ? (fkRaw as [typeof fkRows, unknown])[0]
+      : fkRaw
+  ) as typeof fkRows;
+
+  const fks = new Map<string, ForeignKeySpec[]>();
+  const fkColumns = new Map<string, string[]>();
+  const fkRefColumns = new Map<string, string[]>();
+  for (const row of fkRows ?? []) {
+    const key = `${row.TABLE_NAME}\u0000${row.CONSTRAINT_NAME}`;
+    fkColumns.set(key, [...(fkColumns.get(key) ?? []), row.COLUMN_NAME]);
+    fkRefColumns.set(key, [
+      ...(fkRefColumns.get(key) ?? []),
+      row.REFERENCED_COLUMN_NAME,
+    ]);
+    const list = fks.get(row.TABLE_NAME);
+    if (
+      list === undefined ||
+      !list.some(fk => fk.name === row.CONSTRAINT_NAME)
+    ) {
+      const fresh: ForeignKeySpec = {
+        name: row.CONSTRAINT_NAME,
+        columns: [],
+        referencesTable: row.REFERENCED_TABLE_NAME,
+        referencesColumns: [],
+        onDelete: MYSQL_FK_ACTION[row.DELETE_RULE] ?? "no action",
+        onUpdate: MYSQL_FK_ACTION[row.UPDATE_RULE] ?? "no action",
+      };
+      if (list === undefined) fks.set(row.TABLE_NAME, [fresh]);
+      else list.push(fresh);
+    }
+  }
+  for (const [table, list] of fks) {
+    for (const fk of list) {
+      const key = `${table}\u0000${fk.name}`;
+      fk.columns = fkColumns.get(key) ?? [];
+      fk.referencesColumns = fkRefColumns.get(key) ?? [];
+    }
+  }
+
+  const checkRaw = await db.execute(
+    sql`SELECT tc.TABLE_NAME, cc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
+        FROM information_schema.TABLE_CONSTRAINTS tc
+        JOIN information_schema.CHECK_CONSTRAINTS cc
+          ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+          AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+        WHERE tc.CONSTRAINT_SCHEMA = DATABASE()
+          AND tc.CONSTRAINT_TYPE = 'CHECK'
+          AND tc.TABLE_NAME IN (${tableNamesIn})`
+  );
+  const checkRows: Array<{
+    TABLE_NAME: string;
+    CONSTRAINT_NAME: string;
+    CHECK_CLAUSE: string;
+  }> = (
+    Array.isArray(checkRaw) && Array.isArray((checkRaw as unknown[])[0])
+      ? (checkRaw as [typeof checkRows, unknown])[0]
+      : checkRaw
+  ) as typeof checkRows;
+
+  const checks = new Map<string, CheckSpec[]>();
+  for (const row of checkRows ?? []) {
+    const list = checks.get(row.TABLE_NAME) ?? [];
+    list.push({
+      name: row.CONSTRAINT_NAME,
+      sql: mysqlCheckExpression(row.CHECK_CLAUSE),
+    });
+    checks.set(row.TABLE_NAME, list);
+  }
+
+  for (const table of snapshot.tables) {
+    table.foreignKeys = fks.get(table.name) ?? [];
+    table.checks = checks.get(table.name) ?? [];
+  }
+}
+
+/**
+ * The column names in an `array_agg` result.
+ *
+ * The `pg` driver hands back the raw PostgreSQL array LITERAL — the string
+ * `{owner_id}` — rather than a JS array, because the subquery's result type
+ * carries no registered parser. Spreading that string yielded one entry per
+ * CHARACTER, so every introspected foreign key named columns like `{`, `o`,
+ * `w`; the diff then compared those against real names and proposed dropping
+ * and recreating the constraint on every single comparison.
+ *
+ * An array is still accepted, because a driver or a double may hand one over
+ * already parsed, and anything else reads as "no columns" rather than as
+ * characters.
+ *
+ * The literal's own rules: members are comma-separated, and a member is
+ * double-quoted when it contains a comma, a brace, whitespace or a quote,
+ * with backslash escapes inside the quotes. Identifiers rarely need that, but
+ * a quoted column name is legal and this is what reads it back.
+ */
+export function parsePgTextArray(value: unknown): string[] | null {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value !== "string") return null;
+  const body = value.trim();
+  if (!body.startsWith("{") || !body.endsWith("}")) return null;
+  const inner = body.slice(1, -1);
+  if (inner === "") return [];
+
+  const out: string[] = [];
+  let current = "";
+  let quoted = false;
+  let escaped = false;
+  for (const ch of inner) {
+    if (escaped) {
+      current += ch;
+      escaped = false;
+    } else if (ch === "\\") {
+      escaped = true;
+    } else if (ch === '"') {
+      quoted = !quoted;
+    } else if (ch === "," && !quoted) {
+      out.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  out.push(current);
+  return out;
+}
+
+/**
+ * Foreign keys by table, skipping any row this cannot describe.
+ *
+ * A row whose column lists cannot be read is not a foreign key this can
+ * describe. The reader is handed whatever the executor returns — including a
+ * test double answering one shape for every query — so an unreadable row is
+ * skipped rather than allowed to abort the whole introspection.
+ */
+function groupPgForeignKeys(
+  rows: ReadonlyArray<{
+    name: string;
+    table: string;
+    columns: string[];
+    on_delete: string;
+    on_update: string;
+    ref_table: string;
+    ref_columns: string[];
+  }>
+): Map<string, ForeignKeySpec[]> {
+  const fks = new Map<string, ForeignKeySpec[]>();
+  for (const row of rows) {
+    const columns = parsePgTextArray(row.columns);
+    const refColumns = parsePgTextArray(row.ref_columns);
+    if (columns === null || refColumns === null) continue;
+    const list = fks.get(row.table) ?? [];
+    list.push({
+      name: row.name,
+      columns,
+      referencesTable: row.ref_table,
+      referencesColumns: refColumns,
+      onDelete: PG_FK_ACTION[row.on_delete] ?? "no action",
+      onUpdate: PG_FK_ACTION[row.on_update] ?? "no action",
+    });
+    fks.set(row.table, list);
+  }
+  return fks;
+}
+
+/** Check constraints by table, skipping a row carrying no definition. */
+function groupPgChecks(
+  rows: ReadonlyArray<{ name: string; table: string; definition: string }>
+): Map<string, CheckSpec[]> {
+  const checks = new Map<string, CheckSpec[]>();
+  for (const row of rows) {
+    if (typeof row.definition !== "string") continue;
+    const list = checks.get(row.table) ?? [];
+    list.push({ name: row.name, sql: pgCheckExpression(row.definition) });
+    checks.set(row.table, list);
+  }
+  return checks;
+}
+
+/**
+ * Read foreign keys and named checks from pg_constraint for the snapshot's
+ * tables, with the same empty-array-not-undefined contract as indexes: a
+ * table with no constraints is TRACKED as having none.
+ *
+ * Both reads are scoped through `PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT`, the
+ * predicate the index query uses, and for the same reason: `relname` is unique
+ * per schema, not per database, so a same-named table in another schema — two
+ * apps isolated by `search_path` in one database — would otherwise contribute
+ * ITS constraints to this snapshot. The diff would then report drift on a
+ * constraint the table does not have, or propose dropping one from the wrong
+ * table. The pg_class alias is `t` because that predicate is written against
+ * it.
+ *
+ * The referenced side needs no scope of its own: `confrelid` is the OID of the
+ * table the constraint actually references, so once the constraint belongs to
+ * the right table its target is exact.
+ */
+async function attachPgConstraints(
+  db: PgMysqlExecute,
+  snapshot: NextlySchemaSnapshot,
+  // `unknown` alone: the union with `ReturnType<typeof sql.join>` said
+  // nothing, because `unknown` absorbs every member of a union it is in. The
+  // value is passed straight through to a tagged template, which accepts it.
+  tableNamesIn: unknown
+): Promise<void> {
+  // The same empty-snapshot guard MySQL needs: PostgreSQL rejects `IN ()` too.
+  if (snapshot.tables.length === 0) return;
+
+  const fkResult = (await db.execute(
+    sql`SELECT con.conname AS name, t.relname AS table, ref.relname AS ref_table,
+               con.confdeltype AS on_delete, con.confupdtype AS on_update,
+               (SELECT array_agg(att.attname ORDER BY ord)
+                FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                JOIN pg_attribute att
+                  ON att.attrelid = con.conrelid AND att.attnum = k.attnum) AS columns,
+               (SELECT array_agg(att.attname ORDER BY ord)
+                FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+                JOIN pg_attribute att
+                  ON att.attrelid = con.confrelid AND att.attnum = k.attnum) AS ref_columns
+        FROM pg_constraint con
+        JOIN pg_class t ON t.oid = con.conrelid
+        JOIN pg_class ref ON ref.oid = con.confrelid
+        WHERE con.contype = 'f'
+          AND ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+          AND t.relname IN (${tableNamesIn})`
+  )) as {
+    rows: Array<{
+      name: string;
+      table: string;
+      ref_table: string;
+      on_delete: string;
+      on_update: string;
+      columns: string[];
+      ref_columns: string[];
+    }>;
+  };
+  const checkResult = (await db.execute(
+    sql`SELECT con.conname AS name, t.relname AS table,
+               pg_get_constraintdef(con.oid) AS definition
+        FROM pg_constraint con
+        JOIN pg_class t ON t.oid = con.conrelid
+        WHERE con.contype = 'c'
+          AND ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+          AND t.relname IN (${tableNamesIn})`
+  )) as {
+    rows: Array<{ name: string; table: string; definition: string }>;
+  };
+
+  const fks = groupPgForeignKeys(fkResult?.rows ?? []);
+  const checks = groupPgChecks(checkResult?.rows ?? []);
+  for (const table of snapshot.tables) {
+    table.foreignKeys = fks.get(table.name) ?? [];
+    table.checks = checks.get(table.name) ?? [];
+  }
+}
+
+/**
+ * Group index rows (one per index key, ordered) by table + index name, and
  * attach an `indexes` array to every table in the snapshot. Every table gets a
  * DEFINED array (possibly empty) — introspection never leaves it undefined, so
  * the diff sentinel only ever comes from pre-C1 on-disk snapshots.
+ *
+ * An index with any expression key is recorded as an expression index: the
+ * whole key list, as the server prints it, in `expression`, and no columns —
+ * the shape `IndexSpec` gives an expression index on the declared side. A
+ * predicate becomes `where`. Both are kept in the server's spelling; the diff
+ * compares them through `indexKey`, which reads each spelling as syntax.
  */
 function attachIndexes(snapshot: NextlySchemaSnapshot, rows: IndexRow[]): void {
   const byTable = new Map<
     string,
-    Map<string, { unique: boolean; columns: string[] }>
+    Map<
+      string,
+      {
+        unique: boolean;
+        keys: string[];
+        hasExpression: boolean;
+        predicate: string | undefined;
+      }
+    >
   >();
   for (const r of rows) {
     let indexes = byTable.get(r.table);
@@ -57,10 +436,19 @@ function attachIndexes(snapshot: NextlySchemaSnapshot, rows: IndexRow[]): void {
     }
     let idx = indexes.get(r.index);
     if (!idx) {
-      idx = { unique: r.unique, columns: [] };
+      idx = {
+        unique: r.unique,
+        keys: [],
+        hasExpression: false,
+        predicate:
+          typeof r.predicate === "string" && r.predicate.trim() !== ""
+            ? r.predicate.trim()
+            : undefined,
+      };
       indexes.set(r.index, idx);
     }
-    idx.columns.push(r.column);
+    idx.keys.push(r.column);
+    if (r.expression === true) idx.hasExpression = true;
   }
   for (const t of snapshot.tables) {
     const indexes = byTable.get(t.name);
@@ -68,11 +456,45 @@ function attachIndexes(snapshot: NextlySchemaSnapshot, rows: IndexRow[]): void {
       ? [...indexes.entries()].map(
           ([name, v]): IndexSpec => ({
             name,
-            columns: v.columns,
+            columns: v.hasExpression ? [] : v.keys,
             unique: v.unique,
+            ...(v.predicate !== undefined ? { where: v.predicate } : {}),
+            ...(v.hasExpression ? { expression: v.keys.join(", ") } : {}),
           })
         )
       : [];
+  }
+}
+
+/**
+ * Leave out the indexes MySQL created on its own to back a foreign key.
+ *
+ * MySQL requires an index on a foreign key's columns and, when none exists,
+ * creates one named after the constraint. That index is the constraint's
+ * implementation, not a declared index — and reported as one it shares its
+ * key with a declared index on the same columns, so the diff reads the
+ * declared index as already present and never creates it. Creating the
+ * declared one is also what retires this one: MySQL silently drops an
+ * automatic foreign-key index once another index can serve the constraint
+ * (measured on 8.0.46).
+ *
+ * Identified by structure, not by prefix: an index whose name IS a foreign
+ * key's name on the same table and whose columns are exactly that key's.
+ */
+function dropForeignKeyBackingIndexes(snapshot: NextlySchemaSnapshot): void {
+  for (const table of snapshot.tables) {
+    const keys = table.foreignKeys ?? [];
+    if (keys.length === 0 || table.indexes === undefined) continue;
+    table.indexes = table.indexes.filter(
+      index =>
+        !keys.some(
+          fk =>
+            fk.name === index.name &&
+            !index.unique &&
+            index.expression === undefined &&
+            fk.columns.join("\u0000") === index.columns.join("\u0000")
+        )
+    );
   }
 }
 
@@ -171,18 +593,23 @@ interface MysqlIndexRow {
   TABLE_NAME: string;
   INDEX_NAME: string;
   NON_UNIQUE: number | string;
-  COLUMN_NAME: string;
+  /** Null for a functional key part, whose SQL is in EXPRESSION instead. */
+  COLUMN_NAME: string | null;
   SEQ_IN_INDEX: number;
+  EXPRESSION?: string | null;
 }
 
 interface SqliteIndexListRow {
   name: string;
   unique: number;
   origin: string;
+  /** 1 for an index with a WHERE clause. */
+  partial?: number;
 }
 
 interface SqliteIndexInfoRow {
-  name: string;
+  /** Null for an expression key. */
+  name: string | null;
 }
 
 interface SqliteRow {
@@ -202,7 +629,15 @@ interface SqliteAll {
   all(query: unknown): SqliteRow[] | Promise<SqliteRow[]>;
 }
 
-export async function introspectLiveSnapshot(
+/**
+ * The live tables' COLUMNS — names, types, nullability, defaults, keys and
+ * declared sizes — with no indexes or constraints.
+ *
+ * The one reading of a live column. `introspectLiveSnapshot` builds on it, and
+ * narrower views (`queryLiveColumnTypes`) are derived from it, so a column's
+ * live type cannot be read two ways.
+ */
+export async function introspectLiveColumns(
   db: unknown,
   dialect: SupportedDialect,
   tableNames: string[]
@@ -275,44 +710,7 @@ export async function introspectLiveSnapshot(
             AND c.table_name IN (${tableNamesIn})
           ORDER BY c.table_name, c.ordinal_position`
     )) as { rows: PgRow[] };
-    const snapshot = buildSnapshotFromPgRows(result.rows);
-    // Index query: join pg_index/pg_class/pg_attribute. Exclude primary keys
-    // (indisprimary) and partial indexes (indpred). Expression indexes yield no
-    // pg_attribute row and are naturally excluded.
-    //
-    // Scoped through the relation like the column query above. `pg_class.relname`
-    // is unique per schema, not per database, so without a scope a same-named
-    // table in another schema contributes its indexes to these rows and
-    // `attachIndexes` groups them under the same name — reporting indexes that
-    // are not on the table being introspected, and masking the absence of ones
-    // that should be.
-    const idxResult = (await dbTyped.execute(
-      sql`SELECT t.relname AS table, i.relname AS index, ix.indisunique AS unique,
-                 a.attname AS column, array_position(ix.indkey, a.attnum) AS ord
-          FROM pg_class t
-          JOIN pg_index ix ON ix.indrelid = t.oid
-          JOIN pg_class i ON i.oid = ix.indexrelid
-          JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
-          WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
-            AND t.relname IN (${tableNamesIn})
-            AND ix.indisprimary = false
-            AND ix.indpred IS NULL
-            AND a.attnum > 0
-          ORDER BY t.relname, i.relname, ord`
-    )) as {
-      rows: { table: string; index: string; unique: boolean; column: string }[];
-    };
-    attachIndexes(
-      snapshot,
-      idxResult.rows.map(r => ({
-        table: r.table,
-        index: r.index,
-        unique: r.unique,
-        column: r.column,
-      }))
-    );
-    normalizeIndexOrder(snapshot);
-    return snapshot;
+    return buildSnapshotFromPgRows(result.rows);
   }
 
   if (dialect === "mysql") {
@@ -358,67 +756,19 @@ export async function introspectLiveSnapshot(
       pkRows.map(r => `${r.TABLE_NAME}.${r.COLUMN_NAME}`)
     );
 
-    const snapshot = buildSnapshotFromMysqlRows(rows, primaryKeyColumns);
-    // Index query: information_schema.STATISTICS. Exclude PRIMARY.
-    const idxRaw = (await dbTyped.execute(
-      sql`SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX
-          FROM information_schema.STATISTICS
-          WHERE TABLE_SCHEMA = DATABASE()
-            AND TABLE_NAME IN (${tableNamesIn})
-            AND INDEX_NAME <> 'PRIMARY'
-          ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`
-    )) as MysqlIndexRow[] | [MysqlIndexRow[], unknown];
-    const idxRows: MysqlIndexRow[] =
-      Array.isArray(idxRaw) &&
-      idxRaw.length > 0 &&
-      Array.isArray((idxRaw as unknown[])[0])
-        ? (idxRaw as [MysqlIndexRow[], unknown])[0]
-        : (idxRaw as MysqlIndexRow[]);
-    attachIndexes(
-      snapshot,
-      idxRows.map(r => ({
-        table: r.TABLE_NAME,
-        index: r.INDEX_NAME,
-        unique: Number(r.NON_UNIQUE) === 0,
-        column: r.COLUMN_NAME,
-      }))
-    );
-    normalizeIndexOrder(snapshot);
-    return snapshot;
+    return buildSnapshotFromMysqlRows(rows, primaryKeyColumns);
   }
 
   // SQLite - PRAGMA per table; no information_schema.
   const dbTyped = db as SqliteAll;
-  const dbAny = db as {
-    all(query: unknown): SqliteIndexListRow[] | Promise<SqliteIndexListRow[]>;
-  };
   const tables: TableSpec[] = [];
   for (const table of tableNames) {
     const rows = await dbTyped.all(
       sql`PRAGMA table_info(${sql.identifier(table)})`
     );
     if (rows.length === 0) continue;
-    // Indexes: PRAGMA index_list + index_info. Filter pk-origin indexes and
-    // SQLite's auto-created sqlite_autoindex_* (unique-constraint backed).
-    const idxList = await dbAny.all(
-      sql`PRAGMA index_list(${sql.identifier(table)})`
-    );
-    const indexes: IndexSpec[] = [];
-    for (const ix of idxList) {
-      if (ix.origin === "pk") continue;
-      if (ix.name.startsWith("sqlite_autoindex_")) continue;
-      const infoRows = (await dbAny.all(
-        sql`PRAGMA index_info(${sql.identifier(ix.name)})`
-      )) as unknown as SqliteIndexInfoRow[];
-      indexes.push({
-        name: ix.name,
-        columns: infoRows.map(r => r.name),
-        unique: ix.unique === 1,
-      });
-    }
     tables.push({
       name: table,
-      indexes,
       columns: rows.map(
         (r): ColumnSpec => ({
           name: r.name,
@@ -457,9 +807,450 @@ export async function introspectLiveSnapshot(
       ),
     });
   }
-  const snapshot: NextlySchemaSnapshot = { tables };
+  return { tables };
+}
+
+export async function introspectLiveSnapshot(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableNames: string[]
+): Promise<NextlySchemaSnapshot> {
+  const snapshot = await introspectLiveColumns(db, dialect, tableNames);
+  if (tableNames.length === 0) return snapshot;
+
+  const tableNamesIn = sql.join(
+    tableNames.map(t => sql`${t}`),
+    sql`, `
+  );
+
+  if (dialect === "postgresql") {
+    const dbTyped = db as PgMysqlExecute;
+    // Index query: one row per KEY of every non-primary index, in key order.
+    // `indnkeyatts` stops before INCLUDE columns, which are payload rather
+    // than part of what the index is on. A key whose `indkey` entry is 0 is
+    // an expression, printed by `pg_get_indexdef` for that key position; a
+    // partial index's predicate is printed by `pg_get_expr`. Both reach the
+    // snapshot in the server's spelling, and the diff reads them as syntax —
+    // without them a declared expression or partial index never matched the
+    // live one and was re-planned on every comparison.
+    //
+    // Scoped through the relation like the column query (`introspectLiveColumns`). `pg_class.relname`
+    // is unique per schema, not per database, so without a scope a same-named
+    // table in another schema contributes its indexes to these rows and
+    // `attachIndexes` groups them under the same name — reporting indexes that
+    // are not on the table being introspected, and masking the absence of ones
+    // that should be.
+    const idxResult = (await dbTyped.execute(
+      sql`SELECT t.relname AS table, i.relname AS index, ix.indisunique AS unique,
+                 pg_get_expr(ix.indpred, ix.indrelid) AS predicate,
+                 (ix.indkey[k.ord - 1] = 0) AS expression,
+                 CASE WHEN ix.indkey[k.ord - 1] = 0
+                      THEN pg_get_indexdef(ix.indexrelid, k.ord, false)
+                      ELSE a.attname::text
+                 END AS column
+          FROM pg_class t
+          JOIN pg_index ix ON ix.indrelid = t.oid
+          JOIN pg_class i ON i.oid = ix.indexrelid
+          CROSS JOIN LATERAL generate_series(1, ix.indnkeyatts::int) AS k(ord)
+          LEFT JOIN pg_attribute a
+            ON a.attrelid = t.oid AND a.attnum = ix.indkey[k.ord - 1]
+          WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+            AND t.relname IN (${tableNamesIn})
+            AND ix.indisprimary = false
+          ORDER BY t.relname, i.relname, k.ord`
+    )) as {
+      rows: IndexRow[];
+    };
+    attachIndexes(
+      snapshot,
+      idxResult.rows.map(r => ({
+        table: r.table,
+        index: r.index,
+        unique: r.unique,
+        column: r.column,
+        expression: r.expression === true,
+        predicate: r.predicate,
+      }))
+    );
+    await attachPgConstraints(dbTyped, snapshot, tableNamesIn);
+    normalizeIndexOrder(snapshot);
+    return snapshot;
+  }
+
+  if (dialect === "mysql") {
+    const dbTyped = db as PgMysqlExecute;
+    // Index query: information_schema.STATISTICS. Exclude PRIMARY. A
+    // functional key part reports no COLUMN_NAME; its SQL is in EXPRESSION,
+    // stored escaped the way CHECK_CLAUSE is (see `mysqlCheckExpression`).
+    const idxRaw = (await dbTyped.execute(
+      sql`SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX,
+                 EXPRESSION
+          FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME IN (${tableNamesIn})
+            AND INDEX_NAME <> 'PRIMARY'
+          ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`
+    )) as MysqlIndexRow[] | [MysqlIndexRow[], unknown];
+    const idxRows: MysqlIndexRow[] =
+      Array.isArray(idxRaw) &&
+      idxRaw.length > 0 &&
+      Array.isArray((idxRaw as unknown[])[0])
+        ? (idxRaw as [MysqlIndexRow[], unknown])[0]
+        : (idxRaw as MysqlIndexRow[]);
+    attachIndexes(
+      snapshot,
+      idxRows.map(r => {
+        const expression =
+          r.COLUMN_NAME === null && typeof r.EXPRESSION === "string";
+        return {
+          table: r.TABLE_NAME,
+          index: r.INDEX_NAME,
+          unique: Number(r.NON_UNIQUE) === 0,
+          column: expression
+            ? mysqlCheckExpression(r.EXPRESSION ?? "")
+            : (r.COLUMN_NAME ?? ""),
+          expression,
+        };
+      })
+    );
+    await attachMysqlConstraints(dbTyped, snapshot);
+    dropForeignKeyBackingIndexes(snapshot);
+    normalizeIndexOrder(snapshot);
+    return snapshot;
+  }
+
+  // SQLite - PRAGMA per table; no information_schema.
+  const dbAny = db as {
+    all(query: unknown): SqliteIndexListRow[] | Promise<SqliteIndexListRow[]>;
+  };
+  for (const spec of snapshot.tables) {
+    const table = spec.name;
+    // Indexes: PRAGMA index_list + index_info. Filter pk-origin indexes and
+    // SQLite's auto-created sqlite_autoindex_* (unique-constraint backed).
+    const idxList = await dbAny.all(
+      sql`PRAGMA index_list(${sql.identifier(table)})`
+    );
+    const indexes: IndexSpec[] = [];
+    for (const ix of idxList) {
+      if (ix.origin === "pk") continue;
+      if (ix.name.startsWith("sqlite_autoindex_")) continue;
+      const infoRows = (await dbAny.all(
+        sql`PRAGMA index_info(${sql.identifier(ix.name)})`
+      )) as unknown as SqliteIndexInfoRow[];
+      indexes.push(await sqliteIndex(dbAny, ix, infoRows));
+    }
+    spec.indexes = indexes;
+    // The stored CREATE TABLE, read once for both constraint readers below.
+    const createSql = await sqliteCreateStatement(dbAny, "table", table);
+    // Foreign keys: PRAGMA foreign_key_list, grouped by the id composite
+    // FKs share. The PRAGMA carries no constraint name, so the name is read
+    // from the CREATE statement, and derived by the compiler's own rule only
+    // for a key declared without one.
+    spec.foreignKeys = await sqliteForeignKeys(dbAny, table, createSql);
+    // Checks: SQLite has no catalog for them, so the CREATE statement is
+    // parsed for NAMED constraints. Anonymous checks stay invisible to the
+    // diff, which matches by name and could not match them anyway.
+    spec.checks = sqliteChecks(createSql);
+  }
   normalizeIndexOrder(snapshot);
   return snapshot;
+}
+
+/** The PRAGMA's action spellings, as the diff's ReferentialAction spells them. */
+const SQLITE_FK_ACTION: Record<string, ForeignKeySpec["onDelete"]> = {
+  CASCADE: "cascade",
+  "SET NULL": "set null",
+  "SET DEFAULT": "set default",
+  RESTRICT: "restrict",
+  "NO ACTION": "no action",
+};
+
+async function sqliteForeignKeys(
+  // The return is `unknown` for the same reason the parameter is: a promise of
+  // unknown and a plain unknown collapse to one type, and the caller awaits it
+  // either way.
+  dbAny: { all(query: unknown): unknown },
+  table: string,
+  createSql: string | undefined
+): Promise<ForeignKeySpec[] | undefined> {
+  const rows = (await Promise.resolve(
+    dbAny.all(sql`PRAGMA foreign_key_list(${sql.identifier(table)})`)
+  )) as Array<{
+    id: number;
+    seq: number;
+    table: string;
+    from: string;
+    to: string;
+    on_delete: string;
+    on_update: string;
+  }>;
+  if ((rows ?? []).length === 0) return [];
+  const byId = new Map<number, typeof rows>();
+  for (const row of rows) {
+    const list = byId.get(row.id) ?? [];
+    list.push(row);
+    byId.set(row.id, list);
+  }
+  const declaredNames = namedSqliteForeignKeys(createSql);
+  return [...byId.values()].map(group => {
+    const first = group.reduce((a, b) => (a.seq <= b.seq ? a : b));
+    const columns = [...group]
+      .sort((a, b) => a.seq - b.seq)
+      .map(row => row.from);
+    const referenced = [...group]
+      .sort((a, b) => a.seq - b.seq)
+      .map(row => row.to);
+    return {
+      name:
+        declaredNames.get(foreignKeyIdentity(columns, first.table)) ??
+        foreignKeyNameForColumns(table, columns),
+      columns,
+      referencesTable: first.table,
+      referencesColumns: referenced,
+      onDelete: SQLITE_FK_ACTION[first.on_delete] ?? "no action",
+      onUpdate: SQLITE_FK_ACTION[first.on_update] ?? "no action",
+    };
+  });
+}
+
+/** What pairs a PRAGMA foreign key with its declaration: columns and target. */
+function foreignKeyIdentity(
+  columns: readonly string[],
+  referencesTable: string
+): string {
+  return [...columns, referencesTable]
+    .map(part => part.toLowerCase())
+    .join("\u0000");
+}
+
+/** An identifier as SQLite's CREATE statement may spell it, quotes removed. */
+const SQLITE_IDENTIFIER = String.raw`(?:"(?:[^"]|"")+"|\`(?:[^\`]|\`\`)+\`|\[[^\]]+\]|[A-Za-z_][\w$]*)`;
+
+function unquoteSqliteIdentifier(identifier: string): string {
+  const text = identifier.trim();
+  if (text.startsWith('"')) return text.slice(1, -1).replace(/""/g, '"');
+  if (text.startsWith("`")) return text.slice(1, -1).replace(/``/g, "`");
+  if (text.startsWith("[")) return text.slice(1, -1);
+  return text;
+}
+
+/**
+ * The names of the table-level foreign keys a CREATE TABLE declares with
+ * `CONSTRAINT <name> FOREIGN KEY (...) REFERENCES <table>`, keyed by
+ * `foreignKeyIdentity`.
+ *
+ * The name an author gave a constraint is the name the desired side carries,
+ * so it is read rather than derived. Deriving it for every key, as this once
+ * did, made an explicitly named key compare unequal on every diff — a drop and
+ * an add each time, and on SQLite that is a rebuild of the whole table.
+ */
+function namedSqliteForeignKeys(
+  createSql: string | undefined
+): Map<string, string> {
+  const names = new Map<string, string>();
+  if (createSql === undefined) return names;
+  const pattern = new RegExp(
+    String.raw`CONSTRAINT\s+(${SQLITE_IDENTIFIER})\s+FOREIGN\s+KEY\s*\(([^)]*)\)\s*REFERENCES\s+(${SQLITE_IDENTIFIER})`,
+    "gi"
+  );
+  for (const match of createSql.matchAll(pattern)) {
+    const columns = match[2]
+      .split(",")
+      .map(column => unquoteSqliteIdentifier(column));
+    names.set(
+      foreignKeyIdentity(columns, unquoteSqliteIdentifier(match[3])),
+      unquoteSqliteIdentifier(match[1])
+    );
+  }
+  return names;
+}
+
+/** The stored CREATE statement of a table or index, when SQLite kept one. */
+async function sqliteCreateStatement(
+  dbAny: { all(query: unknown): unknown },
+  type: "table" | "index",
+  name: string
+): Promise<string | undefined> {
+  const rows = (await Promise.resolve(
+    dbAny.all(
+      sql`SELECT sql FROM sqlite_master WHERE type = ${type} AND name = ${name}`
+    )
+  )) as Array<{ sql: string | null }> | undefined;
+  const text = (rows ?? [])[0]?.sql;
+  return typeof text === "string" ? text : undefined;
+}
+
+/**
+ * One index as SQLite describes it.
+ *
+ * The PRAGMAs answer for an index over plain columns. They cannot describe a
+ * partial index — `index_list` says only THAT it has a predicate — or an
+ * expression key, which `index_info` reports with no name. For those the
+ * stored CREATE INDEX statement is read instead; without it a declared
+ * partial or expression index never matched the live one, and every push
+ * dropped and recreated it.
+ */
+async function sqliteIndex(
+  dbAny: { all(query: unknown): unknown },
+  ix: SqliteIndexListRow,
+  infoRows: readonly SqliteIndexInfoRow[]
+): Promise<IndexSpec> {
+  const unique = ix.unique === 1;
+  const names = infoRows.map(r => r.name);
+  const hasExpression = names.some(name => name === null);
+  const plainColumns = names.filter((name): name is string => name !== null);
+  if (ix.partial !== 1 && !hasExpression) {
+    return { name: ix.name, columns: plainColumns, unique };
+  }
+  const parsed = parseSqliteIndexStatement(
+    await sqliteCreateStatement(dbAny, "index", ix.name)
+  );
+  // A statement that does not read as one key per PRAGMA row is described by
+  // what the PRAGMA alone can say.
+  if (parsed === null || parsed.keys.length !== names.length) {
+    return { name: ix.name, columns: plainColumns, unique };
+  }
+  const keys = names.map(
+    (name, position) => name ?? stripWrappingParens(parsed.keys[position])
+  );
+  return {
+    name: ix.name,
+    columns: hasExpression ? [] : keys,
+    unique,
+    ...(parsed.where !== undefined ? { where: parsed.where } : {}),
+    ...(hasExpression ? { expression: keys.join(", ") } : {}),
+  };
+}
+
+/**
+ * Walk SQL text outside quoted strings and identifiers, reporting each
+ * character with the parenthesis depth it sits at. Quotes are skipped whole,
+ * so a `(` or `,` inside a literal or a quoted name is never read as syntax.
+ */
+function* sqlStructure(
+  text: string
+): Generator<{ char: string; index: number; depth: number }> {
+  let depth = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const close =
+      char === "'" || char === '"' || char === "`"
+        ? char
+        : char === "["
+          ? "]"
+          : null;
+    if (close !== null) {
+      // Past the closing quote; a doubled quote inside is an escaped one and
+      // the scan simply continues through it.
+      let j = i + 1;
+      while (j < text.length) {
+        if (text[j] === close) {
+          if (close !== "]" && text[j + 1] === close) {
+            j += 2;
+            continue;
+          }
+          break;
+        }
+        j += 1;
+      }
+      i = j;
+      continue;
+    }
+    if (char === ")") depth -= 1;
+    yield { char, index: i, depth };
+    if (char === "(") depth += 1;
+  }
+}
+
+/**
+ * The key list and predicate of a stored `CREATE INDEX` statement:
+ * `CREATE [UNIQUE] INDEX name ON table (key, key, ...) [WHERE predicate]`.
+ * Null when the text does not have that shape.
+ */
+function parseSqliteIndexStatement(
+  statement: string | undefined
+): { keys: string[]; where?: string } | null {
+  if (statement === undefined) return null;
+  let open = -1;
+  let close = -1;
+  const commas: number[] = [];
+  for (const { char, index, depth } of sqlStructure(statement)) {
+    if (open === -1) {
+      if (char === "(" && depth === 0) open = index;
+      continue;
+    }
+    if (char === "," && depth === 1) commas.push(index);
+    if (char === ")" && depth === 0) {
+      close = index;
+      break;
+    }
+  }
+  if (open === -1 || close === -1) return null;
+  const bounds = [open, ...commas, close];
+  const keys = bounds
+    .slice(0, -1)
+    .map((start, i) => statement.slice(start + 1, bounds[i + 1]).trim());
+  const rest = statement.slice(close + 1).trim();
+  if (rest === "") return { keys };
+  const where = /^WHERE\s+([\s\S]+)$/i.exec(rest);
+  return where ? { keys, where: where[1].trim() } : null;
+}
+
+/** An expression without the parentheses that enclose all of it, if any. */
+function stripWrappingParens(expression: string): string {
+  let text = expression.trim();
+  for (;;) {
+    if (!text.startsWith("(") || !text.endsWith(")")) return text;
+    // The opening parenthesis must close at the very end, or the text is
+    // `(a) + (b)` rather than one parenthesised expression.
+    let closesAt = -1;
+    for (const { char, index, depth } of sqlStructure(text)) {
+      if (char === ")" && depth === 0) {
+        closesAt = index;
+        break;
+      }
+    }
+    if (closesAt !== text.length - 1) return text;
+    text = text.slice(1, -1).trim();
+  }
+}
+
+/**
+ * Named CHECK constraints, parsed from the stored CREATE TABLE statement.
+ *
+ * Parenthesis-balanced extraction: a check expression can itself contain
+ * parentheses, and a regex that stops at the first `)` would truncate it and
+ * report a drift no migration could resolve.
+ */
+function sqliteChecks(create: string | undefined): CheckSpec[] {
+  if (create === undefined) return [];
+  const checks: CheckSpec[] = [];
+  const pattern =
+    /CONSTRAINT\s+(?:"([^"]+)"|`([^`]+)`|([A-Za-z_][\w]*))\s+CHECK\s*\(/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(create)) !== null) {
+    const name = match[1] ?? match[2] ?? match[3];
+    // Balance from the CHECK's own opening paren.
+    const openAt = match.index + match[0].length - 1;
+    let depth = 0;
+    let end = -1;
+    for (let i = openAt; i < create.length; i += 1) {
+      if (create[i] === "(") depth += 1;
+      else if (create[i] === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    if (end === -1) continue;
+    checks.push({
+      name,
+      sql: create.slice(openAt + 1, end).trim(),
+    });
+  }
+  return checks;
 }
 
 /**
@@ -615,7 +1406,7 @@ const MYSQL_BARE_EXPRESSION_DEFAULT = /^current_timestamp(\s*\(\s*\d*\s*\))?$/i;
  * an unescape whose correctness depends on the server's `sql_mode`
  * (`NO_BACKSLASH_ESCAPES` makes a backslash an ordinary character), which is a
  * decision rather than a mechanical fix. No emitter in this package produces
- * that shape — `quoteJsonSqlDefault` uses a hex `CONVERT` precisely to avoid
+ * that shape — `quoteExpressionSqlDefault` uses a hex `CONVERT` precisely to avoid
  * guessing the mode — so it is reachable only through a column someone added
  * to a managed table by hand.
  */

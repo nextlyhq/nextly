@@ -5,6 +5,8 @@
  * Tests are mock-based to avoid requiring an actual SQLite database.
  */
 
+import { defineRelations } from "drizzle-orm";
+import { integer, sqliteTable } from "drizzle-orm/sqlite-core";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import {
@@ -625,6 +627,36 @@ describe("SqliteAdapter", () => {
         expect(typeof tx.getDrizzle).toBe("function");
         const db = tx.getDrizzle();
         expect(db).toBeDefined();
+      });
+    });
+
+    // `ctx.db.transaction` hands a plugin's `query` reads this handle. The bare
+    // `drizzle()` is built without relations, so its `query` namespace is
+    // empty; a pooled `getDrizzle(relations)` would read outside the
+    // transaction.
+    it("drizzleWithRelations is a relations-enabled instance on the transaction's connection, memoized per relations object", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      const notes = sqliteTable("notes", { id: integer("id").primaryKey() });
+      const CLIENT = adapter.getDrizzle<{ $client: unknown }>().$client;
+      const first = defineRelations({ notes });
+      const second = defineRelations({ notes });
+      type Handle = { query: Record<string, unknown>; $client: unknown };
+
+      await adapter.transaction(async tx => {
+        const bare = tx.drizzle<Handle>();
+        const relational = tx.drizzleWithRelations<Handle>(first);
+
+        expect(relational.query.notes).toBeDefined();
+        expect(bare.query?.notes).toBeUndefined();
+        // The transaction's own connection, which the bare instance is bound to too.
+        expect(relational.$client).toBe(CLIENT);
+        expect(relational.$client).toBe(bare.$client);
+
+        expect(tx.drizzleWithRelations(first)).toBe(relational);
+        expect(tx.drizzleWithRelations(second)).not.toBe(relational);
+        // The bare instance the delegated CRUD uses is unchanged.
+        expect(tx.drizzle()).toBe(bare);
       });
     });
 

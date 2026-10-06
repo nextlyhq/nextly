@@ -376,22 +376,16 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // the direct API or the route-handler dispatcher path.
         await runBootTimeApplyIfDev({ caller: "init" });
 
-        // Production sibling of boot-apply: when `db.runMigrationsOnBoot` is on,
-        // apply committed migration files (prod only; no-op in dev). Wired at
-        // both init entry points.
+        // The production migration phase used to run HERE, and now runs inside
+        // `registerServices` before `initializePlugins`. It has to: a plugin's
+        // `init()` hook otherwise queries a database whose pending migrations
+        // have not been applied, and with plugin-owned tables that is a query
+        // against a table nothing has created.
         //
-        // NOT failure-safe, deliberately, and it used to say it was. Ordinary
-        // failures are still logged and swallowed, but a boot that could not
-        // establish whether migrations ran THROWS: serving a schema nobody
-        // verified is worse than not starting.
-        const { runProdMigrationsIfEnabled } = await import(
-          "./init/prod-migrations"
-        );
-        await runProdMigrationsIfEnabled({
-          config: options.config,
-          adapter: adapter,
-          logger: driftLogger,
-        });
+        // It is still NOT failure-safe, deliberately. Ordinary failures are
+        // logged and swallowed; a boot that could not establish whether
+        // migrations ran THROWS, because serving a schema nobody verified is
+        // worse than not starting.
 
         // Run post-initialisation tasks (template seeding, code-field sync,
         // permission seeding, etc.) in the background so that getNextly()
@@ -472,12 +466,11 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
  * @public
  */
 export async function getCachedNextly(): Promise<Nextly> {
-  // Before ANY return, including the cached one. This is the surface that could
-  // serve during another surface's migration wait: the request-path boot
-  // registers services and then waits for the lock, and everything below keys
-  // off `isServicesRegistered()`, which is true throughout that window. Awaiting
-  // rather than testing means a request racing a normal boot still waits for it,
-  // exactly as before — it only learns the answer once there is one.
+  // Before ANY return, including the cached one. Everything below keys off
+  // `isServicesRegistered()`, which says nothing about whether this process's
+  // boot migrations allowed it to serve. Awaiting rather than testing means a
+  // caller racing a boot that is still migrating waits for its answer, and a
+  // process that refused keeps refusing.
   await awaitBootMigrations();
 
   if (globalForInit.__nextly_cachedInstance) {

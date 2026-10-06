@@ -38,6 +38,16 @@ import {
   getHookRegistry,
   setActiveHookRegistry,
 } from "../../hooks/hook-registry";
+import {
+  clearActiveExtensionSchema,
+  getActiveExtensionSchema,
+} from "../../domains/schema/extension/active-schema";
+import { col, defineTable } from "../../domains/schema/extension/dsl";
+import { compileAndPublishExtensionSchema } from "../../domains/schema/extension/publish";
+import {
+  collectionDbOptions,
+  publishCollectionDbOptions,
+} from "../../domains/collections/services/collection-id";
 import { setInitializedPlugins } from "../../plugins/initialized-plugins";
 import { createPluginContext } from "../../plugins/plugin-context";
 
@@ -1606,6 +1616,161 @@ describe("reloadNextlyConfig", () => {
     await reloadNextlyConfig({ resolver: buildResolver() });
 
     expect(pipelineApplySpy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The extension schema is recompiled from the reloaded config. An edit that
+   * only touches a plugin's tables (or `db.schema.extend`) changes no entity,
+   * so without the recompile the reload found no diff, never reached the
+   * pipeline, and kept serving the boot-time schema until a restart.
+   */
+  describe("the extension schema", () => {
+    const unchangedPosts = () => {
+      introspectSpy.mockResolvedValue(
+        liveSnapshot("dc_posts", [
+          ...reservedColumns("dc_posts"),
+          { name: "body", type: "text", nullable: true },
+        ])
+      );
+    };
+    const withPluginTable = {
+      collections: [
+        {
+          slug: "posts",
+          tableName: "dc_posts",
+          fields: [{ name: "body", type: "text" }],
+        },
+      ],
+      plugins: [
+        {
+          name: "@acme/local",
+          version: "1.0.0",
+          contributes: {
+            schema: { tables: [defineTable("notes", { id: col.id() })] },
+          },
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      clearActiveExtensionSchema();
+    });
+
+    it("is recompiled on reload, and an extension-only edit reaches the pipeline", async () => {
+      loadConfigSpy.mockResolvedValue({ config: withPluginTable });
+      unchangedPosts();
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      const tables = (getActiveExtensionSchema("sqlite")?.specs ?? []).map(
+        table => table.name
+      );
+      expect(tables.some(name => name.endsWith("notes"))).toBe(true);
+      // The posts table is unchanged, so only the recompiled schema can have
+      // sent this reload to the pipeline.
+      expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("is put back when the reload does not land", async () => {
+      // The schema a previous reload published, distinct from what this one
+      // compiles, so "put back" is observable as the same object returning.
+      const previous = await compileAndPublishExtensionSchema({
+        dialect: "sqlite",
+        plugins: [
+          {
+            name: "@acme/earlier",
+            version: "1.0.0",
+            contributes: {
+              schema: { tables: [defineTable("legacy", { id: col.id() })] },
+            },
+          } as never,
+        ],
+        config: {},
+        logger: { warn: () => undefined },
+      });
+      expect(previous).toBeDefined();
+
+      loadConfigSpy.mockResolvedValue({ config: withPluginTable });
+      introspectSpy.mockRejectedValue(new Error("connection refused"));
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(pipelineApplySpy).not.toHaveBeenCalled();
+      // A refused reload keeps the previous config, and with it the schema the
+      // previous config compiled — not the one this reload compiled.
+      expect(getActiveExtensionSchema("sqlite")).toBe(previous);
+    });
+  });
+
+  /**
+   * Collection db options (`idType`, `allowIdOnCreate`) are published when a
+   * reload lands, from the reloaded config, and the set in force when it
+   * started is back in place when it does not.
+   */
+  describe("collection db options", () => {
+    const postsWith = (db: Record<string, unknown>) => ({
+      collections: [
+        {
+          slug: "posts",
+          tableName: "dc_posts",
+          fields: [{ name: "body", type: "text" }],
+          db,
+        },
+      ],
+    });
+
+    beforeEach(() => {
+      publishCollectionDbOptions([
+        { slug: "posts", db: { allowIdOnCreate: true } },
+      ]);
+    });
+
+    it("publishes the reloaded config's options when the reload lands", async () => {
+      loadConfigSpy.mockResolvedValue({
+        config: postsWith({ idType: "uuidv7" }),
+      });
+      introspectSpy.mockResolvedValue(
+        liveSnapshot("dc_posts", [
+          ...reservedColumns("dc_posts"),
+          { name: "body", type: "text", nullable: true },
+        ])
+      );
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(collectionDbOptions("posts")).toEqual({ idType: "uuidv7" });
+    });
+
+    it("clears them when the reloaded config has no code-first collections", async () => {
+      loadConfigSpy.mockResolvedValue({ config: { collections: [] } });
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(collectionDbOptions("posts")).toEqual({});
+    });
+
+    it("keeps the previous options when the reload does not land", async () => {
+      loadConfigSpy.mockResolvedValue({
+        config: postsWith({ idType: "uuidv7" }),
+      });
+      // Options published mid-reload, then the reload refused: whatever set
+      // them, the undo is what puts the previous set back.
+      introspectSpy.mockImplementation(async () => {
+        publishCollectionDbOptions([
+          { slug: "posts", db: { idType: "uuidv7" } },
+        ]);
+        throw new Error("connection refused");
+      });
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(collectionDbOptions("posts")).toEqual({ allowIdOnCreate: true });
+    });
   });
 
   it("does not crash when the database adapter is unavailable from DI", async () => {

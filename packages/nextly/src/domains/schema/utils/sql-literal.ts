@@ -39,19 +39,20 @@ export function quoteSqlLiteral(
 }
 
 /**
- * The DEFAULT clause value for a JSON-backed column.
+ * The DEFAULT clause value for a column MySQL accepts only an expression
+ * default on: JSON, and the TEXT and BLOB families.
  *
- * MySQL refuses a literal default on a JSON column outright — `DEFAULT '{}'`
+ * MySQL refuses a literal default on those columns outright — `DEFAULT '{}'`
  * fails with "BLOB, TEXT, GEOMETRY or JSON column can't have a default value"
- * — and accepts only an expression default, which is the same literal in
- * parentheses. PostgreSQL and SQLite take the literal directly, so they are
- * left as they are rather than given an equivalent-but-different form.
+ * (error 1101) — and accepts only an expression default. PostgreSQL and SQLite
+ * take the literal directly, so they are left as they are rather than given an
+ * equivalent-but-different form.
  *
  * The parenthesized form requires MySQL 8.0.13 or later, which introduced
  * expression defaults. On anything older no default is expressible for these
  * columns at all, so there is no earlier syntax to fall back to.
  */
-export function quoteJsonSqlDefault(
+export function quoteExpressionSqlDefault(
   value: string,
   dialect: SupportedDialect
 ): string {
@@ -59,7 +60,7 @@ export function quoteJsonSqlDefault(
   // Hex avoids quoting entirely. A quoted MySQL literal would have to guess
   // whether the server treats a backslash as an escape, which depends on the
   // session's SQL mode and cannot be known while the DDL is being written; a
-  // wrong guess silently stores different JSON than was configured. The bytes
+  // wrong guess silently stores a different value than was configured. The bytes
   // here carry no delimiter and no escape character, so they mean the same
   // thing under every mode.
   const hex = Buffer.from(value, "utf8").toString("hex");
