@@ -7,30 +7,11 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { seedApi, type SeedResult } from "@admin/services/seedApi";
+import { seedResult } from "@admin/__tests__/helpers/seed";
+import { seedApi } from "@admin/services/seedApi";
 
 import { DASHBOARD_LAYOUT_KEY } from "./useDashboardLayout";
 import { useSeedStatus } from "./useSeedStatus";
-
-/** One successful seed, shared by every case that needs the mutation to land. */
-function seedResult(): SeedResult {
-  return {
-    message: "Demo content seeded.",
-    summary: {
-      rolesCreated: 3,
-      usersCreated: 3,
-      categoriesCreated: 5,
-      tagsCreated: 8,
-      postsCreated: 12,
-      mediaUploaded: 14,
-      mediaSkipped: 0,
-      collectionsRegistered: 0,
-      singlesRegistered: 0,
-      permissionsSynced: 0,
-    },
-    warnings: [],
-  };
-}
 
 vi.mock("@admin/services/seedApi", () => ({
   seedApi: {
@@ -276,6 +257,49 @@ describe("useSeedStatus", () => {
     });
 
     await waitFor(() => expect(readLayout).toHaveBeenCalledTimes(2));
+  });
+
+  it("reports a seed another instance started, and will not start a second", async () => {
+    // Two instances over ONE client, as the empty dashboard and its remount
+    // are: the first starts a seed and unmounts, the way entering edit mode
+    // unmounts the empty dashboard, and the second must still see the run.
+    vi.mocked(seedApi.probe).mockResolvedValue({
+      available: true,
+      template: { slug: "blog", label: "Blog" },
+    });
+    vi.mocked(seedApi.getStatus).mockResolvedValue({
+      completedAt: null,
+      skippedAt: null,
+    });
+    vi.mocked(seedApi.runSeed).mockImplementation(() => new Promise(() => {}));
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: false },
+      },
+    });
+    const shared = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+
+    const first = renderHook(() => useSeedStatus(), { wrapper: shared });
+    await waitFor(() => expect(first.result.current.status.kind).toBe("idle"));
+    act(() => first.result.current.startSeed());
+    first.unmount();
+
+    const second = renderHook(() => useSeedStatus(), { wrapper: shared });
+    await waitFor(() =>
+      expect(second.result.current.status.kind).toBe("seeding")
+    );
+    // Awaited with a task's grace: mutate() reaches the request only after
+    // several asynchronous steps, so a second run the guard failed to refuse
+    // would not have started yet when a synchronous count was read.
+    await act(async () => {
+      second.result.current.startSeed();
+      await new Promise(resolve => setTimeout(resolve, 20));
+    });
+
+    expect(seedApi.runSeed).toHaveBeenCalledTimes(1);
   });
 
   it("skip writes skippedAt and transitions to hidden", async () => {

@@ -54,7 +54,7 @@ describe("seedApi", () => {
       });
     });
 
-    it("treats 401 as 'endpoint exists' so the card can render auth hint", async () => {
+    it("returns { available: false } on 401: no session may run the seed", async () => {
       global.fetch = vi.fn(
         async () =>
           new Response(null, {
@@ -62,8 +62,21 @@ describe("seedApi", () => {
             headers: { "x-nextly-seed-template": "blog" },
           })
       ) as unknown as typeof fetch;
-      const result = await seedApi.probe();
-      expect(result.available).toBe(true);
+      expect(await seedApi.probe()).toEqual({ available: false });
+    });
+
+    it("returns { available: false } on 403: the POST refuses this reader too", async () => {
+      // The seed route answers the probe with the super-admin check its POST
+      // enforces. Offered to a reader it refuses, the seed is a button whose
+      // every press fails -- drawn where that reader's real next step would be.
+      global.fetch = vi.fn(
+        async () =>
+          new Response(null, {
+            status: 403,
+            headers: { "x-nextly-seed-template": "blog" },
+          })
+      ) as unknown as typeof fetch;
+      expect(await seedApi.probe()).toEqual({ available: false });
     });
 
     it("falls back to 'unknown'/'Template' if headers missing", async () => {
