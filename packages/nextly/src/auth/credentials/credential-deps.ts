@@ -13,6 +13,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getDialectTables } from "../../database/index";
+import { serializeOnSqlite } from "../../shared/lib/run-adapter-transaction";
 import type { DatabaseAdapter } from "../../shared/types/database-adapter";
 
 import type { CredentialDeps } from "./verify-credentials";
@@ -47,33 +48,43 @@ export function passwordCredentialDeps(
       return result[0] || null;
     },
 
+    // The three writes below go through `serializeOnSqlite`: on SQLite a
+    // plain write issued while another request's transaction is open lands
+    // inside it, and that rollback would reset the count to zero or lift a
+    // lockout, giving a password guesser its attempts back.
     incrementFailedAttempts: async (userId: string) => {
       const schema = getDialectTables();
       const { eq, sql } = await import("drizzle-orm");
-      await db()
-        .update(schema.users)
-        .set({
-          failedLoginAttempts: sql`${schema.users.failedLoginAttempts} + 1`,
-        })
-        .where(eq(schema.users.id, userId));
+      await serializeOnSqlite(adapter(), () =>
+        db()
+          .update(schema.users)
+          .set({
+            failedLoginAttempts: sql`${schema.users.failedLoginAttempts} + 1`,
+          })
+          .where(eq(schema.users.id, userId))
+      );
     },
 
     lockAccount: async (userId: string, lockedUntil: Date) => {
       const schema = getDialectTables();
       const { eq } = await import("drizzle-orm");
-      await db()
-        .update(schema.users)
-        .set({ lockedUntil, failedLoginAttempts: 0 })
-        .where(eq(schema.users.id, userId));
+      await serializeOnSqlite(adapter(), () =>
+        db()
+          .update(schema.users)
+          .set({ lockedUntil, failedLoginAttempts: 0 })
+          .where(eq(schema.users.id, userId))
+      );
     },
 
     resetFailedAttempts: async (userId: string) => {
       const schema = getDialectTables();
       const { eq } = await import("drizzle-orm");
-      await db()
-        .update(schema.users)
-        .set({ failedLoginAttempts: 0, lockedUntil: null })
-        .where(eq(schema.users.id, userId));
+      await serializeOnSqlite(adapter(), () =>
+        db()
+          .update(schema.users)
+          .set({ failedLoginAttempts: 0, lockedUntil: null })
+          .where(eq(schema.users.id, userId))
+      );
     },
   };
 }

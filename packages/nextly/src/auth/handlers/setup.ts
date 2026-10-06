@@ -7,8 +7,7 @@ import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
-import { setAccessTokenCookie } from "../cookies/access-token-cookie";
-import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
+import { sessionCookies } from "../cookies/session-cookies";
 import { validatePasswordStrength } from "../credentials/password-strength";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
@@ -203,14 +202,7 @@ export async function handleSetup(
     userAgent: request.headers.get("user-agent"),
   });
 
-  const cookies = [
-    setAccessTokenCookie(accessToken, deps.refreshTokenTTL, deps.isProduction),
-    setRefreshTokenCookie(
-      rawRefreshToken,
-      deps.refreshTokenTTL,
-      deps.isProduction
-    ),
-  ];
+  const cookies = sessionCookies(accessToken, rawRefreshToken, deps);
 
   // Action message is "Setup complete." plus the freshly-issued user +
   // tokens (spec §7.6). Tokens still travel as HttpOnly cookies;

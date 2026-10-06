@@ -1,6 +1,7 @@
 import { isStrategyName } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext } from "../../plugins/plugin-context";
+import { withoutRefreshCookie } from "../cookies/refresh-token-cookie";
 
 import type { AuthInput, AuthOutcome, AuthStrategy } from "./types";
 
@@ -53,18 +54,20 @@ function withStrategyAttribution(error: unknown, name: string): unknown {
  * @experimental Run auth strategies in declared order; the first to return a
  * non-`pass` outcome wins (WordPress `authenticate`-chain semantics, typed).
  * Returns `pass` when every strategy passes (the handler then treats that as
- * invalid credentials). Each strategy is invoked with its own `strategyName`.
+ * invalid credentials). Each strategy is invoked with its own `strategyName`,
+ * and receives the request without the refresh cookie.
  */
 export async function runStrategyChain(
   strategies: AuthStrategy[],
   input: Omit<AuthInput, "strategyName">,
   ctx: PluginContext
 ): Promise<StrategyChainResult> {
+  const request = withoutRefreshCookie(input.request);
   for (const strategy of strategies) {
     let outcome: AuthOutcome;
     try {
       outcome = await strategy.authenticate(
-        { ...input, strategyName: strategy.name },
+        { ...input, request, strategyName: strategy.name },
         ctx
       );
     } catch (error) {

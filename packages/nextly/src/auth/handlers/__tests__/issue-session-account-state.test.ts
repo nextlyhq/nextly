@@ -115,7 +115,13 @@ describe("mintSession", () => {
     const d = deps(usable);
     const minted = await mintSession(user, d, req, { strategy: "test" });
 
-    expect(minted.cookies).toHaveLength(2);
+    // The access and refresh cookies, and the clearing of a refresh cookie
+    // left at its legacy path.
+    expect(minted.cookies.map(c => c.split("=")[0])).toEqual([
+      "nextly_session",
+      "nextly_refresh",
+      "nextly_refresh",
+    ]);
     expect(minted.body.user).toMatchObject({ id: "u1", email: "a@b.c" });
     expect(typeof minted.body.accessToken).toBe("string");
     expect(typeof minted.body.refreshToken).toBe("string");

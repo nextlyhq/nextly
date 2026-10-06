@@ -8,9 +8,8 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
-import { setAccessTokenCookie } from "../cookies/access-token-cookie";
 import { clearPendingCookie } from "../cookies/pending-cookie";
-import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
+import { sessionCookies } from "../cookies/session-cookies";
 import { buildClaims } from "../jwt/claims";
 import { signAccessTokenWithExpiry } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
@@ -327,14 +326,7 @@ export async function mintSession(
       : {}),
   });
 
-  const cookies = [
-    setAccessTokenCookie(accessToken, deps.refreshTokenTTL, deps.isProduction),
-    setRefreshTokenCookie(
-      rawRefreshToken,
-      deps.refreshTokenTTL,
-      deps.isProduction
-    ),
-  ];
+  const cookies = sessionCookies(accessToken, rawRefreshToken, deps);
 
   return {
     cookies,

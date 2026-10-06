@@ -26,7 +26,7 @@ import type { AuthUser } from "../types/auth";
 import { setPendingCookie } from "./cookies/pending-cookie";
 import { readCsrfCookie, readCsrfFromRequest } from "./csrf/csrf-cookie";
 import { readCsrfBody } from "./csrf/read-csrf-body";
-import { validateCsrf } from "./csrf/validate";
+import { isUnsafeMethod, validateCsrf, validateOrigin } from "./csrf/validate";
 import { recordLoginFailure } from "./handlers/handler-utils";
 import {
   gateAccountForSession,
@@ -93,6 +93,14 @@ export interface PluginAuthApi {
   /**
    * The session user for this request, or null. Resolved through `getSession`,
    * so the typed-token rules apply and no plugin parses the cookie itself.
+   *
+   * A write — POST, PUT, PATCH or DELETE — whose `Origin` (or, without one,
+   * `Referer`) is neither this site nor an allowed origin gets null, as a
+   * request without a session does: the session cookie travels with a
+   * request another site makes, and a handler acting on the user it reads
+   * would otherwise act for that site. The check is the one core applies to
+   * an authenticated route's cookie writes, and it refuses a write that
+   * names no origin at all. Reads are answered whatever their origin.
    *
    * It reads the access token and does not re-check the account's state, as
    * core's own `requireAuth` does not: an account deactivated after its
@@ -433,11 +441,22 @@ export function createPluginAuthApi(
 
     async currentUser(request) {
       const deps = getDeps();
-      const result = await getSession(request, deps.secret);
       // Recorded even when nobody is signed in: the ANSWER differs between
       // an anonymous and a signed-in caller either way, and the cache
       // decision is about the response, not the user.
       markSessionConsulted();
+      // A write from another site gets no user. The session cookie travels
+      // with any request the browser makes, so without this a public route
+      // acting on the user it reads would act for whichever page posted to
+      // it. The origin check is the one the route dispatcher applies to an
+      // authenticated route's cookie writes.
+      if (
+        isUnsafeMethod(request.method) &&
+        !validateOrigin(request, env.NEXTLY_ALLOWED_ORIGINS_PARSED ?? [])
+      ) {
+        return null;
+      }
+      const result = await getSession(request, deps.secret);
       return result.authenticated
         ? { id: String(result.user.id), email: String(result.user.email) }
         : null;

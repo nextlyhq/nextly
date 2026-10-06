@@ -26,7 +26,13 @@ function failingAdapter(failure: Error): DrizzleAdapter {
     where: () => query,
     limit: () => Promise.reject(failure),
   };
-  return { getDrizzle: () => query } as unknown as DrizzleAdapter;
+  // The adapter surface the deps reach for: the handle, and the dialect and
+  // transaction its writes are serialized with on SQLite.
+  return {
+    getDrizzle: () => query,
+    getCapabilities: () => ({ dialect: "postgresql" }),
+    transaction: <T>(work: () => Promise<T>) => work(),
+  } as unknown as DrizzleAdapter;
 }
 
 describe("passwordCredentialDeps", () => {

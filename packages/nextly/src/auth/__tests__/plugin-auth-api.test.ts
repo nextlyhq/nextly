@@ -431,6 +431,64 @@ describe("ctx.auth.currentUser", () => {
     });
   });
 
+  describe("a request from another site", () => {
+    /** A signed-in browser's request to a plugin route, from `origin`. */
+    async function signedInRequest(
+      method: string,
+      origin?: string
+    ): Promise<{ deps: CompleteLoginDeps; req: Request }> {
+      const deps = makeDeps();
+      const login = await api(deps).completeLogin("u1", {
+        request,
+        strategy: "oauth-test",
+      });
+      const sessionCookie = login.headers
+        .getSetCookie()
+        .find(c => c.startsWith("nextly_session="));
+      const req = new Request("http://localhost/admin/api/plugins/x/act", {
+        method,
+        headers: {
+          cookie: sessionCookie?.split(";")[0] ?? "",
+          ...(origin ? { origin } : {}),
+        },
+        ...(method === "GET" ? {} : { body: "{}" }),
+      });
+      return { deps, req };
+    }
+
+    it("answers no user to a write posted from another origin", async () => {
+      const { deps, req } = await signedInRequest(
+        "POST",
+        "https://evil.example"
+      );
+      expect(await api(deps).currentUser(req)).toBeNull();
+    });
+
+    it("answers no user to a write that names no origin", async () => {
+      const { deps, req } = await signedInRequest("DELETE");
+      expect(await api(deps).currentUser(req)).toBeNull();
+    });
+
+    it("answers the user to a write from this site", async () => {
+      const { deps, req } = await signedInRequest("POST", "http://localhost");
+      expect(await api(deps).currentUser(req)).toEqual({
+        id: "u1",
+        email: "a@b.c",
+      });
+    });
+
+    it("answers the user to a read from another origin", async () => {
+      const { deps, req } = await signedInRequest(
+        "GET",
+        "https://evil.example"
+      );
+      expect(await api(deps).currentUser(req)).toEqual({
+        id: "u1",
+        email: "a@b.c",
+      });
+    });
+  });
+
   it("returns null for a pending token presented as a session", async () => {
     const { mintPendingToken } = await import("../pipeline/pending-token");
     const pending = await mintPendingToken(

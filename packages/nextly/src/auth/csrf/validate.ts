@@ -20,6 +20,14 @@ export function csrfTokensMatch(
   }
 }
 
+/** Methods that change something, and so need a cross-site check. */
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/** Whether `method` changes something, and so needs a cross-site check. */
+export function isUnsafeMethod(method: string): boolean {
+  return UNSAFE_METHODS.has(method.toUpperCase());
+}
+
 /**
  * Validate the Origin or Referer header against allowed origins.
  * Returns true if the request origin is allowed.

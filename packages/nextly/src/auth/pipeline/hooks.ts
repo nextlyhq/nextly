@@ -1,6 +1,7 @@
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
+import { withoutRefreshCookie } from "../cookies/refresh-token-cookie";
 import { JWT_INTERNAL_CLAIMS } from "../jwt/claims";
 
 import type { AuthHooks, AuthInput, Challenge } from "./types";
@@ -90,8 +91,13 @@ export class AuthHookRegistry {
     return this.#hooks.length === 0;
   }
 
+  /** The hooks receive the request without the refresh cookie. */
   async runBeforeLogin(input: AuthInput, ctx: PluginContext): Promise<void> {
-    for (const h of this.#hooks) await h.beforeLogin?.(input, ctx);
+    const hookInput = {
+      ...input,
+      request: withoutRefreshCookie(input.request),
+    };
+    for (const h of this.#hooks) await h.beforeLogin?.(hookInput, ctx);
   }
 
   /**
@@ -154,12 +160,14 @@ export class AuthHookRegistry {
     return withCoreClaims(current, core, this.#reserved);
   }
 
+  /** The hooks receive the request without the refresh cookie. */
   async runDetermineUser(
     request: Request,
     ctx: PluginContext
   ): Promise<AuthUser | null> {
+    const hookRequest = withoutRefreshCookie(request);
     for (const h of this.#hooks) {
-      const u = await h.determineUser?.(request, ctx);
+      const u = await h.determineUser?.(hookRequest, ctx);
       if (u) return u;
     }
     return null;

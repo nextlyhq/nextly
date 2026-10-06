@@ -14,9 +14,11 @@
  * own, so the two serialise on the user row: a revocation that committed
  * first is seen by the re-read and refuses the session, and one that comes
  * after waits for this transaction to commit and then deletes the row it
- * wrote. On Postgres and MySQL the lock is `FOR SHARE`, which concurrent
- * sign-ins of one account share; SQLite's transaction opens with
- * `BEGIN IMMEDIATE`, which already serialises writers.
+ * wrote. On Postgres the lock is `FOR SHARE`, which concurrent sign-ins of
+ * one account share; on MySQL it is `FOR UPDATE`, the strength every server
+ * of that dialect accepts, so concurrent sign-ins of one account take turns;
+ * SQLite's transaction opens with `BEGIN IMMEDIATE`, which already serialises
+ * writers.
  *
  * @module auth/handlers/session-row
  */

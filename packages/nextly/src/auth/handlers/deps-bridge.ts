@@ -29,7 +29,12 @@ import {
   type PluginDefinition,
 } from "../../plugins/plugin-context";
 import { affectedRowCount } from "../../shared/lib/affected-row-count";
-import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction";
+import { readUnderRowLock, type LockableRead } from "../../shared/lib/row-lock";
+import {
+  runAdapterTransaction,
+  serializeOnSqlite,
+  type SerializingAdapter,
+} from "../../shared/lib/run-adapter-transaction";
 import type { AuthUser } from "../../types/auth";
 import { readProxyTrustSettings } from "../../utils/proxy-trust";
 import { passwordCredentialDeps } from "../credentials/credential-deps";
@@ -230,24 +235,22 @@ export function buildAuthRouterDeps(
       );
     },
 
+    // Sign-out and the theft response delete through `serializeOnSqlite`: a
+    // revocation another request's rollback undid would leave a session the
+    // user was told had ended.
     deleteRefreshTokenByHash: async (tokenHash: string) => {
-      const adapter = getService("adapter");
-      const db = adapter.getDrizzle();
-      const schema = getDialectTables();
       const { eq } = await import("drizzle-orm");
-      await db
-        .delete(schema.refreshTokens)
-        .where(eq(schema.refreshTokens.tokenHash, tokenHash));
+      const { refreshTokens } = getDialectTables();
+      await deleteRefreshTokens(
+        getService,
+        eq(refreshTokens.tokenHash, tokenHash)
+      );
     },
 
     deleteAllRefreshTokensForUser: async (userId: string) => {
-      const adapter = getService("adapter");
-      const db = adapter.getDrizzle();
-      const schema = getDialectTables();
       const { eq } = await import("drizzle-orm");
-      await db
-        .delete(schema.refreshTokens)
-        .where(eq(schema.refreshTokens.userId, userId));
+      const { refreshTokens } = getDialectTables();
+      await deleteRefreshTokens(getService, eq(refreshTokens.userId, userId));
     },
 
     getUserCount: async () => {
@@ -531,11 +534,7 @@ interface SessionRowDb {
   select(fields: unknown): {
     from(table: unknown): {
       where(condition: unknown): {
-        // `.for("share")` exists on the Postgres and MySQL builders. SQLite
-        // has no row lock and never reaches the call.
-        limit(count: number): Promise<AccountState[]> & {
-          for(strength: "share"): Promise<AccountState[]>;
-        };
+        limit(count: number): LockableRead<AccountState[]>;
       };
     };
   };
@@ -575,9 +574,10 @@ function accountStateQuery(db: SessionRowDb, eq: Eq, userId: string) {
 /**
  * The session-row operations bound to one transaction's Drizzle handle.
  *
- * The account read takes `FOR SHARE` on Postgres and MySQL: a revocation's
- * update of the same user row waits for this transaction, and this read waits
- * for a revocation already holding it, then reads what it committed. SQLite's
+ * The account read takes the session row lock (`readUnderRowLock`: `FOR
+ * SHARE` on Postgres, `FOR UPDATE` on MySQL): a revocation's update of the
+ * same user row waits for this transaction, and this read waits for a
+ * revocation already holding it, then reads what it committed. SQLite's
  * transaction holds the database's write lock from its `BEGIN IMMEDIATE`, so
  * the plain read is already serialised against every writer.
  */
@@ -589,9 +589,11 @@ function sessionRowTransaction(
   const { refreshTokens } = getDialectTables();
   return {
     lockAccountState: async userId => {
-      const query = accountStateQuery(db, eq, userId);
-      const rows =
-        dialect === "sqlite" ? await query : await query.for("share");
+      const rows = await readUnderRowLock(
+        accountStateQuery(db, eq, userId),
+        { dialect },
+        "session"
+      );
       return rows[0] ?? null;
     },
     insertRefreshToken: async record => {
@@ -613,19 +615,31 @@ async function deleteRefreshTokenById(
   getService: (name: string) => unknown,
   id: string
 ): Promise<void> {
-  const adapter = getService("adapter") as {
+  const { eq } = await import("drizzle-orm");
+  const { refreshTokens } = getDialectTables();
+  await deleteRefreshTokens(getService, eq(refreshTokens.id, id));
+}
+
+/**
+ * Delete the refresh rows `condition` matches, through `serializeOnSqlite`, so
+ * on SQLite the delete waits for another request's open transaction instead
+ * of running inside it and being undone by its rollback.
+ */
+async function deleteRefreshTokens(
+  getService: (name: string) => unknown,
+  condition: unknown
+): Promise<void> {
+  const adapter = getService("adapter") as SerializingAdapter & {
     getDrizzle: () => {
       delete: (table: unknown) => {
         where: (cond: unknown) => Promise<unknown>;
       };
     };
   };
-  const schema = getDialectTables();
-  const { eq } = await import("drizzle-orm");
-  await adapter
-    .getDrizzle()
-    .delete(schema.refreshTokens)
-    .where(eq(schema.refreshTokens.id, id));
+  const { refreshTokens } = getDialectTables();
+  await serializeOnSqlite(adapter, () =>
+    adapter.getDrizzle().delete(refreshTokens).where(condition)
+  );
 }
 
 /** Read the sanitized NextlyServiceConfig from the DI container, if present. */

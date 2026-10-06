@@ -28,7 +28,7 @@ import { hashPassword } from "../../password";
 import { signAccessToken } from "../../jwt/sign";
 import { setCsrfCookie } from "../../csrf/csrf-cookie";
 import { setAccessTokenCookie } from "../../cookies/access-token-cookie";
-import { setRefreshTokenCookie } from "../../cookies/refresh-token-cookie";
+import { setRefreshTokenCookies } from "../../cookies/refresh-token-cookie";
 import { handleChangePassword } from "../change-password";
 import { handleCsrf } from "../csrf";
 import { handleForgotPassword } from "../forgot-password";
@@ -1246,7 +1246,7 @@ describe("csrf handler: respondData shape", () => {
 // future expansion of the suite.
 void setCsrfCookie;
 void setAccessTokenCookie;
-void setRefreshTokenCookie;
+void setRefreshTokenCookies;
 
 describe("the account-state gate before continuations", () => {
   it("refuses an INACTIVE account before any hook or challenge runs", async () => {

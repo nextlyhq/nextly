@@ -185,9 +185,10 @@ export interface AuthRouterDeps {
    * - Every operation `work` receives runs in the ONE transaction, and a
    *   throw from `work` rolls back everything it wrote.
    * - `lockAccountState` locks the user row before reading it: `FOR SHARE` on
-   *   PostgreSQL and MySQL, so a deactivation or a password set waits for the
-   *   write and the write waits for one already holding the row; on SQLite
-   *   the transaction itself must hold the write lock (`BEGIN IMMEDIATE`).
+   *   PostgreSQL and `FOR UPDATE` on MySQL, so a deactivation or a password
+   *   set waits for the write and the write waits for one already holding the
+   *   row; on SQLite the transaction itself must hold the write lock
+   *   (`BEGIN IMMEDIATE`).
    * - It returns `passwordUpdatedAt` as {@link fetchAccountState} does. A
    *   different value there refuses the session as a password changed since.
    */

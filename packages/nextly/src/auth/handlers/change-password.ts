@@ -11,7 +11,7 @@ import { respondAction } from "../../api/response-shapes";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { clearAccessTokenCookie } from "../cookies/access-token-cookie";
-import { clearRefreshTokenCookie } from "../cookies/refresh-token-cookie";
+import { clearRefreshTokenCookies } from "../cookies/refresh-token-cookie";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 import { getSession } from "../session/get-session";
@@ -96,7 +96,10 @@ export async function handleChangePassword(
     userAgent: request.headers.get("user-agent"),
   });
 
-  const clearCookies = [clearAccessTokenCookie(), clearRefreshTokenCookie()];
+  const clearCookies = [
+    clearAccessTokenCookie(),
+    ...clearRefreshTokenCookies(),
+  ];
 
   // Success body is `{ message: "Password changed." }` per spec §7.6.
   // Cleared cookies (forcing re-login on every device) ride the headers.

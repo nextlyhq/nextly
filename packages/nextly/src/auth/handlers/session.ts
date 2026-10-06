@@ -20,9 +20,8 @@ import type { PluginContext } from "../../plugins/plugin-context";
 import {
   clearAccessTokenCookie,
   readAccessTokenCookie,
-  setAccessTokenCookie,
 } from "../cookies/access-token-cookie";
-import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
+import { sessionCookies } from "../cookies/session-cookies";
 import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
@@ -297,14 +296,7 @@ async function attemptDevAutoLogin(
     expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
   });
 
-  const cookies = [
-    setAccessTokenCookie(accessToken, deps.refreshTokenTTL, deps.isProduction),
-    setRefreshTokenCookie(
-      rawRefreshToken,
-      deps.refreshTokenTTL,
-      deps.isProduction
-    ),
-  ];
+  const cookies = sessionCookies(accessToken, rawRefreshToken, deps);
 
   // Match the `respondData({ user, accessToken })` shape that the
   // authenticated `handleSession` branch returns above so SDK clients

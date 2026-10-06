@@ -10,15 +10,12 @@ import { getNextlyLogger } from "../../observability/logger";
 import type { PluginContext } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
+import { clearAccessTokenCookie } from "../cookies/access-token-cookie";
 import {
-  setAccessTokenCookie,
-  clearAccessTokenCookie,
-} from "../cookies/access-token-cookie";
-import {
-  setRefreshTokenCookie,
   readRefreshTokenCookie,
-  clearRefreshTokenCookie,
+  clearRefreshTokenCookies,
 } from "../cookies/refresh-token-cookie";
+import { sessionCookies } from "../cookies/session-cookies";
 import { clearCsrfCookie } from "../csrf/csrf-cookie";
 import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
@@ -104,9 +101,15 @@ export async function handleRefresh(
     const tokenRecord = await deps.findRefreshTokenByHash(tokenHash);
 
     if (!tokenRecord) {
-      // Token not found -- could be token theft (replayed consumed token).
-      // The legitimate user's rotated token is still valid.
-      return clearAndDeny("Invalid refresh token");
+      // No row: a token another tab has just rotated, a replay of a spent
+      // one, a row a revocation deleted, or a value that was never issued.
+      // Nothing is revoked here, so clearing cookies protects no one; it only
+      // wipes the fresh cookies a tab that won the rotation has just set in
+      // this browser's shared jar. A browser left holding a dead token is
+      // sent to the login page by the admin, and signing in replaces it.
+      // Logged without the token, so replays can be watched.
+      getNextlyLogger().warn({ kind: "refresh-token-not-found" });
+      return denyWithoutClearing("Invalid refresh token");
     }
 
     if (tokenRecord.expiresAt < new Date()) {
@@ -194,18 +197,7 @@ export async function handleRefresh(
     if (rotated instanceof Response) return rotated;
     const newRawToken = rotated.rawToken;
 
-    const cookies = [
-      setAccessTokenCookie(
-        accessToken,
-        deps.refreshTokenTTL,
-        deps.isProduction
-      ),
-      setRefreshTokenCookie(
-        newRawToken,
-        deps.refreshTokenTTL,
-        deps.isProduction
-      ),
-    ];
+    const cookies = sessionCookies(accessToken, newRawToken, deps);
 
     // Silent rotation per spec §7.6, no `message`. Body surfaces the
     // freshly-rotated tokens so non-cookie clients (mobile / SDK) can
@@ -344,33 +336,52 @@ async function refuseAccount(
  * The other request — a second tab refreshing at the same moment — has just
  * set fresh cookies on this browser, so clearing them here would sign the
  * winner out too. The cookies are left alone and the code says why, so a
- * client can retry with the cookies it now holds. A token that is replayed
- * after its rotation is not this case: its row is gone before the lookup,
- * which answers with the cookie-clearing refusal.
+ * client can retry with the cookies it now holds. A token presented after its
+ * rotation has committed finds no row at the lookup instead, and is refused
+ * by {@link denyWithoutClearing}, which leaves the cookies alone too.
  */
 function supersededDeny(): Response {
-  return new Response(
-    JSON.stringify({
-      error: {
-        code: "REFRESH_SUPERSEDED",
-        message: "Refresh token already rotated",
-      },
-    }),
-    { status: 401, headers: { "Content-Type": "application/json" } }
-  );
+  return refusal("REFRESH_SUPERSEDED", "Refresh token already rotated");
 }
 
+/**
+ * A `REFRESH_FAILED` refusal that sets no cookie.
+ *
+ * For a presented token with no row. The browser holding it may be the one a
+ * second tab has just rotated for, whose fresh cookies a clearing answer would
+ * wipe; the admin then sends that tab to the login page, which finds the
+ * winner's session and sends it back to the admin. An attacker replaying a
+ * stolen token loses nothing to it either: a clearing answer would only empty
+ * their own jar.
+ */
+function denyWithoutClearing(message: string): Response {
+  return refusal("REFRESH_FAILED", message);
+}
+
+/**
+ * A `REFRESH_FAILED` refusal that clears the session's cookies: for a session
+ * that has ended — no cookie, an expired row, an account that may no longer
+ * hold one, a binding mismatch.
+ */
 function clearAndDeny(message: string): Response {
   const clearCookies = [
     clearAccessTokenCookie(),
-    clearRefreshTokenCookie(),
+    ...clearRefreshTokenCookies(),
     clearCsrfCookie(),
   ];
-
   return new Response(
-    JSON.stringify({
-      error: { code: "REFRESH_FAILED", message },
-    }),
+    JSON.stringify({ error: { code: "REFRESH_FAILED", message } }),
     { status: 401, headers: buildCookieHeaders(clearCookies) }
   );
+}
+
+/** A 401 refusal with `code`, and no Set-Cookie. */
+function refusal(
+  code: "REFRESH_FAILED" | "REFRESH_SUPERSEDED",
+  message: string
+): Response {
+  return new Response(JSON.stringify({ error: { code, message } }), {
+    status: 401,
+    headers: { "Content-Type": "application/json" },
+  });
 }

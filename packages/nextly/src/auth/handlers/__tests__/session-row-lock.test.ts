@@ -4,8 +4,9 @@
  *
  * Postgres and MySQL are not reachable from a unit run, so the statement each
  * dialect is sent is observed on a recording handle instead: the account read
- * is the one that locks, `FOR SHARE`, on the dialects with row locks, and
- * every operation runs on the transaction's own handle rather than the pool.
+ * is the one that locks — `FOR SHARE` on Postgres, `FOR UPDATE` on MySQL,
+ * whose MariaDB and TiDB servers refuse `FOR SHARE` — and every operation runs
+ * on the transaction's own handle rather than the pool.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -89,7 +90,7 @@ const record = {
 describe("the bridge's session-row transaction", () => {
   it.each([
     ["postgresql", "select for share"],
-    ["mysql", "select for share"],
+    ["mysql", "select for update"],
     ["sqlite", "select"],
   ] as const)(
     "on %s, reads the account under the lock before writing",

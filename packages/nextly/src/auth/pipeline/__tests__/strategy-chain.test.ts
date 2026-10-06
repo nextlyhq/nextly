@@ -105,7 +105,7 @@ describe("a strategy that THROWS its failure", () => {
       },
     };
     await expect(
-      runStrategyChain([throwing], {} as never, {} as never)
+      runStrategyChain([throwing], input, {} as never)
     ).rejects.toSatisfy((err: unknown) => {
       if (!NextlyError.is(err)) return false;
       return (err.logContext as { strategy?: string }).strategy === "password";
@@ -122,7 +122,7 @@ describe("a strategy that THROWS its failure", () => {
       },
     };
     await expect(
-      runStrategyChain([throwing], {} as never, {} as never)
+      runStrategyChain([throwing], input, {} as never)
     ).rejects.toSatisfy((err: unknown) => {
       if (!NextlyError.is(err)) return false;
       const ctx = err.logContext as {
@@ -145,7 +145,7 @@ describe("a strategy that THROWS its failure", () => {
       },
     };
     await expect(
-      runStrategyChain([throwing], {} as never, {} as never)
+      runStrategyChain([throwing], input, {} as never)
     ).rejects.toSatisfy((err: unknown) => {
       if (!NextlyError.is(err)) return false;
       return (
@@ -167,7 +167,7 @@ describe("a strategy that THROWS its failure", () => {
       },
     };
     await expect(
-      runStrategyChain([throwing], {} as never, {} as never)
+      runStrategyChain([throwing], input, {} as never)
     ).rejects.toSatisfy((err: unknown) => {
       if (!NextlyError.is(err)) return false;
       return (err.logContext as { strategy?: string }).strategy === "otp";
@@ -185,7 +185,7 @@ describe("a strategy that THROWS its failure", () => {
       },
     };
     await expect(
-      runStrategyChain([throwing], {} as never, {} as never)
+      runStrategyChain([throwing], input, {} as never)
     ).rejects.toThrow("plugin code threw");
   });
 });
