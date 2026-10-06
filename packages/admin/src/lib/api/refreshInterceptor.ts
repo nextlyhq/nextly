@@ -61,11 +61,15 @@ export function setLoginRedirectPath(path: string): void {
  * isn't logged in yet, by design) and must NOT trigger a redirect to
  * login. Without this guard the setup wizard ping-pongs forever:
  *
- *   1. /admin/setup mounts → GeneralSettingsSyncProvider fires
- *      `useGeneralSettings` (protected) → 401 with AUTH_REQUIRED.
+ *   1. /admin/setup mounts → BrandingProvider's session settles signed-out
+ *      and its workspace probe fires → 401 with AUTH_REQUIRED.
  *   2. authFetch sees the code → redirectToLogin() → /admin/login.
  *   3. /admin/login mounts → PublicRoute checks setup-status,
  *      sees no users → navigateTo("/admin/setup"). Bounce.
+ *
+ * (The settings sync that used to be the example no longer mounts on public
+ * routes — but the probe above is not the only background query that can
+ * 401 without a session, so the guard stays.)
  *
  * DERIVED from the one declaration rather than listed again here. The set that
  * must not redirect is exactly the set reachable without a session, and a

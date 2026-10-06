@@ -865,6 +865,322 @@ jobs:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
+  # The gates `.husky/pre-push` runs, on Windows, so a change that breaks them
+  # there shows on its pull request rather than on a teammate's machine. The
+  # hook itself skips in CI, so its gates are listed here, and
+  # `scripts/windows-gates-match-hook.test.mjs` fails when the two lists differ.
+  #
+  # Every gate runs even when one before it failed, so one run reports all of
+  # them. Gated on the same `changes` decision as the Linux jobs: a change
+  # that can affect nothing skips it, and a skipped job is accepted by branch
+  # protection. `.gitattributes` and this workflow are never inert, so a change
+  # to how files are checked out, or to this job, runs it.
+  #
+  # Not among the jobs `gate` waits on, so its result informs a pull request
+  # without holding its merge.
+  #
+  # Three jobs, for the reason the Linux unit suites are three: on one runner
+  # the suites were 23 of the job's 33 minutes, and `nextly`'s and
+  # `@nextlyhq/admin`'s were nearly all of that. Each of those two runs on a
+  # runner of its own, in the two jobs below, and this one runs every other
+  # workspace's. The same test file checks that the three run each workspace's
+  # suite once: the two name one workspace each, and this one excludes exactly
+  # those two.
+  windows-gates:
+    name: Pre-push gates (windows-latest)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        id: install
+        run: pnpm install --frozen-lockfile
+
+      # The hook's own limits on concurrent package tasks and test workers, so
+      # a suite that only times out under unbounded contention does not fail
+      # here when it would pass in the hook.
+      - name: Size the gates as the hook does
+        id: limits
+        if: steps.install.outcome == 'success'
+        shell: bash
+        run: |
+          concurrency="$(node scripts/local-limits.mjs --concurrency)"
+          workers="$(node scripts/local-limits.mjs --max-workers)"
+          case "$concurrency$workers" in ''|*[!0-9]*) echo "could not derive the hook's limits" >&2; exit 1;; esac
+          echo "TURBO_CONCURRENCY=$concurrency" >> "$GITHUB_ENV"
+          echo "VITEST_WORKERS=$workers" >> "$GITHUB_ENV"
+
+      - name: Design lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm lint:design
+
+      - name: Workspace lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm lint:workspace
+
+      - name: Scripts lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm lint:scripts
+
+      - name: Build
+        id: build
+        if: ${{ !cancelled() && steps.limits.outcome == 'success' }}
+        run: pnpm run build
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # These read what the build wrote, so after a failed build they would
+      # report its missing output rather than failures of their own.
+      - name: Package lint
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: pnpm turbo lint --continue --filter=./packages/*
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      - name: Typecheck
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: pnpm turbo check-types --continue
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Every workspace's suite but the two the jobs below run. Together the
+      # three run what the hook runs when a push changes the workspace or task
+      # graph.
+      - name: Unit suites
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: pnpm turbo test --continue --filter='!nextly' --filter='!@nextlyhq/admin' -- --maxWorkers="$VITEST_WORKERS"
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Only a job whose gates all passed publishes what it learned.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # `nextly`'s unit suite on Windows, on a runner of its own: 957 files, and
+  # 18.7 minutes beside the admin's on one runner. `test` depends on `^build`,
+  # so turbo builds what the suite needs and nothing else.
+  windows-gates-nextly:
+    name: Pre-push gates (windows-latest, nextly tests)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The hook's own limits, as in the job above.
+      - name: Size the gates as the hook does
+        shell: bash
+        run: |
+          concurrency="$(node scripts/local-limits.mjs --concurrency)"
+          workers="$(node scripts/local-limits.mjs --max-workers)"
+          case "$concurrency$workers" in ''|*[!0-9]*) echo "could not derive the hook's limits" >&2; exit 1;; esac
+          echo "TURBO_CONCURRENCY=$concurrency" >> "$GITHUB_ENV"
+          echo "VITEST_WORKERS=$workers" >> "$GITHUB_ENV"
+
+      - name: Unit suites
+        shell: bash
+        run: pnpm turbo test --continue --filter=nextly -- --maxWorkers="$VITEST_WORKERS"
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Only a job whose suite passed publishes what it learned.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # `@nextlyhq/admin`'s unit suite on Windows, on a runner of its own: 436
+  # files, and 13.6 minutes beside nextly's on one runner.
+  windows-gates-admin:
+    name: Pre-push gates (windows-latest, admin tests)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The hook's own limits, as in the first of these jobs.
+      - name: Size the gates as the hook does
+        shell: bash
+        run: |
+          concurrency="$(node scripts/local-limits.mjs --concurrency)"
+          workers="$(node scripts/local-limits.mjs --max-workers)"
+          case "$concurrency$workers" in ''|*[!0-9]*) echo "could not derive the hook's limits" >&2; exit 1;; esac
+          echo "TURBO_CONCURRENCY=$concurrency" >> "$GITHUB_ENV"
+          echo "VITEST_WORKERS=$workers" >> "$GITHUB_ENV"
+
+      - name: Unit suites
+        shell: bash
+        run: pnpm turbo test --continue --filter=@nextlyhq/admin -- --maxWorkers="$VITEST_WORKERS"
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Only a job whose suite passed publishes what it learned.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # What `@nextlyhq/admin` would publish, read as a production application gets
+  # it. The package ships prebuilt, and its build settles what a production
+  # user sees: built in development mode it shows an error's message and stack
+  # trace and the query developer tools, and dials a development-only route.
+  # The unit suites import the admin's source and the playground loads its
+  # source, so nothing else here reads the built files.
+  #
+  # The last step turns the check on itself. It builds the admin in development
+  # mode and requires the check to refuse that build, so a check that stopped
+  # recognising the failure it exists for fails here, not in silence.
+  #
+  # `needs: changes`, not `needs: ci`: it runs beside the Linux jobs, and it is
+  # among the jobs `gate` waits on, so its failure holds a merge. It runs the
+  # same steps on a merge-queue run as on a pull request.
+  admin-published-build:
+    name: Published admin build
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # A release builds with `NODE_ENV` unset, and the admin's build reads it,
+      # so it is unset here whatever the runner carries.
+      - name: Build the admin as a release does
+        run: env -u NODE_ENV pnpm turbo build --filter=@nextlyhq/admin...
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Packs the package as `pnpm publish` would, and reads the packed files.
+      - name: Check what the packed admin gives a production application
+        run: pnpm --filter @nextlyhq/admin check:published-build
+
+      # `tsup` alone, without the stylesheet step: the check is asked only for
+      # the two kinds a development-mode build must be refused for.
+      - name: The check refuses a build made in development mode
+        run: |
+          NODE_ENV=development pnpm --filter @nextlyhq/admin exec tsup
+          pnpm --filter @nextlyhq/admin check:published-build --packed . --must-fail-with error-detail,developer-tools
+
+      # Only a job whose checks passed publishes what it learned.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
   # The one check that can block a merge, standing for all of them.
   #
   # 🔴 Measured before this existed: the only required status check on `main`
@@ -919,6 +1235,7 @@ jobs:
       - ci
       - unit-tests-nextly
       - unit-tests-admin
+      - admin-published-build
       - entry-guard-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 5

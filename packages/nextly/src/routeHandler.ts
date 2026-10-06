@@ -1693,6 +1693,25 @@ function widgetsForAudience(
 }
 
 /**
+ * Whether THIS process is serving a development server, from the runtime
+ * environment.
+ *
+ * The one comparison every dev-only wire in this file answers from: the
+ * `/admin/api/dev-reload` route exists only while this is true, and the
+ * workspace payload tells the client exactly the same thing, so the browser
+ * can never be told the stream exists while the route would refuse it — the
+ * two answers are the same answer by construction.
+ *
+ * It reads the RUNTIME value deliberately. The admin's browser bundle cannot
+ * answer this for itself: its copy of `NODE_ENV` was folded into the dist at
+ * package build time, which says where the library was built, never where the
+ * host is running.
+ */
+function isDevServerRuntime(): boolean {
+  return process.env.NODE_ENV === "development";
+}
+
+/**
  * The admin metadata, separated by the audience each half is answerable to.
  *
  * `branding` is what the sign-in screen draws with, so it has to be readable
@@ -1760,6 +1779,13 @@ async function buildAdminMeta(
   // Same resolver the schema-mutation endpoints enforce with, so what the
   // admin renders and what the API accepts can never disagree.
   workspace.showBuilder = isBuilderEnabled();
+
+  // The dev-reload subscription answer, from the same runtime comparison that
+  // gates the route itself. The client's bundled `NODE_ENV` cannot say this —
+  // it was folded when the admin package was built — so the server's answer is
+  // the only one the browser can act on: subscribe exactly when the stream it
+  // would dial exists.
+  workspace.devReload = isDevServerRuntime();
 
   // Content-localization config for the admin (present only when i18n is enabled).
   const localization = config?.localization;
@@ -2058,7 +2084,7 @@ async function handleGet(req: Request, params: string[]) {
   if (params[0] === "admin-meta") {
     return handleAdminMetaRequest();
   }
-  if (params[0] === "dev-reload" && process.env.NODE_ENV === "development") {
+  if (params[0] === "dev-reload" && isDevServerRuntime()) {
     const { subscribeDevReload } = await import(
       "./runtime/dev-reload-broadcaster"
     );
@@ -2086,7 +2112,7 @@ async function handleGet(req: Request, params: string[]) {
 }
 
 async function handlePost(req: Request, params: string[]) {
-  if (params[0] === "_dev" && process.env.NODE_ENV === "development") {
+  if (params[0] === "_dev" && isDevServerRuntime()) {
     return handleDevSchemaRequest(req, params, "POST");
   }
   return handleServiceRequest(req, params, "POST");
@@ -2104,7 +2130,7 @@ async function handlePatch(req: Request, params: string[]) {
 }
 
 async function handleDelete(req: Request, params: string[]) {
-  if (params[0] === "_dev" && process.env.NODE_ENV === "development") {
+  if (params[0] === "_dev" && isDevServerRuntime()) {
     return handleDevSchemaRequest(req, params, "DELETE");
   }
   return handleServiceRequest(req, params, "DELETE");

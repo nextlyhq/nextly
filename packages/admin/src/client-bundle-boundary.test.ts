@@ -41,7 +41,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { posix, resolve as resolveNative } from "node:path";
 
 import {
   moduleSpecifierRefs,
@@ -50,7 +50,12 @@ import {
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
-const REPO_ROOT = resolve(__dirname, "../../..");
+// Paths are walked in `/` form on every platform, so the real tree and the
+// `/repo/...` trees the rule's own tests build resolve the same way. Windows
+// reads a `/` path as readily as its own, and `posix.join` keeps a drive
+// letter where `posix.resolve` would treat it as a relative path.
+const { dirname, join } = posix;
+const REPO_ROOT = resolveNative(__dirname, "../../..").replaceAll("\\", "/");
 const ADMIN_SRC = join(REPO_ROOT, "packages/admin/src");
 const PACKAGES = join(REPO_ROOT, "packages");
 
@@ -202,7 +207,7 @@ export function makeResolver(
     }
     if (specifier.startsWith(".")) {
       return asFile(
-        resolveSourceFile(resolve(dirname(fromFile), specifier), io),
+        resolveSourceFile(join(dirname(fromFile), specifier), io),
         specifier
       );
     }
@@ -344,8 +349,12 @@ const sourceFilesUnder = (dir: string): string[] => {
   return found;
 };
 
+/** A path under the repository, named from its root for a message. */
+const fromRepo = (file: string): string =>
+  file.startsWith(`${REPO_ROOT}/`) ? file.slice(REPO_ROOT.length + 1) : file;
+
 const describeChain = (chain: string[]): string =>
-  chain.map(file => relative(REPO_ROOT, file)).join("\n      imported by ");
+  chain.map(fromRepo).join("\n      imported by ");
 
 describe("what a browser bundle can reach", () => {
   const workspace = readWorkspace(PACKAGES, realIo);
@@ -395,7 +404,7 @@ describe("what a browser bundle can reach", () => {
     // cannot see at all. Either one makes the result below a statement about less than it claims.
     expect(
       result.unresolved.map(
-        item => `${relative(REPO_ROOT, item.from)} -> ${item.specifier}`
+        item => `${fromRepo(item.from)} -> ${item.specifier}`
       )
     ).toEqual([]);
   });

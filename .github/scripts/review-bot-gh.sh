@@ -21,6 +21,15 @@ die() {
   exit 2
 }
 
+# The review workflow has Claude Code keep credentials out of every command
+# the agent runs, this one included, and says so with REVIEW_BOT_EXPECT_SCRUB.
+# A model key here then means the scrub did not happen, whatever the workflow
+# asked, as when an action stops passing the setting on: stop, rather than go
+# on with the key in reach. A caller that does not say so is not held to it.
+if [[ "${REVIEW_BOT_EXPECT_SCRUB:-}" == 1 && -n "${ANTHROPIC_API_KEY:-}${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
+  die "a model key reached this command, though the workflow had it scrubbed"
+fi
+
 # Every caller-supplied identifier is checked before it reaches a URL, so a
 # crafted value cannot smuggle a flag or a second endpoint into the request.
 require_number() {
@@ -107,25 +116,62 @@ case "$command" in
     ;;
   threads)
     # Review threads carry the resolution state the multi-round protocol needs,
-    # and that state is only exposed through GraphQL.
+    # and that state is only exposed through GraphQL. Every thread is read, a
+    # hundred to a page, and `comments` holds every comment of each, the
+    # finding and every reply to it; `recent` holds its last ten again, where
+    # the post job tells a thread that moved while the agent worked. gh pages
+    # by the first `pageInfo` in an answer, so the threads' own comes before
+    # their nodes and no connection inside them asks for one: a thread with
+    # more comments than its first hundred is read again whole, through its
+    # own id, a hundred to a page. Prints one answer in the shape of a single
+    # page, holding every thread, or nothing if any page cannot be read.
     require_number "${1:-}"
-    exec gh api graphql -F owner="$OWNER" -F name="$NAME" -F number="$1" -f query='
-      query($owner:String!,$name:String!,$number:Int!){
+    pages=$(gh api graphql --paginate -F owner="$OWNER" -F name="$NAME" -F number="$1" -f query='
+      query($owner:String!,$name:String!,$number:Int!,$endCursor:String){
         repository(owner:$owner,name:$name){
           pullRequest(number:$number){
-            reviewThreads(first:100){
+            reviewThreads(first:100,after:$endCursor){
+              pageInfo{ hasNextPage endCursor }
               nodes{
-                isResolved isOutdated path line
-                comments(first:20){ nodes{ author{login} body url databaseId } }
+                id isResolved isOutdated path line
+                comments(first:100){ totalCount nodes{ author{login} body url databaseId createdAt } }
+                recent: comments(last:10){ nodes{ author{login} body url databaseId createdAt } }
               }
             }
           }
         }
-      }'
+      }') || die "could not read the review threads of #$1"
+    long=$(jq -rs '.[].data.repository.pullRequest.reviewThreads.nodes[]
+      | select(.comments.totalCount > (.comments.nodes | length)) | .id' <<<"$pages") ||
+      die "could not read the review threads of #$1"
+    whole=$(
+      printf '%s\n' "$pages"
+      while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        [[ "$id" =~ ^[A-Za-z0-9_=-]+$ ]] || die "expected a review thread's node id, got '$id'"
+        gh api graphql --paginate -f id="$id" -f query='
+          query($id:ID!,$endCursor:String){
+            node(id:$id){
+              ... on PullRequestReviewThread{
+                comments(first:100,after:$endCursor){
+                  pageInfo{ hasNextPage endCursor }
+                  nodes{ author{login} body url databaseId createdAt }
+                }
+              }
+            }
+          }' | jq -cs --arg id "$id" '{thread: $id, comments: [.[].data.node.comments.nodes[]]}' ||
+          die "could not read the comments of review thread $id"
+      done <<<"$long"
+    ) || die "could not read the review threads of #$1"
+    jq -s '(map(select(.thread)) | map({key: .thread, value: .comments}) | from_entries) as $all
+      | {data: {repository: {pullRequest: {reviewThreads: {nodes: [
+          .[] | select(.data) | .data.repository.pullRequest.reviewThreads.nodes[]
+          | if $all[.id] then .comments.nodes = $all[.id] else . end]}}}}}' <<<"$whole"
     ;;
   file-at)
-    # Read one file at one commit. Used by the mention workflow, whose checkout
-    # is the default branch rather than the PR head.
+    # Read one file at one commit. The review agent reads the pull request's
+    # own instruction files this way, since its checkout holds the base
+    # branch's in their place.
     # The raw media type returns the file body itself, so there is no JSON
     # envelope here to select a field out of.
     require_sha "${1:-}"
@@ -203,21 +249,67 @@ case "$command" in
   reply)
     # Reply inside an existing review thread; the body comes from a file so no
     # comment text has to survive shell quoting. It is tagged with the run and
-    # its place in the payload, and posted once per run as a review is.
+    # its place in the payload, and posted once per run as a review is. Like
+    # a review, it answers the head reviewed, and none once the head has moved:
+    # it would argue about code nobody is looking at any more.
     require_number "${1:-}"
-    require_number "${2:-}"
-    require_file "${3:-}"
-    require_number "${4:-}"
+    require_sha "${2:-}"
+    require_number "${3:-}"
+    require_file "${4:-}"
     require_number "${5:-}"
-    tag=$(posted_tag "$4" "reply:$5")
-    posted=$(posted_ids "repos/$REPO/pulls/$1/comments" "$tag" in_reply_to_id "$2") ||
-      die "could not read the review comments, so cannot tell whether run $4 already replied; not posting"
+    require_number "${6:-}"
+    current=$(gh api "repos/$REPO/pulls/$1" --jq '.head.sha')
+    [ "$current" = "$2" ] || die "head moved to $current since $2 was reviewed; not posting"
+    tag=$(posted_tag "$5" "reply:$6")
+    posted=$(posted_ids "repos/$REPO/pulls/$1/comments" "$tag" in_reply_to_id "$3") ||
+      die "could not read the review comments, so cannot tell whether run $5 already replied; not posting"
     if [ -n "$posted" ]; then
-      echo "review-bot-gh: run $4 already posted reply $5 as comment ${posted//$'\n'/, }; not posting it again" >&2
+      echo "review-bot-gh: run $5 already posted reply $6 as comment ${posted//$'\n'/, }; not posting it again" >&2
       exit 0
     fi
-    reply=$(jq -n --rawfile body "$3" --arg tag "$tag" --argjson to "$2" '{in_reply_to: $to, body: ($body + "\n\n" + $tag)}')
+    reply=$(jq -n --rawfile body "$4" --arg tag "$tag" --argjson to "$3" '{in_reply_to: $to, body: ($body + "\n\n" + $tag)}')
     exec gh api --method POST "repos/$REPO/pulls/$1/comments" --input - <<<"$reply"
+    ;;
+  react-request)
+    # A reaction on the comment that asked for a review: 👀 when the request is
+    # taken, 👍 when a review already answered it, then 🚀 once the review is
+    # posted or 😕 when the run did not get that far. Only these four, on the
+    # one comment named, so nothing a caller passes can choose another
+    # endpoint or reaction. GitHub keeps one reaction of a kind per user, so a
+    # repeat changes nothing.
+    require_number "${1:-}"
+    case "${2:-}" in
+      eyes | +1 | rocket | confused) ;;
+      *) die "expected eyes, +1, rocket or confused, got '${2:-}'" ;;
+    esac
+    exec gh api --method POST "repos/$REPO/issues/comments/$1/reactions" -f content="$2" --silent
+    ;;
+  seed-reactions)
+    # 👍 and 👎 on each finding one run posted at one head, so a reader rates it
+    # in one click: the inline comments of the run's review, and the file-level
+    # comments the run posted, which carry its tag. Its replies are answers,
+    # not findings, and get none. One reaction of a kind per user, so a re-run
+    # adds nothing.
+    require_number "${1:-}"
+    require_sha "${2:-}"
+    require_number "${3:-}"
+    reviews=$(posted_ids "repos/$REPO/pulls/$1/reviews" "$(posted_tag "$3")" commit_id "$2") ||
+      die "could not read the reviews, so cannot tell which findings run $3 posted; none seeded"
+    findings=$(
+      for review in $reviews; do
+        gh api --paginate "repos/$REPO/pulls/$1/reviews/$review/comments?per_page=100" | jq -r '.[].id'
+      done
+      gh api --paginate "repos/$REPO/pulls/$1/comments?per_page=100" |
+        jq -r --arg tag "<!-- nextly-review-bot run:$3 file:" '
+          .[]
+          | select(.user.login == "nextly-review-bot[bot]")
+          | select((.body // "") | split("\n") | map(rtrimstr("\r") | select(length > 0)) | last // "" | startswith($tag))
+          | .id'
+    ) || die "could not read the findings run $3 posted; none seeded"
+    for id in $findings; do
+      gh api --method POST "repos/$REPO/pulls/comments/$id/reactions" -f content=+1 --silent
+      gh api --method POST "repos/$REPO/pulls/comments/$id/reactions" -f content=-1 --silent
+    done
     ;;
   post-file-comment)
     # A finding no line of the diff shows, posted as a file-level comment on
@@ -247,6 +339,6 @@ case "$command" in
     exec gh api --method POST "repos/$REPO/pulls/$1/comments" --input - <<<"$comment"
     ;;
   *)
-    die "usage: review-bot-gh.sh {pr|head-sha|diff|reviews|review-ids-at|review-comments|issue-comments|files|threads|file-at|base-file|delta|line-history|post-review|reply|post-file-comment} ..."
+    die "usage: review-bot-gh.sh {pr|head-sha|diff|reviews|review-ids-at|review-comments|issue-comments|files|threads|file-at|base-file|delta|line-history|post-review|reply|post-file-comment|react-request|seed-reactions} ..."
     ;;
 esac

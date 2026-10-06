@@ -14,9 +14,11 @@
 # the bot, which is what lets the merge queue count its review as the standby's
 # when Codex is held up. The agent itself never holds a token that can write,
 # and never shares a runner with one: it runs in the `review` job, which hands
-# on only the two files it wrote, and the `post` job, on a fresh runner that the
-# agent never touched, is the only one that takes the App's identity. So a file
-# the agent overwrites or a process it leaves behind cannot reach the token. A
+# on only the two files it wrote, and only jobs that run no agent take the App's
+# identity: `post`, on a fresh runner that the agent never touched, to post what
+# it wrote, and `acknowledge` and `report`, each with a token for nothing but
+# the writes a reaction needs, to react to the comment that asked. So a file
+# the agent overwrites or a process it leaves behind cannot reach a token. A
 # mention inside a review thread does not start a review, since that event runs
 # the pull request's own copy of this workflow; ask in the pull request's
 # conversation instead.
@@ -40,9 +42,14 @@ on:
 # costs a few seconds for the no-op runs and nothing for the real ones.
 # Staleness is handled where it actually matters: `post-review` re-reads the
 # head and refuses to post against a commit that has moved on.
+#
+# A group keeps one pending run by default, and a newer one cancels it, so a
+# request waiting behind a review was lost to any later comment. `queue: max`
+# keeps up to 100 pending, run in order; it cannot go with cancel-in-progress.
 concurrency:
   group: nextly-review-bot-${{ github.event.issue.number || inputs.pr }}
   cancel-in-progress: false
+  queue: max
 
 # The workflow's own token only reads: the review and its replies post with
 # the App's token in the `post` job, so nothing here can post as the login
@@ -54,7 +61,15 @@ permissions:
   issues: read
 
 jobs:
-  review:
+  # Decides, on a runner of its own, whether a comment asks for a review that
+  # still needs one, and of which pull request at which commit. It holds no
+  # place in the repository-wide queue below: a comment that only mentions the
+  # bot, a request the checks refuse and a request already answered are all
+  # turned down here without waiting behind another pull request's review. A
+  # job its condition skips takes no place in a concurrency group (measured on
+  # 2026-09-29: a skipped job finished while another held the group, and one
+  # that ran waited for it).
+  gate:
     # Gates evaluated before a runner starts: a pull request conversation, the
     # review phrase, a trusted author (a stranger cannot spend the API budget or
     # prompt-inject the agent), and never another bot. A dispatch carries no
@@ -70,14 +85,16 @@ jobs:
       contains(github.event.comment.body, '@nextly-bot') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
       !endsWith(github.event.comment.user.login, '[bot]'))
-    # No environment: the App's key is for the `post` job alone.
+    # No environment: the App's key is for the jobs that post or react alone.
     runs-on: ubuntu-latest
-    # GLM thinking responses are slow; a deep multi-phase review needs headroom.
-    timeout-minutes: 90
+    timeout-minutes: 10
     # Settled before the agent starts, so nothing it does can change them.
     outputs:
-      run: ${{ steps.ask.outputs.run }}
+      asked: ${{ steps.ask.outputs.run }}
+      run: ${{ steps.fresh.outputs.run }}
+      number: ${{ steps.pr.outputs.number }}
       sha: ${{ steps.pr.outputs.sha }}
+      base: ${{ steps.pr.outputs.base }}
     steps:
       # Only the command parser, from the workflow's own commit, so the decision
       # below can be made before anything is cloned. The full checkout follows
@@ -99,7 +116,7 @@ jobs:
 
       # `contains` cannot express a boundary, so the job condition only asks
       # whether the bot was mentioned at all. Whether that mention ASKS for a
-      # review is decided here, by the same script the mention workflow uses,
+      # review is decided here, by `.github/scripts/is-review-command.sh`,
       # before anything expensive starts. The body travels in an env var: it is
       # attacker-controlled text, and interpolating it into a `run:` line is the
       # standard Actions script-injection hole.
@@ -147,17 +164,180 @@ jobs:
             echo "base=$base"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # A request can wait behind a running review of its pull request, and
+      # several can arrive for one head. One that a review of the same head has
+      # already answered, posted after the request was made, is skipped before
+      # anything is cloned, so a burst of requests costs one review. A request
+      # made after that review still runs: asking again on an unchanged head can
+      # be deliberate. A dispatch carries no request time, and always runs.
+      #
+      # Only the review that carries the round marker for this head counts, and
+      # the post job posts it last, after the file-level comments and replies:
+      # its presence means the run finished posting. A reply or a file-level
+      # comment makes a review of its own with no body, and a run that failed
+      # part way leaves no marked review, so neither answers a request.
+      - name: Skip a request a review has already answered
+        id: fresh
         if: steps.ask.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+          SHA: ${{ steps.pr.outputs.sha }}
+          ASKED: ${{ github.event.comment.created_at }}
+        run: |
+          set -euo pipefail
+          answered=""
+          # `--paginate` prints each page as an array of its own; `-s` reads them
+          # all. Reviews that cannot be read leave the request to run: a second
+          # review of a head costs less than a request lost.
+          if [ -n "$ASKED" ] && ! answered=$(gh api --paginate "repos/$REPO/pulls/$NUMBER/reviews?per_page=100" |
+              jq -rs -L .github/scripts --arg sha "$SHA" --arg asked "$ASKED" \
+                'include "round-marker"; [.[][] | select(.user.login == "nextly-review-bot[bot]" and .commit_id == $sha and .submitted_at > $asked)
+                  | select(.body | carries_round_marker($sha)) | .html_url] | first // empty'); then
+            echo "::warning::could not read the pull request's reviews, so the request runs"
+            answered=""
+          fi
+          if [ -n "$answered" ]; then
+            echo "::notice::skipped: $answered already reviewed $SHA after this request"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # 👀 on the comment that asked, as soon as the gate takes the request, and 👍
+  # on one a review of the same head already answered: the request shows it was
+  # seen, whether it then waits in the queue or not. A request on a pull request
+  # whose review is running waits for that run first, as every run of this
+  # workflow for it does (the concurrency group above), so its reaction comes
+  # when that run ends: reacting sooner would mean a gate outside that group,
+  # which could not see the running review and would start a second review of
+  # the same head. It reacts as the review bot, with a token minted here for
+  # `issues: write` and `pull-requests: write` alone: GitHub's tables name the
+  # first for a reaction on a conversation comment, and a comment on a PR,
+  # through the same API, needs the second (measured by `code-hygiene.yml`'s
+  # post step). The agent never runs in this job, and it checks out the
+  # workflow's own gateway alone. The App's key comes from the environment
+  # that admits `main` only, as for `post`.
+  acknowledge:
+    needs: gate
+    if: github.event_name == 'issue_comment' && needs.gate.outputs.asked == 'true'
+    environment: review-bot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Take the review bot's App identity, to react
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.REVIEW_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: React to the request
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          COMMENT: ${{ github.event.comment.id }}
+          RUN: ${{ needs.gate.outputs.run }}
+        run: |
+          set -euo pipefail
+          if [ "$RUN" = true ]; then reaction=eyes; else reaction=+1; fi
+          .github/scripts/review-bot-gh.sh react-request "$COMMENT" "$reaction"
+
+  review:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    # No environment: the App's key is for the jobs that post or react alone.
+    runs-on: ubuntu-latest
+    # GLM thinking responses are slow; a deep multi-phase review needs headroom.
+    timeout-minutes: 90
+    # One review at a time in this repository, whatever the pull request, in
+    # the order asked: every review spends the one z.ai account, which answers
+    # concurrent requests past its limit with an error rather than a wait.
+    concurrency:
+      group: nextly-review-bot-reviews
+      queue: max
+    # When the prefetch read the pull request, which the post job compares a
+    # thread's newest comment with before it replies there.
+    outputs:
+      prefetched: ${{ steps.prefetch.outputs.at }}
+    steps:
+      # The first checkout on this runner, so it makes a whole clone of its
+      # own. With the parser's sparse checkout on the same runner, as before
+      # the gate had a job of its own, this one reused that partial clone
+      # (`--filter=blob:none`) and fetched each file on first read, which
+      # failed once its credentials were gone (2026-09-29).
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # The PR head itself, not the merge ref: the review protocol judges
           # the code at a specific head SHA and reports findings against it.
-          ref: ${{ steps.pr.outputs.sha }}
+          ref: ${{ needs.gate.outputs.sha }}
           # Full history: the protocol distinguishes PR-introduced defects from
           # pre-existing ones by comparing against main, and materializing every
           # ref here means the agent never needs a network-capable git command.
           fetch-depth: 0
           persist-credentials: false
+
+      # On a runner of its own, the checkout above is not sparse; the
+      # sparse-checkout lines below stay as the guard should that ever change.
+      # A sparse checkout earlier on the same runner, as the parser's once was,
+      # sets `core.sparseCheckout true` in `.git/config`; a later checkout turns
+      # it off in the worktree's own config, then removes the extension that
+      # config lives under, so `.git/config` applies again and the head is
+      # checked out holding `.github/scripts` alone (measured on 2026-09-28,
+      # git 2.53, actions/checkout v7.0.0). The agent reads the pull request
+      # from this tree, so sparse checkout is turned off where it stays off,
+      # and a file left out fails the job rather than leaving the agent a tree
+      # with holes in it.
+      #
+      # A whole tree also holds what a sparse one kept out, so two kinds of
+      # file in it are made safe before the agent starts:
+      # - Symbolic links are removed. Claude Code before 2.1.251 did not apply
+      #   a `Read` deny through a link in its Grep and Glob tools, so a link
+      #   committed to `/proc` would reach what the denies below keep out; the
+      #   removal stays with 2.1.283, pinned here, as a second guard.
+      # - Every CLAUDE.md, CLAUDE.local.md and AGENTS.md, and every file under a
+      #   `.claude/` directory at any depth (rules, settings, skills), is the
+      #   base branch's, and one the base branch lacks is removed. Claude Code
+      #   can load these as instructions from where it runs, and a pull request
+      #   must not get to instruct its own reviewer; the agent reads the pull
+      #   request's own versions as data, through the gateway. The action
+      #   restores the root `.claude/` itself; this does not depend on it.
+      - name: Give the agent the whole pull request
+        env:
+          BASE: ${{ needs.gate.outputs.base }}
+        run: |
+          set -euo pipefail
+          git config --local core.sparseCheckout false
+          git sparse-checkout disable
+          # Counted over the whole listing: a `grep -q` that stops at the first
+          # match can end `git ls-files` on a broken pipe, which `pipefail`
+          # would then read as no match.
+          skipped=$(git ls-files -t | awk '$1 == "S"' | wc -l)
+          if [ "$skipped" -ne 0 ]; then
+            echo "::error::the checkout still leaves $skipped files of the pull request out"
+            exit 1
+          fi
+          find . -path ./.git -prune -o -type l -exec rm -f {} +
+          # Names and paths travel NUL-separated, so no path the pull request
+          # chooses can split into two.
+          instructions='(^|/)((CLAUDE|CLAUDE\.local|AGENTS)\.md$|\.claude/)'
+          git ls-files -z | { grep -zE "$instructions" || true; } | xargs -0 -r rm -f --
+          git ls-tree -r -z --name-only "origin/$BASE" | { grep -zE "$instructions" || true; } |
+            xargs -0 -r git checkout "origin/$BASE" --
+          links=$(find . -path ./.git -prune -o -type l -print | wc -l)
+          if [ "$links" -ne 0 ]; then
+            echo "::error::$links symbolic links are still in the checkout"
+            exit 1
+          fi
 
       # The reviewer runs its OWN protocol, not the one in the tree it is
       # reviewing: a pull request old enough to predate the bot carries neither
@@ -173,8 +353,12 @@ jobs:
       # checkout would work for running, but it would also replace the very
       # files under review with the base versions, so a change to the protocol
       # or the gateway would be reviewed as though it had not been made.
+      #
+      # Beside them, in `law/`, go the same commit's copies of the rules the
+      # protocol's Phase 1 reads, read-only. A pull request is judged by the
+      # rules as `main` has them, never by a version it rewrote; the change it
+      # makes to a rule is reviewed as a change.
       - name: Materialize the reviewer's tooling outside the tree
-        if: steps.ask.outputs.run == 'true'
         env:
           TOOLING: ${{ runner.temp }}/nextly-review-bot
           REVISION: ${{ github.sha }}
@@ -194,29 +378,151 @@ jobs:
           # Every gateway reference must now point at the runnable copy; a stray
           # in-repo path left behind would fail mid-review instead of here.
           ! grep -q "\.github/scripts/review-bot-gh\.sh" "$TOOLING/review-prompt.md"
+          mkdir "$TOOLING/law"
+          git archive "$REVISION" AGENTS.md ARCHITECTURE.md .agents/skills/derived-checks \
+            .agents/skills/verifying-merged-work .agents/skills/reviewing-a-pr \
+            .agents/skills/release-and-changesets packages/nextly/AGENTS.md packages/admin/AGENTS.md \
+            packages/plugin-sdk/STABILITY.md packages/ui/STABILITY.md |
+            tar -x -C "$TOOLING/law"
+          chmod -R a-w "$TOOLING/law"
           # The agent's one writable directory starts empty. A pull request can
           # commit files there, and what this job posts as the bot must only
           # ever be what this run's agent wrote.
           rm -rf .nextly-review
           mkdir .nextly-review
 
+      # What every review reads first, fetched before the agent starts, so its
+      # turns go to reviewing: each fetch through the gateway costs it a call
+      # and a Read. Read-only, and outside the working tree like the tooling.
+      # The time is taken before the first read, so a thread that moves while
+      # these run still counts as moved when the post job compares it. The gate
+      # settled the head before the request waited in the queue; one pushed
+      # since stops the job here, before the agent starts, rather than in the
+      # agent's first phase.
+      - name: Prefetch the pull request for the agent
+        id: prefetch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUMBER: ${{ needs.gate.outputs.number }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          TOOLING: ${{ runner.temp }}/nextly-review-bot
+        run: |
+          set -euo pipefail
+          echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          gateway="$TOOLING/review-bot-gh.sh"
+          dir="$TOOLING/pr"
+          mkdir "$dir"
+          "$gateway" pr "$NUMBER" > "$dir/pr.json"
+          head=$(jq -r .head.sha "$dir/pr.json")
+          if [ "$head" != "$SHA" ]; then
+            echo "::error::head moved to $head while the request for $SHA waited; ask for another review"
+            exit 1
+          fi
+          # Paginated answers arrive as one array per page; each file holds one.
+          "$gateway" reviews "$NUMBER" | jq -s 'add // []' > "$dir/reviews.json"
+          "$gateway" threads "$NUMBER" > "$dir/threads.json"
+          "$gateway" files "$NUMBER" | jq -s 'add // []' > "$dir/files.json"
+          # GitHub refuses a whole diff of more than 20,000 lines (HTTP 406),
+          # and a PR that large is still reviewed: its diff is then built from
+          # each file's patch in the list just read. A file GitHub shows no
+          # patch for says so, for the agent to read with file-at.
+          if ! "$gateway" diff "$NUMBER" > "$dir/diff.patch"; then
+            # The file list stops at 3,000 files: one shorter than the count of
+            # changed files leaves some out, and a diff built from it would
+            # read as whole.
+            if [ "$(jq length "$dir/files.json")" -lt "$(jq '.changed_files // 0' "$dir/pr.json")" ]; then
+              echo "::error::GitHub gives neither the whole diff nor every changed file (it lists 3,000 at most), so this cannot be reviewed whole"
+              exit 1
+            fi
+            echo "::notice::GitHub did not give the whole diff, so it is built from each file's patch"
+            jq -r '.[] | "diff --git a/\(.previous_filename // .filename) b/\(.filename)",
+              (if .status == "added" then "--- /dev/null" else "--- a/\(.previous_filename // .filename)" end),
+              (if .status == "removed" then "+++ /dev/null" else "+++ b/\(.filename)" end),
+              (.patch // if .status == "removed" then "GitHub shows no patch for this deleted file: read it as main has it, with base-file" else "GitHub shows no patch for this file (binary, or too large to show): read it with file-at" end)' \
+              "$dir/files.json" > "$dir/diff.patch"
+          fi
+          chmod -R a-w "$dir"
+
+      # What the agent's Bash commands need so that Claude Code can keep
+      # credentials out of their environment (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
+      # on the next step). It runs each command inside bubblewrap, in a PID
+      # namespace of its own. Measured on this runner on 2026-09-28, with
+      # Claude Code 2.1.222; the move to 2.1.283 (v1.0.235) keeps these steps
+      # as they were, without measuring them again (decided 2026-09-30):
+      #
+      # - Without bubblewrap, Claude Code refuses to start, and without socat
+      #   it refuses every command. The runner image has neither.
+      # - Ubuntu 24.04's AppArmor forbids the user namespace bubblewrap makes,
+      #   until the sysctl below lifts that. The runner is thrown away after
+      #   the job, and nothing in it runs code from the pull request.
+      # - 2.1.222 shields `.mcp.json` in every directory above the checkout, up
+      #   to `/`, by mounting over it, and bubblewrap cannot create the mount
+      #   point where the runner's user may not write (`/home` and `/`). An
+      #   empty, root-owned one is made there instead; Claude Code reads MCP
+      #   servers from none of them (`--strict-mcp-config`).
+      #
+      # A missing piece fails the review rather than running it unscrubbed.
+      - name: Prepare the agent's subprocess isolation
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap socat && break
+            [ "$attempt" = 3 ] && exit 1
+            sleep 5
+          done
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          dir=$(dirname "$GITHUB_WORKSPACE")
+          while :; do
+            [ -w "$dir" ] || sudo touch "${dir%/}/.mcp.json"
+            [ "$dir" = / ] && break
+            dir=$(dirname "$dir")
+          done
+
       - name: Run review agent
-        if: steps.ask.outputs.run == 'true'
-        uses: anthropics/claude-code-action@9db594c7a0e82298c121c18b7f08aa1579ce7341 # v1.0.185
+        id: agent
+        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1.0.235
         env:
           # z.ai's Anthropic-compatible endpoint; the key goes in via
           # anthropic_api_key below and is exported as ANTHROPIC_AUTH_TOKEN.
           ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
           # Model tier overrides are how third-party providers select models.
-          ANTHROPIC_DEFAULT_OPUS_MODEL: glm-5.2
-          ANTHROPIC_DEFAULT_SONNET_MODEL: glm-5.2
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: glm-4.7
+          # The main loop runs on GLM-5.3 with its 1M window; `[1m]` is how
+          # Claude Code learns the window, and it strips the suffix before the
+          # request, so z.ai receives `glm-5.3`. Background calls need no such
+          # window and run on the Flash model. Named rather than left to z.ai's
+          # routing of older names, which it may change without notice.
+          ANTHROPIC_DEFAULT_OPUS_MODEL: glm-5.3[1m]
+          ANTHROPIC_DEFAULT_SONNET_MODEL: glm-5.3[1m]
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: glm-5.3-flash
+          # Effort is sent on every request: z.ai maps it onto its thinking
+          # levels, and left unset its default depends on which reading of
+          # the docs holds. A review is worth the deepest.
+          CLAUDE_CODE_EFFORT_LEVEL: max
+          CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "1"
           # z.ai-recommended CI settings: long single-response timeout and an
           # explicit compact window (context detection is wrong for third-party
           # providers).
           API_TIMEOUT_MS: "3000000"
           CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000"
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+          # A review needs no background subagent, and in the Claude Code this
+          # action installs one can end the run before its work is written
+          # (claude-code-action issue 1852, open on 2026-09-28).
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # Every Bash command the agent runs, the gateway included, starts
+          # without the model key or any other credential Claude Code knows,
+          # in a PID namespace of its own; the step above prepares what that
+          # needs. The workflow's read token is not on Claude Code's list, so
+          # the gateway still reaches GitHub. The action reads this from the
+          # step's env.
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+          # The gateway stops if a model key reaches it all the same, so an
+          # action that stopped passing the setting on would fail the review
+          # rather than run it unscrubbed. The action does not know this
+          # variable, and passes it through as it is.
+          REVIEW_BOT_EXPECT_SCRUB: "1"
         with:
           anthropic_api_key: ${{ secrets.ZAI_API_KEY }}
           # The workflow's own token, which only reads here. The action writes
@@ -237,9 +543,14 @@ jobs:
 
             Invocation context:
             - Repository: ${{ github.repository }}
-            - PR number: ${{ steps.pr.outputs.number }}
-            - Head SHA this run was triggered for: ${{ steps.pr.outputs.sha }}
-            - Base branch: ${{ steps.pr.outputs.base }}
+            - PR number: ${{ needs.gate.outputs.number }}
+            - Head SHA this run was triggered for: ${{ needs.gate.outputs.sha }}
+            - Base branch: ${{ needs.gate.outputs.base }}
+            - Prefetch folder, read-only, fetched just before you started:
+              ${{ runner.temp }}/nextly-review-bot/pr/ (pr.json, reviews.json,
+              threads.json, diff.patch, files.json)
+            - Law folder, read-only, `main`'s copies of the rules Phase 1
+              reads: ${{ runner.temp }}/nextly-review-bot/law/
 
             Write the review payload to .nextly-review/review.json, and any
             replies to earlier findings to .nextly-review/replies.json (the only
@@ -247,6 +558,16 @@ jobs:
             workflow posts both as the review bot, and a `post-review` or `reply`
             call of your own is refused. A `gh api` call of your own is not
             permitted. Do not approve, request changes, merge, close, or push.
+
+            Claude Code's isolation creates some files in the checkout, empty,
+            when they are missing: `.env` files, `package.json`, lock files,
+            `.gitmodules`, `.npmrc` and the like. Git does not track them, and
+            they are not part of the pull request.
+
+            In the checkout, every CLAUDE.md, CLAUDE.local.md and AGENTS.md,
+            and every file under a `.claude/` directory, is the base branch's,
+            and symbolic links are removed. Read the pull request's own versions
+            of those with the gateway's `file-at`, at the head SHA above.
           # Allowlist entries match a command prefix, so every entry has to be
           # safe under ANY arguments appended to it, and no raw `gh` or `git`
           # qualifies. `gh api` takes `--hostname` and `gh pr` takes
@@ -265,7 +586,8 @@ jobs:
           # target included; a rule written for Write is accepted and never
           # consulted, so it grants nothing. The leading `/` anchors it at the
           # directory the agent starts in, the checkout. There is no other Edit
-          # or Write rule and no bare Bash.
+          # or Write rule and no bare Bash, and the gateway is the only command:
+          # the Glob tool lists files, so `ls` is not granted either.
           #
           # The checkout is the pull request under review, and Claude Code loads
           # a project's own settings from where it starts: its hooks, its
@@ -278,36 +600,87 @@ jobs:
           #
           # Keeping the model API key on the runner rests on two layers, not on
           # this list alone. Outbound: the gateway fixes the destination of
-          # every request. Inbound: the key sits in the agent's own process
-          # environment, so reading it is the remaining path. Every primitive
-          # that reaches it is withheld: `/proc` and `/sys` are denied below and
-          # the action's own guard blocks those reads too, no `env`/`printenv`
-          # is allowlisted, and `jq` is absent because `jq -n '$ENV'` reads the
-          # environment through libc without going near `/proc`. Treat that as
-          # defence in depth rather than an impossibility proof: an agent that
-          # reads files and emits text is trusted by construction. The backstops
-          # are that forks never reach this job, only collaborators can trigger
-          # it, the token is read-only, and the key should be a CI-dedicated one
-          # that is rotated on suspicion.
+          # every request. Inbound: the key sits in Claude Code's own process
+          # environment, and the scrub keeps it out of every command the agent
+          # runs, so reading it from there is the remaining path. Every
+          # primitive that reaches it is withheld: `/proc` and `/sys` are denied
+          # below and the action's own guard blocks those reads too, no
+          # `env`/`printenv` is allowlisted, and `jq` is absent because
+          # `jq -n '$ENV'` reads the environment through libc without going near
+          # `/proc`. Treat that as defence in depth rather than an impossibility
+          # proof: an agent that reads files and emits text is trusted by
+          # construction. The backstops are that forks never reach this job,
+          # only collaborators can trigger it, the token is read-only, and the
+          # key should be a CI-dedicated one that is rotated on suspicion.
+          # From v1.0.188 the action fails a finished run whose `num_turns`
+          # passes --max-turns, and `num_turns` counts tool results, so
+          # parallel calls inflate it (claude-code-action issue 1795, open on
+          # 2026-09-28): a review done in fewer turns can still read as over.
+          # The cap sits far above the counts this workflow recorded: across
+          # its runs from 2026-08-10 to 2026-09-28, 90 of which reported a
+          # count, `num_turns` reached 175 at most (run 32655211349), and 173
+          # for a review that posted (run 32067853247). So only a runaway meets
+          # it, and the job's 90-minute timeout bounds the rest.
           claude_args: |
-            --allowedTools "Read,Grep,Glob,Edit(/.nextly-review/**),Bash(${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(bash ${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(ls:*)"
+            --allowedTools "Read,Grep,Glob,Edit(/.nextly-review/**),Bash(${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*),Bash(bash ${{ runner.temp }}/nextly-review-bot/review-bot-gh.sh:*)"
             --disallowedTools "WebSearch,WebFetch,Read(//proc/**),Read(//sys/**),Grep(//proc/**),Grep(//sys/**)"
             --setting-sources user
             --strict-mcp-config
-            --max-turns 150
+            --max-turns 400
+
+      # What the run used, which the action's log leaves out: the model it
+      # asked for, the models that answered, the tokens each spent, the tools
+      # it was refused, and why a failed run failed. Read with `jq` on the
+      # runner, outside the agent's reach, from the action's execution file, a
+      # JSON array of the SDK's messages. It prints names and counts only,
+      # never a message's text, and it runs whatever became of the agent. For a
+      # refused `Bash` call it names the program alone, the command's first
+      # word without its path, and only one that looks like a program's name:
+      # the rest of a command can quote the pull request. A
+      # failed run's `result` is printed only when Claude Code worded it as an
+      # API failure (`API Error: <status> <body>`): other text there can be the
+      # model's own.
+      - name: Log what the run used
+        if: always()
+        env:
+          EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
+        run: |
+          file=${EXECUTION_FILE:-$RUNNER_TEMP/claude-execution-output.json}
+          if [ ! -s "$file" ]; then
+            echo "no execution file: the agent did not start"
+            exit 0
+          fi
+          jq -r '
+            (map(select(.type == "system" and .subtype == "init")) | first) as $init
+            | (map(select(.type == "result")) | last) as $result
+            | "asked for: \($init.model // "unknown"), on Claude Code \($init.claude_code_version // "unknown")",
+              "answered by: \([.[] | select(.type == "assistant") | .message.model] | group_by(.) | map("\(.[0]) x\(length)") | if length > 0 then join(", ") else "no reply" end)",
+              (($result.modelUsage // {}) | to_entries[] | "tokens for \(.key): input \(.value.inputTokens), output \(.value.outputTokens), cache read \(.value.cacheReadInputTokens), cache write \(.value.cacheCreationInputTokens), context window \(.value.contextWindow // "unknown")"),
+              "turns: \($result.num_turns // "unknown"), ended: \($result.subtype // "without a result"), error: \(if $result.is_error == null then "unknown" else $result.is_error end), \((($result.duration_ms // 0) / 1000) | floor) s",
+              "refused tools: \([($result.permission_denials // [])[] | .tool_name] | group_by(.) | map("\(.[0]) x\(length)") | if length > 0 then join(", ") else "none" end)",
+              ([($result.permission_denials // [])[] | select(.tool_name == "Bash")
+                | [(.tool_input.command // "") | tostring | splits("\\s+") | select(. != "")] | (.[0] // "")
+                | split("/") | last
+                | if test("^[A-Za-z0-9._-]{1,40}$") then . else "(other)" end]
+                | if length > 0 then "refused commands: \(group_by(.) | map("\(.[0]) x\(length)") | join(", "))" else empty end),
+              (if $result.api_error_status then "API error status: \($result.api_error_status)" else empty end),
+              (if $result.is_error == true then
+                (($result.result // "") | tostring) as $text
+                | if ($text | startswith("API Error")) then "error: \($text | .[0:500])"
+                  else "error: withheld, as it is not an API error (\($text | length) characters)" end
+              else empty end)
+          ' "$file" || echo "could not read the execution file"
 
       # Said here, where it is plain, rather than left to the upload below to
       # report as a missing file.
       - name: Check the agent wrote a review
-        if: steps.ask.outputs.run == 'true'
         run: |
-          test -s .nextly-review/review.json || { echo "::error::the agent wrote no review payload for ${{ steps.pr.outputs.sha }}"; exit 1; }
+          test -s .nextly-review/review.json || { echo "::error::the agent wrote no review payload for ${{ needs.gate.outputs.sha }}"; exit 1; }
 
       # Only the two files the agent was asked for travel to the post job; the
       # rest of what it wrote stays on this runner. `.nextly-review` is a hidden
       # directory, which the action leaves out unless told to include it.
       - name: Hand the payload to the post job
-        if: steps.ask.outputs.run == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: review-payload
@@ -322,10 +695,10 @@ jobs:
   # on. Its tooling comes from the workflow's own commit, and the payload is
   # read as untrusted data.
   post:
-    needs: review
-    if: needs.review.outputs.run == 'true'
-    # The App's key is here and nowhere else, and the environment admits `main`
-    # only: a dispatch from any other branch is refused before a step runs.
+    needs: [gate, review]
+    # The App's key is here and in the two jobs that react, and the environment
+    # admits `main` only: a dispatch from any other branch is refused before a
+    # step runs.
     environment: review-bot
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -372,18 +745,23 @@ jobs:
       # inline one does, and one on a file the change does not touch stops the
       # post, since it could open no thread and the merge queue counts the bot's
       # review while Codex is held up. A file-level comment that cannot post
-      # fails the step for the same reason, and a re-run posts it. Replies
-      # follow the review, each body through a file so no comment text passes
-      # through the shell; one that cannot post, to a thread removed since,
-      # say, is reported without undoing the review. Each post names this run,
-      # and a reply or a file-level comment its place, so re-running this job after a
+      # fails the step for the same reason, and a re-run posts it. Replies go
+      # next, each body through a file so no comment text passes through the
+      # shell; one that cannot post, to a thread removed since, say, is reported
+      # and the rest go on. A reply to a thread with a comment newer than the
+      # prefetch is not posted: the agent answered the thread as it stood when
+      # it started, and someone has spoken since. The review itself goes last,
+      # so its presence says the rest is posted: a request waiting behind this
+      # run counts it as an answer only then. Each post names this run, and a
+      # reply or a file-level comment its place, so re-running this job after a
       # failure posts only what the earlier attempt did not: the gateway tags
       # every post with them and skips one this run already made.
       - name: Post the review as the review bot
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-          NUMBER: ${{ github.event.issue.number || inputs.pr }}
-          SHA: ${{ needs.review.outputs.sha }}
+          NUMBER: ${{ needs.gate.outputs.number }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          PREFETCHED: ${{ needs.review.outputs.prefetched }}
           PAYLOAD: ${{ runner.temp }}/payload
         run: |
           set -euo pipefail
@@ -391,14 +769,31 @@ jobs:
           out="${RUNNER_TEMP}/nextly-review-post"
           mkdir -p "$out"
           test -s "$PAYLOAD/review.json" || { echo "::error::the agent wrote no review payload for $SHA"; exit 1; }
-          jq -e --arg sha "$SHA" '
-            if type == "object" and (.body | type == "string") and ((.comments // []) | type == "array")
-            then {commit_id: $sha, event: "COMMENT", body, comments: (.comments // [])}
-            else error("the payload is not a review: an object with a string body and a comments array")
-            end' "$PAYLOAD/review.json" > "$out/review.json"
+          # A review is refused unless its summary carries the whole round
+          # marker the protocol writes, naming the head being posted to, and
+          # some text besides: a marker alone, a truncated one or an empty
+          # summary would read as a finished round that said nothing, and the
+          # merge queue counts the bot's review while Codex is held up. The SHA
+          # is hexadecimal, so it is safe inside the pattern.
+          jq -e -L .github/scripts --arg sha "$SHA" '
+            include "round-marker";
+            if type == "object" and (.body | type == "string")
+                and (.body | carries_round_marker($sha))
+                and (.body | gsub("<!--[\\s\\S]*?-->"; "") | test("\\S"))
+                and ((.comments // []) | type == "array")
+              then {commit_id: $sha, event: "COMMENT", body, comments: (.comments // [])}
+              else error("the payload is not a review: an object with a summary that carries the round marker for this head, and a comments array")
+              end' "$PAYLOAD/review.json" > "$out/review.json"
           "$gateway" files "$NUMBER" | jq -s 'add // []' > "$out/files.json"
           node scripts/review-anchors.mjs "$out/review.json" "$out/files.json" "$out/inline.json" "$out/file-comments.json"
-          "$gateway" post-review "$NUMBER" "$out/inline.json" "$SHA" "$GITHUB_RUN_ID"
+          # Checked once before the first write, so a head that has moved stops
+          # the step with nothing posted; each file-level comment, reply and the
+          # review check again as they post.
+          current=$("$gateway" head-sha "$NUMBER")
+          if [ "$current" != "$SHA" ]; then
+            echo "::error::head moved to ${current} while reviewing $SHA; nothing was posted, ask for another review"
+            exit 1
+          fi
           count=$(jq length "$out/file-comments.json")
           for i in $(seq 0 $((count - 1))); do
             jq -r ".[$i].body" "$out/file-comments.json" > "$out/file-$i.md"
@@ -409,12 +804,44 @@ jobs:
               echo "::warning::replies.json is not a JSON array, so no reply was posted"
               count=0
             fi
+            # Threads as they stand now. Unreadable, no reply goes: a reply the
+            # next round can make costs less than one that talks past a person.
+            if [ "$count" -gt 0 ] && ! "$gateway" threads "$NUMBER" > "$out/threads.json"; then
+              echo "::warning::the review threads could not be read, so no reply was posted"
+              count=0
+            fi
             for i in $(seq 0 $((count - 1))); do
+              target=$(jq -r ".[$i].in_reply_to" "$PAYLOAD/replies.json")
+              # A comment in the reply's thread, by anyone but this bot, made at
+              # or after the prefetch. The same second counts as after: GitHub's
+              # times are whole seconds. GraphQL names an App without `[bot]`.
+              # A thread not among those read (one deleted since, or a
+              # comment id the agent got wrong) cannot be shown unmoved, so no
+              # reply goes to it.
+              moved=$(jq -r --arg id "$target" --arg since "$PREFETCHED" '
+                [.data.repository.pullRequest.reviewThreads.nodes[]
+                  | select(any(((.comments.nodes // []) + (.recent.nodes // []))[]; (.databaseId | tostring) == $id))] as $threads
+                | if ($threads | length) == 0 then "unread"
+                  else [$threads[] | (.recent.nodes // [])[] | select(.author.login != "nextly-review-bot" and .createdAt >= $since)] | length end' "$out/threads.json")
+              if [ "$moved" = unread ]; then
+                echo "::notice::reply $((i + 1)) of $count not posted: its thread is not among the threads read"
+                continue
+              fi
+              if [ "$moved" != 0 ]; then
+                echo "::notice::reply $((i + 1)) of $count not posted: its thread has a comment made since the review started ($PREFETCHED)"
+                continue
+              fi
               if ! { jq -er ".[$i].body" "$PAYLOAD/replies.json" > "$out/reply-$i.md" &&
-                "$gateway" reply "$NUMBER" "$(jq -r ".[$i].in_reply_to" "$PAYLOAD/replies.json")" "$out/reply-$i.md" "$GITHUB_RUN_ID" "$i"; }; then
+                "$gateway" reply "$NUMBER" "$SHA" "$target" "$out/reply-$i.md" "$GITHUB_RUN_ID" "$i"; }; then
                 echo "::warning::reply $((i + 1)) of $count could not be posted; the review stands"
               fi
             done
+          fi
+          "$gateway" post-review "$NUMBER" "$out/inline.json" "$SHA" "$GITHUB_RUN_ID"
+          # 👍 and 👎 on each finding, for readers to rate it; the review stands
+          # without them.
+          if ! "$gateway" seed-reactions "$NUMBER" "$SHA" "$GITHUB_RUN_ID"; then
+            echo "::warning::👍 and 👎 could not be added to the findings; the review stands"
           fi
 
       # A run that finishes without posting is the failure mode that looks most
@@ -423,8 +850,8 @@ jobs:
       - name: Confirm this run posted a review
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NUMBER: ${{ github.event.issue.number || inputs.pr }}
-          SHA: ${{ needs.review.outputs.sha }}
+          NUMBER: ${{ needs.gate.outputs.number }}
+          SHA: ${{ needs.gate.outputs.sha }}
         run: |
           set -euo pipefail
           # A review this run did not post proves nothing: repeating the request
@@ -445,3 +872,51 @@ jobs:
             exit 1
           fi
           echo "this run posted a review for $SHA"
+
+  # 🚀 on the comment that asked once the review is posted, and 😕 when the run
+  # did not get that far, so the outcome shows where the request was made. A
+  # gate that failed, on GitHub's answer say, settled nothing and acknowledged
+  # nothing, so the job runs then too, and reacts if the comment asked. As the
+  # acknowledgement: the review bot's identity, minted for the same two writes
+  # alone, in a job that runs no agent, with the key from the environment that
+  # admits `main` only.
+  report:
+    needs: [gate, review, post]
+    if: always() && github.event_name == 'issue_comment' && (needs.gate.outputs.run == 'true' || needs.gate.result == 'failure')
+    environment: review-bot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Take the review bot's App identity, to react
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.REVIEW_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: React to the request with how the run ended
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          COMMENT: ${{ github.event.comment.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          GATE: ${{ needs.gate.result }}
+          POSTED: ${{ needs.post.result }}
+        run: |
+          set -euo pipefail
+          # A gate that failed may have failed on a comment that asked for
+          # nothing; the parser, read from this checkout, says whether it asked.
+          if [ "$GATE" != success ] && [ "$(.github/scripts/is-review-command.sh)" != true ]; then
+            echo "the gate failed on a comment that asks for no review, so no reaction"
+            exit 0
+          fi
+          if [ "$POSTED" = success ]; then reaction=rocket; else reaction=confused; fi
+          .github/scripts/review-bot-gh.sh react-request "$COMMENT" "$reaction"

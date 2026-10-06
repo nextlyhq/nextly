@@ -17,7 +17,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../config";
 import { clearWidgets, registerWidget } from "../domains/widgets/registry";
@@ -137,6 +137,8 @@ interface WorkspaceBody {
   widgets?: WorkspaceDeclaration[];
   plugins?: { name: string; widgets?: WorkspaceDeclaration[] }[];
   widgetAudience?: string;
+  /** The running server's dev-reload answer — the emission pinned below. */
+  devReload?: boolean;
 }
 
 async function workspace(headers: Record<string, string>): Promise<Response> {
@@ -530,5 +532,28 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
   it("still refuses an unauthenticated caller", async () => {
     const res = await workspace({});
     expect(res.status).toBe(401);
+  });
+});
+
+describe("GET /api/admin-meta/workspace, devReload", () => {
+  // The admin client dials the dev-reload stream only on an explicit
+  // `devReload === true` from THIS payload, so the emission itself is the
+  // wire the whole fix consumes — and deleting its one line must turn these
+  // red with every other suite green. Both legs stubbed with `vi.stubEnv`:
+  // `NODE_ENV` is read-only in this package's types.
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("answers true while the runtime is development", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const body = await workspaceFor(await keyHolding([`read-${NOTES}`]));
+    expect(body.devReload).toBe(true);
+  });
+
+  it("answers false once the runtime leaves development", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const body = await workspaceFor(await keyHolding([`read-${NOTES}`]));
+    expect(body.devReload).toBe(false);
   });
 });

@@ -292,7 +292,6 @@ const REVIEW_DOMAIN_PATHS = [
   // GitHub review automation: these files read pull requests, post reviews and dispatch on bot
   // logins, so pull-request vocabulary is what they OPERATE on rather than narration about them.
   ".github/workflows/nextly-review-bot.yml",
-  ".github/workflows/nextly-bot-mention.yml",
   ".github/scripts/review-bot",
 ];
 

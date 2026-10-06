@@ -12,6 +12,7 @@
  * rather than reaching for a test-only export of the scheduler.
  */
 import { existsSync, watch } from "node:fs";
+import { resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -37,8 +38,10 @@ vi.mock("node:fs", async importOriginal => {
   };
 });
 
-const CONFIG_PATH = "/virtual/nextly.config.ts";
-const OTHER_CONFIG_PATH = "/virtual/other.config.ts";
+// Resolved, as the loader resolves `configPath` against `cwd`: on Windows a
+// leading `/` gains the drive letter, and the mocks compare against these.
+const CONFIG_PATH = resolve("/virtual/nextly.config.ts");
+const OTHER_CONFIG_PATH = resolve("/virtual/other.config.ts");
 
 /** The change listener the loader registered with `watch`. */
 function capturedListener(): (event: string) => void {

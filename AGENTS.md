@@ -204,6 +204,25 @@ budget, the overrides and each operating system's caveats: the
 - API responses use the canonical envelopes in
   `packages/nextly/src/api/response-shapes.ts` (`{ items, meta }` for lists,
   `{ message, item }` for mutations). Never invent a new response shape.
+- Parse outside input with `zod` at the boundary: a request body, a query,
+  config, plugin options, a provider's response, a webhook payload. Past it,
+  trust no client-supplied id, role or redirect target.
+- A `NextlyError`'s `publicMessage` stays generic where it could leak account
+  state or internals; the detail goes in `logMessage` and `logContext`.
+- Inside a transaction, hand nested work its `tx`; never open a second
+  transaction. On PostgreSQL and MySQL a nested `transaction()` takes another
+  connection and cannot see the outer's writes; on SQLite it waits behind the
+  outer, which is waiting for it.
+- Make retried work (jobs, webhook handlers, event subscribers) idempotent: a
+  repeated delivery adds no second row or side effect.
+- Queries select only the columns they need, filter and paginate in the
+  database, and make no N+1 round trips. Filtering or sorting a large table on
+  an unindexed column is slow: say so in the PR.
+- Never hard-code or log a secret, and redact tokens and credentials in logs
+  and errors. Return one only through a route that exists to hand it over, to
+  a caller allowed to have it: a new API key once at creation; a webhook's
+  signing secrets at creation and through the session-only, `update-webhooks`
+  reveal.
 - Admin styling is token-driven: use `--nx-*` custom properties (defined for
   light AND dark in `packages/ui/src/styles/theme.css`). Zero hardcoded
   colors, and every visual change must work in both modes.
@@ -307,11 +326,12 @@ Why, as measured, and how to recover a file once it has been clobbered: the
   request lands in slices, each complete and tested; public API not yet
   finished is marked `@experimental` until the feature is, as
   `packages/ui/STABILITY.md` uses the tag.
-- Merges go through the merge queue once it is switched on for `main`; it runs
-  the required checks on each pull request combined with the latest `main`.
-  Until then, bring a branch up to date with `main`, and before calling it
-  ready to merge, run `node scripts/verify-merge.mjs <pr-number>` on the
-  result: `CI gate` alone leaves out the integration legs and the secret scan.
+- Every pull request merges through the merge queue, which runs the required
+  checks on it combined with the latest `main` and squash-merges only what
+  passes, so no branch is brought up to date by hand. `node
+scripts/verify-merge.mjs <pr-number>` reads a pull request's checks and
+  threads before it joins the queue, and checks that a merged one landed
+  whole.
 - Do not add a "generated with" line naming an AI tool, an AI co-author
   trailer, or any other AI attribution to commits or PR bodies.
 - Husky runs gitleaks + lint-staged on commit, commitlint on the message, and
