@@ -17,10 +17,10 @@ There is no OAuth provider integration in the runtime. Authentication is local t
 
 Sessions use a two-token architecture:
 
-- **Access token** -- JWT signed with HS256 (jose), 15-minute TTL, stateless verification (no database hit). Sent as the HTTP-only `__nextly_access_token` cookie.
-- **Refresh token** -- opaque random string, 7-day TTL, SHA-256 hashed in the database for revocation support. Sent as the HTTP-only refresh-token cookie.
+- **Access token** -- JWT signed with HS256 (jose), 15-minute TTL, stateless verification (no database hit). Sent as the HTTP-only `nextly_session` cookie.
+- **Refresh token** -- opaque random string, 7-day TTL, SHA-256 hashed in the database for revocation support. Sent as the HTTP-only `nextly_refresh` cookie, scoped to `/admin/api/auth` so that both refresh and sign-out receive it.
 
-When the access token expires, the admin UI silently refreshes it using the refresh token. Users only see a re-login prompt once the refresh token itself expires (7 days of inactivity by default). Every refresh consumes the old refresh token and issues a new one -- if a previously-consumed token is replayed, that's a signal of theft.
+When the access token expires, the admin UI silently refreshes it using the refresh token. Users only see a re-login prompt once the refresh token itself expires (7 days of inactivity by default). Every refresh consumes the old refresh token and issues a new one. A token whose row is gone is refused and logged as `refresh-token-not-found` (see [Refresh-token rotation](#refresh-token-rotation)).
 
 Cookies are scoped to `/admin/*` so Nextly auth never collides with frontend application cookies.
 
@@ -275,7 +275,7 @@ All state-changing auth endpoints (login, logout, register, setup, password oper
 
 ### Refresh-token rotation
 
-Every successful refresh consumes the old refresh token and issues a new one. Replays of a consumed token are detectable -- if you wire up monitoring on the refresh handler, you can flag these as potential theft.
+Every successful refresh consumes the old refresh token and issues a new one. A token that matches no row answers 401 `REFRESH_FAILED` without clearing the cookies, and logs a `refresh-token-not-found` warning (without the token). Watch that warning for replays of a consumed token, but not every one is theft: it also fires for a second tab a round trip behind a rotation another tab made, for a session that was revoked, and for a cookie holding a value that was never issued. The cookies are left alone because nothing is revoked there, and clearing them would sign out the tab that just rotated.
 
 Two refreshes presenting the same token get one rotation. The one that loses the race answers 401 `REFRESH_SUPERSEDED` and leaves the cookies alone. The admin retries with the cookies it now holds; any other client should retry once with its current cookies.
 

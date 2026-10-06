@@ -50,7 +50,7 @@ interface PluginContributions {
   extend?:      Array<{ target: string | string[]; fields: FieldConfig[] }>;
   permissions?: PluginPermission[];            // { action, resource, label?, description?, group? }
   fieldTypes?:  PluginFieldType[];             // custom field types — see below
-  events?:      Array<{ name: string }>;       // a core prefix fails boot; use your own by convention
+  events?:      Array<{ name: string }>;       // each must begin with your slug and a dot, or boot fails
   routes?:      PluginRoute[];                 // { method, path, handler, requiredPermission?, public?, middleware?, rateLimit?, rawBody?, csrf?, noStore?, formatTimestamps?, mount? }
   auth?:        PluginAuthContributions;       // hooks, challenges, ui — see Auth extensibility
   settings?:    ZodObject;                     // gives ctx.settings
@@ -109,10 +109,15 @@ Reads are unchanged and return their value directly.
 ```ts
 ctx.hooks.on(type, collectionSlug | "*", handler);   // beforeCreate/afterCreate/… — can modify/abort
 ctx.events.on(eventName, handler);                   // observe-only; e.g. `collection.${slug}.created`
-ctx.events.emit(eventName, payload);                 // declare custom names in contributes.events
+ctx.events.emit(eventName, payload);                 // your own `<slug>.…` names, declared in contributes.events
 ```
 
 Event-name constants are exported: `DocumentEvents`, `AuthEvents`, `MediaEvents`.
+
+A plugin emits and declares only names beginning with its own slug and a dot, the slug
+being `pluginAdminSlug(name)`: `@acme/billing` emits `acme-billing.charged`.
+`ctx.events.emit` throws `FORBIDDEN` for any other name, core's included, and a name in
+`contributes.events` outside the slug fails boot (`plugin-event-outside-namespace`).
 
 ## Typed slugs (codegen)
 
@@ -454,7 +459,7 @@ return ctx.auth.completeLogin(user.id, {
 });
 ```
 
-Also `ctx.auth.currentUser(request)` and `ctx.auth.verifyCsrf(request)`. `verifyCsrf` accepts the token in the `x-csrf-token` header or as `csrfToken` in a JSON body; it reads at most 64 KB of a body looking for it, and refuses a larger one with `reason: "body-too-large"`, so a large request sends the token in the header.
+Also `ctx.auth.currentUser(request)` and `ctx.auth.verifyCsrf(request)`. `currentUser` answers `null` to a POST, PUT, PATCH or DELETE whose `Origin` (or, without one, `Referer`) is neither your site nor an allowed origin, or that names no origin, as it does to a request with no session. `verifyCsrf` accepts the token in the `x-csrf-token` header or as `csrfToken` in a JSON body; it reads at most 64 KB of a body looking for it, and refuses a larger one with `reason: "body-too-large"`, so a large request sends the token in the header.
 
 ### `ctx.filters.decide`
 
@@ -470,6 +475,31 @@ const verdict = await ctx.filters.decide(
 
 A handler that throws denies, and a handler may only keep or downgrade the
 verdict — so the order plugins load in cannot decide access.
+
+### Typed hook points
+
+`ctx.filters` and `ctx.actions` take their types from `HookPointPayloads`
+(`@experimental`), keyed by the point's name. Core's seams (`email.beforeSend`,
+`email.afterSend`, `admin.nav`, `collections.listQuery`) are listed; a plugin
+lists the points it publishes by augmenting the interface:
+
+```ts
+declare module "@nextlyhq/plugin-sdk" {
+  interface HookPointPayloads {
+    "acme-auth.profile": {
+      kind: "filter";
+      value: { displayName: string };
+      context: { userId: string };
+    };
+    "acme-auth.may-link": { kind: "decision"; context: { email: string } };
+    "acme-auth.linked": { kind: "action"; payload: { userId: string } };
+  }
+}
+```
+
+A listed point's handlers and calls are then checked against its entry, and one
+used through the wrong registry (a `decision` through `apply`, say) does not
+compile. A name with no entry is typed by the call site, as before.
 
 ### Lifecycle
 

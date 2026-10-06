@@ -64,7 +64,7 @@ be walked; see [Secrets](#secrets)).
 
 `nextly plugins info <name>` prints a plugin's manifest: the hosts it may
 reach, whether it declares raw SQL, whether it finishes logins, its secret
-paths, and what it provides and requires.
+paths, what it provides and requires, and its `schemaVersion`.
 
 Capability names are global, and two plugins cannot provide the same one, so
 prefix them with your vendor (`acme/auth-provider`). `requires` is checked at
@@ -134,7 +134,7 @@ Two things are worth knowing. By default, an authenticated route checks the
 **origin** of every unsafe request from a session-cookie caller: it must come
 from your site or from an origin listed in `NEXTLY_ALLOWED_ORIGINS`. Browsers
 send `Origin` (or `Referer`) on cross-site writes, so a forged request is
-refused, while the admin's own requests pass without sending a token. This is
+refused, while a same-origin write passes without sending a token. This is
 the origin half of what core's `/auth/*` routes check. Declare
 `csrf: true` to require a double-submit CSRF token as well, the protection
 core's `/auth/*` routes take. Only **cookie**-authenticated callers are
@@ -152,14 +152,24 @@ IPv6 client counted by its /64. The client is known only with
 client shares one bucket per route, and boot names each rate-limited route
 when that is the case.
 
+A route your plugin's admin page writes to works with `csrf` unset or `true`
+when the page writes through `usePluginRouteMutation` (from
+`@nextlyhq/plugin-sdk/admin`): it sends `x-csrf-token` on every write, read
+from the `nextly_csrf` cookie or fetched once from `/admin/api/auth/csrf`. A
+page that writes with its own `fetch` either leaves `csrf` unset, or fetches
+`/admin/api/auth/csrf` and sends the token as `x-csrf-token` (or as
+`csrfToken` in a JSON body); with `csrf: true` and no token, every save
+answers 403.
+
 A public route skips the default check — it authenticated no one, and a cookie
-on the request says nothing about what admitted it. The one that does not skip
-it is an explicit declaration: a public handler that resolves the session user
-(`ctx.auth.currentUser`) and acts on them declares `csrf: true`, and only
-callers carrying the session cookie are asked for a token, so webhook callers
-and browsers with only unrelated cookies stay free. `csrf: false` cannot be
-combined with `public: true`: boot refuses such a route, naming the plugin and
-the route.
+on the request says nothing about what admitted it. A public handler that
+resolves the session user through `ctx.auth.currentUser` is checked there
+instead: a POST, PUT, PATCH or DELETE whose origin is not your site or an
+allowed one, or that names no origin, gets no user (`null`). Declare
+`csrf: true` to require the token as well; only callers carrying the session
+cookie are asked for it, so webhook callers and browsers with only unrelated
+cookies stay free. `csrf: false` cannot be combined with `public: true`: boot refuses
+such a route, naming the plugin and the route.
 `ctx.auth.verifyCsrf` remains the tool when the check must stay conditional
 inside the handler instead.
 

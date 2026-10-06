@@ -408,8 +408,9 @@ Run it in your PR CI to catch mistakes before they reach production.
 | `NEXTLY_APPLIED_BY`          | `migrate`  | No effect today: the column exists on `nextly_schema_events` but the runner does not write it. |
 | `NEXTLY_ACCEPT_DATA_LOSS=1`  | `migrate`, `db:sync` | Acknowledge destructive changes (drops, type narrowings) without an interactive prompt. Required for CI runs of destructive migrations. |
 | `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1` | `migrate` | Allow a destructive change to Nextly's **own** core tables, which `migrate` otherwise refuses with `NEXTLY_CORE_DESTRUCTIVE_REFUSED`. Applies to every operation in the run — see below before setting it. |
-| `NEXTLY_DROP_RETIRED_AUTH_TABLES=1` | `migrate` | Drop the retired `accounts` and `sessions` tables, when they are present in the shape Nextly created them. A table that only shares the name is left alone. |
+| `NEXTLY_DROP_RETIRED_AUTH_TABLES=1` | `migrate` | Drop the retired `accounts` and `sessions` tables, when they are present in the shape Nextly created them. A table that only shares the name is left alone, but an Auth.js adapter's table has the same shape, so check a table is not another app's before setting it. |
 | `NEXTLY_DROP_NONEMPTY_RETIRED=1` | `migrate` | With the flag above, also drop a retired table that still holds rows. Without it such a table is kept, with a warning, and the rest of the run goes ahead. |
+| `NEXTLY_ERASE_RETIRED_AUTH_TABLES` | Runtime | The retired tables that are Nextly's, comma-separated (`accounts`, `sessions` or `accounts,sessions`). Deleting a user erases their rows only from a table named here, and only while it has the shape Nextly created. Nextly keeps no record that it created either table, so unset, the rows stay and the startup warning says so. |
 
 ## When `migrate` refuses a destructive core change
 

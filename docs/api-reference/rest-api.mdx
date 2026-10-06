@@ -34,8 +34,8 @@ Two authentication mechanisms are supported.
 
 When a user logs in through `/api/auth/login` (or completes the `/admin/setup` wizard), the runtime sets two HTTP-only cookies:
 
-- `__nextly_access_token` — short-lived JWT used for every authenticated request.
-- `__nextly_refresh_token` — long-lived token consumed only by `/api/auth/refresh`.
+- `nextly_session` — short-lived JWT used for every authenticated request, scoped to `/admin`.
+- `nextly_refresh` — long-lived token, scoped to `/admin/api/auth` so that only the auth endpoints receive it: `/api/auth/refresh` rotates it and `/api/auth/logout` deletes its row.
 
 Browsers send these automatically. There is no header for you to set; just call `fetch` with `credentials: "include"` if your frontend lives on a different origin.
 
@@ -191,7 +191,7 @@ The catch-all dispatches every URL under `/api/` to one of these endpoint groups
 | `POST` | `/api/auth/login` | Email + password login. Sets cookies. | Public |
 | `POST` | `/api/auth/challenge/resolve` | Answer a second factor with the pending token. Sets cookies. | Pending token |
 | `POST` | `/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in. Sets cookies. | Pending token |
-| `POST` | `/api/auth/logout` | Clear cookies. | Cookie |
+| `POST` | `/api/auth/logout` | Delete the session's refresh token and clear cookies. | Cookie |
 | `POST` | `/api/auth/refresh` | Rotate the access token. | Cookie |
 | `POST` | `/api/auth/register` | Public registration. | Public |
 | `POST` | `/api/auth/forgot-password` | Send password-reset email. | Public |
@@ -354,7 +354,7 @@ curl -i -X POST http://localhost:3000/api/auth/login \
   -d '{"email":"user@example.com","password":"secure-password"}'
 ```
 
-A successful login responds 200 with the action envelope `{ message, user, token, exp }` and sets `__nextly_access_token` + `__nextly_refresh_token` cookies on the response. Browsers handle these automatically; for API clients you can ignore them and use the returned `token` as a Bearer token instead.
+A successful login responds 200 with the action envelope `{ message, user, token, exp }` and sets the `nextly_session` and `nextly_refresh` cookies on the response. Browsers handle these automatically; for API clients you can ignore them and use the returned `token` as a Bearer token instead.
 
 ```bash
 # Register
@@ -383,7 +383,7 @@ curl -X POST http://localhost:3000/api/auth/reset-password \
 # Change password (authenticated)
 curl -X PATCH http://localhost:3000/api/auth/change-password \
   -H "Content-Type: application/json" \
-  -b "__nextly_access_token=..." \
+  -b "nextly_session=..." \
   -d '{"currentPassword":"old","newPassword":"new-secure"}'
 ```
 
@@ -588,7 +588,7 @@ Image-size presets are managed under `/api/image-sizes`. The `regeneration-statu
 `/api/api-keys/*` is session-only — these endpoints **do not** accept Bearer authentication, so an attacker with a stolen key cannot mint new keys with it. Manage keys from the admin UI or via cookie-authenticated requests.
 
 ```bash
-curl http://localhost:3000/api/api-keys -b "__nextly_access_token=..."
+curl http://localhost:3000/api/api-keys -b "nextly_session=..."
 ```
 
 `POST /api/api-keys` returns the new key value once at creation; it is hashed on the server and never displayed again.

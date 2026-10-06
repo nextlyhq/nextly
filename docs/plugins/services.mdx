@@ -113,6 +113,13 @@ read and is refused on a write, and a selector is refused on both.
 
 `ctx.services` also exposes `users`, `media`, and `email` services.
 
+`ctx.services.users` may create and update accounts, but not decide who administers the
+site. It refuses, with `NextlyError` code `FORBIDDEN`, to create an install's first
+account (core makes that one super-admin), to give a role that reaches `super-admin`
+(directly or by inheritance) on create or update, and to change the password, email,
+activation, email verification or roles of an account that reaches `super-admin`, or to
+delete one. An address it marks verified is recorded as verified by `plugin`.
+
 ## Querying (D56)
 
 `listEntries` takes a `QueryOptions`:
@@ -248,19 +255,34 @@ has no nested `transaction`; with it, `tx` is the live handle and its
 there runs on its own connection on PostgreSQL and MySQL, outside the
 transaction, and commits on its own.
 
-On SQLite the transaction holds the database's only connection until it ends.
-A service or `ctx.settings` called inside joins it as a savepoint, and its rows
-roll back with it. What a service does after its own write runs when its
-savepoint is released, though, and is not undone if your transaction then rolls
-back: collection hooks (`afterCreate`, `afterUpdate`, `afterDelete`), events
-such as `user.created` or `plugin.settings.changed`, and cache revalidation.
-Call such services after the transaction, not inside it. A media delete
-(`ctx.services.media.delete` or `bulkDelete`) called inside it is refused with
-`409 CONFLICT`, so stored files are never removed for a delete that rolls back:
-delete media after the transaction. A focal-point change made inside it keeps
-the superseded image variants rather than deleting them. Statements from other requests wait for the transaction or run
-inside it. Keep it short, and never await network I/O such as `ctx.fetch`
-inside it.
+On SQLite the transaction holds the database's only connection until it ends. A
+service or `ctx.settings` called inside joins it as a savepoint, and its rows
+roll back with it. What a service does after its own write waits until your
+transaction commits: collection hooks (`afterCreate`, `afterUpdate`,
+`afterDelete`), field `afterChange` hooks, events such as `user.created`,
+`media.uploaded` or `plugin.settings.changed`, cache revalidation and webhook
+delivery run once, before `ctx.db.transaction` resolves, and never run if it
+rolls back. Inside such a transaction an after-hook's error is logged rather
+than failing the call, and a value a field `afterChange` hook or a Single's
+`afterUpdate` hook returns does not reshape the service's response. A media
+delete (`ctx.services.media.delete` or `bulkDelete`) called inside it is refused
+with `409 CONFLICT`, so stored files are never removed for a delete that rolls
+back: delete media after the transaction. A focal-point change made inside it
+keeps the superseded image variants rather than deleting them.
+
+Statements from other requests wait for the transaction or run inside it. Core's
+security writes — sign-out, the refresh-token theft response, failed-attempt and
+lockout counts, role assignment and removal, API-key revocation and audit
+entries — queue behind it instead, so its rollback cannot undo them. Keep it
+short, and never await network I/O such as `ctx.fetch` inside it.
+
+Nested transactions on SQLite run one at a time, in the order they are started.
+A nested transaction must never wait for one started after it in the same
+transaction, for example through a memoised or cached promise that a later
+sibling created. Neither settles, and the connection stays inside your open
+transaction: every later transaction waits, and other requests' writes land in
+it without ever committing, so a restart loses them. Start shared work before
+the transactions that wait on it, or outside the transaction.
 
 There is no relational `query` namespace: the one that used to exist named a
 few core tables, so it could never answer about a plugin's own tables.

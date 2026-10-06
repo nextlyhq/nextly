@@ -32,8 +32,10 @@ Core authentication hardening, and the runtime surface a stateful plugin needs.
 ## Upgrading
 
 **Run `nextly migrate` before deploying this release.** It adds the nullable
-`users.deactivated_at` column and the `nextly_plugin_settings` table. Boot
-applies it on its own in two cases: with `NODE_ENV=production` when
+`users.deactivated_at` and `users.email_verified_via` columns and the
+`nextly_plugin_settings` table, and marks every address already verified as
+verified by `legacy`. Boot applies the schema, and the same marking, on its own
+in two cases: with `NODE_ENV=production` when
 `db.runMigrationsOnBoot` is on, and with `NODE_ENV=development` unless
 `NEXTLY_DISABLE_BOOT_APPLY=1` is set or the app has no migrations directory.
 Otherwise boot only warns about a schema that is behind, and password login
@@ -57,6 +59,11 @@ Each is described in its section below; listed here so none is missed.
   and the reserved token claims cannot be added. Add your own claim beside a core one instead of changing it.
 - **An `afterAuthenticate` hook that returns another account fails the
   login.** Change the user's details, never its id.
+- **A `determineUser` hook must name a usable account.** `GET /auth/session`
+  reads the account the hook returns and does not answer it as a session when
+  that account is unknown, deactivated or unverified; the request then goes on
+  to the session cookie. A hook returning a synthetic identity, such as one
+  for an API key, no longer gets a session.
 - **Challenge views no longer post the answer.** They receive
   `resolve(response)` and call it; `pendingToken` is deprecated.
 - **A wrong code at `POST /auth/challenge/resolve` answers in the canonical
@@ -82,6 +89,34 @@ Each is described in its section below; listed here so none is missed.
   says nothing. `nextly.users.create` and `ctx.services.users.create` still
   default to `admin-vouched`, because they are the host's own server code;
   pass `emailVerification: "pending"` there for a self-supplied address.
+- **Self-registered accounts stay unverified until their link is followed.**
+  Registration used to mark the address verified at once, and password sign-in
+  requires a verified address, so an app with registration on now needs a
+  working email provider. An administrator activating such an account no
+  longer lets it sign in by itself: the person follows the link, or the
+  administrator also sets `emailVerified`.
+- **A correct password for an unverified account answers 403
+  `EMAIL_NOT_VERIFIED`** at `POST /auth/login`, where it answered 401
+  `AUTH_INVALID_CREDENTIALS`, and `nextly.login()` answers the same way. A
+  wrong password, and a locked or administrator-deactivated account, still
+  answer `AUTH_INVALID_CREDENTIALS`.
+- **`PATCH /api/users/:id/password` clears `mustChangePassword` and ends the
+  account's sessions.** It used to set only the hash; it now also stamps
+  `passwordUpdatedAt` and deletes the account's refresh tokens, so a flow that
+  creates a user who must change their password and then sets it this way no
+  longer leaves the change pending.
+- **A refresh token is spent once.** Two refreshes presenting one token no
+  longer both succeed: the second answers 401 `REFRESH_SUPERSEDED` and leaves
+  the cookies alone. A client other than the admin retries once with the
+  cookies it now holds.
+- **The refresh cookie is scoped to `Path=/admin/api/auth`**, where it was
+  `/admin/api/auth/refresh`, so sign-out receives it and deletes the session's
+  refresh row; before, that row stayed valid for its whole lifetime after the
+  user signed out. A cookie left at the old path is cleared by the next
+  sign-in, refresh or sign-out. Only core's refresh and sign-out handlers read
+  it: auth hooks (`determineUser`, `beforeLogin`), auth strategies and plugin
+  route handlers receive the request without `nextly_refresh`, with every
+  other cookie, header and the body unchanged.
 - **`nextly.login()` applies the login endpoint's account checks.** It
   refuses a locked, deactivated or unverified account, and one that must
   replace an admin-set password, and a wrong password counts toward the
@@ -92,13 +127,31 @@ Each is described in its section below; listed here so none is missed.
   `select`, `insert`, `update`, `delete` and `transaction` only: `execute`,
   `run`, `selectDistinct`, `$count`, `with`/`$with` and `batch` are gone, as is
   the relational `query` namespace. Declare `rawSql` for the live instance.
-- **`ctx.events.emit` refuses core event names** (`plugin.`, `collection.`,
-  `auth.`, `document.`, `media.`, `user.`), and a plugin declaring an event
-  under one of those prefixes fails boot. Use your plugin's own prefix.
+- **A plugin's events must be named under its slug.** `ctx.events`, a stable
+  surface in `STABILITY.md`, now takes from a plugin only names beginning
+  `<slug>.`, where the slug is `pluginAdminSlug(name)`: `@acme/billing` emits
+  `acme-billing.charged`. `ctx.events.emit` throws `FORBIDDEN` for any other
+  name, core's (`plugin.`, `collection.`, `auth.`, `document.`, `media.`,
+  `user.`) included, and a plugin declaring an event in `contributes.events`
+  under a core prefix (`plugin-event-name-reserved`) or outside its slug
+  (`plugin-event-outside-namespace`) fails boot. Rename your events under your
+  slug.
+- **`ctx.services.users` cannot decide who administers the site.** It refuses,
+  with `FORBIDDEN`, to create an install's first account, to give a role that
+  reaches `super-admin` (directly or by inheritance) on create or update, and
+  to change the password, email, activation, email verification or roles of
+  an account that reaches `super-admin`, or to delete one. `ctx.services` is
+  stable in `STABILITY.md`. Core's own paths (the admin, the Direct API,
+  setup) are unchanged.
 - **The account-link endpoints and their service methods are removed.**
 - **`accounts` and `sessions` are no longer exported from `nextly/schemas`.**
   Code that imports them stops compiling; declare the table yourself with only
   the columns you read. Fresh installs no longer create the tables.
+- **Deleting a user no longer erases their rows from a retired `accounts` or
+  `sessions` table unless you name it.** Set
+  `NEXTLY_ERASE_RETIRED_AUTH_TABLES` to the tables that are Nextly's
+  (`accounts`, `sessions`, or `accounts,sessions`). Nextly keeps no record that
+  it created them, and the Auth.js adapters' tables share the name and shape.
 
 ## Authentication
 
@@ -158,11 +211,11 @@ Deactivating an account, or setting its password — by an administrator
 own, by a reset, by accepting an invite or by setting an initial password —
 deletes its refresh tokens in the same transaction, so a reactivation does not
 bring old sessions back. Every one of these password writes also clears
-`mustChangePassword` and stamps `passwordUpdatedAt`;
-`PATCH /api/users/:id/password` used to set only the hash. A user's own password change
-through `userService.changePassword` is refused for a deactivated account, as
-`changePassword` already was, and the Direct API's `changePassword` and
-`resetPassword` end the account's other sessions too, as the REST endpoints
+`mustChangePassword` and stamps `passwordUpdatedAt`; `PATCH
+/api/users/:id/password` used to set only the hash. A user's own password
+change through `userService.changePassword` is refused for a deactivated
+account, as `changePassword` already was, and the Direct API's `changePassword`
+and `resetPassword` end the account's other sessions too, as the REST endpoints
 did. An administrator who sets their own password on the user edit page is
 signed out and sent to sign in again, as is one who deactivates their own
 account there. A refresh token is spent once: a rotation hands out its new
@@ -170,20 +223,34 @@ token only if it removed the presented row, so two requests presenting one
 token get one rotation, and the one that loses the race answers 401
 `REFRESH_SUPERSEDED` and leaves the cookies alone. The admin retries with the
 cookies it now holds; any other client should retry once with its current
-cookies. A spent token replayed later is still refused with its cookies
-cleared. A sign-in or a rotation in
-flight when the account is deactivated or its password set does not leave a
-session behind: each writes its refresh row in one transaction that locks the
-account's row (`FOR SHARE` on PostgreSQL and MySQL) and checks the account
-again. A password sign-in, including one paused for a second factor, is
-refused if the password changed after it was proven, and so is the session the
-forced first-sign-in change issues if the password is set again before it is
-written. An access token already issued stays valid until it expires,
-within fifteen minutes; a token from the Direct API's `nextly.login()` lasts
-30 days and is not ended early. The password
-attempt lockout applies to password logins only: a refresh is not a password
-attempt, and someone else guessing a password must not end a session that is
-already established.
+cookies. A token whose row is already gone — one a second tab rotated a round
+trip earlier, a spent token replayed later, a revoked session's, or a value
+never issued — answers 401 `REFRESH_FAILED` without clearing the cookies:
+nothing is revoked there, and clearing would only wipe the fresh cookies the
+tab that won the rotation has just set in the same browser. Each such refusal
+logs a `refresh-token-not-found` warning, without the token. A sign-in or a
+rotation in flight when the account is deactivated or its password set does not
+leave a session behind: each writes its refresh row in one transaction that
+locks the account's row (`FOR SHARE` on PostgreSQL, `FOR UPDATE` on MySQL) and
+checks the account again. A password sign-in, including one paused for a second
+factor, is refused if the password changed after it was proven, and so is the
+session the forced first-sign-in change issues if the password is set again
+before it is written. An access token already issued stays valid until it
+expires, within fifteen minutes; a token from the Direct API's `nextly.login()`
+lasts 30 days and is not ended early. The password attempt lockout applies to
+password logins only: a refresh is not a password attempt, and someone else
+guessing a password must not end a session that is already established.
+
+On MySQL the session-row write locks the account with `FOR UPDATE`, which
+every MySQL-compatible server accepts; it only makes concurrent sign-ins of
+one account take turns. The audit and activity writes that check the account
+they name still exists take `FOR SHARE` on MySQL 8, Aurora and Vitess, and
+`FOR UPDATE` on MariaDB and TiDB, which reject `FOR SHARE` as a syntax error,
+so every attributed audit or activity write failed there before. The MySQL
+adapter reports which it can take as `getCapabilities().sharedRowLock`
+(experimental), known once it has connected; `checkDialectVersion` returns
+the variant it detected, and `acceptsForShare` is exported from
+`@nextlyhq/adapter-drizzle/version-check`.
 
 Any HS256 token signed with `NEXTLY_SECRET` that carried a `sub` was accepted
 as a session. The session verifier refused only the one token kind it had been
@@ -199,8 +266,8 @@ signing algorithm is pinned explicitly at the same time, so a token declaring
 `alg: "none"` cannot talk the verifier out of checking the signature.
 
 This release still accepts a session token with no `typ` header, so tokens
-already in circulation keep working; a later release will require it, which
-will stop Direct API tokens minted before this change. Browser sessions are
+already in circulation keep working; 0.1.0 will require it, which will stop
+Direct API tokens minted before this change. Browser sessions are
 unaffected either way, because access tokens rotate every fifteen minutes.
 
 A custom user field named `typ` can no longer reach the claims, where it would
@@ -222,6 +289,14 @@ with a challenge, but only for the account that authenticated. A hook that
 returns a user with a different id, a challenge for a different `userId`, or
 no user at all now fails the login with an internal error, because what it
 returns is what the session or pending token is issued for.
+
+A `determineUser` hook can answer `GET /auth/session` from a credential of its
+own, such as an API key, but only for an account that may hold a session. The
+endpoint reads the account the hook names, and an unknown, deactivated or
+unverified one is not answered as a session: the request goes on to the
+session cookie as if the hook had returned nothing. A password lockout does
+not disqualify it, as it does not disqualify a refresh. Before, the hook's
+user was answered as returned.
 
 The forced first-sign-in password change checks the account before changing
 the password, not only at the session afterwards, so an account deactivated or
@@ -288,7 +363,11 @@ login page stops offering a challenge nothing can finish.
 spending an attempt.
 
 `ctx.auth.currentUser(request)` reports the signed-in user for a plugin route
-that behaves differently when someone is already signed in.
+that behaves differently when someone is already signed in. A POST, PUT, PATCH
+or DELETE whose `Origin` (or, without one, `Referer`) is neither this site nor
+an allowed origin, or that names no origin at all, gets no user (`null`), so a
+public route acting on the user it reads cannot be driven by another site
+through the session cookie.
 
 Breaking, for plugins that contribute a challenge view: the host now posts the
 answer, and the component receives `resolve(response)` instead of posting the
@@ -296,23 +375,27 @@ answer, and the component receives `resolve(response)` instead of posting the
 `pendingToken` stays in the props for one minor, deprecated, and is undefined
 in resume mode. When an answer finishes the login, the host navigates to the
 login's destination itself; `onResolved` chooses where to land only for a view
-that still posts its own answer with `pendingToken`.
+that still posts its own answer with `pendingToken`. Such a view gets a
+console notice in the admin, once per challenge type, saying the prop is
+deprecated.
 
-`createExternalUser` creates an active, email-verified account with no password,
-for an identity a trusted provider has already verified. A passwordless
-`createLocalUser` makes an inactive invite carrying a set-password link, which
-is the wrong shape for someone who has just signed in with a provider.
+`ctx.services.users` is the user service as a plugin receives it, and a
+plugin may not decide who administers the site through it. It refuses, with
+`NextlyError` code `FORBIDDEN`, to create an install's first account (core
+makes that one super-admin), to give a role that reaches `super-admin`,
+directly or by inheritance, on create or update, and to change the password,
+email, activation, email verification or roles of an account that reaches
+`super-admin`, or to delete one. The admin, the Direct API and setup keep the
+unrestricted service.
 
-It refuses two things as policy. It will not create the first account on an
-install, because that account decides who administers the site and a login
-provider must never be what mints it. And it will not assign the super-admin
-role, so the highest privilege is never reachable by arriving through a
-provider.
-
-Roles are validated and assigned inside the same transaction as the account.
-`createLocalUser` assigns them afterwards and swallows failures, which can
-leave an active account holding fewer privileges than it was created with and
-nothing to say so.
+`users.email_verified_via` records how an address came to be verified: `link`
+(a verification link), `invite` (an accepted invite), `admin` (an
+administrator, the app's own server code, setup or a seeder), `plugin`
+(through `ctx.services.users`) or `external` (a login provider). It is written
+in the same statement as `email_verified` and cleared with it. `nextly migrate`
+adds the nullable column and marks an address verified before it existed, or
+written outside Nextly, as `legacy`, on every run, so a later decision keyed on
+how an address was verified can tell an unknown origin from a known one.
 
 ## The plugin runtime
 
@@ -331,7 +414,8 @@ be a string (a number or a boolean, say), a challenge id core reserves or
 another enabled plugin also declares, a settings key or plugin name too long
 for storage, and a `schemaVersion` that is not a positive integer.
 `nextly plugins info <name>` prints the manifest: outbound hosts, raw SQL,
-whether it finishes logins, secret paths, and what it provides and requires. Capability names are
+whether it finishes logins, secret paths, what it provides and requires, and
+its `schemaVersion` ("not declared" when it has none). Capability names are
 global; prefix them with your vendor (`acme/auth-provider`).
 
 **`onReady`**, which runs after every plugin has initialised and routes are
@@ -392,20 +476,34 @@ limit, and boot names each rate-limited route when that is the case.
 
 CSRF applies only to callers the session cookie admitted, because a browser
 cannot attach an API key cross-site. By default an unsafe-method request must
-come from this site or an allowed origin, which the admin's own requests do
+come from this site or an allowed origin, which a same-origin write does
 without a token; `csrf: true` also requires the double-submit token, and
 `csrf: false` refuses every unsafe-method request the session cookie
 authenticates, so the route takes writes only from callers with another
 credential. A refusal answers `403 CSRF_FAILED` and records a `csrf-failed`
-audit event. A public route skips the default check, and a public handler that
-resolves the session user declares `csrf: true`. `csrf: false` cannot be
+audit event. A public route skips the default check; a public handler that
+resolves the session user through `ctx.auth.currentUser` gets no user for a
+cross-site write, and `csrf: true` adds the token. `csrf: false` cannot be
 combined with `public: true`: boot refuses such a route, naming the plugin and
 the route.
+
+The admin's `usePluginRouteMutation` now sends `x-csrf-token` on every write,
+read from the `nextly_csrf` cookie or fetched once from `/auth/csrf`, so a
+route the plugin's admin page writes to through it may leave `csrf` unset or
+declare `csrf: true`. A page that writes with its own `fetch` either leaves
+`csrf` unset, or fetches `/admin/api/auth/csrf` and sends the token as
+`x-csrf-token` (or as `csrfToken` in a JSON body). The admin's fetcher also
+merges a caller's `headers` onto its defaults, where they used to replace them
+and drop the JSON content type.
 
 **Declared hook points**, collision-checked and owned by prefix, plus
 `ctx.filters.decide` for seams where handlers veto rather than transform.
 Decisions fail closed: a handler that throws denies, and a handler may only
 keep or downgrade a verdict, so load order cannot decide access.
+`HookPointPayloads` (experimental) maps a hook point's name to what it
+carries, so `ctx.filters` and `ctx.actions` type a listed point's handlers and
+calls; a plugin lists its own points by augmenting it from
+`@nextlyhq/plugin-sdk`, and a name with no entry is typed as before.
 
 **`user.created` and `user.deleted` events**, so a plugin can clean up what it
 stored against a user, with `UserEvents` and their payload types. The webhook
@@ -432,7 +530,8 @@ the `getAccounts`, `deleteUserAccount` and `unlinkAccountForUser` service
 methods behind them. They read an `accounts` table nothing has written since
 the auth rewrite, so they could only ever answer with an empty list or a
 not-found, and a route that cannot return data invites clients to build
-against it.
+against it. External sign-in is not affected: nothing in this release reads or
+writes the `accounts` table.
 
 The relational `query` namespace is also gone from the plugin-facing database
 type. It named a handful of core tables, so it could never answer about a
@@ -452,38 +551,58 @@ on every dialect.
 
 The SQLite adapter runs a `transaction()` called from inside another
 transaction's work as a savepoint of it, including one made later from a
-savepoint that has since released, which runs inside the innermost
-transaction or savepoint still open on the connection, and rolls back with it
-if that one does. It used to queue behind the transaction waiting for it, which hung both
-and every later transaction on the instance. Core services' own transactions
-on SQLite go through the adapter too, so one called inside a plugin's
+savepoint that has since released, which runs inside the innermost transaction
+or savepoint still open on the connection, and rolls back with it if that one
+does. It used to queue behind the transaction waiting for it, which hung both
+and every later transaction on the instance. Core services' own transactions on
+SQLite go through the adapter too, so one called inside a plugin's
 `ctx.db.transaction` nests as a savepoint, and its rows roll back with it,
 instead of failing with "cannot start a transaction within a transaction".
-What it does after its own write runs when its savepoint is released and is
-not undone if the plugin's transaction then rolls back: collection hooks
-(`afterCreate`, `afterUpdate`, `afterDelete`), events such as `user.created` or
-`plugin.settings.changed`, and cache revalidation. A core media delete
-(`media.delete` or `media.bulkDelete`) called inside the transaction is
-refused with `409 CONFLICT`, so stored files are never removed for a delete
-that rolls back: delete media after the transaction. A focal-point change made
-inside it keeps the superseded image variants rather than deleting them.
-`DrizzleAdapter.inTransaction()` is new: it tells a caller whether a
+
+What it does after its own write — collection `afterCreate`, `afterUpdate` and
+`afterDelete` hooks, field `afterChange` hooks, events such as `user.created`,
+`media.uploaded` or `plugin.settings.changed`, cache revalidation and webhook
+delivery — waits until the plugin's transaction commits, runs once before
+`ctx.db.transaction` resolves, and never runs if it rolls back. Inside such a
+transaction an after-hook's error is logged rather than failing the call, and a
+value a field `afterChange` hook or a Single's `afterUpdate` hook returns does
+not reshape the service's response. `DrizzleAdapter.afterCommit()` is new and
+experimental: it runs an effect once the current write is durable, now on
+PostgreSQL and MySQL, and on SQLite after the outermost transaction commits.
+Sign-out, the refresh-token theft response, failed-attempt and lockout writes,
+role assignment and removal, API-key revocation and audit entries made by other
+requests queue behind a plugin's transaction on SQLite, instead of running
+inside it and being undone by its rollback. An effect belongs to the
+savepoint whose write registered it, so a nested write that rolls back
+announces nothing even when sibling writes in a `Promise.all` succeed.
+`updateUser` writes an account's core fields and replaces its roles in one
+transaction, and a plugin's change to any account-controlling field, roles
+included, re-checks the super-admin rule inside it.
+
+A core media delete (`media.delete` or `media.bulkDelete`) called inside the
+transaction is refused with `409 CONFLICT`, so stored files are never removed
+for a delete that rolls back: delete media after the transaction. A focal-point
+change made inside it keeps the superseded image variants rather than deleting
+them. `DrizzleAdapter.inTransaction()` is new: it tells a caller whether a
 `transaction()` made from there would join an open transaction as a savepoint,
 and is false on PostgreSQL and MySQL, where each transaction has its own
-connection. On SQLite a
-plugin's transaction holds the database's only connection until it ends:
-other requests' statements wait for it or run inside it, so keep it short and
-never await network I/O (`ctx.fetch`) inside it. An error the plugin throws inside
-`ctx.db.transaction`, `rawSql` or not, reaches it as thrown, as on PostgreSQL
-and MySQL, rather than as a generic database error.
-
-External identities are not affected: they are the subject of the plugin
-identity tables that arrive with the auth plugin, not of this table.
+connection. On SQLite a plugin's transaction holds the database's only
+connection until it ends: other requests' statements wait for it or run inside
+it, so keep it short and never await network I/O (`ctx.fetch`) inside it.
+Nested transactions on SQLite run one at a time, in the order they are started.
+A nested transaction must never wait for one started after it in the same
+transaction, for example through a memoised or cached promise that a later
+sibling created: neither settles, and the connection stays inside the open
+transaction, so every later transaction waits and other requests' writes land
+in it without ever committing, and a restart loses them. Start shared work
+before the transactions that wait on it, or outside the transaction. An error
+the plugin throws inside `ctx.db.transaction`, `rawSql` or not, reaches it as
+thrown, as on PostgreSQL and MySQL, rather than as a generic database error.
 
 **Breaking for fresh installs.** Nextly no longer creates the `accounts` and
 `sessions` tables. They came from an authentication model it no longer uses:
-sessions are stateless JWTs with their own refresh-token table, and an external
-identity belongs to the plugin that authenticated it.
+sessions are stateless JWTs with their own refresh-token table, and nothing in
+this release reads or writes either table.
 
 An existing database keeps both. Dropping a table that may hold rows is the
 operator's decision rather than an upgrade's, so Nextly warns once at startup,
@@ -499,9 +618,14 @@ created (`accounts`: `user_id`, `provider`, `provider_account_id`;
 `sessions`: `session_token`, `user_id`, `expires`), so a host application's
 own table that merely shares the name is not reported, dropped or erased from.
 A host table built on the same Auth.js model does match it: it is reported at
-boot, the flags would drop it, and deleting a Nextly user erases that user's
-id from it. If one shares the database, rename it. Deleting a user erases
-their rows from both retired tables.
+boot and the flags would drop it. If one shares the database, rename it.
+
+Deleting a user erases their rows from a retired table only when
+`NEXTLY_ERASE_RETIRED_AUTH_TABLES` names it (`accounts`, `sessions`, or
+`accounts,sessions`), and only while it still has that shape. Nextly keeps no
+record that it created either table, and the Auth.js adapters' tables share
+the name and shape, so without the name the rows stay, and the startup warning
+says so and names the setting. Name a table only when it is Nextly's.
 
 Both names stay reserved, so a collection cannot take a name that an existing
 database still has a table under.

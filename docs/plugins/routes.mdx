@@ -132,6 +132,15 @@ Return a standard web `Response`. A thrown error is isolated into a JSON error r
 - **Opt out:** set `public: true` to make a route callable without a session (e.g. a
   public sitemap or a webhook receiver). `ctx.user` will be `null`.
 
+A write the session cookie authenticates is also checked for cross-site forgery. Left
+unset, `csrf` checks only the request's origin, which a same-origin write passes;
+`csrf: true` also requires a CSRF token. A route your admin page writes to through
+`usePluginRouteMutation` works either way, because that hook sends the token on every
+write. A page that writes with its own `fetch` leaves `csrf` unset, or fetches
+`/admin/api/auth/csrf` and sends the token as `x-csrf-token`. See
+[Route protections](/docs/plugins/security#route-protections) for `csrf: false` and
+the other options.
+
 ### Gating on one of your OWN collections
 
 A permission slug spells a collection — and a host can rename your plugin's
