@@ -351,12 +351,31 @@ naming the file before they run it, and `migrate:status` shows it as
 A marked file has no all-or-nothing guarantee, on any dialect. If a statement
 fails, **the statements before it stay applied and are not undone**. The error
 says which statement failed and how many ran before it, and the ledger records
-the file as failed. Finish or reverse those statements by hand before running
-the file again. Keep a marked file to the statements that need it, and write
-them so they can run again (`IF NOT EXISTS`, `IF EXISTS`). A
-`CREATE INDEX CONCURRENTLY` that fails can leave an invalid index behind:
-drop it before you retry.
+the file as failed. Then either:
+
+- **finish the remaining statements by hand** and mark the file applied with
+  `nextly migrate:resolve --applied <file>`. Do not run it again: that would
+  repeat the statements that already ran.
+- **reverse the statements that ran** and run `nextly migrate` again.
+
+Keep a marked file to the statements that need it, and write them so they can
+run again (`IF NOT EXISTS`, `IF EXISTS`). A `CREATE INDEX CONCURRENTLY` that
+fails can leave an invalid index behind: drop it before you retry.
 </Callout>
+
+When every schema statement in a failed marked file ran and a later data
+statement did not, the database already stands where the file ends. `nextly
+migrate` does not take that as the file being applied, which would skip the data
+change for good: while the file's newest attempt is the failed one, it refuses
+with `NEXTLY_MIGRATION_PARTIALLY_APPLIED` (`logContext.reason` is
+`partially-applied`) and names the recovery above.
+
+A plugin module marked `transaction: false` is recovered the same way, except
+the marking: `migrate:resolve --applied` does not take a module, because
+`nextly migrate` records a module together with the tables it owns. Once its
+statements are finished by hand, run
+`nextly migrate:resolve --failed-cleanup plugin:<name>/<module>` and then
+`nextly migrate`, which records it applied without running it.
 
 The marker does not lift every refusal. Session settings (`SET …`), a bare
 `ROLLBACK`, MySQL's `LOCK TABLES` and SQLite's `ATTACH`/`DETACH` are refused in
@@ -587,6 +606,7 @@ If `nextly migrate` fails partway through:
 3. Pick the recovery that matches what actually happened:
    - **The file actually applied but wasn't recorded** (e.g. the process died after the DDL committed): `nextly migrate:resolve --applied <file>`. This verifies the live schema matches the file's target snapshot before recording it. Pass `--skip-verify` only if you have manually confirmed the state.
    - **A failed attempt is blocking retries and the `.sql` needs editing first:** `nextly migrate:resolve --failed-cleanup <file>` flips the stuck failed row to `rolled_back`. Edit the file, then run `nextly migrate` again.
+   - **A file [marked to run outside a transaction](#running-a-file-outside-a-transaction) stopped part-way:** finish its remaining statements by hand and mark it with `nextly migrate:resolve --applied <file>`, rather than running it again, or reverse the statements that ran and run `nextly migrate` again. For a plugin module, `--failed-cleanup plugin:<name>/<module>` followed by `nextly migrate` records it once its statements are finished.
    - **You need to re-run a file** that was recorded as applied: `nextly migrate:resolve --rolled-back <file>` — the next `nextly migrate` treats it as pending again.
 4. Otherwise, fix the SQL (revert + regenerate via `migrate:create`) or the underlying database state, then re-run `nextly migrate`.
 

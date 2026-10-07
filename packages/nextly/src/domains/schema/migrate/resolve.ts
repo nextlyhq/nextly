@@ -5,7 +5,8 @@
  * recovery situations the spec enumerates:
  *   --applied        record a file as applied (live must equal the file's
  *                    target snapshot, unless --skip-verify); supersede a prior
- *                    failed row.
+ *                    failed row. An app file only: a plugin module is
+ *                    recorded by `nextly migrate`, after --failed-cleanup.
  *   --rolled-back    record a rolled_back event so the next `migrate` re-runs
  *                    the file (requires a prior applied row).
  *   --failed-cleanup flip a stuck failed row to rolled_back so the .sql can be
@@ -19,7 +20,7 @@
  * @since v0.0.3-alpha (Plan C3)
  */
 import { NextlyError } from "../../../errors";
-import { ledgerFilename } from "../events/ledger-scope";
+import { isPluginLedgerRow, ledgerFilename } from "../events/ledger-scope";
 import { newestEvent } from "../events/newest-event";
 import type { SchemaEventRow } from "../events/schema-events-repository";
 import { diffSnapshots } from "../pipeline/diff/diff";
@@ -87,6 +88,16 @@ async function resolveApplied(
   args: ResolveMigrationArgs,
   filename: string
 ): Promise<ResolveResult> {
+  // A plugin module is recorded applied by `nextly migrate`, which records
+  // the tables it owns with it; a row written here would leave them without
+  // an owner. Clearing its failed attempt hands it back to `nextly migrate`,
+  // which records it when the database stands at its result.
+  if (isPluginLedgerRow(filename)) {
+    throw new NextlyError({
+      code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      publicMessage: `${filename} is a plugin module, which \`nextly migrate\` records applied together with the tables it owns. Run \`nextly migrate:resolve --failed-cleanup ${filename}\` and then \`nextly migrate\`: it records the module applied when the database stands at its result, and runs it when the database stands at its start.`,
+    });
+  }
   if (!(await args.fileExists(filename))) {
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_FILE_MISSING",

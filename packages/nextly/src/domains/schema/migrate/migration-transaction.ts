@@ -230,6 +230,16 @@ function markAppliedAdvice(source: string): string {
 }
 
 /**
+ * What the operator does about a unit that ran outside a transaction and
+ * stopped part-way. A unit finished by hand is recorded, never run again:
+ * running it would repeat the statements that already ran. A unit whose
+ * statements were reversed by hand stands at its start, and runs again.
+ */
+export function partiallyAppliedAdvice(source: string): string {
+  return `If you finish its remaining statements by hand, ${markAppliedAdvice(source)} rather than running it again; if you reverse the statements that ran, run \`nextly migrate\` again.`;
+}
+
+/**
  * The error for a unit run outside a transaction whose statement at `index`
  * failed: which statement, the database's reason, and that the ones before
  * it were not undone.

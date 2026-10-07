@@ -918,4 +918,33 @@ describe("a database already past some of a plugin's modules", () => {
     ).rejects.toThrow();
     expect(d.started).toEqual([]);
   });
+
+  it("refuses the whole adoption when a module in it ran outside a transaction and its last attempt failed", async () => {
+    // The failed attempt may have run its schema statements and stopped
+    // before a data statement; adopting it would skip that statement.
+    const { checksum: _sealed, ...content } = create;
+    const outside = { ...content, transaction: false };
+    const createOutside = {
+      ...outside,
+      checksum: migrationChecksum(outside),
+    };
+    const d = deps();
+    d.deps.repo.findFileApplies = async (filename: string) =>
+      filename === "plugin:@acme/p/20260101_000000_create"
+        ? [{ status: "failed", startedAt: new Date(1) }]
+        : [];
+    d.live.set(T, [tableSpec(T, true)]);
+
+    await expect(
+      runPluginMigrations(set([createOutside, addScore]), d.deps)
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      logContext: {
+        source: "plugin:@acme/p/20260101_000000_create",
+        reason: "partially-applied",
+      },
+    });
+    expect(d.started).toEqual([]);
+    expect(d.executed).toEqual([]);
+  });
 });
