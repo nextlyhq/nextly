@@ -111,14 +111,29 @@ read and is refused on a write, and a selector is refused on both.
 | `createMany(slug, rows, opts?)` | Bulk insert → `BatchOperationResult`. |
 | `updateMany(slug, entries, opts?)` | Bulk update, one `{ id, data }` per row → `BatchOperationResult`. |
 
-`ctx.services` also exposes `users`, `media`, and `email` services.
+It also has `createCollection`, `listCollections`, `getCollection`,
+`updateCollection`, `deleteCollection`, `warmLocalizedReadiness`, and the
+[transaction methods](#collection-transactions).
 
-`ctx.services.users` may create and update accounts, but not decide who administers the
-site. It refuses, with `NextlyError` code `FORBIDDEN`, to create an install's first
-account (core makes that one super-admin), to give a role that reaches `super-admin`
-(directly or by inheritance) on create or update, and to change the password, email,
-activation, email verification or roles of an account that reaches `super-admin`, or to
-delete one. An address it marks verified is recorded as verified by `plugin`.
+## Each service is a facade
+
+Every service reaches your plugin as a frozen facade: an object holding only
+the methods meant for plugins, each calling the service's own method. The
+service's database adapter, Drizzle handle, sub-services and logger are not on
+it, so a plugin cannot reach the database through a service except by calling
+its methods.
+
+| Service | Type | Methods |
+|---|---|---|
+| `collections` | `PluginCollectionService` | the methods above |
+| `users` | `PluginUserService` | `create`, `findById`, `listUsersByIds`, `findByEmail`, `listUsers`, `update`, `delete`, `authenticate`, `changePassword`, `hasPassword`, `updateProfile` |
+| `media` | `PluginMediaService` | `upload`, `findById`, `listMedia`, `update`, `delete`, `bulkUpload`, `bulkDelete`, `moveToFolder`, `getStorageType`, `hasStorage`, `createFolder`, `findFolderById`, `listRootFolders`, `listSubfolders`, `getFolderContents`, `updateFolder`, `deleteFolder`, `isImage`, `validateImage`, `getImageDimensions` |
+| `email` | `PluginEmailService` | `send`, `sendWithTemplate`, `sendPasswordResetEmail`, `sendEmailVerificationEmail`, `sendWelcomeEmail`, `isConfigured`, `canSendTemplate` |
+| `versions` | `PluginVersionsService` | `list`, `get`, `setLabel`, `deleteWorkingDraft`, `autosave`, `getAutosave`, `pendingEditRows` |
+
+`ctx.services` also has `singles` (the declared Singles), `jobs` (queue
+background work) and `plugins` (services other plugins contribute). The
+service types are `@experimental` and exported from `@nextlyhq/plugin-sdk`.
 
 ## Querying (D56)
 
@@ -238,6 +253,46 @@ if (warnings) {
 
 `deleteEntry` reports `item` as `{ id }`, since there is no row left to return.
 
+## Collection transactions
+
+`collections.withTransaction` runs its work in one transaction, and the
+`*InTransaction` methods write inside it. The work receives a
+`PluginCollectionTransaction`, an opaque token: pass it as the first argument
+of `createEntryInTransaction`, `updateEntryInTransaction` or
+`deleteEntryInTransaction`, which take the service's own arguments after it.
+The token carries nothing else, so it cannot run SQL. Any other value passed
+where the token goes is rejected with `VALIDATION_ERROR`
+(`logContext.reason` is `plugin-transaction-token-unknown`).
+
+```ts
+await ctx.services.collections.warmLocalizedReadiness("orders");
+await ctx.services.collections.withTransaction(async tx => {
+  const order = await ctx.services.collections.createEntryInTransaction(
+    tx,
+    "orders",
+    { total: 40 },
+    requestContext // the service's request context, not ServiceOpts
+  );
+  await ctx.services.collections.updateEntryInTransaction(
+    tx,
+    "orders",
+    order.id,
+    { status: "placed" },
+    requestContext
+  );
+});
+```
+
+Unlike the access methods above, the `*InTransaction` methods take the
+service's request context as their last argument, not `ServiceOpts`.
+
+`ctx.services.users` may create and update accounts, but not decide who administers the
+site. It refuses, with `NextlyError` code `FORBIDDEN`, to create an install's first
+account (core makes that one super-admin), to give a role that reaches `super-admin`
+(directly or by inheritance) on create or update, and to change the password, email,
+activation, email verification or roles of an account that reaches `super-admin`, or to
+delete one. An address it marks verified is recorded as verified by `plugin`.
+
 ## When to drop to `ctx.db`
 
 `ctx.db` is the **`@experimental`** database surface — unmanaged: it bypasses
@@ -260,15 +315,20 @@ It comes in two layers:
   `query`. If your plugin declares `capabilities.db.rawSql` **and** the app
   lists it in `db: { rawSqlPlugins: [...] }`, `ctx.db.raw` is the live Drizzle
   instance instead, `execute` and `run` included. A plugin that declares
-  `rawSql` without being listed stops the boot; see
+  `rawSql` without being listed stops the boot. The grant is decided once,
+  when the boot resolves the plugin list: setting `capabilities.db.rawSql`
+  on a definition afterwards grants nothing. See
   [Raw SQL](/docs/plugins/security#raw-sql).
 
 Both `transaction`s commit the work as one unit and roll it back if the work
 throws, on every dialect. Inside one, write through `tx`:
 
 - `ctx.db.transaction(async tx => { ... })` hands `tx` the same typed surface,
-  bound to the transaction's connection. `tx` has no `transaction`; calling it
-  inside is refused rather than nesting.
+  bound to the transaction's connection. `tx` has no `transaction` in its
+  type, and calling one anyway rejects with a `NextlyError`, code
+  `INVALID_INPUT` (`logContext.reason` is `nested-plugin-transaction`),
+  rather than opening a second transaction on another connection. Do the
+  nested work in the same callback, through `tx`.
 - `ctx.db.raw.transaction(async tx => { ... })` hands `tx` the fluent builder,
   without a nested `transaction`. With `rawSql` listed, `tx` is the live handle
   and its `transaction` nests as a savepoint.
