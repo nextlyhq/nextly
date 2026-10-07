@@ -102,9 +102,9 @@ migration file the run refuses (see below). Applied files are never re-read.
   carries the refresh cookie (any `/admin/api/auth/*` request from a signed-in
   browser), the cookie is removed from a copy of the request, and that copy
   now reads at most 64 KiB of the body, the same cap as the `csrf` route
-  option's reader. A larger body is refused with `VALIDATION_ERROR`
-  (`too_large`) before authentication and rate limiting, instead of being
-  buffered whole; a plugin route mounted under that path that accepts larger
+  option's reader. A larger body is refused with a `400` `VALIDATION_ERROR`
+  response (`too_large`) before authentication and rate limiting, instead of
+  being buffered whole; a plugin route mounted under that path that accepts larger
   bodies from signed-in browsers stops receiving them.
 - **Collection `indexes` now reach the database.** They were validated and
   then discarded, so an app that declared a compound index has been running
