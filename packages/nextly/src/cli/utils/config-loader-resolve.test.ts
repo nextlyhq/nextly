@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
+import { NO_PLUGIN_CONSENT } from "../../plugins/plugin-consent";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import type { SingleConfig } from "../../singles/config/types";
 
@@ -26,14 +27,14 @@ describe("orderConfigPlugins (CLI resolution — D5/D6/D7)", () => {
     const a = plugin("@t/a");
     const b = plugin("@t/b", { dependsOn: { "@t/a": ">=1.0.0" } });
 
-    const ordered = orderConfigPlugins([b, a]); // declared b-first
+    const ordered = orderConfigPlugins([b, a], NO_PLUGIN_CONSENT); // declared b-first
     expect(ordered.map(p => p.name)).toEqual(["@t/a", "@t/b"]);
   });
 
   it("fails fast on an incompatible core version", () => {
     const bad = plugin("@t/bad", { nextly: "^99.0.0" });
     try {
-      orderConfigPlugins([bad]);
+      orderConfigPlugins([bad], NO_PLUGIN_CONSENT);
       throw new Error("expected orderConfigPlugins to throw");
     } catch (err) {
       expect(
@@ -47,7 +48,7 @@ describe("orderConfigPlugins (CLI resolution — D5/D6/D7)", () => {
       dependsOn: { "@t/absent": ">=1.0.0" },
     });
     try {
-      orderConfigPlugins([needsMissing]);
+      orderConfigPlugins([needsMissing], NO_PLUGIN_CONSENT);
       throw new Error("expected orderConfigPlugins to throw");
     } catch (err) {
       expect(
@@ -57,7 +58,7 @@ describe("orderConfigPlugins (CLI resolution — D5/D6/D7)", () => {
   });
 
   it("returns an empty array unchanged", () => {
-    expect(orderConfigPlugins([])).toEqual([]);
+    expect(orderConfigPlugins([], NO_PLUGIN_CONSENT)).toEqual([]);
   });
 });
 

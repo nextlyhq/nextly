@@ -6,6 +6,11 @@ import { isReservedEventName } from "../events/event-bus";
 
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
+import {
+  assertPluginConsent,
+  NO_PLUGIN_CONSENT,
+  type PluginConsent,
+} from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
 import { resolutionError } from "./resolution-error";
@@ -22,6 +27,13 @@ export interface ResolvePluginsOptions {
    * P1 wires the runtime source (CLI + register).
    */
   coreVersion: string;
+  /**
+   * What the app lists plugins for (`pluginConsentFromConfig`). Read from the
+   * config as the app wrote it, never from one a `setup` transformer
+   * returned. Absent, nothing is listed, so a plugin declaring a capability
+   * that needs the app's consent is refused.
+   */
+  consent?: PluginConsent;
 }
 
 /**
@@ -191,6 +203,11 @@ export function resolvePlugins(
 ): PluginDefinition[] {
   validatePluginVersions(plugins, opts.coreVersion);
   assertPluginManifests(plugins);
+  // After the manifests' shape is known good, so a capability is read from a
+  // declaration that parsed. Here rather than in `assertPluginManifests`
+  // because it judges the manifest against the app's config, which that
+  // check never sees.
+  assertPluginConsent(plugins, opts.consent ?? NO_PLUGIN_CONSENT);
   // Last, because it reads what the earlier validators already accepted: a
   // declared schemaVersion must be one the plugin's own migrations reach.
   validateSchemaVersionDeclarations(plugins);

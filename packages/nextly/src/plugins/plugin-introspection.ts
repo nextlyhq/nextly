@@ -20,6 +20,7 @@ import type { NextlyServiceConfig } from "../di/register";
 import { buildPluginAdminMeta } from "./admin-meta";
 import { collectCustomPermissions } from "./permissions/collect-permissions";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
+import type { PluginConsent } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { resolvePlugins } from "./resolve";
 import { collectPluginRoutes } from "./routes/collect-routes";
@@ -91,9 +92,14 @@ function manifestSummary(plugin: PluginDefinition): PluginInfo["manifest"] {
 export function collectPluginInfo(
   config: NextlyServiceConfig,
   plugins: PluginDefinition[],
-  opts: { coreVersion: string }
+  opts: { coreVersion: string; consent: PluginConsent }
 ): PluginInfo[] {
-  const resolved = resolvePlugins(plugins, { coreVersion: opts.coreVersion });
+  // With the app's consent, so a configuration the boot refuses is refused
+  // here too rather than listed as if it would start.
+  const resolved = resolvePlugins(plugins, {
+    coreVersion: opts.coreVersion,
+    consent: opts.consent,
+  });
 
   // Collected ONCE. Both views below derive from this list — the slug summary
   // here and the display metadata `buildPluginAdminMeta` serializes — so the

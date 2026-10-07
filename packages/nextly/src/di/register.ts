@@ -140,6 +140,10 @@ import {
   finalizePermissionTargets,
 } from "../plugins/permissions/collect-permissions";
 import { setPluginAuthDepsResolver } from "../plugins/plugin-auth-provider";
+import {
+  NO_PLUGIN_CONSENT,
+  type PluginConsent,
+} from "../plugins/plugin-consent";
 import type {
   AdapterTransactions,
   PluginContext,
@@ -329,6 +333,14 @@ export interface NextlyServiceConfig {
 
   /** Plugins to initialize with Nextly. */
   plugins?: PluginDefinition[];
+
+  /**
+   * @experimental What the app lists plugins for, beyond their own manifests
+   * (`db.rawSqlPlugins`). Filled by `buildServiceConfig` from the app's
+   * config. Absent, nothing is listed: a plugin that declares such a
+   * capability refuses the boot.
+   */
+  pluginConsent?: PluginConsent;
 
   /**
    * @experimental Fail fast (throw) when a plugin `extend`/relation targets an
@@ -631,8 +643,14 @@ async function registerServicesOnce(
   // declared dependencies (D5), failing fast with a great error (D7). The
   // resolved order drives BOTH setup and init below. Runs over all plugins
   // (including disabled ones) so schema stays deterministic (D49).
+  //
+  // The consent is read once, here, from the config as the app passed it:
+  // the re-resolution below runs against the SAME grants, so a `setup`
+  // transformer, which is plugin code, cannot list a plugin itself.
+  const pluginConsent = config.pluginConsent ?? NO_PLUGIN_CONSENT;
   const resolvedPlugins = resolvePlugins(config.plugins ?? [], {
     coreVersion: getCoreVersion(),
+    consent: pluginConsent,
   });
   const resolvedConfig: NextlyServiceConfig = {
     ...config,
@@ -660,7 +678,7 @@ async function registerServicesOnce(
   // collections and singles fold exactly like a declared plugin's.
   const transformedSetupConfig: NextlyServiceConfig = resolveTransformedPlugins(
     setupConfig,
-    { coreVersion: getCoreVersion() }
+    { coreVersion: getCoreVersion(), consent: pluginConsent }
   );
   const transformedPlugins = transformedSetupConfig.plugins ?? [];
 
