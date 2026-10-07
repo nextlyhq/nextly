@@ -50,6 +50,9 @@ const TABLE = "nx_search_path_subject";
 // through verbatim, so a real table can carry capitals — and an unquoted name
 // handed to `to_regclass` is folded to lower case and resolves to nothing.
 const MIXED_CASE = "nx_SearchPath_Mixed";
+// A referenced table present in BOTH schemas, so a foreign key's target name
+// alone cannot say which one it points at.
+const REF = "nx_search_path_ref";
 
 describePg("introspection follows the search path (postgres)", () => {
   let client: Client | undefined;
@@ -70,6 +73,7 @@ describePg("introspection follows the search path (postgres)", () => {
     const run = (text: string) => db.execute(sql.raw(text));
 
     await run(`DROP TABLE IF EXISTS public."${TABLE}"`);
+    await run(`DROP TABLE IF EXISTS public."${REF}"`);
     await run(`DROP SCHEMA IF EXISTS ${TENANT} CASCADE`);
     await run(`CREATE SCHEMA ${TENANT}`);
 
@@ -79,6 +83,24 @@ describePg("introspection follows the search path (postgres)", () => {
     // The subject, in the tenant schema, carrying a different column.
     await run(`CREATE TABLE ${TENANT}."${TABLE}" (subject_only text)`);
     await run(`CREATE INDEX ix_subject ON ${TENANT}."${TABLE}" (subject_only)`);
+
+    // Constraints on both, under distinct names, each referencing a table of
+    // the same name in its OWN schema — two apps isolated by search path in
+    // one database. A constraint read filtered on relname alone attaches the
+    // decoy's to the subject.
+    // On the existing columns, so the column assertions below are unchanged.
+    await run(`CREATE TABLE public."${REF}" (id integer PRIMARY KEY)`);
+    await run(`CREATE TABLE ${TENANT}."${REF}" (id text PRIMARY KEY)`);
+    await run(
+      `ALTER TABLE public."${TABLE}"
+         ADD CONSTRAINT fk_decoy FOREIGN KEY (decoy_only) REFERENCES public."${REF}" (id),
+         ADD CONSTRAINT ck_decoy CHECK (decoy_only > 0)`
+    );
+    await run(
+      `ALTER TABLE ${TENANT}."${TABLE}"
+         ADD CONSTRAINT fk_subject FOREIGN KEY (subject_only) REFERENCES ${TENANT}."${REF}" (id) ON DELETE CASCADE,
+         ADD CONSTRAINT ck_subject CHECK (subject_only <> '')`
+    );
     // And one whose name survives only if it is quoted before it is resolved.
     await run(`CREATE TABLE ${TENANT}."${MIXED_CASE}" (mixed_only text)`);
 
@@ -90,6 +112,7 @@ describePg("introspection follows the search path (postgres)", () => {
     if (client === undefined) return;
     await db.execute(sql.raw(`SET search_path TO public`));
     await db.execute(sql.raw(`DROP TABLE IF EXISTS public."${TABLE}"`));
+    await db.execute(sql.raw(`DROP TABLE IF EXISTS public."${REF}"`));
     await db.execute(sql.raw(`DROP SCHEMA IF EXISTS ${TENANT} CASCADE`));
     // The connection itself is still the client's to close: it is what pins the
     // session, so nothing above can release it.
@@ -124,6 +147,32 @@ describePg("introspection follows the search path (postgres)", () => {
     // The decoy carries no index, so a read pinned to `public` reports none —
     // which reads as "this table has no indexes" rather than as an error.
     expect(indexes.map(i => i.name)).toContain("ix_subject");
+  });
+
+  it("reads the foreign keys of that table, not a same-named one elsewhere", async () => {
+    const live = await introspectLiveSnapshot(db, "postgresql", [TABLE]);
+    const foreignKeys = live.tables.find(t => t.name === TABLE)?.foreignKeys;
+
+    // Exactly the subject's: the decoy's `fk_decoy` appearing is the defect,
+    // and the whole-list assertion also rules out a merge that kept the right
+    // name while mixing in the decoy's actions.
+    expect(foreignKeys).toEqual([
+      {
+        name: "fk_subject",
+        columns: ["subject_only"],
+        referencesTable: REF,
+        referencesColumns: ["id"],
+        onDelete: "cascade",
+        onUpdate: "no action",
+      },
+    ]);
+  });
+
+  it("reads the checks of that table, not a same-named one elsewhere", async () => {
+    const live = await introspectLiveSnapshot(db, "postgresql", [TABLE]);
+    const checks = live.tables.find(t => t.name === TABLE)?.checks ?? [];
+
+    expect(checks.map(c => c.name)).toEqual(["ck_subject"]);
   });
 
   it("resolves a table whose name carries capitals", async () => {

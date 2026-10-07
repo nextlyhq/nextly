@@ -132,3 +132,28 @@ export function createTransactionForwarders(
     getDrizzle: <T = unknown>(): T => txDb() as T,
   };
 }
+
+/**
+ * The Drizzle handle one transaction hands out, built once.
+ *
+ * `bare` is `TransactionContext.drizzle()`, the instance the delegated CRUD
+ * runs on, bound to the transaction's own connection. Built lazily — a
+ * transaction using only raw execute never constructs it.
+ *
+ * Shared because the three adapters differ only in how they build an
+ * instance on their connection, which is what `build` supplies.
+ */
+export function transactionDrizzleHandles<TBare>(build: () => TBare): {
+  bare: () => TBare;
+  /** The `TransactionContext` member, ready to spread into one. */
+  context: Pick<TransactionContext, "drizzle">;
+} {
+  let bareInstance: TBare | undefined;
+  const bare = (): TBare => (bareInstance ??= build());
+  return {
+    bare,
+    context: {
+      drizzle: <T = unknown>(): T => bare() as unknown as T,
+    },
+  };
+}

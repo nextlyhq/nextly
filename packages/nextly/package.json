@@ -234,6 +234,10 @@
     "./api/auth-ui-types": {
       "types": "./dist/api/auth-ui-types.d.ts",
       "import": "./dist/api/auth-ui-types.mjs"
+    },
+    "./schema-extension": {
+      "types": "./dist/schema-extension.d.ts",
+      "import": "./dist/schema-extension.mjs"
     }
   },
   "files": [

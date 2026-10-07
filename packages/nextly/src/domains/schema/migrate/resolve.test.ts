@@ -1,6 +1,6 @@
 /**
  * @module domains/schema/migrate/resolve.test
- * @since v0.0.3-alpha (Plan C3)
+ * @since v0.0.3-alpha
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -28,6 +28,7 @@ function makeDeps(
       fileExists: () => Promise.resolve(true),
       loadTargetSnapshot: () => Promise.resolve(ONE_TABLE),
       introspectLive: () => Promise.resolve(ONE_TABLE),
+      marksNoTransaction: () => Promise.resolve(false),
       ...over,
     },
   };
@@ -53,6 +54,33 @@ describe("resolveMigration", () => {
       expect(rows[0].status).toBe("applied");
       expect(rows[0].statementsExecuted).toBe(0);
       expect(rows[0].note).toBe("manual-resolve");
+    });
+
+    it("refuses a plugin module, naming the recovery that records it", async () => {
+      // A module recorded here would leave the tables it owns without an
+      // owner row; `nextly migrate` records both.
+      const { repo, base } = makeDeps(testDb);
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "failed",
+        source: "cli-migrate",
+        filename: "plugin:@acme/fx/001_init",
+        startedAt: new Date(1),
+      });
+      await expect(
+        resolveMigration({
+          mode: "applied",
+          filename: "plugin:@acme/fx/001_init",
+          ...base,
+        })
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+        publicMessage: expect.stringContaining(
+          "Run `nextly migrate:resolve --failed-cleanup plugin:@acme/fx/001_init` and then `nextly migrate`"
+        ) as unknown,
+      });
+      const rows = await repo.findFileApplies("plugin:@acme/fx/001_init");
+      expect(rows.map(row => row.status)).toEqual(["failed"]);
     });
 
     it("supersedes a prior failed row", async () => {
@@ -111,6 +139,44 @@ describe("resolveMigration", () => {
       ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING" });
     });
 
+    it("records a no-transaction file that has no snapshot, without --skip-verify", async () => {
+      // The file a partial failure tells the operator to mark applied. It is
+      // written by `migrate:create --blank --no-transaction`, which pairs no
+      // snapshot with it, so there is nothing to compare and refusing it
+      // made the advised recovery fail.
+      const { repo, base } = makeDeps(testDb, {
+        loadTargetSnapshot: () => Promise.resolve(null),
+        marksNoTransaction: () => Promise.resolve(true),
+        introspectLive: () =>
+          Promise.reject(new Error("nothing to compare it with")),
+      });
+      const r = await resolveMigration({
+        mode: "applied",
+        filename: "002_backfill.sql",
+        ...base,
+      });
+      expect(r).toMatchObject({ kind: "applied", verified: false });
+      const rows = await repo.findFileApplies("002_backfill.sql");
+      expect(rows.map(row => row.status)).toEqual(["applied"]);
+    });
+
+    it("still compares a no-transaction file that does have a snapshot", async () => {
+      const { base } = makeDeps(testDb, {
+        marksNoTransaction: () => Promise.resolve(true),
+        introspectLive: () => Promise.resolve(EMPTY), // live != target
+      });
+      await expect(
+        resolveMigration({ mode: "applied", filename: "x.sql", ...base })
+      ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_RESOLVE_DRIFT" });
+    });
+
+    it("reports a compared file as verified", async () => {
+      const { base } = makeDeps(testDb);
+      await expect(
+        resolveMigration({ mode: "applied", filename: "x.sql", ...base })
+      ).resolves.toMatchObject({ kind: "applied", verified: true });
+    });
+
     it("throws RESOLVE_DRIFT when live diverges from the target snapshot", async () => {
       const { base } = makeDeps(testDb, {
         introspectLive: () => Promise.resolve(EMPTY), // live != target
@@ -159,6 +225,31 @@ describe("resolveMigration", () => {
       // The prior applied row must be retired (superseded), else the partial
       // unique index blocks re-apply on the next `migrate`.
       expect(rows.some(x => x.status === "applied")).toBe(false);
+    });
+
+    it("records a plugin module's rollback under its qualified key", async () => {
+      // A plugin module's ledger key is `plugin:<name>/<module>`, with no
+      // extension. Recorded under any other spelling, the rollback finds no
+      // applied row to retire, and the module's newest state stays `applied`.
+      const { repo, base } = makeDeps(testDb);
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: "plugin:@acme/fx/001_init",
+        startedAt: new Date(1),
+      });
+      const r = await resolveMigration({
+        mode: "rolled-back",
+        filename: "plugin:@acme/fx/001_init",
+        ...base,
+      });
+      expect(r.kind).toBe("rolled-back");
+      const rows = await repo.findFileApplies("plugin:@acme/fx/001_init");
+      expect(rows.map(x => x.status).sort()).toEqual([
+        "rolled_back",
+        "superseded",
+      ]);
     });
 
     it("throws PRECONDITION when no applied row exists", async () => {

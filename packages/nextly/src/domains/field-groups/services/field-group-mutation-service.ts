@@ -8,6 +8,7 @@ import type {
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
+import { isVirtualField } from "../../../collections/fields/virtual";
 import { toDbError } from "../../../database/errors";
 // Database failures cross this boundary through `NextlyError.fromDatabaseError`,
 // and rethrow guards use `NextlyError.is(...)` so an error travelling through
@@ -50,11 +51,13 @@ import {
 
 import {
   COMPONENT_META_KEYS,
+  componentFieldHasColumn,
   toSnakeCase,
   shouldTreatAsJson,
   type ComponentRow,
   type ComponentInstanceData,
 } from "./field-group-utils";
+import { INSTANCE_ORDER, instanceKey } from "./instance-query";
 
 /**
  * Parameters for saving component data as part of a parent entry operation.
@@ -362,6 +365,12 @@ export class FieldGroupMutationService extends BaseService {
   ): Promise<void> {
     for (const field of fields) {
       if (!isFieldGroupField(field)) continue;
+      // A virtual field-group field stores nothing: its value is computed on
+      // read, and a document that carries it back must not become instance
+      // rows in the referenced group's table. Skipped here because every
+      // field-group write — collection, Single, pooled or in-transaction —
+      // walks its payload through this one loop.
+      if (isVirtualField(field)) continue;
 
       const f = withResolvedFieldGroupReferences(field);
       const fieldData = data[f.name];
@@ -448,6 +457,9 @@ export class FieldGroupMutationService extends BaseService {
     const resolved = new Set<string>();
     for (const field of params.fields) {
       if (!isFieldGroupField(field)) continue;
+      // Nothing is written for a virtual field-group field (see
+      // `eachFieldGroupWrite`), so it has no companion to be ready.
+      if (isVirtualField(field)) continue;
 
       // Same boundary resolution the write performs, so the references this
       // check warms and judges are the ones the write will read.
@@ -1540,12 +1552,8 @@ export class FieldGroupMutationService extends BaseService {
   ): Promise<ComponentRow[]> {
     try {
       return await this.adapter.select<ComponentRow>(tableName, {
-        where: this.whereAnd({
-          [STORAGE_FORMAT.columns.parentId]: parentId,
-          [STORAGE_FORMAT.columns.parentTable]: parentTable,
-          [STORAGE_FORMAT.columns.parentField]: fieldName,
-        }),
-        orderBy: [{ column: STORAGE_FORMAT.columns.order, direction: "asc" }],
+        where: this.whereAnd(instanceKey(parentId, parentTable, fieldName)),
+        orderBy: INSTANCE_ORDER,
       });
     } catch (error) {
       this.logger.debug("Could not query component table", {
@@ -1565,12 +1573,8 @@ export class FieldGroupMutationService extends BaseService {
   ): Promise<ComponentRow[]> {
     try {
       return await tx.select<ComponentRow>(tableName, {
-        where: this.whereAnd({
-          [STORAGE_FORMAT.columns.parentId]: parentId,
-          [STORAGE_FORMAT.columns.parentTable]: parentTable,
-          [STORAGE_FORMAT.columns.parentField]: fieldName,
-        }),
-        orderBy: [{ column: STORAGE_FORMAT.columns.order, direction: "asc" }],
+        where: this.whereAnd(instanceKey(parentId, parentTable, fieldName)),
+        orderBy: INSTANCE_ORDER,
       });
     } catch (error) {
       this.logger.debug("Could not query component table in tx", {
@@ -1724,6 +1728,14 @@ export class FieldGroupMutationService extends BaseService {
 
       const field = fieldMap.get(key);
       if (!field) {
+        continue;
+      }
+      // A declared field with no column on the instance row — a virtual one,
+      // whose value a read computes and a round-tripped document carries back —
+      // is not written: naming it would address a column the table lacks and
+      // fail the whole write. The descriptor's rule, so the row matches the
+      // table the pipeline generated.
+      if (!componentFieldHasColumn(field)) {
         continue;
       }
 

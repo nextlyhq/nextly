@@ -2,6 +2,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { marksNoTransaction } from "../../migrate/split-sql";
+
 import {
   ENTITY_HEADER_GUIDANCE,
   FIELD_GROUP_HEADER_PATTERN,
@@ -151,6 +153,27 @@ describe("formatBlankFile", () => {
     expect(out).toContain("-- DOWN");
     expect(out).toContain("-- Migration: custom_seed");
     expect(out).toContain("-- Dialect: PostgreSQL");
+  });
+});
+
+describe("formatBlankFile and running outside a transaction", () => {
+  const at = new Date("2026-04-29T00:00:00Z");
+
+  it("says where the marker goes, and is not marked itself", () => {
+    const out = formatBlankFile("custom_seed", "postgresql", at);
+    expect(marksNoTransaction(out)).toBe(false);
+    expect(out).toContain(
+      "put -- nextly:no-transaction above the -- Migration: line, as the\n-- file's first line."
+    );
+  });
+
+  it("writes the marker as the first line when asked to", () => {
+    const out = formatBlankFile("custom_index", "postgresql", at, {
+      transaction: false,
+    });
+    expect(out.split("\n")[0]).toBe("-- nextly:no-transaction");
+    expect(marksNoTransaction(out)).toBe(true);
+    expect(out).toContain("-- Migration: custom_index");
   });
 });
 

@@ -82,11 +82,20 @@ describe("collectPluginInfo", () => {
   });
 
   it("carries the declared schemaVersion, and none when undeclared", () => {
-    const infos = collectPluginInfo(
-      cfg(),
-      [basePlugin(), fbPlugin({ schemaVersion: 4 })],
-      { coreVersion: "1.0.0" }
-    );
+    // Shipped with a migration reaching it: resolution refuses a declared
+    // schemaVersion that no migration of the plugin's own can apply.
+    const versioned = fbPlugin({ schemaVersion: 4 });
+    versioned.contributes = {
+      ...versioned.contributes,
+      schema: {
+        migrations: [{ schemaVersion: 4 }] as unknown as NonNullable<
+          NonNullable<PluginDefinition["contributes"]>["schema"]
+        >["migrations"],
+      },
+    };
+    const infos = collectPluginInfo(cfg(), [basePlugin(), versioned], {
+      coreVersion: "1.0.0",
+    });
     expect(
       findPluginInfo(infos, "@nextlyhq/plugin-form-builder")!.manifest
         .schemaVersion

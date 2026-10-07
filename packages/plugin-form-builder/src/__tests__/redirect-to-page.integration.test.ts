@@ -21,6 +21,22 @@ import { submitForm } from "../handlers/submit-form";
 import { formBuilder } from "../plugin";
 
 /**
+ * The database services the harness does not register.
+ *
+ * They are plugin-service RESOLVERS on the container's side rather than
+ * container entries, so asking this Nextly instance for one throws. The
+ * submission path under test never touches either — it goes through the
+ * collections service — so stubbing them keeps the rest of the context real
+ * rather than mocking the part being tested.
+ *
+ * `relations` (the config behind `ctx.db.query`) is asked for only when a
+ * relational query runs, but it is stubbed with `db` all the same: an earlier
+ * relational service was resolved at construction, the stub named only `db`,
+ * and building a plugin context threw here and nowhere else.
+ */
+const RAW_DB_HANDLES = new Set(["db", "relations"]);
+
+/**
  * Asserts the write was refused BY THE REDIRECT RULE.
  *
  * A bare `rejects.toThrow()` passes on any failure — an unregistered
@@ -127,12 +143,10 @@ async function submitPointingAt(
     },
   });
 
-  // `db` is the raw-database escape hatch, resolved eagerly when the context
-  // is built and not registered by the harness. The submission path never
-  // touches it — it goes through the collections service — so a stub keeps the
-  // rest of the context real rather than mocking the part under test.
   const getService = ((name: string) =>
-    name === "db" ? {} : current?.getService(name as never)) as never;
+    RAW_DB_HANDLES.has(name)
+      ? {}
+      : current?.getService(name as never)) as never;
 
   const pluginContext = createPluginContext(getService, current.hooks as never);
 
@@ -207,7 +221,9 @@ describe("a form that redirects to a picked page", () => {
 
     const pluginContext = createPluginContext(
       ((name: string) =>
-        name === "db" ? {} : current?.getService(name as never)) as never,
+        RAW_DB_HANDLES.has(name)
+          ? {}
+          : current?.getService(name as never)) as never,
       current.hooks as never
     );
 
@@ -300,7 +316,9 @@ describe("a form submitted in the visitor's language", () => {
       },
     });
     const getService = ((name: string) =>
-      name === "db" ? {} : current?.getService(name as never)) as never;
+      RAW_DB_HANDLES.has(name)
+        ? {}
+        : current?.getService(name as never)) as never;
     const pluginContext = createPluginContext(
       getService,
       current.hooks as never
@@ -442,7 +460,9 @@ describe("a public visitor and a translation that is not published yet", () => {
       },
     });
     const getService = ((name: string) =>
-      name === "db" ? {} : current?.getService(name as never)) as never;
+      RAW_DB_HANDLES.has(name)
+        ? {}
+        : current?.getService(name as never)) as never;
     const pluginContext = createPluginContext(
       getService,
       current.hooks as never
@@ -1049,7 +1069,9 @@ describe("a target collection with the publish lifecycle", () => {
     });
 
     const getService = ((name: string) =>
-      name === "db" ? {} : current?.getService(name as never)) as never;
+      RAW_DB_HANDLES.has(name)
+        ? {}
+        : current?.getService(name as never)) as never;
     const pluginContext = createPluginContext(
       getService,
       current.hooks as never

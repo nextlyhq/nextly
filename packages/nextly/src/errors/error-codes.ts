@@ -82,20 +82,26 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: 409,
   NEXTLY_MIGRATION_DRIFT: 409,
   NEXTLY_MIGRATION_APPLY_FAILED: 500,
-  // Plan C3 — migrate:resolve recovery command.
+  // A SQLite migration unit would leave a row referencing a row that does
+  // not exist, or could not switch foreign-key enforcement off to run.
+  NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION: 409,
+  // A migration unit marked to run outside a transaction failed part-way;
+  // the statements before the failing one stayed applied.
+  NEXTLY_MIGRATION_PARTIALLY_APPLIED: 500,
+  // `nextly migrate:resolve`, the recovery command.
   NEXTLY_MIGRATION_FILE_MISSING: 404,
   NEXTLY_MIGRATION_SNAPSHOT_MISSING: 404,
   NEXTLY_MIGRATION_RESOLVE_DRIFT: 409,
   NEXTLY_MIGRATION_RESOLVE_PRECONDITION: 409,
-  // Plan D — UI schema support.
+  // The Builder's UI schema.
   NEXTLY_UI_SCHEMA_INVALID: 400,
   NEXTLY_SCHEMA_SLUG_COLLISION: 409,
   NEXTLY_SCHEMA_RELATION_TARGET_MISSING: 400,
-  // Plugin platform (P2b) — schema extend (contributes.extend) + relations (D15).
+  // Plugin schema: `contributes.extend` and relations.
   NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN: 400,
   NEXTLY_SCHEMA_EXTEND_FIELD_DUPLICATE: 409,
   NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION: 409,
-  // Plugin platform (P2c) — framework remap (.rename()).
+  // Plugin schema: the framework remap (`.rename()`).
   NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET: 400,
   // Plugin platform — a declared admin.clientConfig that cannot be delivered
   // to the browser, refused at boot rather than serialized mangled.
@@ -107,6 +113,20 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
+  // Plugin schema migrations. All 409: each is a state
+  // the database and the config disagree about, which retrying cannot change
+  // and an operator command resolves.
+  PLUGIN_SCHEMA_BEHIND: 409,
+  PLUGIN_SCHEMA_VERSION_NOT_ADVANCED: 409,
+  // A generated plugin migration that would drop a table or column the
+  // plugin's earlier modules created: a rename comes out as a drop and an add.
+  PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA: 409,
+  PLUGIN_MIGRATIONS_UNAVAILABLE: 409,
+  // A migration would drop a table another owner holds, or names a drop
+  // target the guard cannot read — refused for the same reason.
+  DROP_OF_FOREIGN_TABLE: 409,
+  // A plugin migration module whose content no longer matches its checksum.
+  MIGRATION_CHECKSUM_MISMATCH: 409,
   // Plugin platform (P4) — contributes.routes collection (D25).
   NEXTLY_ROUTE_COLLISION: 409,
   NEXTLY_ROUTE_INVALID_PATH: 400,
@@ -127,6 +147,15 @@ export const NEXTLY_ERROR_STATUS = {
   // transport above: nothing is broken and the request is not malformed, the
   // install simply cannot carry it out until one command is run.
   NEXTLY_CONFIG_TOOLING_UNAVAILABLE: 503,
+  // `db.postgres.schema` names one schema and the adapter the application
+  // supplied writes to another. 500 like the other boot-time configuration
+  // refusals: no request caused it, and the fix is a change to the server's
+  // own configuration.
+  NEXTLY_POSTGRES_SCHEMA_MISMATCH: 500,
+  // `db.postgres.schema` names a schema other than `public`, which the schema
+  // push cannot yet create tables in. 500 for the same reason as the mismatch
+  // above: a boot-time refusal of the server's own configuration.
+  NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED: 500,
 } as const;
 
 export type NextlyErrorCode = keyof typeof NEXTLY_ERROR_STATUS;

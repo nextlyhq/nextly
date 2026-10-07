@@ -34,6 +34,11 @@ export const nextlySchemaEventsSqlite = sqliteTable(
 
     scopeKind: text("scope_kind").$type<SchemaEventScopeKind>(),
     scopeSlug: text("scope_slug"),
+    // Nullable and additive; an existing row reads as core or app, which is
+    // what every row written before plugins could own a migration was.
+    ownerKind: text("owner_kind"),
+    ownerId: text("owner_id"),
+    ownerVersion: text("owner_version"),
 
     startedAt: integer("started_at", { mode: "timestamp_ms" })
       .$defaultFn(() => new Date())

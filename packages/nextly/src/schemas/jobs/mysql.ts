@@ -13,6 +13,7 @@
  * @module schemas/jobs/mysql
  */
 
+import type { BuildColumns } from "drizzle-orm";
 import {
   mysqlTable,
   varchar,
@@ -20,15 +21,15 @@ import {
   datetime,
   json,
   text,
-  index,
-  uniqueIndex,
 } from "drizzle-orm/mysql-core";
+
+import { NEXTLY_JOBS_INDEXES, mysqlIndexes } from "../_internal/core-indexes";
 
 import type { JobState } from "./types";
 
-export const nextlyJobsMysql = mysqlTable(
-  "nextly_jobs",
-  {
+/** `nextly_jobs` columns, a fresh builder record per call (see `core-table-contributions`). */
+export function nextlyJobsMysqlColumns() {
+  return {
     id: varchar("id", { length: 36 })
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
@@ -67,14 +68,24 @@ export const nextlyJobsMysql = mysqlTable(
     updatedAt: datetime("updated_at", { fsp: 3 })
       .$defaultFn(() => new Date())
       .notNull(),
-  },
-  table => [
-    index("nextly_jobs_due_idx").on(table.state, table.runAt),
-    // See `schemas/jobs/postgres.ts` for what this index is for and why a
-    // declaration alone does not put it on an existing database.
-    index("nextly_jobs_recent_idx").on(table.updatedAt),
-    uniqueIndex("nextly_jobs_dedupe_idx").on(table.dedupeKey),
-  ]
+  };
+}
+
+/** `nextly_jobs` indexes, from `NEXTLY_JOBS_INDEXES`. */
+export function nextlyJobsMysqlExtraConfig(
+  table: BuildColumns<
+    "nextly_jobs",
+    ReturnType<typeof nextlyJobsMysqlColumns>,
+    "mysql"
+  >
+) {
+  return mysqlIndexes(NEXTLY_JOBS_INDEXES, table);
+}
+
+export const nextlyJobsMysql = mysqlTable(
+  "nextly_jobs",
+  nextlyJobsMysqlColumns(),
+  nextlyJobsMysqlExtraConfig
 );
 
 export type NextlyJobMysql = typeof nextlyJobsMysql.$inferSelect;

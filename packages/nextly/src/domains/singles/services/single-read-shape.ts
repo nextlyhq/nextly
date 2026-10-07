@@ -16,7 +16,7 @@
 import type { FieldConfig } from "../../../collections/fields/types";
 import {
   stripPasswordFieldValues,
-  stripSystemOwnerField,
+  stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 
 import { shouldTreatAsJson } from "./single-utils";
@@ -38,10 +38,19 @@ import { shouldTreatAsJson } from "./single-utils";
  */
 export function applyReadShape(
   row: Record<string, unknown>,
-  fieldConfigs: FieldConfig[]
+  fieldConfigs: FieldConfig[],
+  /**
+   * The SQL table the row came from.
+   *
+   * Needed for the same reason the redaction above is: a column a schema hook
+   * contributed to this Single is a real column on it, so a snapshot or a
+   * webhook payload carries it unless this boundary removes it — and the set
+   * to remove is per table.
+   */
+  tableName: string
 ): void {
   stripPasswordFieldValues(row, fieldConfigs);
-  stripSystemOwnerField(row);
+  stripServerOnlyColumns(row, tableName);
   for (const field of fieldConfigs) {
     if (!("name" in field) || !field.name) continue;
     const value = row[field.name];

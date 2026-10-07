@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { quoteJsonSqlDefault, quoteSqlLiteral } from "../sql-literal";
+import { quoteExpressionSqlDefault, quoteSqlLiteral } from "../sql-literal";
 
 const dialects = ["postgresql", "mysql", "sqlite"] as const;
 
@@ -68,26 +68,26 @@ describe("quoteSqlLiteral", () => {
 });
 
 /**
- * MySQL refuses a literal default on a JSON column outright, so the DEFAULT
- * clause for a JSON-backed column is not the same text on every dialect.
+ * MySQL refuses a literal default on a JSON, TEXT or BLOB column outright, so
+ * the DEFAULT clause for one is not the same text on every dialect.
  */
-describe("quoteJsonSqlDefault", () => {
+describe("quoteExpressionSqlDefault", () => {
   it("encodes the value as hex for mysql", () => {
     // A quoted literal would have to guess how the server treats backslashes,
     // which depends on a SQL mode this code cannot see.
-    expect(quoteJsonSqlDefault("{}", "mysql")).toBe(
+    expect(quoteExpressionSqlDefault("{}", "mysql")).toBe(
       "(CONVERT(X'7b7d' USING utf8mb4))"
     );
   });
 
   it("leaves the literal bare for postgresql and sqlite", () => {
-    expect(quoteJsonSqlDefault("{}", "postgresql")).toBe("'{}'");
-    expect(quoteJsonSqlDefault("{}", "sqlite")).toBe("'{}'");
+    expect(quoteExpressionSqlDefault("{}", "postgresql")).toBe("'{}'");
+    expect(quoteExpressionSqlDefault("{}", "sqlite")).toBe("'{}'");
   });
 
   it("round-trips a value carrying quotes, newlines, and backslashes", () => {
     const json = JSON.stringify({ p: "C:\\dir", n: "a\nb", q: "it's" });
-    const emitted = quoteJsonSqlDefault(json, "mysql");
+    const emitted = quoteExpressionSqlDefault(json, "mysql");
     const hex = emitted.match(/X'([0-9a-f]*)'/)?.[1] ?? "";
     expect(Buffer.from(hex, "hex").toString("utf8")).toBe(json);
     // No delimiter or escape character survives into the statement text.

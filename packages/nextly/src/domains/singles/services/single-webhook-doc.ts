@@ -141,7 +141,7 @@ export async function buildSingleWebhookDoc(
   }
   // Redact and normalise: no password hash or system owner column reaches a
   // webhook payload, and JSON-backed fields arrive parsed.
-  applyReadShape(parentRow, fieldConfigs);
+  applyReadShape(parentRow, fieldConfigs, parentTable);
   // Read the component subtrees on the transaction so the assembly sees the
   // right generation (post-write: just saved; pre-write: prior).
   const components = await readComponentSubtrees({

@@ -21,6 +21,9 @@ import {
 const mockConnection = {
   query: vi.fn(),
   release: vi.fn(),
+  // The callback connection the mysql2/promise wrapper exposes, which is what
+  // Drizzle's mysql2 driver binds to (and whose `config` it writes to).
+  connection: { config: {} },
 };
 
 // Mock pool with internal structure
@@ -745,6 +748,23 @@ describe("@nextly/adapter-mysql", () => {
         expect(typeof tx.upsert).toBe("function");
         expect(typeof tx.execute).toBe("function");
         expect(typeof tx.insert).toBe("function");
+      });
+    });
+
+    // A migration records its ledger rows through this handle, so they commit
+    // or roll back with the statements they record. The pooled `getDrizzle()`
+    // would write on a different connection.
+    it("drizzle() is an instance on the transaction's connection, built once", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      type Handle = { $client: unknown };
+
+      await adapter.transaction(async tx => {
+        const bare = tx.drizzle<Handle>();
+        expect(bare.$client).toBe(mockConnection.connection);
+        expect(tx.drizzle()).toBe(bare);
       });
     });
 

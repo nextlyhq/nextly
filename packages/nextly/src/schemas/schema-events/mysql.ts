@@ -51,6 +51,11 @@ export const nextlySchemaEventsMysql = mysqlTable(
       length: 32,
     }).$type<SchemaEventScopeKind>(),
     scopeSlug: varchar("scope_slug", { length: 255 }),
+    // Nullable and additive; an existing row reads as core or app, which is
+    // what every row written before plugins could own a migration was.
+    ownerKind: varchar("owner_kind", { length: 32 }),
+    ownerId: varchar("owner_id", { length: 255 }),
+    ownerVersion: varchar("owner_version", { length: 64 }),
 
     startedAt: datetime("started_at", { fsp: 3 })
       .$defaultFn(() => new Date())

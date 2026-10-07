@@ -26,6 +26,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { getDialectDisplayName } from "../../../cli/utils/adapter";
+import { NO_TRANSACTION_MARKER } from "../migrate/split-sql";
 
 /**
  * The field-group header written into a generated migration, and the pattern that reads it
@@ -177,18 +178,38 @@ ${downBody}
 `;
 }
 
+/**
+ * A blank migration file for SQL the author writes.
+ *
+ * `transaction: false` writes `NO_TRANSACTION_MARKER` as the first line, the
+ * only line it counts on; otherwise the template says where the marker goes,
+ * because a statement such as `CREATE INDEX CONCURRENTLY` is refused in a
+ * file without it.
+ */
 export function formatBlankFile(
   name: string,
   dialect: SupportedDialect,
-  now: Date = new Date()
+  now: Date = new Date(),
+  options: { transaction?: boolean } = {}
 ): string {
-  return `-- Migration: ${name}
+  const outside = options.transaction === false;
+  return `${outside ? `${NO_TRANSACTION_MARKER}\n` : ""}-- Migration: ${name}
 -- Generated at: ${now.toISOString()}
 -- Dialect: ${getDialectDisplayName(dialect)}
 --
 -- This is a blank migration file for custom SQL.
 -- Add your migration SQL below.
 --
+${
+  outside
+    ? `-- Its first line, ${NO_TRANSACTION_MARKER}, runs it outside a
+-- transaction, statement by statement: a statement that fails leaves the
+-- ones before it applied. Keep to the statements that need it.`
+    : `-- It runs in one transaction. A statement that cannot, such as
+-- PostgreSQL's CREATE INDEX CONCURRENTLY, needs the file to run outside one:
+-- put ${NO_TRANSACTION_MARKER} above the -- Migration: line, as the
+-- file's first line.`
+}
 --
 -- ${ENTITY_HEADER_GUIDANCE}. For example:
 --

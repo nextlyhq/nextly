@@ -9,7 +9,10 @@ import type { RelatedRowReadContext } from "../../../services/collections/relate
 import { TRUSTS_EVERY_COLLECTION } from "../../../services/collections/trust-grant";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
-import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
+import {
+  stripPasswordFieldValues,
+  stripServerOnlyColumns,
+} from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import {
   populateCompanionFields,
@@ -40,6 +43,7 @@ import {
   shouldTreatAsJson,
   type ComponentRow,
 } from "./field-group-utils";
+import { INSTANCE_ORDER, instanceKey } from "./instance-query";
 
 /**
  * Parameters for populating component data on a single parent entry.
@@ -1017,18 +1021,15 @@ export class FieldGroupQueryService extends BaseService {
     strict = false
   ): Promise<ComponentRow[]> {
     try {
-      return await this.adapter.select<ComponentRow>(
+      const rows = await this.adapter.select<ComponentRow>(
         tableName,
         {
-          where: this.whereAnd({
-            [STORAGE_FORMAT.columns.parentId]: parentId,
-            [STORAGE_FORMAT.columns.parentTable]: parentTable,
-            [STORAGE_FORMAT.columns.parentField]: fieldName,
-          }),
-          orderBy: [{ column: STORAGE_FORMAT.columns.order, direction: "asc" }],
+          where: this.whereAnd(instanceKey(parentId, parentTable, fieldName)),
+          orderBy: INSTANCE_ORDER,
         },
         executor
       );
+      return this.withoutServerOnlyColumns(rows, tableName);
     } catch (error) {
       // The comp_* table may not exist yet (a component before its migration
       // runs) — tolerate that and read as empty. In strict mode a real failure
@@ -1055,7 +1056,7 @@ export class FieldGroupQueryService extends BaseService {
     if (parentIds.length === 0) return [];
 
     try {
-      return await this.adapter.select<ComponentRow>(tableName, {
+      const rows = await this.adapter.select<ComponentRow>(tableName, {
         where: {
           and: [
             {
@@ -1080,6 +1081,7 @@ export class FieldGroupQueryService extends BaseService {
           { column: STORAGE_FORMAT.columns.order, direction: "asc" },
         ],
       });
+      return this.withoutServerOnlyColumns(rows, tableName);
     } catch (error) {
       this.logger.debug("Could not batch query component table", {
         tableName,
@@ -1087,6 +1089,23 @@ export class FieldGroupQueryService extends BaseService {
       });
       return [];
     }
+  }
+
+  /**
+   * Remove the columns that never leave the server from rows read here.
+   *
+   * Every instance this service returns is built from these two reads, and
+   * the instance keeps any column it does not recognise as a field, so a
+   * column a schema hook contributed to the field group's table would reach
+   * the parent entry's response. Stripped at the read rather than per
+   * instance so no caller can build one from an unstripped row.
+   */
+  private withoutServerOnlyColumns(
+    rows: ComponentRow[],
+    tableName: string
+  ): ComponentRow[] {
+    for (const row of rows) stripServerOnlyColumns(row, tableName);
+    return rows;
   }
 
   private deserializeComponentRow(

@@ -13,6 +13,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import type { BuildColumns } from "drizzle-orm";
 import {
   sqliteTable,
   integer,
@@ -21,19 +22,13 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
+import { MEDIA_INDEXES, sqliteIndexes } from "../_internal/core-indexes";
+import { sqliteTimestamp } from "../_internal/sqlite-timestamp";
 import { users } from "../users/sqlite";
 
-/**
- * Media table for storing uploaded files and images
- *
- * Supports various storage backends (Vercel Blob, S3, R2, local filesystem)
- * Stores file metadata in database, actual files in configured storage
- *
- * SQLite variant - uses TEXT for timestamps and JSON as text
- */
-export const media = sqliteTable(
-  "media",
-  {
+/** `media` columns, a fresh builder record per call (see `core-table-contributions`). */
+export function mediaColumns() {
+  return {
     id: text("id")
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
@@ -78,20 +73,27 @@ export const media = sqliteTable(
     uploadedBy: text("uploaded_by").references(() => users.id, {
       onDelete: "cascade",
     }),
-    uploadedAt: integer("uploaded_at", { mode: "timestamp" })
-      .notNull()
-      .$defaultFn(() => new Date()),
-    updatedAt: integer("updated_at", { mode: "timestamp" })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  t => [
-    index("media_uploaded_by_idx").on(t.uploadedBy),
-    index("media_mime_type_idx").on(t.mimeType),
-    index("media_uploaded_at_idx").on(t.uploadedAt),
-    index("media_folder_id_idx").on(t.folderId),
-  ]
-);
+    uploadedAt: sqliteTimestamp("uploaded_at"),
+    updatedAt: sqliteTimestamp("updated_at"),
+  };
+}
+
+/** `media` indexes, from `MEDIA_INDEXES`. */
+export function mediaExtraConfig(
+  t: BuildColumns<"media", ReturnType<typeof mediaColumns>, "sqlite">
+) {
+  return sqliteIndexes(MEDIA_INDEXES, t);
+}
+
+/**
+ * Media table for storing uploaded files and images
+ *
+ * Supports various storage backends (Vercel Blob, S3, R2, local filesystem)
+ * Stores file metadata in database, actual files in configured storage
+ *
+ * SQLite variant - uses TEXT for timestamps and JSON as text
+ */
+export const media = sqliteTable("media", mediaColumns(), mediaExtraConfig);
 
 /**
  * Media Folders table for organizing media files (SQLite)

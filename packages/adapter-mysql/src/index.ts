@@ -793,14 +793,16 @@ export class MySqlAdapter extends DrizzleAdapter {
     // the pool, which would use a different connection. Built lazily and
     // memoized: transactions that use only raw execute/insert never construct
     // it.
-    const buildTxExecutor = () =>
-      drizzle({
-        client: (connection as unknown as { connection: CallbackConnection })
-          .connection,
-      });
-    let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
-    const txDb = () => (txExecutor ??= buildTxExecutor());
+    const txConnection = (
+      connection as unknown as { connection: CallbackConnection }
+    ).connection;
+    const txHandles = this.transactionDrizzleHandles(() =>
+      drizzle({ client: txConnection })
+    );
+    const txDb = txHandles.bare;
     return {
+      ...txHandles.context,
+
       execute: async <T = unknown>(
         sql: string,
         params: SqlParam[] = []

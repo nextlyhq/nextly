@@ -40,6 +40,7 @@ import { writeCompanionMigrationFile } from "../../i18n/migration/write-migratio
 import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
+  type DeclaredIndex,
 } from "../pipeline/diff/build-from-fields";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type {
@@ -49,11 +50,18 @@ import type {
   RenameColumnOp,
   TableSpec,
 } from "../pipeline/diff/types";
+import { withForeignKeysLiftedForTypeChanges } from "../pipeline/foreign-key-lift";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
-import { generateSQL } from "../pipeline/sql-templates/index";
+import { generateStatements } from "../pipeline/sql-templates/index";
 
+import {
+  appStreamSnapshots,
+  NO_APP_STREAM_TABLES,
+  type AppStreamTables,
+} from "./app-stream";
+import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
 import { buildInverseOperations } from "./down-generator";
 import { formatMigrationFile, formatTimestamp, slugify } from "./format-file";
 import { promptRenames, type RenameDecision } from "./prompt-renames";
@@ -96,6 +104,14 @@ export interface MinimalConfigEntity {
   tableName: string;
   fields: MinimalConfigField[];
   /**
+   * Compound indexes declared in the entity's config.
+   *
+   * Carried here because this mapper feeds BOTH `migrate:create` and
+   * `migrate:check`. Dropping it from one would make the generator write an
+   * index the checker then reports as drift, on every run.
+   */
+  indexes?: readonly DeclaredIndex[];
+  /**
    * Whether the entity has Nextly's built-in Draft/Published lifecycle
    * enabled (`defineCollection({ status: true })` /
    * `defineSingle({ status: true })`). When true, the desired snapshot
@@ -134,6 +150,19 @@ export interface GenerateArgs {
    * an enable transition. Defaults to `"en"` when omitted.
    */
   defaultLocale?: string;
+  /**
+   * The extension schema the APP's stream owns: the tables it declares through
+   * `db.schema.extend`, and the elements it contributes to tables another owner
+   * declares.
+   *
+   * Without it the generator only ever saw collections, singles and
+   * components, so a table an app declared through the documented extend hook
+   * was created by development bootstrap and silently absent from every
+   * migration — the one difference migrations exist to prevent. A PLUGIN's own
+   * tables are not here: those ride the plugin's module, which
+   * `migrate:create --plugin` writes.
+   */
+  appStream?: AppStreamTables;
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -180,16 +209,25 @@ export async function generateMigration(
 
   // 1. Load previous state.
   const previous = await loadLatestSnapshot(metaDir);
-  const previousSnapshot = previous?.data.snapshot ?? EMPTY_SNAPSHOT;
 
   // 2. Build desired snapshot from config. Localized collections omit their
   //    translatable columns here (they live in the companion `_locales` table).
-  const desiredSnapshot = buildDesiredSnapshotFromConfig(
-    args.collections,
-    args.singles,
-    args.components,
-    args.dialect
-  );
+  //    The app stream's extension tables are folded into BOTH sides, since a
+  //    table the app contributes to is compared over its owner's current
+  //    declaration rather than over the copy the last snapshot froze.
+  const stream = appStreamSnapshots({
+    previous: previous?.data.snapshot ?? EMPTY_SNAPSHOT,
+    previousContributions: previous?.data.contributions ?? {},
+    desired: buildDesiredSnapshotFromConfig(
+      args.collections,
+      args.singles,
+      args.components,
+      args.dialect
+    ),
+    tables: args.appStream ?? NO_APP_STREAM_TABLES,
+  });
+  const previousSnapshot = stream.previous;
+  const desiredSnapshot = stream.desired;
 
   // 2a. Plan companion `_locales` migrations for localized collections, singles, AND
   //     components (i18n Option B: companions are migration-owned, emitted as
@@ -242,15 +280,43 @@ export async function generateMigration(
     return null;
   }
 
-  // 7. Generate UP SQL per op.
-  const sqlStatements = operations.map(op => generateSQL(op, args.dialect));
+  // 7. Generate UP SQL per op, a foreign-key cycle's keys split out of the
+  // table operations that cannot carry them (see `withCyclicForeignKeysSplit`),
+  // and — on MySQL — every existing key a type change covers lifted around it,
+  // as dev push lifts them. The DOWN below inverts these ops, so it lifts the
+  // same keys around the reverse change.
+  operations = withCyclicForeignKeysSplit(
+    withForeignKeysLiftedForTypeChanges(
+      operations,
+      previousSnapshot.tables,
+      args.dialect
+    ),
+    args.dialect,
+    previousSnapshot.tables
+  );
+  // Rendered as a list, not one statement per operation: on SQLite a check
+  // or foreign-key change is a rebuild of its table to the schema the list
+  // leads to — the desired side for the UP, the previous side for the DOWN.
+  const sqlStatements = generateStatements(
+    operations,
+    args.dialect,
+    desiredSnapshot.tables
+  );
 
   // 7a. Generate DOWN SQL by inverting the RESOLVED ops (renames preserved).
   // Inverting the resolved ops — not re-diffing — keeps a forward rename as a
   // reverse rename rather than a data-losing drop+add. Object-removing ops
   // recover their original spec from previousSnapshot.
-  const inverseOps = buildInverseOperations(operations, previousSnapshot);
-  const downSqlStatements = inverseOps.map(op => generateSQL(op, args.dialect));
+  const inverseOps = withCyclicForeignKeysSplit(
+    buildInverseOperations(operations, previousSnapshot),
+    args.dialect,
+    desiredSnapshot.tables
+  );
+  const downSqlStatements = generateStatements(
+    inverseOps,
+    args.dialect,
+    previousSnapshot.tables
+  );
 
   // 7b. Append UI metadata-row upserts for any touched UI-built table (§4.12.7).
   const touched = new Set(operations.map(operationTableName));
@@ -326,8 +392,9 @@ export async function generateMigration(
   const snapshotPath = await writeSnapshot(
     metaDir,
     baseName,
-    desiredSnapshot,
-    sqlContent
+    stream.written,
+    sqlContent,
+    stream.contributions
   );
 
   // 9. Emit the snapshot-less companion `.sql` files around the main migration, ordered by kind:
@@ -642,6 +709,7 @@ export function buildDesiredSnapshotFromConfig(
           builtBy: "codeFirst" as const,
           hasStatus: c.status === true,
           localized: c.localized === true,
+          ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),
         }),
         c,
         dialect
@@ -659,6 +727,7 @@ export function buildDesiredSnapshotFromConfig(
           builtBy: "codeFirst" as const,
           hasStatus: c.status === true,
           localized: c.localized === true,
+          ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),
         }),
         c,
         dialect

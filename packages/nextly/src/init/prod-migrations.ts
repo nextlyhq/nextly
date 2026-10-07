@@ -9,13 +9,19 @@
 
 import { resolve } from "node:path";
 
-import { shutdownServices } from "../di";
+import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
+import {
+  pluginMigrationSetsFrom,
+  type PluginMigrationSet,
+} from "../domains/schema/migrate/plugin/run-plugin-migrations";
 import { resolveDeclaredSchema } from "../domains/schema/migrate/resolved-schema";
 import { NextlyError } from "../errors";
+import type { PluginDefinition } from "../plugins/plugin-context";
 
 import {
   allowBootMigrations,
   assertBootMigrationsNotRefused,
+  openBootMigrationsGate,
   refuseBootMigrations,
 } from "./boot-migrations-gate";
 
@@ -35,6 +41,8 @@ interface LoggerLike {
 
 interface MigrateCoreLike {
   (deps: {
+    /** See `MigrateCoreDeps.extensionSchema`. */
+    extensionSchema: ExtensionSchema | undefined;
     dialect: AdapterLike["dialect"];
     db: unknown;
     adapter: AdapterLike;
@@ -45,6 +53,14 @@ interface MigrateCoreLike {
     isSettled?: () => Promise<boolean>;
     ensureLedger?: () => Promise<void>;
     knownJunctions?: ReadonlySet<string>;
+    pluginMigrationSets?: readonly PluginMigrationSet[];
+    /**
+     * Declared here so the value `pluginMigrationArgs` spreads in is checked
+     * against a type. A spread is exempt from excess-property checks, so
+     * leaving it off typechecked cleanly while the parameter the real
+     * `migrateCore` reads was invisible at this boundary.
+     */
+    pluginsWithMigrations?: ReadonlySet<string>;
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
 }
 
@@ -70,6 +86,11 @@ export interface RunProdMigrationsArgs {
     collections: readonly unknown[];
     singles?: readonly unknown[];
     fieldGroups?: readonly unknown[];
+    /**
+     * Plugin definitions from the same config the CLI reads: boot applies the
+     * same plugin migration modules the CLI would, from the same source.
+     */
+    plugins?: readonly PluginDefinition[];
   };
   /** Plugin additions to Builder entities, when the caller has them. */
   deferredExtends?: readonly unknown[];
@@ -106,6 +127,29 @@ function bootMigrationsNotRun(dialect: string): NextlyError {
   });
 }
 
+/**
+ * The two arguments `migrateCore` needs about plugin migrations, from one read.
+ *
+ * `pluginsWithMigrations` is not optional: `migrateCore` checks every active
+ * plugin table against it BEFORE `runPluginPhase` can apply anything, so an
+ * empty set makes it reject every such table as having no production migration
+ * path — with the modules sitting right there in `pluginMigrationSets`. Passing
+ * one without the other was the bug; deriving both from a single call is what
+ * stops them drifting apart again.
+ */
+async function pluginMigrationArgs(
+  plugins: readonly PluginDefinition[]
+): Promise<{
+  pluginMigrationSets: Awaited<ReturnType<typeof pluginMigrationSetsFrom>>;
+  pluginsWithMigrations: Set<string>;
+}> {
+  const sets = await pluginMigrationSetsFrom(plugins);
+  return {
+    pluginMigrationSets: sets,
+    pluginsWithMigrations: new Set(sets.map(set => set.pluginName)),
+  };
+}
+
 export async function runProdMigrationsIfEnabled(
   args: RunProdMigrationsArgs
 ): Promise<void> {
@@ -114,12 +158,12 @@ export async function runProdMigrationsIfEnabled(
   //
   // The REFUSAL only, not the pending gate: this function is what settles that
   // gate, so awaiting it here would deadlock the very boot it was called to
-  // perform. Found by a test that hung for ten seconds, not by reading it.
+  // perform.
   assertBootMigrationsNotRefused();
 
-  // Settled on the early exits too: `registerServices` only opens the gate
-  // under exactly these conditions, but a mismatch here would hang every
-  // consumer, so this closes it rather than assuming it was never opened.
+  // Nothing to run: the gate is never opened for this boot. Settled anyway,
+  // so a gate some earlier code path left pending cannot outlive a boot that
+  // decided not to migrate.
   if (process.env.NODE_ENV !== "production") {
     allowBootMigrations();
     return;
@@ -129,12 +173,18 @@ export async function runProdMigrationsIfEnabled(
     return;
   }
 
+  // Opened here, once the decision to run is made, because every path below
+  // settles it: the success path and the tolerated failure allow serving, the
+  // refusal refuses. The function that settles the gate is the only one that
+  // opens it, so the decision to run is read in one place.
+  openBootMigrationsGate();
+
   const { adapter, logger } = args;
   const migrationsDir = resolve(process.cwd(), args.config.db.migrationsDir);
 
   // migrateCore -> runFileMigrations expects the full CLI `Logger` surface
-  // (notably `.success`, plus cosmetic helpers). The boot callers
-  // (init.ts/auth-handler.ts) only provide info/warn/error/debug, so adapt the
+  // (notably `.success`, plus cosmetic helpers). The boot caller
+  // (`registerServices`) provides only info/warn/error/debug, so adapt the
   // minimal boot logger to a complete Logger here. Without this, the first
   // applied migration throws "logger.success is not a function" mid-run, which
   // is caught below as a (false) failure and aborts any remaining migrations.
@@ -184,7 +234,19 @@ export async function runProdMigrationsIfEnabled(
       config: args.config,
       deferredExtends: args.deferredExtends,
     });
+    // Compiled from this call's config, as every migrate entry point
+    // compiles it; see `MigrateCoreDeps.extensionSchema`.
+    const { compileExtensionSchema } = await import(
+      "../domains/schema/extension/publish"
+    );
+    const extensionSchema = await compileExtensionSchema({
+      dialect: adapter.dialect,
+      plugins: args.config.plugins ?? [],
+      config: args.config,
+      logger: { warn: m => logger.warn(m) },
+    });
     const { applied, ran } = await core({
+      extensionSchema,
       dialect: adapter.dialect,
       db: adapter.getDrizzle(),
       adapter,
@@ -193,6 +255,10 @@ export async function runProdMigrationsIfEnabled(
       lockMode: "wait",
       ttlSeconds: args.config.db.migrateLockTtlSeconds,
       knownJunctions: resolvedSchema.knownJunctions,
+      // The same sets the CLI applies, from the same config: a boot that
+      // skipped them would serve against a schema missing every plugin
+      // table while reporting a clean migrate.
+      ...(await pluginMigrationArgs(args.config.plugins ?? [])),
       ensureLedger,
     });
     // REFUSES rather than serving. `ran: false` means the migrate lock stayed
@@ -261,28 +327,11 @@ export async function runProdMigrationsIfEnabled(
         err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN"
           ? err
           : bootMigrationsNotRun(args.adapter.dialect);
-      // Recorded BEFORE rethrowing, so the next request through either entry
-      // point refuses too rather than finding services already registered.
+      // Recorded before rethrowing: `registerServices` checks it before it
+      // connects anything, so every later boot attempt in this process refuses
+      // at once. The throw itself makes `registerServices` release the adapter
+      // and container this boot acquired.
       refuseBootMigrations(fatal);
-      // Reopen the registration gate, or the sticky flag above is unreachable.
-      // Both entry points call this helper only inside
-      // `if (!isServicesRegistered())`, and `registerServices()` has already
-      // made that false by the time we get here — so a second request would
-      // skip this helper entirely, build the dispatcher, and serve. Clearing
-      // registration is ONE edit at the point of refusal; adding the check to
-      // both caller gates would be the same fix wired into two places, which is
-      // how the original defect survived in the first place.
-      //
-      // It costs a re-registration per request on a process that now fails
-      // every request. That is the right trade: the process is refusing to
-      // serve and wants restarting, and a wasted registration is cheaper than a
-      // request served against a schema nobody verified.
-      // `shutdownServices`, not `clearServices`: the latter empties the
-      // container WITHOUT disconnecting the adapter, so re-registering on the
-      // next request would build a second connected pool and leak one per
-      // retry — exhausting connections that healthy replicas need. Tearing
-      // down releases what this boot took before reopening the gate.
-      await shutdownServices();
       logger.error(`[Nextly] ${fatal.publicMessage}`);
       throw fatal;
     }

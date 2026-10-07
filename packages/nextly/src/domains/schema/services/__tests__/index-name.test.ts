@@ -9,8 +9,12 @@ import { describe, expect, it } from "vitest";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { collectionIndexSpecs } from "../../pipeline/diff/build-from-fields";
 import {
+  boundedIdentifier,
+  checkConstraintName,
   columnTypeIsIndexable,
+  foreignKeyNameForColumns,
   indexNameForColumn,
+  indexNameForColumns,
   MAX_INDEX_NAME_LENGTH,
   uniquenessCanBeAnIndex,
 } from "../index-name";
@@ -125,5 +129,59 @@ describe("the DDL and the desired schema agree on WHICH indexes exist", () => {
     // MySQL rejects — the same failure, once per attempt, forever.
     expect(emitted).not.toContain("idx_dc_probe_payload");
     expect(declared).not.toContain("idx_dc_probe_payload");
+  });
+});
+
+describe("names already stored in databases", () => {
+  it("are derived exactly as before, long ones included", () => {
+    // Pinned, not recomputed: an index created under one of these names must
+    // stay addressable by it, and a change to the hash or the truncation
+    // would rename every long index an existing database holds.
+    expect(indexNameForColumn(LONG_TABLE, LONG_COLUMN)).toBe(
+      `idx_dc_${"a".repeat(48)}_1k6qikc`
+    );
+    expect(indexNameForColumns(LONG_TABLE, [LONG_COLUMN, "x"], false)).toBe(
+      `idx_dc_${"a".repeat(48)}_12eqq91`
+    );
+    expect(indexNameForColumns("t", ["a", "b"], false)).toBe(
+      "idx_t_a_b_04pbs2a"
+    );
+  });
+});
+
+describe("constraint names", () => {
+  it("leave a name that fits unchanged", () => {
+    expect(foreignKeyNameForColumns("fx__notes", ["owner_id"])).toBe(
+      "fk_fx__notes_owner_id"
+    );
+    expect(foreignKeyNameForColumns("fx__notes", ["a", "b"])).toBe(
+      "fk_fx__notes_a_b"
+    );
+    expect(checkConstraintName("fx__notes", "score_ok")).toBe(
+      "ck_fx__notes_score_ok"
+    );
+  });
+
+  it("bound a long name and keep two that share a prefix apart", () => {
+    // A plain `slice(0, 63)` passes the bound and merges these two.
+    const a = foreignKeyNameForColumns(LONG_TABLE, [`${"c".repeat(45)}alpha`]);
+    const b = foreignKeyNameForColumns(LONG_TABLE, [`${"c".repeat(45)}omega`]);
+    expect(a.length).toBeLessThanOrEqual(63);
+    expect(b.length).toBeLessThanOrEqual(63);
+    expect(a).not.toBe(b);
+    expect(a.startsWith("fk_dc_")).toBe(true);
+
+    const c = checkConstraintName(LONG_TABLE, `${"c".repeat(45)}alpha`);
+    const d = checkConstraintName(LONG_TABLE, `${"c".repeat(45)}omega`);
+    expect(c.length).toBeLessThanOrEqual(63);
+    expect(c).not.toBe(d);
+  });
+
+  it("shorten a name at 64 characters and not at 63", () => {
+    // 64 is the length PostgreSQL silently truncates and MySQL still accepts,
+    // so it is the first one that must change.
+    expect(boundedIdentifier("x".repeat(63))).toBe("x".repeat(63));
+    expect(boundedIdentifier("x".repeat(64))).toHaveLength(63);
+    expect(boundedIdentifier("x".repeat(64))).not.toBe("x".repeat(63));
   });
 });

@@ -18,11 +18,12 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import type { Operation } from "../diff/types";
+import type { Operation, TableSpec } from "../diff/types";
 
 import { generateMysqlSQL } from "./mysql";
 import { generatePgSQL } from "./postgres";
 import { generateSqliteSQL } from "./sqlite";
+import { sqliteStatements } from "./sqlite-rebuild";
 
 export {
   addForeignKeySql,
@@ -33,6 +34,7 @@ export type { ForeignKeyActionDialect } from "./foreign-key-action";
 export { quoteIdent } from "./identifier-quoting";
 export { MysqlUnsupportedOperationError } from "./mysql";
 export { SqliteUnsupportedOperationError } from "./sqlite";
+export { sqliteTableRebuildStatements } from "./sqlite-rebuild";
 
 /**
  * SQL for one operation, as a single string.
@@ -78,4 +80,30 @@ export function generateSQL(op: Operation, dialect: SupportedDialect): string {
       throw new Error(`generateSQL: unsupported dialect ${dialect as string}`);
     }
   }
+}
+
+/**
+ * SQL for a whole list of operations, in order — what a migration file holds.
+ *
+ * On PostgreSQL and MySQL this is exactly `generateSQL` per operation. SQLite
+ * cannot add or drop a check or a foreign key on an existing table, and one
+ * such operation does not say what the rest of the table looks like, so there
+ * every check and foreign-key change on a table becomes ONE rebuild of that
+ * table to its definition in `tablesAfter` (see `sqlite-rebuild.ts`). The
+ * rebuild is a run of statements, so the result is not one entry per
+ * operation on that dialect.
+ *
+ * `tablesAfter` is the schema the list leads TO: the desired snapshot's
+ * tables for an up migration, the previous snapshot's for the down that
+ * inverts it. PostgreSQL and MySQL do not read it.
+ */
+export function generateStatements(
+  ops: readonly Operation[],
+  dialect: SupportedDialect,
+  tablesAfter: readonly TableSpec[]
+): string[] {
+  if (dialect === "sqlite") {
+    return sqliteStatements(ops, tablesAfter, generateSqliteSQL);
+  }
+  return ops.map(op => generateSQL(op, dialect));
 }

@@ -74,6 +74,8 @@ describe.each(getConfiguredTestDialects())(
       const { logger, warnings } = recordingLogger();
       const adapter = handle.adapter;
       await migrateCore({
+        // A config that declares no schema hooks: the run is core-only.
+        extensionSchema: undefined,
         dialect,
         db: adapter.getDrizzle(),
         adapter: adapter as unknown as Parameters<
