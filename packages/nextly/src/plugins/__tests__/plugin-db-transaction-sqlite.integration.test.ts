@@ -329,6 +329,33 @@ describe("the boot and a plugin that declares rawSql", () => {
     });
   });
 
+  it("gives one that does not declare it no live handle at ctx.config", async () => {
+    // `ctx.config` was a copy of the whole service configuration, so a plugin
+    // without rawSql could run any SQL through `ctx.config.adapter`.
+    const ctx = await bootPlugin();
+    const config = ctx.config as Record<string, unknown>;
+
+    for (const live of [
+      "adapter",
+      "db",
+      "pluginConsent",
+      "storagePlugins",
+      "imageProcessor",
+      "logger",
+      "hookRegistry",
+      "passwordHasher",
+      "rateLimit",
+    ]) {
+      expect(config, live).not.toHaveProperty(live);
+    }
+    // The plain values plugins read are still there.
+    expect(ctx.config.plugins?.map(plugin => plugin.name)).toEqual([
+      "@test/tx",
+    ]);
+    expect(Object.isFrozen(ctx.config)).toBe(true);
+    expect(Object.isFrozen(ctx.config.plugins)).toBe(true);
+  });
+
   it("does not let a setup transformer push itself onto the consent", async () => {
     // A transformer that pushes its own name onto whatever consent it can
     // reach, then declares rawSql on its own entry, must not boot with the
