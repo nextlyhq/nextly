@@ -131,6 +131,39 @@ describe("the extendable core table factories", () => {
     );
     expect(described.checks).toContain("ck_users_nickname_enum");
   });
+
+  it.each(DIALECTS)(
+    "keep every column of the static users table beside a contribution on %s",
+    dialect => {
+      const rebuilt = describeTable(
+        coreTableWithLiveContributions(
+          "users",
+          {
+            name: "users",
+            columns: [{ name: "nickname", type: "text", nullable: true }],
+          },
+          [{ key: "nickname", name: "nickname", kind: "text", nullable: true }],
+          dialect
+        ),
+        dialect
+      );
+      const original = describeTable(getDialectTables(dialect).users, dialect);
+      // The columns the account-state checks and the verification writes
+      // read, named so a static table that lost one fails here too.
+      expect(original.columns.map(column => column.name)).toEqual(
+        expect.arrayContaining([
+          "email_verified_via",
+          "password_updated_at",
+          "deactivated_at",
+          "must_change_password",
+        ])
+      );
+      expect(
+        rebuilt.columns.filter(column => column.name !== "nickname")
+      ).toEqual(original.columns);
+      expect(rebuilt.columns.map(column => column.name)).toContain("nickname");
+    }
+  );
 });
 
 describe("the static core tables built from the factories", () => {
@@ -142,6 +175,7 @@ describe("the static core tables built from the factories", () => {
       name: string | null;
       email: string;
       emailVerified: Date | null;
+      emailVerifiedVia: string | null;
       passwordUpdatedAt: Date | null;
       image: string | null;
       passwordHash: string | null;
