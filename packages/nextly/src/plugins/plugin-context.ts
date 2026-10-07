@@ -68,7 +68,7 @@ import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
-import { PLUGIN_CONFIG_KEYS } from "./plugin-config-view";
+import { type PluginConfig, pluginConfigView } from "./plugin-config-view";
 import { NO_PLUGIN_GRANTS, type PluginGrants } from "./plugin-consent";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
 import { createPluginSettings } from "./plugin-settings-provider";
@@ -1005,6 +1005,12 @@ export interface PluginDefinition {
  * });
  * ```
  */
+export type {
+  PluginConfig,
+  PluginEmailSettings,
+  PluginSummary,
+} from "./plugin-config-view";
+
 export function definePlugin(definition: PluginDefinition): PluginDefinition {
   const withRename: PluginDefinition = {
     ...definition,
@@ -1407,34 +1413,6 @@ function restrictDatabase(
           )
         : native.transaction(tx => work(fluentOnly(tx))),
   };
-}
-
-/**
- * @experimental What a plugin reads at `ctx.config`: the application's plain
- * configuration values, frozen. Live handles are not part of it; a plugin
- * reaches the database through `ctx.db` and logs through `ctx.logger`.
- */
-export type PluginConfig = Readonly<
-  Omit<
-    Pick<NextlyServiceConfig, (typeof PLUGIN_CONFIG_KEYS)[number]>,
-    "plugins"
-  > & { plugins?: readonly PluginDefinition[] }
->;
-
-/**
- * Build `ctx.config` from the service configuration: the allowlisted keys
- * only, in a new frozen object. `plugins` is a frozen copy of the list, so a
- * plugin cannot add to or reorder the list the next boot reads.
- */
-function pluginConfigView(config: NextlyServiceConfig): PluginConfig {
-  const view: Partial<Record<keyof NextlyServiceConfig, unknown>> = {};
-  for (const key of PLUGIN_CONFIG_KEYS) {
-    if (config[key] !== undefined) view[key] = config[key];
-  }
-  if (config.plugins !== undefined) {
-    view.plugins = Object.freeze([...config.plugins]);
-  }
-  return Object.freeze(view) as PluginConfig;
 }
 
 export function createPluginContext(

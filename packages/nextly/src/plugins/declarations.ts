@@ -24,6 +24,15 @@ export interface PluginDeclaration {
 }
 
 /**
+ * What `collectDeclarations` reads of a plugin: a definition, or the summary
+ * `ctx.config.plugins` lists (`PluginSummary`), which carries the same three
+ * members.
+ */
+export type DeclaringPlugin = Pick<PluginDefinition, "name" | "enabled"> & {
+  readonly contributes?: { readonly declarations?: unknown };
+};
+
+/**
  * Every declaration addressed to `consumer`, in plugin order.
  *
  * Disabled plugins are skipped: `enabled: false` withholds behavior, and a
@@ -35,7 +44,7 @@ export interface PluginDeclaration {
  * time — which is the property the whole channel exists for.
  */
 export function collectDeclarations(
-  plugins: readonly PluginDefinition[],
+  plugins: readonly DeclaringPlugin[],
   consumer: string
 ): PluginDeclaration[] {
   const found: PluginDeclaration[] = [];
