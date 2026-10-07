@@ -84,9 +84,11 @@ A plugin that needs raw SQL declares `capabilities.db.rawSql: true`, and the
 app lists it in `nextly.config.ts`:
 
 ```ts
+import { defineConfig } from "nextly/config";
+
 export default defineConfig({
+  // The package name of each plugin allowed raw SQL.
   db: { rawSqlPlugins: ["@acme/nextly-reports"] },
-  plugins: [reports()],
 });
 ```
 
