@@ -20,10 +20,9 @@ type Hook = (args: {
   };
 }) => void;
 
-const compile = (
-  extend: Hook[],
-  dialect: "postgresql" | "mysql" = "postgresql"
-) =>
+type Dialect = "postgresql" | "mysql" | "sqlite";
+
+const compile = (extend: Hook[], dialect: Dialect = "postgresql") =>
   compileExtensionSchema({
     dialect,
     plugins: [],
@@ -47,7 +46,7 @@ const compile = (
   } as never);
 
 /** The refusal's message, or a note that nothing was refused. */
-async function refusal(extend: Hook[], dialect?: "mysql"): Promise<string> {
+async function refusal(extend: Hook[], dialect?: Dialect): Promise<string> {
   try {
     await compile(extend, dialect);
   } catch (error) {
@@ -80,7 +79,7 @@ function messageOf(error: unknown): string {
   return "";
 }
 
-async function refusedWith(extend: Hook[], dialect?: "mysql") {
+async function refusedWith(extend: Hook[], dialect?: Dialect) {
   try {
     const message = await refusal(extend, dialect);
     return message;
@@ -126,6 +125,44 @@ describe("a contributed column reusing a name the entity already has", () => {
       await refusedWith([
         contribute("users", { email: col.shortText({ nullable: true }) }),
       ])
+    ).toMatch(/already declared/);
+  });
+
+  it.each(["postgresql", "mysql", "sqlite"] as const)(
+    "is accepted on users when the name is new, on %s (the control)",
+    async dialect => {
+      expect(
+        await refusedWith(
+          [
+            contribute("users", {
+              nickname: col.shortText({ nullable: true }),
+            }),
+          ],
+          dialect
+        )
+      ).toBe("not refused");
+    }
+  );
+
+  // The columns sign-in, session refresh and the verification writes read
+  // off `users`. A contribution of one of these names would be a second
+  // column of that name on the runtime table, or a type of its own in place
+  // of the one those paths write.
+  it.each(
+    (["postgresql", "mysql", "sqlite"] as const).flatMap(dialect =>
+      [
+        "emailVerifiedVia",
+        "passwordUpdatedAt",
+        "deactivatedAt",
+        "mustChangePassword",
+      ].map(key => [key, dialect] as const)
+    )
+  )("is refused on users when it is %s, on %s", async (key, dialect) => {
+    expect(
+      await refusedWith(
+        [contribute("users", { [key]: col.shortText({ nullable: true }) })],
+        dialect
+      )
     ).toMatch(/already declared/);
   });
 });

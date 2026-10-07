@@ -176,6 +176,46 @@ async function setUp(dialect: TestDialect, adapter: Adapter) {
   return { run, users };
 }
 
+/** A timestamp literal each dialect's column takes. */
+function timestamp(dialect: TestDialect, iso: string): string {
+  return dialect === "sqlite"
+    ? String(Math.floor(new Date(iso).getTime() / 1000))
+    : `'${iso.replace("T", " ").replace("Z", "")}'`;
+}
+
+/**
+ * A user row carrying the account-state columns (verification provenance,
+ * deactivation, password change) and the contributed `nickname`, written by
+ * hand so the values are known. `via` null is an address verified with no
+ * record of how, which the reconcile marks `"legacy"`.
+ */
+async function insertAccount(
+  dialect: TestDialect,
+  adapter: Adapter,
+  id: string,
+  via: string | null
+): Promise<void> {
+  const at = timestamp(dialect, "2026-01-01T00:00:00Z");
+  await adapter.executeQuery(
+    `INSERT INTO users (id, email, email_verified, email_verified_via, password_updated_at, is_active, deactivated_at, failed_login_attempts, created_at, updated_at, nickname) ` +
+      `VALUES ('${id}', '${id}@example.com', ${at}, ${via === null ? "NULL" : `'${via}'`}, ${at}, ${dialect === "postgresql" ? "false" : "0"}, ${at}, 0, ${at}, ${at}, 'Ace')`
+  );
+}
+
+/** What survives of `insertAccount`'s row, as comparable values. */
+async function accountState(adapter: Adapter, id: string) {
+  const rows = (await adapter.executeQuery(
+    `SELECT email_verified_via, password_updated_at, deactivated_at, nickname FROM users WHERE id = '${id}'`
+  )) as Record<string, unknown>[];
+  const row = rows[0];
+  return {
+    via: row?.email_verified_via ?? null,
+    passwordUpdated: row?.password_updated_at != null,
+    deactivated: row?.deactivated_at != null,
+    nickname: row?.nickname ?? null,
+  };
+}
+
 describeEachDialect(
   "a contribution to a core table, across core reconciles",
   dialect => {
@@ -224,6 +264,48 @@ describeEachDialect(
       }
     }, 90_000);
 
+    it("keeps the account-state columns and their values beside the contribution", async () => {
+      const { adapter, close } = await openDatabase(dialect);
+      try {
+        const { run, users } = await setUp(dialect, adapter);
+        await insertAccount(dialect, adapter, "u-link", "link");
+        await insertAccount(dialect, adapter, "u-unrecorded", null);
+
+        // The reconcile marks the unrecorded verification, then a genuine
+        // core change makes it push with the contribution built in.
+        expect((await run()).changed).toBe(true);
+        await adapter.executeQuery(
+          dialect === "mysql"
+            ? `DROP INDEX ${CORE_INDEX} ON nextly_versions`
+            : `DROP INDEX ${CORE_INDEX}`
+        );
+        expect((await run()).changed).toBe(true);
+
+        expect((await users())?.columns.map(c => c.name)).toEqual(
+          expect.arrayContaining([
+            "email_verified_via",
+            "password_updated_at",
+            "deactivated_at",
+            "nickname",
+          ])
+        );
+        expect(await accountState(adapter, "u-link")).toEqual({
+          via: "link",
+          passwordUpdated: true,
+          deactivated: true,
+          nickname: "Ace",
+        });
+        expect(await accountState(adapter, "u-unrecorded")).toEqual({
+          via: "legacy",
+          passwordUpdated: true,
+          deactivated: true,
+          nickname: "Ace",
+        });
+      } finally {
+        await close();
+      }
+    }, 90_000);
+
     if (dialect === "sqlite") {
       it("keeps a contributed column's VALUES through a rebuild of the core table", async () => {
         const { adapter, close } = await openDatabase(dialect);
@@ -233,6 +315,7 @@ describeEachDialect(
             `INSERT INTO users (id, email, is_active, failed_login_attempts, created_at, updated_at, nickname) ` +
               `VALUES ('u1', 'a@example.com', 0, 0, 0, 0, 'Ace')`
           );
+          await insertAccount(dialect, adapter, "u-link", "link");
 
           // Drift SQLite can only repair by rebuilding `users`: `email` made
           // nullable, through the production rebuild helper, keeping every
@@ -258,6 +341,14 @@ describeEachDialect(
             `SELECT nickname FROM users WHERE id = 'u1'`
           )) as { nickname: string | null }[];
           expect(rows[0]?.nickname).toBe("Ace");
+          // The core table's own account-state values are copied by the
+          // same rebuild.
+          expect(await accountState(adapter, "u-link")).toEqual({
+            via: "link",
+            passwordUpdated: true,
+            deactivated: true,
+            nickname: "Ace",
+          });
         } finally {
           await close();
         }
