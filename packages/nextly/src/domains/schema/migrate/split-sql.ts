@@ -19,6 +19,47 @@ import { scanSql } from "./sql-scan";
 const BREAKPOINT = "--> statement-breakpoint";
 
 /**
+ * The first line that marks a migration file to run outside a transaction,
+ * statement by statement, so it can hold a statement a transaction refuses,
+ * such as PostgreSQL's `CREATE INDEX CONCURRENTLY`.
+ */
+export const NO_TRANSACTION_MARKER = "-- nextly:no-transaction";
+
+/**
+ * Whether a migration file's text is marked to run outside a transaction:
+ * its first line, past a byte-order mark and trailing whitespace, is
+ * `NO_TRANSACTION_MARKER`. Only the first line counts, so the marker is a
+ * decision about the whole file, made where a reader sees it first.
+ */
+export function marksNoTransaction(content: string): boolean {
+  const firstLine = content.replace(/^\uFEFF/, "").split("\n", 1)[0] ?? "";
+  return firstLine.trimEnd() === NO_TRANSACTION_MARKER;
+}
+
+/**
+ * How a migration unit runs, as far as the refusals need to know: inside the
+ * runner's transaction or outside one, and whether it is a migration file or
+ * a plugin's module, which are marked to run outside one differently.
+ */
+export interface MigrationRunMode {
+  transaction: boolean;
+  unit: "file" | "module";
+}
+
+/** An unmarked migration file: the mode every unit has unless marked. */
+const IN_TRANSACTION_FILE: MigrationRunMode = {
+  transaction: true,
+  unit: "file",
+};
+
+/** How the author marks a unit of this kind to run outside a transaction. */
+function markAdvice(unit: MigrationRunMode["unit"]): string {
+  return unit === "module"
+    ? "set `transaction: false` on the module"
+    : `make \`${NO_TRANSACTION_MARKER}\` the file's first line`;
+}
+
+/**
  * drizzle-kit's breakpoint markers and whole-line comments removed, leaving
  * every string, quoted name, block comment and dollar-quoted body as written.
  *
@@ -154,8 +195,8 @@ function leadingWords(
  *   `XA`. Leaving it out would change what the file does, and running it
  *   would roll back work the runner then records.
  * - A savepoint is neither: `SAVEPOINT`, `RELEASE [SAVEPOINT]` and
- *   `ROLLBACK TO [SAVEPOINT]` work inside the runner's transaction and undo
- *   at most part of the file, so they run as written.
+ *   `ROLLBACK [WORK | TRANSACTION] TO [SAVEPOINT]` work inside the runner's
+ *   transaction and undo at most part of the file, so they run as written.
  *
  * Read from the statement's leading keywords only. A `BEGIN` or `END` inside
  * a PostgreSQL `DO` or function body is inside a dollar-quoted segment and
@@ -165,7 +206,7 @@ export function transactionControlOf(
   statement: string,
   dialect?: SupportedDialect
 ): "bracket" | "refused" | null {
-  const [first, second] = leadingWords(statement, dialect, 2);
+  const [first, second, third] = leadingWords(statement, dialect, 3);
   switch (first) {
     case "BEGIN":
     case "END":
@@ -174,10 +215,14 @@ export function transactionControlOf(
       return second === "TRANSACTION" ? "bracket" : null;
     case "COMMIT":
       return second === "PREPARED" ? "refused" : "bracket";
-    case "ROLLBACK":
-      // `ROLLBACK TO` returns to a savepoint the file set, inside the
-      // runner's transaction; a bare ROLLBACK ends that transaction.
-      return second === "TO" ? null : "refused";
+    case "ROLLBACK": {
+      // `ROLLBACK [WORK | TRANSACTION] TO` returns to a savepoint the file
+      // set, inside the runner's transaction; a bare ROLLBACK, with or
+      // without the optional word, ends that transaction.
+      const next =
+        second === "WORK" || second === "TRANSACTION" ? third : second;
+      return next === "TO" ? null : "refused";
+    }
     case "SAVEPOINT":
     case "RELEASE":
       return null;
@@ -255,7 +300,8 @@ function quoted(statement: string): string {
 function sessionSettingMessage(
   statement: string,
   setting: string,
-  dialect: SupportedDialect | undefined
+  dialect: SupportedDialect | undefined,
+  mode: MigrationRunMode
 ): string {
   const lingers = `${quoted(statement)} changes a session setting (${setting}) that would stay on the pooled connection after the migration, and apply to whatever that connection serves next.`;
   if (dialect === "mysql" && setting === "FOREIGN_KEY_CHECKS") {
@@ -264,7 +310,11 @@ function sessionSettingMessage(
   if (dialect === "postgresql") {
     return setting === "RESET" || setting === "DISCARD"
       ? `${quoted(statement)} resets session state on a pooled connection the application shares. Remove it.`
-      : `${lingers} Use SET LOCAL ${setting.toLowerCase()} ..., which ends with the migration's transaction.`;
+      : mode.transaction
+        ? `${lingers} Use SET LOCAL ${setting.toLowerCase()} ..., which ends with the migration's transaction.`
+        : // Outside a transaction SET LOCAL has nothing to end with, and
+          // does nothing.
+          `${lingers} A ${mode.unit} that runs outside a transaction has none for SET LOCAL to end with: move the statements that need the setting to one that runs in a transaction, and use SET LOCAL there.`;
   }
   return `${lingers} Remove it, or keep the value in a user variable (SET @name = ...), which only statements that read it see.`;
 }
@@ -286,47 +336,90 @@ export interface StatementRefusal {
  */
 export function statementRefusals(
   statements: readonly string[],
-  dialect: SupportedDialect | undefined
+  dialect: SupportedDialect | undefined,
+  mode: MigrationRunMode = IN_TRANSACTION_FILE
 ): StatementRefusal[] {
-  const refusals: StatementRefusal[] = [];
-  for (const statement of statements) {
-    if (transactionControlOf(statement, dialect) === "refused") {
-      refusals.push({
-        statement,
-        code: "TRANSACTION_CONTROL_IN_MIGRATION",
-        message: `${quoted(statement)}: a migration runs inside the runner's own transaction, so it may not contain ${leadingWords(statement, dialect, 1)[0] ?? "it"}. Remove it and let the file run as one transaction.`,
-      });
-      continue;
-    }
-    const setting = sessionSettingOf(statement, dialect);
-    if (setting !== undefined) {
-      refusals.push({
-        statement,
-        code: "SESSION_SETTING_IN_MIGRATION",
-        message: sessionSettingMessage(statement, setting, dialect),
-      });
-      continue;
-    }
-    const reason = outsideTransactionReason(statement, dialect);
-    if (reason !== undefined) {
-      refusals.push({
-        statement,
-        code: "NOT_TRANSACTIONAL_IN_MIGRATION",
-        message: `${quoted(statement)} ${reason} Run it outside the migration, by hand or from a deploy step, after the migration has applied.`,
-      });
-    }
+  return statements.flatMap(statement => {
+    const refusal = refusalOf(statement, dialect, mode);
+    return refusal === undefined ? [] : [refusal];
+  });
+}
+
+/** Why the runner refuses one statement in a unit run as `mode` says. */
+function refusalOf(
+  statement: string,
+  dialect: SupportedDialect | undefined,
+  mode: MigrationRunMode
+): StatementRefusal | undefined {
+  if (transactionControlOf(statement, dialect) === "refused") {
+    return {
+      statement,
+      code: "TRANSACTION_CONTROL_IN_MIGRATION",
+      message: transactionControlMessage(statement, dialect, mode),
+    };
   }
-  return refusals;
+  const setting = sessionSettingOf(statement, dialect);
+  if (setting !== undefined) {
+    return {
+      statement,
+      code: "SESSION_SETTING_IN_MIGRATION",
+      message: sessionSettingMessage(statement, setting, dialect, mode),
+    };
+  }
+  const outside = outsideTransactionReason(statement, dialect, mode);
+  // A statement the database runs only outside a transaction runs in a unit
+  // marked to run outside one.
+  if (outside === undefined || (outside.markable && !mode.transaction)) {
+    return undefined;
+  }
+  return {
+    statement,
+    code: "NOT_TRANSACTIONAL_IN_MIGRATION",
+    message: outside.markable
+      ? `${quoted(statement)} ${outside.reason} To run it as a migration, ${markAdvice(mode.unit)}: the ${mode.unit} then runs outside a transaction, statement by statement, and a failure part-way leaves the statements before it applied.`
+      : `${quoted(statement)} ${outside.reason} Remove it.`,
+  };
 }
 
 /**
- * Why a statement cannot run inside the migration's transaction, or
- * undefined when it can.
+ * Why a statement that ends or hands off a transaction is refused: inside
+ * the runner's transaction it would end that transaction, and outside one it
+ * would act on a transaction the runner does not own.
+ */
+function transactionControlMessage(
+  statement: string,
+  dialect: SupportedDialect | undefined,
+  mode: MigrationRunMode
+): string {
+  const keyword = leadingWords(statement, dialect, 1)[0] ?? "it";
+  if (!mode.transaction) {
+    return `${quoted(statement)}: a migration may not contain ${keyword}, which ends or hands off a transaction the runner does not own. Remove it.`;
+  }
+  const savepoint =
+    keyword === "ROLLBACK"
+      ? ", or undo part of it with SAVEPOINT name and ROLLBACK TO SAVEPOINT name"
+      : "";
+  return `${quoted(statement)}: a migration runs inside the runner's own transaction, so it may not contain ${keyword}. Remove it and let the ${mode.unit} run as one transaction${savepoint}.`;
+}
+
+/**
+ * Why a statement cannot run inside the migration's transaction, and
+ * whether marking the unit to run outside one lets it run — or undefined
+ * when it runs inside one.
  *
- * - PostgreSQL refuses to run these inside a transaction block: `VACUUM`,
- *   anything `CONCURRENTLY` (`CREATE`/`DROP INDEX`, `REINDEX`),
- *   `CREATE`/`DROP DATABASE`, `CREATE`/`DROP TABLESPACE`, `ALTER SYSTEM`.
- * - SQLite refuses `VACUUM`, `ATTACH` and `DETACH` inside one.
+ * Markable: the database refuses these inside a transaction, and runs them
+ * outside one.
+ *
+ * - PostgreSQL: `VACUUM`, anything `CONCURRENTLY` (`CREATE`/`DROP INDEX`,
+ *   `REINDEX`), `CREATE`/`DROP DATABASE`, `CREATE`/`DROP TABLESPACE`,
+ *   `ALTER SYSTEM`.
+ * - SQLite: `VACUUM`.
+ *
+ * Not markable: they leave state on the connection after the migration, so
+ * running them outside a transaction would not help.
+ *
+ * - SQLite's `ATTACH` and `DETACH` change which databases the process's one
+ *   connection sees.
  * - MySQL's `LOCK TABLES`/`UNLOCK TABLES` (and the INSTANCE forms) commit
  *   the transaction implicitly, and the locks stay with the pooled
  *   connection.
@@ -337,41 +430,57 @@ export function statementRefusals(
  */
 function outsideTransactionReason(
   statement: string,
-  dialect: SupportedDialect | undefined
-): string | undefined {
+  dialect: SupportedDialect | undefined,
+  mode: MigrationRunMode
+): { reason: string; markable: boolean } | undefined {
   const words = leadingWords(statement, dialect, 6);
   const [first, second] = words;
+  const inOne = `cannot run inside a transaction, and this ${mode.unit} runs in one.`;
   if (dialect === "postgresql") {
-    if (first === "VACUUM") {
-      return "cannot run inside a transaction, and every migration runs in one.";
-    }
+    if (first === "VACUUM") return { reason: inOne, markable: true };
     if (
       (first === "CREATE" || first === "DROP" || first === "REINDEX") &&
       words.includes("CONCURRENTLY")
     ) {
-      return "builds or drops concurrently, which PostgreSQL cannot do inside a transaction, and every migration runs in one.";
+      return {
+        reason: `builds or drops concurrently, which PostgreSQL cannot do inside a transaction, and this ${mode.unit} runs in one.`,
+        markable: true,
+      };
     }
     if (
       (first === "CREATE" || first === "DROP") &&
       (second === "DATABASE" || second === "TABLESPACE")
     ) {
-      return "cannot run inside a transaction, and every migration runs in one.";
+      return { reason: inOne, markable: true };
     }
     if (first === "ALTER" && second === "SYSTEM") {
-      return "changes the server's configuration and cannot run inside a transaction.";
+      return {
+        reason: `changes the server's configuration, which cannot be done inside a transaction, and this ${mode.unit} runs in one.`,
+        markable: true,
+      };
     }
     return undefined;
   }
   if (dialect === "sqlite") {
-    return first === "VACUUM" || first === "ATTACH" || first === "DETACH"
-      ? "cannot run inside a transaction, and every migration runs in one."
+    if (first === "VACUUM") return { reason: inOne, markable: true };
+    return first === "ATTACH" || first === "DETACH"
+      ? {
+          reason:
+            "changes which databases the process's one connection sees, and that outlives the migration.",
+          markable: false,
+        }
       : undefined;
   }
   if (dialect === "mysql") {
     const locking = first === "LOCK" || first === "UNLOCK";
     return locking &&
       (second === "TABLES" || second === "TABLE" || second === "INSTANCE")
-      ? "commits the migration's transaction implicitly and holds its locks on the pooled connection after the migration."
+      ? {
+          reason: mode.transaction
+            ? "commits the migration's transaction implicitly and holds its locks on the pooled connection after the migration."
+            : "holds its locks on the pooled connection after the migration.",
+          markable: false,
+        }
       : undefined;
   }
   return undefined;
@@ -384,9 +493,10 @@ function outsideTransactionReason(
 export function assertRunnableStatements(
   statements: readonly string[],
   dialect: SupportedDialect | undefined,
-  source: string
+  source: string,
+  mode: MigrationRunMode = IN_TRANSACTION_FILE
 ): void {
-  const refusals = statementRefusals(statements, dialect);
+  const refusals = statementRefusals(statements, dialect, mode);
   if (refusals.length === 0) return;
   throw NextlyError.invalidInput({
     message: `${source} was refused, and nothing in it ran. ${refusals

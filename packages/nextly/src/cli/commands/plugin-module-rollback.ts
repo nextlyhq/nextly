@@ -74,26 +74,32 @@ export function verifiedPluginModule(args: {
  * it, and a retried uninstall would leave it out.
  *
  * On MySQL each DDL statement commits as it runs, so a DOWN that failed part
- * way may have changed the schema. The row says so, and `migrate:status`
- * shows it beside the migration.
+ * way may have changed the schema; so may a DOWN run outside a transaction,
+ * on any dialect. The row says so, and `migrate:status` shows it beside the
+ * migration.
  */
 export async function recordRollbackFailed(args: {
   repo: Pick<SchemaEventsRepository, "insertEvent">;
   filename: string;
   dialect: SupportedDialect;
+  /** False when the DOWN ran outside a transaction. Absent, it ran in one. */
+  transaction?: boolean;
   /** Which command failed and why. */
   note: string;
 }): Promise<void> {
+  const partial =
+    args.transaction === false
+      ? NO_TRANSACTION_ROLLBACK_NOTE
+      : args.dialect === "mysql"
+        ? PARTIAL_ROLLBACK_NOTE
+        : undefined;
   await args.repo.insertEvent({
     eventType: "file_rollback",
     status: "failed",
     source: "cli-migrate",
     filename: ledgerFilename(args.filename),
     endedAt: new Date(),
-    note:
-      args.dialect === "mysql"
-        ? `${PARTIAL_ROLLBACK_NOTE} ${args.note}`
-        : args.note,
+    note: partial === undefined ? args.note : `${partial} ${args.note}`,
   });
 }
 
@@ -103,3 +109,10 @@ export async function recordRollbackFailed(args: {
  */
 export const PARTIAL_ROLLBACK_NOTE =
   "[possibly partial: MySQL commits each DDL statement as it runs]";
+
+/**
+ * The prefix a failed rollback's note carries when its DOWN ran outside a
+ * transaction: the statements before the failing one stayed applied.
+ */
+export const NO_TRANSACTION_ROLLBACK_NOTE =
+  "[possibly partial: ran outside a transaction]";

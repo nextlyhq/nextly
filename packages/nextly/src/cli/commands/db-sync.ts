@@ -91,6 +91,7 @@ import { formatDuration } from "../utils/logger";
 import {
   ensureLocalizedCompanions,
   performPermissionSeeding,
+  publishExtensionSchema,
   syncCollections,
   syncComponents,
   syncSingles,
@@ -359,6 +360,9 @@ export async function runDbSync(
             );
           }
 
+          // Before the pushes, which plan plugin tables and contributed
+          // elements from it.
+          await publishExtensionSchema(configResult, adapter, context);
           await syncCollections(configResult, adapter, options, context);
           await syncSingles(configResult, adapter, options, context);
           await syncComponents(configResult, adapter, options, context);

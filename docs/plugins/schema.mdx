@@ -373,6 +373,15 @@ it would have dropped; write the rename, or the deliberate drop, by hand. With
 no schema changes it writes nothing and exits with code 2, whatever
 `schemaVersion` says.
 
+Each module runs in one transaction. A module that needs a statement a
+transaction refuses, such as PostgreSQL's `CREATE INDEX CONCURRENTLY`, sets
+`transaction: false`, and its UP and DOWN then run statement by statement. If
+one fails, the statements before it stay applied and are not undone, so keep
+such a module to the statements that need it. The field is part of the
+module's checksum only when it is `false`, so existing modules keep their
+checksums. See
+[Running a file outside a transaction](/docs/guides/production-migrations#running-a-file-outside-a-transaction).
+
 The entry `--plugin` points at may export the plugin as its default export or
 as a named one (`export const myPlugin = definePlugin(...)`), beside the tables
 it declares; a file exporting two plugins is refused, naming both.

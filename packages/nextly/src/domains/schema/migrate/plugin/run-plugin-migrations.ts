@@ -31,6 +31,7 @@ import {
   snapshotsEquivalent,
   type ReconcileRepo,
 } from "../drift-reconcile";
+import type { MigrationUnit } from "../migration-transaction";
 import { assertRunnableStatements } from "../split-sql";
 import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
 
@@ -77,8 +78,11 @@ export interface RunPluginMigrationsDeps {
     tableNames: readonly string[],
     stream: string
   ) => Promise<NextlySchemaSnapshot>;
-  /** Execute one module's UP in one transaction; returns statements run. */
-  executeSql: (sql: string) => Promise<number>;
+  /**
+   * Execute one module's UP — in one transaction unless the module is marked
+   * `transaction: false`; returns statements run.
+   */
+  executeSql: (sql: string, unit: MigrationUnit) => Promise<number>;
   /** Ledger rows are recorded through this — `reconcileFile`'s own repo. */
   repo: ReconcileRepo;
   /**
@@ -403,7 +407,10 @@ async function applyModule(
     source: filename,
     liveColumns: await deps.liveColumns?.(statements),
   });
-  assertRunnableStatements(statements, deps.dialect, filename);
+  assertRunnableStatements(statements, deps.dialect, filename, {
+    transaction: migration.transaction !== false,
+    unit: "module",
+  });
 
   const ownedTarget = migration.snapshot[deps.dialect]?.tables ?? [];
   const sides = await moduleSides(set, migration, earlier, deps);
@@ -415,6 +422,7 @@ async function applyModule(
       sql: moduleSql(migration, deps.dialect, "up"),
       path: `plugin:${set.pluginName}/${migration.name}`,
       sha256: migration.checksum,
+      transaction: migration.transaction !== false,
     },
     before: sides.before,
     target: sides.target,

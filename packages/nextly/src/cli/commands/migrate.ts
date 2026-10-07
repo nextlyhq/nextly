@@ -57,7 +57,11 @@ import type { ExtensionSchema } from "../../domains/schema/extension/build-exten
 import { compileExtensionSchema } from "../../domains/schema/extension/publish";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
-import { executeTransaction } from "../../domains/schema/migrate/migration-transaction";
+import {
+  outsideTransactionNotice,
+  runMigrationStatements,
+  type MigrationUnit,
+} from "../../domains/schema/migrate/migration-transaction";
 import { pluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import {
   pluginMigrationSetsFrom,
@@ -69,7 +73,9 @@ import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconci
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
   assertRunnableStatements,
+  marksNoTransaction,
   splitSqlStatements,
+  statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
 import {
   mergeContributions,
@@ -206,6 +212,11 @@ interface ParsedMigration {
   timestamp: string;
   /** Source of the migration (core bundled or app) */
   source: MigrationSource;
+  /**
+   * False when the file's first line is `-- nextly:no-transaction`: its UP
+   * and DOWN run outside a transaction, statement by statement.
+   */
+  transaction: boolean;
 }
 
 /**
@@ -314,7 +325,7 @@ export async function runMigrate(
       );
       logger.newline();
       logger.keyValue("Pending", formatCount(pending.length, "migration"));
-      for (const m of pending) logger.info(`  • ${m.name}.sql`);
+      for (const m of pending) previewPendingFile(m, dialect, logger);
       logger.success("Dry run complete (no changes made).");
       return;
     }
@@ -571,6 +582,28 @@ export interface MigrateCoreResult {
   };
 }
 
+/**
+ * One pending file as `migrate --dry-run` lists it: its name, whether it runs
+ * outside a transaction, and each refusal a real run would make, from the
+ * same check, so the preview and the run cannot disagree.
+ */
+function previewPendingFile(
+  m: ParsedMigration,
+  dialect: SupportedDialect,
+  logger: CommandContext["logger"]
+): void {
+  logger.info(
+    `  • ${m.name}.sql${m.transaction ? "" : " (runs outside a transaction)"}`
+  );
+  for (const refusal of statementRefusals(
+    splitSqlStatements(m.upSql, dialect),
+    dialect,
+    { transaction: m.transaction, unit: "file" }
+  )) {
+    logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
+  }
+}
+
 /** Clear a stale migrate lock when `--force-unlock` was passed (else no-op). */
 export async function maybeForceUnlock(
   options: { forceUnlock?: boolean },
@@ -615,23 +648,25 @@ export function installRegistryResolver(
 }
 
 /**
- * One SQL executor for every phase: split, run in one transaction, count.
+ * One SQL executor for every phase: split, run as the unit is marked to —
+ * in one transaction unless it is marked to run outside one — and count.
  *
  * Shared by the app files and the plugin modules so the two paths cannot
- * drift about what "executed as one unit" means.
+ * drift about what "executed as one unit" means. A unit that runs outside a
+ * transaction is named in the run's output before it starts.
  */
 function buildSqlExecutor(
   dz: DrizzleAdapter,
-  dialect: SupportedDialect
-): (sqlText: string) => Promise<number> {
-  return async sqlText => {
-    const statements = splitSqlStatements(sqlText, dialect);
-    await executeTransaction(dz, async tx => {
-      for (const statement of statements) {
-        await tx.execute(statement);
-      }
-    });
-    return statements.length;
+  dialect: SupportedDialect,
+  logger: CommandContext["logger"]
+): (sqlText: string, unit: MigrationUnit) => Promise<number> {
+  return async (sqlText, unit) => {
+    if (!unit.transaction) logger.warn(outsideTransactionNotice(unit.source));
+    return runMigrationStatements(
+      dz,
+      splitSqlStatements(sqlText, dialect),
+      unit
+    );
   };
 }
 
@@ -880,7 +915,7 @@ export async function runPluginPhase(
       }
       return live;
     },
-    executeSql: buildSqlExecutor(dz, deps.dialect),
+    executeSql: buildSqlExecutor(dz, deps.dialect, deps.logger),
     repo: eventsRepo,
     recordOwner: async ({
       pluginName,
@@ -1374,7 +1409,7 @@ export async function runFileMigrations(args: {
   const metaDir = resolve(migrationsDir, "meta");
 
   const dz = adapter as unknown as DrizzleAdapter;
-  const executeSql = buildSqlExecutor(dz, dialect);
+  const executeSql = buildSqlExecutor(dz, dialect, logger);
 
   // Owner rows for the drop guard: an app file dropping a plugin-migrated
   // table is refused whole, before its first statement. Read once; an absent
@@ -1426,7 +1461,14 @@ export async function runFileMigrations(args: {
       source: filename,
       liveColumns: await readLiveColumns(db, dialect, [upStatements]),
     });
-    assertRunnableStatements(upStatements, dialect, filename);
+    const unit: MigrationUnit = {
+      source: filename,
+      transaction: m.transaction,
+    };
+    assertRunnableStatements(upStatements, dialect, filename, {
+      transaction: m.transaction,
+      unit: "file",
+    });
 
     if (!target) {
       // No paired snapshot (hand-written migration): run verbatim + record.
@@ -1441,7 +1483,7 @@ export async function runFileMigrations(args: {
       });
       let didApply: boolean;
       try {
-        const n = await executeSql(m.upSql);
+        const n = await executeSql(m.upSql, unit);
         didApply = await repo.markApplied(id, {
           statementsExecuted: n,
           uniqueFilename: filename,
@@ -1509,7 +1551,13 @@ export async function runFileMigrations(args: {
       ),
     });
     await reconcileFile({
-      file: { filename, sql: m.upSql, path: m.filePath, sha256: m.checksum },
+      file: {
+        filename,
+        sql: m.upSql,
+        path: m.filePath,
+        sha256: m.checksum,
+        transaction: m.transaction,
+      },
       before: sides.before,
       target: sides.target,
       live: sides.live,
@@ -1600,6 +1648,7 @@ function parseMigrationFile(
     components,
     timestamp,
     source,
+    transaction: !marksNoTransaction(content),
     ...(localization === null ? {} : { localization }),
   };
 }

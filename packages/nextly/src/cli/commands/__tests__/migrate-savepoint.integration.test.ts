@@ -95,6 +95,37 @@ describe.each(getConfiguredTestDialects())(
       expect(await marks()).toEqual(["after", "kept"]);
     });
 
+    // The optional word between ROLLBACK and TO, in each spelling the
+    // dialect's server accepts.
+    const optionalWordForms: Record<typeof dialect, string[]> = {
+      postgresql: [
+        "ROLLBACK WORK TO SAVEPOINT s1",
+        "ROLLBACK TRANSACTION TO s1",
+      ],
+      mysql: ["ROLLBACK WORK TO SAVEPOINT s1", "ROLLBACK WORK TO s1"],
+      sqlite: [
+        "ROLLBACK TRANSACTION TO SAVEPOINT s1",
+        "ROLLBACK TRANSACTION TO s1",
+      ],
+    };
+
+    it.each(optionalWordForms[dialect])(
+      "runs a file returning to its savepoint with %s",
+      async rollbackTo => {
+        writeMigration(migrationsDir, "20261001_000002_partial", [
+          "INSERT INTO sp_marks (id) VALUES ('kept')",
+          "SAVEPOINT s1",
+          "INSERT INTO sp_marks (id) VALUES ('undone')",
+          rollbackTo,
+          "RELEASE SAVEPOINT s1",
+        ]);
+
+        await expect(migrate()).resolves.toBe(2);
+
+        expect(await marks()).toEqual(["kept"]);
+      }
+    );
+
     it("still refuses a bare ROLLBACK, before anything in the file runs", async () => {
       writeMigration(migrationsDir, "20261001_000002_rollback", [
         "INSERT INTO sp_marks (id) VALUES ('never')",

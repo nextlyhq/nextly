@@ -52,6 +52,17 @@ export interface PluginMigration {
    * `canonicalMigrationForm`.
    */
   checksum: string;
+  /**
+   * `false` runs this module's UP and DOWN outside a transaction, statement
+   * by statement, so it can hold a statement a transaction refuses, such as
+   * PostgreSQL's `CREATE INDEX CONCURRENTLY`. A statement that fails then
+   * leaves the ones before it applied. Absent or `true`, the module runs in
+   * one transaction. Part of the checksum only when `false`, so a module
+   * without it hashes as it always has.
+   *
+   * @experimental
+   */
+  transaction?: boolean;
   dialects: Record<SupportedDialect, DialectStatements>;
   /** The owner's tables AFTER this migration, per dialect. */
   snapshot: Record<SupportedDialect, PluginMigrationSnapshot>;
@@ -115,6 +126,8 @@ export type MigrationContent = Omit<PluginMigration, "checksum">;
  *   move ahead of a module it depends on.
  * - `schemaVersion` is recorded on the owner rows and read by the version
  *   gate, so an edited one claims a schema the SQL never produced.
+ * - `transaction: false` decides whether a failure can leave the module
+ *   partly applied.
  * - The snapshot sides are handed to the reconcile, which adopts a live
  *   schema that already matches the target and records it as applied WITHOUT
  *   running the SQL — so an unverified snapshot is as dangerous as
@@ -141,7 +154,7 @@ export function canonicalMigrationForm(content: MigrationContent): string {
   // exactly as a module generated before they were recorded — and one with
   // them cannot have them edited without its checksum noticing, since they
   // decide what the next module emits.
-  return JSON.stringify(
+  const form: unknown[] =
     content.contributions === undefined
       ? [identity, base, sides]
       : [
@@ -154,8 +167,12 @@ export function canonicalMigrationForm(content: MigrationContent): string {
               normalizeContributions(content.contributions?.[dialect] ?? {})
             ),
           ]),
-        ]
-  );
+        ];
+  // Appended only for `transaction: false`, for the same reason: a module
+  // that runs in a transaction, marked so or not, hashes as before. A string,
+  // so it cannot be read as the contributions' array in the same position.
+  if (content.transaction === false) form.push("no-transaction");
+  return JSON.stringify(form);
 }
 
 /**

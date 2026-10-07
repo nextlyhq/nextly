@@ -37,6 +37,7 @@ import {
   SchemaEventsRepository,
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
+import { marksNoTransaction } from "../../domains/schema/migrate/split-sql";
 import { describeError } from "../../errors/index";
 import type {
   MigrationErrorJson,
@@ -58,7 +59,10 @@ import {
   getSortedBaseNames,
 } from "../utils/migration-discovery";
 
-import { PARTIAL_ROLLBACK_NOTE } from "./plugin-module-rollback";
+import {
+  NO_TRANSACTION_ROLLBACK_NOTE,
+  PARTIAL_ROLLBACK_NOTE,
+} from "./plugin-module-rollback";
 
 /**
  * Options specific to the migrate:status command
@@ -95,6 +99,11 @@ interface ParsedMigration {
   filePath: string;
   /** SHA-256 checksum of file content */
   checksum: string;
+  /**
+   * False when the file's first line is `-- nextly:no-transaction`. Absent,
+   * it runs in a transaction.
+   */
+  transaction?: boolean;
   /** Collection slugs (if present in file header) */
   collections: string[];
   /** Timestamp extracted from filename */
@@ -134,6 +143,11 @@ interface MigrationStatus {
   durationMs: number | null;
   errorJson: MigrationErrorJson | null;
   checksumMismatch: boolean;
+  /**
+   * Present when the file is marked to run outside a transaction, so a
+   * failure part-way leaves what ran before it applied.
+   */
+  outsideTransaction?: true;
 }
 
 /**
@@ -371,6 +385,7 @@ function parseMigrationFile(
     name,
     filePath,
     checksum,
+    transaction: !marksNoTransaction(content),
     collections,
     timestamp,
   };
@@ -396,8 +411,13 @@ export interface FailedRollback {
   filename: string;
   failedAt: Date;
   note: string | null;
-  /** On MySQL: the DOWN may have committed part of its statements. */
+  /**
+   * The DOWN may have committed part of its statements: on MySQL, or where
+   * it ran outside a transaction (`outsideTransaction`).
+   */
   possiblyPartial: boolean;
+  /** The DOWN ran outside a transaction, as its migration is marked to. */
+  outsideTransaction: boolean;
 }
 
 /**
@@ -423,7 +443,11 @@ export function failedRollbacksSinceApply(
       filename: record.filename,
       failedAt: failure.startedAt,
       note: failure.note,
-      possiblyPartial: failure.note?.startsWith(PARTIAL_ROLLBACK_NOTE) === true,
+      possiblyPartial:
+        failure.note?.startsWith(PARTIAL_ROLLBACK_NOTE) === true ||
+        failure.note?.startsWith(NO_TRANSACTION_ROLLBACK_NOTE) === true,
+      outsideTransaction:
+        failure.note?.startsWith(NO_TRANSACTION_ROLLBACK_NOTE) === true,
     });
   }
   return failures;
@@ -435,10 +459,15 @@ function displayFailedRollbacks(
   context: CommandContext
 ): void {
   for (const failure of failures) {
+    const failed = `${failure.filename}: a rollback failed at ${formatDate(failure.failedAt)}`;
+    const compare =
+      "It is still recorded as applied; compare the schema with the migration before running migrate or migrate:down again.";
     context.logger.warn(
-      failure.possiblyPartial
-        ? `${failure.filename}: a rollback failed at ${formatDate(failure.failedAt)}, and MySQL may have committed part of its DOWN. It is still recorded as applied; compare the schema with the migration before running migrate or migrate:down again.`
-        : `${failure.filename}: a rollback failed at ${formatDate(failure.failedAt)} and was undone; it is still applied.`
+      failure.outsideTransaction
+        ? `${failed}. Its DOWN ran outside a transaction, so the statements before the failing one stayed applied. ${compare}`
+        : failure.possiblyPartial
+          ? `${failed}, and MySQL may have committed part of its DOWN. ${compare}`
+          : `${failed} and was undone; it is still applied.`
     );
   }
 }
@@ -583,6 +612,8 @@ export function buildMigrationStatuses(
 
   for (const file of files) {
     const record = appliedMap.get(stripSql(file.name));
+    const marked =
+      file.transaction === false ? { outsideTransaction: true as const } : {};
 
     if (record) {
       const checksumMismatch = record.sha256 !== file.checksum;
@@ -602,6 +633,7 @@ export function buildMigrationStatuses(
         durationMs: record.durationMs,
         errorJson: record.errorJson,
         checksumMismatch,
+        ...marked,
       });
 
       appliedMap.delete(stripSql(file.name));
@@ -613,6 +645,7 @@ export function buildMigrationStatuses(
         durationMs: null,
         errorJson: null,
         checksumMismatch: false,
+        ...marked,
       });
     }
   }
@@ -653,7 +686,9 @@ function displayStatus(
     // added Duration so operators can spot slow migrations at a glance.
     const headers = ["Migration", "Status", "Applied At", "Duration"];
     const rows: (string | number | boolean)[][] = migrations.map(m => {
-      const statusDisplay = formatStatusForDisplay(m.status);
+      const statusDisplay = `${formatStatusForDisplay(m.status)}${
+        m.outsideTransaction ? " (no transaction)" : ""
+      }`;
       return [
         m.filename,
         statusDisplay,
@@ -663,6 +698,12 @@ function displayStatus(
     });
 
     logger.table(headers, rows);
+
+    if (migrations.some(m => m.outsideTransaction && m.status === "pending")) {
+      logger.info(
+        "(no transaction): marked -- nextly:no-transaction, so it runs outside a transaction; if a statement fails, the statements before it stay applied."
+      );
+    }
 
     if (verbose) {
       const failedMigrations = migrations.filter(

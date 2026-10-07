@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import { executeTransaction } from "../../domains/schema/migrate/migration-transaction";
 import {
   assertRunnableStatements,
+  marksNoTransaction,
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
 
@@ -552,6 +553,11 @@ describe("statementRefusals", () => {
       "TRANSACTION_CONTROL_IN_MIGRATION",
     ],
     ["mysql", "XA START 'x'", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    // The optional word alone is still a ROLLBACK of the whole transaction.
+    ["postgresql", "ROLLBACK WORK", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    ["postgresql", "ROLLBACK TRANSACTION", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    ["mysql", "ROLLBACK WORK", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    ["sqlite", "ROLLBACK TRANSACTION", "TRANSACTION_CONTROL_IN_MIGRATION"],
     ["mysql", "SET FOREIGN_KEY_CHECKS = 0", "SESSION_SETTING_IN_MIGRATION"],
     [
       "mysql",
@@ -629,6 +635,8 @@ describe("statementRefusals", () => {
 
     const [rollback] = statementRefusals(["ROLLBACK"], "postgresql");
     expect(rollback?.message).toContain('"ROLLBACK"');
+    // Points at the form that is allowed, rather than only at removing it.
+    expect(rollback?.message).toContain("ROLLBACK TO SAVEPOINT name");
   });
 
   it.each([
@@ -653,9 +661,106 @@ describe("statementRefusals", () => {
     ["sqlite", "SAVEPOINT s1"],
     ["sqlite", "ROLLBACK TO s1"],
     ["sqlite", "RELEASE s1"],
+    // The optional word each dialect accepts between ROLLBACK and TO.
+    ["postgresql", "ROLLBACK WORK TO s1"],
+    ["postgresql", "ROLLBACK WORK TO SAVEPOINT s1"],
+    ["postgresql", "ROLLBACK TRANSACTION TO s1"],
+    ["postgresql", "ROLLBACK TRANSACTION TO SAVEPOINT s1"],
+    ["mysql", "ROLLBACK WORK TO s1"],
+    ["mysql", "ROLLBACK WORK TO SAVEPOINT s1"],
+    ["sqlite", "ROLLBACK TRANSACTION TO s1"],
+    ["sqlite", "ROLLBACK TRANSACTION TO SAVEPOINT s1"],
   ] as const)("allows on %s: %s", (dialect, statement) => {
     // The control: statements a migration may hold, through the same check.
     expect(statementRefusals([statement], dialect)).toEqual([]);
+  });
+});
+
+describe("a migration marked to run outside a transaction", () => {
+  it.each([
+    ["-- nextly:no-transaction\n-- Migration: x\n-- UP\nVACUUM;", true],
+    ["\uFEFF-- nextly:no-transaction\r\n-- UP\nVACUUM;", true],
+    ["-- nextly:no-transaction   \n-- UP\n", true],
+    // Only the first line marks the file.
+    ["-- Migration: x\n-- nextly:no-transaction\n-- UP\nVACUUM;", false],
+    ["--nextly:no-transaction\n-- UP\n", false],
+    ["-- nextly:no-transaction-please\n-- UP\n", false],
+    ["", false],
+  ])("reads the marker from %j as %s", (content, marked) => {
+    expect(marksNoTransaction(content)).toBe(marked);
+  });
+
+  const outside = { transaction: false, unit: "file" } as const;
+
+  it.each([
+    ["postgresql", "CREATE INDEX CONCURRENTLY i ON t (a)"],
+    ["postgresql", "DROP INDEX CONCURRENTLY i"],
+    ["postgresql", "REINDEX (CONCURRENTLY) TABLE t"],
+    ["postgresql", "VACUUM ANALYZE t"],
+    ["postgresql", "ALTER SYSTEM SET work_mem = '64MB'"],
+    ["sqlite", "VACUUM"],
+  ] as const)("lets a marked file run on %s: %s", (dialect, statement) => {
+    expect(statementRefusals([statement], dialect, outside)).toEqual([]);
+    // The control: the same statement in an unmarked file is refused, and
+    // the refusal names the marker.
+    const [refusal] = statementRefusals([statement], dialect);
+    expect(refusal?.code).toBe("NOT_TRANSACTIONAL_IN_MIGRATION");
+    expect(refusal?.message).toContain(
+      "make `-- nextly:no-transaction` the file's first line"
+    );
+  });
+
+  it("names the module's field, not the comment, for a plugin module", () => {
+    const [refusal] = statementRefusals(
+      ["CREATE INDEX CONCURRENTLY i ON t (a)"],
+      "postgresql",
+      { transaction: true, unit: "module" }
+    );
+    expect(refusal?.message).toContain(
+      "set `transaction: false` on the module"
+    );
+    expect(
+      statementRefusals(
+        ["CREATE INDEX CONCURRENTLY i ON t (a)"],
+        "postgresql",
+        {
+          transaction: false,
+          unit: "module",
+        }
+      )
+    ).toEqual([]);
+  });
+
+  it.each([
+    // State that outlives the file on its connection, marked or not.
+    ["mysql", "LOCK TABLES t WRITE", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+    ["mysql", "UNLOCK TABLES", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+    ["sqlite", "ATTACH DATABASE 'x.db' AS x", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+    ["sqlite", "DETACH DATABASE x", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+    ["mysql", "SET FOREIGN_KEY_CHECKS = 0", "SESSION_SETTING_IN_MIGRATION"],
+    ["postgresql", "SET search_path TO other", "SESSION_SETTING_IN_MIGRATION"],
+    ["postgresql", "ROLLBACK", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    ["mysql", "XA START 'x'", "TRANSACTION_CONTROL_IN_MIGRATION"],
+  ] as const)(
+    "still refuses in a marked file on %s: %s",
+    (dialect, statement, code) => {
+      expect(
+        statementRefusals([statement], dialect, outside).map(r => r.code)
+      ).toEqual([code]);
+      expect(() =>
+        assertRunnableStatements([statement], dialect, "0001_x.sql", outside)
+      ).toThrow(/0001_x\.sql was refused/);
+    }
+  );
+
+  it("does not advise SET LOCAL where there is no transaction for it", () => {
+    const [refusal] = statementRefusals(
+      ["SET search_path TO other"],
+      "postgresql",
+      outside
+    );
+    expect(refusal?.message).not.toContain("Use SET LOCAL");
+    expect(refusal?.message).toContain("runs outside a transaction");
   });
 });
 

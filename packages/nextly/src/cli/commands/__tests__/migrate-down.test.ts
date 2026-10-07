@@ -46,6 +46,11 @@ describe("selectAppliedTargets", () => {
   });
 });
 
+/** A DOWN that runs in a transaction, as an unmarked migration's does. */
+function down(sql: string) {
+  return { sql, transaction: true };
+}
+
 function baseDeps(overrides: Record<string, unknown> = {}) {
   const recorded: string[] = [];
   const executed: string[] = [];
@@ -62,7 +67,7 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
       options: { step: 1, allowDataLoss: false, yes: false, dryRun: false },
       listFileApplies: async () => [row("a.sql", "applied", 1000)],
       fileExists: async () => true,
-      readDownSql: async () => 'ALTER TABLE "t" DROP COLUMN "c";',
+      readDownSql: async () => down('ALTER TABLE "t" DROP COLUMN "c";'),
       execDown: async (statements: readonly string[]) => {
         executed.push(statements.join(";\n"));
         return statements.length;
@@ -85,7 +90,7 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
 
 describe("migrateDownCore", () => {
   it("refuses when the DOWN section is empty", async () => {
-    const { deps } = baseDeps({ readDownSql: async () => "   " });
+    const { deps } = baseDeps({ readDownSql: async () => down("   ") });
     await expect(migrateDownCore(deps)).rejects.toThrow(/irreversible/i);
   });
 
@@ -98,7 +103,9 @@ describe("migrateDownCore", () => {
     // the tables that are still standing.
     const { deps, executed } = baseDeps({
       readDownSql: async () =>
-        "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)",
+        down(
+          "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)"
+        ),
     });
     await expect(migrateDownCore(deps)).rejects.toThrow(/irreversible/i);
     expect(executed).toEqual([]);
@@ -122,7 +129,7 @@ describe("migrateDownCore", () => {
       // these loses data as surely as `DROP COLUMN` does.
       const { deps, executed } = baseDeps({
         dialect,
-        readDownSql: async () => downSql,
+        readDownSql: async () => down(downSql),
       });
       await expect(migrateDownCore(deps)).rejects.toThrow(/allow-data-loss/);
       expect(executed).toEqual([]);
@@ -140,7 +147,7 @@ describe("migrateDownCore", () => {
     ];
     const { deps, executed } = baseDeps({
       dialect: "sqlite",
-      readDownSql: async () => `${rebuild.join(";\n")};`,
+      readDownSql: async () => down(`${rebuild.join(";\n")};`),
       // The table as the database holds it: the twin declares every column.
       readLiveColumns: async () => new Map([["t", new Set(["id", "a"])]]),
     });
@@ -150,7 +157,7 @@ describe("migrateDownCore", () => {
     // A twin that leaves out a live column loses that column's data.
     const narrow = baseDeps({
       dialect: "sqlite",
-      readDownSql: async () => `${rebuild.join(";\n")};`,
+      readDownSql: async () => down(`${rebuild.join(";\n")};`),
       readLiveColumns: async () =>
         new Map([["t", new Set(["id", "a", "secret"])]]),
     });
@@ -161,7 +168,7 @@ describe("migrateDownCore", () => {
     // The control: the same DROP without the copy before it loses the rows.
     const bare = baseDeps({
       dialect: "sqlite",
-      readDownSql: async () => 'DROP TABLE "t";',
+      readDownSql: async () => down('DROP TABLE "t";'),
     });
     await expect(migrateDownCore(bare.deps)).rejects.toThrow(/allow-data-loss/);
   });
@@ -171,7 +178,9 @@ describe("migrateDownCore", () => {
     // index — schema only.
     const { deps, executed } = baseDeps({
       readDownSql: async () =>
-        'ALTER TABLE "t" DROP CONSTRAINT "t_c_check";\nDROP INDEX "t_idx";',
+        down(
+          'ALTER TABLE "t" DROP CONSTRAINT "t_c_check";\nDROP INDEX "t_idx";'
+        ),
     });
     await migrateDownCore(deps);
     expect(executed.length).toBe(1);
@@ -221,7 +230,7 @@ describe("migrateDownCore", () => {
           ...createLogger({ quiet: true }),
           info: (m: string) => lines.push(m),
         },
-        readDownSql: async () => 'DROP TABLE "t";\nROLLBACK;',
+        readDownSql: async () => down('DROP TABLE "t";\nROLLBACK;'),
       });
       await expect(migrateDownCore(deps)).resolves.toEqual({ rolledBack: [] });
       expect(lines.join("\n")).toMatch(
@@ -230,7 +239,7 @@ describe("migrateDownCore", () => {
 
       const real = baseDeps({
         options: { step: 1, allowDataLoss: true, yes: false, dryRun: false },
-        readDownSql: async () => 'DROP TABLE "t";\nROLLBACK;',
+        readDownSql: async () => down('DROP TABLE "t";\nROLLBACK;'),
       });
       await expect(migrateDownCore(real.deps)).rejects.toThrow(/ROLLBACK/);
       expect(real.executed).toEqual([]);
@@ -292,6 +301,62 @@ describe("migrateDownCore", () => {
     });
     await expect(migrateDownCore(deps)).rejects.toThrow(/boom/);
     expect(failures).toEqual(["a.sql"]);
+  });
+
+  describe("a DOWN marked to run outside a transaction", () => {
+    const concurrently = 'DROP INDEX CONCURRENTLY "t_a_idx";';
+
+    it("runs it outside a transaction, named in the output", async () => {
+      const units: unknown[] = [];
+      const warnings: string[] = [];
+      const { deps, recorded } = baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: false },
+        logger: {
+          ...createLogger({ quiet: true }),
+          warn: (m: string) => warnings.push(m),
+        },
+        readDownSql: async () => ({ sql: concurrently, transaction: false }),
+        execDown: async (statements: readonly string[], unit: unknown) => {
+          units.push(unit);
+          return statements.length;
+        },
+      });
+      await migrateDownCore(deps);
+      expect(units).toEqual([{ source: "a.sql", transaction: false }]);
+      expect(recorded).toEqual(["a.sql"]);
+      expect(warnings.join("\n")).toMatch(/a\.sql runs outside a transaction/);
+    });
+
+    it("refuses the same DOWN unmarked, naming the marker", async () => {
+      const { deps, executed } = baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: false },
+        readDownSql: async () => down(concurrently),
+      });
+      await expect(migrateDownCore(deps)).rejects.toThrow(
+        /-- nextly:no-transaction/
+      );
+      expect(executed).toEqual([]);
+    });
+
+    it("records a failure as one that ran outside a transaction", async () => {
+      const failed: unknown[] = [];
+      const { deps } = baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: false },
+        readDownSql: async () => ({ sql: concurrently, transaction: false }),
+        execDown: async () => {
+          throw new Error("boom");
+        },
+        recordFailed: async (
+          filename: string,
+          _message: string,
+          transaction: boolean
+        ) => {
+          failed.push([filename, transaction]);
+        },
+      });
+      await expect(migrateDownCore(deps)).rejects.toThrow(/boom/);
+      expect(failed).toEqual([["a.sql", false]]);
+    });
   });
 
   describe("ledger scoping (plugin rows)", () => {

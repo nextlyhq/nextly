@@ -17,7 +17,7 @@ import {
   newestEventsByFilename,
 } from "../../domains/schema/events/newest-event";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
-import { executeTransaction } from "../../domains/schema/migrate/migration-transaction";
+import { runMigrationStatements } from "../../domains/schema/migrate/migration-transaction";
 import {
   orderedMigrations,
   pluginModuleStatements,
@@ -226,6 +226,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         moduleName,
         filename,
         statements: pluginModuleStatements(module, dialect, "down"),
+        transaction: module.transaction !== false,
       };
     });
 
@@ -245,7 +246,10 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     for (const down of downs) {
       // A statement the runner's transaction cannot hold, refused with the
       // rest before any module runs.
-      assertRunnableStatements(down.statements, dialect, down.filename);
+      assertRunnableStatements(down.statements, dialect, down.filename, {
+        transaction: down.transaction,
+        unit: "module",
+      });
       assertNoForeignDrops({
         liveColumns: columns,
         statements: down.statements,
@@ -261,7 +265,8 @@ async function connect(options: RunnerOptions, context: CommandContext) {
 
   /**
    * Undo one prepared module, exactly as the apply path runs its UP: in one
-   * transaction, recorded in the ledger.
+   * transaction unless the module is marked `transaction: false`, recorded
+   * in the ledger.
    *
    * The ledger row is written inside the transaction, so a module whose
    * reversal committed is recorded even when a later module fails — a module
@@ -280,31 +285,34 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // One transaction for the module, like the UP path: a module half
       // undone is a state no snapshot describes. The ledger row is written
       // through the transaction's own handle, so it commits or rolls back
-      // with the statements it records.
-      await executeTransaction(drizzleAdapter, async tx => {
-        for (const statement of down.statements) {
-          await tx.execute(statement);
+      // with the statements it records. A module marked to run outside a
+      // transaction records it once every statement has run.
+      return await runMigrationStatements(
+        drizzleAdapter,
+        down.statements,
+        { source: down.filename, transaction: down.transaction },
+        async db => {
+          await resolveMigration({
+            mode: "rolled-back",
+            filename: down.filename,
+            repo: new SchemaEventsRepository(db, dialect),
+            // rolled-back mode does not read these; provide inert resolvers.
+            fileExists: () => Promise.resolve(true),
+            loadTargetSnapshot: () => Promise.resolve(null),
+            introspectLive: () => Promise.resolve({ tables: [] }),
+          });
         }
-        await resolveMigration({
-          mode: "rolled-back",
-          filename: down.filename,
-          repo: new SchemaEventsRepository(tx.db, dialect),
-          // rolled-back mode does not read these; provide inert resolvers.
-          fileExists: () => Promise.resolve(true),
-          loadTargetSnapshot: () => Promise.resolve(null),
-          introspectLive: () => Promise.resolve({ tables: [] }),
-        });
-      });
+      );
     } catch (error) {
       await recordRollbackFailed({
         repo: new SchemaEventsRepository(drizzleAdapter.getDrizzle(), dialect),
         filename: down.filename,
         dialect,
+        transaction: down.transaction,
         note: `plugins uninstall failed: ${describeError(error, { context: false })}`,
       });
       throw error;
     }
-    return down.statements.length;
   };
 
   /**

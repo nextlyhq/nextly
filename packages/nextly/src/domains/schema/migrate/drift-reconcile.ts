@@ -21,6 +21,7 @@ import type { NextlySchemaSnapshot, Operation } from "../pipeline/diff/types";
 
 import { isUnadoptedDatabase } from "./baseline";
 import { migrationDriftError, type DriftItem } from "./drift-error";
+import type { MigrationUnit } from "./migration-transaction";
 
 export type ReconcileState = "in_sync" | "already_applied" | "drift";
 
@@ -49,13 +50,26 @@ export interface ReconcileRepo {
 }
 
 export interface ReconcileFileArgs {
-  file: { filename: string; sql: string; path: string; sha256?: string };
+  file: {
+    filename: string;
+    sql: string;
+    path: string;
+    sha256?: string;
+    /**
+     * False for a unit marked to run outside a transaction; absent, it runs
+     * in one.
+     */
+    transaction?: boolean;
+  };
   before: NextlySchemaSnapshot;
   target: NextlySchemaSnapshot;
   live: NextlySchemaSnapshot;
   repo: ReconcileRepo;
-  /** Execute the file's SQL in one transaction; returns statements executed. */
-  executeSql: (sql: string) => Promise<number>;
+  /**
+   * Execute the file's SQL as `unit` says — in one transaction unless it is
+   * marked to run outside one; returns statements executed.
+   */
+  executeSql: (sql: string, unit: MigrationUnit) => Promise<number>;
   /** Dev/ui/db_sync event ids this file_apply supersedes (ALREADY_APPLIED). */
   supersedableEventIds?: () => Promise<string[]>;
   /**
@@ -156,7 +170,10 @@ export async function reconcileFile(
       sha256: file.sha256 ?? null,
     });
     try {
-      const statementsExecuted = await executeSql(file.sql);
+      const statementsExecuted = await executeSql(file.sql, {
+        source: file.filename,
+        transaction: file.transaction ?? true,
+      });
       await repo.markApplied(id, {
         statementsExecuted,
         uniqueFilename: file.filename,
