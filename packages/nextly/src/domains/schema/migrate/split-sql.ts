@@ -149,10 +149,13 @@ function leadingWords(
  *   runner's own transaction, so a file's own brackets are left out: a
  *   COMMIT would end the runner's transaction early, and a BEGIN inside it
  *   fails on SQLite.
- * - `refused`: it would undo, split or hand off the runner's transaction —
- *   `ROLLBACK`/`ABORT`, `SAVEPOINT`, `RELEASE`, `COMMIT PREPARED`,
- *   `PREPARE TRANSACTION`, MySQL's `XA`. Leaving it out would change what the
- *   file does, and running it would roll back work the runner then records.
+ * - `refused`: it would undo or hand off the runner's transaction —
+ *   `ROLLBACK`/`ABORT`, `COMMIT PREPARED`, `PREPARE TRANSACTION`, MySQL's
+ *   `XA`. Leaving it out would change what the file does, and running it
+ *   would roll back work the runner then records.
+ * - A savepoint is neither: `SAVEPOINT`, `RELEASE [SAVEPOINT]` and
+ *   `ROLLBACK TO [SAVEPOINT]` work inside the runner's transaction and undo
+ *   at most part of the file, so they run as written.
  *
  * Read from the statement's leading keywords only. A `BEGIN` or `END` inside
  * a PostgreSQL `DO` or function body is inside a dollar-quoted segment and
@@ -172,9 +175,13 @@ export function transactionControlOf(
     case "COMMIT":
       return second === "PREPARED" ? "refused" : "bracket";
     case "ROLLBACK":
-    case "ABORT":
+      // `ROLLBACK TO` returns to a savepoint the file set, inside the
+      // runner's transaction; a bare ROLLBACK ends that transaction.
+      return second === "TO" ? null : "refused";
     case "SAVEPOINT":
     case "RELEASE":
+      return null;
+    case "ABORT":
     case "XA":
       return "refused";
     case "PREPARE":

@@ -302,7 +302,8 @@ anything.
 | Statement | What happens | Why |
 |---|---|---|
 | `BEGIN`, `START TRANSACTION`, `COMMIT`, `END` (with any modifiers, such as `BEGIN IMMEDIATE` or `START TRANSACTION READ WRITE`) | Left out; the rest of the file runs | The runner's own transaction already brackets the file. |
-| `ROLLBACK`, `ABORT`, `SAVEPOINT`, `RELEASE`, `COMMIT PREPARED`, `PREPARE TRANSACTION`, `XA …` | File refused | Each one would undo, split or hand off the runner's transaction, which would then record work that did not happen. |
+| `SAVEPOINT`, `ROLLBACK TO [SAVEPOINT]`, `RELEASE [SAVEPOINT]` | Run as written | A savepoint works inside the runner's transaction and undoes at most part of the file. On MySQL a schema statement commits on its own and ends the savepoint with it, so keep savepoints to data statements there. |
+| `ROLLBACK`, `ABORT`, `COMMIT PREPARED`, `PREPARE TRANSACTION`, `XA …` | File refused | Each one would undo or hand off the runner's transaction, which would then record work that did not happen. |
 | PostgreSQL `SET …` (except `SET LOCAL`, `SET CONSTRAINTS`, `SET TRANSACTION`), `RESET`, `DISCARD` | File refused | A session setting stays on the pooled connection after the migration. Use `SET LOCAL`, which ends with the transaction. |
 | MySQL `SET …` (except user variables, `SET @name = …`), including one inside `/*!…*/` | File refused | The same: `SET FOREIGN_KEY_CHECKS = 0` would stay on a pooled connection and switch checks off for whatever it serves next. Order the statements instead (create a table before the tables that reference it, drop it after them), or drop the foreign key and add it back within the migration. |
 | PostgreSQL `VACUUM`, `CREATE`/`DROP INDEX CONCURRENTLY`, `REINDEX … CONCURRENTLY`, `CREATE`/`DROP DATABASE`, `CREATE`/`DROP TABLESPACE`, `ALTER SYSTEM`; SQLite `VACUUM`, `ATTACH`, `DETACH` | File refused | The database cannot run them inside a transaction. Run them outside the migration, after it has applied. |
