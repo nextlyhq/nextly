@@ -312,7 +312,8 @@ type AccessMethod =
   | "deleteEntry"
   | "count"
   | "createMany"
-  | "updateMany";
+  | "updateMany"
+  | InTransactionMethod;
 
 const CONTEXT_INDEX: Record<AccessMethod, number> = {
   createEntry: 2,
@@ -326,6 +327,13 @@ const CONTEXT_INDEX: Record<AccessMethod, number> = {
   // The entries carry their own ids, so the context stays at index 2 as on
   // `createMany` rather than moving out to make room for one.
   updateMany: 2,
+  // The transactional writes run the same access check as the writes above,
+  // so their context is a `ServiceOpts` too. Taken raw, it let a plugin name
+  // `overrideAccess` or hand in a caller carrying whatever roles it liked.
+  // Each sits one place further out, behind the transaction token.
+  createEntryInTransaction: 3,
+  updateEntryInTransaction: 4,
+  deleteEntryInTransaction: 3,
 };
 
 /**
@@ -425,10 +433,39 @@ type ReplaceLeadingTransaction<F> = F extends (
   : never;
 
 /**
+ * Drop the service's trailing `actor` from `deleteEntryInTransaction`.
+ *
+ * The actor is who the recorded event names, and a plugin naming it would be
+ * the plugin choosing whom its own delete is attributed to. `deleteEntry`
+ * takes none either, so both deletes attribute the same way: from the caller
+ * `ServiceOpts` resolves.
+ */
+type WithoutTrailingActor<F> = F extends (
+  tx: TransactionContext,
+  collectionName: string,
+  entryId: string,
+  context: RequestContext,
+  actor?: infer _Actor
+) => infer R
+  ? (
+      tx: TransactionContext,
+      collectionName: string,
+      entryId: string,
+      context: RequestContext
+    ) => R
+  : F;
+
+/** A transactional write as a plugin calls it: a token first, `ServiceOpts` last. */
+type PluginInTransactionMethod<K extends InTransactionMethod> =
+  ReplaceLeadingTransaction<
+    ReplaceTrailingContext<WithoutTrailingActor<CollectionService[K]>>
+  >;
+
+/**
  * @public Plugin-facing collection service.
  *
- * Access methods take `ServiceOpts` in place of a `RequestContext`, and the
- * writes resolve to the same `{ message, item, warnings? }` envelope the Direct
+ * Access methods, the `*InTransaction` writes among them, take `ServiceOpts`
+ * in place of a `RequestContext`, and the non-transactional writes resolve to the same `{ message, item, warnings? }` envelope the Direct
  * API and the wire API return. Returning the bare row left a plugin unable to
  * see a post-commit hook failure that every other caller of the same write is
  * told about. Only the methods meant for plugins are present; a transaction
@@ -441,13 +478,14 @@ export type PluginCollectionService = Pick<
     AccessMethod | WriteMethod | InTransactionMethod | "withTransaction"
   >
 > & {
-  [K in Exclude<AccessMethod, WriteMethod>]: ReplaceTrailingContext<
-    CollectionService[K]
-  >;
+  [K in Exclude<
+    AccessMethod,
+    WriteMethod | InTransactionMethod
+  >]: ReplaceTrailingContext<CollectionService[K]>;
 } & {
   [K in WriteMethod]: PluginWriteMethod<K>;
 } & {
-  [K in InTransactionMethod]: ReplaceLeadingTransaction<CollectionService[K]>;
+  [K in InTransactionMethod]: PluginInTransactionMethod<K>;
 } & {
   withTransaction<T>(
     work: (tx: PluginCollectionTransaction) => Promise<T>
@@ -549,7 +587,11 @@ function translateServiceOpts(
           (args[idx] as ServiceOpts) ?? {},
           deps
         );
-        const next = [...args];
+        // Nothing past the context travels. The context is the last argument
+        // a plugin may name; a parameter the service accepts after it (the
+        // delete's `actor`) is the service's own, and an extra argument
+        // passed at runtime past the published type must not reach it.
+        const next = args.slice(0, idx);
         // Spread rather than named one by one. Rebuilding this literal is
         // what kept a plugin from reaching the hook context, and the same
         // shape then dropped an API key's scope on its way to the access
