@@ -19,7 +19,9 @@ definePlugin({
   },
   setup(config) {
     // Escape-hatch config transform. ALL plugins' setup() run before ANY init().
-    // Don't mutate — spread and return a new object.
+    // `config` is a copy of the plain settings and plugin definitions, without
+    // the adapter, logger or other live handles; what you return is the config
+    // the boot continues with.
     return { ...config };
   },
   async init(ctx) {
@@ -33,10 +35,17 @@ definePlugin({
 
 Phase order:
 
-1. **`contributes`** is read first (without running your plugin) — the host folds your
-   schema, permissions, routes, and admin contributions into the merged config.
+1. **`contributes`** is declared data, read without running your plugin.
 2. **`setup(config)`** runs for **every** plugin before any `init` — so a plugin can
-   adjust config that a later plugin's `init` relies on.
+   adjust config that a later plugin's `init` relies on. It receives copies of the
+   plain settings and of the plugin definitions, never the database adapter, logger,
+   hook registry, password hasher, rate limiter, storage plugins, image processor or
+   the app's raw-SQL consent; a value it returns under those keys is ignored. Editing
+   what it receives in place changes only the copy. It runs before plugins'
+   collections, singles and components are folded into the config, so it never sees
+   them. The plugin list it returns is resolved and checked again in full, and a
+   plugin whose raw-SQL grant it changed stops the boot (see
+   [Raw SQL](/docs/plugins/security#raw-sql)).
 3. **`init(ctx)`** runs once services are live. This is where you do runtime work.
 4. **`destroy(ctx)`** runs on shutdown, hot-reload, and test teardown. Always clean up
    here — leaked subscriptions break HMR and tests.

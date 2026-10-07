@@ -103,12 +103,68 @@ quietly widen what a plugin may do.
   line to add, with every name already listed plus the missing ones, so
   pasting it fixes the config in one edit. A disabled plugin is not checked.
 - The list is read from the config as you wrote it, before any plugin's
-  `setup` runs, so a plugin cannot add its own name.
-- A listed name that matches no configured plugin logs a warning at boot, so a
-  typo or a removed plugin does not leave a stale grant behind.
+  `setup` runs, so a plugin cannot add its own name. A `setup` transformer
+  receives a copy of `db` whose `rawSqlPlugins` is frozen, and the grant is
+  judged against the list read before it ran, whatever it returns.
+- A listed name that matches no configured plugin grants nothing, and the boot
+  logs a warning naming it, so a typo or a removed plugin does not read as a
+  listing that works.
+
+The grant covers the plugin you configured, as you configured it. Each plugin
+is recorded before any `setup` transformer runs, and the list the
+transformers return is judged against that record:
+
+- A plugin that holds `capabilities.db.rawSql` only because a transformer gave
+  it, by adding the plugin, renaming a plugin onto a name no configured plugin
+  declaring it held, or setting the flag on a plugin whose manifest does not
+  declare it, stops the boot with `PLUGIN_RESOLUTION_ERROR`
+  (`logContext.reason` is `capability-added-by-setup`).
+- A plugin that declares `rawSql` under a configured name, but whose lifecycle
+  functions (`init`, `destroy`, `setup`, `onReady`, `onInstall`,
+  `onUninstall`) or any part of `contributes` a transformer replaced, stops
+  the boot with `plugin-code-replaced-by-setup`, naming the plugin and the
+  changed path. This includes dropping the configured plugin and renaming
+  another onto its name.
+
+The grant is decided once, when the boot resolves the plugin list, and every
+plugin context, the auth router's included, reads that decision rather than
+the manifest. Setting `capabilities.db.rawSql` on a definition after the boot,
+or a manifest getter that answers differently later, grants nothing.
 
 This is a reviewed grant, not a sandbox: a plugin is trusted code in your
 process, with or without it.
+
+## What plugin code is handed
+
+Configuration and services reach plugin code in three places, and none
+carries a live handle.
+
+**`ctx.config`** is a `PluginConfig`: a copy of the plain configuration values
+(collections, singles, field groups, plugins, users, email, security, admin,
+auth, localization, jobs, permissions, roles, preview, API keys, retention
+windows and paths). Every plain object and array in it is frozen, so a write
+throws in strict-mode code rather than changing what core reads. Functions and
+class instances are kept by reference. It has no database `adapter`, `db`
+block, `pluginConsent`, storage plugins, image processor, logger, hook
+registry, password hasher or rate-limit store, and `email` leaves out
+`providerConfig`, the provider's credentials. `ctx.config.plugins` lists
+summaries (`name`, `version`, `enabled`, and copies of `capabilities` and
+`contributes.declarations`), not definitions, so no plugin can read or
+replace another's code through it.
+
+**A `setup` transformer** receives copies of the plugin definitions and of
+the plain settings, plus a copy of the app's `db` block (with
+`rawSqlPlugins` frozen). The adapter, logger, hook registry, password hasher,
+rate limiter, storage plugins, image processor and `pluginConsent` are absent,
+and a value it returns under those keys, or under any other key it was not
+handed, is ignored: the app's own value is kept. Editing a definition in place
+changes only the copy.
+
+**`ctx.services`** hands out facades holding only the methods meant for
+plugins: no service's adapter, Drizzle handle, sub-services or logger is
+reachable, and `collections.withTransaction` hands its work an opaque token
+rather than the adapter's transaction, which could run SQL. See
+[Data access](/docs/plugins/services#each-service-is-a-facade).
 
 ## Outbound requests
 
@@ -211,6 +267,13 @@ cookies stay free. `csrf: false` cannot be combined with `public: true`: boot re
 such a route, naming the plugin and the route.
 `ctx.auth.verifyCsrf` remains the tool when the check must stay conditional
 inside the handler instead.
+
+A route never sees the refresh cookie. A request carrying it, which a browser
+sends only to `/admin/api/auth/*`, reaches auth hooks, strategies and plugin
+routes as a copy without that cookie. The copy reads at most 64 KiB of the
+body, the same cap the `csrf` option reads under, before the request is
+authenticated or rate limited; a larger body is refused with
+`VALIDATION_ERROR` (field code `too_large`).
 
 ## Secrets
 

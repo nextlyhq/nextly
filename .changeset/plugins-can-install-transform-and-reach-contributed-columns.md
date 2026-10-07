@@ -67,7 +67,13 @@ know before using it:
   `--keep-data`, and asks for confirmation before dropping them; `--yes` gives
   it where there is no terminal (`PLUGIN_UNINSTALL_UNCONFIRMED` without it).
   A development database whose plugin tables were pushed rather than migrated
-  is refused, because there is no DOWN to run.
+  is refused, because there is no DOWN to run. Both commands honour a
+  module's `transaction: false`, running it statement by statement, and
+  uninstall names each module whose DOWN runs outside a transaction before
+  it runs. To call `onInstall` or `onUninstall` they boot from the config as
+  the app wrote it (`loadConfig` now also returns it, as `appConfig`), so a
+  `setup` transformer that adds a plugin or a collection runs once and does
+  not add it twice.
 
 Full details: `docs/plugins/schema.mdx` and
 `docs/database/extending-the-schema.mdx`.

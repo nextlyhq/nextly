@@ -55,27 +55,57 @@ migration file the run refuses (see below). Applied files are never re-read.
   outlive it on a pooled connection (`SET` other than `SET LOCAL`,
   `SET CONSTRAINTS` and `SET TRANSACTION`, `RESET`, `DISCARD`), or a statement
   the database cannot run inside a transaction (`VACUUM`, `CONCURRENTLY` index
-  builds, MySQL `LOCK TABLES`, SQLite `ATTACH`). `BEGIN` and `COMMIT` in a file
-  are left out; `SAVEPOINT`, `ROLLBACK TO` (also spelled `ROLLBACK WORK TO`
-  or `ROLLBACK TRANSACTION TO`) and `RELEASE` run as written. **A pending file
+  builds, MySQL `LOCK TABLES`, SQLite `ATTACH`). In a file that runs in a
+  transaction, its own `BEGIN`, `START TRANSACTION`, `COMMIT` and `END` are
+  left out, and `SAVEPOINT`, `ROLLBACK TO` (also spelled `ROLLBACK WORK TO` or
+  `ROLLBACK TRANSACTION TO`) and `RELEASE` run as written. **A pending file
   that uses a refused statement must be edited before it applies.** A file
   whose first line is `-- nextly:no-transaction`, or a plugin migration module
   with `transaction: false` (experimental), runs outside a transaction,
   statement by statement, so it can hold `VACUUM`, PostgreSQL's `CONCURRENTLY`
   index builds and the other statements a transaction refuses. Statements that
   leave state on the connection stay refused either way: a session `SET`, a
-  bare `ROLLBACK`, MySQL `LOCK TABLES` and SQLite `ATTACH`. Such a file has no
-  all-or-nothing guarantee: if a statement fails, the ones before it stay
-  applied, the run fails with `NEXTLY_MIGRATION_PARTIALLY_APPLIED`, and
-  `nextly migrate`, `migrate:down`, `migrate:status` and `plugins uninstall`
-  name each unit that ran outside a transaction. A refusal's message names
-  the marker, `migrate --dry-run` lists refusals, and `migrate:check` warns
-  about them (`REFUSED_STATEMENT`). Existing plugin modules keep their
-  checksums. On MySQL each schema statement still commits as it runs.
-- **On SQLite a migration that leaves a dangling reference is rolled back.**
-  Each unit runs with `foreign_keys` off and a `foreign_key_check` before it
-  commits, so a table rebuild keeps child rows, and a unit that leaves a new
-  dangling reference fails with `NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION`.
+  bare `ROLLBACK`, MySQL `LOCK TABLES` and SQLite `ATTACH`. A unit marked to
+  run outside a transaction is also refused, before anything runs, when it
+  holds what needs one: its own `BEGIN`, `START TRANSACTION`, `COMMIT` or
+  `END`, a savepoint, or PostgreSQL's `SET LOCAL`, `SET CONSTRAINTS` or
+  `SET TRANSACTION` (refusal code `NEEDS_TRANSACTION_IN_MIGRATION`); on SQLite
+  it may not write `PRAGMA foreign_keys` or `PRAGMA defer_foreign_keys`. Such
+  a file has no all-or-nothing guarantee: if a statement fails, the ones
+  before it stay applied and the run fails with
+  `NEXTLY_MIGRATION_PARTIALLY_APPLIED`, whose message gives the statement
+  count and the recovery (the database's own error is in its cause). While
+  that failed attempt is the unit's newest, `nextly migrate` refuses to record
+  the unit as applied without running it, even when the database already
+  stands at its result: finish it by hand and mark it with
+  `nextly migrate:resolve --applied <file>` (a file written by `--blank` has no
+  snapshot to verify against, so add `--skip-verify`; for a plugin module,
+  `--failed-cleanup` and then `nextly migrate`), or reverse what ran and
+  migrate again. `nextly migrate`, `migrate:down` and `migrate:status` name
+  each unit that runs outside a transaction. A refusal's message names the
+  marker, `migrate --dry-run` lists refusals, and `migrate:check` warns about
+  them (`REFUSED_STATEMENT`). `nextly migrate:create --blank --no-transaction`
+  writes a file whose first line is the marker, and
+  `migrate:create --plugin <entry> --no-transaction` (or `--blank`) writes a
+  module sealed with `migrationChecksum` when it loads, so its SQL can be
+  edited. Existing plugin modules keep their checksums. On MySQL each schema
+  statement still commits as it runs.
+- **On SQLite a migration that leaves a dangling reference is refused.** Each
+  unit runs with `foreign_keys` off, a `foreign_key_check` after its last
+  statement and the setting restored afterwards, so a table rebuild keeps
+  child rows. A unit that leaves a new dangling reference fails with
+  `NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION`: a unit run in a transaction is
+  rolled back; one marked to run outside a transaction keeps its statements
+  and is recorded as failed, to be repaired and then marked applied.
+- **A large body on an auth request carrying the refresh cookie is refused.**
+  Before an auth hook, a strategy or a plugin route sees a request that
+  carries the refresh cookie (any `/admin/api/auth/*` request from a signed-in
+  browser), the cookie is removed from a copy of the request, and that copy
+  now reads at most 64 KiB of the body, the same cap as the `csrf` route
+  option's reader. A larger body is refused with `VALIDATION_ERROR`
+  (`too_large`) before authentication and rate limiting, instead of being
+  buffered whole; a plugin route mounted under that path that accepts larger
+  bodies from signed-in browsers stops receiving them.
 - **Collection `indexes` now reach the database.** They were validated and
   then discarded, so an app that declared a compound index has been running
   without one. The next dev push or `migrate:create` adds it, and a unique
@@ -153,6 +183,10 @@ applies a plugin's migrations on a database the app already migrated, and
 adopts a multi-module history that development push already created.
 `migrate:create --plugin` accepts a plugin exported by name, and reports no
 changes (exit 2) when the plugin's schema matches its last migration.
+`migrate:create --plugin --blank` now writes a blank module; before, `--blank`
+was ignored with `--plugin`. `migrate:resolve --applied plugin:…` now refuses,
+naming `--failed-cleanup` and then `nextly migrate`, instead of reporting the
+module's file missing.
 
 Full details: `docs/database/extending-the-schema.mdx`,
 `docs/plugins/schema.mdx` and `docs/guides/production-migrations.mdx`.

@@ -59,6 +59,7 @@ export const myPlugin = (opts: MyPluginOptions = {}) =>
       /* declarative nouns — see below */
     },
     setup(config) {
+      // a copy of the plain settings and plugin definitions, no live handles
       return config;
     }, // escape hatch — all setups run before any init
     init(ctx) {
@@ -137,7 +138,7 @@ something newer.
 | `ctx.filters` / `ctx.actions` | Typed seams to transform values / run ordered side-effects. |
 | `ctx.self` | Your entities' **resolved** slugs after any host `.rename()`. Always reference your own entities through this. |
 | `ctx.logger` | Structured logging. |
-| `ctx.config` | Read-only Nextly configuration: plain values only. It carries no database adapter; reach the database through `ctx.db`. |
+| `ctx.config` | A `PluginConfig`: a frozen copy of the plain configuration values. No live handle (adapter, logger, hook registry, storage, rate limiter) and no email provider credentials; `plugins` lists summaries, not definitions. Reach the database through `ctx.db` and log through `ctx.logger`. |
 | `ctx.nextlyVersion` | The running core version (feature detection). |
 
 **Hooks vs events:** need to change or block an operation → use a **hook**; need to react after it commits → use an **event**.

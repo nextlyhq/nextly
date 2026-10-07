@@ -31,8 +31,11 @@ than landing as silent breaks — but **pin your versions** while we're pre-`1.0
 - Lifecycle: `setup` / `init` / `destroy`
 - Schema: `contributes.collections` / `extend` (+ singles/components)
 - Permissions: `PluginPermission`, `PermissionSlug`, `AuthUser`
-- Data access: `ctx.services` (incl. `{ as: "system" }`), `QueryOptions`,
-  `PaginatedResult`, `BatchOperationResult`, `ServiceOpts`
+- Data access: `ctx.services` (incl. `{ as: "system" }`), `PluginCollectionService`,
+  `QueryOptions`, `PaginatedResult`, `BatchOperationResult`, `ServiceOpts`. Each
+  service is now a facade of its plugin methods, and `collections.withTransaction`
+  hands its work a `PluginCollectionTransaction` token rather than the adapter's
+  transaction context
 - HTTP routes: `PluginRoute`, `PluginRouteContext`, `PluginRouteHandler`,
   `Middleware`, `RouteMethod`
 - Events: `EventBus`, `EventEnvelope`, `EventHandler`, `EventName`,
@@ -51,6 +54,20 @@ These ship today but carry no guarantee yet — use them, but expect change:
   for a plugin that declares `capabilities.db.rawSql` and that the app lists
   in `db.rawSqlPlugins`
 - `ctx.dialect` — which database the installation runs on
+- `ctx.config` and its types `PluginConfig`, `PluginSummary` and
+  `PluginEmailSettings`: a frozen copy of the plain configuration values, with
+  no live handles and no email provider credentials, and plugin summaries in
+  place of definitions
+- The service facade types `PluginUserService`, `PluginMediaService`,
+  `PluginEmailService`, `PluginVersionsService` and
+  `PluginCollectionTransaction`
+- `PluginTransaction` (the handle `ctx.db.transaction` passes its work) and
+  `PluginRawDatabase` (`ctx.db.raw`)
+- `PluginMigration.transaction` — `false` runs a migration module outside a
+  transaction, statement by statement
+- `onInstall` / `onUninstall`, called by `nextly plugins install` and
+  `uninstall`, never at boot
+- `createTestNextly`'s `pluginConsent` option
 - `ctx.hooks` plugin registration (`PluginHookRegistry`, `HookType`, `HookHandler`)
 - Filters & actions (D63): `ctx.filters` / `ctx.actions` + seam types
 - Secrets (D37): `secret`, `Secret`, `isSecret`

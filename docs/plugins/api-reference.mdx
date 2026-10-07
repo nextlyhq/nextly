@@ -32,9 +32,11 @@ interface PluginDefinition {
   provides?: string[];                         // capability names, e.g. "acme/auth-provider"
   requires?: Record<string, string>;           // capability → provider version range (checked, not ordering)
   schemaVersion?: number;
-  setup?:   (config: NextlyConfig) => NextlyConfig;   // all setups before any init
+  setup?:   (config: NextlyServiceConfig) => NextlyServiceConfig; // all setups before any init; receives copies, no live handles
   init?:    (ctx: PluginContext) => void | Promise<void>;
   onReady?: (ctx: PluginContext) => void | Promise<void>; // after every init and route registration
+  onInstall?:   (ctx: PluginContext) => void | Promise<void>; // `nextly plugins install`, after its migrations; @experimental
+  onUninstall?: (ctx: PluginContext, opts: { keepData: boolean }) => void | Promise<void>; // `nextly plugins uninstall`, before its DOWN migrations; @experimental
   destroy?: (ctx: PluginContext) => void | Promise<void>;
   rename?:  (map: Record<string, string>) => PluginDefinition;  // integrator-side remap (D54)
 }
@@ -72,9 +74,18 @@ Component references are string paths: `"<package>/<path>#<Export>"`, e.g. `"@ac
 
 ```ts
 interface PluginContext {
-  services: NextlyServices;       // managed, secure-by-default; .collections supports { as: 'user' | 'system' }
+  services: {                     // managed, secure-by-default; each a frozen facade of its plugin methods
+    collections: PluginCollectionService; // access methods take { as: 'user' | 'system' }
+    users: PluginUserService;             // @experimental type
+    media: PluginMediaService;            // @experimental type
+    email: PluginEmailService;            // @experimental type
+    versions: PluginVersionsService;      // @experimental
+    singles: PluginSinglesService;        // @experimental
+    jobs: JobsNamespace;                  // @experimental
+    plugins: Record<string, Record<string, unknown>>; // @experimental
+  };
   db: PluginDatabase & { raw: PluginRawDatabase }; // typed, owner-checked; .raw = Drizzle builder + transaction, the live instance only with capabilities.db.rawSql AND db.rawSqlPlugins
-  dialect: SupportedDialect;      // "postgresql" | "mysql" | "sqlite"; @experimental
+  dialect: SupportedDialect;      // "postgresql" | "mysql" | "sqlite"; read when accessed; @experimental
   auth: PluginAuthApi;            // always present; completeLogin needs capabilities.auth.login
   settings?: PluginSettingsApi;   // with contributes.settings
   fetch?: typeof fetch;           // with a non-empty capabilities.net.outbound
@@ -84,10 +95,54 @@ interface PluginContext {
   filters: PluginFilterRegistry;  // transform values on typed seams (D63)
   actions: PluginActionRegistry;  // ordered side-effects on typed seams (D63)
   self: { name: string; collections: Record<string,string>; singles: Record<string,string> }; // resolved slugs (D54)
-  config: PluginConfig; // frozen plain configuration values only: no adapter, logger, hook registry or other live handle; reach the database through ctx.db
+  config: PluginConfig; // @experimental; a copy of the plain configuration values, frozen all the way down — see below
   logger: Logger;
   nextlyVersion: string;
 }
+```
+
+### `PluginConfig`
+
+```ts
+type PluginConfig = Readonly<
+  Pick<
+    NextlyServiceConfig,
+    | "basePath" | "preview" | "schemasDir" | "migrationsDir" | "runMigrationsOnBoot"
+    | "strictPluginTargets" | "permissions" | "roles" | "jobs" | "collections"
+    | "singles" | "fieldGroups" | "users" | "apiKeys" | "security" | "admin"
+    | "auth" | "localization" | "webhookRetention" | "auditRetention"
+    | "emailRetention" | "webhookAuditEnabled"
+  > & {
+    plugins?: readonly PluginSummary[];
+    email?: Readonly<PluginEmailSettings>; // the email settings without providerConfig
+  }
+>;
+
+interface PluginSummary {
+  readonly name: string;
+  readonly version: string;
+  readonly enabled: boolean;                            // false when configured with enabled: false
+  readonly capabilities?: Readonly<PluginCapabilities>; // a copy
+  readonly contributes?: { readonly declarations?: Readonly<Record<string, unknown>> }; // a copy
+}
+```
+
+Every plain object and array is copied and frozen; functions and class
+instances are kept by reference. `adapter`, `db`, `pluginConsent`,
+`storagePlugins`, `imageProcessor`, `logger`, `hookRegistry`, `passwordHasher`
+and `rateLimit` are not on it. All three types are `@experimental`.
+
+### Transactions
+
+```ts
+ctx.db.transaction(work: (tx: PluginTransaction) => Promise<T>): Promise<T>;
+// PluginTransaction = PluginDatabase without `transaction`; calling one rejects (INVALID_INPUT, nested-plugin-transaction)
+
+ctx.db.raw.transaction(work: (tx: DatabaseInstance) => Promise<T>): Promise<T>;
+// PluginRawDatabase: the fluent builder; the live Drizzle instance with rawSql granted
+
+ctx.services.collections.withTransaction(work: (tx: PluginCollectionTransaction) => Promise<T>): Promise<T>;
+// tx is an opaque token for createEntryInTransaction / updateEntryInTransaction / deleteEntryInTransaction
 ```
 
 ### Secure-by-default services (D35)
@@ -149,6 +204,7 @@ createTestNextly(opts: {
   collections?: CollectionConfig[];
   dialect?: "sqlite" | "postgresql" | "mysql";  // default sqlite (in-memory)
   serverUrl?: string;                           // else TEST_POSTGRES_URL / TEST_MYSQL_URL
+  pluginConsent?: { rawSql: readonly string[] }; // @experimental; the test's db.rawSqlPlugins
 }): Promise<{ nextly; getService; hooks; events; adapter; destroy }>;
 
 getConfiguredTestDialects(): TestDialect[];  // sqlite, plus any whose server URL is set
@@ -505,6 +561,8 @@ compile. A name with no entry is typed by the call site, as before.
 ### Lifecycle
 
 `onReady` runs after every plugin has initialised and routes are registered.
-There are no install or uninstall hooks yet: they arrive with the install
-command that calls them. Do one-time setup in `init`, written so running it on
-every boot is harmless.
+`onInstall` and `onUninstall` (`@experimental`) never run at boot: `nextly
+plugins install` calls `onInstall` after the plugin's migrations, and `nextly
+plugins uninstall` calls `onUninstall` before its DOWN migrations, with
+`{ keepData }`. Write both so they can run again: an install can be retried
+after a failure part-way through.
