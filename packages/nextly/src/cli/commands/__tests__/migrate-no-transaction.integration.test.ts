@@ -173,8 +173,17 @@ describe.each(getConfiguredTestDialects())(
         true
       );
 
-      await expect(migrate()).rejects.toThrow(
-        /20261001_000001_marks\.sql ran outside a transaction, and its statement 2 of 2 failed: .*The 1 statement\(s\) before it stayed applied, and were not undone/
+      const error = await migrate().catch((thrown: unknown) => thrown);
+      expect(error).toMatchObject({
+        code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+        publicMessage:
+          "20261001_000001_marks.sql ran outside a transaction, and its statement 2 of 2 failed. The 1 statement(s) before it stayed applied, and were not undone. If you finish its remaining statements by hand, mark it applied with `nextly migrate:resolve --applied 20261001_000001_marks.sql` rather than running it again; if you reverse the statements that ran, run `nextly migrate` again.",
+        logContext: { reason: "partially-applied" },
+      });
+      // The database's reason is not public; the cause carries it.
+      expect((error as Error).message).not.toMatch(MISSING_TABLE);
+      expect((error as { cause?: Error }).cause?.message).toMatch(
+        MISSING_TABLE
       );
 
       expect(await marks()).toEqual(["kept"]);

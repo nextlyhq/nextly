@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { SchemaEventRow } from "../events/schema-events-repository";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
@@ -162,6 +163,46 @@ describe("reconcileFile (Phase 2 three-state)", () => {
     expect(r.state).toBe("in_sync");
     expect(executeSql).toHaveBeenCalledOnce();
     expect(repo.applied[0].statementsExecuted).toBe(1);
+  });
+
+  it("records a failure's cause in the ledger and keeps it on the error it rethrows", async () => {
+    // A partial failure keeps the database's reason out of its public
+    // message and in its cause, so the ledger row and the rethrown error
+    // must carry the cause for the operator to read it back.
+    const failures: Array<string | null | undefined> = [];
+    const repo = {
+      ...fakeRepo(),
+      markFailed: (
+        _id: string,
+        args: { errorMessage?: string | null }
+      ): Promise<void> => {
+        failures.push(args.errorMessage);
+        return Promise.resolve();
+      },
+    };
+    const driver = new Error('relation "secret_t" does not exist');
+    const partial = new NextlyError({
+      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      publicMessage: "0006_x.sql ran outside a transaction, and failed.",
+      cause: driver,
+    });
+    const error = await reconcileFile({
+      file: { ...file, transaction: false },
+      before: snap("a"),
+      target: snap("a", "b"),
+      live: snap("a"),
+      repo,
+      executeSql: vi.fn().mockRejectedValue(partial),
+    }).then(
+      () => undefined,
+      (caught: unknown) => caught as NextlyError
+    );
+
+    expect(error?.code).toBe("NEXTLY_MIGRATION_APPLY_FAILED");
+    expect(error?.publicMessage).not.toContain("secret_t");
+    expect(error?.cause).toBe(partial);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('relation "secret_t" does not exist');
   });
 
   it("ALREADY_APPLIED: live ≡ target → skips SQL, records statements=0, supersedes", async () => {

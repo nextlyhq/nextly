@@ -290,7 +290,11 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       return await runMigrationStatements(
         drizzleAdapter,
         down.statements,
-        { source: down.filename, transaction: down.transaction },
+        {
+          source: down.filename,
+          transaction: down.transaction,
+          direction: "down",
+        },
         async db => {
           await resolveMigration({
             mode: "rolled-back",

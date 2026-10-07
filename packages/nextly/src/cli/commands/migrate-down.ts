@@ -409,6 +409,7 @@ export async function migrateDownCore(
             await deps.execDown(p.statements, {
               source: p.filename,
               transaction: p.transaction,
+              direction: "down",
             });
           } catch (err) {
             await deps.recordFailed(

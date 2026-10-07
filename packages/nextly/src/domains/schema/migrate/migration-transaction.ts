@@ -133,6 +133,12 @@ export interface MigrationUnit {
    * `transaction: false`: its statements run outside a transaction.
    */
   transaction: boolean;
+  /**
+   * Which way the unit runs: its UP, the default, or a DOWN undoing it. Read
+   * only by the advice a failure outside a transaction gives, because
+   * recording a unit applied is the recovery for an UP alone.
+   */
+  direction?: "up" | "down";
 }
 
 /**
@@ -190,7 +196,7 @@ export async function runMigrationStatements(
       try {
         await adapter.executeQuery(statement);
       } catch (error) {
-        throw partialFailure(unit.source, index, statements.length, error);
+        throw partialFailure(unit, index, statements.length, error);
       }
     }
   };
@@ -207,7 +213,7 @@ export async function runMigrationStatements(
         session,
         runEach,
         (count, pairs) =>
-          `${unit.source} ran outside a transaction, and left ${String(count)} row(s) referencing rows that do not exist (${pairs}). Its statements stayed applied: repair or remove those rows, then ${markAppliedAdvice(unit.source)}.`
+          `${unit.source} ran outside a transaction, and left ${String(count)} row(s) referencing rows that do not exist (${pairs}). Its statements stayed applied: repair or remove those rows${unit.direction === "down" ? "" : `, then ${markAppliedAdvice(unit.source)}`}.`
       );
     });
   } else {
@@ -241,24 +247,39 @@ export function partiallyAppliedAdvice(source: string): string {
 
 /**
  * The error for a unit run outside a transaction whose statement at `index`
- * failed: which statement, the database's reason, and that the ones before
- * it were not undone.
+ * failed: which statement, how many before it stayed applied, and what to
+ * do about them.
+ *
+ * The database's own reason is kept out of the public message — a driver's
+ * text can carry identifiers and values from the statement — and travels in
+ * `logMessage` and `cause`, which the CLI prints and the ledger records.
  */
 function partialFailure(
-  source: string,
+  unit: MigrationUnit,
   index: number,
   total: number,
   error: unknown
 ): NextlyError {
+  const { source } = unit;
   const reason = error instanceof Error ? error.message : String(error);
+  const advice =
+    unit.direction === "down"
+      ? "Finish or reverse them by hand before running it again."
+      : partiallyAppliedAdvice(source);
   const kept =
     index === 0
-      ? "No statement before it had run."
-      : `The ${String(index)} statement(s) before it stayed applied, and were not undone: finish or reverse them by hand before running it again.`;
+      ? "No statement before it had run, so it can run again once the cause is fixed."
+      : `The ${String(index)} statement(s) before it stayed applied, and were not undone. ${advice}`;
   return new NextlyError({
     code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
-    publicMessage: `${source} ran outside a transaction, and its statement ${String(index + 1)} of ${String(total)} failed: ${reason}. ${kept}`,
-    logContext: { source, failedStatement: index + 1, statements: total },
+    publicMessage: `${source} ran outside a transaction, and its statement ${String(index + 1)} of ${String(total)} failed. ${kept}`,
+    logMessage: `${source}: statement ${String(index + 1)} of ${String(total)} failed: ${reason}`,
+    logContext: {
+      source,
+      failedStatement: index + 1,
+      statements: total,
+      reason: "partially-applied",
+    },
     ...(error instanceof Error ? { cause: error } : {}),
   });
 }

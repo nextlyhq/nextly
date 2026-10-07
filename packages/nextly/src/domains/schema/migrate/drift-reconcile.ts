@@ -17,9 +17,12 @@
  * @module domains/schema/migrate/drift-reconcile
  * @since v0.0.3-alpha (Plan C2)
  */
-import { NextlyError } from "../../../errors";
+import { describeError, NextlyError } from "../../../errors";
 import { newestEvent } from "../events/newest-event";
-import type { SchemaEventRow } from "../events/schema-events-repository";
+import {
+  truncateErrorMessage,
+  type SchemaEventRow,
+} from "../events/schema-events-repository";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot, Operation } from "../pipeline/diff/types";
 
@@ -220,13 +223,20 @@ export async function reconcileFile(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await repo.markFailed(id, {
-        errorMessage: message,
+        // The cause chain as well as the message, bounded and without
+        // logContext, as the verbatim path records it: an error that keeps
+        // the database's reason out of its public message carries it in its
+        // cause, and the ledger row is where the operator reads it back.
+        errorMessage: truncateErrorMessage(
+          describeError(err, { context: false })
+        ),
         errorJson:
           err instanceof Error ? { name: err.name, message: err.message } : err,
       });
       throw new NextlyError({
         code: "NEXTLY_MIGRATION_APPLY_FAILED",
         publicMessage: `Migration ${migration} failed: ${message}`,
+        ...(err instanceof Error ? { cause: err } : {}),
       });
     }
     return { state: "in_sync" };
