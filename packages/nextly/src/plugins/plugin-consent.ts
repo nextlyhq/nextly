@@ -428,29 +428,43 @@ export function assertConsentDeclaredBeforeSetup(
   for (const rule of CONSENT_RULES) {
     for (const plugin of transformed) {
       if (plugin.enabled === false || !rule.declares(plugin)) continue;
-      const configured = declared.find(entry => entry.name === plugin.name);
-      if (configured?.declares.includes(rule.capability)) {
-        const replaced = replacedCode(configured, plugin);
-        if (replaced === undefined) continue;
-        throw resolutionError(
-          "plugin-code-replaced-by-setup",
-          `A setup transformer changed the code of plugin "${plugin.name}" (${replaced}), which declares ${rule.capability}. That capability grants ${rule.grants}, and the app's listing covers the plugin it configured, with that plugin's own code. ` +
-            `Leave the definitions of plugins that declare ${rule.capability} as configured in setup transformers.`,
-          { plugin: plugin.name, capability: rule.capability, path: replaced }
-        );
-      }
-      const what =
-        configured === undefined
-          ? `A setup transformer added plugin "${plugin.name}", or renamed another plugin to that name, and it declares ${rule.capability}`
-          : `A setup transformer added ${rule.capability} to plugin "${plugin.name}", whose own manifest does not declare it`;
-      throw resolutionError(
-        "capability-added-by-setup",
-        `${what}. That capability grants ${rule.grants}, and the app's listing covers only a plugin that declares it in its own manifest under the listed name. ` +
-          `Declare ${rule.capability} in the manifest of the plugin the app configures, rather than in a setup transformer.`,
-        { plugin: plugin.name, capability: rule.capability }
-      );
+      const refusal = setupConsentRefusal(rule, plugin, declared);
+      if (refusal !== undefined) throw refusal;
     }
   }
+}
+
+/**
+ * Why `plugin`, which holds `rule`'s capability on the transformed list, may
+ * not hold it, or undefined when the record shows it declared the capability
+ * under this name, with this code, before setup.
+ */
+function setupConsentRefusal(
+  rule: ConsentRule,
+  plugin: PluginDefinition,
+  declared: readonly PreSetupPlugin[]
+): NextlyError | undefined {
+  const configured = declared.find(entry => entry.name === plugin.name);
+  if (configured?.declares.includes(rule.capability)) {
+    const replaced = replacedCode(configured, plugin);
+    if (replaced === undefined) return undefined;
+    return resolutionError(
+      "plugin-code-replaced-by-setup",
+      `A setup transformer changed the code of plugin "${plugin.name}" (${replaced}), which declares ${rule.capability}. That capability grants ${rule.grants}, and the app's listing covers the plugin it configured, with that plugin's own code. ` +
+        `Leave the definitions of plugins that declare ${rule.capability} as configured in setup transformers.`,
+      { plugin: plugin.name, capability: rule.capability, path: replaced }
+    );
+  }
+  const what =
+    configured === undefined
+      ? `A setup transformer added plugin "${plugin.name}", or renamed another plugin to that name, and it declares ${rule.capability}`
+      : `A setup transformer added ${rule.capability} to plugin "${plugin.name}", whose own manifest does not declare it`;
+  return resolutionError(
+    "capability-added-by-setup",
+    `${what}. That capability grants ${rule.grants}, and the app's listing covers only a plugin that declares it in its own manifest under the listed name. ` +
+      `Declare ${rule.capability} in the manifest of the plugin the app configures, rather than in a setup transformer.`,
+    { plugin: plugin.name, capability: rule.capability }
+  );
 }
 
 /**
