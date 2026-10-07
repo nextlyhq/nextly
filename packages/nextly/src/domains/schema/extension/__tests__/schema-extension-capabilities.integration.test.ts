@@ -1,7 +1,7 @@
 /**
- * Payload schema-extensibility parity, against a REAL database.
+ * What the schema extension model can express, against a REAL database.
  *
- * The unit checklist beside this file (`payload-parity.test.ts`) asserts what
+ * The unit file beside this one (`schema-extension-capabilities.test.ts`) asserts what
  * the compiled model says. This one asserts what the server does with it:
  * every construct is pushed to a live database, read back through the same
  * introspection the diff engine uses, and compared. A model that describes a
@@ -11,8 +11,6 @@
  * Runs on every dialect whose URL is set, and skips the rest rather than
  * failing — the same contract every other integration file here uses. SQLite
  * always runs, in memory.
- *
- * This file is the executable definition of "same as Payload or better".
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
@@ -82,7 +80,7 @@ function createTableSql(
 for (const entry of DIALECTS) {
   const suite = entry.url === null ? describe.skip : describe;
 
-  suite(`Payload parity, live (${entry.dialect})`, () => {
+  suite(`schema extension capabilities, live (${entry.dialect})`, () => {
     let adapter: TestAdapter | undefined;
     const made: string[] = [];
 
@@ -133,7 +131,7 @@ for (const entry of DIALECTS) {
 
     // Rows 1 and 11: a plugin's declared table, with every first-class kind,
     // reaches the database and reads back as the model described it.
-    it("row 1 + 11 — a declared table is created with every column kind", async () => {
+    it("a declared table is created with every column kind", async () => {
       const live = await push(
         table("kinds", {
           id: col.id(),
@@ -167,9 +165,9 @@ for (const entry of DIALECTS) {
       );
     });
 
-    // Row 10: an enum's values are ENFORCED, by the one mechanism all three
-    // dialects have. Payload reaches `pgEnum` and stops at PostgreSQL.
-    it("row 10 — an enum column refuses a value outside its set", async () => {
+    // An enum's values are ENFORCED, by the one mechanism all three
+    // dialects have.
+    it("an enum column refuses a value outside its set", async () => {
       const t = table("enums", {
         id: col.id(),
         state: col.enum(["open", "closed"]),
@@ -193,14 +191,14 @@ for (const entry of DIALECTS) {
       ).rejects.toThrow();
     });
 
-    // Row 10, continued: the enum's constraint reads back as the SAME check
+    // The enum's constraint reads back as the SAME check
     // the model declares. PostgreSQL deparses `state IN (...)` as
     // `(state)::text = ANY ((ARRAY[...])::text[])`, so a textual comparison
     // saw a changed check on every diff — dev push proposed dropping and
     // re-adding it forever, and any later change to the values was refused as
     // drift. The diff is asked directly, because "no check operations" is the
     // property that matters, whatever spelling the server chose.
-    it("row 10 — a created enum check introspects with no diff against its declaration", async () => {
+    it("a created enum check introspects with no diff against its declaration", async () => {
       const t = table("enum_rt", {
         id: col.id(),
         state: col.enum(["open", "closed", "it's"]),
@@ -223,9 +221,9 @@ for (const entry of DIALECTS) {
       expect(checkOps).toEqual([]);
     });
 
-    // Row 3: indexes a plugin declares are emitted, including the compound
+    // Indexes a plugin declares are emitted, including the compound
     // unique one, and read back under the name the pipeline derives.
-    it("row 3 — declared indexes exist on the live table", async () => {
+    it("declared indexes exist on the live table", async () => {
       const t = table(
         "indexed",
         { id: col.id(), a: col.shortText(), b: col.shortText() },

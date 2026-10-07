@@ -1,14 +1,10 @@
 /**
- * Payload schema-extensibility parity, as an executable checklist.
+ * What the schema extension model can express, one `describe` per capability,
+ * asserted against the compiled model.
  *
- * One `describe` per row of the Payload parity matrix. A row is done when
- * its `todo` becomes a real assertion, and parity is not reached while any
- * remains. Keeping them here rather than in a document means the checklist
- * cannot quietly disagree with the code.
- *
- * Rows needing a live database carry a `todo` naming the integration file that
- * will own them — asserting them here against a fake would be a test of the
- * fake. Rows checkable from the compiled model are asserted now.
+ * Capabilities that need a live database are asserted in
+ * `schema-extension-capabilities.integration.test.ts`; asserting them here
+ * against a fake would be a test of the fake.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -60,14 +56,14 @@ function input(
   };
 }
 
-describe("row 1 — add tables", () => {
+describe("add tables", () => {
   it("a plugin's declared table is compiled", async () => {
     const schema = await buildExtensionSchema(input());
     expect(schema.tables.map(t => t.name)).toEqual(["fx__notes"]);
   });
 });
 
-describe("row 2 — hooks see every generated table", () => {
+describe("hooks see every generated table", () => {
   it("the draft is seeded with core and entity tables", async () => {
     const seen: string[] = [];
     await buildExtensionSchema(
@@ -84,13 +80,13 @@ describe("row 2 — hooks see every generated table", () => {
         ],
       })
     );
-    // Payload's `afterSchemaInit` sees the generated tables; ours sees those
-    // AND core, which is what makes a reference to `users` checkable.
+    // A hook sees the generated tables AND core, which is what makes a
+    // reference to `users` checkable.
     expect(seen).toEqual(expect.arrayContaining(["users", "dc_posts"]));
   });
 });
 
-describe("row 3 — columns on a generated table", () => {
+describe("columns on a generated table", () => {
   it("adds a HIDDEN column, which is the difference from extendTable", async () => {
     const schema = await buildExtensionSchema(
       input({
@@ -108,10 +104,8 @@ describe("row 3 — columns on a generated table", () => {
         ],
       })
     );
-    // Payload's `extendTable` reaches Drizzle's internals and the column
-    // becomes part of the table for every reader. Here it reaches the schema
-    // machinery — so push and SQLite rebuilds keep it — and no entry API
-    // returns it.
+    // The column reaches the schema machinery, so push and SQLite rebuilds
+    // keep it, and no entry API returns it.
     expect(schema.entityColumns.get("dc_posts")?.[0]).toMatchObject({
       name: "search_vector",
       hidden: true,
@@ -130,9 +124,9 @@ describe("row 3 — columns on a generated table", () => {
   });
 });
 
-describe("row 4 — override a generated column", () => {
+describe("override a generated column", () => {
   it("narrows storage within a value family, app only", () => {
-    // Payload's tested case is `varchar('city', { length: 10 })`.
+    // Narrowing within a family, such as `varchar('city', { length: 10 })`.
     expect(() =>
       assertOverrideCompatible("text", "varchar", "dc_posts", "city")
     ).not.toThrow();
@@ -148,7 +142,7 @@ describe("row 4 — override a generated column", () => {
   });
 });
 
-describe("row 5 — compound and unique indexes", () => {
+describe("compound and unique indexes", () => {
   it("emits a unique index over ordered columns", async () => {
     const schema = await buildExtensionSchema(input());
     const spec = toTableSpec(schema.tables[0], "postgresql");
@@ -158,7 +152,7 @@ describe("row 5 — compound and unique indexes", () => {
   });
 });
 
-describe("row 6 — partial indexes", () => {
+describe("partial indexes", () => {
   it("C: a partial index is refused at declaration, and its spec renders and re-diffs clean", async () => {
     const { col, defineTable } = await import("../dsl");
     const searched = defineTable(
@@ -230,7 +224,7 @@ describe("row 6 — partial indexes", () => {
   });
 });
 
-describe("row 7 — expression indexes", () => {
+describe("expression indexes", () => {
   it("C: an expression index is expressible and survives migrate:create", async () => {
     const searched = defineTable(
       "searched",
@@ -278,7 +272,7 @@ describe("row 7 — expression indexes", () => {
   });
 });
 
-describe("row 8 — foreign keys with onDelete/onUpdate", () => {
+describe("foreign keys with onDelete/onUpdate", () => {
   it("C: a foreign key is expressible, diffed and emitted per dialect", async () => {
     const linked = defineTable(
       "linked",
@@ -325,7 +319,7 @@ describe("row 8 — foreign keys with onDelete/onUpdate", () => {
   });
 });
 
-describe("row 9 — check constraints", () => {
+describe("check constraints", () => {
   it("C: a check constraint is expressible, diffed and emitted per dialect", async () => {
     // The chain: DSL declares the check, the compiler emits it into the
     // spec, the diff turns a new check into add_check, and each dialect
@@ -378,7 +372,7 @@ describe("row 9 — check constraints", () => {
   });
 });
 
-describe("row 10 — enums", () => {
+describe("enums", () => {
   it("declares a value set and narrows the inferred type to it", () => {
     const orders = defineTable("orders", {
       id: col.id(),
@@ -389,9 +383,8 @@ describe("row 10 — enums", () => {
       enumValues: ["open", "paid"],
       enumName: "order_status",
     });
-    // Payload reaches `pgEnum` through a hook and loses the type. Here the
-    // literal union comes from the declaration, so a bad value is a compile
-    // error rather than a write the database refuses.
+    // The literal union comes from the declaration, so a bad value is a
+    // compile error rather than a write the database refuses.
     type Row = InferRow<typeof orders>;
     const row: Row = { id: "x", state: "open" };
     expect(row.state).toBe("open");
@@ -414,7 +407,7 @@ describe("row 10 — enums", () => {
       toTableSpec(orders(values), "postgresql").checks?.[0]?.sql ?? "";
 
     // CREATE: the values are enforced, on every dialect, by the one mechanism
-    // all three have. Payload reaches `pgEnum` and stops at PostgreSQL.
+    // all three have.
     const created = checkSql(["open"]);
     expect(created).toBe(`"state" IN ('open')`);
 
@@ -430,7 +423,7 @@ describe("row 10 — enums", () => {
   });
 });
 
-describe("row 11 — any Drizzle column type", () => {
+describe("any Drizzle column type", () => {
   it("the app escape hatch exists and refuses what migrations cannot carry", () => {
     // Half of this row is delivered: `afterDrizzle` takes any Drizzle column.
     // The other half is new first-class kinds, such as `serial` below.
@@ -609,7 +602,7 @@ describe("the typed surface addresses columns the way authors declare them", () 
   });
 });
 
-describe("row 12 — relations for typed relational queries", () => {
+describe("relations for typed relational queries", () => {
   it("C: extension tables declare relations for typed relational queries", async () => {
     // The declared chain: a ref column compiles to a one-edge the registry
     // accepts. The query half — a `with` query returning the nested row on
@@ -641,10 +634,10 @@ describe("row 12 — relations for typed relational queries", () => {
   });
 });
 
-describe("row 13 — typed access to added tables", () => {
+describe("typed access to added tables", () => {
   it("infers the row and insert types from the declaration", () => {
-    // Typed by construction rather than by codegen, which is what Payload's
-    // `generate:db-schema` cannot do for hook-added tables.
+    // Typed by construction rather than by codegen, so a hook-added table is
+    // typed too.
     const row: InferRow<typeof notes> = {
       id: "x",
       title: "t",
@@ -656,7 +649,7 @@ describe("row 13 — typed access to added tables", () => {
   });
 });
 
-describe("row 14 — adopt an existing table without dropping it", () => {
+describe("adopt an existing table without dropping it", () => {
   it("C: an existing unmanaged table is adopted rather than dropped", async () => {
     // The adoption contract: the table is visible for typed access and
     // owned by the app, and structurally absent from everything that could
@@ -683,12 +676,12 @@ describe("row 14 — adopt an existing table without dropping it", () => {
   });
 });
 
-describe("row 15 — extend core system tables", () => {
+describe("extend core system tables", () => {
   it("allows the five carrying application data, and refuses the rest", () => {
-    // Payload reaches core tables through `jobsCollectionOverrides` and its
-    // hooks. The allowlist is the difference: a column on RBAC or the ledger
-    // sits inside the machinery that decides access or applies migrations, so
-    // a broken extension there fails OPEN or strands the database.
+    // Only an allowlist of core tables can be extended: a column on RBAC or
+    // the ledger sits inside the machinery that decides access or applies
+    // migrations, so a broken extension there fails OPEN or strands the
+    // database.
     for (const table of ["users", "media", "nextly_jobs"]) {
       expect(() =>
         assertMayAddColumns({ kind: "core", table }, table, { kind: "app" })
@@ -704,7 +697,7 @@ describe("row 15 — extend core system tables", () => {
   });
 });
 
-describe("row 16 — the app extending a plugin's tables", () => {
+describe("the app extending a plugin's tables", () => {
   it("C: per-element ownership decides what each owner may read and change", async () => {
     // The app may add COLUMNS and INDEXES to any plugin's table; a plugin,
     // only to a declared dependency's. Every contributed element is recorded
@@ -750,14 +743,14 @@ describe("row 16 — the app extending a plugin's tables", () => {
   });
 });
 
-describe("row 17 — appears in migrations", () => {
+describe("appears in migrations", () => {
   it("compiles to a TableSpec the diff engine consumes", async () => {
     const schema = await buildExtensionSchema(input());
     expect(schema.specs[0]).toMatchObject({ name: "fx__notes" });
   });
 });
 
-describe("row 18 — appears in dev push, including hook-only edits", () => {
+describe("appears in dev push, including hook-only edits", () => {
   it("moves the fingerprint when only a hook's output changes", async () => {
     const withoutIndex = await buildExtensionSchema(
       input({
@@ -772,19 +765,18 @@ describe("row 18 — appears in dev push, including hook-only edits", () => {
       })
     );
     const withIndex = await buildExtensionSchema(input());
-    // The dev-push cache is keyed on this. Payload's hook tables are invisible
-    // to its change check, so a hook-only edit never re-pushes.
+    // The dev-push cache is keyed on this, so a hook-only edit re-pushes.
     expect(withIndex.fingerprint).not.toBe(withoutIndex.fingerprint);
   });
 });
 
-describe("row 19 — custom table name", () => {
+describe("custom table name", () => {
   it("is delivered by dbName on entities", () => {
     expect(true).toBe(true);
   });
 });
 
-describe("row 20 — virtual fields", () => {
+describe("virtual fields", () => {
   it("C: a virtual field produces no column, on any field type", async () => {
     // The descriptor is the one rule every consumer honours for column-less
     // fields (component fields), so the root-level `virtual` flag rides it:
@@ -804,13 +796,13 @@ describe("row 20 — virtual fields", () => {
   });
 });
 
-describe("row 21 — server-only custom config", () => {
+describe("server-only custom config", () => {
   it("is delivered by `custom`", () => {
     expect(true).toBe(true);
   });
 });
 
-describe("row 22 — collection id type", () => {
+describe("collection id type", () => {
   it("C: a collection chooses its id generator without changing storage", async () => {
     const { generateEntryId } = await import(
       "../../../collections/services/collection-id"
@@ -827,7 +819,7 @@ describe("row 22 — collection id type", () => {
   });
 });
 
-describe("row 23 — client-supplied id on create", () => {
+describe("client-supplied id on create", () => {
   it("C: a collection accepts a client-supplied id", async () => {
     const { resolveEntryId } = await import(
       "../../../collections/services/collection-id"
@@ -851,7 +843,7 @@ describe("row 23 — client-supplied id on create", () => {
   });
 });
 
-describe("row 24 — a Postgres schema other than public", () => {
+describe("a Postgres schema other than public", () => {
   it("is a gap for now: any schema but public is refused, not half-honoured", async () => {
     const {
       resolvePostgresSchema,
@@ -859,10 +851,9 @@ describe("row 24 — a Postgres schema other than public", () => {
       clearActivePostgresSchema,
     } = await import("../../services/postgres-schema");
 
-    // Payload reaches another schema through `schemaName`. Here the setting is
-    // resolved and refused: the schema push cannot yet create tables outside
-    // `public`, and an installation pointed elsewhere would boot with none of
-    // its core tables. Recorded as a gap rather than claimed as parity.
+    // The setting is resolved and refused: the schema push cannot yet create
+    // tables outside `public`, and an installation pointed elsewhere would
+    // boot with none of its core tables.
     try {
       expect(() => resolvePostgresSchema("cms", "postgresql")).toThrow(
         expect.objectContaining({ code: "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED" })
@@ -875,8 +866,8 @@ describe("row 24 — a Postgres schema other than public", () => {
   });
 });
 
-describe("row 25 — plugin-registrable schema changes", () => {
-  it("a plugin declares schema directly, which Payload has no mechanism for", async () => {
+describe("plugin-registrable schema changes", () => {
+  it("a plugin declares schema directly", async () => {
     const schema = await buildExtensionSchema(input());
     expect(schema.owners.get("fx__notes")).toEqual({
       kind: "plugin",
@@ -885,17 +876,16 @@ describe("row 25 — plugin-registrable schema changes", () => {
   });
 });
 
-describe("row 26 — plugin migrations, ownership, uninstall, lock", () => {
+describe("plugin migrations, ownership, uninstall, lock", () => {
   it("records the owner every later phase reads", async () => {
     const schema = await buildExtensionSchema(input());
     expect([...schema.owners.values()]).toEqual([{ kind: "plugin", id: "fx" }]);
   });
 });
 
-describe("row 27 — types without codegen, refusing unrepresentable schema", () => {
+describe("types without codegen, refusing unrepresentable schema", () => {
   it("refuses an index no dialect could build", () => {
-    // Payload's codegen loses silently. The refusal is the difference, and it
-    // fires for EVERY dialect rather than the live one — an index that works
+    // The refusal fires for EVERY dialect rather than the live one — an index that works
     // only where its author develops is a deployment failure with no local
     // reproduction.
     expect(() =>
@@ -912,7 +902,7 @@ describe("row 27 — types without codegen, refusing unrepresentable schema", ()
   });
 });
 
-describe("row 29 — a plugin adding fields to another plugin's collections", () => {
+describe("a plugin adding fields to another plugin's collections", () => {
   it("is delivered by contributes.extend", () => {
     // `apply-contributions.ts` already searches the MERGED collections,
     // singles and components, so a plugin's `extend` reaches another
@@ -921,7 +911,7 @@ describe("row 29 — a plugin adding fields to another plugin's collections", ()
   });
 });
 
-describe("row 30 — a plugin adding schema to another plugin's tables", () => {
+describe("a plugin adding schema to another plugin's tables", () => {
   it("C: a plugin adds schema to another plugin's tables", async () => {
     // With dependsOn named, the extension is deliberate: the resolver orders
     // the pair, the element rides the contributor's own migration stream,
