@@ -143,6 +143,7 @@ import { setPluginAuthDepsResolver } from "../plugins/plugin-auth-provider";
 import {
   NO_PLUGIN_CONSENT,
   type PluginConsent,
+  type PluginGrants,
   setupTransformerInput,
   snapshotPluginConsent,
   unmatchedConsentWarnings,
@@ -651,7 +652,8 @@ async function registerServicesOnce(
   // ----------------------------------------
   // Layers 0a/0b: resolve, transform and re-resolve the plugin list
   // ----------------------------------------
-  const transformedSetupConfig = await resolveBootPlugins(config);
+  const { config: transformedSetupConfig, grants: pluginGrants } =
+    await resolveBootPlugins(config);
   const transformedPlugins = transformedSetupConfig.plugins ?? [];
 
   // ----------------------------------------
@@ -1319,6 +1321,10 @@ async function registerServicesOnce(
     "config",
     () => transformedConfig
   );
+  // Beside the config rather than in it: what the boot granted, decided once
+  // when the plugin list was resolved. The auth router builds its plugin
+  // contexts from this entry, as `initializePlugins` does from the same value.
+  container.registerSingleton<PluginGrants>("pluginGrants", () => pluginGrants);
 
   // ----------------------------------------
   // Layer 2.5: Initialize Media Storage
@@ -1551,6 +1557,7 @@ async function registerServicesOnce(
   // previous registration's names in place for a reload to believe.
   globalForReg.__nextly_pluginTeardown = await initializePlugins(
     transformedConfig,
+    pluginGrants,
     pluginBootContributions,
     adapterDrizzleDb,
     adapter.getCapabilities().dialect,
@@ -1750,12 +1757,17 @@ export function bootMigrationsArgs(
  * transformers run in resolved order, and the transformed list resolved again
  * in full. Fail-fast; nothing has connected to the database yet.
  *
+ * Returns the transformed config and, beside it, the grants the resolved
+ * list holds (`decidePluginGrants`). Every plugin context the boot builds
+ * reads those grants, never a manifest.
+ *
  * Exported for the boot's tests, which judge the consent rules on exactly the
  * config the boot hands its plugins without opening a database.
  */
-export async function resolveBootPlugins(
-  config: NextlyServiceConfig
-): Promise<NextlyServiceConfig & { plugins: PluginDefinition[] }> {
+export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
+  config: NextlyServiceConfig & { plugins: PluginDefinition[] };
+  grants: PluginGrants;
+}> {
   // ----------------------------------------
   // Layer 0a: Resolve Plugins (validate + order)
   // ----------------------------------------
@@ -3363,6 +3375,8 @@ async function createMissingCodeFirstTables(
  */
 async function initializePlugins(
   transformedConfig: NextlyServiceConfig,
+  /** What `resolveBootPlugins` granted the plugins of `transformedConfig`. */
+  pluginGrants: PluginGrants,
   /**
    * The routes and widget sources of `transformedConfig.plugins`, collected
    * and validated by `registerServicesOnce` before the adapter connected,
@@ -3547,7 +3561,8 @@ async function initializePlugins(
     const pluginContext = createPluginContext(
       getServiceForPlugin as Parameters<typeof createPluginContext>[0],
       pluginHookRegistry,
-      plugin
+      plugin,
+      pluginGrants
     );
     teardown.push({ plugin, context: pluginContext });
     contexts.set(plugin.name, pluginContext);

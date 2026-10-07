@@ -10,8 +10,10 @@ import {
   assertConsentDeclaredBeforeSetup,
   assertPluginConsent,
   copyPluginDefinitions,
+  decidePluginGrants,
   NO_PLUGIN_CONSENT,
   type PluginConsent,
+  type PluginGrants,
   type PreSetupPlugin,
   recordPreSetupPlugins,
 } from "./plugin-consent";
@@ -255,14 +257,15 @@ export function resolveDeclaredPlugins(
  * list again — versions, dependencies, cycles, every manifest assertion and
  * the topological sort — makes a transformer-added plugin as checked as a
  * declared one. The boot and the CLI both call this, so a configuration one
- * of them accepts is one the other accepts too.
+ * of them accepts is one the other accepts too. The grants the resolved list
+ * holds (`decidePluginGrants`) are returned beside it.
  */
 export function resolveTransformedPlugins<
   C extends { plugins?: PluginDefinition[] },
 >(
   config: C,
   opts: ResolveTransformedPluginsOptions
-): C & { plugins: PluginDefinition[] } {
+): { config: C & { plugins: PluginDefinition[] }; grants: PluginGrants } {
   // Copied first, so every check below and everything after it reads one
   // snapshot of what the transformers returned, and an accessor on a
   // transformer-built definition is read once rather than at each check.
@@ -271,7 +274,13 @@ export function resolveTransformedPlugins<
     opts
   );
   assertConsentDeclaredBeforeSetup(opts.declared, plugins);
-  return { ...config, plugins };
+  // Decided here, once, from the copies every check above read: the grants
+  // travel beside the config to whatever builds a plugin context, and a
+  // manifest changed after this point grants nothing.
+  return {
+    config: { ...config, plugins },
+    grants: decidePluginGrants(plugins),
+  };
 }
 
 /**

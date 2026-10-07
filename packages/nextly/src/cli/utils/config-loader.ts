@@ -624,7 +624,7 @@ async function loadConfigInternal(
         coreVersion: getCoreVersion(),
         consent: pluginConsent,
         declared: preSetup,
-      });
+      }).config;
       const transformedPlugins: PluginDefinition[] = transformedConfig.plugins;
 
       // Fold plugin contributions. Extend targets that aren't code/plugin

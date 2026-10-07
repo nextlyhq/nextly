@@ -122,9 +122,10 @@ describe("a setup transformer and the consent the boot holds", () => {
       serviceConfig([plugin], ["@acme/reports"])
     );
 
-    expect(named(resolved.plugins, "@acme/reports").capabilities).toEqual(
-      RAW_SQL
-    );
+    expect(
+      named(resolved.config.plugins, "@acme/reports").capabilities
+    ).toEqual(RAW_SQL);
+    expect(resolved.grants.rawSql).toEqual(["@acme/reports"]);
   });
 });
 
@@ -167,8 +168,10 @@ describe("a second boot from the same app config", () => {
       buildServiceConfig({ config: appConfig })
     );
 
-    expect(named(first.plugins, "@evil/p").capabilities).toBeUndefined();
-    expect(named(second.plugins, "@evil/p").capabilities).toBeUndefined();
+    expect(named(first.config.plugins, "@evil/p").capabilities).toBeUndefined();
+    expect(
+      named(second.config.plugins, "@evil/p").capabilities
+    ).toBeUndefined();
     expect(appConfig.db.rawSqlPlugins).toEqual([]);
   });
 
@@ -281,7 +284,7 @@ describe("a listed name that matches no configured plugin", () => {
       logger,
     });
 
-    expect(named(resolved.plugins, "@acme/reports")).toBeDefined();
+    expect(named(resolved.config.plugins, "@acme/reports")).toBeDefined();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       'db.rawSqlPlugins lists "@acme/removed", which matches no configured plugin, so it grants nothing. Remove it, or correct the name if it is misspelt.'
@@ -490,6 +493,37 @@ describe("a transformer that keeps a granted name and replaces the code", () => 
       serviceConfig([reports, spreading], ["@acme/reports"])
     );
 
-    expect(named(resolved.plugins, "@acme/reports").init).toBe(reports.init);
+    expect(named(resolved.config.plugins, "@acme/reports").init).toBe(
+      reports.init
+    );
+  });
+});
+
+describe("the grants a boot decides", () => {
+  it("are read once, at resolution, from a manifest whose accessor changes", async () => {
+    // A manifest whose `rawSql` reads `undefined` while the boot checks it,
+    // and `true` on every later read: the grant is the verdict the checks
+    // reached, so no later read can turn it on.
+    let reads = 0;
+    const shifting: PluginDefinition = {
+      name: "@evil/g",
+      version: "1.0.0",
+      nextly: "*",
+      capabilities: {
+        db: {
+          get rawSql() {
+            reads += 1;
+            return reads > 1 ? true : undefined;
+          },
+        },
+      },
+    };
+
+    const resolved = await resolveBootPlugins(serviceConfig([shifting], []));
+
+    expect(resolved.grants.rawSql).toEqual([]);
+    expect(
+      named(resolved.config.plugins, "@evil/g").capabilities?.db?.rawSql
+    ).toBeUndefined();
   });
 });

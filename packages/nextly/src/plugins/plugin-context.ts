@@ -68,6 +68,7 @@ import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
+import { NO_PLUGIN_GRANTS, type PluginGrants } from "./plugin-consent";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
 import { createPluginSettings } from "./plugin-settings-provider";
 import { wrapSinglesForPlugin } from "./plugin-singles";
@@ -1531,7 +1532,15 @@ export function createPluginContext(
    * The plugin this context is built for — used to resolve `ctx.self`.
    * Optional so the factory stays usable without a plugin (empty `self`).
    */
-  plugin?: PluginDefinition
+  plugin?: PluginDefinition,
+  /**
+   * What the boot granted, decided once when it resolved the plugin list
+   * (`decidePluginGrants`). The context reads this and never the plugin's
+   * manifest, so a manifest changed after resolution, or one whose accessor
+   * answers differently when read here, grants nothing. Absent, nothing is
+   * granted.
+   */
+  grants: PluginGrants = NO_PLUGIN_GRANTS
 ): PluginContext {
   // Subscriptions made through this context are tracked under the plugin's name
   // so the runtime can clear them before the plugin re-initializes on HMR (B2).
@@ -1592,7 +1601,8 @@ export function createPluginContext(
   const userService = getServiceFn("userService");
   const mediaService = getServiceFn("mediaService");
   const emailService = getServiceFn("emailService");
-  // The raw handle is restricted unless the plugin DECLARED raw SQL.
+  // The raw handle is restricted unless the boot GRANTED this plugin raw SQL:
+  // it declared the capability before setup and the app lists it.
   // `DatabaseInstance` already describes only the fluent surface, but the
   // object handed over was the live Drizzle instance, which carries `execute`,
   // `run` and its own client, so the ordinary way to run raw SQL needed no
@@ -1601,7 +1611,7 @@ export function createPluginContext(
   // surface below exposes this handle as `raw`.
   const rawDb = restrictDatabase(
     getServiceFn("db"),
-    plugin?.capabilities?.db?.rawSql === true,
+    plugin !== undefined && grants.rawSql.includes(plugin.name),
     // Both resolved when a transaction starts, not now: the context can be
     // built before the database is connected. A closure, so the adapter
     // keeps its receiver.

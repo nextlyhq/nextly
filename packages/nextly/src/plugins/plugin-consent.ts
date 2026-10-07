@@ -263,6 +263,41 @@ export function setupTransformerInput<
   return Object.assign(input, { db });
 }
 
+/**
+ * The plugins the boot granted each capability that needs the app's consent,
+ * by name. Decided once, when the boot's plugin list is resolved
+ * (`decidePluginGrants`), and read by every place that builds a plugin
+ * context, so no later read of a manifest can grant what resolution did not.
+ */
+export interface PluginGrants {
+  /** Plugins whose `ctx.db.raw` is the live database handle. */
+  readonly rawSql: readonly string[];
+}
+
+/** Nothing granted: what a context built outside a boot receives. */
+export const NO_PLUGIN_GRANTS: PluginGrants = Object.freeze({
+  rawSql: Object.freeze([]),
+});
+
+/**
+ * The grants a resolved plugin list holds: every enabled plugin that declares
+ * a capability needing consent. Called on a list resolution has already
+ * checked (`resolveTransformedPlugins`), where each such plugin is listed by
+ * the app and declared the capability before setup, so this records the
+ * verdict rather than reaching one. Frozen.
+ */
+export function decidePluginGrants(
+  plugins: readonly PluginDefinition[]
+): PluginGrants {
+  const granted = (rule: ConsentRule): readonly string[] =>
+    Object.freeze(
+      plugins
+        .filter(plugin => plugin.enabled !== false && rule.declares(plugin))
+        .map(plugin => plugin.name)
+    );
+  return Object.freeze({ rawSql: granted(RAW_SQL_RULE) });
+}
+
 /** One capability that needs the app's consent. */
 interface ConsentRule {
   /** The manifest key, as an author writes it. */
@@ -279,17 +314,17 @@ interface ConsentRule {
   configKey: string;
 }
 
-const CONSENT_RULES: readonly ConsentRule[] = [
-  {
-    capability: "capabilities.db.rawSql",
-    grants: "the live database handle at ctx.db.raw, which reaches every table",
-    declares: plugin => plugin.capabilities?.db?.rawSql === true,
-    listed: consent => consent.rawSql,
-    configLine: names =>
-      `db: { rawSqlPlugins: [${names.map(name => JSON.stringify(name)).join(", ")}] }`,
-    configKey: "db.rawSqlPlugins",
-  },
-];
+const RAW_SQL_RULE: ConsentRule = {
+  capability: "capabilities.db.rawSql",
+  grants: "the live database handle at ctx.db.raw, which reaches every table",
+  declares: plugin => plugin.capabilities?.db?.rawSql === true,
+  listed: consent => consent.rawSql,
+  configLine: names =>
+    `db: { rawSqlPlugins: [${names.map(name => JSON.stringify(name)).join(", ")}] }`,
+  configKey: "db.rawSqlPlugins",
+};
+
+const CONSENT_RULES: readonly ConsentRule[] = [RAW_SQL_RULE];
 
 /**
  * Refuse the boot when an enabled plugin declares a capability the app has

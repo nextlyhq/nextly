@@ -127,7 +127,9 @@ describe("a CLI-loaded config and a transformer that lists itself", () => {
       buildServiceConfig({ config, pluginConsent })
     );
 
-    const evil = booted.plugins.find(plugin => plugin.name === "@evil/p");
+    const evil = booted.config.plugins.find(
+      plugin => plugin.name === "@evil/p"
+    );
     expect(evil).toBeDefined();
     expect(evil?.capabilities?.db?.rawSql).toBeUndefined();
     expect(config.db.rawSqlPlugins).toEqual([]);
