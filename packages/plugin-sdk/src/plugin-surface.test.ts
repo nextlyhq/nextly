@@ -117,6 +117,10 @@ describe("plugin-sdk public export surface", () => {
     expect(exportedNames("blocks.ts")).toMatchSnapshot();
   });
 
+  it("`./schema` surface is unchanged", () => {
+    expect(exportedNames("schema.ts")).toMatchSnapshot();
+  });
+
   it("`./testing` surface is unchanged", () => {
     expect(exportedNames("testing.ts")).toMatchSnapshot();
   });
