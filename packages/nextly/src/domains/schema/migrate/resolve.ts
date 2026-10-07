@@ -84,20 +84,25 @@ export async function resolveMigration(
   }
 }
 
+/**
+ * Refuses to mark a plugin module applied. `nextly migrate` records a module
+ * together with the tables it owns, and a row written here would leave them
+ * without an owner; clearing the module's failed attempt hands it back to
+ * `nextly migrate`, which records it when the database stands at its result.
+ */
+function assertAppFile(filename: string): void {
+  if (!isPluginLedgerRow(filename)) return;
+  throw new NextlyError({
+    code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+    publicMessage: `${filename} is a plugin module, which \`nextly migrate\` records applied together with the tables it owns. Run \`nextly migrate:resolve --failed-cleanup ${filename}\` and then \`nextly migrate\`: it records the module applied when the database stands at its result, and runs it when the database stands at its start.`,
+  });
+}
+
 async function resolveApplied(
   args: ResolveMigrationArgs,
   filename: string
 ): Promise<ResolveResult> {
-  // A plugin module is recorded applied by `nextly migrate`, which records
-  // the tables it owns with it; a row written here would leave them without
-  // an owner. Clearing its failed attempt hands it back to `nextly migrate`,
-  // which records it when the database stands at its result.
-  if (isPluginLedgerRow(filename)) {
-    throw new NextlyError({
-      code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
-      publicMessage: `${filename} is a plugin module, which \`nextly migrate\` records applied together with the tables it owns. Run \`nextly migrate:resolve --failed-cleanup ${filename}\` and then \`nextly migrate\`: it records the module applied when the database stands at its result, and runs it when the database stands at its start.`,
-    });
-  }
+  assertAppFile(filename);
   if (!(await args.fileExists(filename))) {
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_FILE_MISSING",

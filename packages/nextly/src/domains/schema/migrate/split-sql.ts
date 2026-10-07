@@ -412,6 +412,34 @@ export function statementRefusals(
   });
 }
 
+/**
+ * What only a unit run outside a transaction is refused: a statement that
+ * needs the transaction it does not have, and on SQLite a write to the
+ * foreign-key setting the runner holds for it.
+ */
+function outsideTransactionRefusal(
+  statement: string,
+  dialect: SupportedDialect | undefined,
+  unit: MigrationRunMode["unit"]
+): StatementRefusal | undefined {
+  const needs = needsTransactionReason(statement, dialect);
+  if (needs !== undefined) {
+    return {
+      statement,
+      code: "NEEDS_TRANSACTION_IN_MIGRATION",
+      message: `${quoted(statement)} ${needs} It needs a transaction, and this ${unit} runs outside one: ${inTransactionAdvice(unit)}.`,
+    };
+  }
+  const pragma = foreignKeyPragmaOf(statement, dialect);
+  return pragma === undefined
+    ? undefined
+    : {
+        statement,
+        code: "SESSION_SETTING_IN_MIGRATION",
+        message: `${quoted(statement)} changes ${pragma}, which the runner sets for a ${unit} that runs outside a transaction: it switches foreign-key enforcement off before the first statement, checks every reference after the last, and restores the setting afterwards. Remove it.`,
+      };
+}
+
 /** Why the runner refuses one statement in a unit run as `mode` says. */
 function refusalOf(
   statement: string,
@@ -425,24 +453,10 @@ function refusalOf(
       message: transactionControlMessage(statement, dialect, mode),
     };
   }
-  if (!mode.transaction) {
-    const needs = needsTransactionReason(statement, dialect);
-    if (needs !== undefined) {
-      return {
-        statement,
-        code: "NEEDS_TRANSACTION_IN_MIGRATION",
-        message: `${quoted(statement)} ${needs} It needs a transaction, and this ${mode.unit} runs outside one: ${inTransactionAdvice(mode.unit)}.`,
-      };
-    }
-    const pragma = foreignKeyPragmaOf(statement, dialect);
-    if (pragma !== undefined) {
-      return {
-        statement,
-        code: "SESSION_SETTING_IN_MIGRATION",
-        message: `${quoted(statement)} changes ${pragma}, which the runner sets for a ${mode.unit} that runs outside a transaction: it switches foreign-key enforcement off before the first statement, checks every reference after the last, and restores the setting afterwards. Remove it.`,
-      };
-    }
-  }
+  const outsideOnly = mode.transaction
+    ? undefined
+    : outsideTransactionRefusal(statement, dialect, mode.unit);
+  if (outsideOnly !== undefined) return outsideOnly;
   const setting = sessionSettingOf(statement, dialect);
   if (setting !== undefined) {
     return {
