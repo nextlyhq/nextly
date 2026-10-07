@@ -11,6 +11,7 @@
  * gives; everything under test runs after it.
  */
 import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -24,7 +25,9 @@ vi.mock("node:fs", async importOriginal => {
   return { ...actual, existsSync: vi.fn(actual.existsSync) };
 });
 
-const CONFIG_PATH = "/virtual/nextly.config.ts";
+// Resolved, as the loader resolves `configPath` against `cwd`: on Windows a
+// bare `/virtual/...` becomes `D:\virtual\...` and never matches.
+const CONFIG_PATH = resolve("/virtual/nextly.config.ts");
 
 /** A plugin a transformer adds: it contributes a collection. */
 const added = {
