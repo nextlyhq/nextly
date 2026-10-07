@@ -62,7 +62,10 @@ import { generateRuntimeSchema } from "../../domains/schema/services/runtime-sch
 // addMissingColumnsForFields is extracted to utils/missing-columns.ts.
 import { addMissingColumnsForFields } from "../../domains/schema/utils/missing-columns";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
-import { reconcileSingleTables } from "../../domains/singles/services/reconcile-single-tables";
+import {
+  reconcileSingleTables,
+  singleTableSources,
+} from "../../domains/singles/services/reconcile-single-tables";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError, immediateMessage } from "../../errors/index";
 import { getProductionNotifier } from "../../runtime/notifications/index";
@@ -1020,14 +1023,7 @@ export async function performSinglesReconcile(
   const reconciledSlugs: string[] = [];
 
   await reconcileSingleTables({
-    registeredSingles: async () => {
-      const records = await singleRegistry.getAllSingles();
-      return records.map(r => ({ slug: r.slug, tableName: r.tableName }));
-    },
-    existingTableNames: async () => {
-      const tables = await drizzleAdapter.listTables();
-      return new Set(tables);
-    },
+    ...singleTableSources(singleRegistry, () => drizzleAdapter.listTables()),
     createTable: async single => {
       // Prefer code-first config (source of truth) but fall back to the
       // registry's stored fields for UI-created singles.

@@ -8,6 +8,10 @@
  * @since 1.0.0
  */
 
+import {
+  activePostgresSchema,
+  DEFAULT_POSTGRES_SCHEMA,
+} from "../../domains/schema/services/postgres-schema";
 import { dialectFromUrl } from "../../shared/lib/env";
 
 import type { Logger } from "./logger";
@@ -37,6 +41,16 @@ export interface CreateCliAdapterOptions {
    * Logger instance for output
    */
   logger?: Logger;
+
+  /**
+   * The PostgreSQL schema this command should resolve in.
+   *
+   * Defaults to whatever `loadConfig` published, which is what every command
+   * that reads `nextly.config.ts` already has. Passed explicitly only by a
+   * caller that has no config — a test, or a command operating on a database
+   * named entirely on the command line.
+   */
+  schema?: string;
 }
 
 /**
@@ -176,7 +190,13 @@ export async function createCliAdapter(
     process.env.DB_DIALECT = dialect;
     process.env.DATABASE_URL = databaseUrl;
 
-    const adapter = await createAdapterFromEnv();
+    // The CONFIGURED schema, not the default. `migrate` applying DDL through
+    // `public` while the application it is migrating runs in `cms` splits the
+    // lock and the ledger and leaves the tables where nothing reads them.
+    const schema = options.schema ?? activePostgresSchema();
+    const adapter = await createAdapterFromEnv(
+      schema === DEFAULT_POSTGRES_SCHEMA ? undefined : { schema }
+    );
     return adapter;
   } finally {
     if (originalDialect !== undefined) {
