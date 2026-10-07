@@ -176,6 +176,21 @@ async function setUp(dialect: TestDialect, adapter: Adapter) {
   return { run, users };
 }
 
+/**
+ * Every column of `users` as Nextly declares it, by name: the static table of
+ * each dialect, read across all three because they declare one set. A column
+ * one dialect's declaration lost is then still expected of that dialect, and
+ * the live table is compared against the whole set rather than a sample.
+ */
+function declaredUsersColumns(): string[] {
+  const names = new Set<string>();
+  for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
+    const users = getCoreSchema(dialect).tables.find(t => t.name === "users");
+    for (const column of users?.columns ?? []) names.add(column.name);
+  }
+  return [...names].sort();
+}
+
 /** A timestamp literal each dialect's column takes. */
 function timestamp(dialect: TestDialect, iso: string): string {
   return dialect === "sqlite"
@@ -281,13 +296,10 @@ describeEachDialect(
         );
         expect((await run()).changed).toBe(true);
 
-        expect((await users())?.columns.map(c => c.name)).toEqual(
-          expect.arrayContaining([
-            "email_verified_via",
-            "password_updated_at",
-            "deactivated_at",
-            "nickname",
-          ])
+        // Exactly Nextly's declared columns plus the contribution: none lost
+        // to the push, none left over.
+        expect((await users())?.columns.map(c => c.name).sort()).toEqual(
+          [...declaredUsersColumns(), "nickname"].sort()
         );
         expect(await accountState(adapter, "u-link")).toEqual({
           via: "link",
