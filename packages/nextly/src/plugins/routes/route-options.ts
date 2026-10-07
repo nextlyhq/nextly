@@ -26,7 +26,7 @@ import {
 import { ipv6PrefixHex } from "../../auth/session/refresh-binding";
 import { isReadOperation } from "../../middleware/rate-limit";
 
-import type { PluginRoute } from "./route-types";
+import type { PluginRoute, RouteMethod } from "./route-types";
 
 /** How a caller proved who they are, which decides whether CSRF applies. */
 export type CallerCredential = "cookie" | "bearer" | "none";
@@ -208,8 +208,26 @@ function isRouteAllowance(value: unknown): boolean {
   );
 }
 
+/** Every method a route can declare; keyed so a new one must be added here. */
+const ROUTE_METHODS: Record<RouteMethod, true> = {
+  GET: true,
+  POST: true,
+  PATCH: true,
+  PUT: true,
+  DELETE: true,
+};
+
 /** Why a route's declared options are invalid, or null when they are fine. */
 export function validateRouteOptions(route: PluginRoute): string | null {
+  // As with `rateLimit` below, the union binds only TypeScript: a JavaScript
+  // plugin's `"post"` would be registered under that literal, and requests,
+  // whose methods are uppercase and matched exactly, would never reach it.
+  if (
+    typeof route.method !== "string" ||
+    !Object.hasOwn(ROUTE_METHODS, route.method)
+  ) {
+    return `method must be one of ${Object.keys(ROUTE_METHODS).join(", ")}, not ${JSON.stringify(route.method)}`;
+  }
   if (route.rawBody === true && !isUnsafeMethod(route.method)) {
     return `rawBody is only meaningful on a method with a body, not ${route.method}`;
   }
