@@ -62,6 +62,7 @@ import { pluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plug
 import {
   pluginMigrationSetsFrom,
   runPluginMigrations,
+  type PluginMigrationRunResult,
   type PluginMigrationSet,
 } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
@@ -349,7 +350,7 @@ export async function runMigrate(
         config: configResult.config,
         logger: { warn: m => logger.warn(m) },
       });
-      const { applied, metadata } = await migrateCore({
+      const { applied, pluginModulesApplied, metadata } = await migrateCore({
         extensionSchema,
         dialect,
         db,
@@ -391,12 +392,15 @@ export async function runMigrate(
        */
       reportMetadataOutcome(metadata, logger);
 
+      // Both streams count: a run that executed only plugin modules did
+      // migrate, and saying "nothing to migrate" after it is untrue.
+      const ran = applied + pluginModulesApplied;
       logger.success(
-        applied === 0
+        ran === 0
           ? metadata.stillPending > 0 || metadata.unreadable.length > 0
             ? "No migration files to apply."
             : "Nothing to migrate. Database is up to date."
-          : `${formatCount(applied, "migration")} applied.`
+          : `${formatCount(ran, "migration")} applied.`
       );
     } catch (err) {
       logger.error(describeError(err));
@@ -532,6 +536,12 @@ export interface MigrateCoreDeps {
 
 export interface MigrateCoreResult {
   applied: number;
+  /**
+   * Plugin migration modules this run executed. Kept apart from `applied`,
+   * which counts the app's migration files, so "nothing to migrate" is said
+   * only when neither stream ran anything.
+   */
+  pluginModulesApplied: number;
   coreChanged: boolean;
   /**
    * Whether the migration body actually RAN.
@@ -768,9 +778,11 @@ async function retireElementOwners(deps: MigrateCoreDeps): Promise<void> {
  * and stops Phase 2: later migrations assume a database state that was never
  * reached.
  */
-export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
+export async function runPluginPhase(
+  deps: MigrateCoreDeps
+): Promise<PluginMigrationRunResult> {
   if (!deps.pluginMigrationSets || deps.pluginMigrationSets.length === 0) {
-    return;
+    return { applied: 0, adopted: 0, skipped: 0 };
   }
   deps.logger.info("Phase 1.5: applying plugin migrations...");
   const dz = deps.adapter as unknown as DrizzleAdapter;
@@ -924,6 +936,7 @@ export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
       `Plugin migrations: ${pluginOutcome.applied} applied, ${pluginOutcome.adopted} adopted, ${pluginOutcome.skipped} already recorded.`
     );
   }
+  return pluginOutcome;
 }
 
 /**
@@ -1071,6 +1084,7 @@ export async function migrateCore(
     deps.reconcileMetadataFn ?? reconcileMigrationMetadata;
   const lock = deps.withLock ?? withMigrateLock;
   let applied = 0;
+  let pluginModulesApplied = 0;
   let coreChanged = false;
   let metadata = {
     collectionsRegistered: 0,
@@ -1162,7 +1176,7 @@ export async function migrateCore(
       coreChanged = r.changed;
 
       await recordAppTableOwners(deps);
-      await runPluginPhase(deps);
+      pluginModulesApplied = (await runPluginPhase(deps)).applied;
 
       deps.logger.info("Phase 2: applying user migrations...");
       applied = await runFiles({
@@ -1234,7 +1248,13 @@ export async function migrateCore(
     }
   );
 
-  return { applied, coreChanged, ran: outcome.ran, metadata };
+  return {
+    applied,
+    pluginModulesApplied,
+    coreChanged,
+    ran: outcome.ran,
+    metadata,
+  };
 }
 
 /**
