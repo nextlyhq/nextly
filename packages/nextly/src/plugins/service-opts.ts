@@ -1,3 +1,5 @@
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { effectiveCallerScope, runWithCallerScope } from "../auth/caller-scope";
 import { buildUserContext } from "../auth/user-context";
@@ -13,6 +15,8 @@ import type {
 import { listRoleSlugsForUserOrRefuse } from "../services/lib/permissions";
 import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
+
+import { methodFacade } from "./service-facade";
 
 /**
  * @public Elevation options for the managed `ctx.services` path.
@@ -368,24 +372,118 @@ type PluginWriteMethod<K extends WriteMethod> =
     : never;
 
 /**
+ * The collection-service methods a plugin receives. Everything else on the
+ * service (its adapter, its Drizzle handle, its sub-services, the schema
+ * registry's mutators) is not reachable through `ctx.services.collections`.
+ */
+const PLUGIN_COLLECTION_METHODS = [
+  "createCollection",
+  "listCollections",
+  "getCollection",
+  "updateCollection",
+  "deleteCollection",
+  "createEntry",
+  "createMany",
+  "updateMany",
+  "listEntries",
+  "count",
+  "findEntryById",
+  "updateEntry",
+  "deleteEntry",
+  "warmLocalizedReadiness",
+  "withTransaction",
+  "createEntryInTransaction",
+  "updateEntryInTransaction",
+  "deleteEntryInTransaction",
+] as const satisfies readonly (keyof CollectionService)[];
+
+/** The methods that take the transaction `withTransaction` opened. */
+type InTransactionMethod =
+  | "createEntryInTransaction"
+  | "updateEntryInTransaction"
+  | "deleteEntryInTransaction";
+
+declare const pluginTransactionBrand: unique symbol;
+
+/**
+ * @experimental The transaction `ctx.services.collections.withTransaction`
+ * hands its work: a token to pass to the `*InTransaction` methods, and
+ * nothing else. The adapter's transaction it stands for carries `execute`,
+ * raw SQL on the transaction's connection, which a plugin holds only with
+ * `capabilities.db.rawSql`, through `ctx.db.raw`.
+ */
+export interface PluginCollectionTransaction {
+  readonly [pluginTransactionBrand]: "PluginCollectionTransaction";
+}
+
+/** Replace a method's leading `TransactionContext` with the plugin's token. */
+type ReplaceLeadingTransaction<F> = F extends (
+  tx: TransactionContext,
+  ...rest: infer A
+) => infer R
+  ? (tx: PluginCollectionTransaction, ...rest: A) => R
+  : never;
+
+/**
  * @public Plugin-facing collection service.
  *
  * Access methods take `ServiceOpts` in place of a `RequestContext`, and the
  * writes resolve to the same `{ message, item, warnings? }` envelope the Direct
  * API and the wire API return. Returning the bare row left a plugin unable to
  * see a post-commit hook failure that every other caller of the same write is
- * told about.
+ * told about. Only the methods meant for plugins are present; a transaction
+ * reaches the plugin as a `PluginCollectionTransaction` token.
  */
-export type PluginCollectionService = Omit<
+export type PluginCollectionService = Pick<
   CollectionService,
-  AccessMethod | WriteMethod
+  Exclude<
+    (typeof PLUGIN_COLLECTION_METHODS)[number],
+    AccessMethod | WriteMethod | InTransactionMethod | "withTransaction"
+  >
 > & {
   [K in Exclude<AccessMethod, WriteMethod>]: ReplaceTrailingContext<
     CollectionService[K]
   >;
 } & {
   [K in WriteMethod]: PluginWriteMethod<K>;
+} & {
+  [K in InTransactionMethod]: ReplaceLeadingTransaction<CollectionService[K]>;
+} & {
+  withTransaction<T>(
+    work: (tx: PluginCollectionTransaction) => Promise<T>
+  ): Promise<T>;
 };
+
+/**
+ * The adapter transaction behind each token `withTransaction` handed out.
+ * Weak, so a token outliving its transaction holds nothing.
+ */
+const pluginTransactions = new WeakMap<object, TransactionContext>();
+
+/**
+ * The adapter transaction a plugin's token stands for, or a refusal when the
+ * value is not one `withTransaction` handed out.
+ */
+function transactionOf(token: unknown): TransactionContext {
+  const tx =
+    typeof token === "object" && token !== null
+      ? pluginTransactions.get(token)
+      : undefined;
+  if (tx === undefined) {
+    throw NextlyError.validation({
+      logContext: { reason: "plugin-transaction-token-unknown" },
+      errors: [
+        {
+          path: "tx",
+          code: "INVALID",
+          message:
+            "Pass the transaction ctx.services.collections.withTransaction handed your work.",
+        },
+      ],
+    });
+  }
+  return tx;
+}
 
 /**
  * Wrap the collection facade so its access methods accept a trailing `ServiceOpts`
@@ -398,6 +496,42 @@ export function wrapCollectionsForPlugin(
   collections: CollectionService,
   deps: ServiceOptsDeps = REAL_DEPS
 ): PluginCollectionService {
+  const translated = translateServiceOpts(collections, deps);
+  const facade = methodFacade(translated, PLUGIN_COLLECTION_METHODS);
+  // The transaction a plugin's work receives is a token, mapped back to the
+  // adapter's transaction where a method needs it. Async, so an unknown token
+  // is a rejection like every other failure of these methods.
+  const inTransaction =
+    (method: InTransactionMethod) =>
+    async (token: unknown, ...rest: unknown[]): Promise<unknown> =>
+      (facade[method] as (...args: unknown[]) => Promise<unknown>)(
+        transactionOf(token),
+        ...rest
+      );
+  return Object.freeze({
+    ...facade,
+    withTransaction: <T>(
+      work: (tx: PluginCollectionTransaction) => Promise<T>
+    ): Promise<T> =>
+      facade.withTransaction(tx => {
+        const token = Object.freeze({}) as PluginCollectionTransaction;
+        pluginTransactions.set(token, tx);
+        return work(token);
+      }),
+    createEntryInTransaction: inTransaction("createEntryInTransaction"),
+    updateEntryInTransaction: inTransaction("updateEntryInTransaction"),
+    deleteEntryInTransaction: inTransaction("deleteEntryInTransaction"),
+  }) as unknown as PluginCollectionService;
+}
+
+/**
+ * The collection service with its access methods accepting a trailing
+ * `ServiceOpts`, and its writes resolving to the mutation envelope.
+ */
+function translateServiceOpts(
+  collections: CollectionService,
+  deps: ServiceOptsDeps
+): CollectionService {
   return new Proxy(collections, {
     get(target, prop, receiver) {
       const orig = Reflect.get(target, prop, receiver) as unknown;
@@ -455,5 +589,5 @@ export function wrapCollectionsForPlugin(
         };
       };
     },
-  }) as unknown as PluginCollectionService;
+  });
 }

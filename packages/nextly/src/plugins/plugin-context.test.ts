@@ -326,11 +326,11 @@ describe("createPluginContext (P1 reshape)", () => {
 
   it("keeps the services shape; collections is ServiceOpts-wrapped", () => {
     const { ctx, collections, email } = makeCtx();
-    // D35: collections is wrapped for ServiceOpts elevation — a distinct Proxy
-    // that delegates to the raw service, no longer the raw instance itself.
+    // D35: collections is wrapped for ServiceOpts elevation, and every core
+    // service reaches the plugin as a facade of its plugin methods rather
+    // than the instance, which carries the adapter its methods run on.
     expect(ctx.services.collections).not.toBe(collections);
-    // The shape and the non-collection services are unchanged.
-    expect(ctx.services.email).toBe(email);
+    expect(ctx.services.email).not.toBe(email);
     // Pinned as an exact list rather than a set of `toHaveProperty` checks:
     // this surface is public API, so a member ARRIVING is as much a change as
     // one going, and only an exhaustive comparison catches the first.

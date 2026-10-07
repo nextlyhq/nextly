@@ -77,6 +77,7 @@ import type { PluginSinglesService } from "./plugin-singles";
 import { isInPluginNamespace } from "./plugin-slug";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
+import { methodFacade } from "./service-facade";
 import {
   wrapCollectionsForPlugin,
   type PluginCollectionService,
@@ -332,6 +333,90 @@ export interface PluginActionRegistry {
  * });
  * ```
  */
+/**
+ * The methods of each core service a plugin receives at `ctx.services`. A
+ * service instance carries the adapter and Drizzle handle its methods run on,
+ * so a plugin is handed a facade of these methods (`methodFacade`) and
+ * nothing else.
+ */
+const PLUGIN_USER_METHODS = [
+  "create",
+  "findById",
+  "listUsersByIds",
+  "findByEmail",
+  "listUsers",
+  "update",
+  "delete",
+  "authenticate",
+  "changePassword",
+  "hasPassword",
+  "updateProfile",
+] as const satisfies readonly (keyof UserService)[];
+
+const PLUGIN_MEDIA_METHODS = [
+  "upload",
+  "findById",
+  "listMedia",
+  "update",
+  "delete",
+  "bulkUpload",
+  "bulkDelete",
+  "moveToFolder",
+  "getStorageType",
+  "hasStorage",
+  "createFolder",
+  "findFolderById",
+  "listRootFolders",
+  "listSubfolders",
+  "getFolderContents",
+  "updateFolder",
+  "deleteFolder",
+  "isImage",
+  "validateImage",
+  "getImageDimensions",
+] as const satisfies readonly (keyof MediaService)[];
+
+const PLUGIN_EMAIL_METHODS = [
+  "send",
+  "sendWithTemplate",
+  "sendPasswordResetEmail",
+  "sendEmailVerificationEmail",
+  "sendWelcomeEmail",
+  "isConfigured",
+  "canSendTemplate",
+] as const satisfies readonly (keyof EmailService)[];
+
+const PLUGIN_VERSIONS_METHODS = [
+  "list",
+  "get",
+  "setLabel",
+  "deleteWorkingDraft",
+  "autosave",
+  "getAutosave",
+  "pendingEditRows",
+] as const satisfies readonly (keyof VersionsService)[];
+
+/** @experimental `ctx.services.users`: the plugin view of the user service. */
+export type PluginUserService = Pick<
+  UserService,
+  (typeof PLUGIN_USER_METHODS)[number]
+>;
+/** @experimental `ctx.services.media`. */
+export type PluginMediaService = Pick<
+  MediaService,
+  (typeof PLUGIN_MEDIA_METHODS)[number]
+>;
+/** @experimental `ctx.services.email`. */
+export type PluginEmailService = Pick<
+  EmailService,
+  (typeof PLUGIN_EMAIL_METHODS)[number]
+>;
+/** @experimental `ctx.services.versions`. */
+export type PluginVersionsService = Pick<
+  VersionsService,
+  (typeof PLUGIN_VERSIONS_METHODS)[number]
+>;
+
 export interface PluginContext {
   /**
    * @public Core services with full TypeScript autocomplete — the managed,
@@ -359,16 +444,16 @@ export interface PluginContext {
      * are refused with `NextlyError` code `FORBIDDEN`. An
      * address a plugin vouches for is recorded as verified by `"plugin"`.
      */
-    users: UserService;
+    users: PluginUserService;
     /** Media service for file operations */
-    media: MediaService;
+    media: PluginMediaService;
     /** Email service for sending emails via templates and providers */
-    email: EmailService;
+    email: PluginEmailService;
     /**
      * @experimental Read-only content version history (list/get). Restore and
      * diff arrive in later stages.
      */
-    versions: VersionsService;
+    versions: PluginVersionsService;
     /**
      * @experimental Read-only registry access to the app's Singles: which are
      * declared, and what fields they have.
@@ -1691,16 +1776,19 @@ export function createPluginContext(
       // access like `versions` below, so a context built by a caller that
       // never manages users asks nothing of the service it was handed.
       get users() {
-        return userService.forPlugins();
+        return methodFacade(userService.forPlugins(), PLUGIN_USER_METHODS);
       },
-      media: mediaService,
-      email: emailService,
+      media: methodFacade(mediaService, PLUGIN_MEDIA_METHODS),
+      email: methodFacade(emailService, PLUGIN_EMAIL_METHODS),
       // Resolved on access, not at construction: `createPluginContext` is
       // exported, and a resolver written before this service existed would
       // otherwise throw while building the context for callers that never
       // touch version history.
       get versions() {
-        return getServiceFn("versionsService");
+        return methodFacade(
+          getServiceFn("versionsService"),
+          PLUGIN_VERSIONS_METHODS
+        );
       },
       // Lazy for the same reason as `versions` directly above: this module is
       // exported, so a context built by a caller that never asks about Singles
