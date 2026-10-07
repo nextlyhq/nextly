@@ -40,12 +40,12 @@ export async function readJsonBody<T = unknown>(
 }
 
 /**
- * Read a JSON body, refusing anything past `maxBytes` WITHOUT buffering it.
+ * Read a body's bytes, refusing anything past `maxBytes` WITHOUT buffering it.
  *
- * `req.json()` buffers the whole body before anything can look at it, so a
- * quota checked on the parsed result has already paid for the memory and the
- * parse it exists to prevent — an authenticated caller can send a body far past
- * the advertised limit and be refused only after the cost is sunk.
+ * `req.arrayBuffer()` and `req.json()` buffer the whole body before anything
+ * can look at it, so a quota checked afterwards has already paid for the
+ * memory it exists to prevent — a caller can send a body far past the limit
+ * and be refused only after the cost is sunk.
  *
  * This reads the stream in chunks and stops at the first one that crosses the
  * cap, so the work is bounded by the cap rather than by what the caller sent.
@@ -56,15 +56,14 @@ export async function readJsonBody<T = unknown>(
  * honest enough to declare an oversized body; the running count is what
  * actually enforces.
  *
- * Refuses with the same `invalid_json` contract shape as {@link readJsonBody},
- * under a distinct `too_large` code so a client can tell "unreadable" from
- * "too big".
+ * Refuses with `VALIDATION_ERROR`, field code `too_large` and log reason
+ * `body-too-large`. Returns undefined when the request exposes no stream.
  */
-export async function readBoundedJsonBody<T = unknown>(
+export async function readBoundedBytes(
   req: Request,
   maxBytes: number,
   extraLogContext?: Record<string, unknown>
-): Promise<T> {
+): Promise<Uint8Array<ArrayBuffer> | undefined> {
   const tooLarge = (): never => {
     throw new NextlyError({
       code: "VALIDATION_ERROR",
@@ -86,10 +85,7 @@ export async function readBoundedJsonBody<T = unknown>(
   if (Number.isFinite(declared) && declared > maxBytes) tooLarge();
 
   const body = req.body;
-  // No stream to bound — an empty body, or a runtime that does not expose one.
-  // Falling back keeps this correct rather than refusing a legal request; the
-  // parse below still runs, and the caller's own quotas still apply.
-  if (!body) return readJsonBody<T>(req, extraLogContext);
+  if (!body) return undefined;
 
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
@@ -126,6 +122,27 @@ export async function readBoundedJsonBody<T = unknown>(
     merged.set(chunk, offset);
     offset += chunk.byteLength;
   }
+  return merged;
+}
+
+/**
+ * Read a JSON body, refusing anything past `maxBytes` WITHOUT buffering it
+ * (`readBoundedBytes`).
+ *
+ * Refuses with the same `invalid_json` contract shape as {@link readJsonBody},
+ * under a distinct `too_large` code so a client can tell "unreadable" from
+ * "too big".
+ */
+export async function readBoundedJsonBody<T = unknown>(
+  req: Request,
+  maxBytes: number,
+  extraLogContext?: Record<string, unknown>
+): Promise<T> {
+  const merged = await readBoundedBytes(req, maxBytes, extraLogContext);
+  // No stream to bound — an empty body, or a runtime that does not expose one.
+  // Falling back keeps this correct rather than refusing a legal request; the
+  // parse below still runs, and the caller's own quotas still apply.
+  if (merged === undefined) return readJsonBody<T>(req, extraLogContext);
 
   try {
     return JSON.parse(new TextDecoder().decode(merged)) as T;

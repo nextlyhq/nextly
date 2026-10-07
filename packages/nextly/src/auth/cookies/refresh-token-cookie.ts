@@ -4,6 +4,9 @@
  * Scoped to core's auth endpoints (`COOKIE_PATHS.refreshToken`): `/refresh`
  * rotates it and `/logout` deletes its row.
  */
+import { readBoundedBytes } from "../../api/read-json-body";
+import { MAX_CSRF_BODY_BYTES } from "../csrf/read-csrf-body";
+
 import {
   COOKIE_NAMES,
   COOKIE_PATHS,
@@ -66,6 +69,12 @@ export function readRefreshTokenCookie(request: Request): string | null {
  * copy is a plain `Request`, without what a subclass such as `NextRequest`
  * adds, and an unread body is read into memory to carry it over. A request
  * without the cookie is returned as is.
+ *
+ * That read happens before the request is authenticated or rate limited, so
+ * it stops at {@link MAX_CSRF_BODY_BYTES}, the cap the route dispatcher's
+ * `csrf` option reads a body under, and refuses past it with the same error
+ * (`readBoundedBytes`: `VALIDATION_ERROR`, `too_large`). A caller about to be
+ * refused cannot decide how much memory the refusal costs.
  */
 export async function withoutRefreshCookie(request: Request): Promise<Request> {
   const header = request.headers.get("cookie");
@@ -84,7 +93,7 @@ export async function withoutRefreshCookie(request: Request): Promise<Request> {
   const body =
     request.bodyUsed || request.body === null
       ? undefined
-      : await request.clone().arrayBuffer();
+      : await readBoundedBytes(request.clone(), MAX_CSRF_BODY_BYTES);
   return new Request(request.url, {
     method: request.method,
     headers,
