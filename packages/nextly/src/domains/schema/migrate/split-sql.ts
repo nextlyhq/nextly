@@ -186,17 +186,17 @@ function leadingWords(
  * - `bracket`: it opens or closes one — `BEGIN` (with any modifiers:
  *   SQLite's `DEFERRED`/`IMMEDIATE`/`EXCLUSIVE`, PostgreSQL's isolation and
  *   access modes, `WORK`/`TRANSACTION`), `START TRANSACTION` (with any
- *   characteristics), `COMMIT`, `END`. Every migration runs inside the
- *   runner's own transaction, so a file's own brackets are left out: a
- *   COMMIT would end the runner's transaction early, and a BEGIN inside it
- *   fails on SQLite.
+ *   characteristics), `COMMIT`, `END`. A unit that runs inside the runner's
+ *   own transaction has its brackets left out: a COMMIT would end the
+ *   runner's transaction early, and a BEGIN inside it fails on SQLite.
  * - `refused`: it would undo or hand off the runner's transaction —
  *   `ROLLBACK`/`ABORT`, `COMMIT PREPARED`, `PREPARE TRANSACTION`, MySQL's
  *   `XA`. Leaving it out would change what the file does, and running it
  *   would roll back work the runner then records.
- * - A savepoint is neither: `SAVEPOINT`, `RELEASE [SAVEPOINT]` and
- *   `ROLLBACK [WORK | TRANSACTION] TO [SAVEPOINT]` work inside the runner's
- *   transaction and undo at most part of the file, so they run as written.
+ * - `savepoint`: `SAVEPOINT`, `RELEASE [SAVEPOINT]` and
+ *   `ROLLBACK [WORK | TRANSACTION] TO [SAVEPOINT]`. They work inside the
+ *   runner's transaction and undo at most part of the unit, so there they
+ *   run as written.
  *
  * Read from the statement's leading keywords only. A `BEGIN` or `END` inside
  * a PostgreSQL `DO` or function body is inside a dollar-quoted segment and
@@ -205,7 +205,7 @@ function leadingWords(
 export function transactionControlOf(
   statement: string,
   dialect?: SupportedDialect
-): "bracket" | "refused" | null {
+): "bracket" | "refused" | "savepoint" | null {
   const [first, second, third] = leadingWords(statement, dialect, 3);
   switch (first) {
     case "BEGIN":
@@ -221,11 +221,11 @@ export function transactionControlOf(
       // without the optional word, ends that transaction.
       const next =
         second === "WORK" || second === "TRANSACTION" ? third : second;
-      return next === "TO" ? null : "refused";
+      return next === "TO" ? "savepoint" : "refused";
     }
     case "SAVEPOINT":
     case "RELEASE":
-      return null;
+      return "savepoint";
     case "ABORT":
     case "XA":
       return "refused";
@@ -244,15 +244,18 @@ export function transactionControlOf(
  * at boot, the application's own pool — so a session setting a migration
  * makes stays on that connection for whatever it serves next:
  * `SET FOREIGN_KEY_CHECKS = 0` leaves foreign keys unchecked for unrelated
- * requests. Transaction-scoped forms are allowed: PostgreSQL's `SET LOCAL`,
- * `SET CONSTRAINTS` and `SET TRANSACTION`, and MySQL user variables
- * (`SET @x = ...`), which only code that reads them sees. MySQL's
+ * requests. Transaction-scoped forms are not session settings: PostgreSQL's
+ * `SET LOCAL`, `SET CONSTRAINTS` and `SET TRANSACTION`, which a unit run
+ * outside a transaction may not hold (`needsTransactionReason`), and MySQL
+ * user variables (`SET @x = ...`), which only code that reads them sees. MySQL's
  * `SET TRANSACTION` configures the connection's NEXT transaction, so it is
  * refused with the rest.
  *
  * SQLite runs on the process's one connection, and its `PRAGMA`s are not
- * judged here: the setting that matters, `foreign_keys`, cannot change inside
- * a transaction, which is where every migration runs.
+ * judged here. The one that matters, `foreign_keys`, cannot change inside a
+ * transaction, so a unit that runs in one cannot change it; a unit that runs
+ * outside one may not write it (`foreignKeyPragmaOf`), because the runner
+ * switches enforcement off around that unit and restores it afterwards.
  */
 function sessionSettingOf(
   statement: string,
@@ -284,6 +287,69 @@ function sessionSettingOf(
     return setting ?? first;
   }
   return undefined;
+}
+
+/**
+ * Why a statement needs the transaction that a unit run outside one does
+ * not have, or undefined when it needs none.
+ *
+ * - The unit's own `BEGIN`, `START TRANSACTION`, `COMMIT` and `END`: in a
+ *   unit run outside a transaction each statement commits as it runs, so a
+ *   COMMIT has nothing to end, and a BEGIN would open a transaction that
+ *   holds every later statement and that the runner never ends.
+ * - Savepoints: PostgreSQL refuses one outside a transaction block, SQLite
+ *   opens a transaction for one that the runner never ends, and MySQL, with
+ *   each statement committed as it runs, keeps nothing to return to.
+ * - PostgreSQL's `SET LOCAL`, `SET CONSTRAINTS` and `SET TRANSACTION`: each
+ *   lasts until the transaction ends, and outside one PostgreSQL warns and
+ *   ignores it, so the statements after it run without the setting the
+ *   author wrote it for.
+ */
+function needsTransactionReason(
+  statement: string,
+  dialect: SupportedDialect | undefined
+): string | undefined {
+  const control = transactionControlOf(statement, dialect);
+  if (control === "bracket") {
+    return "opens or ends a transaction, and each statement of a unit run outside one commits as it runs.";
+  }
+  if (control === "savepoint") {
+    return "marks or returns to a savepoint, which exists only inside a transaction.";
+  }
+  if (dialect !== "postgresql") return undefined;
+  const [first, second] = leadingWords(statement, dialect, 2);
+  return first === "SET" &&
+    (second === "LOCAL" || second === "CONSTRAINTS" || second === "TRANSACTION")
+    ? "lasts only until the transaction ends, and outside one PostgreSQL ignores it."
+    : undefined;
+}
+
+/** How the author moves a statement into a unit that runs in a transaction. */
+function inTransactionAdvice(unit: MigrationRunMode["unit"]): string {
+  return unit === "module"
+    ? "move it to a module without `transaction: false`, which runs in one"
+    : `move it to a file without \`${NO_TRANSACTION_MARKER}\` as its first line, which runs in one`;
+}
+
+/**
+ * The SQLite foreign-key pragma a statement writes, or undefined when it
+ * writes none: `PRAGMA [schema.]foreign_keys = ...` or
+ * `PRAGMA [schema.]defer_foreign_keys = ...`, either spelling of the
+ * assignment. Reading one (`PRAGMA foreign_keys`) changes nothing.
+ */
+function foreignKeyPragmaOf(
+  statement: string,
+  dialect: SupportedDialect | undefined
+): string | undefined {
+  if (dialect !== "sqlite") return undefined;
+  const [first, name, assignment] = leadingWords(statement, dialect, 3);
+  if (first !== "PRAGMA" || (assignment !== "=" && assignment !== "(")) {
+    return undefined;
+  }
+  const pragma = name?.slice(name.lastIndexOf(".") + 1);
+  return pragma === "FOREIGN_KEYS" || pragma === "DEFER_FOREIGN_KEYS"
+    ? pragma.toLowerCase()
+    : undefined;
 }
 
 /** A statement as a refusal quotes it: its first line, bounded. */
@@ -324,6 +390,7 @@ export interface StatementRefusal {
   statement: string;
   code:
     | "TRANSACTION_CONTROL_IN_MIGRATION"
+    | "NEEDS_TRANSACTION_IN_MIGRATION"
     | "SESSION_SETTING_IN_MIGRATION"
     | "NOT_TRANSACTIONAL_IN_MIGRATION";
   message: string;
@@ -357,6 +424,24 @@ function refusalOf(
       code: "TRANSACTION_CONTROL_IN_MIGRATION",
       message: transactionControlMessage(statement, dialect, mode),
     };
+  }
+  if (!mode.transaction) {
+    const needs = needsTransactionReason(statement, dialect);
+    if (needs !== undefined) {
+      return {
+        statement,
+        code: "NEEDS_TRANSACTION_IN_MIGRATION",
+        message: `${quoted(statement)} ${needs} It needs a transaction, and this ${mode.unit} runs outside one: ${inTransactionAdvice(mode.unit)}.`,
+      };
+    }
+    const pragma = foreignKeyPragmaOf(statement, dialect);
+    if (pragma !== undefined) {
+      return {
+        statement,
+        code: "SESSION_SETTING_IN_MIGRATION",
+        message: `${quoted(statement)} changes ${pragma}, which the runner sets for a ${mode.unit} that runs outside a transaction: it switches foreign-key enforcement off before the first statement, checks every reference after the last, and restores the setting afterwards. Remove it.`,
+      };
+    }
   }
   const setting = sessionSettingOf(statement, dialect);
   if (setting !== undefined) {
@@ -603,21 +688,31 @@ function insideRoutineBody(
  * comment, a PostgreSQL dollar-quoted body or a routine's or trigger's
  * `BEGIN ... END` body (`insideRoutineBody`) — so a `DO $$ ... ; ... $$`
  * block, a function body or a `CREATE TRIGGER ... BEGIN ...; END` reaches
- * the driver whole, and its `END` is never read as a transaction bracket. A fragment with nothing
- * but comments is dropped, and so is a file's own transaction bracket
- * (`transactionControlOf`). Everything else is kept as written, including
- * statements the runner will refuse: refusing is `statementRefusals`' job.
+ * the driver whole, and its `END` is never read as a transaction bracket.
+ * A fragment with nothing but comments is dropped, and so, in a unit that
+ * runs in the runner's transaction, is the unit's own transaction bracket
+ * (`transactionControlOf`). `mode` is how the unit runs: one that runs
+ * outside a transaction keeps its brackets, so `statementRefusals` names
+ * them rather than the split dropping them unseen. Everything else is kept
+ * as written, including statements the runner will refuse: refusing is
+ * `statementRefusals`' job.
  */
 export function splitSqlStatements(
   sql: string,
-  dialect?: SupportedDialect
+  dialect?: SupportedDialect,
+  mode: Pick<MigrationRunMode, "transaction"> = IN_TRANSACTION_FILE
 ): string[] {
   const cleaned = withoutMarkers(sql, dialect);
   const statements: string[] = [];
   const collect = (fragment: string): void => {
     const statement = fragment.trim();
     if (!hasExecutableText(statement, dialect)) return;
-    if (transactionControlOf(statement, dialect) === "bracket") return;
+    if (
+      mode.transaction &&
+      transactionControlOf(statement, dialect) === "bracket"
+    ) {
+      return;
+    }
     statements.push(statement);
   };
 

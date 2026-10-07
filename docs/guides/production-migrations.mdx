@@ -302,12 +302,14 @@ refusals without executing anything, and `migrate:check` warns about them.
 
 | Statement | What happens | Why |
 |---|---|---|
-| `BEGIN`, `START TRANSACTION`, `COMMIT`, `END` (with any modifiers, such as `BEGIN IMMEDIATE` or `START TRANSACTION READ WRITE`) | Left out; the rest of the file runs | The runner's own transaction already brackets the file. |
-| `SAVEPOINT`, `ROLLBACK [WORK \| TRANSACTION] TO [SAVEPOINT]`, `RELEASE [SAVEPOINT]` | Run as written | A savepoint works inside the runner's transaction and undoes at most part of the file. On MySQL a schema statement commits on its own and ends the savepoint with it, so keep savepoints to data statements there. |
+| `BEGIN`, `START TRANSACTION`, `COMMIT`, `END` (with any modifiers, such as `BEGIN IMMEDIATE` or `START TRANSACTION READ WRITE`) | Left out; the rest of the file runs. Refused in a no-transaction file | The runner's own transaction already brackets the file. |
+| `SAVEPOINT`, `ROLLBACK [WORK \| TRANSACTION] TO [SAVEPOINT]`, `RELEASE [SAVEPOINT]` | Run as written. Refused in a no-transaction file | A savepoint works inside the runner's transaction and undoes at most part of the file. On MySQL a schema statement commits on its own and ends the savepoint with it, so keep savepoints to data statements there. |
 | `ROLLBACK [WORK \| TRANSACTION]`, `ABORT`, `COMMIT PREPARED`, `PREPARE TRANSACTION`, `XA …` | File refused | Each one would undo or hand off the runner's transaction, which would then record work that did not happen. |
 | PostgreSQL `SET …` (except `SET LOCAL`, `SET CONSTRAINTS`, `SET TRANSACTION`), `RESET`, `DISCARD` | File refused | A session setting stays on the pooled connection after the migration. Use `SET LOCAL`, which ends with the transaction. |
 | MySQL `SET …` (except user variables, `SET @name = …`), including one inside `/*!…*/` | File refused | The same: `SET FOREIGN_KEY_CHECKS = 0` would stay on a pooled connection and switch checks off for whatever it serves next. Order the statements instead (create a table before the tables that reference it, drop it after them), or drop the foreign key and add it back within the migration. |
 | PostgreSQL `VACUUM`, `CREATE`/`DROP INDEX CONCURRENTLY`, `REINDEX … CONCURRENTLY`, `CREATE`/`DROP DATABASE`, `CREATE`/`DROP TABLESPACE`, `ALTER SYSTEM`; SQLite `VACUUM` | File refused, unless it is marked to run outside a transaction | The database cannot run them inside a transaction. Mark the file (`-- nextly:no-transaction` as its first line) or the module (`transaction: false`), and they run. |
+| In a no-transaction file: its own `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`; `SAVEPOINT`, `ROLLBACK … TO`, `RELEASE`; PostgreSQL `SET LOCAL`, `SET CONSTRAINTS`, `SET TRANSACTION` | Refused in a no-transaction file | Each one needs a transaction, and a no-transaction file has none: each statement commits as it runs. Outside one, PostgreSQL ignores `SET LOCAL` and refuses a savepoint, SQLite opens a transaction for a `BEGIN` or a savepoint that nothing ends, and a `COMMIT` has nothing to commit. Move the statement to a file without the marker, which runs in a transaction. |
+| In a no-transaction file on SQLite: `PRAGMA foreign_keys = …`, `PRAGMA defer_foreign_keys = …` | Refused in a no-transaction file | The runner switches foreign-key enforcement off for the file and restores it afterwards; see [foreign keys on SQLite](#foreign-keys-on-sqlite). Reading the setting (`PRAGMA foreign_keys`) is allowed. |
 | SQLite `ATTACH`, `DETACH` | File refused, marked or not | They change which databases the process's one connection sees, after the migration too. |
 | MySQL `LOCK TABLES`, `UNLOCK TABLES` (and the `INSTANCE` forms) | File refused, marked or not | They commit the migration's transaction implicitly, and the locks stay with the pooled connection. |
 
@@ -359,7 +361,11 @@ drop it before you retry.
 The marker does not lift every refusal. Session settings (`SET …`), a bare
 `ROLLBACK`, MySQL's `LOCK TABLES` and SQLite's `ATTACH`/`DETACH` are refused in
 a marked file too, because what they leave on the connection outlives the file.
-A file's own `BEGIN` and `COMMIT` are left out as in any other file.
+A marked file also may not hold what needs a transaction: its own `BEGIN`,
+`START TRANSACTION`, `COMMIT` or `END`, a savepoint, or PostgreSQL's
+`SET LOCAL`, `SET CONSTRAINTS` and `SET TRANSACTION`. The refusal names the
+statement; move it to a file without the marker. On SQLite a marked file may
+not write `PRAGMA foreign_keys` or `PRAGMA defer_foreign_keys` either.
 
 Marking a generated migration changes its contents, so `migrate:check` then
 reports `CHECKSUM_MISMATCH` for it; put statements that need the marker in a
@@ -373,6 +379,8 @@ A `DROP TABLE` inside such a body is judged like any other drop in the file: a
 body that drops a table another owner holds is refused. A PostgreSQL function
 body written as an ordinary single-quoted string (`AS 'DROP TABLE x'`) is not
 read; see [Known limits](#known-limits).
+
+### Foreign keys on SQLite
 
 **On SQLite, foreign-key enforcement is off while a file runs, and checked before
 it commits.** The runner sets `PRAGMA foreign_keys = OFF` before the transaction,

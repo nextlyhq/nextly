@@ -762,6 +762,126 @@ describe("a migration marked to run outside a transaction", () => {
     expect(refusal?.message).not.toContain("Use SET LOCAL");
     expect(refusal?.message).toContain("runs outside a transaction");
   });
+
+  // What only a transaction gives a statement: its own brackets, a
+  // savepoint, a setting that lasts until the transaction ends. Outside one
+  // each would do nothing, fail, or open a transaction nobody ends.
+  const needsTransaction = [
+    ...(["postgresql", "mysql", "sqlite"] as const).flatMap(dialect =>
+      [
+        "BEGIN",
+        "BEGIN IMMEDIATE",
+        "START TRANSACTION",
+        "COMMIT",
+        "END",
+        "SAVEPOINT s1",
+        "RELEASE SAVEPOINT s1",
+        "RELEASE s1",
+        "ROLLBACK TO s1",
+        "ROLLBACK WORK TO SAVEPOINT s1",
+        "ROLLBACK TRANSACTION TO s1",
+      ].map(statement => [dialect, statement] as const)
+    ),
+    ["postgresql", "SET LOCAL lock_timeout = '5s'"],
+    ["postgresql", "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"],
+    ["postgresql", "SET CONSTRAINTS ALL DEFERRED"],
+  ] as const;
+
+  it.each(needsTransaction)(
+    "refuses in a marked file on %s, as needing a transaction: %s",
+    (dialect, statement) => {
+      const [refusal, ...rest] = statementRefusals(
+        [statement],
+        dialect,
+        outside
+      );
+      expect(rest).toEqual([]);
+      expect(refusal?.code).toBe("NEEDS_TRANSACTION_IN_MIGRATION");
+      expect(refusal?.message).toContain(
+        "It needs a transaction, and this file runs outside one: move it to a file without `-- nextly:no-transaction` as its first line"
+      );
+      expect(() =>
+        assertRunnableStatements([statement], dialect, "0001_x.sql", outside)
+      ).toThrow(/0001_x\.sql was refused, and nothing in it ran/);
+    }
+  );
+
+  it.each(needsTransaction)(
+    "keeps allowing it in an unmarked file on %s: %s",
+    (dialect, statement) => {
+      // The control: a bracket is left out of an unmarked file by the split,
+      // and the rest run inside the runner's transaction.
+      expect(
+        statementRefusals(splitSqlStatements(statement, dialect), dialect)
+      ).toEqual([]);
+    }
+  );
+
+  it("names the module's field for a module marked transaction: false", () => {
+    const [refusal] = statementRefusals(["SAVEPOINT s1"], "postgresql", {
+      transaction: false,
+      unit: "module",
+    });
+    expect(refusal?.code).toBe("NEEDS_TRANSACTION_IN_MIGRATION");
+    expect(refusal?.message).toContain(
+      "this module runs outside one: move it to a module without `transaction: false`"
+    );
+  });
+
+  it.each(["postgresql", "mysql", "sqlite"] as const)(
+    "keeps a marked file's own BEGIN and COMMIT for the refusal on %s",
+    dialect => {
+      const sql =
+        "BEGIN;\nCREATE TABLE t (id int);\nCOMMIT;\nSTART TRANSACTION;\nEND;";
+      // Split as an unmarked file runs, the brackets are left out.
+      expect(splitSqlStatements(sql, dialect)).toEqual([
+        "CREATE TABLE t (id int)",
+      ]);
+      // Split as a marked file runs, they are kept, and each is refused.
+      const statements = splitSqlStatements(sql, dialect, {
+        transaction: false,
+      });
+      expect(statements).toEqual([
+        "BEGIN",
+        "CREATE TABLE t (id int)",
+        "COMMIT",
+        "START TRANSACTION",
+        "END",
+      ]);
+      expect(
+        statementRefusals(statements, dialect, outside).map(r => r.statement)
+      ).toEqual(["BEGIN", "COMMIT", "START TRANSACTION", "END"]);
+    }
+  );
+
+  it.each([
+    "PRAGMA foreign_keys = OFF",
+    "PRAGMA foreign_keys=ON",
+    "PRAGMA foreign_keys(0)",
+    "PRAGMA main.foreign_keys = OFF",
+    "PRAGMA defer_foreign_keys = ON",
+  ])(
+    "refuses a foreign-key pragma write in a marked SQLite file: %s",
+    statement => {
+      const [refusal] = statementRefusals([statement], "sqlite", outside);
+      expect(refusal?.code).toBe("SESSION_SETTING_IN_MIGRATION");
+      expect(refusal?.message).toContain(
+        "switches foreign-key enforcement off before the first statement"
+      );
+      // The control: inside the runner's transaction SQLite ignores it.
+      expect(statementRefusals([statement], "sqlite")).toEqual([]);
+    }
+  );
+
+  it("lets a marked SQLite file read the foreign-key setting", () => {
+    expect(
+      statementRefusals(
+        ["PRAGMA foreign_keys", "PRAGMA foreign_key_check"],
+        "sqlite",
+        outside
+      )
+    ).toEqual([]);
+  });
 });
 
 describe("executeTransaction", () => {

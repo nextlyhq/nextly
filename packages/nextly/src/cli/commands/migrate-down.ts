@@ -296,7 +296,7 @@ export async function migrateDownCore(
         filename,
         downSql,
         transaction: down.transaction,
-        statements: splitSqlStatements(downSql, deps.dialect),
+        statements: splitSqlStatements(downSql, deps.dialect, down),
       });
     } catch (unreadable) {
       planned.push({

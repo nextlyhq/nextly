@@ -197,6 +197,40 @@ describe.each(getConfiguredTestDialects())(
       expect(warnings.join("\n")).not.toContain("outside a transaction");
     });
 
+    it("refuses a marked file's own BEGIN and COMMIT, before anything runs", async () => {
+      writeMigration(
+        migrationsDir,
+        "20261001_000001_bracketed",
+        ["BEGIN", "INSERT INTO nt_marks (id) VALUES ('kept')", "COMMIT"],
+        true
+      );
+
+      await expect(migrate()).rejects.toThrow(
+        /20261001_000001_bracketed\.sql was refused, and nothing in it ran\. "BEGIN" opens or ends a transaction.*It needs a transaction, and this file runs outside one: move it to a file without `-- nextly:no-transaction` as its first line/
+      );
+
+      expect(await marks()).toEqual([]);
+      // Refused before the ledger records an attempt.
+      expect(await ledgerStatus("20261001_000001_bracketed.sql")).toEqual([]);
+    });
+
+    it("refuses a savepoint in a module marked transaction: false, before anything runs", async () => {
+      await expect(
+        migratePlugin([
+          module(
+            "0001_savepoint",
+            ["SAVEPOINT s1", "INSERT INTO nt_marks (id) VALUES ('kept')"],
+            false
+          ),
+        ])
+      ).rejects.toThrow(
+        /plugin:ntx\/0001_savepoint was refused, and nothing in it ran\. "SAVEPOINT s1" marks or returns to a savepoint.*move it to a module without `transaction: false`/
+      );
+
+      expect(await marks()).toEqual([]);
+      expect(await ledgerStatus("plugin:ntx/0001_savepoint")).toEqual([]);
+    });
+
     it("leaves what ran before the failing statement of a module marked transaction: false", async () => {
       const marked = module("0001_marks", FAILS_SECOND, false);
 

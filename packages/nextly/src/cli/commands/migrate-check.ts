@@ -492,7 +492,7 @@ export async function judgeStatements(
     const { upSql, downSql } = parseSqlSections(content);
     for (const sql of [upSql, downSql]) {
       for (const refusal of statementRefusals(
-        splitSqlStatements(sql, dialect),
+        splitSqlStatements(sql, dialect, { transaction }),
         dialect,
         { transaction, unit: "file" }
       )) {

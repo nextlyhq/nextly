@@ -200,17 +200,20 @@ export function migrationChecksum(content: MigrationContent): string {
  * put through `splitSqlStatements`, the splitter an app migration file goes
  * through. Each entry is split on its own: joined first, an entry ending in a
  * `-- comment` would swallow the separator after it and merge with the next.
+ * Split as the module runs, so a `transaction: false` module keeps a
+ * transaction bracket for the refusal to name.
  *
  * Every guard over a module reads this list, and every path that runs one —
  * the apply, `migrate:down --plugin`, `plugins uninstall` — runs it.
  */
 export function pluginModuleStatements(
-  migration: Pick<PluginMigration, "dialects">,
+  migration: Pick<PluginMigration, "dialects" | "transaction">,
   dialect: SupportedDialect,
   direction: keyof DialectStatements
 ): string[] {
+  const mode = { transaction: migration.transaction !== false };
   return (migration.dialects[dialect]?.[direction] ?? []).flatMap(entry =>
-    splitSqlStatements(entry, dialect)
+    splitSqlStatements(entry, dialect, mode)
   );
 }
 
@@ -222,7 +225,7 @@ export function pluginModuleStatements(
  * back exactly `pluginModuleStatements`.
  */
 export function moduleSql(
-  migration: Pick<PluginMigration, "dialects">,
+  migration: Pick<PluginMigration, "dialects" | "transaction">,
   dialect: SupportedDialect,
   direction: keyof DialectStatements
 ): string {
