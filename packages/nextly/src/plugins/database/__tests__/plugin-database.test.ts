@@ -509,6 +509,51 @@ describe("the surface ctx.db used to be", () => {
 });
 
 describe("transaction", () => {
+  it("refuses transaction on the handle it passes, opening nothing", async () => {
+    // `PluginTransaction` leaves `transaction` out of the type only. Called
+    // from JavaScript it would open a second transaction through the deps,
+    // which on PostgreSQL and MySQL is another pooled connection.
+    const opened = vi.fn();
+    const db = {
+      insert: () => ({ values: () => Promise.resolve() }),
+      update: () => ({ set: () => ({ where: () => Promise.resolve({}) }) }),
+      delete: () => ({ where: () => Promise.resolve({}) }),
+    };
+    const surface = createPluginDatabase({
+      dialect: "postgresql",
+      owner: OWNER,
+      dependsOn: new Set(),
+      owners: () => new Map([["fx__notes", OWNER]]),
+      tables: () => ({ fx__notes: { name: "fx__notes" } }),
+      tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
+      db: () => db,
+      relationalDb: () => db,
+      transaction: fn => {
+        opened();
+        return fn({ db, relationalDb: db });
+      },
+    });
+    const nestedWork = vi.fn();
+
+    const caught = await surface
+      .transaction(tx =>
+        (tx as unknown as typeof surface).transaction(async () => {
+          nestedWork();
+        })
+      )
+      .catch((error: unknown) => error);
+
+    expect(caught).toBeInstanceOf(NextlyError);
+    expect((caught as NextlyError).logContext).toMatchObject({
+      reason: "nested-plugin-transaction",
+    });
+    expect((caught as NextlyError).publicMessage).toContain(
+      "Do the nested work in the same callback"
+    );
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(nestedWork).not.toHaveBeenCalled();
+  });
+
   it("runs the callback against a surface bound to the transaction handle", async () => {
     const { surface, inserted } = harness();
     await surface.transaction(async tx => {
