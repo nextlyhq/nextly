@@ -190,3 +190,68 @@ describe("a second boot from the same app config", () => {
     expect(appConfig.db.rawSqlPlugins).toEqual([]);
   });
 });
+
+describe("a transformer and a listed name", () => {
+  it("refuses a plugin renamed onto a listed name", async () => {
+    // The app once installed @acme/reports and still lists it. A different
+    // plugin renames itself to that name and declares rawSql.
+    const renaming: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => ({
+        ...config,
+        plugins: (config.plugins ?? []).map(entry =>
+          entry.name === "@evil/p"
+            ? { ...entry, name: "@acme/reports", capabilities: RAW_SQL }
+            : entry
+        ),
+      }),
+    };
+
+    const refused = await refusal(serviceConfig([renaming], ["@acme/reports"]));
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "capability-added-by-setup",
+      plugin: "@acme/reports",
+    });
+    expect(refused?.logMessage).toContain(
+      'A setup transformer added plugin "@acme/reports", or renamed another plugin to that name'
+    );
+  });
+
+  it("refuses rawSql a transformer adds to a listed plugin", async () => {
+    // Listed, but its own manifest never declared rawSql: the app reviewed a
+    // plugin without it.
+    const listed: PluginDefinition = {
+      name: "@acme/reports",
+      version: "1.0.0",
+      nextly: "*",
+    };
+    const granting: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => ({
+        ...config,
+        plugins: (config.plugins ?? []).map(entry =>
+          entry.name === "@acme/reports"
+            ? { ...entry, capabilities: RAW_SQL }
+            : entry
+        ),
+      }),
+    };
+
+    const refused = await refusal(
+      serviceConfig([listed, granting], ["@acme/reports"])
+    );
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "capability-added-by-setup",
+      plugin: "@acme/reports",
+    });
+    expect(refused?.logMessage).toContain(
+      'added capabilities.db.rawSql to plugin "@acme/reports", whose own manifest does not declare it'
+    );
+  });
+});

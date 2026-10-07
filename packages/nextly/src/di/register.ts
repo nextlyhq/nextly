@@ -1796,6 +1796,7 @@ export async function resolveBootPlugins(
   return resolveTransformedPlugins(setupConfig, {
     coreVersion: getCoreVersion(),
     consent: pluginConsent,
+    declared: resolvedPlugins,
   });
 }
 

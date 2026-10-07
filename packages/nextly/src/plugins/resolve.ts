@@ -7,6 +7,7 @@ import { isReservedEventName } from "../events/event-bus";
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
 import {
+  assertConsentDeclaredBeforeSetup,
   assertPluginConsent,
   NO_PLUGIN_CONSENT,
   type PluginConsent,
@@ -34,6 +35,16 @@ export interface ResolvePluginsOptions {
    * that needs the app's consent is refused.
    */
   consent?: PluginConsent;
+}
+
+export interface ResolveTransformedPluginsOptions
+  extends ResolvePluginsOptions {
+  /**
+   * The plugin list as configured, before any `setup` transformer ran. A
+   * capability that needs the app's consent is held on the transformed list
+   * only by a plugin that declared it here under the same name.
+   */
+  declared: readonly PluginDefinition[];
 }
 
 /**
@@ -227,8 +238,13 @@ export function resolvePlugins(
  */
 export function resolveTransformedPlugins<
   C extends { plugins?: PluginDefinition[] },
->(config: C, opts: ResolvePluginsOptions): C & { plugins: PluginDefinition[] } {
-  return { ...config, plugins: resolvePlugins(config.plugins ?? [], opts) };
+>(
+  config: C,
+  opts: ResolveTransformedPluginsOptions
+): C & { plugins: PluginDefinition[] } {
+  const plugins = resolvePlugins(config.plugins ?? [], opts);
+  assertConsentDeclaredBeforeSetup(opts.declared, plugins);
+  return { ...config, plugins };
 }
 
 /**

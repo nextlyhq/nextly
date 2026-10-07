@@ -155,3 +155,38 @@ export function assertPluginConsent(
     );
   }
 }
+
+/**
+ * Refuse a capability that needs the app's consent when a `setup` transformer
+ * introduced it.
+ *
+ * The app's listing names a plugin it reviewed: the manifest that plugin
+ * declares under that name. On the transformed list a plugin holds the
+ * capability only when the configured list already had an entry with the
+ * same name declaring it. A transformer that renames a plugin onto a listed
+ * name, adds a plugin under one, or adds the capability to a plugin that did
+ * not declare it would otherwise inherit a grant the app made for something
+ * else. Disabled plugins are skipped, as `assertPluginConsent` skips them.
+ */
+export function assertConsentDeclaredBeforeSetup(
+  declared: readonly PluginDefinition[],
+  transformed: readonly PluginDefinition[]
+): void {
+  for (const rule of CONSENT_RULES) {
+    for (const plugin of transformed) {
+      if (plugin.enabled === false || !rule.declares(plugin)) continue;
+      const configured = declared.find(entry => entry.name === plugin.name);
+      if (configured !== undefined && rule.declares(configured)) continue;
+      const what =
+        configured === undefined
+          ? `A setup transformer added plugin "${plugin.name}", or renamed another plugin to that name, and it declares ${rule.capability}`
+          : `A setup transformer added ${rule.capability} to plugin "${plugin.name}", whose own manifest does not declare it`;
+      throw resolutionError(
+        "capability-added-by-setup",
+        `${what}. That capability grants ${rule.grants}, and the app's listing covers only a plugin that declares it in its own manifest under the listed name. ` +
+          `Declare ${rule.capability} in the manifest of the plugin the app configures, rather than in a setup transformer.`,
+        { plugin: plugin.name, capability: rule.capability }
+      );
+    }
+  }
+}

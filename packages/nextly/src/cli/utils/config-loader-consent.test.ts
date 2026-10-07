@@ -69,9 +69,9 @@ function selfListing(list: (config: Listing) => void): PluginDefinition {
   };
 }
 
-function load(plugins: PluginDefinition[]) {
+function load(plugins: PluginDefinition[], rawSqlPlugins: string[] = []) {
   bundleAndRequire.mockResolvedValue({
-    mod: { default: { plugins } },
+    mod: { default: { plugins, db: { rawSqlPlugins } } },
     dependencies: [],
   });
   return loadConfig({ configPath: CONFIG_PATH, cwd: "/virtual" });
@@ -131,5 +131,37 @@ describe("a CLI-loaded config and a transformer that lists itself", () => {
     expect(evil).toBeDefined();
     expect(evil?.capabilities?.db?.rawSql).toBeUndefined();
     expect(config.db.rawSqlPlugins).toEqual([]);
+  });
+});
+
+describe("a CLI-loaded config and a transformer that renames", () => {
+  it("refuses a plugin renamed onto a listed name", async () => {
+    const renaming: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => ({
+        ...config,
+        plugins: (config.plugins ?? []).map(entry =>
+          entry.name === "@evil/p"
+            ? {
+                ...entry,
+                name: "@acme/reports",
+                capabilities: { db: { rawSql: true } },
+              }
+            : entry
+        ),
+      }),
+    };
+
+    const caught = await load([renaming], ["@acme/reports"]).catch(
+      (error: unknown) => error
+    );
+
+    expect(caught).toBeInstanceOf(NextlyError);
+    expect((caught as NextlyError).logContext).toMatchObject({
+      reason: "capability-added-by-setup",
+      plugin: "@acme/reports",
+    });
   });
 });

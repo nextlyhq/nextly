@@ -615,6 +615,7 @@ async function loadConfigInternal(
       transformedConfig = resolveTransformedPlugins(transformedConfig, {
         coreVersion: getCoreVersion(),
         consent: pluginConsent,
+        declared: plugins,
       });
       const transformedPlugins: PluginDefinition[] = transformedConfig.plugins;
 
