@@ -66,6 +66,8 @@ async function migrate(
   migrationsDir: string
 ): Promise<boolean> {
   const { coreChanged } = await migrateCore({
+    // A config that declares no schema hooks: the run is core-only.
+    extensionSchema: undefined,
     dialect: fresh.dialect,
     db: fresh.db,
     // The shape the dev boot path hands over: a wrapper carrying the one

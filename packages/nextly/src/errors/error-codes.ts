@@ -121,6 +121,9 @@ export const NEXTLY_ERROR_STATUS = {
   PLUGIN_SCHEMA_BEHIND: 409,
   PLUGIN_SCHEMA_UNINSTALLED: 409,
   PLUGIN_SCHEMA_VERSION_NOT_ADVANCED: 409,
+  // A generated plugin migration that would drop a table or column the
+  // plugin's earlier modules created: a rename comes out as a drop and an add.
+  PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA: 409,
   PLUGIN_MIGRATIONS_UNAVAILABLE: 409,
   // A migration would drop a table another owner holds, or names a drop
   // target the guard cannot read — refused for the same reason.

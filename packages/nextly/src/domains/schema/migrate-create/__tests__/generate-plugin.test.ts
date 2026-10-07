@@ -196,14 +196,82 @@ describe("buildPluginMigration", () => {
     expect(again).toBeNull();
   });
 
-  it("refuses an un-bumped schemaVersion", () => {
+  it("refuses an un-bumped schemaVersion when the schema changed", () => {
     const first = buildPluginMigration(FIRST)!.module;
-    expect(() => buildPluginMigration({ ...FIRST, existing: [first] })).toThrow(
-      /schemaVersion/i
-    );
-    expect(() => buildPluginMigration({ ...FIRST, existing: [first] })).toThrow(
+    const changed = {
+      ...FIRST,
+      tablesByDialect: tablesByDialect(tableSpec(true)),
+      existing: [first],
+    };
+    expect(() => buildPluginMigration(changed)).toThrow(
       /must move past 1 .*\(it is 1\)/
     );
+  });
+
+  it("reports no changes for an unchanged schema at an un-bumped schemaVersion", () => {
+    // Asking whether a plugin's shipped modules are current is a regeneration
+    // at the version they already declare; it has nothing to refuse.
+    const first = buildPluginMigration(FIRST)!.module;
+    expect(buildPluginMigration({ ...FIRST, existing: [first] })).toBeNull();
+  });
+
+  it("refuses a renamed table, which the diff reads as a drop and a create", () => {
+    const first = buildPluginMigration(FIRST)!.module;
+    const renamed = { ...tableSpec(false), name: "fx__memos" };
+    expect(() =>
+      buildPluginMigration({
+        ...FIRST,
+        schemaVersion: 2,
+        name: "rename_notes",
+        tablesByDialect: tablesByDialect(renamed),
+        existing: [first],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        code: "PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA",
+        message: expect.stringMatching(
+          /would drop fx__notes, .*write the rename as a migration by hand/
+        ),
+      })
+    );
+  });
+
+  it("refuses a renamed column, which the diff reads as a drop and an add", () => {
+    const first = buildPluginMigration(FIRST)!.module;
+    const spec = tableSpec(false);
+    const renamed: TableSpec = {
+      ...spec,
+      columns: spec.columns.map(column =>
+        column.name === "label" ? { ...column, name: "title" } : column
+      ),
+    };
+    expect(() =>
+      buildPluginMigration({
+        ...FIRST,
+        schemaVersion: 2,
+        name: "rename_label",
+        tablesByDialect: tablesByDialect(renamed),
+        existing: [first],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        code: "PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA",
+        message: expect.stringMatching(/would drop fx__notes\.label,/),
+      })
+    );
+  });
+
+  it("refuses dropping a table the plugin no longer declares", () => {
+    const first = buildPluginMigration(FIRST)!.module;
+    expect(() =>
+      buildPluginMigration({
+        ...FIRST,
+        schemaVersion: 2,
+        name: "drop_all",
+        tablesByDialect: { postgresql: [], mysql: [], sqlite: [] },
+        existing: [first],
+      })
+    ).toThrow(/would drop fx__notes,/);
   });
 
   it("moves the checksum when the SQL moves", () => {
@@ -385,23 +453,27 @@ describe("elements contributed to another owner's table", () => {
     expect(built.module.contributions).toEqual(CONTRIBUTING.contributions);
   });
 
-  it("drops its column when it stops contributing to the table", () => {
-    // The table then leaves the contributed set entirely. Built only from
-    // that set, both sides lost it and the column was never dropped; with a
-    // baseline for every foreign table, the removal is diffed like any other.
+  it("refuses to drop its column when it stops contributing to the table", () => {
+    // The table then leaves the contributed set entirely. With a baseline for
+    // every foreign table the removal is diffed like any other — and a column
+    // this plugin's earlier module created holds rows, so the drop is the
+    // developer's to write, not the generator's to emit.
     const first = buildPluginMigration(CONTRIBUTING)!;
-    const second = buildPluginMigration({
-      ...CONTRIBUTING,
-      schemaVersion: 2,
-      name: "withdraw",
-      contributedByDialect: { postgresql: [], mysql: [], sqlite: [] },
-      contributions: {},
-      existing: [first.module],
-    });
-    const up = second!.module.dialects.postgresql.up.join("\n");
-    expect(up).toMatch(/ALTER TABLE .*dep__orders.* DROP COLUMN .*fx_ref/i);
-    expect(up).not.toMatch(/DROP TABLE/i);
-    expect(second!.module.contributions).toBeUndefined();
+    expect(() =>
+      buildPluginMigration({
+        ...CONTRIBUTING,
+        schemaVersion: 2,
+        name: "withdraw",
+        contributedByDialect: { postgresql: [], mysql: [], sqlite: [] },
+        contributions: {},
+        existing: [first.module],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        code: "PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA",
+        message: expect.stringMatching(/would drop dep__orders\.fx_ref,/),
+      })
+    );
   });
 
   it("reads a module generated before contributions were recorded", () => {

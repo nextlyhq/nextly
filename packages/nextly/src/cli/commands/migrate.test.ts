@@ -545,8 +545,6 @@ describe("statementRefusals", () => {
   it.each([
     ["postgresql", "ROLLBACK", "TRANSACTION_CONTROL_IN_MIGRATION"],
     ["postgresql", "ABORT", "TRANSACTION_CONTROL_IN_MIGRATION"],
-    ["postgresql", "SAVEPOINT s1", "TRANSACTION_CONTROL_IN_MIGRATION"],
-    ["mysql", "RELEASE SAVEPOINT s1", "TRANSACTION_CONTROL_IN_MIGRATION"],
     ["postgresql", "COMMIT PREPARED 'x'", "TRANSACTION_CONTROL_IN_MIGRATION"],
     [
       "postgresql",
@@ -629,8 +627,8 @@ describe("statementRefusals", () => {
     expect(path?.message).toContain('"SET SESSION search_path TO other"');
     expect(path?.message).toContain("SET LOCAL search_path");
 
-    const [rollback] = statementRefusals(["ROLLBACK TO s1"], "postgresql");
-    expect(rollback?.message).toContain('"ROLLBACK TO s1"');
+    const [rollback] = statementRefusals(["ROLLBACK"], "postgresql");
+    expect(rollback?.message).toContain('"ROLLBACK"');
   });
 
   it.each([
@@ -645,6 +643,16 @@ describe("statementRefusals", () => {
     ["mysql", "/*!40000 ALTER TABLE `t` DISABLE KEYS */"],
     ["sqlite", "PRAGMA foreign_keys = OFF"],
     ["sqlite", "UPDATE t SET a = 1"],
+    // A savepoint runs inside the runner's transaction and undoes at most
+    // part of the file.
+    ["postgresql", "SAVEPOINT s1"],
+    ["postgresql", "ROLLBACK TO SAVEPOINT s1"],
+    ["postgresql", "RELEASE SAVEPOINT s1"],
+    ["mysql", "ROLLBACK TO s1"],
+    ["mysql", "RELEASE SAVEPOINT s1"],
+    ["sqlite", "SAVEPOINT s1"],
+    ["sqlite", "ROLLBACK TO s1"],
+    ["sqlite", "RELEASE s1"],
   ] as const)("allows on %s: %s", (dialect, statement) => {
     // The control: statements a migration may hold, through the same check.
     expect(statementRefusals([statement], dialect)).toEqual([]);
