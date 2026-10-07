@@ -415,7 +415,7 @@ export interface PluginContext {
   db: PluginDatabase & { raw: PluginRawDatabase };
 
   /**
-   * Which database this installation runs on.
+   * @experimental Which database this installation runs on.
    *
    * Exposed because a plugin cannot always be dialect-blind and had no way to
    * ask. `isUniqueViolation(dialect, error)` is the case that forced it: the
