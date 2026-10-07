@@ -240,12 +240,10 @@ export function generateSqliteCoreTableStatements(): string[] {
     // true of EVERY table, which quietly disables the protection rather than
     // failing.
     // The primary key is COMPOSITE, matching the canonical schema: ownership
-    // became element-granular, so one table can carry a row for itself and a
-    // row per column or index somebody else contributed. Declared here as a
-    // lone `table_name PRIMARY KEY` — which it was — a database created from
-    // this DDL rejected the second row for any table with a contributed
-    // element, and the element columns were absent entirely, so every insert
-    // naming them failed on a fresh SQLite database.
+    // is element-granular, so one table can carry a row for itself and a row
+    // per column or index somebody else contributed. A lone
+    // `table_name PRIMARY KEY` would reject the second row for any table with
+    // a contributed element.
     `CREATE TABLE IF NOT EXISTS "${SCHEMA_OWNERS_TABLE}" (
       "table_name" TEXT NOT NULL,
       "element_kind" TEXT NOT NULL DEFAULT 'table',
