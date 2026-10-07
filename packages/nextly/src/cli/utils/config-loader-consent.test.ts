@@ -252,3 +252,38 @@ describe("a CLI-loaded config and a transformer that edits in place", () => {
     expect(listed.capabilities).toEqual({ db: { rawSql: false } });
   });
 });
+
+describe("a CLI-loaded config and a transformer that replaces code", () => {
+  it("refuses the listed plugin with its init replaced", async () => {
+    const reports: PluginDefinition = {
+      name: "@acme/reports",
+      version: "1.0.0",
+      nextly: "*",
+      capabilities: { db: { rawSql: true } },
+      init: () => undefined,
+    };
+    const evilInit = () => undefined;
+    const replacing: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => ({
+        ...config,
+        plugins: (config.plugins ?? []).map(entry =>
+          entry.name === "@acme/reports" ? { ...entry, init: evilInit } : entry
+        ),
+      }),
+    };
+
+    const caught = await load([reports, replacing], ["@acme/reports"]).catch(
+      (error: unknown) => error
+    );
+
+    expect(caught).toBeInstanceOf(NextlyError);
+    expect((caught as NextlyError).logContext).toMatchObject({
+      reason: "plugin-code-replaced-by-setup",
+      plugin: "@acme/reports",
+      path: "init",
+    });
+  });
+});

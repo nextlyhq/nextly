@@ -195,6 +195,37 @@ function pluginCode(
 }
 
 /**
+ * The first path at which `plugin`'s code differs from what `recorded` held
+ * before setup, or undefined when it is the same code.
+ *
+ * Compared by identity for functions and other objects and by value for
+ * primitives, over every lifecycle function and every leaf of `contributes`:
+ * a definition swapped for one with another `init`, an auth hook added to
+ * its `contributes`, or a route handler replaced, is not the plugin the app
+ * listed, whatever its name says.
+ */
+function replacedCode(
+  recorded: PreSetupPlugin,
+  plugin: PluginDefinition
+): string | undefined {
+  const now = pluginCode(plugin);
+  const length = Math.max(now.length, recorded.code.length);
+  for (let index = 0; index < length; index += 1) {
+    const before = recorded.code[index];
+    const after = now[index];
+    if (
+      before === undefined ||
+      after === undefined ||
+      before[0] !== after[0] ||
+      !Object.is(before[1], after[1])
+    ) {
+      return (before ?? after)?.[0];
+    }
+  }
+  return undefined;
+}
+
+/**
  * The config a plugin's `setup` transformers start from: `config` with a
  * copy of the resolved `plugins` (`copyPluginDefinitions`), a `db` block that
  * is a copy of the app's with a frozen `rawSqlPlugins`, and no
@@ -304,7 +335,12 @@ export function assertPluginConsent(
  * (`recordPreSetupPlugins`) had an entry with the same name declaring it. A
  * transformer that renames a plugin onto a listed name, adds a plugin under
  * one, or adds the capability to a plugin that did not declare it would
- * otherwise inherit a grant the app made for something else. Judged against
+ * otherwise inherit a grant the app made for something else. A plugin under
+ * a listed name whose code differs from the recorded plugin's is refused too
+ * (`plugin-code-replaced-by-setup`): a transformer that drops the listed
+ * plugin and renames itself onto the name, or swaps in a definition with
+ * another `init`, keeps the name and the declaration and replaces what runs
+ * under them. Judged against
  * the record rather than the definitions, so an edit a transformer makes in
  * place reaches only the transformed list. Disabled plugins are skipped, as
  * `assertPluginConsent` skips them.
@@ -317,7 +353,16 @@ export function assertConsentDeclaredBeforeSetup(
     for (const plugin of transformed) {
       if (plugin.enabled === false || !rule.declares(plugin)) continue;
       const configured = declared.find(entry => entry.name === plugin.name);
-      if (configured?.declares.includes(rule.capability)) continue;
+      if (configured?.declares.includes(rule.capability)) {
+        const replaced = replacedCode(configured, plugin);
+        if (replaced === undefined) continue;
+        throw resolutionError(
+          "plugin-code-replaced-by-setup",
+          `A setup transformer changed the code of plugin "${plugin.name}" (${replaced}), which declares ${rule.capability}. That capability grants ${rule.grants}, and the app's listing covers the plugin it configured, with that plugin's own code. ` +
+            `Leave the definitions of plugins that declare ${rule.capability} as configured in setup transformers.`,
+          { plugin: plugin.name, capability: rule.capability, path: replaced }
+        );
+      }
       const what =
         configured === undefined
           ? `A setup transformer added plugin "${plugin.name}", or renamed another plugin to that name, and it declares ${rule.capability}`

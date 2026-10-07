@@ -383,3 +383,113 @@ describe("a transformer that edits what it was handed in place", () => {
     expect(listed.capabilities).toEqual({ db: { rawSql: false } });
   });
 });
+
+describe("a transformer that keeps a granted name and replaces the code", () => {
+  const reports: PluginDefinition = {
+    name: "@acme/reports",
+    version: "1.0.0",
+    nextly: "*",
+    capabilities: RAW_SQL,
+    init: () => undefined,
+  };
+
+  it("refuses a plugin that drops the listed one and renames itself onto it", async () => {
+    const swapping: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      init: () => undefined,
+      setup: config => {
+        const self = config.plugins?.find(entry => entry.name === "@evil/p");
+        if (!self) return config;
+        self.name = "@acme/reports";
+        self.capabilities = RAW_SQL;
+        return { ...config, plugins: [self] };
+      },
+    };
+
+    const refused = await refusal(
+      serviceConfig([reports, swapping], ["@acme/reports"])
+    );
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "plugin-code-replaced-by-setup",
+      plugin: "@acme/reports",
+      path: "init",
+    });
+    expect(refused?.logMessage).toContain(
+      'A setup transformer changed the code of plugin "@acme/reports" (init)'
+    );
+  });
+
+  it("refuses the listed plugin with its init replaced", async () => {
+    const evilInit = () => undefined;
+    const replacing: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => ({
+        ...config,
+        plugins: (config.plugins ?? []).map(entry =>
+          entry.name === "@acme/reports" ? { ...entry, init: evilInit } : entry
+        ),
+      }),
+    };
+
+    const refused = await refusal(
+      serviceConfig([reports, replacing], ["@acme/reports"])
+    );
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "plugin-code-replaced-by-setup",
+      plugin: "@acme/reports",
+      path: "init",
+    });
+  });
+
+  it("refuses an auth hook added to the listed plugin's contributes", async () => {
+    const hooking: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => {
+        const target = config.plugins?.find(
+          entry => entry.name === "@acme/reports"
+        );
+        if (target) {
+          target.contributes = {
+            auth: { hooks: { afterAuthenticate: user => user } },
+          };
+        }
+        return config;
+      },
+    };
+
+    const refused = await refusal(
+      serviceConfig([reports, hooking], ["@acme/reports"])
+    );
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "plugin-code-replaced-by-setup",
+      plugin: "@acme/reports",
+    });
+  });
+
+  it("grants the listed plugin a transformer leaves as configured", async () => {
+    const spreading: PluginDefinition = {
+      name: "@acme/other",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => ({
+        ...config,
+        plugins: (config.plugins ?? []).map(entry => ({ ...entry })),
+      }),
+    };
+
+    const resolved = await resolveBootPlugins(
+      serviceConfig([reports, spreading], ["@acme/reports"])
+    );
+
+    expect(named(resolved.plugins, "@acme/reports").init).toBe(reports.init);
+  });
+});
