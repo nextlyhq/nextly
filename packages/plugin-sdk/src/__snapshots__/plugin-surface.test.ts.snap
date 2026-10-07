@@ -218,6 +218,35 @@ exports[`plugin-sdk public export surface > \`./routing\` surface is unchanged 1
 ]
 `;
 
+exports[`plugin-sdk public export surface > \`./schema\` surface is unchanged 1`] = `
+[
+  "ColumnBuilder (type)",
+  "ContributedElements (type)",
+  "DialectStatements (type)",
+  "DraftTableView (type)",
+  "DrizzleSchemaHook (type)",
+  "ExtensionColumn (type)",
+  "ExtensionIndex (type)",
+  "ExtensionTable (type)",
+  "InferInsert (type)",
+  "InferRow (type)",
+  "PluginDatabase (type)",
+  "PluginMigration (type)",
+  "PluginMigrationSnapshot (type)",
+  "PluginTransaction (type)",
+  "PortableSelect (type)",
+  "PortableWhere (type)",
+  "SchemaDraft (type)",
+  "SchemaHook (type)",
+  "SchemaOwner (type)",
+  "TableDefinition (type)",
+  "col (value)",
+  "defineTable (value)",
+  "isUniqueViolation (value)",
+  "migrationChecksum (value)",
+]
+`;
+
 exports[`plugin-sdk public export surface > \`./testing\` surface is unchanged 1`] = `
 [
   "CreateTestNextlyOptions (type)",

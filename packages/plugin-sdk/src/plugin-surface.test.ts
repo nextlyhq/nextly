@@ -40,6 +40,7 @@ const SNAPSHOTTED = [
   "db.ts",
   "index.ts",
   "routing.ts",
+  "schema.ts",
   "testing.ts",
   "widgets.ts",
 ];
@@ -114,6 +115,10 @@ describe("plugin-sdk public export surface", () => {
 
   it("`./blocks` surface is unchanged", () => {
     expect(exportedNames("blocks.ts")).toMatchSnapshot();
+  });
+
+  it("`./schema` surface is unchanged", () => {
+    expect(exportedNames("schema.ts")).toMatchSnapshot();
   });
 
   it("`./testing` surface is unchanged", () => {
