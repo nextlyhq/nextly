@@ -12,9 +12,11 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { NextlyError } from "../../errors/nextly-error";
 import type { NextlyServiceConfig } from "../../di/register";
+import { NextlyError } from "../../errors/nextly-error";
+import { buildServiceConfig } from "../../init/build-service-config";
 import type { PluginDefinition } from "../../plugins/plugin-context";
+import { sanitizeConfig } from "../../shared/types/config";
 
 vi.mock("../../route-handler/auth-handler", () => ({
   setBootedConfig: () => undefined,
@@ -32,6 +34,17 @@ function named(
   const found = plugins.find(plugin => plugin.name === name);
   if (!found) throw new Error(`no plugin named ${name} was resolved`);
   return found;
+}
+
+/** The service config an app with `plugins` that lists `rawSql` boots from. */
+function serviceConfig(
+  plugins: PluginDefinition[],
+  rawSql: string[]
+): NextlyServiceConfig {
+  return buildServiceConfig({
+    config: sanitizeConfig({ plugins }),
+    pluginConsent: { rawSql },
+  });
 }
 
 /** What `resolveBootPlugins` refused with, or undefined when it resolved. */
@@ -60,10 +73,7 @@ describe("a setup transformer and the consent the boot holds", () => {
       },
     };
 
-    await resolveBootPlugins({
-      plugins: [plugin],
-      pluginConsent: { rawSql: ["@test/other"] },
-    });
+    await resolveBootPlugins(serviceConfig([plugin], ["@test/other"]));
 
     expect(received).toBeDefined();
     expect(received).not.toHaveProperty("pluginConsent");
@@ -91,10 +101,7 @@ describe("a setup transformer and the consent the boot holds", () => {
       },
     };
 
-    const refused = await refusal({
-      plugins: [plugin],
-      pluginConsent: { rawSql: [] },
-    });
+    const refused = await refusal(serviceConfig([plugin], []));
 
     expect(refused?.logContext).toMatchObject({
       reason: "capability-not-listed",
@@ -111,13 +118,75 @@ describe("a setup transformer and the consent the boot holds", () => {
       setup: config => config,
     };
 
-    const resolved = await resolveBootPlugins({
-      plugins: [plugin],
-      pluginConsent: { rawSql: ["@acme/reports"] },
-    });
+    const resolved = await resolveBootPlugins(
+      serviceConfig([plugin], ["@acme/reports"])
+    );
 
     expect(named(resolved.plugins, "@acme/reports").capabilities).toEqual(
       RAW_SQL
     );
+  });
+});
+
+/**
+ * A plugin whose transformer adds its name to `db.rawSqlPlugins` by
+ * replacing the list when it is not listed, and declares rawSql on its own
+ * entry once it is: harmless in one boot, a grant in the next if the list it
+ * replaced was the app's.
+ */
+const selfListing: PluginDefinition = {
+  name: "@evil/p",
+  version: "1.0.0",
+  nextly: "*",
+  setup: config => {
+    const db = config.db as unknown as { rawSqlPlugins: readonly string[] };
+    if (!db.rawSqlPlugins.includes("@evil/p")) {
+      db.rawSqlPlugins = [...db.rawSqlPlugins, "@evil/p"];
+      return config;
+    }
+    return {
+      ...config,
+      plugins: (config.plugins ?? []).map(entry =>
+        entry.name === "@evil/p" ? { ...entry, capabilities: RAW_SQL } : entry
+      ),
+    };
+  },
+};
+
+describe("a second boot from the same app config", () => {
+  it("does not grant what a transformer wrote in the first", async () => {
+    // A `getNextly` retry after a failed boot, a re-boot from the stored
+    // config, and the dev server registering again all build the service
+    // config afresh from the one sanitized app config.
+    const appConfig = sanitizeConfig({ plugins: [selfListing] });
+
+    const first = await resolveBootPlugins(
+      buildServiceConfig({ config: appConfig })
+    );
+    const second = await resolveBootPlugins(
+      buildServiceConfig({ config: appConfig })
+    );
+
+    expect(named(first.plugins, "@evil/p").capabilities).toBeUndefined();
+    expect(named(second.plugins, "@evil/p").capabilities).toBeUndefined();
+    expect(appConfig.db.rawSqlPlugins).toEqual([]);
+  });
+
+  it("refuses a transformer that pushes onto the app's list", async () => {
+    const pushing: PluginDefinition = {
+      ...selfListing,
+      setup: config => {
+        (
+          config.db as unknown as { rawSqlPlugins: string[] }
+        ).rawSqlPlugins.push("@evil/p");
+        return config;
+      },
+    };
+    const appConfig = sanitizeConfig({ plugins: [pushing] });
+
+    await expect(
+      resolveBootPlugins(buildServiceConfig({ config: appConfig }))
+    ).rejects.toThrow('Plugin "@evil/p" setup transformer failed');
+    expect(appConfig.db.rawSqlPlugins).toEqual([]);
   });
 });

@@ -24,7 +24,6 @@ import type { NextlyServiceConfig } from "../../di/register";
 import { describeError } from "../../errors/index";
 import { pluginAdminSlug } from "../../plugins/admin-meta";
 import { getCoreVersion } from "../../plugins/core-version";
-import { pluginConsentFromConfig } from "../../plugins/plugin-consent";
 import {
   collectPluginInfo,
   findPluginInfo,
@@ -134,14 +133,16 @@ export function renderPluginInfo(
 async function loadPluginInfos(
   options: PluginsCommandOptions
 ): Promise<PluginInfo[]> {
-  const { config } = await loadConfig({
+  const { config, pluginConsent } = await loadConfig({
     configPath: options.config,
     cwd: options.cwd,
   });
+  // The grants as the app wrote them, read by the loader before any `setup`
+  // transformer ran, rather than derived again from the transformed config.
   return collectPluginInfo(
     config as unknown as NextlyServiceConfig,
     config.plugins ?? [],
-    { coreVersion: getCoreVersion(), consent: pluginConsentFromConfig(config) }
+    { coreVersion: getCoreVersion(), consent: pluginConsent }
   );
 }
 

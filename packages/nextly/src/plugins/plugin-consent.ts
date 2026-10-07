@@ -67,6 +67,36 @@ export function snapshotPluginConsent(consent: PluginConsent): PluginConsent {
   return Object.freeze({ rawSql: Object.freeze([...consent.rawSql]) });
 }
 
+/**
+ * The config a plugin's `setup` transformers start from: `config` with the
+ * resolved `plugins`, a `db` block that is a copy of the app's with a frozen
+ * `rawSqlPlugins`, and no `pluginConsent`.
+ *
+ * A transformer is plugin code. Handed the app's own `db` object, one could
+ * add its name to `db.rawSqlPlugins` there, and every later read of that
+ * config would grant it: the CLI deriving consent from the config it
+ * loaded, a boot retried after a failure, the dev server registering again.
+ * Whatever a transformer does to the copy stays in the config it returns.
+ * The boot and the CLI both start their transformers from this, so neither
+ * hands plugin code a grant.
+ */
+export function setupTransformerInput<
+  C extends {
+    plugins?: PluginDefinition[];
+    db?: object;
+    pluginConsent?: PluginConsent;
+  },
+>(config: C, plugins: PluginDefinition[]): C & { plugins: PluginDefinition[] } {
+  const input: C & { plugins: PluginDefinition[] } = { ...config, plugins };
+  delete input.pluginConsent;
+  if (config.db === undefined) return input;
+  const db: object = { ...config.db };
+  if ("rawSqlPlugins" in db && Array.isArray(db.rawSqlPlugins)) {
+    db.rawSqlPlugins = Object.freeze([...db.rawSqlPlugins]);
+  }
+  return Object.assign(input, { db });
+}
+
 /** One capability that needs the app's consent. */
 interface ConsentRule {
   /** The manifest key, as an author writes it. */

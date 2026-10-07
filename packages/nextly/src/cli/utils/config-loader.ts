@@ -49,8 +49,10 @@ import type { PluginFieldType } from "../../plugins/contributions";
 import { getCoreVersion } from "../../plugins/core-version";
 import { collectCustomPermissions } from "../../plugins/permissions/collect-permissions";
 import {
+  NO_PLUGIN_CONSENT,
   pluginConsentFromConfig,
   type PluginConsent,
+  setupTransformerInput,
 } from "../../plugins/plugin-consent";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import {
@@ -218,6 +220,14 @@ export interface LoadConfigResult {
    * which the next load clears and rebuilds.
    */
   fieldTypes?: ReadonlyMap<string, PluginFieldType>;
+
+  /**
+   * What the app lists plugins for, read from the config as the app wrote it,
+   * before any `setup` transformer ran. A command that resolves or boots the
+   * plugins again uses this rather than deriving consent from `config`, which
+   * is the transformed one.
+   */
+  pluginConsent: PluginConsent;
 }
 
 /**
@@ -474,6 +484,7 @@ async function loadConfigInternal(
       config: defineConfig({}),
       configPath: undefined,
       dependencies: [],
+      pluginConsent: NO_PLUGIN_CONSENT,
       // Empty, matching the clear above: work pinned to this result must not
       // resolve plugin types a later config happens to register.
       fieldTypes: snapshotFieldTypes(),
@@ -567,7 +578,7 @@ async function loadConfigInternal(
 
     if (plugins.length > 0) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let transformedConfig: any = { ...config, plugins };
+      let transformedConfig: any = setupTransformerInput(config, plugins);
 
       for (const plugin of plugins) {
         if (plugin.setup) {
@@ -678,6 +689,7 @@ async function loadConfigInternal(
       configPath,
       dependencies,
       deferredExtends,
+      pluginConsent,
       // Captured after registration, so it holds exactly what this config
       // contributed rather than whatever the live set becomes later.
       fieldTypes: snapshotFieldTypes(),

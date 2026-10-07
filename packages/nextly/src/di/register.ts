@@ -143,6 +143,7 @@ import { setPluginAuthDepsResolver } from "../plugins/plugin-auth-provider";
 import {
   NO_PLUGIN_CONSENT,
   type PluginConsent,
+  setupTransformerInput,
   snapshotPluginConsent,
 } from "../plugins/plugin-consent";
 import type {
@@ -1771,7 +1772,7 @@ export async function resolveBootPlugins(
     coreVersion: getCoreVersion(),
     consent: pluginConsent,
   });
-  const resolvedConfig = transformerInput(config, resolvedPlugins);
+  const resolvedConfig = setupTransformerInput(config, resolvedPlugins);
 
   // ----------------------------------------
   // Layer 0b: Process Plugin Config Transformers (resolved order)
@@ -1796,21 +1797,6 @@ export async function resolveBootPlugins(
     coreVersion: getCoreVersion(),
     consent: pluginConsent,
   });
-}
-
-/**
- * The config the `setup` transformers start from: the caller's config with
- * the resolved plugin list, and without `pluginConsent`. The grants are the
- * app's, judged by core; a transformer is plugin code and has no use for
- * them.
- */
-function transformerInput(
-  config: NextlyServiceConfig,
-  plugins: PluginDefinition[]
-): NextlyServiceConfig {
-  const input: NextlyServiceConfig = { ...config, plugins };
-  delete input.pluginConsent;
-  return input;
 }
 
 // eslint-disable-next-line @typescript-eslint/require-await
