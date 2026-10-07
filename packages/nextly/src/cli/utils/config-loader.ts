@@ -56,7 +56,7 @@ import {
 } from "../../plugins/plugin-consent";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import {
-  resolvePlugins,
+  resolveDeclaredPlugins,
   resolveTransformedPlugins,
 } from "../../plugins/resolve";
 import {
@@ -83,14 +83,19 @@ function builderCollectionSlugs(builder: BuilderEntities): string[] {
  * Validate (D6) and topologically order (D5) the configured plugins using the
  * single shared resolver — the SAME resolver the runtime uses (register.ts), so
  * CLI and runtime agree on order and fail identically (D6). Fail-fast (D7).
- * The CLI then runs each plugin's `setup` in this order.
+ * The CLI then runs each plugin's `setup` in this order, and judges the
+ * transformed list against the record (`preSetup`) taken here, before any of
+ * them ran.
  */
 export function orderConfigPlugins(
   plugins: PluginDefinition[],
   consent: PluginConsent
-): PluginDefinition[] {
-  if (plugins.length === 0) return plugins;
-  return resolvePlugins(plugins, { coreVersion: getCoreVersion(), consent });
+): ReturnType<typeof resolveDeclaredPlugins> {
+  if (plugins.length === 0) return { plugins: [], preSetup: [] };
+  return resolveDeclaredPlugins(plugins, {
+    coreVersion: getCoreVersion(),
+    consent,
+  });
 }
 
 /** Merge the folded collections/singles/components + transformed plugins/storage onto base. Pure. */
@@ -568,7 +573,10 @@ async function loadConfigInternal(
     // `setup` transformer runs, exactly as the boot reads it: a transformer
     // is plugin code and must not be able to list a plugin itself.
     const pluginConsent = pluginConsentFromConfig(config);
-    const plugins = orderConfigPlugins(config.plugins ?? [], pluginConsent);
+    const { plugins, preSetup } = orderConfigPlugins(
+      config.plugins ?? [],
+      pluginConsent
+    );
 
     // Cleared on EVERY load, not only when plugins are present. A reload that
     // removes the last plugin would otherwise leave its types in the
@@ -615,7 +623,7 @@ async function loadConfigInternal(
       transformedConfig = resolveTransformedPlugins(transformedConfig, {
         coreVersion: getCoreVersion(),
         consent: pluginConsent,
-        declared: plugins,
+        declared: preSetup,
       });
       const transformedPlugins: PluginDefinition[] = transformedConfig.plugins;
 

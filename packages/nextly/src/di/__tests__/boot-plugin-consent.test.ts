@@ -299,3 +299,87 @@ describe("a listed name that matches no configured plugin", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 });
+
+describe("a transformer that edits what it was handed in place", () => {
+  it("refuses a plugin pushed onto the list under a listed name", async () => {
+    // The app still lists a plugin it removed. A transformer pushes a plugin
+    // under that name onto the list it received, and returns that list.
+    const pushing: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => {
+        config.plugins?.push({
+          name: "@acme/removed",
+          version: "1.0.0",
+          nextly: "*",
+          capabilities: RAW_SQL,
+        });
+        return config;
+      },
+    };
+
+    const refused = await refusal(serviceConfig([pushing], ["@acme/removed"]));
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "capability-added-by-setup",
+      plugin: "@acme/removed",
+    });
+  });
+
+  it("refuses a plugin renamed in place onto a listed name", async () => {
+    const renaming: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => {
+        const self = config.plugins?.find(entry => entry.name === "@evil/p");
+        if (self) {
+          self.name = "@acme/removed";
+          self.capabilities = RAW_SQL;
+        }
+        return config;
+      },
+    };
+
+    const refused = await refusal(serviceConfig([renaming], ["@acme/removed"]));
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "capability-added-by-setup",
+      plugin: "@acme/removed",
+    });
+  });
+
+  it("refuses rawSql flipped on in place on a listed plugin", async () => {
+    const listed: PluginDefinition = {
+      name: "@acme/reports",
+      version: "1.0.0",
+      nextly: "*",
+      capabilities: { db: { rawSql: false } },
+    };
+    const flipping: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => {
+        const target = config.plugins?.find(
+          entry => entry.name === "@acme/reports"
+        );
+        const db = target?.capabilities?.db;
+        if (db) db.rawSql = true;
+        return config;
+      },
+    };
+
+    const refused = await refusal(
+      serviceConfig([listed, flipping], ["@acme/reports"])
+    );
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "capability-added-by-setup",
+      plugin: "@acme/reports",
+    });
+    // The edit reached a copy, not the app's own definition.
+    expect(listed.capabilities).toEqual({ db: { rawSql: false } });
+  });
+});

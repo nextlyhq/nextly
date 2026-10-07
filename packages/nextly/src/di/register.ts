@@ -154,7 +154,10 @@ import type {
   PluginServiceName,
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
-import { resolvePlugins, resolveTransformedPlugins } from "../plugins/resolve";
+import {
+  resolveDeclaredPlugins,
+  resolveTransformedPlugins,
+} from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import {
   collectPluginRoutes,
@@ -1769,10 +1772,14 @@ export async function resolveBootPlugins(
   const pluginConsent = snapshotPluginConsent(
     config.pluginConsent ?? NO_PLUGIN_CONSENT
   );
-  const resolvedPlugins = resolvePlugins(config.plugins ?? [], {
-    coreVersion: getCoreVersion(),
-    consent: pluginConsent,
-  });
+  // Resolved from copies and recorded before any transformer runs: the
+  // transformers receive further copies, so nothing they edit in place
+  // reaches the record the transformed list is judged against, or the app's
+  // own definitions.
+  const { plugins: resolvedPlugins, preSetup } = resolveDeclaredPlugins(
+    config.plugins ?? [],
+    { coreVersion: getCoreVersion(), consent: pluginConsent }
+  );
   for (const warning of unmatchedConsentWarnings(
     resolvedPlugins,
     pluginConsent
@@ -1803,7 +1810,7 @@ export async function resolveBootPlugins(
   return resolveTransformedPlugins(setupConfig, {
     coreVersion: getCoreVersion(),
     consent: pluginConsent,
-    declared: resolvedPlugins,
+    declared: preSetup,
   });
 }
 

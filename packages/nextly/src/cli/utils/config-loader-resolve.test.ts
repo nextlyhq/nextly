@@ -27,7 +27,7 @@ describe("orderConfigPlugins (CLI resolution — D5/D6/D7)", () => {
     const a = plugin("@t/a");
     const b = plugin("@t/b", { dependsOn: { "@t/a": ">=1.0.0" } });
 
-    const ordered = orderConfigPlugins([b, a], NO_PLUGIN_CONSENT); // declared b-first
+    const ordered = orderConfigPlugins([b, a], NO_PLUGIN_CONSENT).plugins; // declared b-first
     expect(ordered.map(p => p.name)).toEqual(["@t/a", "@t/b"]);
   });
 
@@ -58,7 +58,7 @@ describe("orderConfigPlugins (CLI resolution — D5/D6/D7)", () => {
   });
 
   it("returns an empty array unchanged", () => {
-    expect(orderConfigPlugins([], NO_PLUGIN_CONSENT)).toEqual([]);
+    expect(orderConfigPlugins([], NO_PLUGIN_CONSENT).plugins).toEqual([]);
   });
 });
 

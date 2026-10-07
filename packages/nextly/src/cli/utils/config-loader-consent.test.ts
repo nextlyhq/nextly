@@ -165,3 +165,90 @@ describe("a CLI-loaded config and a transformer that renames", () => {
     });
   });
 });
+
+describe("a CLI-loaded config and a transformer that edits in place", () => {
+  const RAW_SQL = { db: { rawSql: true } };
+
+  /** What `load` refused with, as its log context. */
+  async function refusedWith(
+    plugins: PluginDefinition[],
+    rawSqlPlugins: string[]
+  ): Promise<Record<string, unknown> | undefined> {
+    const caught = await load(plugins, rawSqlPlugins).catch(
+      (error: unknown) => error
+    );
+    expect(caught).toBeInstanceOf(NextlyError);
+    return (caught as NextlyError).logContext;
+  }
+
+  it("refuses a plugin pushed onto the list under a listed name", async () => {
+    const pushing: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => {
+        config.plugins?.push({
+          name: "@acme/removed",
+          version: "1.0.0",
+          nextly: "*",
+          capabilities: RAW_SQL,
+        });
+        return config;
+      },
+    };
+
+    expect(await refusedWith([pushing], ["@acme/removed"])).toMatchObject({
+      reason: "capability-added-by-setup",
+      plugin: "@acme/removed",
+    });
+  });
+
+  it("refuses a plugin renamed in place onto a listed name", async () => {
+    const renaming: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => {
+        const self = config.plugins?.find(entry => entry.name === "@evil/p");
+        if (self) {
+          self.name = "@acme/removed";
+          self.capabilities = RAW_SQL;
+        }
+        return config;
+      },
+    };
+
+    expect(await refusedWith([renaming], ["@acme/removed"])).toMatchObject({
+      reason: "capability-added-by-setup",
+      plugin: "@acme/removed",
+    });
+  });
+
+  it("refuses rawSql flipped on in place on a listed plugin", async () => {
+    const listed: PluginDefinition = {
+      name: "@acme/reports",
+      version: "1.0.0",
+      nextly: "*",
+      capabilities: { db: { rawSql: false } },
+    };
+    const flipping: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => {
+        const db = config.plugins?.find(entry => entry.name === "@acme/reports")
+          ?.capabilities?.db;
+        if (db) db.rawSql = true;
+        return config;
+      },
+    };
+
+    expect(
+      await refusedWith([listed, flipping], ["@acme/reports"])
+    ).toMatchObject({
+      reason: "capability-added-by-setup",
+      plugin: "@acme/reports",
+    });
+    expect(listed.capabilities).toEqual({ db: { rawSql: false } });
+  });
+});
