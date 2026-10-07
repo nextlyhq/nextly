@@ -407,7 +407,18 @@ const content = {
     mysql: { up: [], down: [] },
     sqlite: { up: [], down: [] },
   },
-  // ...the snapshot sides: see below.
+  // The tables before and after it, carried from the previous module: an
+  // index built outside a transaction changes no declared table.
+  snapshot: {
+    postgresql: { tables: [] },
+    mysql: { tables: [] },
+    sqlite: { tables: [] },
+  },
+  before: {
+    postgresql: { tables: [] },
+    mysql: { tables: [] },
+    sqlite: { tables: [] },
+  },
 } satisfies Omit<PluginMigration, "checksum">;
 
 export default {
