@@ -83,6 +83,12 @@ export interface BuildPluginMigrationArgs {
   contributions?: ContributionsByDialect;
   /** Modules the plugin already ships. */
   existing: readonly PluginMigration[];
+  /**
+   * `false` writes a module that runs outside a transaction, statement by
+   * statement (`PluginMigration.transaction`). Absent, the module runs in one
+   * and carries no `transaction` field.
+   */
+  transaction?: boolean;
 }
 
 export interface BuiltPluginMigration {
@@ -295,6 +301,7 @@ export function buildPluginMigration(
   const content: MigrationContent = {
     name: `${formatTimestamp(now)}_${slugify(args.name)}`,
     schemaVersion: args.schemaVersion,
+    ...runMode(args.transaction),
     dialects,
     snapshot,
     before,
@@ -323,8 +330,126 @@ function lastModule(
   return orderedMigrations(existing).at(-1);
 }
 
+/**
+ * The `transaction` field a module carries: present only as `false`, so a
+ * module that runs in a transaction stays byte-identical to one written
+ * before the field existed, and hashes the same.
+ */
+function runMode(
+  transaction: boolean | undefined
+): Pick<MigrationContent, "transaction"> {
+  return transaction === false ? { transaction: false } : {};
+}
+
+export type BuildBlankPluginMigrationArgs = Pick<
+  BuildPluginMigrationArgs,
+  "pluginName" | "schemaVersion" | "name" | "now" | "existing" | "transaction"
+>;
+
+/**
+ * A module with no statements, for SQL the author writes by hand: a data
+ * backfill, PostgreSQL's `VACUUM` or `REINDEX ... CONCURRENTLY`.
+ *
+ * It changes no table the plugin declares, so every snapshot side is the
+ * previous module's result on both sides: the reconcile runs it wherever the
+ * database stands at that result, and the next generated module diffs from
+ * the same shape as if this one were not there. Its schema version is the
+ * plugin's declared one, which may equal the previous module's — it moves no
+ * schema — but not fall behind it.
+ */
+export function buildBlankPluginMigration(
+  args: BuildBlankPluginMigrationArgs
+): PluginMigration {
+  const previous = lastModule(args.existing);
+  if (previous && args.schemaVersion < previous.schemaVersion) {
+    throw new NextlyError({
+      code: "PLUGIN_SCHEMA_VERSION_NOT_ADVANCED",
+      publicMessage: `The plugin's schemaVersion is ${args.schemaVersion}, behind ${previous.schemaVersion} on its last migration. A new migration cannot claim an older schema.`,
+      logContext: {
+        plugin: args.pluginName,
+        previousSchemaVersion: previous.schemaVersion,
+        declared: args.schemaVersion,
+      },
+    });
+  }
+  const carried = (
+    side: "snapshot" | "contributed"
+  ): Record<SupportedDialect, { tables: TableSpec[] }> => {
+    const tables = (dialect: SupportedDialect) => ({
+      tables: previous?.[side]?.[dialect]?.tables ?? [],
+    });
+    return {
+      postgresql: tables("postgresql"),
+      mysql: tables("mysql"),
+      sqlite: tables("sqlite"),
+    };
+  };
+  const contributed = carried("contributed");
+  const content: MigrationContent = {
+    name: `${formatTimestamp(args.now ?? new Date())}_${slugify(args.name)}`,
+    schemaVersion: args.schemaVersion,
+    ...runMode(args.transaction),
+    dialects: {
+      postgresql: { up: [], down: [] },
+      mysql: { up: [], down: [] },
+      sqlite: { up: [], down: [] },
+    },
+    snapshot: carried("snapshot"),
+    before: carried("snapshot"),
+    contributed,
+    contributedBefore: contributed,
+    ...(previous?.contributions === undefined
+      ? {}
+      : { contributions: previous.contributions }),
+  };
+  return { ...content, checksum: migrationChecksum(content) };
+}
+
 function moduleVariable(name: string): string {
   return `m${name.replace(/[^a-zA-Z0-9]/g, "_")}`;
+}
+
+/**
+ * A module the author edits, sealed when it loads: its content is written
+ * out, and its checksum is `migrationChecksum` over that content rather than
+ * a literal, so an edit to its SQL keeps it intact. What it gives up is the
+ * check that the SQL is the SQL that was generated, which a hand-written
+ * module has no use for. The ledger still refuses it once it has been applied
+ * and then changed (`assertAppliedUnchanged`).
+ */
+export function formatHandSealedPluginMigrationModule(
+  module: PluginMigration
+): string {
+  const { checksum: _sealed, ...content } = module;
+  return [
+    "/**",
+    " * Written by `nextly migrate:create --plugin`, to be edited: put this",
+    " * module's SQL in each dialect's `up` and `down`, one statement per entry.",
+    " * It is sealed with `migrationChecksum` when it loads, so an edit keeps it",
+    " * intact. Once it has been applied, change it no further: the ledger",
+    " * refuses a module that no longer matches what ran.",
+    ...(module.transaction === false
+      ? [
+          " *",
+          " * `transaction: false`: it runs outside a transaction, statement by",
+          " * statement, and a statement that fails leaves the ones before it",
+          " * applied.",
+        ]
+      : []),
+    " */",
+    "import {",
+    "  migrationChecksum,",
+    "  type PluginMigration,",
+    '} from "@nextlyhq/plugin-sdk/schema";',
+    "",
+    `const content = ${JSON.stringify(content, null, 2)} satisfies Omit<PluginMigration, "checksum">;`,
+    "",
+    "export default {",
+    "  ...content,",
+    "  checksum: migrationChecksum(content),",
+    "} satisfies PluginMigration;",
+    "",
+  ].join("\n");
 }
 
 /** The module file's content, generated — never hand-edited. */
@@ -372,6 +497,13 @@ export function formatPluginMigrationsIndex(
 export interface GeneratePluginMigrationArgs extends BuildPluginMigrationArgs {
   /** The plugin's `src/migrations` directory. */
   migrationsDir: string;
+  /**
+   * Write the module sealed when it loads (`formatHandSealedPluginMigrationModule`),
+   * for an author who will edit its SQL — the form a module that runs
+   * outside a transaction is written in, so `CREATE INDEX` can become
+   * `CREATE INDEX CONCURRENTLY`.
+   */
+  handSealed?: boolean;
 }
 
 export interface GeneratePluginMigrationResult {
@@ -391,26 +523,53 @@ export async function generatePluginMigration(
 ): Promise<GeneratePluginMigrationResult | null> {
   const built = buildPluginMigration(args);
   if (!built) return null;
+  const written = await writePluginMigration(
+    args.migrationsDir,
+    built.module,
+    args.existing,
+    args.handSealed === true
+  );
+  return { ...written, operationCounts: built.operationCounts };
+}
 
-  await mkdir(args.migrationsDir, { recursive: true });
-  const modulePath = resolve(args.migrationsDir, `${built.module.name}.ts`);
+/**
+ * Write a blank module (`buildBlankPluginMigration`), hand-sealed because
+ * its author is about to add its SQL, plus the rewritten barrel.
+ */
+export async function generateBlankPluginMigration(
+  args: BuildBlankPluginMigrationArgs & { migrationsDir: string }
+): Promise<Omit<GeneratePluginMigrationResult, "operationCounts">> {
+  return writePluginMigration(
+    args.migrationsDir,
+    buildBlankPluginMigration(args),
+    args.existing,
+    true
+  );
+}
+
+/** Write one module and the barrel listing it beside the existing ones. */
+async function writePluginMigration(
+  migrationsDir: string,
+  module: PluginMigration,
+  existing: readonly PluginMigration[],
+  handSealed: boolean
+): Promise<Omit<GeneratePluginMigrationResult, "operationCounts">> {
+  await mkdir(migrationsDir, { recursive: true });
+  const modulePath = resolve(migrationsDir, `${module.name}.ts`);
   await writeFile(
     modulePath,
-    formatPluginMigrationModule(built.module),
+    handSealed
+      ? formatHandSealedPluginMigrationModule(module)
+      : formatPluginMigrationModule(module),
     "utf-8"
   );
 
-  const indexPath = resolve(args.migrationsDir, "index.ts");
+  const indexPath = resolve(migrationsDir, "index.ts");
   await writeFile(
     indexPath,
-    formatPluginMigrationsIndex([...args.existing, built.module]),
+    formatPluginMigrationsIndex([...existing, module]),
     "utf-8"
   );
 
-  return {
-    modulePath,
-    indexPath,
-    moduleName: built.module.name,
-    operationCounts: built.operationCounts,
-  };
+  return { modulePath, indexPath, moduleName: module.name };
 }

@@ -36,7 +36,7 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 
 - `nextly migrate` -- `--dry-run` (preview without executing), `--step <n>` (apply only N pending migrations), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
 - `nextly migrate:baseline` -- `--name <name>` (the migration's name; defaults to `baseline`), `--force-unlock`.
-- `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--non-interactive`, `--accept-renames`.
+- `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--no-transaction` (with `--blank`, a file whose first line is the [no-transaction marker](#running-a-file-outside-a-transaction); with `--plugin`, a module with `transaction: false`), `--non-interactive`, `--accept-renames`.
 - `nextly migrate:status` -- `--json` (machine-readable output for CI scripting).
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check).
 - `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
@@ -337,8 +337,9 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS orders_customer_idx ON dc_orders (custom
 DROP INDEX CONCURRENTLY IF EXISTS orders_customer_idx;
 ```
 
-`nextly migrate:create --blank` writes a file you can start from; the marker
-goes above its `-- Migration:` line, and only the first line counts. A plugin's
+`nextly migrate:create --blank --no-transaction` writes a file you can start
+from, with the marker as its first line. In any other file the marker goes
+above its `-- Migration:` line: only the first line counts. A plugin's
 migration module says the same with `transaction: false` on the module; see
 [Plugin schema](/docs/plugins/schema).
 

@@ -247,6 +247,15 @@ describe("runPluginMigrations", () => {
         h.deps
       )
     ).rejects.toThrow(/changed since it was generated/i);
+    // And names the supported way to edit one: sealing it by hand.
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        h.deps
+      )
+    ).rejects.toThrow(
+      "A module written or edited by hand is sealed with `migrationChecksum` from `@nextlyhq/plugin-sdk/schema`"
+    );
   });
 
   it("refuses a module whose target snapshot was edited, even though its SQL was not", async () => {
