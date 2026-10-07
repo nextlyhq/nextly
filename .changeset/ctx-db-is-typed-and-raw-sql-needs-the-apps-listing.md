@@ -27,7 +27,9 @@
 "@nextlyhq/ui": patch
 ---
 
-`ctx.db` is typed and owner-checked, and raw SQL needs the app's consent.
+`ctx.db` is typed and owner-checked, raw SQL needs the app's consent, and
+plugin code no longer reaches core's live handles through `ctx.config`,
+`ctx.services` or a `setup` transformer.
 
 ## Breaking changes
 
@@ -72,15 +74,65 @@
   `PLUGIN_RESOLUTION_ERROR` (`logContext.reason` is `capability-not-listed`);
   the message names the line to add. The list is read from the config as the
   app wrote it, before any plugin's `setup` runs, so a plugin cannot add
-  itself. A listed name that matches no configured plugin logs a warning.
+  itself. A listed name that matches no configured plugin logs a warning at
+  boot.
 
+- **The raw-SQL grant is judged on the plugins as the app configured them.**
+  - The plugins are recorded before any `setup` transformer runs, and the
+    transformed list is judged against that record.
+  - A plugin that holds `capabilities.db.rawSql` only because a transformer
+    gave it (adding the plugin, renaming a plugin onto a name no configured
+    plugin declaring it held, or setting the flag on a plugin whose manifest
+    does not declare it) refuses the boot with `PLUGIN_RESOLUTION_ERROR`
+    (`capability-added-by-setup`).
+  - A plugin that declares `rawSql` under a configured name whose lifecycle
+    functions or `contributes` a transformer replaced (including dropping the
+    configured plugin and renaming another onto its name) refuses with
+    `plugin-code-replaced-by-setup`, naming the plugin and the changed path.
+  - The grant is decided once, when the boot resolves the plugin list. Every
+    plugin context, the auth router's included, reads that decision, so
+    turning `capabilities.db.rawSql` on after the boot grants nothing. The
+    exported `createPluginContext` takes the grants as a fourth argument and
+    grants nothing without them.
+- **A `setup` transformer receives copies of settings, not live handles.** It
+  receives copies of the plugin definitions and of the plain settings, with
+  `db.rawSqlPlugins` frozen. `adapter`, `logger`, `hookRegistry`,
+  `passwordHasher`, `rateLimit`, `storagePlugins` (the CLI's `storage`),
+  `imageProcessor` and `pluginConsent` are absent from its input, and a value
+  it returns under those keys, or under any other key it was not handed, is
+  ignored: the app's own value is kept. Editing a definition in place no
+  longer changes the app's own plugin objects. `PluginDefinition.setup`'s
+  type is unchanged, so typed transformers still compile; the withheld keys
+  are simply absent at runtime.
+- **`ctx.config` is a frozen copy of plain configuration.** Its type is the
+  new `PluginConfig`, in place of `Readonly<NextlyServiceConfig>`.
+  - Every plain object and array in it is a copy frozen all the way down, so
+    writing a nested value throws in strict-mode code rather than reaching
+    the configuration core reads. Functions and class instances are kept by
+    reference.
+  - Removed: `adapter`, `db`, `pluginConsent`, `storagePlugins`,
+    `imageProcessor`, `logger` (use `ctx.logger`), `hookRegistry` (use
+    `ctx.hooks`), `passwordHasher`, `rateLimit`, and `email.providerConfig`
+    (the provider's credentials).
+  - `ctx.config.plugins` lists `PluginSummary` entries (`name`, `version`,
+    `enabled`, `capabilities`, `contributes.declarations`), not definitions.
+- **`ctx.services` hands out facades.**
+  - `users`, `media`, `email`, `versions` and `collections` are frozen
+    facades of the methods meant for plugins. A service's `adapter`, Drizzle
+    handle, sub-services and logger are no longer reachable, and
+    `collections.registerDynamicSchemas` and `invalidateSchemaForSlug` are
+    gone.
+  - `collections.withTransaction` hands its work an opaque
+    `PluginCollectionTransaction` token, which the `*InTransaction` methods
+    accept, instead of the adapter's transaction context; any other value is
+    rejected with `VALIDATION_ERROR` (`plugin-transaction-token-unknown`).
+    This changes the `@public` `PluginCollectionService` type.
 - **`ctx.db.transaction` does not nest.** `tx` is the typed surface bound to
-  the transaction's connection; calling `transaction` on it is refused. With
+  the transaction's connection, and its type has no `transaction`. Called
+  anyway, it rejects with `INVALID_INPUT` (`nested-plugin-transaction`)
+  instead of opening a second transaction on another connection. With
   `rawSql` listed, `ctx.db.raw.transaction`'s `tx` is the live handle and its
   `transaction` nests as a savepoint.
-- **`ctx.config` carries configuration values only.** It no longer includes
-  the live database `adapter` or the raw-SQL consent data. Reach the database
-  through `ctx.db`, or through `ctx.db.raw` with `rawSql` declared and listed.
 
 This corrects the earlier release note that said a plugin declaring `rawSql`
 gets the live Drizzle instance at `ctx.db`: the live instance is at
@@ -97,5 +149,12 @@ gets the live Drizzle instance at `ctx.db`: the live instance is at
   effects wait for the commit.
 - `ctx.db.query.<table>.findMany({ with })` runs relational queries over the
   tables `ctx.db` may reach.
+- New experimental types, from `nextly` and `@nextlyhq/plugin-sdk`:
+  `PluginConfig`, `PluginSummary`, `PluginEmailSettings`, `PluginUserService`,
+  `PluginMediaService`, `PluginEmailService`, `PluginVersionsService` and
+  `PluginCollectionTransaction`.
+- `createTestNextly` takes a `pluginConsent` option (`@experimental`), the
+  test's counterpart of `db.rawSqlPlugins`, and its refusal of a plugin that
+  declares `rawSql` names the option and the value to pass.
 
 Full details: `docs/plugins/services.mdx` and `docs/plugins/security.mdx`.
