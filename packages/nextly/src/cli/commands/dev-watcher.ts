@@ -22,6 +22,7 @@ import type { ResolvedDevOptions } from "./db-sync";
 import {
   ensureLocalizedCompanions,
   performPermissionSeeding,
+  publishExtensionSchema,
   syncCollections,
   syncComponents,
   syncSingles,
@@ -112,6 +113,9 @@ export function createDebouncedSync(
             // Unconditional, so the orphan scan still runs when the config declares none of a
             // type: deleting the last entry of a kind is precisely what orphans its table, making
             // a zero count the case where the scan matters most.
+            // Before the pushes, which plan plugin tables and contributed
+            // elements from it.
+            await publishExtensionSchema(configToSync, adapter, context);
             await syncCollections(configToSync, adapter, options, context);
             await syncSingles(configToSync, adapter, options, context);
             await syncComponents(configToSync, adapter, options, context);
