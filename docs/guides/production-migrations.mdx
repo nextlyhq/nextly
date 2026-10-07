@@ -320,7 +320,9 @@ The error names the statement and says what to write instead.
 PostgreSQL `BEGIN ATOMIC` function body reach the database whole, so no
 `DELIMITER` line is needed. A PostgreSQL `$$ … $$` body is likewise never split.
 A `DROP TABLE` inside such a body is judged like any other drop in the file: a
-body that drops a table another owner holds is refused.
+body that drops a table another owner holds is refused. A PostgreSQL function
+body written as an ordinary single-quoted string (`AS 'DROP TABLE x'`) is not
+read; see [Known limits](#known-limits).
 
 **On SQLite, foreign-key enforcement is off while a file runs, and checked before
 it commits.** The runner sets `PRAGMA foreign_keys = OFF` before the transaction,
@@ -668,10 +670,37 @@ risk, and that is a decision for `nextly plugins uninstall` rather than a side
 effect of a reload.
 
 <Callout type="warn">
-`nextly migrate:fresh` drops everything. The guarantee above — that tables
-belonging to another owner are never touched — holds for push, reconcile and
-`migrate`, and not for `migrate:fresh`.
+`nextly migrate:fresh` drops everything. The check above — that a migration
+dropping another owner's table is refused — applies to push, reconcile and
+`migrate`, within the limits below, and not to `migrate:fresh`.
 </Callout>
+
+#### Known limits
+
+The drop check catches mistakes. It is **not a security boundary**: plugins are
+trusted code that already run in your process with database access, so nothing
+that reads their migration text can stop a plugin set on dropping a table. Two
+limits are accepted:
+
+- **It reads SQL as text.** Where it cannot read a statement with certainty it
+  refuses it: an unterminated string or comment, a MySQL executable comment,
+  and MySQL's backslash escape inside a string (`'it\'s'`), whose meaning
+  depends on a server setting. Write the quote doubled (`'it''s'`) instead. It
+  does not read a PostgreSQL function body written as an ordinary
+  single-quoted string, such as
+  `CREATE FUNCTION f() RETURNS void AS 'DROP TABLE auth__identities' LANGUAGE sql`,
+  or SQL passed as a string to a function that runs it: those are data to the
+  check, so a drop inside them is not refused. Write function bodies with
+  `$$ … $$`, which is read as code. The statements that run SQL assembled at
+  run time (`EXECUTE`, `PREPARE`, and a `DO` whose body is not dollar-quoted)
+  are refused.
+- **On MySQL, development push and an apply planned through drizzle-kit can
+  commit a change before the check refuses.** The checks that read
+  drizzle-kit's plan run after the renames and drops that plan resolves first,
+  and MySQL commits each schema statement as it runs. The next push plans again
+  from the database as it now stands, and converges. `nextly migrate` is not
+  affected: a migration's statements are fixed and checked before any of them
+  runs.
 
 ### Boot refusals you may meet
 
