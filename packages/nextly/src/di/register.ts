@@ -149,7 +149,10 @@ import type {
 import { createPluginContext } from "../plugins/plugin-context";
 import { resolvePlugins, resolveTransformedPlugins } from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
-import { collectPluginRoutes } from "../plugins/routes/collect-routes";
+import {
+  collectPluginRoutes,
+  type CollectedRoute,
+} from "../plugins/routes/collect-routes";
 import { rateLimitProxyWarning } from "../plugins/routes/route-options";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import {
@@ -168,7 +171,10 @@ import {
   registerPluginService,
 } from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
-import { collectWidgetSources } from "../plugins/widgets/collect-widget-sources";
+import {
+  collectWidgetSources,
+  type CollectedWidgetSource,
+} from "../plugins/widgets/collect-widget-sources";
 import { setBootedConfig } from "../route-handler/auth-handler";
 import type {
   CollectionSource,
@@ -758,6 +764,19 @@ async function registerServicesOnce(
   // Fail fast on role-bundle collisions (D67). Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
   collectRoles(transformedConfig, transformedPlugins);
+
+  // Fail fast on contributed routes and widget sources: a path or method that
+  // cannot be served, an option that cannot mean what it says, a collision,
+  // or a source outside the `plugin:` namespace. Both folds are pure, so they
+  // run here, before the adapter connects — boot migrations, extension-table
+  // creation and code-first syncs all run before `initializePlugins`, and a
+  // configuration the boot is going to refuse must not change the database
+  // first. The results are handed to `initializePlugins` rather than folded
+  // again there.
+  const pluginBootContributions: PluginBootContributions = {
+    routes: collectPluginRoutes(transformedPlugins),
+    widgetSources: collectWidgetSources(transformedPlugins),
+  };
 
   // Register plugin custom field types (C7/D16) BEFORE schema sync, so the DDL
   // classifier (classifyFieldKind) maps each custom type to its storage
@@ -1548,6 +1567,7 @@ async function registerServicesOnce(
   // previous registration's names in place for a reload to believe.
   globalForReg.__nextly_pluginTeardown = await initializePlugins(
     transformedConfig,
+    pluginBootContributions,
     adapterDrizzleDb,
     adapter.getCapabilities().dialect,
     resolvedLogger,
@@ -1686,6 +1706,16 @@ async function registerServicesOnce(
 // ============================================================
 // Orchestration Helpers
 // ============================================================
+
+/**
+ * The contributed routes and widget sources of the boot's plugin list, each
+ * folded and validated once, before the adapter connects, and registered by
+ * `initializePlugins` once every plugin has a context.
+ */
+interface PluginBootContributions {
+  routes: CollectedRoute[];
+  widgetSources: CollectedWidgetSource[];
+}
 
 /**
  * What boot-time migrations are handed: the RAW run settings and the EFFECTIVE
@@ -3280,6 +3310,12 @@ async function createMissingCodeFirstTables(
  */
 async function initializePlugins(
   transformedConfig: NextlyServiceConfig,
+  /**
+   * The routes and widget sources of `transformedConfig.plugins`, collected
+   * and validated by `registerServicesOnce` before the adapter connected
+   * (D25/D7).
+   */
+  contributions: PluginBootContributions,
   adapterDrizzleDb: DatabaseInstance,
   dialect: SupportedDialect,
   logger: Logger,
@@ -3288,9 +3324,7 @@ async function initializePlugins(
   const plugins = transformedConfig.plugins ?? [];
   if (plugins.length === 0) return [];
 
-  // Collect + validate contributed routes BEFORE any init runs so a route
-  // collision / invalid path fails the boot fast (D25/D7), before side effects.
-  const collectedRoutes = collectPluginRoutes(plugins);
+  const collectedRoutes = contributions.routes;
 
   // Reported once here rather than wherever the auth UI or deps are rebuilt,
   // which is every `/auth/*` request and every `ctx.auth` call.
@@ -3433,9 +3467,9 @@ async function initializePlugins(
   };
 
   // Folded once, across every plugin, so a duplicate source id or a reserved
-  // namespace is a boot failure naming BOTH owners. Done before any
-  // registration so a refusal writes no store at all.
-  const contributedSources = collectWidgetSources(plugins);
+  // namespace is a boot failure naming BOTH owners. Folded before the adapter
+  // connected, so a refusal writes no store at all.
+  const contributedSources = contributions.widgetSources;
 
   // PASS 1 — build every enabled plugin's context, register its contributed
   // services (D64) and declared event names. Services register BEFORE any init
