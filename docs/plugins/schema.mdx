@@ -104,6 +104,9 @@ them with `plugin.rename({...})` (D54). Read the resolved slug from `ctx.self`:
 ```ts
 const slug = ctx.self.collections.redirects; // resolved, post-rename
 await ctx.services.collections.listEntries(slug, {}, { as: "system" });
+
+declare const ctx: PluginContext;
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 ```
 
 ## Provenance (D14)
@@ -136,3 +139,234 @@ is why declaring everything through `contributes` (rather than hand-writing tabl
 > behind on uninstall — document it, or avoid it.
 
 See also: [Data access](/docs/plugins/services) · [Testing](/docs/plugins/testing).
+
+## Tables of your own
+
+A collection gives you REST routes, admin screens, validation and access
+control. Sometimes you want none of that — a join table, a cache, a log a user
+never sees — and a collection is the wrong shape for it.
+
+Declare a table instead:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { col, defineTable } from "@nextlyhq/plugin-sdk/schema";
+
+const identities = defineTable(
+  "identities",
+  {
+    id: col.id(),
+    provider: col.shortText(),
+    providerAccountId: col.shortText(),
+    userId: col.ref("users"),
+    lastSeenAt: col.timestamp({ nullable: true }),
+    ...col.timestamps(),
+  },
+  {
+    indexes: [
+      { columns: ["provider", "providerAccountId"], unique: true },
+      { columns: ["userId"] },
+    ],
+  }
+);
+
+definePlugin({
+  name: "@acme/nextly-plugin-auth",
+  version: "1.0.0",
+  nextly: ">=0.1.0",
+  contributes: {
+    schema: { prefix: "auth", tables: [identities] },
+  },
+});
+```
+
+That table is created as `auth__identities`. The prefix is yours; declare it,
+or let it default to your plugin's admin slug.
+
+### The column kinds
+
+`text`, `shortText`, `longText`, `varchar(n)`, `boolean`, `integer`, `double`,
+`decimal(p, s)`, `timestamp`, `json<T>()`, plus two conveniences: `col.id()` (a
+`varchar(36)` primary key for a UUIDv7) and `col.timestamps()` (`created_at`
+and `updated_at`).
+
+The list is deliberately short. Every kind here renders on PostgreSQL, MySQL
+and SQLite, so a table you declare works on all three — what cannot be
+expressed cannot drift between them.
+
+## Reading and writing
+
+The declaration creates and migrates the table under its SQL name
+(`auth__identities` above). Plugin code queries it through `ctx.db`, the
+Drizzle builder, with a Drizzle table object that names the same table and
+columns. `col.id()` has no database default, so the code that inserts a row
+supplies its `id`.
+
+## Hooks, when a declaration is not enough
+
+`contributes.schema.extend` runs after every plugin before you in dependency
+order, so you can react to what they declared:
+
+```ts
+contributes: {
+  schema: {
+    extend: [
+      ({ schema }) => {
+        schema.extendTable("dc_posts", {
+          indexes: [{ columns: ["authorId", "publishedAt"] }],
+        });
+      },
+    ],
+  },
+}
+```
+
+The declarative `tables` form is sugar for a hook calling `addTable`. They
+produce identical output.
+
+## What you may change
+
+| Target | Columns | Indexes |
+| --- | --- | --- |
+| Your own tables | yes | yes |
+| A plugin you name in `dependsOn` / `optionalDependsOn` | yes, hidden | yes |
+| Any other plugin's tables | no | no |
+| Entity tables (`dc_*`, `single_*`, `comp_*`) | yes, hidden | yes |
+| Extendable core tables (`users`, `media`, `nextly_jobs`, `audit_log`, `activity_log`) | yes, hidden | yes |
+| Every other core table | no | no |
+
+The app may add columns and indexes to any plugin's table, under the same
+rules.
+
+Which migrations carry what you add depends on the table. On your own tables
+and on a dependency's, your plugin's own migration modules carry it. On an
+entity table or an extendable core table — whether a plugin or the app added
+it — the APP's migrations carry it: `nextly migrate:create` in the app writes
+the statement, so it reaches a database with the app's next migration.
+
+A column added to a table you do not own is **hidden**: it exists on the table,
+so migrations and dev push keep it, and on an entity table it is stripped
+from every REST response, Direct API read, version snapshot and webhook
+payload, and a value sent for it through the entry API is dropped. The column
+must be nullable or have a default, since the table may already have rows.
+
+A hidden column is storage for your plugin's own bookkeeping, not a field. To
+give a collection a field that editors and API callers see, with validation and
+access control, use `contributes.extend`.
+
+## What is deliberately unsupported
+
+Views, native enums, and partial indexes: an index with a `where` predicate is
+refused on every dialect, because declarations are checked against all three
+and MySQL has none. Checks, foreign keys, and expression indexes ARE
+supported: declare them on `defineTable` and they travel through
+dev push, plugin migrations and drift checks on every dialect — inline in the
+table's `CREATE TABLE` on its first migration, and through the table rebuild
+where a dialect cannot add one in place. An expression index key must compute a
+value: `DESC`, `ASC`, `NULLS FIRST/LAST`, `COLLATE` and operator classes such as
+`text_pattern_ops` are refused at `defineTable`, because no dialect reports them
+back and the index would be planned again on every push. `col.ref()` alone records a reference
+for documentation and validation; a constraint comes from the `foreignKeys`
+option.
+
+## Production
+
+A plugin that declares tables ships **migration modules**
+(`contributes.schema.migrations`) and a `schemaVersion`. Generate them with
+`nextly migrate:create --plugin ./src/index.ts`, bumping `schemaVersion` each
+time; `nextly migrate` applies them in dependency order under the migrate lock,
+before any plugin initialises. The ledger records them under qualified names
+(`plugin:<name>/<file>`), an app rollback never touches them, and a production
+boot refuses a plugin whose declared version the database has not applied
+(`PLUGIN_SCHEMA_BEHIND`).
+
+Generation never drops a table or column an earlier module created. The
+generator cannot tell a rename from a drop and an add, and either loses the
+rows, so it refuses (`PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA`) and names what
+it would have dropped; write the rename, or the deliberate drop, by hand. With
+no schema changes it writes nothing and exits with code 2, whatever
+`schemaVersion` says.
+
+Each module runs in one transaction. A module that needs a statement a
+transaction refuses, such as PostgreSQL's `CREATE INDEX CONCURRENTLY`, sets
+`transaction: false`, and its UP and DOWN then run statement by statement. If
+one fails, the statements before it stay applied and are not undone, so keep
+such a module to the statements that need it. The field is part of the
+module's checksum only when it is `false`, so existing modules keep their
+checksums. See
+[Running a file outside a transaction](/docs/guides/production-migrations#running-a-file-outside-a-transaction).
+
+### Writing a module by hand
+
+A generated module carries its checksum as a literal, and any edit to it is
+refused (`MIGRATION_CHECKSUM_MISMATCH`). A module you write or edit yourself
+is sealed by `migrationChecksum` from `@nextlyhq/plugin-sdk/schema` instead,
+computed over the module without its checksum when the module loads:
+
+```ts
+import {
+  migrationChecksum,
+  type PluginMigration,
+} from "@nextlyhq/plugin-sdk/schema";
+
+const content = {
+  name: "20261007_120000_000_index_notes",
+  schemaVersion: 3,
+  transaction: false,
+  dialects: {
+    postgresql: {
+      up: ["CREATE INDEX CONCURRENTLY IF NOT EXISTS notes_label_idx ON acme__notes (label)"],
+      down: ["DROP INDEX CONCURRENTLY IF EXISTS notes_label_idx"],
+    },
+    mysql: { up: [], down: [] },
+    sqlite: { up: [], down: [] },
+  },
+  // The tables before and after it, carried from the previous module: an
+  // index built outside a transaction changes no declared table.
+  snapshot: {
+    postgresql: { tables: [] },
+    mysql: { tables: [] },
+    sqlite: { tables: [] },
+  },
+  before: {
+    postgresql: { tables: [] },
+    mysql: { tables: [] },
+    sqlite: { tables: [] },
+  },
+} satisfies Omit<PluginMigration, "checksum">;
+
+export default {
+  ...content,
+  checksum: migrationChecksum(content),
+} satisfies PluginMigration;
+```
+
+You rarely write one from nothing. `nextly migrate:create` writes it in this
+form:
+
+- `nextly migrate:create --plugin ./src/index.ts --blank` writes a module with
+  no statements for SQL you add, such as a backfill or a `VACUUM`. It carries
+  the previous module's schema on both sides, so its SQL must not change the
+  tables the plugin declares; its `schemaVersion` is the plugin's, which may
+  equal the previous module's. Add `--no-transaction` for a module with
+  `transaction: false`.
+- `nextly migrate:create --plugin ./src/index.ts --no-transaction` generates the
+  next module from the plugin's schema, as usual, with `transaction: false`, so
+  you can turn its `CREATE INDEX` into `CREATE INDEX CONCURRENTLY`. A statement
+  that builds the same index leaves the module's snapshot correct.
+
+Either way the module is written to `src/migrations/` and added to its barrel.
+A hand-sealed module gives up one check: that its SQL is the SQL that was
+generated. The ledger still refuses a module that changed after it was
+applied, so finish editing it before it ships.
+
+The entry `--plugin` points at may export the plugin as its default export or
+as a named one (`export const myPlugin = definePlugin(...)`), beside the tables
+it declares; a file exporting two plugins is refused, naming both.
+
+A database that dev push has already given the plugin's tables can be migrated
+as it is. Dev push creates the tables as the plugin defines them now, which is
+the result of its latest module, so `nextly migrate` records every module up to
+the one whose result the database matches as applied, without running them,
+and runs any after it. A database matching no point in the plugin's history is
+refused, with the recovery for a plugin's tables.

@@ -219,12 +219,11 @@
     "digests": ["a532c6cee9e6e280"]
   },
   "packages/nextly/src/cli/commands/migrate-check.ts": {
-    "count": 6,
+    "count": 5,
     "digests": [
       "1e69da4e9a7faed6",
       "ac4363b1f74caedb",
       "b0fd26dbfaf30d0a",
-      "ba2c3801c52945d7",
       "c7a32540bd4bec8c",
       "f373ffe8aadde1d6"
     ]
@@ -248,10 +247,6 @@
   "packages/nextly/src/cli/commands/migrate-resolve.test.ts": {
     "count": 1,
     "digests": ["b6f524f34e423244"]
-  },
-  "packages/nextly/src/cli/commands/migrate-resolve.ts": {
-    "count": 1,
-    "digests": ["35f32f8b7ce0a0c3"]
   },
   "packages/nextly/src/cli/commands/migrate-status.ts": {
     "count": 1,
@@ -304,10 +299,8 @@
     "digests": ["736602a7e7e37941"]
   },
   "packages/nextly/src/di/register.ts": {
-    "count": 6,
+    "count": 4,
     "digests": [
-      "3b36a36d5b6266c4",
-      "691778b66139a8a0",
       "7e5c57aa1fbd7a0f",
       "c37909a17b34d363",
       "c4704b07cd3f3890",
@@ -634,18 +627,6 @@
   "packages/nextly/src/domains/schema/migrate/drift-reconcile.test.ts": {
     "count": 1,
     "digests": ["d8e7346d47ae180c"]
-  },
-  "packages/nextly/src/domains/schema/migrate/drift-reconcile.ts": {
-    "count": 1,
-    "digests": ["5a2c10adf9bc403c"]
-  },
-  "packages/nextly/src/domains/schema/migrate/resolve.test.ts": {
-    "count": 1,
-    "digests": ["1e062c7b8286b543"]
-  },
-  "packages/nextly/src/domains/schema/migrate/resolve.ts": {
-    "count": 1,
-    "digests": ["3ef9f5d5c2d843b7"]
   },
   "packages/nextly/src/domains/schema/pipeline/__tests__/f8-matrix.integration.test.ts": {
     "count": 2,
