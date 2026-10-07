@@ -366,6 +366,13 @@ before any plugin initialises. The ledger records them under qualified names
 boot refuses a plugin whose declared version the database has not applied
 (`PLUGIN_SCHEMA_BEHIND`).
 
+Generation never drops a table or column an earlier module created. The
+generator cannot tell a rename from a drop and an add, and either loses the
+rows, so it refuses (`PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA`) and names what
+it would have dropped; write the rename, or the deliberate drop, by hand. With
+no schema changes it writes nothing and exits with code 2, whatever
+`schemaVersion` says.
+
 The entry `--plugin` points at may export the plugin as its default export or
 as a named one (`export const myPlugin = definePlugin(...)`), beside the tables
 it declares; a file exporting two plugins is refused, naming both.

@@ -133,11 +133,72 @@ function renderDialect(
   return { statements: { up, down }, operations };
 }
 
+/** The tables and columns a list of operations drops, by name. */
+function droppedTablesAndColumns(operations: readonly Operation[]): string[] {
+  return operations.flatMap(operation => {
+    if (operation.type === "drop_table") return [operation.tableName];
+    if (operation.type === "drop_column") {
+      return [`${operation.tableName}.${operation.columnName}`];
+    }
+    return [];
+  });
+}
+
+/**
+ * Refuse a module that drops a table or column this plugin created.
+ *
+ * Every table and column the previous side holds was created by this
+ * plugin's earlier modules: its own tables, and on a foreign table only the
+ * elements it contributed, since both sides of that diff share the rest. The
+ * diff cannot tell a rename from a drop and an add, so dropping one here
+ * loses its rows in production without anyone having asked to. The developer
+ * writes the rename, or the deliberate drop, by hand.
+ */
+function assertNothingCreatedIsDropped(
+  pluginName: string,
+  drops: ReadonlySet<string>
+): void {
+  if (drops.size === 0) return;
+  const named = [...drops].sort();
+  const one = named.length === 1;
+  throw new NextlyError({
+    code: "PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA",
+    publicMessage:
+      `This migration would drop ${named.join(", ")}, which an earlier migration of plugin "${pluginName}" created, and lose ${one ? "its" : "their"} rows. ` +
+      `If ${one ? "it was" : "they were"} renamed, write the rename as a migration by hand; if the drop is deliberate, write the drop by hand.`,
+    logContext: { plugin: pluginName, drops: named },
+  });
+}
+
+/**
+ * Refuse a module whose schemaVersion does not move past the previous one's:
+ * module order is name-sorted and the runner takes the version from the LAST
+ * module, so an un-bumped module would describe a schema the plugin's
+ * manifest no longer claims.
+ */
+function assertSchemaVersionAdvanced(
+  args: Pick<BuildPluginMigrationArgs, "pluginName" | "schemaVersion">,
+  previous: PluginMigration | undefined
+): void {
+  if (!previous || args.schemaVersion > previous.schemaVersion) return;
+  throw new NextlyError({
+    code: "PLUGIN_SCHEMA_VERSION_NOT_ADVANCED",
+    publicMessage: `The plugin's schemaVersion must move past ${previous.schemaVersion} before new migrations can be generated (it is ${args.schemaVersion}).`,
+    logContext: {
+      plugin: args.pluginName,
+      previousSchemaVersion: previous.schemaVersion,
+      declared: args.schemaVersion,
+    },
+  });
+}
+
 /**
  * Build the next migration module for a plugin. Returns null when no dialect
- * has operations (the CLI's "no changes detected" exit-2 contract).
+ * has operations (the CLI's "no changes detected" exit-2 contract), whatever
+ * the declared schemaVersion.
  *
- * Throws `PLUGIN_SCHEMA_VERSION_NOT_ADVANCED` when `schemaVersion` does not
+ * Throws `PLUGIN_SCHEMA_VERSION_NOT_ADVANCED` when there are changes and
+ * `schemaVersion` does not
  * move past the previous module's: module order is name-sorted and the runner
  * takes the version from the LAST module, so an un-bumped regeneration would
  * silently describe a schema the plugin's manifest no longer claims.
@@ -146,17 +207,6 @@ export function buildPluginMigration(
   args: BuildPluginMigrationArgs
 ): BuiltPluginMigration | null {
   const previous = lastModule(args.existing);
-  if (previous && args.schemaVersion <= previous.schemaVersion) {
-    throw new NextlyError({
-      code: "PLUGIN_SCHEMA_VERSION_NOT_ADVANCED",
-      publicMessage: `The plugin's schemaVersion must move past ${previous.schemaVersion} before new migrations can be generated (it is ${args.schemaVersion}).`,
-      logContext: {
-        plugin: args.pluginName,
-        previousSchemaVersion: previous.schemaVersion,
-        declared: args.schemaVersion,
-      },
-    });
-  }
 
   const dialects = {} as Record<SupportedDialect, DialectStatements>;
   const snapshot = {} as Record<SupportedDialect, { tables: TableSpec[] }>;
@@ -168,6 +218,8 @@ export function buildPluginMigration(
   >;
   const operationCounts = {} as Record<SupportedDialect, number>;
   let totalOperations = 0;
+  // Tables and columns the diff would drop, across every dialect, by name.
+  const drops = new Set<string>();
   const contributions: ContributionsByDialect = {};
 
   for (const dialect of ALL_DIALECTS) {
@@ -223,9 +275,17 @@ export function buildPluginMigration(
     contributedBefore[dialect] = { tables: previousContributed };
     operationCounts[dialect] = operations.length;
     totalOperations += operations.length;
+    for (const dropped of droppedTablesAndColumns(operations)) {
+      drops.add(dropped);
+    }
   }
 
+  assertNothingCreatedIsDropped(args.pluginName, drops);
   if (totalOperations === 0) return null;
+  // After the diff, so a plugin whose schema matches its last module reports
+  // "no changes" whatever its schemaVersion: the version only has to move
+  // when there is a module to give it to.
+  assertSchemaVersionAdvanced(args, previous);
 
   const now = args.now ?? new Date();
   // Present only when there are some, so a module that contributes nothing
