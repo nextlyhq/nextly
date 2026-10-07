@@ -56,12 +56,22 @@ migration file the run refuses (see below). Applied files are never re-read.
   `SET CONSTRAINTS` and `SET TRANSACTION`, `RESET`, `DISCARD`), or a statement
   the database cannot run inside a transaction (`VACUUM`, `CONCURRENTLY` index
   builds, MySQL `LOCK TABLES`, SQLite `ATTACH`). `BEGIN` and `COMMIT` in a file
-  are left out; `SAVEPOINT`, `ROLLBACK TO` and `RELEASE` run as written. **A
-  pending file that uses a refused statement must be edited before it
-  applies**, or marked with a `-- nextly:no-transaction` comment, which runs it
-  statement by statement outside a transaction, with no all-or-nothing
-  guarantee; the run's output says so. On MySQL each schema statement still
-  commits as it runs.
+  are left out; `SAVEPOINT`, `ROLLBACK TO` (also spelled `ROLLBACK WORK TO`
+  or `ROLLBACK TRANSACTION TO`) and `RELEASE` run as written. **A pending file
+  that uses a refused statement must be edited before it applies.** A file
+  whose first line is `-- nextly:no-transaction`, or a plugin migration module
+  with `transaction: false` (experimental), runs outside a transaction,
+  statement by statement, so it can hold `VACUUM`, PostgreSQL's `CONCURRENTLY`
+  index builds and the other statements a transaction refuses. Statements that
+  leave state on the connection stay refused either way: a session `SET`, a
+  bare `ROLLBACK`, MySQL `LOCK TABLES` and SQLite `ATTACH`. Such a file has no
+  all-or-nothing guarantee: if a statement fails, the ones before it stay
+  applied, the run fails with `NEXTLY_MIGRATION_PARTIALLY_APPLIED`, and
+  `nextly migrate`, `migrate:down`, `migrate:status` and `plugins uninstall`
+  name each unit that ran outside a transaction. A refusal's message names
+  the marker, `migrate --dry-run` lists refusals, and `migrate:check` warns
+  about them (`REFUSED_STATEMENT`). Existing plugin modules keep their
+  checksums. On MySQL each schema statement still commits as it runs.
 - **On SQLite a migration that leaves a dangling reference is rolled back.**
   Each unit runs with `foreign_keys` off and a `foreign_key_check` before it
   commits, so a table rebuild keeps child rows, and a unit that leaves a new
@@ -134,6 +144,15 @@ request with the global `Request` constructor, which cannot read the instance
 Next.js passes in, so every session check from a browser holding the refresh
 cookie failed with a server error. The copy is now built from the request's
 URL, method, headers and body.
+
+`nextly db:sync` (and `--watch`) now creates the tables plugins declare and
+the columns and indexes plugins or the app contribute to entity tables, and
+no longer plans to drop a contributed column it finds in the database.
+`nextly migrate` counts the plugin migrations it applied in its summary,
+applies a plugin's migrations on a database the app already migrated, and
+adopts a multi-module history that development push already created.
+`migrate:create --plugin` accepts a plugin exported by name, and reports no
+changes (exit 2) when the plugin's schema matches its last migration.
 
 Full details: `docs/database/extending-the-schema.mdx`,
 `docs/plugins/schema.mdx` and `docs/guides/production-migrations.mdx`.
