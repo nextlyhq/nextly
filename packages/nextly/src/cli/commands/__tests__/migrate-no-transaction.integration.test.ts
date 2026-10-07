@@ -74,6 +74,10 @@ function module(
   return { ...content, checksum: migrationChecksum(content) };
 }
 
+/** Each dialect's error for the missing table `FAILS_SECOND` writes to. */
+const MISSING_TABLE =
+  /no such table: nt_missing|relation "nt_missing" does not exist|Table '[^']*\.nt_missing' doesn't exist/;
+
 /** Two statements: one that runs, then one that fails on every dialect. */
 const FAILS_SECOND = [
   "INSERT INTO nt_marks (id) VALUES ('kept')",
@@ -191,7 +195,17 @@ describe.each(getConfiguredTestDialects())(
         false
       );
 
-      await expect(migrate()).rejects.toThrow();
+      // The driver's own error for the missing table, rethrown as it was:
+      // not the partial-failure error, which only a marked file raises.
+      const error = await migrate().catch((thrown: unknown) => thrown);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(MISSING_TABLE);
+      expect(error).not.toMatchObject({
+        code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      });
+      expect(await ledgerStatus("20261001_000001_marks.sql")).toEqual([
+        "failed",
+      ]);
 
       expect(await marks()).toEqual([]);
       expect(warnings.join("\n")).not.toContain("outside a transaction");
@@ -247,7 +261,10 @@ describe.each(getConfiguredTestDialects())(
     it("rolls back the same module unmarked, leaving nothing", async () => {
       await expect(
         migratePlugin([module("0001_marks", FAILS_SECOND)])
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_APPLY_FAILED",
+        message: expect.stringMatching(MISSING_TABLE) as unknown,
+      });
 
       expect(await marks()).toEqual([]);
     });
