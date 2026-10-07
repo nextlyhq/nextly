@@ -116,7 +116,7 @@ export function pluginModuleDownStatements(
 }
 
 async function connect(options: RunnerOptions, context: CommandContext) {
-  const { config, pluginConsent } = await loadConfig({
+  const { config, appConfig, pluginConsent } = await loadConfig({
     configPath: options.config,
     cwd: options.cwd,
   });
@@ -549,10 +549,12 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // `try` skipped the cleanup exactly then.
       await registerServices(
         buildServiceConfig({
-          config,
+          // The config as the app wrote it. The boot runs every `setup`
+          // transformer and contribution fold itself; booting from the
+          // loader's `config`, which holds their result, ran each twice, so
+          // a transformer that adds a plugin or a collection added it again.
+          config: appConfig,
           // The grants the loader read before any `setup` transformer ran.
-          // `config` is the transformed one, so consent derived from it
-          // would be judged on what plugin code returned.
           pluginConsent,
           adapter: drizzleAdapter,
           imageProcessor: getImageProcessor(),
