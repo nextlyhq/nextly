@@ -137,7 +137,7 @@ something newer.
 | `ctx.filters` / `ctx.actions` | Typed seams to transform values / run ordered side-effects. |
 | `ctx.self` | Your entities' **resolved** slugs after any host `.rename()`. Always reference your own entities through this. |
 | `ctx.logger` | Structured logging. |
-| `ctx.config` | Read-only Nextly config. |
+| `ctx.config` | Read-only Nextly configuration: plain values only. It carries no database adapter; reach the database through `ctx.db`. |
 | `ctx.nextlyVersion` | The running core version (feature detection). |
 
 **Hooks vs events:** need to change or block an operation → use a **hook**; need to react after it commits → use an **event**.

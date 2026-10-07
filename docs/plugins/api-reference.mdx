@@ -84,7 +84,7 @@ interface PluginContext {
   filters: PluginFilterRegistry;  // transform values on typed seams (D63)
   actions: PluginActionRegistry;  // ordered side-effects on typed seams (D63)
   self: { name: string; collections: Record<string,string>; singles: Record<string,string> }; // resolved slugs (D54)
-  config: Readonly<NextlyConfig>;
+  config: Readonly<NextlyServiceConfig>; // plain configuration values only: no database adapter, no raw-SQL consent; reach the database through ctx.db
   logger: Logger;
   nextlyVersion: string;
 }
