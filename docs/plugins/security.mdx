@@ -51,9 +51,10 @@ export default definePlugin({
 
 The runtime holds the plugin to what it declared, for the things it can:
 `ctx.fetch` exists only with declared hosts and reaches only those, the
-settings store encrypts exactly those keys, `ctx.db` has no `execute` or `run`
-without `rawSql`, and `ctx.auth.completeLogin` refuses a plugin that did not
-declare `auth.login`. An invalid manifest fails boot with the plugin named,
+settings store encrypts exactly those keys, `ctx.db.raw` has no `execute` or
+`run` unless the plugin declares `rawSql` and the app lists it (see
+[Raw SQL](#raw-sql)), and `ctx.auth.completeLogin` refuses a plugin that did
+not declare `auth.login`. An invalid manifest fails boot with the plugin named,
 rather than becoming a surface that quietly does not exist: an unknown key
 anywhere inside `capabilities`, a value of the wrong type, an outbound entry
 that is not a hostname, an empty or unparseable `requires` range, secrets
@@ -70,6 +71,42 @@ Capability names are global, and two plugins cannot provide the same one, so
 prefix them with your vendor (`acme/auth-provider`). `requires` is checked at
 boot; it does not change the order plugins initialise in, which `dependsOn`
 decides.
+
+## Raw SQL
+
+`ctx.db` is typed and owner-checked: it reaches the tables a plugin declared,
+its dependencies' tables and the columns it contributed, and nothing else.
+`ctx.db.raw` is Drizzle's fluent builder (`select`, `insert`, `update`,
+`delete`) plus `transaction`, without that owner check. It has no `execute` or
+`run`.
+
+A plugin that needs raw SQL declares `capabilities.db.rawSql: true`, and the
+app lists it in `nextly.config.ts`:
+
+```ts
+export default defineConfig({
+  db: { rawSqlPlugins: ["@acme/nextly-reports"] },
+  plugins: [reports()],
+});
+```
+
+Only with both is `ctx.db.raw` the live Drizzle instance, `execute` and `run`
+included. The manifest is written by the plugin's author and changes with
+every update; the list is in your code and your review, so an update cannot
+quietly widen what a plugin may do.
+
+- A plugin that declares `rawSql` without being listed stops the boot, and
+  every CLI command that loads plugins, with `PLUGIN_RESOLUTION_ERROR`
+  (`logContext.reason` is `capability-not-listed`). The message names the
+  line to add, with every name already listed plus the missing ones, so
+  pasting it fixes the config in one edit. A disabled plugin is not checked.
+- The list is read from the config as you wrote it, before any plugin's
+  `setup` runs, so a plugin cannot add its own name.
+- A listed name that matches no configured plugin logs a warning at boot, so a
+  typo or a removed plugin does not leave a stale grant behind.
+
+This is a reviewed grant, not a sandbox: a plugin is trusted code in your
+process, with or without it.
 
 ## Outbound requests
 
@@ -237,14 +274,15 @@ have refused. See [plugin authentication](/docs/plugins/auth).
 - Does it ask for outbound hosts you recognise?
 - Does it finish logins (`capabilities.auth.login`)? That plugin can sign in any
   account it names, so it should be a sign-in provider you chose.
-- Does it declare raw SQL (`capabilities.db.rawSql`)? Most plugins should not.
-  Either way, read the database access as total: without the capability the
-  plugin still reads and writes every table through the fluent builder. Left
-  out, `ctx.db` has only `select`, `insert`, `update`, `delete` and
-  `transaction`; declared, it is the live Drizzle instance, `execute` and
-  `run` included. The declaration tells you what the plugin means to do; it is
-  not a boundary a determined plugin cannot cross, because plugins run as
-  trusted code.
+- Does it declare raw SQL (`capabilities.db.rawSql`)? Most plugins should not,
+  and the boot refuses one until you add it to `db.rawSqlPlugins`. Either way,
+  read the database access as total: without the capability the plugin still
+  reads and writes every table through `ctx.db.raw`, the fluent builder, which
+  has only `select`, `insert`, `update`, `delete` and `transaction`. Declared
+  and listed, `ctx.db.raw` is the live Drizzle instance, `execute` and `run`
+  included. The declaration tells you what the plugin means to do and the
+  listing records that you agreed; neither is a boundary a determined plugin
+  cannot cross, because plugins run as trusted code.
 - Does the source match the published package?
 - Is it maintained by someone you would give a database credential to?
 

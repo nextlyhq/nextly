@@ -130,7 +130,8 @@ something newer.
 | Field | Use |
 |---|---|
 | `ctx.services` | Managed data access — **secure by default** (acts as the ambient user, RBAC on). Pass `{ as: "system" }` to elevate. Validation/hooks/events always run. |
-| `ctx.db` | Raw Drizzle escape hatch — **unmanaged** (you own consistency + portability). |
+| `ctx.db` | Typed, owner-checked access to your declared tables — **unmanaged** (no validation, hooks or events). `ctx.db.raw` is the Drizzle builder escape hatch; `execute`/`run` need `capabilities.db.rawSql` and the app's `db.rawSqlPlugins` listing. |
+| `ctx.dialect` | The database this installation runs on (`@experimental`). |
 | `ctx.hooks` | In-transaction hooks — can **modify or abort** an operation. |
 | `ctx.events` | Post-commit event bus — **observe-only, best-effort** (may be dropped). React/notify here. |
 | `ctx.filters` / `ctx.actions` | Typed seams to transform values / run ordered side-effects. |
