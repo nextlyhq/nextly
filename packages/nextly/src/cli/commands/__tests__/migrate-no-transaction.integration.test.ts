@@ -252,6 +252,104 @@ describe.each(getConfiguredTestDialects())(
       expect(await marks()).toEqual([]);
     });
 
+    if (dialect === "sqlite") {
+      async function foreignKeysOn(): Promise<boolean> {
+        const [row] = (await handle.adapter.executeQuery(
+          "PRAGMA foreign_keys"
+        )) as Array<{ foreign_keys: number }>;
+        return Number(row?.foreign_keys) === 1;
+      }
+
+      /** A parent with one row, and a child whose row cascades from it. */
+      async function parentAndChild(): Promise<void> {
+        await handle.adapter.executeQuery("PRAGMA foreign_keys = ON");
+        await handle.adapter.executeQuery(
+          "CREATE TABLE nt_parent (id text PRIMARY KEY)"
+        );
+        await handle.adapter.executeQuery(
+          "CREATE TABLE nt_child (id text PRIMARY KEY, parent_id text REFERENCES nt_parent (id) ON DELETE CASCADE)"
+        );
+        await handle.adapter.executeQuery(
+          "INSERT INTO nt_parent (id) VALUES ('p1')"
+        );
+        await handle.adapter.executeQuery(
+          "INSERT INTO nt_child (id, parent_id) VALUES ('c1', 'p1')"
+        );
+      }
+
+      afterEach(async () => {
+        await handle?.adapter.executeQuery("DROP TABLE IF EXISTS nt_child");
+        await handle?.adapter.executeQuery("DROP TABLE IF EXISTS nt_parent");
+      });
+
+      it("leaves foreign keys on after a marked file fails", async () => {
+        await handle.adapter.executeQuery("PRAGMA foreign_keys = ON");
+        writeMigration(
+          migrationsDir,
+          "20261001_000001_marks",
+          FAILS_SECOND,
+          true
+        );
+
+        await expect(migrate()).rejects.toThrow(
+          /ran outside a transaction, and its statement 2 of 2 failed/
+        );
+
+        expect(await foreignKeysOn()).toBe(true);
+      });
+
+      it("rebuilds a parent table in a marked file without cascading into its children", async () => {
+        await parentAndChild();
+        writeMigration(
+          migrationsDir,
+          "20261001_000001_rebuild",
+          [
+            "CREATE TABLE __new_nt_parent (id text PRIMARY KEY, label text)",
+            "INSERT INTO __new_nt_parent (id) SELECT id FROM nt_parent",
+            "DROP TABLE nt_parent",
+            "ALTER TABLE __new_nt_parent RENAME TO nt_parent",
+          ],
+          true
+        );
+
+        await expect(migrate()).resolves.toBe(1);
+
+        const children = (await handle.adapter.executeQuery(
+          "SELECT id FROM nt_child"
+        )) as Array<{ id: string }>;
+        expect(children.map(row => row.id)).toEqual(["c1"]);
+        expect(await foreignKeysOn()).toBe(true);
+      });
+
+      it("refuses a marked file that leaves a dangling reference, with its statements kept", async () => {
+        await parentAndChild();
+        writeMigration(
+          migrationsDir,
+          "20261001_000001_orphan",
+          ["DELETE FROM nt_parent"],
+          true
+        );
+
+        await expect(migrate()).rejects.toThrow(
+          /20261001_000001_orphan\.sql ran outside a transaction, and left 1 row\(s\) referencing rows that do not exist \(nt_child → nt_parent\)\. Its statements stayed applied: repair or remove those rows, then mark it applied with `nextly migrate:resolve --applied 20261001_000001_orphan\.sql`/
+        );
+
+        // Enforcement was off, so the child row was not cascaded away; the
+        // parent's delete stayed applied, and the ledger records the failure.
+        const children = (await handle.adapter.executeQuery(
+          "SELECT id FROM nt_child"
+        )) as Array<{ id: string }>;
+        expect(children.map(row => row.id)).toEqual(["c1"]);
+        expect(
+          await handle.adapter.executeQuery("SELECT id FROM nt_parent")
+        ).toEqual([]);
+        expect(await ledgerStatus("20261001_000001_orphan.sql")).toEqual([
+          "failed",
+        ]);
+        expect(await foreignKeysOn()).toBe(true);
+      });
+    }
+
     if (dialect === "postgresql") {
       const concurrently =
         "CREATE INDEX CONCURRENTLY nt_marks_id_idx ON nt_marks (id)";

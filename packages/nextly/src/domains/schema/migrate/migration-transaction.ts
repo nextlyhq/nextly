@@ -8,6 +8,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { isPluginLedgerRow } from "../events/ledger-scope";
 
 import {
   refusingNewDanglingReferences,
@@ -89,14 +90,7 @@ export async function executeTransaction<T>(
         read: <R>(statement: string) =>
           ctx.queryStatement<R>(sql.raw(statement)),
       };
-      if (await sqliteForeignKeysOn(inside)) {
-        throw new NextlyError({
-          code: "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION",
-          publicMessage:
-            "Foreign-key enforcement could not be switched off for this migration, because another transaction was open on the connection. Nothing was applied; re-run it once that transaction has finished.",
-          logContext: { reason: "enforcement-still-on" },
-        });
-      }
+      await assertForeignKeysOff(inside);
       return refusingNewDanglingReferences(
         inside,
         () =>
@@ -111,6 +105,23 @@ export async function executeTransaction<T>(
       );
     })
   );
+}
+
+/**
+ * Refuses a unit before its first statement when foreign-key enforcement is
+ * still on after the runner switched it off: another transaction was open on
+ * SQLite's one connection, so the pragma did nothing.
+ */
+async function assertForeignKeysOff(
+  session: Pick<SqliteForeignKeySession, "read">
+): Promise<void> {
+  if (!(await sqliteForeignKeysOn(session))) return;
+  throw new NextlyError({
+    code: "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION",
+    publicMessage:
+      "Foreign-key enforcement could not be switched off for this migration, because another transaction was open on the connection. Nothing was applied; re-run it once that transaction has finished.",
+    logContext: { reason: "enforcement-still-on" },
+  });
 }
 
 /** One migration unit as its runner needs it: a name, and how it runs. */
@@ -147,6 +158,17 @@ export function outsideTransactionNotice(source: string): string {
  * run at all. A statement that fails stops the unit, and nothing undoes the
  * statements before it; the error says how many of them stayed applied.
  * `after` runs once every statement has, with the adapter's own handle.
+ *
+ * On SQLite a unit run outside a transaction keeps the foreign-key contract
+ * `executeTransaction` gives one run in a transaction, except the rollback:
+ * enforcement is switched off before its first statement (and the unit
+ * refused if it stayed on), so a table rebuild neither cascades into the rows
+ * of tables that reference it nor fails on them; `PRAGMA foreign_key_check`
+ * runs after its last statement; and the setting in force before it is
+ * restored, whether the unit finished, failed or was refused. A unit that
+ * left new dangling references is refused with them named, but its
+ * statements stay applied, so `after` does not run and the caller records it
+ * failed.
  */
 export async function runMigrationStatements(
   adapter: DrizzleAdapter,
@@ -163,15 +185,48 @@ export async function runMigrationStatements(
     });
     return statements.length;
   }
-  for (const [index, statement] of statements.entries()) {
-    try {
-      await adapter.executeQuery(statement);
-    } catch (error) {
-      throw partialFailure(unit.source, index, statements.length, error);
+  const runEach = async (): Promise<void> => {
+    for (const [index, statement] of statements.entries()) {
+      try {
+        await adapter.executeQuery(statement);
+      } catch (error) {
+        throw partialFailure(unit.source, index, statements.length, error);
+      }
     }
+  };
+  if (adapter.getCapabilities().dialect === "sqlite") {
+    const session: SqliteForeignKeySession = {
+      read: statement => adapter.executeQuery(statement),
+      run: async statement => {
+        await adapter.executeQuery(statement);
+      },
+    };
+    await withSqliteForeignKeysOff(session, async () => {
+      await assertForeignKeysOff(session);
+      await refusingNewDanglingReferences(
+        session,
+        runEach,
+        (count, pairs) =>
+          `${unit.source} ran outside a transaction, and left ${String(count)} row(s) referencing rows that do not exist (${pairs}). Its statements stayed applied: repair or remove those rows, then ${markAppliedAdvice(unit.source)}.`
+      );
+    });
+  } else {
+    await runEach();
   }
   await after?.(adapter.getDrizzle());
   return statements.length;
+}
+
+/**
+ * How the operator records a unit whose statements were completed by hand:
+ * an app file is marked applied; a plugin module's failed attempt is cleared
+ * and `nextly migrate` records it, because recording a module also records
+ * the tables it owns, which only `nextly migrate` does.
+ */
+function markAppliedAdvice(source: string): string {
+  return isPluginLedgerRow(source)
+    ? `run \`nextly migrate:resolve --failed-cleanup ${source}\` and then \`nextly migrate\`, which records it applied`
+    : `mark it applied with \`nextly migrate:resolve --applied ${source}\``;
 }
 
 /**

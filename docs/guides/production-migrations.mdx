@@ -396,6 +396,19 @@ This is SQLite's documented way to rebuild a table (create `__new_x`, copy the
 rows, drop `x`, rename): dropping a parent table this way keeps the rows of
 tables that reference it, instead of deleting them through `ON DELETE CASCADE`.
 
+A file [marked to run outside a transaction](#running-a-file-outside-a-transaction)
+gets the same treatment, except the rollback. Enforcement is switched off before
+its first statement (and the file is refused with `enforcement-still-on` if it
+could not be), `PRAGMA foreign_key_check` runs after its last statement, and the
+setting is restored afterwards, whether the file finished or failed. If the
+check finds a new dangling reference, the file is refused with
+`NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION` (`reason` `dangling-reference`) and
+recorded as failed, but its statements stay applied, because each committed as
+it ran: repair or remove the rows the error names, then mark the file applied
+with `nextly migrate:resolve --applied <file>`. Because the runner owns the
+setting, a marked file may not write `PRAGMA foreign_keys` or
+`PRAGMA defer_foreign_keys`.
+
 ## Builder entities and production
 
 Everything above describes how **columns** reach production. Entities created in the
