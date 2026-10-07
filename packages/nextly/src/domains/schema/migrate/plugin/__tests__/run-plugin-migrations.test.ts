@@ -247,6 +247,15 @@ describe("runPluginMigrations", () => {
         h.deps
       )
     ).rejects.toThrow(/changed since it was generated/i);
+    // And names the supported way to edit one: sealing it by hand.
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        h.deps
+      )
+    ).rejects.toThrow(
+      "A module written or edited by hand is sealed with `migrationChecksum` from `@nextlyhq/plugin-sdk/schema`"
+    );
   });
 
   it("refuses a module whose target snapshot was edited, even though its SQL was not", async () => {
@@ -917,5 +926,34 @@ describe("a database already past some of a plugin's modules", () => {
       runPluginMigrations(set([create, tampered]), d.deps)
     ).rejects.toThrow();
     expect(d.started).toEqual([]);
+  });
+
+  it("refuses the whole adoption when a module in it ran outside a transaction and its last attempt failed", async () => {
+    // The failed attempt may have run its schema statements and stopped
+    // before a data statement; adopting it would skip that statement.
+    const { checksum: _sealed, ...content } = create;
+    const outside = { ...content, transaction: false };
+    const createOutside = {
+      ...outside,
+      checksum: migrationChecksum(outside),
+    };
+    const d = deps();
+    d.deps.repo.findFileApplies = async (filename: string) =>
+      filename === "plugin:@acme/p/20260101_000000_create"
+        ? [{ status: "failed", startedAt: new Date(1) }]
+        : [];
+    d.live.set(T, [tableSpec(T, true)]);
+
+    await expect(
+      runPluginMigrations(set([createOutside, addScore]), d.deps)
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      logContext: {
+        source: "plugin:@acme/p/20260101_000000_create",
+        reason: "partially-applied",
+      },
+    });
+    expect(d.started).toEqual([]);
+    expect(d.executed).toEqual([]);
   });
 });

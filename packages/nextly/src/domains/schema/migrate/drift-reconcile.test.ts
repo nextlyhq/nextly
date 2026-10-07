@@ -4,7 +4,10 @@
  */
 import { describe, it, expect, vi } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
+import type { SchemaEventRow } from "../events/schema-events-repository";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
+
 import { reconcileFile, type ReconcileRepo } from "./drift-reconcile";
 
 const tbl = (name: string): NextlySchemaSnapshot["tables"][number] => ({
@@ -27,7 +30,11 @@ type FakeRepo = ReconcileRepo & {
  * interface fails to compile here instead of being discovered at runtime by
  * whichever test happens to reach it.
  */
-function fakeRepo(priorAttempts: readonly unknown[] = []): FakeRepo {
+function fakeRepo(
+  priorAttempts: ReadonlyArray<
+    Pick<SchemaEventRow, "status" | "startedAt">
+  > = []
+): FakeRepo {
   const state = {
     starts: 0,
     applied: [] as Array<{ statementsExecuted?: number | null }>,
@@ -62,6 +69,86 @@ const file = {
 };
 
 describe("reconcileFile (Phase 2 three-state)", () => {
+  describe("a file run outside a transaction whose last attempt failed", () => {
+    const outside = { ...file, transaction: false };
+    const failedThenRolledBack = [
+      { status: "failed" as const, startedAt: new Date(1) },
+      { status: "rolled_back" as const, startedAt: new Date(2) },
+    ];
+
+    it("refuses to record it applied without running it when live ≡ target", async () => {
+      // Its schema statements ran, so the database stands at its target, but
+      // a data statement after the failure may never have.
+      const repo = fakeRepo([
+        { status: "rolled_back", startedAt: new Date(1) },
+        { status: "failed", startedAt: new Date(2) },
+      ]);
+      const executeSql = vi.fn();
+      await expect(
+        reconcileFile({
+          file: outside,
+          before: snap("a"),
+          target: snap("a", "b"),
+          live: snap("a", "b"),
+          repo,
+          executeSql,
+        })
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+        logContext: { source: "0006_x.sql", reason: "partially-applied" },
+        publicMessage: expect.stringContaining(
+          "mark it applied with `nextly migrate:resolve --applied 0006_x.sql` rather than running it again"
+        ) as unknown,
+      });
+      expect(executeSql).not.toHaveBeenCalled();
+      expect(repo.starts).toBe(0);
+      expect(repo.applied).toEqual([]);
+    });
+
+    it("names the module recovery for a plugin module", async () => {
+      await expect(
+        reconcileFile({
+          file: { ...outside, filename: "plugin:@acme/fx/001_init" },
+          before: snap("a"),
+          target: snap("a", "b"),
+          live: snap("a", "b"),
+          repo: fakeRepo([{ status: "failed", startedAt: new Date(1) }]),
+          executeSql: vi.fn(),
+          pluginName: "@acme/fx",
+        })
+      ).rejects.toThrow(
+        "run `nextly migrate:resolve --failed-cleanup plugin:@acme/fx/001_init` and then `nextly migrate`, which records it applied"
+      );
+    });
+
+    it("records it applied once the failed attempt is cleared", async () => {
+      const repo = fakeRepo(failedThenRolledBack);
+      const r = await reconcileFile({
+        file: outside,
+        before: snap("a"),
+        target: snap("a", "b"),
+        live: snap("a", "b"),
+        repo,
+        executeSql: vi.fn(),
+      });
+      expect(r.state).toBe("already_applied");
+      expect(repo.applied[0].statementsExecuted).toBe(0);
+    });
+
+    it("still records a file run in a transaction, whose failure was undone", async () => {
+      const repo = fakeRepo([{ status: "failed", startedAt: new Date(1) }]);
+      const r = await reconcileFile({
+        file,
+        before: snap("a"),
+        target: snap("a", "b"),
+        live: snap("a", "b"),
+        repo,
+        executeSql: vi.fn(),
+      });
+      expect(r.state).toBe("already_applied");
+    });
+  });
+
   it("IN_SYNC: live ≡ before → runs the SQL and records file_apply", async () => {
     const repo = fakeRepo();
     const executeSql = vi.fn().mockResolvedValue(1);
@@ -76,6 +163,46 @@ describe("reconcileFile (Phase 2 three-state)", () => {
     expect(r.state).toBe("in_sync");
     expect(executeSql).toHaveBeenCalledOnce();
     expect(repo.applied[0].statementsExecuted).toBe(1);
+  });
+
+  it("records a failure's cause in the ledger and keeps it on the error it rethrows", async () => {
+    // A partial failure keeps the database's reason out of its public
+    // message and in its cause, so the ledger row and the rethrown error
+    // must carry the cause for the operator to read it back.
+    const failures: Array<string | null | undefined> = [];
+    const repo = {
+      ...fakeRepo(),
+      markFailed: (
+        _id: string,
+        args: { errorMessage?: string | null }
+      ): Promise<void> => {
+        failures.push(args.errorMessage);
+        return Promise.resolve();
+      },
+    };
+    const driver = new Error('relation "secret_t" does not exist');
+    const partial = new NextlyError({
+      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      publicMessage: "0006_x.sql ran outside a transaction, and failed.",
+      cause: driver,
+    });
+    const error = await reconcileFile({
+      file: { ...file, transaction: false },
+      before: snap("a"),
+      target: snap("a", "b"),
+      live: snap("a"),
+      repo,
+      executeSql: vi.fn().mockRejectedValue(partial),
+    }).then(
+      () => undefined,
+      (caught: unknown) => caught as NextlyError
+    );
+
+    expect(error?.code).toBe("NEXTLY_MIGRATION_APPLY_FAILED");
+    expect(error?.publicMessage).not.toContain("secret_t");
+    expect(error?.cause).toBe(partial);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('relation "secret_t" does not exist');
   });
 
   it("ALREADY_APPLIED: live ≡ target → skips SQL, records statements=0, supersedes", async () => {
@@ -117,7 +244,9 @@ describe("reconcileFile (Phase 2 three-state)", () => {
     // an empty baseline against tables that already exist. The ledger is the
     // difference, and sending this operator to `migrate:baseline` would send
     // them past the failed-cleanup path they need.
-    const withAttempt = fakeRepo([{ status: "failed" }]);
+    const withAttempt = fakeRepo([
+      { status: "failed", startedAt: new Date(1) },
+    ]);
     await expect(
       reconcileFile({
         file,

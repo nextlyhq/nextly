@@ -69,7 +69,10 @@ import {
   slugify,
 } from "../../domains/schema/migrate-create/format-file";
 import { generateMigration } from "../../domains/schema/migrate-create/generate";
-import { generatePluginMigration } from "../../domains/schema/migrate-create/generate-plugin";
+import {
+  generateBlankPluginMigration,
+  generatePluginMigration,
+} from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
 import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import type {
@@ -149,6 +152,16 @@ export interface MigrateCreateCommandOptions {
    * its `index.ts` barrel are written beside it under `src/migrations/`.
    */
   plugin?: string;
+
+  /**
+   * `false` (`--no-transaction`) writes a unit that runs outside a
+   * transaction: a blank file whose first line is the marker, or a plugin
+   * module with `transaction: false`, sealed when it loads so its SQL can be
+   * edited. A generated app file is not marked, because marking changes the
+   * contents its snapshot's hash was taken over.
+   * @default true
+   */
+  transaction?: boolean;
 }
 
 interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
@@ -193,6 +206,17 @@ export async function runMigrateCreate(
   if (options.plugin) {
     await runMigrateCreatePlugin(nameArg ?? options.name, options, context);
     return;
+  }
+
+  // Checked before anything is read: the flag is refused whatever the
+  // config holds.
+  if (options.transaction === false && !options.blank) {
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage:
+        "--no-transaction writes a blank migration file (with --blank) or a plugin module (with --plugin). A generated migration file is not marked: marking it changes the contents its snapshot was taken over. Put the statements that need to run outside a transaction in a file of their own: nextly migrate:create --blank --no-transaction.",
+      statusCode: 400,
+    });
   }
 
   const startTime = Date.now();
@@ -258,7 +282,8 @@ export async function runMigrateCreate(
       dialect,
       migrationsDir,
       context,
-      startTime
+      startTime,
+      options.transaction !== false
     );
     return;
   }
@@ -501,7 +526,8 @@ async function runBlankPath(
   dialect: SupportedDialect,
   migrationsDir: string,
   context: CommandContext,
-  startTime: number
+  startTime: number,
+  transaction: boolean
 ): Promise<void> {
   const { logger } = context;
 
@@ -514,7 +540,9 @@ async function runBlankPath(
   // prefixed baseName) so the file's `-- Migration:` header matches the
   // non-blank path's convention (e.g. "-- Migration: custom_seed", not
   // "-- Migration: 20260429_154500_123_custom_seed").
-  const content = formatBlankFile(slugify(name), dialect, now);
+  const content = formatBlankFile(slugify(name), dialect, now, {
+    transaction,
+  });
   await writeFile(sqlPath, content, "utf-8");
 
   // F11 PR 3: blank migrations don't get a paired snapshot file. The
@@ -865,6 +893,25 @@ async function runMigrateCreatePlugin(
     existing = orderedMigrations(shipped ?? []);
   }
 
+  // A blank module changes no declared table, so nothing is compiled: it
+  // carries the last module's schema on both sides, for SQL the author adds.
+  if (options.blank) {
+    const blank = await generateBlankPluginMigration({
+      pluginName: definition.name,
+      schemaVersion: definition.schemaVersion,
+      name: name ?? "migration",
+      migrationsDir,
+      existing,
+      transaction: options.transaction,
+    });
+    logger.success(`Created ${relative(cwd, blank.modulePath)}`);
+    logger.info(`Rewrote ${relative(cwd, blank.indexPath)}`);
+    logger.info(
+      "Add the module's SQL to each dialect's `up` and `down`. It is sealed with `migrationChecksum` when it loads, so editing it keeps it intact."
+    );
+    return;
+  }
+
   // Declared dependencies, compiled ALONGSIDE this plugin.
   //
   // `extendTable` on a dependency's table is a supported contribution —
@@ -1012,6 +1059,11 @@ async function runMigrateCreatePlugin(
     migrationsDir,
     tablesByDialect,
     existing,
+    transaction: options.transaction,
+    // A module that runs outside a transaction is written to be edited:
+    // its generated `CREATE INDEX` is what becomes `CREATE INDEX
+    // CONCURRENTLY`.
+    handSealed: options.transaction === false,
   });
 
   if (!result) {
@@ -1052,6 +1104,10 @@ export function registerMigrateCreateCommand(program: Command): void {
     .option(
       "--plugin <entry>",
       "Generate the PLUGIN's migration module (path to its entry, e.g. ./src/index.ts)"
+    )
+    .option(
+      "--no-transaction",
+      "Write a unit that runs outside a transaction: with --blank, a file whose first line is the marker; with --plugin, a module with transaction: false that you can edit"
     )
     .action(
       async (

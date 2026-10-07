@@ -322,7 +322,9 @@ describe("migrateDownCore", () => {
         },
       });
       await migrateDownCore(deps);
-      expect(units).toEqual([{ source: "a.sql", transaction: false }]);
+      expect(units).toEqual([
+        { source: "a.sql", transaction: false, direction: "down" },
+      ]);
       expect(recorded).toEqual(["a.sql"]);
       expect(warnings.join("\n")).toMatch(/a\.sql runs outside a transaction/);
     });

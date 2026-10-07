@@ -8,15 +8,17 @@
  * nothing, so its push created no plugin table and no contributed column,
  * and on a database that already had the column it planned to drop it.
  *
- * Drives the command's own sequence against a real SQLite file, as the
- * localized-companion test beside it does.
+ * Drives the command itself, `runDbSync`, against a real SQLite file, and
+ * one re-sync of its watcher (`createDebouncedSync`), so a sync that stops
+ * publishing the extension schema fails here. Only the config file is not
+ * read from disk: the loader is handed the config each test builds.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig, text } from "../../../config";
 import { getDialectTables } from "../../../database/index";
@@ -24,27 +26,41 @@ import { createAdapter } from "../../../database/factory";
 import { SchemaRegistry } from "../../../database/schema-registry";
 import { clearActiveExtensionSchema } from "../../../domains/schema/extension/active-schema";
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
+import { NO_PLUGIN_CONSENT } from "../../../plugins/plugin-consent";
 import { definePlugin } from "../../../plugins/plugin-context";
+import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
-import type { CLIDatabaseAdapter } from "../../utils/adapter";
+import { createCliAdapter } from "../../utils/adapter";
 import type { LoadConfigResult } from "../../utils/config-loader";
 import { createLogger } from "../../utils/logger";
+import { runDbSync } from "../db-sync";
 import type { ResolvedDevOptions } from "../db-sync";
-import {
-  publishExtensionSchema,
-  syncCollections,
-  syncComponents,
-  syncSingles,
-} from "../dev-build";
-import { ensureCoreTables } from "../dev-server";
+import { createDebouncedSync } from "../dev-watcher";
+import { installRegistryResolver } from "../migrate";
+
+/** The config the command loads, set by each test before it runs. */
+const loaded = vi.hoisted(() => ({
+  config: undefined as unknown,
+}));
+vi.mock("../../utils/config-loader", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../utils/config-loader")>()),
+  loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
+}));
 
 let dir: string;
 let adapter: Awaited<ReturnType<typeof createAdapter>> | undefined;
 let previousDialect: string | undefined;
+let previousUrl: string | undefined;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "nextly-dbsync-extension-"));
   previousDialect = process.env.DB_DIALECT;
+  previousUrl = process.env.DATABASE_URL;
+  process.env.DB_DIALECT = "sqlite";
+  process.env.DATABASE_URL = `file:${join(dir, "test.db")}`;
+  // The command's adapter reads the environment once per process; each test
+  // has a database file of its own.
+  _resetEnvCache();
 });
 
 afterEach(async () => {
@@ -54,6 +70,9 @@ afterEach(async () => {
   clearActiveExtensionSchema();
   if (previousDialect === undefined) delete process.env.DB_DIALECT;
   else process.env.DB_DIALECT = previousDialect;
+  if (previousUrl === undefined) delete process.env.DATABASE_URL;
+  else process.env.DATABASE_URL = previousUrl;
+  _resetEnvCache();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -62,7 +81,7 @@ afterEach(async () => {
  * a column to that collection's table. A slug per test: the process keeps
  * what it has pushed, and a second test reusing a slug would find it known.
  */
-function configFor(slug: string, prefix: string) {
+function configFor(slug: string, prefix: string, extraTable?: string) {
   const plugin = definePlugin({
     name: `@test/${prefix}`,
     version: "1.0.0",
@@ -76,6 +95,9 @@ function configFor(slug: string, prefix: string) {
             { id: col.id(), label: col.shortText(), ...col.timestamps() },
             { indexes: [{ columns: ["label"] }] }
           ),
+          ...(extraTable === undefined
+            ? []
+            : [defineTable(extraTable, { id: col.id() })]),
         ],
         extend: [
           ({ schema }) => {
@@ -95,9 +117,69 @@ function configFor(slug: string, prefix: string) {
   });
 }
 
-/** Opened once per test; a second sync reuses it, as a second run would. */
+/** The command's options and context, as `nextly db:sync` builds them. */
+function command(): { options: ResolvedDevOptions; context: CommandContext } {
+  const logger = createLogger({ quiet: true });
+  return {
+    options: { cwd: dir, autoSync: true } as ResolvedDevOptions,
+    context: { logger, options: {}, cwd: dir } as CommandContext,
+  };
+}
+
+/** `nextly db:sync`, once, with `config` as the loaded config. */
+async function runSync(config: LoadConfigResult["config"]): Promise<void> {
+  loaded.config = config;
+  const { options, context } = command();
+  await runDbSync(options, context);
+}
+
+/**
+ * One re-sync of the `--watch` loop for `config`, on a connection of its
+ * own. The watcher reports nothing when it finishes, so this waits for the
+ * re-sync's last step, permission seeding, to report, then for the claim the
+ * re-sync holds to be released; it fails on anything logged as an error.
+ */
+async function watchedResync(
+  config: LoadConfigResult["config"]
+): Promise<void> {
+  const errors: string[] = [];
+  let finished!: () => void;
+  const done = new Promise<void>(resolve => {
+    finished = resolve;
+  });
+  const { options, context } = command();
+  const logger = {
+    ...context.logger,
+    error: (message: string) => {
+      errors.push(message);
+      finished();
+    },
+    success: (message: string) => {
+      if (message.startsWith("Permissions:")) finished();
+    },
+  };
+  // Resolving system tables by name, as `runDbSync` sets up the connection
+  // it hands the watcher.
+  const cli = await createCliAdapter();
+  installRegistryResolver(cli as unknown as DrizzleAdapter);
+  try {
+    const result: LoadConfigResult = {
+      config,
+      dependencies: [],
+      pluginConsent: NO_PLUGIN_CONSENT,
+    };
+    createDebouncedSync(cli, options, { ...context, logger })(result);
+    await done;
+    // The claim is released after the seeding returns.
+    await new Promise(resolve => setTimeout(resolve, 500));
+  } finally {
+    await cli.disconnect();
+  }
+  expect(errors).toEqual([]);
+}
+
+/** A connection of the test's own, to read what the command left. */
 async function open(): Promise<void> {
-  process.env.DB_DIALECT = "sqlite";
   adapter = await createAdapter({
     type: "sqlite",
     url: `file:${join(dir, "test.db")}`,
@@ -105,24 +187,6 @@ async function open(): Promise<void> {
   const registry = new SchemaRegistry("sqlite");
   registry.registerStaticSchemas(getDialectTables("sqlite"));
   (adapter as unknown as DrizzleAdapter).setTableResolver(registry);
-}
-
-/** The command's sequence for the schema, minus the parts that read disk. */
-async function runSync(config: LoadConfigResult["config"]): Promise<void> {
-  const logger = createLogger({ quiet: true });
-  const options = {
-    cwd: dir,
-    autoSync: true,
-    acceptDataLoss: false,
-  } as ResolvedDevOptions;
-  const context = { logger, options: {}, cwd: dir } as CommandContext;
-  const cli = adapter as unknown as CLIDatabaseAdapter;
-  await ensureCoreTables(cli, options, context);
-  const configResult = { config } as LoadConfigResult;
-  await publishExtensionSchema(configResult, cli, context);
-  await syncCollections(configResult, cli, options, context);
-  await syncSingles(configResult, cli, options, context);
-  await syncComponents(configResult, cli, options, context);
 }
 
 async function columns(table: string): Promise<string[]> {
@@ -167,5 +231,16 @@ describe("db:sync and the extension schema (integration)", () => {
       `SELECT "indexed_at" AS v FROM "dc_dbsync_ext_kept" WHERE "id" = 'p1'`
     )) as Array<{ v: string | null }>;
     expect(rows[0]?.v).toBe("kept");
+  });
+
+  it("creates a table the plugin declares after the watcher started", async () => {
+    await runSync(configFor("dbsync_ext_watch", "dsw"));
+
+    // The config as saved while `db:sync --watch` runs: a second table.
+    await watchedResync(configFor("dbsync_ext_watch", "dsw", "tags"));
+
+    await open();
+    expect(await columns("dsw__tags")).toEqual(["id"]);
+    expect(await columns("dc_dbsync_ext_watch")).toContain("indexed_at");
   });
 });

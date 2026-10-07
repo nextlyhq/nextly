@@ -596,7 +596,7 @@ function previewPendingFile(
     `  • ${m.name}.sql${m.transaction ? "" : " (runs outside a transaction)"}`
   );
   for (const refusal of statementRefusals(
-    splitSqlStatements(m.upSql, dialect),
+    splitSqlStatements(m.upSql, dialect, m),
     dialect,
     { transaction: m.transaction, unit: "file" }
   )) {
@@ -664,7 +664,7 @@ function buildSqlExecutor(
     if (!unit.transaction) logger.warn(outsideTransactionNotice(unit.source));
     return runMigrationStatements(
       dz,
-      splitSqlStatements(sqlText, dialect),
+      splitSqlStatements(sqlText, dialect, unit),
       unit
     );
   };
@@ -1452,7 +1452,7 @@ export async function runFileMigrations(args: {
     // — or a statement the runner's transaction cannot hold — is refused
     // identically with or without a paired snapshot, before the ledger
     // records an attempt.
-    const upStatements = splitSqlStatements(m.upSql, dialect);
+    const upStatements = splitSqlStatements(m.upSql, dialect, m);
     assertNoForeignDrops({
       statements: upStatements,
       stream: "app",

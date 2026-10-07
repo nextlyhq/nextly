@@ -55,6 +55,33 @@ describe("resolveMigration", () => {
       expect(rows[0].note).toBe("manual-resolve");
     });
 
+    it("refuses a plugin module, naming the recovery that records it", async () => {
+      // A module recorded here would leave the tables it owns without an
+      // owner row; `nextly migrate` records both.
+      const { repo, base } = makeDeps(testDb);
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "failed",
+        source: "cli-migrate",
+        filename: "plugin:@acme/fx/001_init",
+        startedAt: new Date(1),
+      });
+      await expect(
+        resolveMigration({
+          mode: "applied",
+          filename: "plugin:@acme/fx/001_init",
+          ...base,
+        })
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+        publicMessage: expect.stringContaining(
+          "Run `nextly migrate:resolve --failed-cleanup plugin:@acme/fx/001_init` and then `nextly migrate`"
+        ) as unknown,
+      });
+      const rows = await repo.findFileApplies("plugin:@acme/fx/001_init");
+      expect(rows.map(row => row.status)).toEqual(["failed"]);
+    });
+
     it("supersedes a prior failed row", async () => {
       const { repo, base } = makeDeps(testDb);
       const failedId = await repo.insertEvent({

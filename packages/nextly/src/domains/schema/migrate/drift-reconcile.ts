@@ -1,27 +1,37 @@
 /**
- * `nextly migrate` Phase 2 — per-file drift reconciliation (spec §4.7).
+ * `nextly migrate`'s per-file drift reconciliation.
  *
  * For a pending migration file, compares the live managed schema against the
  * file's pre-baseline and target snapshots:
  *   - live ≡ before        → IN_SYNC: run the .sql verbatim, record file_apply.
  *   - live ≡ target        → ALREADY_APPLIED: skip SQL, record file_apply
- *                            (statements_executed=0), supersede prior dev events.
+ *                            (statements_executed=0), supersede prior dev events
+ *                            — unless the file runs outside a transaction and
+ *                            its last attempt failed (`assertNotPartiallyApplied`).
  *   - neither              → DRIFT: throw NEXTLY_MIGRATION_DRIFT.
  *
- * Equivalence (spec §4.2) is realized as "empty diff" via the existing diff
- * engine. Effects (SQL execution, event recording) are injected so the state
- * machine unit-tests without a DB.
+ * Two snapshots are equivalent when the diff engine finds no difference.
+ * Effects (SQL execution, event recording) are injected so the state machine
+ * unit-tests without a DB.
  *
  * @module domains/schema/migrate/drift-reconcile
- * @since v0.0.3-alpha (Plan C2)
+ * @since v0.0.3-alpha
  */
-import { NextlyError } from "../../../errors";
+import { describeError, NextlyError } from "../../../errors";
+import { newestEvent } from "../events/newest-event";
+import {
+  truncateErrorMessage,
+  type SchemaEventRow,
+} from "../events/schema-events-repository";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot, Operation } from "../pipeline/diff/types";
 
 import { isUnadoptedDatabase } from "./baseline";
 import { migrationDriftError, type DriftItem } from "./drift-error";
-import type { MigrationUnit } from "./migration-transaction";
+import {
+  partiallyAppliedAdvice,
+  type MigrationUnit,
+} from "./migration-transaction";
 
 export type ReconcileState = "in_sync" | "already_applied" | "drift";
 
@@ -46,7 +56,9 @@ export interface ReconcileRepo {
     byEventId: string;
   }): Promise<void>;
   /** Every `file_apply` row for one filename: applied, failed, rolled back. */
-  findFileApplies(filename: string): Promise<ReadonlyArray<unknown>>;
+  findFileApplies(
+    filename: string
+  ): Promise<ReadonlyArray<Pick<SchemaEventRow, "status" | "startedAt">>>;
 }
 
 export interface ReconcileFileArgs {
@@ -124,6 +136,36 @@ export async function recordAlreadyApplied(
   }
 }
 
+/**
+ * Refuses to record a unit as applied without running it when the unit runs
+ * outside a transaction and its newest attempt failed.
+ *
+ * Such an attempt stopped part-way and left the statements before the
+ * failing one applied. The database can then stand at the unit's target —
+ * every schema statement ran — while a statement that changes no schema, a
+ * data change, never did, and recording the unit applied would skip it for
+ * good. Only the operator knows what is left, so the refusal says how to
+ * record the unit once it is finished by hand, or to run it again once what
+ * ran is reversed. A unit run in a transaction is not refused: where its
+ * failure was undone, nothing of it is left half-done.
+ *
+ * Exported so every path that adopts a unit asks this one question: the
+ * reconcile, and the plugin runner's adoption of a run of modules.
+ */
+export async function assertNotPartiallyApplied(
+  file: { filename: string; transaction?: boolean },
+  repo: Pick<ReconcileRepo, "findFileApplies">
+): Promise<void> {
+  if (file.transaction !== false) return;
+  const newest = newestEvent(await repo.findFileApplies(file.filename));
+  if (newest?.status !== "failed") return;
+  throw new NextlyError({
+    code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+    publicMessage: `${file.filename} runs outside a transaction, and its last attempt failed part-way. The database stands where it ends, but a statement that changes no schema may not have run, so it is not recorded as applied without running. ${partiallyAppliedAdvice(file.filename)}`,
+    logContext: { source: file.filename, reason: "partially-applied" },
+  });
+}
+
 function toDriftItem(op: Operation): DriftItem {
   switch (op.type) {
     case "add_table":
@@ -181,13 +223,20 @@ export async function reconcileFile(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await repo.markFailed(id, {
-        errorMessage: message,
+        // The cause chain as well as the message, bounded and without
+        // logContext, as the verbatim path records it: an error that keeps
+        // the database's reason out of its public message carries it in its
+        // cause, and the ledger row is where the operator reads it back.
+        errorMessage: truncateErrorMessage(
+          describeError(err, { context: false })
+        ),
         errorJson:
           err instanceof Error ? { name: err.name, message: err.message } : err,
       });
       throw new NextlyError({
         code: "NEXTLY_MIGRATION_APPLY_FAILED",
         publicMessage: `Migration ${migration} failed: ${message}`,
+        ...(err instanceof Error ? { cause: err } : {}),
       });
     }
     return { state: "in_sync" };
@@ -195,6 +244,7 @@ export async function reconcileFile(
 
   // ALREADY_APPLIED — live already matches the target → record without running.
   if (equiv(live, target)) {
+    await assertNotPartiallyApplied(file, repo);
     await recordAlreadyApplied(file, repo, args.supersedableEventIds);
     return { state: "already_applied" };
   }

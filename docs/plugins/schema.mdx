@@ -382,6 +382,59 @@ module's checksum only when it is `false`, so existing modules keep their
 checksums. See
 [Running a file outside a transaction](/docs/guides/production-migrations#running-a-file-outside-a-transaction).
 
+### Writing a module by hand
+
+A generated module carries its checksum as a literal, and any edit to it is
+refused (`MIGRATION_CHECKSUM_MISMATCH`). A module you write or edit yourself
+is sealed by `migrationChecksum` from `@nextlyhq/plugin-sdk/schema` instead,
+computed over the module without its checksum when the module loads:
+
+```ts
+import {
+  migrationChecksum,
+  type PluginMigration,
+} from "@nextlyhq/plugin-sdk/schema";
+
+const content = {
+  name: "20261007_120000_000_index_notes",
+  schemaVersion: 3,
+  transaction: false,
+  dialects: {
+    postgresql: {
+      up: ["CREATE INDEX CONCURRENTLY IF NOT EXISTS notes_label_idx ON acme__notes (label)"],
+      down: ["DROP INDEX CONCURRENTLY IF EXISTS notes_label_idx"],
+    },
+    mysql: { up: [], down: [] },
+    sqlite: { up: [], down: [] },
+  },
+  // ...the snapshot sides: see below.
+} satisfies Omit<PluginMigration, "checksum">;
+
+export default {
+  ...content,
+  checksum: migrationChecksum(content),
+} satisfies PluginMigration;
+```
+
+You rarely write one from nothing. `nextly migrate:create` writes it in this
+form:
+
+- `nextly migrate:create --plugin ./src/index.ts --blank` writes a module with
+  no statements for SQL you add, such as a backfill or a `VACUUM`. It carries
+  the previous module's schema on both sides, so its SQL must not change the
+  tables the plugin declares; its `schemaVersion` is the plugin's, which may
+  equal the previous module's. Add `--no-transaction` for a module with
+  `transaction: false`.
+- `nextly migrate:create --plugin ./src/index.ts --no-transaction` generates the
+  next module from the plugin's schema, as usual, with `transaction: false`, so
+  you can turn its `CREATE INDEX` into `CREATE INDEX CONCURRENTLY`. A statement
+  that builds the same index leaves the module's snapshot correct.
+
+Either way the module is written to `src/migrations/` and added to its barrel.
+A hand-sealed module gives up one check: that its SQL is the SQL that was
+generated. The ledger still refuses a module that changed after it was
+applied, so finish editing it before it ships.
+
 The entry `--plugin` points at may export the plugin as its default export or
 as a named one (`export const myPlugin = definePlugin(...)`), beside the tables
 it declares; a file exporting two plugins is refused, naming both.

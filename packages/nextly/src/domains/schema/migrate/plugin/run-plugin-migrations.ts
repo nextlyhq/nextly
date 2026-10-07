@@ -26,6 +26,7 @@
  */
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import {
+  assertNotPartiallyApplied,
   reconcileFile,
   recordAlreadyApplied,
   snapshotsEquivalent,
@@ -280,17 +281,26 @@ async function furthestMatched(
 /**
  * Record each module as applied without running it, and its ownership.
  *
- * Every module is checked intact before any row is written, so a tampered
- * module later in the run refuses the whole adoption rather than leaving the
- * modules before it recorded.
+ * Every module is checked intact, and not left part-way by a failed attempt
+ * outside a transaction, before any row is written, so such a module later in
+ * the run refuses the whole adoption rather than leaving the modules before it
+ * recorded.
  */
 async function adoptModules(
   set: PluginMigrationSet,
   modules: readonly PluginMigration[],
   deps: RunPluginMigrationsDeps
 ): Promise<void> {
-  for (const migration of modules)
+  for (const migration of modules) {
     assertModuleIntact(set.pluginName, migration);
+    await assertNotPartiallyApplied(
+      {
+        filename: qualifiedFilename(set.pluginName, migration.name),
+        transaction: migration.transaction !== false,
+      },
+      deps.repo
+    );
+  }
   for (const migration of modules) {
     await recordAlreadyApplied(
       {

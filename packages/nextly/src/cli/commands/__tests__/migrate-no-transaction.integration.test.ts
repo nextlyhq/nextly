@@ -74,6 +74,10 @@ function module(
   return { ...content, checksum: migrationChecksum(content) };
 }
 
+/** Each dialect's error for the missing table `FAILS_SECOND` writes to. */
+const MISSING_TABLE =
+  /no such table: nt_missing|relation "nt_missing" does not exist|Table '[^']*\.nt_missing' doesn't exist/;
+
 /** Two statements: one that runs, then one that fails on every dialect. */
 const FAILS_SECOND = [
   "INSERT INTO nt_marks (id) VALUES ('kept')",
@@ -169,8 +173,17 @@ describe.each(getConfiguredTestDialects())(
         true
       );
 
-      await expect(migrate()).rejects.toThrow(
-        /20261001_000001_marks\.sql ran outside a transaction, and its statement 2 of 2 failed: .*The 1 statement\(s\) before it stayed applied, and were not undone/
+      const error = await migrate().catch((thrown: unknown) => thrown);
+      expect(error).toMatchObject({
+        code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+        publicMessage:
+          "20261001_000001_marks.sql ran outside a transaction, and its statement 2 of 2 failed. The 1 statement(s) before it stayed applied, and were not undone. If you finish its remaining statements by hand, mark it applied with `nextly migrate:resolve --applied 20261001_000001_marks.sql` rather than running it again; if you reverse the statements that ran, run `nextly migrate` again.",
+        logContext: { reason: "partially-applied" },
+      });
+      // The database's reason is not public; the cause carries it.
+      expect((error as Error).message).not.toMatch(MISSING_TABLE);
+      expect((error as { cause?: Error }).cause?.message).toMatch(
+        MISSING_TABLE
       );
 
       expect(await marks()).toEqual(["kept"]);
@@ -191,10 +204,54 @@ describe.each(getConfiguredTestDialects())(
         false
       );
 
-      await expect(migrate()).rejects.toThrow();
+      // The driver's own error for the missing table, rethrown as it was:
+      // not the partial-failure error, which only a marked file raises.
+      const error = await migrate().catch((thrown: unknown) => thrown);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(MISSING_TABLE);
+      expect(error).not.toMatchObject({
+        code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      });
+      expect(await ledgerStatus("20261001_000001_marks.sql")).toEqual([
+        "failed",
+      ]);
 
       expect(await marks()).toEqual([]);
       expect(warnings.join("\n")).not.toContain("outside a transaction");
+    });
+
+    it("refuses a marked file's own BEGIN and COMMIT, before anything runs", async () => {
+      writeMigration(
+        migrationsDir,
+        "20261001_000001_bracketed",
+        ["BEGIN", "INSERT INTO nt_marks (id) VALUES ('kept')", "COMMIT"],
+        true
+      );
+
+      await expect(migrate()).rejects.toThrow(
+        /20261001_000001_bracketed\.sql was refused, and nothing in it ran\. "BEGIN" opens or ends a transaction.*It needs a transaction, and this file runs outside one: move it to a file without `-- nextly:no-transaction` as its first line/
+      );
+
+      expect(await marks()).toEqual([]);
+      // Refused before the ledger records an attempt.
+      expect(await ledgerStatus("20261001_000001_bracketed.sql")).toEqual([]);
+    });
+
+    it("refuses a savepoint in a module marked transaction: false, before anything runs", async () => {
+      await expect(
+        migratePlugin([
+          module(
+            "0001_savepoint",
+            ["SAVEPOINT s1", "INSERT INTO nt_marks (id) VALUES ('kept')"],
+            false
+          ),
+        ])
+      ).rejects.toThrow(
+        /plugin:ntx\/0001_savepoint was refused, and nothing in it ran\. "SAVEPOINT s1" marks or returns to a savepoint.*move it to a module without `transaction: false`/
+      );
+
+      expect(await marks()).toEqual([]);
+      expect(await ledgerStatus("plugin:ntx/0001_savepoint")).toEqual([]);
     });
 
     it("leaves what ran before the failing statement of a module marked transaction: false", async () => {
@@ -213,10 +270,111 @@ describe.each(getConfiguredTestDialects())(
     it("rolls back the same module unmarked, leaving nothing", async () => {
       await expect(
         migratePlugin([module("0001_marks", FAILS_SECOND)])
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_APPLY_FAILED",
+        message: expect.stringMatching(MISSING_TABLE) as unknown,
+      });
 
       expect(await marks()).toEqual([]);
     });
+
+    if (dialect === "sqlite") {
+      async function foreignKeysOn(): Promise<boolean> {
+        const [row] = (await handle.adapter.executeQuery(
+          "PRAGMA foreign_keys"
+        )) as Array<{ foreign_keys: number }>;
+        return Number(row?.foreign_keys) === 1;
+      }
+
+      /** A parent with one row, and a child whose row cascades from it. */
+      async function parentAndChild(): Promise<void> {
+        await handle.adapter.executeQuery("PRAGMA foreign_keys = ON");
+        await handle.adapter.executeQuery(
+          "CREATE TABLE nt_parent (id text PRIMARY KEY)"
+        );
+        await handle.adapter.executeQuery(
+          "CREATE TABLE nt_child (id text PRIMARY KEY, parent_id text REFERENCES nt_parent (id) ON DELETE CASCADE)"
+        );
+        await handle.adapter.executeQuery(
+          "INSERT INTO nt_parent (id) VALUES ('p1')"
+        );
+        await handle.adapter.executeQuery(
+          "INSERT INTO nt_child (id, parent_id) VALUES ('c1', 'p1')"
+        );
+      }
+
+      afterEach(async () => {
+        await handle?.adapter.executeQuery("DROP TABLE IF EXISTS nt_child");
+        await handle?.adapter.executeQuery("DROP TABLE IF EXISTS nt_parent");
+      });
+
+      it("leaves foreign keys on after a marked file fails", async () => {
+        await handle.adapter.executeQuery("PRAGMA foreign_keys = ON");
+        writeMigration(
+          migrationsDir,
+          "20261001_000001_marks",
+          FAILS_SECOND,
+          true
+        );
+
+        await expect(migrate()).rejects.toThrow(
+          /ran outside a transaction, and its statement 2 of 2 failed/
+        );
+
+        expect(await foreignKeysOn()).toBe(true);
+      });
+
+      it("rebuilds a parent table in a marked file without cascading into its children", async () => {
+        await parentAndChild();
+        writeMigration(
+          migrationsDir,
+          "20261001_000001_rebuild",
+          [
+            "CREATE TABLE __new_nt_parent (id text PRIMARY KEY, label text)",
+            "INSERT INTO __new_nt_parent (id) SELECT id FROM nt_parent",
+            "DROP TABLE nt_parent",
+            "ALTER TABLE __new_nt_parent RENAME TO nt_parent",
+          ],
+          true
+        );
+
+        await expect(migrate()).resolves.toBe(1);
+
+        const children = (await handle.adapter.executeQuery(
+          "SELECT id FROM nt_child"
+        )) as Array<{ id: string }>;
+        expect(children.map(row => row.id)).toEqual(["c1"]);
+        expect(await foreignKeysOn()).toBe(true);
+      });
+
+      it("refuses a marked file that leaves a dangling reference, with its statements kept", async () => {
+        await parentAndChild();
+        writeMigration(
+          migrationsDir,
+          "20261001_000001_orphan",
+          ["DELETE FROM nt_parent"],
+          true
+        );
+
+        await expect(migrate()).rejects.toThrow(
+          /20261001_000001_orphan\.sql ran outside a transaction, and left 1 row\(s\) referencing rows that do not exist \(nt_child → nt_parent\)\. Its statements stayed applied: repair or remove those rows, then mark it applied with `nextly migrate:resolve --applied 20261001_000001_orphan\.sql`/
+        );
+
+        // Enforcement was off, so the child row was not cascaded away; the
+        // parent's delete stayed applied, and the ledger records the failure.
+        const children = (await handle.adapter.executeQuery(
+          "SELECT id FROM nt_child"
+        )) as Array<{ id: string }>;
+        expect(children.map(row => row.id)).toEqual(["c1"]);
+        expect(
+          await handle.adapter.executeQuery("SELECT id FROM nt_parent")
+        ).toEqual([]);
+        expect(await ledgerStatus("20261001_000001_orphan.sql")).toEqual([
+          "failed",
+        ]);
+        expect(await foreignKeysOn()).toBe(true);
+      });
+    }
 
     if (dialect === "postgresql") {
       const concurrently =

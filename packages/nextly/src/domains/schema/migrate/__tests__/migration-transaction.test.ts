@@ -8,7 +8,11 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import type Database from "better-sqlite3";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { executeTransaction } from "../migration-transaction";
+import { NextlyError } from "../../../../errors/nextly-error";
+import {
+  executeTransaction,
+  runMigrationStatements,
+} from "../migration-transaction";
 
 let adapter: ReturnType<typeof createSqliteAdapter>;
 let sqlite: Database.Database;
@@ -122,5 +126,91 @@ describe("a SQLite migration unit", () => {
       /already exists/
     );
     expect(sqlite.pragma("foreign_keys", { simple: true })).toBe(1);
+  });
+});
+
+describe("a unit run outside a transaction that fails part-way", () => {
+  /** The unit's error, from a real driver failure on its last statement. */
+  async function failure(
+    statements: string[],
+    unit: Parameters<typeof runMigrationStatements>[2]
+  ): Promise<NextlyError> {
+    const thrown = await runMigrationStatements(adapter, statements, unit).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(thrown).toBeInstanceOf(NextlyError);
+    return thrown as NextlyError;
+  }
+
+  const FAILS_THIRD = [
+    "INSERT INTO parent VALUES ('p2', 'two')",
+    "INSERT INTO parent VALUES ('p3', 'three')",
+    "INSERT INTO missing_secret_table VALUES ('x')",
+  ];
+
+  it("keeps the driver's reason out of the public message", async () => {
+    const error = await failure(FAILS_THIRD, {
+      source: "0001_x.sql",
+      transaction: false,
+    });
+
+    expect(error.code).toBe("NEXTLY_MIGRATION_PARTIALLY_APPLIED");
+    expect(error.publicMessage).toBe(
+      "0001_x.sql ran outside a transaction, and its statement 3 of 3 failed. The 2 statement(s) before it stayed applied, and were not undone. If you finish its remaining statements by hand, mark it applied with `nextly migrate:resolve --applied 0001_x.sql` rather than running it again; if you reverse the statements that ran, run `nextly migrate` again."
+    );
+    expect(error.publicMessage).not.toContain("missing_secret_table");
+    // The reason travels where the operator reads it, not the wire.
+    expect(error.logMessage).toMatch(
+      /^0001_x\.sql: statement 3 of 3 failed: .*no such table: missing_secret_table$/
+    );
+    expect(error.cause?.message).toContain(
+      "no such table: missing_secret_table"
+    );
+    expect(error.logContext).toEqual({
+      source: "0001_x.sql",
+      failedStatement: 3,
+      statements: 3,
+      reason: "partially-applied",
+    });
+    expect(error.toResponseJSON("req").message).not.toContain(
+      "missing_secret_table"
+    );
+    expect(count("parent")).toBe(3);
+  });
+
+  it("names a module's recovery for a plugin module", async () => {
+    const error = await failure(FAILS_THIRD, {
+      source: "plugin:@acme/fx/001_init",
+      transaction: false,
+    });
+    expect(error.publicMessage).toContain(
+      "run `nextly migrate:resolve --failed-cleanup plugin:@acme/fx/001_init` and then `nextly migrate`, which records it applied rather than running it again"
+    );
+  });
+
+  it("asks a DOWN to be finished or reversed, not marked applied", async () => {
+    const error = await failure(FAILS_THIRD, {
+      source: "0001_x.sql",
+      transaction: false,
+      direction: "down",
+    });
+    expect(error.publicMessage).toContain(
+      "The 2 statement(s) before it stayed applied, and were not undone. Finish or reverse them by hand before running it again."
+    );
+    expect(error.publicMessage).not.toContain("--applied");
+  });
+
+  it("says nothing ran when the first statement fails", async () => {
+    const error = await failure(
+      ["INSERT INTO missing_secret_table VALUES ('x')"],
+      {
+        source: "0001_x.sql",
+        transaction: false,
+      }
+    );
+    expect(error.publicMessage).toBe(
+      "0001_x.sql ran outside a transaction, and its statement 1 of 1 failed. No statement before it had run, so it can run again once the cause is fixed."
+    );
   });
 });

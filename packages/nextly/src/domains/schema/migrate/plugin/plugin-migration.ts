@@ -200,17 +200,20 @@ export function migrationChecksum(content: MigrationContent): string {
  * put through `splitSqlStatements`, the splitter an app migration file goes
  * through. Each entry is split on its own: joined first, an entry ending in a
  * `-- comment` would swallow the separator after it and merge with the next.
+ * Split as the module runs, so a `transaction: false` module keeps a
+ * transaction bracket for the refusal to name.
  *
  * Every guard over a module reads this list, and every path that runs one —
  * the apply, `migrate:down --plugin`, `plugins uninstall` — runs it.
  */
 export function pluginModuleStatements(
-  migration: Pick<PluginMigration, "dialects">,
+  migration: Pick<PluginMigration, "dialects" | "transaction">,
   dialect: SupportedDialect,
   direction: keyof DialectStatements
 ): string[] {
+  const mode = { transaction: migration.transaction !== false };
   return (migration.dialects[dialect]?.[direction] ?? []).flatMap(entry =>
-    splitSqlStatements(entry, dialect)
+    splitSqlStatements(entry, dialect, mode)
   );
 }
 
@@ -222,7 +225,7 @@ export function pluginModuleStatements(
  * back exactly `pluginModuleStatements`.
  */
 export function moduleSql(
-  migration: Pick<PluginMigration, "dialects">,
+  migration: Pick<PluginMigration, "dialects" | "transaction">,
   dialect: SupportedDialect,
   direction: keyof DialectStatements
 ): string {
@@ -247,7 +250,9 @@ export function qualifiedFilename(
  *
  * An edited module is refused rather than re-hashed. Re-hashing would accept
  * whatever is on disk, which is precisely the state this exists to detect:
- * the SQL that will run is not the SQL that was reviewed.
+ * the SQL that will run is not the SQL that was reviewed. A module its author
+ * means to edit computes its checksum from its own content when it loads
+ * (`migrationChecksum`), so it passes here, and the refusal says how.
  */
 export function assertModuleIntact(
   pluginName: string,
@@ -258,8 +263,7 @@ export function assertModuleIntact(
 
   throw new NextlyError({
     code: "MIGRATION_CHECKSUM_MISMATCH",
-    publicMessage:
-      "A plugin migration has been changed since it was generated. Regenerate it, or restore the original.",
+    publicMessage: `A plugin migration has been changed since it was generated. Regenerate it, or restore the original. A module written or edited by hand is sealed with \`migrationChecksum\` from \`@nextlyhq/plugin-sdk/schema\` — \`checksum: migrationChecksum(content)\` over the module without its checksum — which is the form \`nextly migrate:create --plugin <entry> --blank\` and \`--no-transaction\` write.`,
     logContext: {
       plugin: pluginName,
       migration: migration.name,

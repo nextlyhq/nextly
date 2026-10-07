@@ -1,11 +1,12 @@
 /**
- * `nextly migrate:resolve` — operator recovery (spec §4.8).
+ * `nextly migrate:resolve` — operator recovery.
  *
- * Flips `file_apply` bookkeeping without (re-)running SQL, for the three
- * recovery situations the spec enumerates:
+ * Flips `file_apply` bookkeeping without (re-)running SQL, for three
+ * recovery situations:
  *   --applied        record a file as applied (live must equal the file's
  *                    target snapshot, unless --skip-verify); supersede a prior
- *                    failed row.
+ *                    failed row. An app file only: a plugin module is
+ *                    recorded by `nextly migrate`, after --failed-cleanup.
  *   --rolled-back    record a rolled_back event so the next `migrate` re-runs
  *                    the file (requires a prior applied row).
  *   --failed-cleanup flip a stuck failed row to rolled_back so the .sql can be
@@ -13,13 +14,13 @@
  *
  * Effects (repo, fs existence, snapshot load, live introspection) are injected
  * so the state machine unit-tests against the in-memory SQLite fixture without
- * a CLI shell. Equivalence (spec §4.2) is "empty diff" via the diff engine.
+ * a CLI shell. Two snapshots are equivalent when their diff is empty.
  *
  * @module domains/schema/migrate/resolve
- * @since v0.0.3-alpha (Plan C3)
+ * @since v0.0.3-alpha
  */
 import { NextlyError } from "../../../errors";
-import { ledgerFilename } from "../events/ledger-scope";
+import { isPluginLedgerRow, ledgerFilename } from "../events/ledger-scope";
 import { newestEvent } from "../events/newest-event";
 import type { SchemaEventRow } from "../events/schema-events-repository";
 import { diffSnapshots } from "../pipeline/diff/diff";
@@ -83,10 +84,25 @@ export async function resolveMigration(
   }
 }
 
+/**
+ * Refuses to mark a plugin module applied. `nextly migrate` records a module
+ * together with the tables it owns, and a row written here would leave them
+ * without an owner; clearing the module's failed attempt hands it back to
+ * `nextly migrate`, which records it when the database stands at its result.
+ */
+function assertAppFile(filename: string): void {
+  if (!isPluginLedgerRow(filename)) return;
+  throw new NextlyError({
+    code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+    publicMessage: `${filename} is a plugin module, which \`nextly migrate\` records applied together with the tables it owns. Run \`nextly migrate:resolve --failed-cleanup ${filename}\` and then \`nextly migrate\`: it records the module applied when the database stands at its result, and runs it when the database stands at its start.`,
+  });
+}
+
 async function resolveApplied(
   args: ResolveMigrationArgs,
   filename: string
 ): Promise<ResolveResult> {
+  assertAppFile(filename);
   if (!(await args.fileExists(filename))) {
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_FILE_MISSING",

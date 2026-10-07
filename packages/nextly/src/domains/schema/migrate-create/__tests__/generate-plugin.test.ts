@@ -14,7 +14,10 @@ import { describe, expect, it } from "vitest";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { migrationChecksum } from "../../migrate/plugin/plugin-migration";
+import {
+  assertModuleIntact,
+  migrationChecksum,
+} from "../../migrate/plugin/plugin-migration";
 import { diffSnapshots } from "../../pipeline/diff/diff";
 import type { ColumnSpec, TableSpec } from "../../pipeline/diff/types";
 import { generateStatements } from "../../pipeline/sql-templates/index";
@@ -22,7 +25,9 @@ import { generateStatements } from "../../pipeline/sql-templates/index";
 import { withCyclicForeignKeysSplit } from "../cyclic-foreign-keys";
 import { buildInverseOperations } from "../down-generator";
 import {
+  buildBlankPluginMigration,
   buildPluginMigration,
+  formatHandSealedPluginMigrationModule,
   formatPluginMigrationsIndex,
   generatePluginMigration,
 } from "../generate-plugin";
@@ -651,5 +656,107 @@ describe("elements contributed to another owner's table", () => {
     const built = buildPluginMigration(CONTRIBUTING);
     const up = built!.module.dialects.postgresql.up.join("\n");
     expect(up).toMatch(/CREATE TABLE .*fx__notes/i);
+  });
+});
+
+describe("a module that runs outside a transaction", () => {
+  it("is generated with transaction: false, sealed over it", () => {
+    const outside = buildPluginMigration({ ...FIRST, transaction: false });
+    const inside = buildPluginMigration(FIRST);
+
+    expect(outside?.module.transaction).toBe(false);
+    expect(outside?.module.dialects).toEqual(inside?.module.dialects);
+    // The field is part of what the checksum covers.
+    expect(outside?.module.checksum).not.toBe(inside?.module.checksum);
+    expect(() => assertModuleIntact("fixture", outside!.module)).not.toThrow();
+    // Absent when the module runs in one, so it hashes as it always has.
+    expect("transaction" in inside!.module).toBe(false);
+  });
+});
+
+describe("buildBlankPluginMigration", () => {
+  const first = buildPluginMigration(FIRST)!.module;
+
+  it("carries the last module's schema on both sides, with no statements", () => {
+    const blank = buildBlankPluginMigration({
+      pluginName: "fixture",
+      schemaVersion: 1,
+      name: "backfill",
+      now: new Date("2026-09-24T10:00:00Z"),
+      existing: [first],
+      transaction: false,
+    });
+
+    expect(blank.name).toBe("20260924_100000_000_backfill");
+    expect(blank.transaction).toBe(false);
+    for (const dialect of DIALECTS) {
+      expect(blank.dialects[dialect]).toEqual({ up: [], down: [] });
+      expect(blank.before[dialect]).toEqual(first.snapshot[dialect]);
+      expect(blank.snapshot[dialect]).toEqual(first.snapshot[dialect]);
+    }
+    expect(() => assertModuleIntact("fixture", blank)).not.toThrow();
+  });
+
+  it("leaves the next generated module diffing from the last module's result", () => {
+    const blank = buildBlankPluginMigration({
+      pluginName: "fixture",
+      schemaVersion: 1,
+      name: "backfill",
+      now: new Date("2026-09-24T10:00:00Z"),
+      existing: [first],
+    });
+    const next = buildPluginMigration({
+      ...FIRST,
+      schemaVersion: 2,
+      name: "score",
+      now: new Date("2026-09-25T10:00:00Z"),
+      tablesByDialect: tablesByDialect(tableSpec(true)),
+      existing: [first, blank],
+    });
+
+    for (const dialect of DIALECTS) {
+      expect(next?.module.dialects[dialect]).toEqual(
+        sharedCoreRender([tableSpec(false)], [tableSpec(true)], dialect)
+      );
+    }
+  });
+
+  it("refuses a schema version behind the last module's", () => {
+    const second = buildPluginMigration({
+      ...FIRST,
+      schemaVersion: 2,
+      name: "score",
+      tablesByDialect: tablesByDialect(tableSpec(true)),
+      existing: [first],
+    })!.module;
+    expect(() =>
+      buildBlankPluginMigration({
+        pluginName: "fixture",
+        schemaVersion: 1,
+        name: "backfill",
+        existing: [first, second],
+      })
+    ).toThrow(/behind 2 on its last migration/);
+  });
+});
+
+describe("formatHandSealedPluginMigrationModule", () => {
+  it("seals the module with migrationChecksum over its content when it loads", () => {
+    const blank = buildBlankPluginMigration({
+      pluginName: "fixture",
+      schemaVersion: 1,
+      name: "backfill",
+      existing: [],
+      transaction: false,
+    });
+    const text = formatHandSealedPluginMigrationModule(blank);
+
+    expect(text).toContain(
+      'import {\n  migrationChecksum,\n  type PluginMigration,\n} from "@nextlyhq/plugin-sdk/schema";'
+    );
+    expect(text).toContain("checksum: migrationChecksum(content),");
+    // No literal checksum to go stale when the SQL is edited.
+    expect(text).not.toContain(blank.checksum);
+    expect(text).toContain('"transaction": false');
   });
 });
