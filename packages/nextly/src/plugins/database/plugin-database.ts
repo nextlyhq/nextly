@@ -398,6 +398,12 @@ export type TableColumns<T> =
     ? Record<keyof TColumns & string, AnyColumn>
     : Record<string, AnyColumn>;
 
+/**
+ * @experimental `ctx.db`: typed, owner-checked access to the tables a plugin
+ * declared, its dependencies' tables and the columns it contributed, with one
+ * behaviour on every dialect. Every method checks the caller's reach before it
+ * builds a query. The untyped Drizzle builder is at `ctx.db.raw`.
+ */
 export interface PluginDatabase {
   table<T extends TableDefinition>(definition: T): TableColumns<T>;
   select<T extends TableDefinition>(definition: T): PortableSelect<T>;
@@ -426,6 +432,17 @@ export interface PluginDatabase {
     tableName: string,
     columns: TColumns
   ): ContributedColumns<TColumns>;
+  /**
+   * Run `fn` in one transaction: it commits when `fn` resolves and rolls back
+   * when it throws, and what `fn` threw reaches the caller as thrown. `tx` is
+   * this surface bound to the transaction's own connection on every dialect;
+   * write through it, since `ctx.db` itself runs outside the transaction on
+   * PostgreSQL and MySQL. On SQLite a core service or `ctx.settings` called
+   * inside joins it as a savepoint and rolls back with it, its after-commit
+   * effects (hooks, events, revalidation) wait for the commit and never run
+   * on rollback, and deleting media is refused. Keep it short, and never
+   * await network I/O inside it.
+   */
   transaction<R>(fn: (tx: PluginTransaction) => Promise<R>): Promise<R>;
   /**
    * Relational queries (`db.query.<table>.findMany({ with })`), keyed by
@@ -483,6 +500,11 @@ export interface ContributedColumns<
   ): Promise<number>;
 }
 
+/**
+ * @experimental The handle `ctx.db.transaction` passes its work: the same
+ * surface as `ctx.db`, bound to the transaction's connection, without a
+ * nested `transaction`.
+ */
 export type PluginTransaction = Omit<PluginDatabase, "transaction">;
 
 /** One table's entry in a relations config: its edges, keyed by relation name. */

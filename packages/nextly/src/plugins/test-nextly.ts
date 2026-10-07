@@ -63,6 +63,7 @@ import {
   isAbortedTransactionError,
   recordAbortedTransaction,
 } from "./aborted-transaction-sightings";
+import type { PluginConsent } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { resetPluginRouteRegistry } from "./routes/route-registry";
 import { clearPluginServices } from "./services/plugin-services-registry";
@@ -270,6 +271,12 @@ export interface CreateTestNextlyOptions {
   serverUrl?: string;
   /** Plugins to boot (their full lifecycle runs). */
   plugins?: PluginDefinition[];
+  /**
+   * What the app lists plugins for, as `db.rawSqlPlugins` does in
+   * `nextly.config.ts`. Absent, nothing is listed, as in an app that lists
+   * nothing: a plugin declaring `rawSql` then refuses the boot.
+   */
+  pluginConsent?: PluginConsent;
   /** Code-first collections to register (tables created on the in-memory DB). */
   collections?: CollectionConfig[];
   /** Code-first singles. */
@@ -705,6 +712,7 @@ async function bootServices(
     // a function". Mirrors production boot (registerServices always gets one).
     hookRegistry: getHookRegistry(),
     plugins: opts.plugins,
+    pluginConsent: opts.pluginConsent,
     collections: opts.collections,
     singles: opts.singles,
     fieldGroups: opts.fieldGroups,

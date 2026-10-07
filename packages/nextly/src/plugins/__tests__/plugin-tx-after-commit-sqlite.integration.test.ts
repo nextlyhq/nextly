@@ -29,7 +29,7 @@ import type { UserService } from "../../services/users/user-service";
 import { getMediaStorage } from "../../storage/storage";
 import {
   definePlugin,
-  type PluginDatabase,
+  type PluginContext,
   type PluginSettingsApi,
 } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
@@ -48,7 +48,7 @@ afterEach(async () => {
 });
 
 interface Captured {
-  db: PluginDatabase;
+  db: PluginContext["db"];
   users: UserService;
   collections: CollectionService;
   media: MediaService;
@@ -187,213 +187,234 @@ function kinds(log: string[]): string[] {
     .sort();
 }
 
-describe("a core write inside ctx.db.transaction on sqlite", () => {
-  it("announces nothing when the transaction rolls back", async () => {
-    const { ctx, seen } = await boot();
+/** Running work in one of the two transactions a plugin can open. */
+type Transaction = <T>(work: () => Promise<T>) => Promise<T>;
 
-    await expect(
-      ctx.db.transaction(async () => {
-        await writeEverything(ctx, "rolled-back");
-        throw new Error("later step failed");
-      })
-    ).rejects.toThrow("later step failed");
-    await current!.events.settle();
+/**
+ * The typed `ctx.db` and `ctx.db.raw` open the same adapter transaction, and
+ * what a service defers must wait for either.
+ */
+const TRANSACTIONS: ReadonlyArray<
+  readonly [string, (db: PluginContext["db"]) => Transaction]
+> = [
+  ["the typed ctx.db", db => work => db.transaction(() => work())],
+  ["ctx.db.raw", db => work => db.raw.transaction(() => work())],
+];
 
-    expect(seen.log).toEqual([]);
-    expect(seen.revalidated).toEqual([]);
-    // The control: the writes really were undone, so silence is correct.
-    expect(
-      await ctx.users.findByEmail("rolled-back@example.com", {})
-    ).toBeNull();
-  });
+describe.each(TRANSACTIONS)(
+  "a core write inside a transaction through %s on sqlite",
+  (_, transactionOf) => {
+    it("announces nothing when the transaction rolls back", async () => {
+      const { ctx, seen } = await boot();
 
-  it("announces each change once, after the transaction commits", async () => {
-    const { ctx, seen } = await boot();
-    let seenInside: string[] = [];
-    let revalidatedInside: string[] = [];
-
-    await ctx.db.transaction(async () => {
-      await writeEverything(ctx, "committed");
-      seenInside = [...seen.log];
-      revalidatedInside = [...seen.revalidated];
-    });
-    await current!.events.settle();
-
-    expect(seenInside).toEqual([]);
-    expect(revalidatedInside).toEqual([]);
-    expect(kinds(seen.log)).toEqual([...EVERY_EFFECT].sort());
-    expect(seen.revalidated).toContain(`nextly:${SLUG}`);
-    expect(seen.revalidated).toContain("nextly:media");
-  });
-
-  it("drops only what a rolled-back savepoint announced", async () => {
-    const { ctx, seen } = await boot();
-
-    await ctx.db.transaction(async () => {
-      await ctx.collections.createEntry(SLUG, { title: "kept" }, {});
-      // A service's own transaction nests as a savepoint; this one fails
-      // after the entry inside it was written, so the entry and its effects
-      // go with it.
-      await ctx.collections
-        .withTransaction(async () => {
-          await ctx.collections.createEntry(SLUG, { title: "undone" }, {});
-          throw new Error("savepoint failed");
+      await expect(
+        transactionOf(ctx.db)(async () => {
+          await writeEverything(ctx, "rolled-back");
+          throw new Error("later step failed");
         })
-        .catch(() => undefined);
-      await ctx.users.create(
-        { email: "sibling@example.com", name: "s", password: "Passw0rd!long" },
+      ).rejects.toThrow("later step failed");
+      await current!.events.settle();
+
+      expect(seen.log).toEqual([]);
+      expect(seen.revalidated).toEqual([]);
+      // The control: the writes really were undone, so silence is correct.
+      expect(
+        await ctx.users.findByEmail("rolled-back@example.com", {})
+      ).toBeNull();
+    });
+
+    it("announces each change once, after the transaction commits", async () => {
+      const { ctx, seen } = await boot();
+      let seenInside: string[] = [];
+      let revalidatedInside: string[] = [];
+
+      await transactionOf(ctx.db)(async () => {
+        await writeEverything(ctx, "committed");
+        seenInside = [...seen.log];
+        revalidatedInside = [...seen.revalidated];
+      });
+      await current!.events.settle();
+
+      expect(seenInside).toEqual([]);
+      expect(revalidatedInside).toEqual([]);
+      expect(kinds(seen.log)).toEqual([...EVERY_EFFECT].sort());
+      expect(seen.revalidated).toContain(`nextly:${SLUG}`);
+      expect(seen.revalidated).toContain("nextly:media");
+    });
+
+    it("drops only what a rolled-back savepoint announced", async () => {
+      const { ctx, seen } = await boot();
+
+      await transactionOf(ctx.db)(async () => {
+        await ctx.collections.createEntry(SLUG, { title: "kept" }, {});
+        // A service's own transaction nests as a savepoint; this one fails
+        // after the entry inside it was written, so the entry and its effects
+        // go with it.
+        await ctx.collections
+          .withTransaction(async () => {
+            await ctx.collections.createEntry(SLUG, { title: "undone" }, {});
+            throw new Error("savepoint failed");
+          })
+          .catch(() => undefined);
+        await ctx.users.create(
+          {
+            email: "sibling@example.com",
+            name: "s",
+            password: "Passw0rd!long",
+          },
+          {}
+        );
+      });
+      await current!.events.settle();
+
+      expect(seen.log).not.toContain("field.afterChange:undone");
+      expect(seen.log.filter(e => e === "hook.afterCreate")).toHaveLength(1);
+      expect(seen.log).toContain("field.afterChange:kept");
+      expect(seen.log).toContain("user.created");
+    });
+
+    it("announces as the service returns outside any transaction", async () => {
+      const { ctx, seen } = await boot();
+
+      await ctx.collections.createEntry(SLUG, { title: "alone" }, {});
+      const afterCreate = [...seen.log];
+      await ctx.settings.set({ port: 8443 });
+
+      expect(afterCreate).toEqual(
+        expect.arrayContaining([
+          "hook.afterCreate",
+          `collection.${SLUG}.created`,
+          "field.afterChange:alone",
+        ])
+      );
+      expect(seen.log).toContain("plugin.settings.changed");
+      expect(seen.revalidated).toContain(`nextly:${SLUG}`);
+    });
+
+    it("drops a deleted user's event and a Single's effects on rollback", async () => {
+      const { ctx, seen } = await boot();
+      const doomed = await ctx.users.create(
+        { email: "doomed@example.com", name: "d", password: "Passw0rd!long" },
         {}
       );
-    });
-    await current!.events.settle();
+      await current!.events.settle();
+      seen.log.length = 0;
+      seen.revalidated.length = 0;
 
-    expect(seen.log).not.toContain("field.afterChange:undone");
-    expect(seen.log.filter(e => e === "hook.afterCreate")).toHaveLength(1);
-    expect(seen.log).toContain("field.afterChange:kept");
-    expect(seen.log).toContain("user.created");
-  });
+      await expect(
+        transactionOf(ctx.db)(async () => {
+          await ctx.users.delete(doomed.id, {});
+          await current!.nextly.updateSingle({
+            slug: "site",
+            data: { siteName: "rolled-back" },
+          });
+          throw new Error("later step failed");
+        })
+      ).rejects.toThrow("later step failed");
+      await current!.events.settle();
 
-  it("announces as the service returns outside any transaction", async () => {
-    const { ctx, seen } = await boot();
+      expect(seen.log).toEqual([]);
+      expect(seen.revalidated).toEqual([]);
+      // The control: the account is still there, so silence is correct.
+      expect(
+        await ctx.users.findByEmail("doomed@example.com", {})
+      ).not.toBeNull();
 
-    await ctx.collections.createEntry(SLUG, { title: "alone" }, {});
-    const afterCreate = [...seen.log];
-    await ctx.settings.set({ port: 8443 });
-
-    expect(afterCreate).toEqual(
-      expect.arrayContaining([
-        "hook.afterCreate",
-        `collection.${SLUG}.created`,
-        "field.afterChange:alone",
-      ])
-    );
-    expect(seen.log).toContain("plugin.settings.changed");
-    expect(seen.revalidated).toContain(`nextly:${SLUG}`);
-  });
-
-  it("drops a deleted user's event and a Single's effects on rollback", async () => {
-    const { ctx, seen } = await boot();
-    const doomed = await ctx.users.create(
-      { email: "doomed@example.com", name: "d", password: "Passw0rd!long" },
-      {}
-    );
-    await current!.events.settle();
-    seen.log.length = 0;
-    seen.revalidated.length = 0;
-
-    await expect(
-      ctx.db.transaction(async () => {
+      await transactionOf(ctx.db)(async () => {
         await ctx.users.delete(doomed.id, {});
         await current!.nextly.updateSingle({
           slug: "site",
-          data: { siteName: "rolled-back" },
+          data: { siteName: "committed" },
         });
-        throw new Error("later step failed");
-      })
-    ).rejects.toThrow("later step failed");
-    await current!.events.settle();
-
-    expect(seen.log).toEqual([]);
-    expect(seen.revalidated).toEqual([]);
-    // The control: the account is still there, so silence is correct.
-    expect(
-      await ctx.users.findByEmail("doomed@example.com", {})
-    ).not.toBeNull();
-
-    await ctx.db.transaction(async () => {
-      await ctx.users.delete(doomed.id, {});
-      await current!.nextly.updateSingle({
-        slug: "site",
-        data: { siteName: "committed" },
       });
+      await current!.events.settle();
+
+      expect(seen.log).toEqual(
+        expect.arrayContaining(["user.deleted", "field.afterChange:committed"])
+      );
+      expect(seen.revalidated.length).toBeGreaterThan(0);
     });
-    await current!.events.settle();
 
-    expect(seen.log).toEqual(
-      expect.arrayContaining(["user.deleted", "field.afterChange:committed"])
-    );
-    expect(seen.revalidated.length).toBeGreaterThan(0);
-  });
+    it("holds a collection transaction's cache flush for the outer commit", async () => {
+      const { ctx, seen } = await boot();
 
-  it("holds a collection transaction's cache flush for the outer commit", async () => {
-    const { ctx, seen } = await boot();
+      await expect(
+        transactionOf(ctx.db)(async () => {
+          await ctx.collections.withTransaction(tx =>
+            ctx.collections.createEntryInTransaction(
+              tx,
+              SLUG,
+              { title: "in-tx" },
+              {}
+            )
+          );
+          throw new Error("later step failed");
+        })
+      ).rejects.toThrow("later step failed");
 
-    await expect(
-      ctx.db.transaction(async () => {
-        await ctx.collections.withTransaction(tx =>
+      expect(seen.revalidated).toEqual([]);
+
+      await transactionOf(ctx.db)(() =>
+        ctx.collections.withTransaction(tx =>
           ctx.collections.createEntryInTransaction(
             tx,
             SLUG,
             { title: "in-tx" },
             {}
           )
-        );
-        throw new Error("later step failed");
-      })
-    ).rejects.toThrow("later step failed");
-
-    expect(seen.revalidated).toEqual([]);
-
-    await ctx.db.transaction(() =>
-      ctx.collections.withTransaction(tx =>
-        ctx.collections.createEntryInTransaction(
-          tx,
-          SLUG,
-          { title: "in-tx" },
-          {}
         )
-      )
-    );
+      );
 
-    expect(seen.revalidated).toContain(`nextly:${SLUG}`);
-  });
+      expect(seen.revalidated).toContain(`nextly:${SLUG}`);
+    });
 
-  it("announces an entry's update and deletion only once they commit", async () => {
-    const { ctx, seen } = await boot();
-    const created = (await ctx.collections.createEntry(
-      SLUG,
-      { title: "before" },
-      {}
-    )) as unknown as { item: { id: string } };
-    const id = created.item.id;
-    await current!.events.settle();
-    seen.log.length = 0;
-    seen.revalidated.length = 0;
-    const updateThenDelete = async () => {
-      await ctx.collections.updateEntry(SLUG, id, { title: "after" }, {});
-      await ctx.collections.deleteEntry(SLUG, id, {});
-    };
+    it("announces an entry's update and deletion only once they commit", async () => {
+      const { ctx, seen } = await boot();
+      const created = (await ctx.collections.createEntry(
+        SLUG,
+        { title: "before" },
+        {}
+      )) as unknown as { item: { id: string } };
+      const id = created.item.id;
+      await current!.events.settle();
+      seen.log.length = 0;
+      seen.revalidated.length = 0;
+      const updateThenDelete = async () => {
+        await ctx.collections.updateEntry(SLUG, id, { title: "after" }, {});
+        await ctx.collections.deleteEntry(SLUG, id, {});
+      };
 
-    await expect(
-      ctx.db.transaction(async () => {
-        await updateThenDelete();
-        throw new Error("later step failed");
-      })
-    ).rejects.toThrow("later step failed");
-    await current!.events.settle();
+      await expect(
+        transactionOf(ctx.db)(async () => {
+          await updateThenDelete();
+          throw new Error("later step failed");
+        })
+      ).rejects.toThrow("later step failed");
+      await current!.events.settle();
 
-    expect(seen.log).toEqual([]);
-    expect(seen.revalidated).toEqual([]);
-    // The control: the entry is still there as it was, so silence is correct.
-    expect((await ctx.collections.findEntryById(SLUG, id, {})).title).toBe(
-      "before"
-    );
+      expect(seen.log).toEqual([]);
+      expect(seen.revalidated).toEqual([]);
+      // The control: the entry is still there as it was, so silence is correct.
+      expect((await ctx.collections.findEntryById(SLUG, id, {})).title).toBe(
+        "before"
+      );
 
-    await ctx.db.transaction(updateThenDelete);
-    await current!.events.settle();
+      await transactionOf(ctx.db)(updateThenDelete);
+      await current!.events.settle();
 
-    expect(kinds(seen.log)).toEqual(
-      [
-        "hook.afterUpdate",
-        `collection.${SLUG}.updated`,
-        "field.afterChange:",
-        "hook.afterDelete",
-        `collection.${SLUG}.deleted`,
-      ].sort()
-    );
-    expect(seen.revalidated).toContain(`nextly:${SLUG}`);
-  });
-});
+      expect(kinds(seen.log)).toEqual(
+        [
+          "hook.afterUpdate",
+          `collection.${SLUG}.updated`,
+          "field.afterChange:",
+          "hook.afterDelete",
+          `collection.${SLUG}.deleted`,
+        ].sort()
+      );
+      expect(seen.revalidated).toContain(`nextly:${SLUG}`);
+    });
+  }
+);
 
 describe("a publish inside ctx.db.transaction on sqlite", () => {
   const STATUS_EVENTS = [
@@ -404,7 +425,7 @@ describe("a publish inside ctx.db.transaction on sqlite", () => {
 
   /** A localized collection with drafts, its companion table, and a draft entry. */
   async function bootWithDraft() {
-    let db: PluginDatabase | undefined;
+    let db: PluginContext["db"] | undefined;
     current = await createTestNextly({
       plugins: [
         definePlugin({

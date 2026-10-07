@@ -32,6 +32,8 @@ export {
   type PluginContext,
   type PluginDatabase,
   type PluginDefinition,
+  type PluginRawDatabase,
+  type PluginTransaction,
   type PluginFilterRegistry,
   type PluginHookRegistry,
   type PluginSettingsApi,

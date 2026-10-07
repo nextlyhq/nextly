@@ -24,6 +24,7 @@ import type { NextlyServiceConfig } from "../../di/register";
 import { describeError } from "../../errors/index";
 import { pluginAdminSlug } from "../../plugins/admin-meta";
 import { getCoreVersion } from "../../plugins/core-version";
+import { pluginConsentFromConfig } from "../../plugins/plugin-consent";
 import {
   collectPluginInfo,
   findPluginInfo,
@@ -140,7 +141,7 @@ async function loadPluginInfos(
   return collectPluginInfo(
     config as unknown as NextlyServiceConfig,
     config.plugins ?? [],
-    { coreVersion: getCoreVersion() }
+    { coreVersion: getCoreVersion(), consent: pluginConsentFromConfig(config) }
   );
 }
 

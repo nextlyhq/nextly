@@ -342,6 +342,8 @@ export {
   type NextlyServiceConfig,
   type ServiceMap,
 } from "./di";
+// Named by `NextlyServiceConfig.pluginConsent`.
+export type { PluginConsent } from "./plugins/plugin-consent";
 
 // Validation Types and Utilities
 export type {
@@ -485,6 +487,8 @@ export {
   type PluginContext,
   type PluginContributions,
   type PluginDatabase,
+  type PluginRawDatabase,
+  type PluginTransaction,
   type PluginHookPointDeclaration,
   type PluginSettingsApi,
   type PluginDeclaration,

@@ -48,6 +48,10 @@ import { NextlyError, describeError } from "../../errors/index";
 import type { PluginFieldType } from "../../plugins/contributions";
 import { getCoreVersion } from "../../plugins/core-version";
 import { collectCustomPermissions } from "../../plugins/permissions/collect-permissions";
+import {
+  pluginConsentFromConfig,
+  type PluginConsent,
+} from "../../plugins/plugin-consent";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import {
   resolvePlugins,
@@ -80,10 +84,11 @@ function builderCollectionSlugs(builder: BuilderEntities): string[] {
  * The CLI then runs each plugin's `setup` in this order.
  */
 export function orderConfigPlugins(
-  plugins: PluginDefinition[]
+  plugins: PluginDefinition[],
+  consent: PluginConsent
 ): PluginDefinition[] {
   if (plugins.length === 0) return plugins;
-  return resolvePlugins(plugins, { coreVersion: getCoreVersion() });
+  return resolvePlugins(plugins, { coreVersion: getCoreVersion(), consent });
 }
 
 /** Merge the folded collections/singles/components + transformed plugins/storage onto base. Pure. */
@@ -547,7 +552,12 @@ async function loadConfigInternal(
 
     // Resolve (validate + topo order) before running setups, mirroring the
     // runtime boot (register.ts) so both paths agree (D5/D6/D7).
-    const plugins = orderConfigPlugins(config.plugins ?? []);
+    //
+    // The consent comes from the config as the app wrote it, before any
+    // `setup` transformer runs, exactly as the boot reads it: a transformer
+    // is plugin code and must not be able to list a plugin itself.
+    const pluginConsent = pluginConsentFromConfig(config);
+    const plugins = orderConfigPlugins(config.plugins ?? [], pluginConsent);
 
     // Cleared on EVERY load, not only when plugins are present. A reload that
     // removes the last plugin would otherwise leave its types in the
@@ -593,6 +603,7 @@ async function loadConfigInternal(
       // exactly as they reach the boot.
       transformedConfig = resolveTransformedPlugins(transformedConfig, {
         coreVersion: getCoreVersion(),
+        consent: pluginConsent,
       });
       const transformedPlugins: PluginDefinition[] = transformedConfig.plugins;
 
