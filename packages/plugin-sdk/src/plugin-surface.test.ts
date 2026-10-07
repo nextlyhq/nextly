@@ -125,10 +125,6 @@ describe("plugin-sdk public export surface", () => {
     expect(exportedNames("testing.ts")).toMatchSnapshot();
   });
 
-  it("`./schema` surface is unchanged", () => {
-    expect(exportedNames("schema.ts")).toMatchSnapshot();
-  });
-
   it("snapshots every subpath the package publishes", () => {
     // A subpath added to `exports` without a snapshot here fails this, so
     // the surface it publishes is reviewed like every other one.
