@@ -1387,18 +1387,12 @@ async function registerServicesOnce(
   // ----------------------------------------
   // Layer 6.5: Pending migrations, BEFORE any plugin initialises
   // ----------------------------------------
-  // This phase used to run in `init.ts`, after `registerServices` had already
-  // awaited `initializePlugins` — so a plugin's `init()` hook ran against a
-  // database whose pending migrations had not been applied.
+  // Pending migrations apply before `initializePlugins`, so a plugin's `init`
+  // and `onReady` never query a table, or a core column, that no migration has
+  // created yet.
   //
-  // `record-settings-activity.ts` documented that hazard for core columns: on
-  // an upgraded database `activity_log` was still on its old shape, and a
-  // plugin writing to it hit a column that did not exist. With plugin-owned
-  // tables it stops being a hazard and becomes fatal, because `init` and
-  // `onReady` would query tables no migration has created yet.
-  //
-  // Only the ordering moved. When `runMigrationsOnBoot` is off — the default —
-  // this is a no-op, and the CLI remains the recommended path.
+  // When `runMigrationsOnBoot` is off (the default) this is a no-op, and the
+  // CLI remains the recommended path.
   const { runProdMigrationsIfEnabled } = await import(
     "../init/prod-migrations"
   );
@@ -1732,11 +1726,10 @@ export async function resolveBootPlugins(
   // ----------------------------------------
   // Layer 0a: Resolve Plugins (validate + order)
   // ----------------------------------------
-  // Validate core/dependency compatibility (D6) and topologically sort by
-  // declared dependencies (D5), failing fast with a great error (D7). The
-  // resolved order drives BOTH setup here and init later in the boot. Runs
-  // over all plugins (including disabled ones) so schema stays deterministic
-  // (D49).
+  // Validate core/dependency compatibility and topologically sort by declared
+  // dependencies, failing fast with a clear error. The resolved order drives
+  // BOTH setup here and init later in the boot. Runs over all plugins
+  // (including disabled ones) so the schema stays deterministic.
   const resolvedPlugins = resolvePlugins(config.plugins ?? [], {
     coreVersion: getCoreVersion(),
   });
