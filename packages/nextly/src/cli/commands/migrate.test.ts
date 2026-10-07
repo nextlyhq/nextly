@@ -552,6 +552,11 @@ describe("statementRefusals", () => {
       "TRANSACTION_CONTROL_IN_MIGRATION",
     ],
     ["mysql", "XA START 'x'", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    // The optional word alone is still a ROLLBACK of the whole transaction.
+    ["postgresql", "ROLLBACK WORK", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    ["postgresql", "ROLLBACK TRANSACTION", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    ["mysql", "ROLLBACK WORK", "TRANSACTION_CONTROL_IN_MIGRATION"],
+    ["sqlite", "ROLLBACK TRANSACTION", "TRANSACTION_CONTROL_IN_MIGRATION"],
     ["mysql", "SET FOREIGN_KEY_CHECKS = 0", "SESSION_SETTING_IN_MIGRATION"],
     [
       "mysql",
@@ -629,6 +634,8 @@ describe("statementRefusals", () => {
 
     const [rollback] = statementRefusals(["ROLLBACK"], "postgresql");
     expect(rollback?.message).toContain('"ROLLBACK"');
+    // Points at the form that is allowed, rather than only at removing it.
+    expect(rollback?.message).toContain("ROLLBACK TO SAVEPOINT name");
   });
 
   it.each([
@@ -653,6 +660,15 @@ describe("statementRefusals", () => {
     ["sqlite", "SAVEPOINT s1"],
     ["sqlite", "ROLLBACK TO s1"],
     ["sqlite", "RELEASE s1"],
+    // The optional word each dialect accepts between ROLLBACK and TO.
+    ["postgresql", "ROLLBACK WORK TO s1"],
+    ["postgresql", "ROLLBACK WORK TO SAVEPOINT s1"],
+    ["postgresql", "ROLLBACK TRANSACTION TO s1"],
+    ["postgresql", "ROLLBACK TRANSACTION TO SAVEPOINT s1"],
+    ["mysql", "ROLLBACK WORK TO s1"],
+    ["mysql", "ROLLBACK WORK TO SAVEPOINT s1"],
+    ["sqlite", "ROLLBACK TRANSACTION TO s1"],
+    ["sqlite", "ROLLBACK TRANSACTION TO SAVEPOINT s1"],
   ] as const)("allows on %s: %s", (dialect, statement) => {
     // The control: statements a migration may hold, through the same check.
     expect(statementRefusals([statement], dialect)).toEqual([]);

@@ -154,8 +154,8 @@ function leadingWords(
  *   `XA`. Leaving it out would change what the file does, and running it
  *   would roll back work the runner then records.
  * - A savepoint is neither: `SAVEPOINT`, `RELEASE [SAVEPOINT]` and
- *   `ROLLBACK TO [SAVEPOINT]` work inside the runner's transaction and undo
- *   at most part of the file, so they run as written.
+ *   `ROLLBACK [WORK | TRANSACTION] TO [SAVEPOINT]` work inside the runner's
+ *   transaction and undo at most part of the file, so they run as written.
  *
  * Read from the statement's leading keywords only. A `BEGIN` or `END` inside
  * a PostgreSQL `DO` or function body is inside a dollar-quoted segment and
@@ -165,7 +165,7 @@ export function transactionControlOf(
   statement: string,
   dialect?: SupportedDialect
 ): "bracket" | "refused" | null {
-  const [first, second] = leadingWords(statement, dialect, 2);
+  const [first, second, third] = leadingWords(statement, dialect, 3);
   switch (first) {
     case "BEGIN":
     case "END":
@@ -174,10 +174,14 @@ export function transactionControlOf(
       return second === "TRANSACTION" ? "bracket" : null;
     case "COMMIT":
       return second === "PREPARED" ? "refused" : "bracket";
-    case "ROLLBACK":
-      // `ROLLBACK TO` returns to a savepoint the file set, inside the
-      // runner's transaction; a bare ROLLBACK ends that transaction.
-      return second === "TO" ? null : "refused";
+    case "ROLLBACK": {
+      // `ROLLBACK [WORK | TRANSACTION] TO` returns to a savepoint the file
+      // set, inside the runner's transaction; a bare ROLLBACK, with or
+      // without the optional word, ends that transaction.
+      const next =
+        second === "WORK" || second === "TRANSACTION" ? third : second;
+      return next === "TO" ? null : "refused";
+    }
     case "SAVEPOINT":
     case "RELEASE":
       return null;
@@ -294,7 +298,11 @@ export function statementRefusals(
       refusals.push({
         statement,
         code: "TRANSACTION_CONTROL_IN_MIGRATION",
-        message: `${quoted(statement)}: a migration runs inside the runner's own transaction, so it may not contain ${leadingWords(statement, dialect, 1)[0] ?? "it"}. Remove it and let the file run as one transaction.`,
+        message: `${quoted(statement)}: a migration runs inside the runner's own transaction, so it may not contain ${leadingWords(statement, dialect, 1)[0] ?? "it"}. Remove it and let the file run as one transaction${
+          leadingWords(statement, dialect, 1)[0] === "ROLLBACK"
+            ? ", or undo part of it with SAVEPOINT name and ROLLBACK TO SAVEPOINT name"
+            : ""
+        }.`,
       });
       continue;
     }
