@@ -259,7 +259,8 @@ if (warnings) {
 `*InTransaction` methods write inside it. The work receives a
 `PluginCollectionTransaction`, an opaque token: pass it as the first argument
 of `createEntryInTransaction`, `updateEntryInTransaction` or
-`deleteEntryInTransaction`, which take the service's own arguments after it.
+`deleteEntryInTransaction`, which take the same arguments as `createEntry`,
+`updateEntry` and `deleteEntry` after it, `ServiceOpts` included.
 The token carries nothing else, so it cannot run SQL. Any other value passed
 where the token goes is rejected with `VALIDATION_ERROR`
 (`logContext.reason` is `plugin-transaction-token-unknown`).
@@ -271,20 +272,24 @@ await ctx.services.collections.withTransaction(async tx => {
     tx,
     "orders",
     { total: 40 },
-    requestContext // the service's request context, not ServiceOpts
+    { as: "user", user: ctx.user ?? undefined }
   );
   await ctx.services.collections.updateEntryInTransaction(
     tx,
     "orders",
     order.id,
     { status: "placed" },
-    requestContext
+    { as: "user", user: ctx.user ?? undefined }
   );
 });
 ```
 
-Unlike the access methods above, the `*InTransaction` methods take the
-service's request context as their last argument, not `ServiceOpts`.
+The `*InTransaction` methods resolve `ServiceOpts` exactly as the access
+methods above do, so a transaction is no way around the access check: an
+`overrideAccess` key or a caller's `roles` passed to them are not read, and the
+caller's roles are looked up. They return the row itself
+(`deleteEntryInTransaction` returns nothing) rather than the
+`{ message, item, warnings? }` envelope.
 
 `ctx.services.users` may create and update accounts, but not decide who administers the
 site. It refuses, with `NextlyError` code `FORBIDDEN`, to create an install's first

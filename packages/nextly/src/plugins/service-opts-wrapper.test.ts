@@ -364,3 +364,92 @@ describe("the hook context a plugin passes", () => {
     ).toEqual({ a: 1 });
   });
 });
+
+describe("the transactional writes take ServiceOpts, as the plain writes do", () => {
+  // A plugin reaching the access check through `withTransaction` must meet the
+  // same gate as one calling `createEntry`. The context below is not a
+  // `ServiceOpts` shape at all: it names `overrideAccess` and hands in a caller
+  // claiming a role. Taken raw, both reached the service as written.
+  const forged = {
+    as: "public",
+    overrideAccess: true,
+    user: { id: "u1", email: "u@x", roles: ["super-admin"] },
+  } as unknown as ServiceOpts;
+  const forgedUser = {
+    overrideAccess: true,
+    user: {
+      id: "u1",
+      email: "u@x",
+      role: "super-admin",
+      roles: ["super-admin"],
+    },
+  } as unknown as ServiceOpts;
+  const TX = { adapterTransaction: true };
+
+  function mockTransactional() {
+    return {
+      ...mockCollections(),
+      deleteEntry: vi.fn().mockResolvedValue(undefined),
+      withTransaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) =>
+        work(TX)
+      ),
+      createEntryInTransaction: vi.fn().mockResolvedValue({ id: "1" }),
+      updateEntryInTransaction: vi.fn().mockResolvedValue({ id: "1" }),
+      deleteEntryInTransaction: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  /** The context `createEntry` hands the service for these options. */
+  async function plainContext(opts: ServiceOpts): Promise<unknown> {
+    const m = mockTransactional();
+    await wrapCollectionsForPlugin(m as never).createEntry("vault", {}, opts);
+    return m.createEntry.mock.calls[0][2];
+  }
+
+  it("createEntryInTransaction: a named overrideAccess elevates nothing", async () => {
+    const m = mockTransactional();
+    const facade = wrapCollectionsForPlugin(m as never);
+    await facade.withTransaction(tx =>
+      facade.createEntryInTransaction(tx, "vault", { title: "a" }, forged)
+    );
+    const ctx = m.createEntryInTransaction.mock.calls[0][3] as Record<
+      string,
+      unknown
+    >;
+    expect(m.createEntryInTransaction.mock.calls[0][0]).toBe(TX);
+    expect(ctx.overrideAccess).toBe(false);
+    expect(ctx.user).toBeUndefined();
+    expect(ctx).toEqual(await plainContext(forged));
+  });
+
+  it("updateEntryInTransaction: a forged caller's roles are not believed", async () => {
+    const m = mockTransactional();
+    const facade = wrapCollectionsForPlugin(m as never);
+    await facade.withTransaction(tx =>
+      facade.updateEntryInTransaction(tx, "vault", "1", { a: 1 }, forgedUser)
+    );
+    const ctx = m.updateEntryInTransaction.mock.calls[0][4] as {
+      overrideAccess: unknown;
+      user: { role: unknown; roles: unknown };
+    };
+    expect(ctx.overrideAccess).toBe(false);
+    // The roles come from the lookup, which answers none for this account.
+    expect(ctx.user.roles).toEqual([]);
+    expect(ctx.user.role).toBe("");
+    expect(ctx).toEqual(await plainContext(forgedUser));
+  });
+
+  it("deleteEntryInTransaction: translated, and an actor passed past it is dropped", async () => {
+    const m = mockTransactional();
+    const facade = wrapCollectionsForPlugin(m as never);
+    const deleteWithActor = facade.deleteEntryInTransaction as (
+      ...args: unknown[]
+    ) => Promise<void>;
+    await facade.withTransaction(tx =>
+      deleteWithActor(tx, "vault", "1", forgedUser, { kind: "user", id: "x" })
+    );
+    const call = m.deleteEntryInTransaction.mock.calls[0];
+    expect(call).toHaveLength(4);
+    expect(call[3]).toEqual(await plainContext(forgedUser));
+  });
+});

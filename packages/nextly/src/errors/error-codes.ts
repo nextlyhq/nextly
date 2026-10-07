@@ -88,20 +88,20 @@ export const NEXTLY_ERROR_STATUS = {
   // A migration unit marked to run outside a transaction failed part-way;
   // the statements before the failing one stayed applied.
   NEXTLY_MIGRATION_PARTIALLY_APPLIED: 500,
-  // Plan C3 — migrate:resolve recovery command.
+  // `nextly migrate:resolve`, the recovery command.
   NEXTLY_MIGRATION_FILE_MISSING: 404,
   NEXTLY_MIGRATION_SNAPSHOT_MISSING: 404,
   NEXTLY_MIGRATION_RESOLVE_DRIFT: 409,
   NEXTLY_MIGRATION_RESOLVE_PRECONDITION: 409,
-  // Plan D — UI schema support.
+  // The Builder's UI schema.
   NEXTLY_UI_SCHEMA_INVALID: 400,
   NEXTLY_SCHEMA_SLUG_COLLISION: 409,
   NEXTLY_SCHEMA_RELATION_TARGET_MISSING: 400,
-  // Plugin platform (P2b) — schema extend (contributes.extend) + relations (D15).
+  // Plugin schema: `contributes.extend` and relations.
   NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN: 400,
   NEXTLY_SCHEMA_EXTEND_FIELD_DUPLICATE: 409,
   NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION: 409,
-  // Plugin platform (P2c) — framework remap (.rename()).
+  // Plugin schema: the framework remap (`.rename()`).
   NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET: 400,
   // Plugin platform — a declared admin.clientConfig that cannot be delivered
   // to the browser, refused at boot rather than serialized mangled.

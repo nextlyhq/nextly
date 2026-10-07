@@ -78,8 +78,9 @@ migration file the run refuses (see below). Applied files are never re-read.
   that failed attempt is the unit's newest, `nextly migrate` refuses to record
   the unit as applied without running it, even when the database already
   stands at its result: finish it by hand and mark it with
-  `nextly migrate:resolve --applied <file>` (a file written by `--blank` has no
-  snapshot to verify against, so add `--skip-verify`; for a plugin module,
+  `nextly migrate:resolve --applied <file>` (a marked file has no snapshot,
+  so it is recorded without comparing the live schema and needs no
+  `--skip-verify`; for a plugin module,
   `--failed-cleanup` and then `nextly migrate`), or reverse what ran and
   migrate again. `nextly migrate`, `migrate:down` and `migrate:status` name
   each unit that runs outside a transaction. A refusal's message names the
@@ -102,9 +103,9 @@ migration file the run refuses (see below). Applied files are never re-read.
   carries the refresh cookie (any `/admin/api/auth/*` request from a signed-in
   browser), the cookie is removed from a copy of the request, and that copy
   now reads at most 64 KiB of the body, the same cap as the `csrf` route
-  option's reader. A larger body is refused with `VALIDATION_ERROR`
-  (`too_large`) before authentication and rate limiting, instead of being
-  buffered whole; a plugin route mounted under that path that accepts larger
+  option's reader. A larger body is refused with a `400` `VALIDATION_ERROR`
+  response (`too_large`) before authentication and rate limiting, instead of
+  being buffered whole; a plugin route mounted under that path that accepts larger
   bodies from signed-in browsers stops receiving them.
 - **Collection `indexes` now reach the database.** They were validated and
   then discarded, so an app that declared a compound index has been running

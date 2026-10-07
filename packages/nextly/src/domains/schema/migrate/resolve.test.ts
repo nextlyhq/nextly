@@ -28,6 +28,7 @@ function makeDeps(
       fileExists: () => Promise.resolve(true),
       loadTargetSnapshot: () => Promise.resolve(ONE_TABLE),
       introspectLive: () => Promise.resolve(ONE_TABLE),
+      marksNoTransaction: () => Promise.resolve(false),
       ...over,
     },
   };
@@ -136,6 +137,44 @@ describe("resolveMigration", () => {
       await expect(
         resolveMigration({ mode: "applied", filename: "x.sql", ...base })
       ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING" });
+    });
+
+    it("records a no-transaction file that has no snapshot, without --skip-verify", async () => {
+      // The file a partial failure tells the operator to mark applied. It is
+      // written by `migrate:create --blank --no-transaction`, which pairs no
+      // snapshot with it, so there is nothing to compare and refusing it
+      // made the advised recovery fail.
+      const { repo, base } = makeDeps(testDb, {
+        loadTargetSnapshot: () => Promise.resolve(null),
+        marksNoTransaction: () => Promise.resolve(true),
+        introspectLive: () =>
+          Promise.reject(new Error("nothing to compare it with")),
+      });
+      const r = await resolveMigration({
+        mode: "applied",
+        filename: "002_backfill.sql",
+        ...base,
+      });
+      expect(r).toMatchObject({ kind: "applied", verified: false });
+      const rows = await repo.findFileApplies("002_backfill.sql");
+      expect(rows.map(row => row.status)).toEqual(["applied"]);
+    });
+
+    it("still compares a no-transaction file that does have a snapshot", async () => {
+      const { base } = makeDeps(testDb, {
+        marksNoTransaction: () => Promise.resolve(true),
+        introspectLive: () => Promise.resolve(EMPTY), // live != target
+      });
+      await expect(
+        resolveMigration({ mode: "applied", filename: "x.sql", ...base })
+      ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_RESOLVE_DRIFT" });
+    });
+
+    it("reports a compared file as verified", async () => {
+      const { base } = makeDeps(testDb);
+      await expect(
+        resolveMigration({ mode: "applied", filename: "x.sql", ...base })
+      ).resolves.toMatchObject({ kind: "applied", verified: true });
     });
 
     it("throws RESOLVE_DRIFT when live diverges from the target snapshot", async () => {

@@ -569,6 +569,7 @@ export async function runMigrateDown(
         // rolled-back mode does not read these; provide inert resolvers.
         fileExists: () => Promise.resolve(true),
         loadTargetSnapshot: () => Promise.resolve(null),
+        marksNoTransaction: () => Promise.resolve(false),
         introspectLive: () => Promise.resolve({ tables: [] }),
       });
     };

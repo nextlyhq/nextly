@@ -303,6 +303,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
             // rolled-back mode does not read these; provide inert resolvers.
             fileExists: () => Promise.resolve(true),
             loadTargetSnapshot: () => Promise.resolve(null),
+            marksNoTransaction: () => Promise.resolve(false),
             introspectLive: () => Promise.resolve({ tables: [] }),
           });
         }

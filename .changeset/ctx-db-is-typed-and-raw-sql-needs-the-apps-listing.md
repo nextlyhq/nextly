@@ -127,6 +127,14 @@ plugin code no longer reaches core's live handles through `ctx.config`,
     accept, instead of the adapter's transaction context; any other value is
     rejected with `VALIDATION_ERROR` (`plugin-transaction-token-unknown`).
     This changes the `@public` `PluginCollectionService` type.
+  - The `*InTransaction` methods take `ServiceOpts` as their last argument,
+    as `createEntry`, `updateEntry` and `deleteEntry` do, not the service's
+    request context. A context naming `overrideAccess`, or a `user` carrying
+    its own roles, was handed to the access check as written; now a `user`
+    is judged with the roles the other methods resolve for it, and an
+    `overrideAccess` key is not read. `{ user: ctx.user }` and `{}` keep
+    their meaning (that caller, and `system`). `deleteEntryInTransaction`
+    no longer takes an `actor`.
 - **`ctx.db.transaction` does not nest.** `tx` is the typed surface bound to
   the transaction's connection, and its type has no `transaction`. Called
   anyway, it rejects with `INVALID_INPUT` (`nested-plugin-transaction`)

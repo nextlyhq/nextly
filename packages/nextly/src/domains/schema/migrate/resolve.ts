@@ -4,9 +4,11 @@
  * Flips `file_apply` bookkeeping without (re-)running SQL, for three
  * recovery situations:
  *   --applied        record a file as applied (live must equal the file's
- *                    target snapshot, unless --skip-verify); supersede a prior
- *                    failed row. An app file only: a plugin module is
- *                    recorded by `nextly migrate`, after --failed-cleanup.
+ *                    target snapshot, unless --skip-verify, or the file is
+ *                    marked `-- nextly:no-transaction` and has none);
+ *                    supersede a prior failed row. An app file only: a
+ *                    plugin module is recorded by `nextly migrate`, after
+ *                    --failed-cleanup.
  *   --rolled-back    record a rolled_back event so the next `migrate` re-runs
  *                    the file (requires a prior applied row).
  *   --failed-cleanup flip a stuck failed row to rolled_back so the .sql can be
@@ -49,12 +51,20 @@ export interface ResolveMigrationArgs {
   fileExists: (filename: string) => Promise<boolean>;
   /** The file's paired target snapshot, or null if absent. */
   loadTargetSnapshot: () => Promise<NextlySchemaSnapshot | null>;
+  /** True iff the file's first line is `-- nextly:no-transaction`. */
+  marksNoTransaction: () => Promise<boolean>;
   /** Live managed-user-table snapshot. */
   introspectLive: () => Promise<NextlySchemaSnapshot>;
 }
 
 export type ResolveResult =
-  | { kind: "applied"; eventId: string; supersededFailedId: string | null }
+  | {
+      kind: "applied";
+      eventId: string;
+      supersededFailedId: string | null;
+      /** False when nothing was compared: skipped, or no snapshot to compare. */
+      verified: boolean;
+    }
   | { kind: "rolled-back"; eventId: string }
   | { kind: "failed-cleanup"; updatedId: string }
   | { kind: "noop"; reason: string };
@@ -115,22 +125,7 @@ async function resolveApplied(
     return { kind: "noop", reason: `${filename} is already marked applied.` };
   }
 
-  if (!args.skipVerify) {
-    const target = await args.loadTargetSnapshot();
-    if (!target) {
-      throw new NextlyError({
-        code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
-        publicMessage: `No paired snapshot for ${filename}; cannot verify. Re-run with --skip-verify to override.`,
-      });
-    }
-    const live = await args.introspectLive();
-    if (!equiv(live, target)) {
-      throw new NextlyError({
-        code: "NEXTLY_MIGRATION_RESOLVE_DRIFT",
-        publicMessage: `Live schema does not match the target snapshot for ${filename}. Resolve the drift or re-run with --skip-verify.`,
-      });
-    }
-  }
+  const verified = args.skipVerify ? false : await verifyTarget(args, filename);
 
   const eventId = await args.repo.insertEvent({
     eventType: "file_apply",
@@ -150,7 +145,49 @@ async function resolveApplied(
     });
   }
 
-  return { kind: "applied", eventId, supersededFailedId: failed?.id ?? null };
+  return {
+    kind: "applied",
+    eventId,
+    supersededFailedId: failed?.id ?? null,
+    verified,
+  };
+}
+
+/**
+ * Hold the live schema to the file's target snapshot before it is recorded.
+ * True when it was compared and matched; false when there was nothing to
+ * compare it with.
+ *
+ * A file marked `-- nextly:no-transaction` is written by
+ * `migrate:create --blank --no-transaction`, which pairs no snapshot with it:
+ * a generated file is never marked, because the marker would change the text
+ * its snapshot was taken over. Its missing snapshot is therefore the file's
+ * design, not a lost artifact, and the check has nothing to hold it to. It is
+ * also the file a partial failure tells the operator to mark applied, so
+ * refusing it here would make that recovery need `--skip-verify`. Any other
+ * file without its snapshot is still refused, and a marked file that does
+ * have one is still compared.
+ */
+async function verifyTarget(
+  args: ResolveMigrationArgs,
+  filename: string
+): Promise<boolean> {
+  const target = await args.loadTargetSnapshot();
+  if (!target) {
+    if (await args.marksNoTransaction()) return false;
+    throw new NextlyError({
+      code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
+      publicMessage: `No paired snapshot for ${filename}; cannot verify. Re-run with --skip-verify to override.`,
+    });
+  }
+  const live = await args.introspectLive();
+  if (!equiv(live, target)) {
+    throw new NextlyError({
+      code: "NEXTLY_MIGRATION_RESOLVE_DRIFT",
+      publicMessage: `Live schema does not match the target snapshot for ${filename}. Resolve the drift or re-run with --skip-verify.`,
+    });
+  }
+  return true;
 }
 
 async function resolveRolledBack(
