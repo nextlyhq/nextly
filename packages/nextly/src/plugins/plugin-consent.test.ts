@@ -134,6 +134,22 @@ describe("resolvePlugins and the app's consent", () => {
 });
 
 describe("the consent an app's config makes", () => {
+  it("is a copy nothing can push onto, nor is the empty consent", () => {
+    const listed = ["@acme/reports"];
+    const consent = pluginConsentFromConfig({ db: { rawSqlPlugins: listed } });
+
+    expect(() => (consent.rawSql as string[]).push("@evil/p")).toThrow(
+      TypeError
+    );
+    expect(() =>
+      (NO_PLUGIN_CONSENT.rawSql as string[]).push("@evil/p")
+    ).toThrow(TypeError);
+    // A later change to the app's own list does not reach the copy either.
+    listed.push("@evil/p");
+    expect(consent.rawSql).toEqual(["@acme/reports"]);
+    expect(Object.isFrozen(consent)).toBe(true);
+  });
+
   it("is read from db.rawSqlPlugins, and is empty without it", () => {
     expect(
       pluginConsentFromConfig({ db: { rawSqlPlugins: ["@acme/reports"] } })

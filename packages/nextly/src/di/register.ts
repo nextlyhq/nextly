@@ -143,6 +143,7 @@ import { setPluginAuthDepsResolver } from "../plugins/plugin-auth-provider";
 import {
   NO_PLUGIN_CONSENT,
   type PluginConsent,
+  snapshotPluginConsent,
 } from "../plugins/plugin-consent";
 import type {
   AdapterTransactions,
@@ -643,49 +644,9 @@ async function registerServicesOnce(
   assertNoLegacyFieldGroupKey(config, "registerServices");
 
   // ----------------------------------------
-  // Layer 0a: Resolve Plugins (validate + order)
+  // Layers 0a/0b: resolve, transform and re-resolve the plugin list
   // ----------------------------------------
-  // Validate core/dependency compatibility (D6) and topologically sort by
-  // declared dependencies (D5), failing fast with a great error (D7). The
-  // resolved order drives BOTH setup and init below. Runs over all plugins
-  // (including disabled ones) so schema stays deterministic (D49).
-  //
-  // The consent is read once, here, from the config as the app passed it:
-  // the re-resolution below runs against the SAME grants, so a `setup`
-  // transformer, which is plugin code, cannot list a plugin itself.
-  const pluginConsent = config.pluginConsent ?? NO_PLUGIN_CONSENT;
-  const resolvedPlugins = resolvePlugins(config.plugins ?? [], {
-    coreVersion: getCoreVersion(),
-    consent: pluginConsent,
-  });
-  const resolvedConfig: NextlyServiceConfig = {
-    ...config,
-    plugins: resolvedPlugins,
-  };
-
-  // ----------------------------------------
-  // Layer 0b: Process Plugin Config Transformers (resolved order)
-  // ----------------------------------------
-  const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
-
-  // RE-RESOLVED in full, not merely re-checked. A `setup` transformer may
-  // add, rename or replace entries in `plugins`, and everything from here
-  // down consumes the transformed config rather than the list
-  // `resolvePlugins` first checked. Running the WHOLE resolver again —
-  // versions, dependencies, cycles, every manifest assertion and the
-  // topological sort — makes the transformed list as checked as the declared
-  // one was: a transformer-added plugin with an incompatible core version or
-  // a missing dependency fails the boot here, a transformer-introduced
-  // secret-path typo is refused before anything stores the credential it
-  // names, and the order the rest of registration initializes in is the
-  // sorted one rather than whatever order the transformer left the array in.
-  // The published hook-point map is rewritten by the same call, and the
-  // schema folding below receives this list, so a transformer-added plugin's
-  // collections and singles fold exactly like a declared plugin's.
-  const transformedSetupConfig: NextlyServiceConfig = resolveTransformedPlugins(
-    setupConfig,
-    { coreVersion: getCoreVersion(), consent: pluginConsent }
-  );
+  const transformedSetupConfig = await resolveBootPlugins(config);
   const transformedPlugins = transformedSetupConfig.plugins ?? [];
 
   // ----------------------------------------
@@ -1777,6 +1738,79 @@ export function bootMigrationsArgs(
     deferredExtends,
     ...deps,
   };
+}
+
+/**
+ * The plugin list a boot uses: the configured plugins resolved, their `setup`
+ * transformers run in resolved order, and the transformed list resolved again
+ * in full. Fail-fast; nothing has connected to the database yet.
+ *
+ * Exported for the boot's tests, which judge the consent rules on exactly the
+ * config the boot hands its plugins without opening a database.
+ */
+export async function resolveBootPlugins(
+  config: NextlyServiceConfig
+): Promise<NextlyServiceConfig & { plugins: PluginDefinition[] }> {
+  // ----------------------------------------
+  // Layer 0a: Resolve Plugins (validate + order)
+  // ----------------------------------------
+  // Validate core/dependency compatibility (D6) and topologically sort by
+  // declared dependencies (D5), failing fast with a great error (D7). The
+  // resolved order drives BOTH setup here and init later in the boot. Runs
+  // over all plugins (including disabled ones) so schema stays deterministic
+  // (D49).
+  //
+  // The consent is read once, here, from the config as the app passed it,
+  // and held as a frozen copy: the re-resolution below runs against the SAME
+  // grants, and a `setup` transformer, which is plugin code, neither receives
+  // them nor can reach a list it could add its own name to.
+  const pluginConsent = snapshotPluginConsent(
+    config.pluginConsent ?? NO_PLUGIN_CONSENT
+  );
+  const resolvedPlugins = resolvePlugins(config.plugins ?? [], {
+    coreVersion: getCoreVersion(),
+    consent: pluginConsent,
+  });
+  const resolvedConfig = transformerInput(config, resolvedPlugins);
+
+  // ----------------------------------------
+  // Layer 0b: Process Plugin Config Transformers (resolved order)
+  // ----------------------------------------
+  const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
+
+  // RE-RESOLVED in full, not merely re-checked. A `setup` transformer may
+  // add, rename or replace entries in `plugins`, and the rest of the boot
+  // consumes the transformed config rather than the list
+  // `resolvePlugins` first checked. Running the WHOLE resolver again —
+  // versions, dependencies, cycles, every manifest assertion and the
+  // topological sort — makes the transformed list as checked as the declared
+  // one was: a transformer-added plugin with an incompatible core version or
+  // a missing dependency fails the boot here, a transformer-introduced
+  // secret-path typo is refused before anything stores the credential it
+  // names, and the order the rest of registration initializes in is the
+  // sorted one rather than whatever order the transformer left the array in.
+  // The published hook-point map is rewritten by the same call, and the
+  // boot's schema folding receives this list, so a transformer-added plugin's
+  // collections and singles fold exactly like a declared plugin's.
+  return resolveTransformedPlugins(setupConfig, {
+    coreVersion: getCoreVersion(),
+    consent: pluginConsent,
+  });
+}
+
+/**
+ * The config the `setup` transformers start from: the caller's config with
+ * the resolved plugin list, and without `pluginConsent`. The grants are the
+ * app's, judged by core; a transformer is plugin code and has no use for
+ * them.
+ */
+function transformerInput(
+  config: NextlyServiceConfig,
+  plugins: PluginDefinition[]
+): NextlyServiceConfig {
+  const input: NextlyServiceConfig = { ...config, plugins };
+  delete input.pluginConsent;
+  return input;
 }
 
 // eslint-disable-next-line @typescript-eslint/require-await

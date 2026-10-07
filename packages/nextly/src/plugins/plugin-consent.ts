@@ -36,7 +36,9 @@ export interface PluginConsent {
 }
 
 /** No plugin is granted anything: what an app that lists nothing gets. */
-export const NO_PLUGIN_CONSENT: PluginConsent = Object.freeze({ rawSql: [] });
+export const NO_PLUGIN_CONSENT: PluginConsent = snapshotPluginConsent({
+  rawSql: [],
+});
 
 /**
  * The grants an app's config makes.
@@ -49,7 +51,20 @@ export const NO_PLUGIN_CONSENT: PluginConsent = Object.freeze({ rawSql: [] });
 export function pluginConsentFromConfig(config: {
   db?: { rawSqlPlugins?: readonly string[] };
 }): PluginConsent {
-  return { rawSql: [...(config.db?.rawSqlPlugins ?? [])] };
+  return snapshotPluginConsent({ rawSql: config.db?.rawSqlPlugins ?? [] });
+}
+
+/**
+ * A copy of `consent` that nothing can change: the object and every list in
+ * it are new and frozen.
+ *
+ * The boot judges the declared list and the transformed list against the
+ * same grants, and plugin code runs between the two. A grant that plugin code
+ * could reach and push onto would let a plugin list itself between the
+ * checks, so the boot holds this copy rather than the caller's object.
+ */
+export function snapshotPluginConsent(consent: PluginConsent): PluginConsent {
+  return Object.freeze({ rawSql: Object.freeze([...consent.rawSql]) });
 }
 
 /** One capability that needs the app's consent. */
