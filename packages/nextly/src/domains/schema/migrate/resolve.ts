@@ -1,8 +1,8 @@
 /**
- * `nextly migrate:resolve` — operator recovery (spec §4.8).
+ * `nextly migrate:resolve` — operator recovery.
  *
- * Flips `file_apply` bookkeeping without (re-)running SQL, for the three
- * recovery situations the spec enumerates:
+ * Flips `file_apply` bookkeeping without (re-)running SQL, for three
+ * recovery situations:
  *   --applied        record a file as applied (live must equal the file's
  *                    target snapshot, unless --skip-verify); supersede a prior
  *                    failed row. An app file only: a plugin module is
@@ -14,10 +14,10 @@
  *
  * Effects (repo, fs existence, snapshot load, live introspection) are injected
  * so the state machine unit-tests against the in-memory SQLite fixture without
- * a CLI shell. Equivalence (spec §4.2) is "empty diff" via the diff engine.
+ * a CLI shell. Two snapshots are equivalent when their diff is empty.
  *
  * @module domains/schema/migrate/resolve
- * @since v0.0.3-alpha (Plan C3)
+ * @since v0.0.3-alpha
  */
 import { NextlyError } from "../../../errors";
 import { isPluginLedgerRow, ledgerFilename } from "../events/ledger-scope";

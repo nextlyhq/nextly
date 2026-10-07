@@ -1,5 +1,5 @@
 /**
- * `nextly migrate` Phase 2 — per-file drift reconciliation (spec §4.7).
+ * `nextly migrate`'s per-file drift reconciliation.
  *
  * For a pending migration file, compares the live managed schema against the
  * file's pre-baseline and target snapshots:
@@ -10,12 +10,12 @@
  *                            its last attempt failed (`assertNotPartiallyApplied`).
  *   - neither              → DRIFT: throw NEXTLY_MIGRATION_DRIFT.
  *
- * Equivalence (spec §4.2) is realized as "empty diff" via the existing diff
- * engine. Effects (SQL execution, event recording) are injected so the state
- * machine unit-tests without a DB.
+ * Two snapshots are equivalent when the diff engine finds no difference.
+ * Effects (SQL execution, event recording) are injected so the state machine
+ * unit-tests without a DB.
  *
  * @module domains/schema/migrate/drift-reconcile
- * @since v0.0.3-alpha (Plan C2)
+ * @since v0.0.3-alpha
  */
 import { describeError, NextlyError } from "../../../errors";
 import { newestEvent } from "../events/newest-event";
