@@ -1090,7 +1090,7 @@ function buildPluginDatabase(
   rawDb: PluginRawDatabase,
   relations: () => AnyRelations,
   adapter: () => AdapterTransactions,
-  dialect: SupportedDialect,
+  dialect: () => SupportedDialect,
   plugin: PluginDefinition | undefined
 ): PluginDatabase & { raw: PluginRawDatabase } {
   const owner: SchemaOwner = plugin
@@ -1105,10 +1105,14 @@ function buildPluginDatabase(
   // Taking the first dialect that had one returned whichever was compiled
   // first — a process that had held another dialect's schema served its
   // tables and its owner rules, refusing this plugin's own tables.
-  const active = () => getActiveExtensionSchema(dialect);
+  const active = () => getActiveExtensionSchema(dialect());
 
   const surface = createPluginDatabase({
-    dialect,
+    // Read when an operation runs, not now: the context can be built before
+    // the database is connected.
+    get dialect() {
+      return dialect();
+    },
     owner,
     dependsOn,
     owners: () => active()?.owners ?? new Map(),
@@ -1214,7 +1218,9 @@ function buildPluginDatabase(
       return runAdapterTransaction(
         transactions.transaction.bind(transactions),
         (tx: AdapterTransactionHandles) =>
-          dialect === "sqlite" ? runInPluginTransaction(() => run(tx)) : run(tx)
+          dialect() === "sqlite"
+            ? runInPluginTransaction(() => run(tx))
+            : run(tx)
       );
     },
   });
@@ -1561,7 +1567,7 @@ export function createPluginContext(
     // Resolved on use, like `raw`'s transaction: the context can be built
     // before the database is connected.
     () => getServiceFn("adapter"),
-    getServiceFn("dialect"),
+    () => getServiceFn("dialect"),
     plugin
   );
   const logger = getServiceFn("logger");
@@ -1701,7 +1707,11 @@ export function createPluginContext(
       plugins: buildPluginServicesNamespace(),
     },
     db,
-    dialect: getServiceFn("dialect"),
+    // Resolved on access: the context can be built before the database is
+    // connected.
+    get dialect() {
+      return getServiceFn("dialect");
+    },
     logger,
     events,
     nextlyVersion: getCoreVersion(),
