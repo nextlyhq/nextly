@@ -24,6 +24,7 @@ import {
   type PluginDefinition,
   type PluginRawDatabase,
   type PluginSettingsApi,
+  type PluginUserService,
 } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
 
@@ -204,7 +205,7 @@ describe.each(SURFACES)(
     // than opening a second one on the connection the plugin's already holds.
     async function bootWithUsers(): Promise<{
       db: Surface;
-      users: UserService;
+      users: PluginUserService;
     }> {
       const ctx = await bootPlugin();
       // An existing account, created by core: a plugin may not create an
@@ -221,7 +222,7 @@ describe.each(SURFACES)(
     }
 
     const EMAIL = "in-tx@example.com";
-    const createUser = (users: UserService) =>
+    const createUser = (users: PluginUserService) =>
       users.create(
         { email: EMAIL, name: "In Tx", password: "Passw0rd!long" },
         {}

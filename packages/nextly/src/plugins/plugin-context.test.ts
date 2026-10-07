@@ -4,6 +4,7 @@ import { publishHookPoints } from "./hook-points";
 import { EventBus } from "../events/event-bus";
 
 import { getCoreVersion } from "./core-version";
+import type { PluginGrants } from "./plugin-consent";
 import { createPluginContext } from "./plugin-context";
 
 /** Marks which handle a relational namespace came from, past the owner check. */
@@ -11,7 +12,8 @@ const ORIGIN = Symbol("origin");
 
 function makeCtx(
   plugin?: unknown,
-  relations: () => object = () => ({ __relations: true })
+  relations: () => object = () => ({ __relations: true }),
+  grants?: PluginGrants
 ) {
   const db = { __db: true };
   // What the context asked each handle factory for, in order.
@@ -88,7 +90,12 @@ function makeCtx(
     registerBeforeOperation: vi.fn(),
     unregisterBeforeOperation: vi.fn(),
   };
-  const ctx = createPluginContext(getServiceFn, hookRegistry, plugin as never);
+  const ctx = createPluginContext(
+    getServiceFn,
+    hookRegistry,
+    plugin as never,
+    grants
+  );
   return { ctx, db, logger, collections, email, built };
 }
 
@@ -126,18 +133,50 @@ describe("createPluginContext (P1 reshape)", () => {
     expect(ctx.logger).toBe(logger);
   });
 
-  it("hands the live instance to a plugin that declared rawSql", () => {
-    // The control: a wrapper applied unconditionally would make the declared
-    // capability buy nothing. With rawSql declared, the raw escape hatch IS
+  it("hands the live instance to a plugin the boot granted rawSql", () => {
+    // The control: a wrapper applied unconditionally would make the granted
+    // capability buy nothing. With rawSql granted, the raw escape hatch IS
     // the live instance the resolver handed over.
-    const { ctx, db } = makeCtx({
+    const { ctx, db } = makeCtx(
+      {
+        name: "@test/raw",
+        version: "1.0.0",
+        nextly: "*",
+        capabilities: { db: { rawSql: true } },
+      },
+      undefined,
+      { rawSql: ["@test/raw"] }
+    );
+    // The live instance's own members, raw SQL included, are reachable.
+    expect((ctx.db.raw as unknown as typeof db).__db).toBe(true);
+  });
+
+  it("restricts a plugin whose manifest declares rawSql without a grant", () => {
+    // The grant is the boot's verdict, not the manifest. A manifest read
+    // again here, after resolution, would let one that changed since, or an
+    // accessor that answers `true` only when read from here, grant itself.
+    let reads = 0;
+    const { ctx } = makeCtx({
       name: "@test/raw",
       version: "1.0.0",
       nextly: "*",
-      capabilities: { db: { rawSql: true } },
+      capabilities: {
+        db: {
+          get rawSql() {
+            reads += 1;
+            return true;
+          },
+        },
+      },
     });
-    // The live instance's own members, raw SQL included, are reachable.
-    expect((ctx.db.raw as unknown as typeof db).__db).toBe(true);
+    expect(Object.keys(ctx.db.raw as object).sort()).toEqual([
+      "delete",
+      "insert",
+      "select",
+      "transaction",
+      "update",
+    ]);
+    expect(reads).toBe(0);
   });
 
   it("checks a filter payload against the schema its point declared", async () => {
@@ -287,11 +326,11 @@ describe("createPluginContext (P1 reshape)", () => {
 
   it("keeps the services shape; collections is ServiceOpts-wrapped", () => {
     const { ctx, collections, email } = makeCtx();
-    // D35: collections is wrapped for ServiceOpts elevation — a distinct Proxy
-    // that delegates to the raw service, no longer the raw instance itself.
+    // D35: collections is wrapped for ServiceOpts elevation, and every core
+    // service reaches the plugin as a facade of its plugin methods rather
+    // than the instance, which carries the adapter its methods run on.
     expect(ctx.services.collections).not.toBe(collections);
-    // The shape and the non-collection services are unchanged.
-    expect(ctx.services.email).toBe(email);
+    expect(ctx.services.email).not.toBe(email);
     // Pinned as an exact list rather than a set of `toHaveProperty` checks:
     // this surface is public API, so a member ARRIVING is as much a change as
     // one going, and only an exhaustive comparison catches the first.
@@ -353,7 +392,13 @@ describe("ctx.db.raw.transaction", () => {
         registerBeforeOperation: vi.fn(),
         unregisterBeforeOperation: vi.fn(),
       },
-      { name: "@test/tx", version: "1.0.0", nextly: "*", capabilities } as never
+      {
+        name: "@test/tx",
+        version: "1.0.0",
+        nextly: "*",
+        capabilities,
+      } as never,
+      { rawSql: capabilities.db === undefined ? [] : ["@test/tx"] }
     );
     return { ctx, calls };
   }

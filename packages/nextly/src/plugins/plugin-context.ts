@@ -68,6 +68,8 @@ import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
+import { type PluginConfig, pluginConfigView } from "./plugin-config-view";
+import { NO_PLUGIN_GRANTS, type PluginGrants } from "./plugin-consent";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
 import { createPluginSettings } from "./plugin-settings-provider";
 import { wrapSinglesForPlugin } from "./plugin-singles";
@@ -75,6 +77,7 @@ import type { PluginSinglesService } from "./plugin-singles";
 import { isInPluginNamespace } from "./plugin-slug";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
+import { methodFacade } from "./service-facade";
 import {
   wrapCollectionsForPlugin,
   type PluginCollectionService,
@@ -330,6 +333,90 @@ export interface PluginActionRegistry {
  * });
  * ```
  */
+/**
+ * The methods of each core service a plugin receives at `ctx.services`. A
+ * service instance carries the adapter and Drizzle handle its methods run on,
+ * so a plugin is handed a facade of these methods (`methodFacade`) and
+ * nothing else.
+ */
+const PLUGIN_USER_METHODS = [
+  "create",
+  "findById",
+  "listUsersByIds",
+  "findByEmail",
+  "listUsers",
+  "update",
+  "delete",
+  "authenticate",
+  "changePassword",
+  "hasPassword",
+  "updateProfile",
+] as const satisfies readonly (keyof UserService)[];
+
+const PLUGIN_MEDIA_METHODS = [
+  "upload",
+  "findById",
+  "listMedia",
+  "update",
+  "delete",
+  "bulkUpload",
+  "bulkDelete",
+  "moveToFolder",
+  "getStorageType",
+  "hasStorage",
+  "createFolder",
+  "findFolderById",
+  "listRootFolders",
+  "listSubfolders",
+  "getFolderContents",
+  "updateFolder",
+  "deleteFolder",
+  "isImage",
+  "validateImage",
+  "getImageDimensions",
+] as const satisfies readonly (keyof MediaService)[];
+
+const PLUGIN_EMAIL_METHODS = [
+  "send",
+  "sendWithTemplate",
+  "sendPasswordResetEmail",
+  "sendEmailVerificationEmail",
+  "sendWelcomeEmail",
+  "isConfigured",
+  "canSendTemplate",
+] as const satisfies readonly (keyof EmailService)[];
+
+const PLUGIN_VERSIONS_METHODS = [
+  "list",
+  "get",
+  "setLabel",
+  "deleteWorkingDraft",
+  "autosave",
+  "getAutosave",
+  "pendingEditRows",
+] as const satisfies readonly (keyof VersionsService)[];
+
+/** @experimental `ctx.services.users`: the plugin view of the user service. */
+export type PluginUserService = Pick<
+  UserService,
+  (typeof PLUGIN_USER_METHODS)[number]
+>;
+/** @experimental `ctx.services.media`. */
+export type PluginMediaService = Pick<
+  MediaService,
+  (typeof PLUGIN_MEDIA_METHODS)[number]
+>;
+/** @experimental `ctx.services.email`. */
+export type PluginEmailService = Pick<
+  EmailService,
+  (typeof PLUGIN_EMAIL_METHODS)[number]
+>;
+/** @experimental `ctx.services.versions`. */
+export type PluginVersionsService = Pick<
+  VersionsService,
+  (typeof PLUGIN_VERSIONS_METHODS)[number]
+>;
+
 export interface PluginContext {
   /**
    * @public Core services with full TypeScript autocomplete — the managed,
@@ -357,16 +444,16 @@ export interface PluginContext {
      * are refused with `NextlyError` code `FORBIDDEN`. An
      * address a plugin vouches for is recorded as verified by `"plugin"`.
      */
-    users: UserService;
+    users: PluginUserService;
     /** Media service for file operations */
-    media: MediaService;
+    media: PluginMediaService;
     /** Email service for sending emails via templates and providers */
-    email: EmailService;
+    email: PluginEmailService;
     /**
      * @experimental Read-only content version history (list/get). Restore and
      * diff arrive in later stages.
      */
-    versions: VersionsService;
+    versions: PluginVersionsService;
     /**
      * @experimental Read-only registry access to the app's Singles: which are
      * declared, and what fields they have.
@@ -1003,6 +1090,12 @@ export interface PluginDefinition {
  * });
  * ```
  */
+export type {
+  PluginConfig,
+  PluginEmailSettings,
+  PluginSummary,
+} from "./plugin-config-view";
+
 export function definePlugin(definition: PluginDefinition): PluginDefinition {
   const withRename: PluginDefinition = {
     ...definition,
@@ -1407,74 +1500,6 @@ function restrictDatabase(
   };
 }
 
-/**
- * The keys of the service configuration a plugin reads at `ctx.config`.
- *
- * An allowlist of plain configuration, so a field added to the service
- * configuration later stays out of plugins' reach until someone decides it
- * belongs here. What is left out is live: the database `adapter`, the app's
- * own `db` block (it carries `db.rawSqlPlugins`, and is the object the next
- * boot reads), `pluginConsent`, `storagePlugins`, `imageProcessor`,
- * `logger`, `hookRegistry`, `passwordHasher` and `rateLimit` (whose `store`
- * is a live connection). Each of those either reaches past what the
- * plugin's own surfaces grant, the raw-SQL approval above all, or is
- * reached through a surface of its own (`ctx.logger`, `ctx.hooks`).
- */
-const PLUGIN_CONFIG_KEYS = [
-  "basePath",
-  "preview",
-  "schemasDir",
-  "migrationsDir",
-  "runMigrationsOnBoot",
-  "plugins",
-  "strictPluginTargets",
-  "permissions",
-  "roles",
-  "jobs",
-  "collections",
-  "singles",
-  "fieldGroups",
-  "users",
-  "email",
-  "apiKeys",
-  "security",
-  "admin",
-  "auth",
-  "localization",
-  "webhookRetention",
-  "auditRetention",
-  "emailRetention",
-  "webhookAuditEnabled",
-] as const satisfies readonly (keyof NextlyServiceConfig)[];
-
-/**
- * @experimental What a plugin reads at `ctx.config`: the application's plain
- * configuration values, frozen. Live handles are not part of it; a plugin
- * reaches the database through `ctx.db` and logs through `ctx.logger`.
- */
-export type PluginConfig = Readonly<
-  Omit<
-    Pick<NextlyServiceConfig, (typeof PLUGIN_CONFIG_KEYS)[number]>,
-    "plugins"
-  > & { plugins?: readonly PluginDefinition[] }
->;
-
-/**
- * Build `ctx.config` from the service configuration: the allowlisted keys
- * only, in a new frozen object. `plugins` is a frozen copy of the list, so a
- * plugin cannot add to or reorder the list the next boot reads.
- */
-function pluginConfigView(config: NextlyServiceConfig): PluginConfig {
-  const view: Partial<Record<keyof NextlyServiceConfig, unknown>> = {};
-  for (const key of PLUGIN_CONFIG_KEYS) {
-    if (config[key] !== undefined) view[key] = config[key];
-  }
-  if (config.plugins !== undefined) {
-    view.plugins = Object.freeze([...config.plugins]);
-  }
-  return Object.freeze(view) as PluginConfig;
-}
-
 export function createPluginContext(
   getServiceFn: <T extends PluginServiceName>(
     name: T
@@ -1531,7 +1556,15 @@ export function createPluginContext(
    * The plugin this context is built for — used to resolve `ctx.self`.
    * Optional so the factory stays usable without a plugin (empty `self`).
    */
-  plugin?: PluginDefinition
+  plugin?: PluginDefinition,
+  /**
+   * What the boot granted, decided once when it resolved the plugin list
+   * (`decidePluginGrants`). The context reads this and never the plugin's
+   * manifest, so a manifest changed after resolution, or one whose accessor
+   * answers differently when read here, grants nothing. Absent, nothing is
+   * granted.
+   */
+  grants: PluginGrants = NO_PLUGIN_GRANTS
 ): PluginContext {
   // Subscriptions made through this context are tracked under the plugin's name
   // so the runtime can clear them before the plugin re-initializes on HMR (B2).
@@ -1592,7 +1625,8 @@ export function createPluginContext(
   const userService = getServiceFn("userService");
   const mediaService = getServiceFn("mediaService");
   const emailService = getServiceFn("emailService");
-  // The raw handle is restricted unless the plugin DECLARED raw SQL.
+  // The raw handle is restricted unless the boot GRANTED this plugin raw SQL:
+  // it declared the capability before setup and the app lists it.
   // `DatabaseInstance` already describes only the fluent surface, but the
   // object handed over was the live Drizzle instance, which carries `execute`,
   // `run` and its own client, so the ordinary way to run raw SQL needed no
@@ -1601,7 +1635,7 @@ export function createPluginContext(
   // surface below exposes this handle as `raw`.
   const rawDb = restrictDatabase(
     getServiceFn("db"),
-    plugin?.capabilities?.db?.rawSql === true,
+    plugin !== undefined && grants.rawSql.includes(plugin.name),
     // Both resolved when a transaction starts, not now: the context can be
     // built before the database is connected. A closure, so the adapter
     // keeps its receiver.
@@ -1742,16 +1776,19 @@ export function createPluginContext(
       // access like `versions` below, so a context built by a caller that
       // never manages users asks nothing of the service it was handed.
       get users() {
-        return userService.forPlugins();
+        return methodFacade(userService.forPlugins(), PLUGIN_USER_METHODS);
       },
-      media: mediaService,
-      email: emailService,
+      media: methodFacade(mediaService, PLUGIN_MEDIA_METHODS),
+      email: methodFacade(emailService, PLUGIN_EMAIL_METHODS),
       // Resolved on access, not at construction: `createPluginContext` is
       // exported, and a resolver written before this service existed would
       // otherwise throw while building the context for callers that never
       // touch version history.
       get versions() {
-        return getServiceFn("versionsService");
+        return methodFacade(
+          getServiceFn("versionsService"),
+          PLUGIN_VERSIONS_METHODS
+        );
       },
       // Lazy for the same reason as `versions` directly above: this module is
       // exported, so a context built by a caller that never asks about Singles

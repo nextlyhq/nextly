@@ -23,7 +23,11 @@ import type { CollectionEntryService } from "../../services/collections/collecti
 import type { CollectionsHandler } from "../../services/collections-handler";
 import type { MediaService } from "../../services/media/media-service";
 import { getMediaStorage } from "../../storage/storage";
-import { definePlugin, type PluginContext } from "../plugin-context";
+import {
+  definePlugin,
+  type PluginContext,
+  type PluginMediaService,
+} from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
 
 let current: TestNextly | undefined;
@@ -37,8 +41,10 @@ afterEach(async () => {
 async function boot(
   collections: CollectionConfig[] = [],
   rawSql = false
-): Promise<{ db: PluginContext["db"]; media: MediaService }> {
-  let captured: { db: PluginContext["db"]; media: MediaService } | undefined;
+): Promise<{ db: PluginContext["db"]; media: PluginMediaService }> {
+  let captured:
+    | { db: PluginContext["db"]; media: PluginMediaService }
+    | undefined;
   const plugin = definePlugin({
     name: "@test/tx-media",
     version: "1.0.0",
@@ -181,7 +187,7 @@ describe("deleting media inside core's own transaction on sqlite", () => {
   it("deletes it from an afterDelete hook of an in-transaction entry delete", async () => {
     // A collection hook cleaning up the media an entry referenced, while the
     // entry delete runs inside core's transaction.
-    let hookMedia: MediaService | undefined;
+    let hookMedia: PluginMediaService | undefined;
     let hookError: unknown;
     const posts = defineCollection({
       slug: "posts",

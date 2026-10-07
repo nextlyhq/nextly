@@ -45,6 +45,7 @@
  * @since 1.0.0
  */
 import { NextlyError } from "../errors/nextly-error";
+import { copyPlainValues } from "../shared/lib/plain-copy";
 
 export type EntityKind = "collection" | "single" | "component";
 
@@ -146,33 +147,6 @@ function matchesFor(
 }
 
 /** Run one transform over one entity, with attribution on failure. */
-/**
- * A deeply frozen COPY of a value.
- *
- * A copy rather than freezing in place: the input is the live config, and
- * freezing that would turn every later legitimate write into a silent no-op
- * (or a throw in strict mode) far from here. Arrays and plain objects are
- * rebuilt; anything else — a Date, a RegExp, a function a field uses as a
- * validator — is passed through as it is, because copying it would change
- * what the transform receives.
- */
-function deepFreeze<T>(value: T): T {
-  if (Array.isArray(value)) {
-    return Object.freeze(value.map(item => deepFreeze(item))) as unknown as T;
-  }
-  if (value === null || typeof value !== "object") return value;
-  // Plain objects only. A class instance rebuilt as a bare object would lose
-  // its prototype, and with it any method the transform means to call.
-  const prototype = Object.getPrototypeOf(value) as unknown;
-  if (prototype !== Object.prototype && prototype !== null) return value;
-
-  const copy: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    copy[key] = deepFreeze(item);
-  }
-  return Object.freeze(copy) as unknown as T;
-}
-
 function transformOne(
   entity: { definition: Record<string, unknown> },
   contribution: TransformContribution,
@@ -193,7 +167,9 @@ function transformOne(
     // the ORIGINAL config, changed it in place, and then returned normally —
     // the guard this comment promises, silently absent exactly where it
     // matters most.
-    next = transform.transform(deepFreeze(entity.definition));
+    next = transform.transform(
+      copyPlainValues(entity.definition, { freeze: true })
+    );
   } catch (cause) {
     if (cause instanceof NextlyError) throw cause;
     throw NextlyError.internal({

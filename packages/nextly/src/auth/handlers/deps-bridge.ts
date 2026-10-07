@@ -25,6 +25,10 @@ import { getHookRegistry } from "../../hooks/hook-registry";
 import { env } from "../../lib/env";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import {
+  NO_PLUGIN_GRANTS,
+  type PluginGrants,
+} from "../../plugins/plugin-consent";
+import {
   createPluginContext,
   type PluginContext,
   type PluginDefinition,
@@ -473,6 +477,10 @@ export function buildAuthRouterDeps(
   // page — which filters disabled plugins — had no view for it, leaving that
   // login unfinishable until the plugin was removed or enabled.
   const config = readServiceConfig(getService);
+  // What the boot granted, decided when it resolved the plugin list. Each
+  // plugin's context reads this rather than the plugin's manifest, so a
+  // manifest edited after the boot grants nothing here either.
+  const grants = readPluginGrants(getService);
   const authHooks = new AuthHookRegistry({
     userFieldClaims: userFieldClaimNames(config),
   });
@@ -491,7 +499,8 @@ export function buildAuthRouterDeps(
     const ownCtx = createPluginContext(
       ctxGetService,
       getHookRegistry(),
-      plugin
+      plugin,
+      grants
     );
     if (authContrib.hooks) {
       authHooks.add(bindHooksToContext(authContrib.hooks, ownCtx));
@@ -658,6 +667,21 @@ async function deleteRefreshTokens(
   await serializeOnSqlite(adapter, () =>
     adapter.getDrizzle().delete(refreshTokens).where(condition)
   );
+}
+
+/**
+ * The grants the boot registered, or none when the container holds no boot:
+ * a context built without one is granted nothing.
+ */
+function readPluginGrants(getService: (name: string) => unknown): PluginGrants {
+  try {
+    return (
+      (getService("pluginGrants") as PluginGrants | undefined) ??
+      NO_PLUGIN_GRANTS
+    );
+  } catch {
+    return NO_PLUGIN_GRANTS;
+  }
 }
 
 /** Read the sanitized NextlyServiceConfig from the DI container, if present. */

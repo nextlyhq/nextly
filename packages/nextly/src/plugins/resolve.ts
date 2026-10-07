@@ -9,8 +9,13 @@ import { collectHookPoints, publishHookPoints } from "./hook-points";
 import {
   assertConsentDeclaredBeforeSetup,
   assertPluginConsent,
+  copyPluginDefinitions,
+  decidePluginGrants,
   NO_PLUGIN_CONSENT,
   type PluginConsent,
+  type PluginGrants,
+  type PreSetupPlugin,
+  recordPreSetupPlugins,
 } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
@@ -40,11 +45,12 @@ export interface ResolvePluginsOptions {
 export interface ResolveTransformedPluginsOptions
   extends ResolvePluginsOptions {
   /**
-   * The plugin list as configured, before any `setup` transformer ran. A
-   * capability that needs the app's consent is held on the transformed list
-   * only by a plugin that declared it here under the same name.
+   * The plugin list as configured, recorded before any `setup` transformer
+   * ran (`resolveDeclaredPlugins`). A capability that needs the app's consent
+   * is held on the transformed list only by a plugin that declared it here
+   * under the same name.
    */
-  declared: readonly PluginDefinition[];
+  declared: readonly PreSetupPlugin[];
 }
 
 /**
@@ -226,6 +232,23 @@ export function resolvePlugins(
 }
 
 /**
+ * The configured plugins, resolved, and the record of them the checks after
+ * the `setup` transformers judge against.
+ *
+ * Resolved from copies (`copyPluginDefinitions`), so the list the boot or CLI
+ * goes on to use shares no object with the app's config, and recorded
+ * (`recordPreSetupPlugins`) before any transformer can run. The boot and the
+ * CLI both start from this.
+ */
+export function resolveDeclaredPlugins(
+  plugins: readonly PluginDefinition[],
+  opts: ResolvePluginsOptions
+): { plugins: PluginDefinition[]; preSetup: readonly PreSetupPlugin[] } {
+  const resolved = resolvePlugins(copyPluginDefinitions(plugins), opts);
+  return { plugins: resolved, preSetup: recordPreSetupPlugins(resolved) };
+}
+
+/**
  * A config whose `setup` transformers have run, with its plugin list resolved
  * again in full.
  *
@@ -234,17 +257,30 @@ export function resolvePlugins(
  * list again — versions, dependencies, cycles, every manifest assertion and
  * the topological sort — makes a transformer-added plugin as checked as a
  * declared one. The boot and the CLI both call this, so a configuration one
- * of them accepts is one the other accepts too.
+ * of them accepts is one the other accepts too. The grants the resolved list
+ * holds (`decidePluginGrants`) are returned beside it.
  */
 export function resolveTransformedPlugins<
   C extends { plugins?: PluginDefinition[] },
 >(
   config: C,
   opts: ResolveTransformedPluginsOptions
-): C & { plugins: PluginDefinition[] } {
-  const plugins = resolvePlugins(config.plugins ?? [], opts);
+): { config: C & { plugins: PluginDefinition[] }; grants: PluginGrants } {
+  // Copied first, so every check below and everything after it reads one
+  // snapshot of what the transformers returned, and an accessor on a
+  // transformer-built definition is read once rather than at each check.
+  const plugins = resolvePlugins(
+    copyPluginDefinitions(config.plugins ?? []),
+    opts
+  );
   assertConsentDeclaredBeforeSetup(opts.declared, plugins);
-  return { ...config, plugins };
+  // Decided here, once, from the copies every check above read: the grants
+  // travel beside the config to whatever builds a plugin context, and a
+  // manifest changed after this point grants nothing.
+  return {
+    config: { ...config, plugins },
+    grants: decidePluginGrants(plugins),
+  };
 }
 
 /**

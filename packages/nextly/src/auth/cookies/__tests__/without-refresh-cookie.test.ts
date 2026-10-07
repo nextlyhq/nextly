@@ -125,3 +125,66 @@ describe("auth hooks and strategies", () => {
     ]);
   });
 });
+
+describe("withoutRefreshCookie and a large body", () => {
+  /** A request carrying the refresh cookie whose body streams `bytes` bytes, with no Content-Length. */
+  function streaming(bytes: number): {
+    request: Request;
+    pulled: () => number;
+  } {
+    let sent = 0;
+    const chunk = new Uint8Array(16 * 1024);
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= bytes) {
+          controller.close();
+          return;
+        }
+        sent += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+    });
+    const request = new Request(URL_, {
+      method: "POST",
+      headers: { cookie: COOKIE },
+      body,
+      duplex: "half",
+    } as RequestInit);
+    return { request, pulled: () => sent };
+  }
+
+  it("refuses a body past the CSRF body cap without reading all of it", async () => {
+    const { request, pulled } = streaming(8 * 1024 * 1024);
+
+    const refused = await withoutRefreshCookie(request).catch(
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "body-too-large", maxBytes: 64 * 1024 },
+    });
+    expect(pulled()).toBeLessThan(1024 * 1024);
+  });
+
+  it("refuses a declared length past the cap before reading", async () => {
+    const original = new Request(URL_, {
+      method: "POST",
+      headers: { cookie: COOKIE, "content-length": String(1024 * 1024) },
+      body: "x",
+    });
+
+    await expect(withoutRefreshCookie(original)).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "body-too-large" },
+    });
+  });
+
+  it("copies a body under the cap", async () => {
+    const { request } = streaming(32 * 1024);
+
+    const copy = await withoutRefreshCookie(request);
+
+    expect((await copy.arrayBuffer()).byteLength).toBe(32 * 1024);
+  });
+});

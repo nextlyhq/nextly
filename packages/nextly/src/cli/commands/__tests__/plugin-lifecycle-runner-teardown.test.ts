@@ -15,22 +15,30 @@ import type { CommandContext } from "../../program";
 import { runPluginInstall } from "../plugin-lifecycle-runner";
 
 // Hoisted with the mocks that close over it.
-const state = vi.hoisted(() => ({
-  calls: [] as string[],
-  alreadyRegistered: false,
-  onInstall: vi.fn(),
-  registerServices: vi.fn(),
-}));
+const state = vi.hoisted(() => {
+  const onInstall = vi.fn();
+  // The loader's two configs: the transformed one commands read, and the
+  // one the app wrote, which a boot must start from.
+  const appConfig = {
+    db: { migrationsDir: "./migrations" },
+    plugins: [{ name: "@acme/fx", version: "1.0.0", onInstall }],
+  };
+  return {
+    calls: [] as string[],
+    alreadyRegistered: false,
+    onInstall,
+    registerServices: vi.fn(),
+    appConfig,
+    loadedConfig: { ...appConfig, plugins: [...appConfig.plugins] },
+    bootedFrom: [] as unknown[],
+  };
+});
 const { calls, onInstall, registerServices } = state;
 
 vi.mock("../../utils/config-loader", () => ({
   loadConfig: async () => ({
-    config: {
-      db: { migrationsDir: "./migrations" },
-      plugins: [
-        { name: "@acme/fx", version: "1.0.0", onInstall: state.onInstall },
-      ],
-    },
+    config: state.loadedConfig,
+    appConfig: state.appConfig,
   }),
 }));
 
@@ -80,7 +88,10 @@ vi.mock("../../../di/register", async importOriginal => ({
 }));
 
 vi.mock("../../../init/build-service-config", () => ({
-  buildServiceConfig: () => ({}),
+  buildServiceConfig: (options: { config: unknown }) => {
+    state.bootedFrom.push(options.config);
+    return {};
+  },
 }));
 vi.mock("../../../storage/image-processor", () => ({
   getImageProcessor: () => undefined,
@@ -101,6 +112,7 @@ const context = {
 
 beforeEach(() => {
   calls.length = 0;
+  state.bootedFrom.length = 0;
   state.alreadyRegistered = false;
   onInstall.mockReset().mockImplementation(async () => {
     calls.push("onInstall");
@@ -165,5 +177,16 @@ describe("the lifecycle hook's boot is torn down", () => {
     );
 
     expect(calls).toEqual(["disconnect"]);
+  });
+});
+
+describe("the lifecycle hook's boot", () => {
+  it("starts from the config as the app wrote it, not the loaded one", async () => {
+    // The boot runs every setup transformer itself. The loaded config
+    // already holds their result, so booting from it ran each one twice.
+    await runPluginInstall("@acme/fx", {}, context);
+
+    expect(state.bootedFrom).toHaveLength(1);
+    expect(state.bootedFrom[0]).toBe(state.appConfig);
   });
 });

@@ -63,7 +63,7 @@ import {
   isAbortedTransactionError,
   recordAbortedTransaction,
 } from "./aborted-transaction-sightings";
-import type { PluginConsent } from "./plugin-consent";
+import { namingTestConsentOption, type PluginConsent } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { resetPluginRouteRegistry } from "./routes/route-registry";
 import { clearPluginServices } from "./services/plugin-services-registry";
@@ -272,9 +272,10 @@ export interface CreateTestNextlyOptions {
   /** Plugins to boot (their full lifecycle runs). */
   plugins?: PluginDefinition[];
   /**
-   * What the app lists plugins for, as `db.rawSqlPlugins` does in
-   * `nextly.config.ts`. Absent, nothing is listed, as in an app that lists
-   * nothing: a plugin declaring `rawSql` then refuses the boot.
+   * @experimental What the app lists plugins for, as `db.rawSqlPlugins` does
+   * in `nextly.config.ts`. Absent, nothing is listed, as in an app that lists
+   * nothing: a plugin declaring `rawSql` then refuses the boot, and the
+   * refusal names this option and the value to pass.
    */
   pluginConsent?: PluginConsent;
   /** Code-first collections to register (tables created on the in-memory DB). */
@@ -701,30 +702,36 @@ async function bootServices(
   provisioned: ProvisionedDatabase | undefined,
   restoreEnv: (() => void) | undefined
 ): Promise<TestNextly> {
-  await registerServices({
-    adapter,
-    imageProcessor: getImageProcessor(),
-    logger,
-    // Wire the (freshly reset) global hook registry into the collection
-    // services so the entry/query/mutation/bulk paths run hooks — without it
-    // those services get `hookRegistry: undefined` and any read/bulk-write
-    // through `ctx.services.collections` throws "executeBeforeOperation is not
-    // a function". Mirrors production boot (registerServices always gets one).
-    hookRegistry: getHookRegistry(),
-    plugins: opts.plugins,
-    pluginConsent: opts.pluginConsent,
-    collections: opts.collections,
-    singles: opts.singles,
-    fieldGroups: opts.fieldGroups,
-    localization: opts.localization
-      ? normalizeLocalization(opts.localization)
-      : undefined,
-    // Record every event by default so machinery tests are independent of
-    // webhook endpoint setup; suites that exercise the endpoint gate turn this
-    // off. Passed through the config (not set after) so it is published before
-    // plugin init() runs, and boot-time plugin events are recorded too.
-    webhookAuditEnabled: true,
-  });
+  // A consent refusal names the `pluginConsent` option to pass rather than
+  // the `nextly.config.ts` line a test has no file to write.
+  try {
+    await registerServices({
+      adapter,
+      imageProcessor: getImageProcessor(),
+      logger,
+      // Wire the (freshly reset) global hook registry into the collection
+      // services so the entry/query/mutation/bulk paths run hooks — without it
+      // those services get `hookRegistry: undefined` and any read/bulk-write
+      // through `ctx.services.collections` throws "executeBeforeOperation is not
+      // a function". Mirrors production boot (registerServices always gets one).
+      hookRegistry: getHookRegistry(),
+      plugins: opts.plugins,
+      pluginConsent: opts.pluginConsent,
+      collections: opts.collections,
+      singles: opts.singles,
+      fieldGroups: opts.fieldGroups,
+      localization: opts.localization
+        ? normalizeLocalization(opts.localization)
+        : undefined,
+      // Record every event by default so machinery tests are independent of
+      // webhook endpoint setup; suites that exercise the endpoint gate turn this
+      // off. Passed through the config (not set after) so it is published before
+      // plugin init() runs, and boot-time plugin events are recorded too.
+      webhookAuditEnabled: true,
+    });
+  } catch (error) {
+    throw namingTestConsentOption(error, opts.pluginConsent);
+  }
 
   // Physical tables for code-first + plugin-contributed collections are created
   // non-interactively by the runtime auto-sync during registerServices (the

@@ -24,13 +24,14 @@ import type { CollectionsHandler } from "../../services/collections-handler";
 import type { CollectionEntryService } from "../../services/collections/collection-entry-service";
 import { pdfDocument } from "../../services/upload-validation/__tests__/format-fixtures";
 import type { CollectionService } from "../../services/collections/collection-service";
-import type { MediaService } from "../../services/media/media-service";
 import type { UserService } from "../../services/users/user-service";
 import { getMediaStorage } from "../../storage/storage";
 import {
   definePlugin,
   type PluginContext,
   type PluginSettingsApi,
+  type PluginMediaService,
+  type PluginUserService,
 } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
 
@@ -49,9 +50,9 @@ afterEach(async () => {
 
 interface Captured {
   db: PluginContext["db"];
-  users: UserService;
+  users: PluginUserService;
   collections: CollectionService;
-  media: MediaService;
+  media: PluginMediaService;
   settings: PluginSettingsApi;
 }
 

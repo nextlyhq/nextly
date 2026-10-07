@@ -79,6 +79,59 @@ describe("a setup transformer and the consent the boot holds", () => {
     expect(received).not.toHaveProperty("pluginConsent");
   });
 
+  it("receives none of the app's live handles, and cannot replace them", async () => {
+    let received: NextlyServiceConfig | undefined;
+    const adapter = { live: "adapter" };
+    const logger = { debug() {}, info() {}, warn() {}, error() {} };
+    const hookRegistry = { live: "hooks" };
+    const passwordHasher = { hash: async () => "", verify: async () => true };
+    const rateLimit = { store: { live: "store" } };
+    const storagePlugins = [{ live: "storage" }];
+    const imageProcessor = { live: "images" };
+    const plugin: PluginDefinition = {
+      name: "@test/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => {
+        received = config;
+        return { ...config, adapter: undefined, logger: undefined };
+      },
+    };
+    const app = {
+      ...serviceConfig([plugin], []),
+      adapter,
+      logger,
+      hookRegistry,
+      passwordHasher,
+      rateLimit,
+      storagePlugins,
+      imageProcessor,
+    } as unknown as NextlyServiceConfig;
+
+    const resolved = await resolveBootPlugins(app);
+
+    for (const key of [
+      "adapter",
+      "logger",
+      "hookRegistry",
+      "passwordHasher",
+      "rateLimit",
+      "storagePlugins",
+      "imageProcessor",
+      "pluginConsent",
+    ]) {
+      expect(received).not.toHaveProperty(key);
+    }
+    // The settings a transformer configures are still there.
+    expect(received?.plugins?.map(entry => entry.name)).toEqual(["@test/p"]);
+    expect(received).toHaveProperty("db");
+    // And the boot carries on with the app's own handles.
+    expect(resolved.config.adapter).toBe(adapter);
+    expect(resolved.config.logger).toBe(logger);
+    expect(resolved.config.rateLimit).toBe(rateLimit);
+    expect(resolved.config.storagePlugins).toBe(storagePlugins);
+  });
+
   it("cannot list itself by pushing onto the consent it was passed", async () => {
     // The shape of the attack: push its own name onto whatever consent it
     // can reach, then declare rawSql on its own entry.
@@ -122,9 +175,10 @@ describe("a setup transformer and the consent the boot holds", () => {
       serviceConfig([plugin], ["@acme/reports"])
     );
 
-    expect(named(resolved.plugins, "@acme/reports").capabilities).toEqual(
-      RAW_SQL
-    );
+    expect(
+      named(resolved.config.plugins, "@acme/reports").capabilities
+    ).toEqual(RAW_SQL);
+    expect(resolved.grants.rawSql).toEqual(["@acme/reports"]);
   });
 });
 
@@ -167,8 +221,10 @@ describe("a second boot from the same app config", () => {
       buildServiceConfig({ config: appConfig })
     );
 
-    expect(named(first.plugins, "@evil/p").capabilities).toBeUndefined();
-    expect(named(second.plugins, "@evil/p").capabilities).toBeUndefined();
+    expect(named(first.config.plugins, "@evil/p").capabilities).toBeUndefined();
+    expect(
+      named(second.config.plugins, "@evil/p").capabilities
+    ).toBeUndefined();
     expect(appConfig.db.rawSqlPlugins).toEqual([]);
   });
 
@@ -281,7 +337,7 @@ describe("a listed name that matches no configured plugin", () => {
       logger,
     });
 
-    expect(named(resolved.plugins, "@acme/reports")).toBeDefined();
+    expect(named(resolved.config.plugins, "@acme/reports")).toBeDefined();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       'db.rawSqlPlugins lists "@acme/removed", which matches no configured plugin, so it grants nothing. Remove it, or correct the name if it is misspelt.'
@@ -297,5 +353,230 @@ describe("a listed name that matches no configured plugin", () => {
     });
 
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("a transformer that edits what it was handed in place", () => {
+  it("refuses a plugin pushed onto the list under a listed name", async () => {
+    // The app still lists a plugin it removed. A transformer pushes a plugin
+    // under that name onto the list it received, and returns that list.
+    const pushing: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => {
+        config.plugins?.push({
+          name: "@acme/removed",
+          version: "1.0.0",
+          nextly: "*",
+          capabilities: RAW_SQL,
+        });
+        return config;
+      },
+    };
+
+    const refused = await refusal(serviceConfig([pushing], ["@acme/removed"]));
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "capability-added-by-setup",
+      plugin: "@acme/removed",
+    });
+  });
+
+  it("refuses a plugin renamed in place onto a listed name", async () => {
+    const renaming: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => {
+        const self = config.plugins?.find(entry => entry.name === "@evil/p");
+        if (self) {
+          self.name = "@acme/removed";
+          self.capabilities = RAW_SQL;
+        }
+        return config;
+      },
+    };
+
+    const refused = await refusal(serviceConfig([renaming], ["@acme/removed"]));
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "capability-added-by-setup",
+      plugin: "@acme/removed",
+    });
+  });
+
+  it("refuses rawSql flipped on in place on a listed plugin", async () => {
+    const listed: PluginDefinition = {
+      name: "@acme/reports",
+      version: "1.0.0",
+      nextly: "*",
+      capabilities: { db: { rawSql: false } },
+    };
+    const flipping: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => {
+        const target = config.plugins?.find(
+          entry => entry.name === "@acme/reports"
+        );
+        const db = target?.capabilities?.db;
+        if (db) db.rawSql = true;
+        return config;
+      },
+    };
+
+    const refused = await refusal(
+      serviceConfig([listed, flipping], ["@acme/reports"])
+    );
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "capability-added-by-setup",
+      plugin: "@acme/reports",
+    });
+    // The edit reached a copy, not the app's own definition.
+    expect(listed.capabilities).toEqual({ db: { rawSql: false } });
+  });
+});
+
+describe("a transformer that keeps a granted name and replaces the code", () => {
+  const reports: PluginDefinition = {
+    name: "@acme/reports",
+    version: "1.0.0",
+    nextly: "*",
+    capabilities: RAW_SQL,
+    init: () => undefined,
+  };
+
+  it("refuses a plugin that drops the listed one and renames itself onto it", async () => {
+    const swapping: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      init: () => undefined,
+      setup: config => {
+        const self = config.plugins?.find(entry => entry.name === "@evil/p");
+        if (!self) return config;
+        self.name = "@acme/reports";
+        self.capabilities = RAW_SQL;
+        return { ...config, plugins: [self] };
+      },
+    };
+
+    const refused = await refusal(
+      serviceConfig([reports, swapping], ["@acme/reports"])
+    );
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "plugin-code-replaced-by-setup",
+      plugin: "@acme/reports",
+      path: "init",
+    });
+    expect(refused?.logMessage).toContain(
+      'A setup transformer changed the code of plugin "@acme/reports" (init)'
+    );
+  });
+
+  it("refuses the listed plugin with its init replaced", async () => {
+    const evilInit = () => undefined;
+    const replacing: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => ({
+        ...config,
+        plugins: (config.plugins ?? []).map(entry =>
+          entry.name === "@acme/reports" ? { ...entry, init: evilInit } : entry
+        ),
+      }),
+    };
+
+    const refused = await refusal(
+      serviceConfig([reports, replacing], ["@acme/reports"])
+    );
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "plugin-code-replaced-by-setup",
+      plugin: "@acme/reports",
+      path: "init",
+    });
+  });
+
+  it("refuses an auth hook added to the listed plugin's contributes", async () => {
+    const hooking: PluginDefinition = {
+      name: "@evil/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => {
+        const target = config.plugins?.find(
+          entry => entry.name === "@acme/reports"
+        );
+        if (target) {
+          target.contributes = {
+            auth: { hooks: { afterAuthenticate: user => user } },
+          };
+        }
+        return config;
+      },
+    };
+
+    const refused = await refusal(
+      serviceConfig([reports, hooking], ["@acme/reports"])
+    );
+
+    expect(refused?.logContext).toMatchObject({
+      reason: "plugin-code-replaced-by-setup",
+      plugin: "@acme/reports",
+    });
+  });
+
+  it("grants the listed plugin a transformer leaves as configured", async () => {
+    const spreading: PluginDefinition = {
+      name: "@acme/other",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => ({
+        ...config,
+        plugins: (config.plugins ?? []).map(entry => ({ ...entry })),
+      }),
+    };
+
+    const resolved = await resolveBootPlugins(
+      serviceConfig([reports, spreading], ["@acme/reports"])
+    );
+
+    expect(named(resolved.config.plugins, "@acme/reports").init).toBe(
+      reports.init
+    );
+  });
+});
+
+describe("the grants a boot decides", () => {
+  it("are read once, at resolution, from a manifest whose accessor changes", async () => {
+    // A manifest whose `rawSql` reads `undefined` while the boot checks it,
+    // and `true` on every later read: the grant is the verdict the checks
+    // reached, so no later read can turn it on.
+    let reads = 0;
+    const shifting: PluginDefinition = {
+      name: "@evil/g",
+      version: "1.0.0",
+      nextly: "*",
+      capabilities: {
+        db: {
+          get rawSql() {
+            reads += 1;
+            return reads > 1 ? true : undefined;
+          },
+        },
+      },
+    };
+
+    const resolved = await resolveBootPlugins(serviceConfig([shifting], []));
+
+    expect(resolved.grants.rawSql).toEqual([]);
+    expect(
+      named(resolved.config.plugins, "@evil/g").capabilities?.db?.rawSql
+    ).toBeUndefined();
   });
 });
