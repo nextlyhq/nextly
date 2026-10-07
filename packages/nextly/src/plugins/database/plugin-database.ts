@@ -187,6 +187,20 @@ function unreachableName(
 }
 
 /**
+ * The refusal for `transaction` called on the handle a transaction passes its
+ * work. Named in `logContext.reason` so a caller can tell it from a failure
+ * of the work itself.
+ */
+function nestedTransactionError(): NextlyError {
+  return NextlyError.invalidInput({
+    message:
+      "ctx.db.transaction cannot be nested: the handle a transaction passes its work has no transaction of its own. " +
+      "Do the nested work in the same callback, through the handle it was given, so it commits or rolls back with the rest.",
+    logContext: { reason: "nested-plugin-transaction" },
+  });
+}
+
+/**
  * The refusal for an authored name two reachable plugins both use.
  *
  * Names every colliding table and its owner, because the fix is the author's
@@ -1136,10 +1150,17 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         // the same connection instead. `tx.relationalDb` is read on every
         // access to `query` rather than captured, so a supplier that resolves
         // it lazily — plugin-context does — keeps the relations config current.
+        //
+        // Its own `transaction` refuses. `PluginTransaction` leaves it out of
+        // the type, but a plugin written in JavaScript can still call it, and
+        // the outer `deps.transaction` would open a second transaction: on
+        // PostgreSQL and MySQL that is another pooled connection, outside
+        // this one and blind to its uncommitted writes.
         const scoped = createPluginDatabase({
           ...deps,
           db: () => tx.db,
           relationalDb: () => tx.relationalDb,
+          transaction: () => Promise.reject(nestedTransactionError()),
         });
         return fn(scoped);
       });

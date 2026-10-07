@@ -116,7 +116,7 @@ export function pluginModuleDownStatements(
 }
 
 async function connect(options: RunnerOptions, context: CommandContext) {
-  const { config } = await loadConfig({
+  const { config, pluginConsent } = await loadConfig({
     configPath: options.config,
     cwd: options.cwd,
   });
@@ -542,6 +542,10 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       await registerServices(
         buildServiceConfig({
           config,
+          // The grants the loader read before any `setup` transformer ran.
+          // `config` is the transformed one, so consent derived from it
+          // would be judged on what plugin code returned.
+          pluginConsent,
           adapter: drizzleAdapter,
           imageProcessor: getImageProcessor(),
           hookRegistry: getHookRegistry(),

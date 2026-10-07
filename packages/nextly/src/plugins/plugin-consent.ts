@@ -36,7 +36,9 @@ export interface PluginConsent {
 }
 
 /** No plugin is granted anything: what an app that lists nothing gets. */
-export const NO_PLUGIN_CONSENT: PluginConsent = Object.freeze({ rawSql: [] });
+export const NO_PLUGIN_CONSENT: PluginConsent = snapshotPluginConsent({
+  rawSql: [],
+});
 
 /**
  * The grants an app's config makes.
@@ -49,7 +51,50 @@ export const NO_PLUGIN_CONSENT: PluginConsent = Object.freeze({ rawSql: [] });
 export function pluginConsentFromConfig(config: {
   db?: { rawSqlPlugins?: readonly string[] };
 }): PluginConsent {
-  return { rawSql: [...(config.db?.rawSqlPlugins ?? [])] };
+  return snapshotPluginConsent({ rawSql: config.db?.rawSqlPlugins ?? [] });
+}
+
+/**
+ * A copy of `consent` that nothing can change: the object and every list in
+ * it are new and frozen.
+ *
+ * The boot judges the declared list and the transformed list against the
+ * same grants, and plugin code runs between the two. A grant that plugin code
+ * could reach and push onto would let a plugin list itself between the
+ * checks, so the boot holds this copy rather than the caller's object.
+ */
+export function snapshotPluginConsent(consent: PluginConsent): PluginConsent {
+  return Object.freeze({ rawSql: Object.freeze([...consent.rawSql]) });
+}
+
+/**
+ * The config a plugin's `setup` transformers start from: `config` with the
+ * resolved `plugins`, a `db` block that is a copy of the app's with a frozen
+ * `rawSqlPlugins`, and no `pluginConsent`.
+ *
+ * A transformer is plugin code. Handed the app's own `db` object, one could
+ * add its name to `db.rawSqlPlugins` there, and every later read of that
+ * config would grant it: the CLI deriving consent from the config it
+ * loaded, a boot retried after a failure, the dev server registering again.
+ * Whatever a transformer does to the copy stays in the config it returns.
+ * The boot and the CLI both start their transformers from this, so neither
+ * hands plugin code a grant.
+ */
+export function setupTransformerInput<
+  C extends {
+    plugins?: PluginDefinition[];
+    db?: object;
+    pluginConsent?: PluginConsent;
+  },
+>(config: C, plugins: PluginDefinition[]): C & { plugins: PluginDefinition[] } {
+  const input: C & { plugins: PluginDefinition[] } = { ...config, plugins };
+  delete input.pluginConsent;
+  if (config.db === undefined) return input;
+  const db: object = { ...config.db };
+  if ("rawSqlPlugins" in db && Array.isArray(db.rawSqlPlugins)) {
+    db.rawSqlPlugins = Object.freeze([...db.rawSqlPlugins]);
+  }
+  return Object.assign(input, { db });
 }
 
 /** One capability that needs the app's consent. */
@@ -64,6 +109,8 @@ interface ConsentRule {
   listed: (consent: PluginConsent) => readonly string[];
   /** The `nextly.config.ts` line that lists exactly `names`. */
   configLine: (names: readonly string[]) => string;
+  /** The config key the app lists names under. */
+  configKey: string;
 }
 
 const CONSENT_RULES: readonly ConsentRule[] = [
@@ -74,6 +121,7 @@ const CONSENT_RULES: readonly ConsentRule[] = [
     listed: consent => consent.rawSql,
     configLine: names =>
       `db: { rawSqlPlugins: [${names.map(name => JSON.stringify(name)).join(", ")}] }`,
+    configKey: "db.rawSqlPlugins",
   },
 ];
 
@@ -109,4 +157,62 @@ export function assertPluginConsent(
       { plugins: unlisted, capability: rule.capability, configLine: line }
     );
   }
+}
+
+/**
+ * Refuse a capability that needs the app's consent when a `setup` transformer
+ * introduced it.
+ *
+ * The app's listing names a plugin it reviewed: the manifest that plugin
+ * declares under that name. On the transformed list a plugin holds the
+ * capability only when the configured list already had an entry with the
+ * same name declaring it. A transformer that renames a plugin onto a listed
+ * name, adds a plugin under one, or adds the capability to a plugin that did
+ * not declare it would otherwise inherit a grant the app made for something
+ * else. Disabled plugins are skipped, as `assertPluginConsent` skips them.
+ */
+export function assertConsentDeclaredBeforeSetup(
+  declared: readonly PluginDefinition[],
+  transformed: readonly PluginDefinition[]
+): void {
+  for (const rule of CONSENT_RULES) {
+    for (const plugin of transformed) {
+      if (plugin.enabled === false || !rule.declares(plugin)) continue;
+      const configured = declared.find(entry => entry.name === plugin.name);
+      if (configured !== undefined && rule.declares(configured)) continue;
+      const what =
+        configured === undefined
+          ? `A setup transformer added plugin "${plugin.name}", or renamed another plugin to that name, and it declares ${rule.capability}`
+          : `A setup transformer added ${rule.capability} to plugin "${plugin.name}", whose own manifest does not declare it`;
+      throw resolutionError(
+        "capability-added-by-setup",
+        `${what}. That capability grants ${rule.grants}, and the app's listing covers only a plugin that declares it in its own manifest under the listed name. ` +
+          `Declare ${rule.capability} in the manifest of the plugin the app configures, rather than in a setup transformer.`,
+        { plugin: plugin.name, capability: rule.capability }
+      );
+    }
+  }
+}
+
+/**
+ * One warning for each name the app lists that matches no configured plugin.
+ *
+ * Such an entry grants nothing today, and is not a failure: an app keeps its
+ * listing while it removes or renames a plugin. It is named because it is a
+ * grant waiting for whatever next arrives under that name, and because a
+ * misspelt name reads as a listing that works.
+ */
+export function unmatchedConsentWarnings(
+  plugins: readonly PluginDefinition[],
+  consent: PluginConsent
+): string[] {
+  const configured = new Set(plugins.map(plugin => plugin.name));
+  return CONSENT_RULES.flatMap(rule =>
+    [...new Set(rule.listed(consent))]
+      .filter(name => !configured.has(name))
+      .map(
+        name =>
+          `${rule.configKey} lists "${name}", which matches no configured plugin, so it grants nothing. Remove it, or correct the name if it is misspelt.`
+      )
+  );
 }

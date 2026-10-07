@@ -449,12 +449,11 @@ export interface PluginContext {
   self: PluginSelf;
 
   /**
-   * Read-only configuration.
-   *
-   * Contains the Nextly service configuration.
-   * Configuration is frozen to prevent accidental modification.
+   * @experimental Read-only application configuration: the plain values in
+   * the service configuration, and none of its live handles. See
+   * `PluginConfig` for what is included. Frozen.
    */
-  config: Readonly<NextlyServiceConfig>;
+  config: PluginConfig;
 
   /**
    * @experimental Hook registration for lifecycle events. Allows plugins to
@@ -1408,6 +1407,74 @@ function restrictDatabase(
   };
 }
 
+/**
+ * The keys of the service configuration a plugin reads at `ctx.config`.
+ *
+ * An allowlist of plain configuration, so a field added to the service
+ * configuration later stays out of plugins' reach until someone decides it
+ * belongs here. What is left out is live: the database `adapter`, the app's
+ * own `db` block (it carries `db.rawSqlPlugins`, and is the object the next
+ * boot reads), `pluginConsent`, `storagePlugins`, `imageProcessor`,
+ * `logger`, `hookRegistry`, `passwordHasher` and `rateLimit` (whose `store`
+ * is a live connection). Each of those either reaches past what the
+ * plugin's own surfaces grant, the raw-SQL approval above all, or is
+ * reached through a surface of its own (`ctx.logger`, `ctx.hooks`).
+ */
+const PLUGIN_CONFIG_KEYS = [
+  "basePath",
+  "preview",
+  "schemasDir",
+  "migrationsDir",
+  "runMigrationsOnBoot",
+  "plugins",
+  "strictPluginTargets",
+  "permissions",
+  "roles",
+  "jobs",
+  "collections",
+  "singles",
+  "fieldGroups",
+  "users",
+  "email",
+  "apiKeys",
+  "security",
+  "admin",
+  "auth",
+  "localization",
+  "webhookRetention",
+  "auditRetention",
+  "emailRetention",
+  "webhookAuditEnabled",
+] as const satisfies readonly (keyof NextlyServiceConfig)[];
+
+/**
+ * @experimental What a plugin reads at `ctx.config`: the application's plain
+ * configuration values, frozen. Live handles are not part of it; a plugin
+ * reaches the database through `ctx.db` and logs through `ctx.logger`.
+ */
+export type PluginConfig = Readonly<
+  Omit<
+    Pick<NextlyServiceConfig, (typeof PLUGIN_CONFIG_KEYS)[number]>,
+    "plugins"
+  > & { plugins?: readonly PluginDefinition[] }
+>;
+
+/**
+ * Build `ctx.config` from the service configuration: the allowlisted keys
+ * only, in a new frozen object. `plugins` is a frozen copy of the list, so a
+ * plugin cannot add to or reorder the list the next boot reads.
+ */
+function pluginConfigView(config: NextlyServiceConfig): PluginConfig {
+  const view: Partial<Record<keyof NextlyServiceConfig, unknown>> = {};
+  for (const key of PLUGIN_CONFIG_KEYS) {
+    if (config[key] !== undefined) view[key] = config[key];
+  }
+  if (config.plugins !== undefined) {
+    view.plugins = Object.freeze([...config.plugins]);
+  }
+  return Object.freeze(view) as PluginConfig;
+}
+
 export function createPluginContext(
   getServiceFn: <T extends PluginServiceName>(
     name: T
@@ -1718,7 +1785,7 @@ export function createPluginContext(
     self: plugin
       ? resolvePluginSelf(plugin)
       : { name: "", collections: {}, singles: {} },
-    config: Object.freeze({ ...config }),
+    config: pluginConfigView(config),
     hooks: pluginHooks,
     filters: pluginFilters,
     actions: pluginActions,

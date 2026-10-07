@@ -193,7 +193,7 @@ export interface DatabaseConfig {
    * db: { rawSqlPlugins: ["@acme/nextly-reports"] }
    * ```
    */
-  rawSqlPlugins?: string[];
+  rawSqlPlugins?: readonly string[];
 }
 
 // ============================================================
@@ -1066,8 +1066,11 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       migrateLockTtlSeconds:
         config.db?.migrateLockTtlSeconds ??
         DEFAULT_DB_CONFIG.migrateLockTtlSeconds,
-      // Copied, so the sanitized config never shares the default's array.
-      rawSqlPlugins: [...(config.db?.rawSqlPlugins ?? [])],
+      // Copied, so the sanitized config never shares the app's or the
+      // default's array, and frozen: the boot and the CLI read the app's
+      // grants from here, and plugin code that could add a name to this list
+      // would grant itself on the next read.
+      rawSqlPlugins: Object.freeze([...(config.db?.rawSqlPlugins ?? [])]),
     },
     rateLimit,
     apiKeys,
