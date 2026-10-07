@@ -121,6 +121,61 @@ describe("runChecks (F11 PR 4)", () => {
     });
   });
 
+  describe("statements a run would refuse", () => {
+    /** A generated-looking file with its paired snapshot, so it passes the
+     * integrity checks and only the statement check has anything to say. */
+    async function writeGenerated(name: string, content: string) {
+      await writeFile(join(migrationsDir, `${name}.sql`), content, "utf-8");
+      await writeSnapshot(
+        join(migrationsDir, "meta"),
+        name,
+        EMPTY_DESIRED,
+        content
+      );
+    }
+
+    const run = async () => {
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        dialect: "postgresql",
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+      return logger;
+    };
+
+    it("warns about a statement nextly migrate would refuse, without failing", async () => {
+      await writeGenerated(
+        "20260101_120000_001_index",
+        "-- UP\nCREATE INDEX CONCURRENTLY i ON t (a);\n\n-- DOWN\n"
+      );
+      const logger = await run();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /REFUSED_STATEMENT: 20260101_120000_001_index\.sql: .*-- nextly:no-transaction/
+        )
+      );
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it("names a marked file and lets its statement through", async () => {
+      await writeGenerated(
+        "20260101_120000_001_index",
+        "-- nextly:no-transaction\n-- UP\nCREATE INDEX CONCURRENTLY i ON t (a);\n\n-- DOWN\nDROP INDEX CONCURRENTLY i;\n"
+      );
+      const logger = await run();
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "20260101_120000_001_index.sql is marked -- nextly:no-transaction"
+        )
+      );
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("REFUSED_STATEMENT")
+      );
+    });
+  });
+
   describe("CHECKSUM_MISMATCH", () => {
     it("exits 1 when a .sql file is edited after generation", async () => {
       const original = "CREATE TABLE foo (id text);";

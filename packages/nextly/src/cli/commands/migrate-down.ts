@@ -3,7 +3,8 @@
  *
  * SP-2 rollback. Reads the newest applied `file_apply` event(s) from
  * `nextly_schema_events`, runs each file's parsed `-- DOWN` section under the
- * migrate lock inside a transaction, then records a `rolled_back` event so the
+ * migrate lock inside a transaction — outside one for a file marked
+ * `-- nextly:no-transaction` — then records a `rolled_back` event so the
  * file becomes re-runnable. Schema shape is restored; data is NOT recovered.
  *
  * **Runtime restriction (F11):** CLI-only; never import from runtime code.
@@ -26,12 +27,17 @@ import {
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
 import { truncateErrorMessage } from "../../domains/schema/events/schema-events-repository";
-import { executeTransaction } from "../../domains/schema/migrate/migration-transaction";
+import {
+  outsideTransactionNotice,
+  runMigrationStatements,
+  type MigrationUnit,
+} from "../../domains/schema/migrate/migration-transaction";
 import { moduleSql } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { recordPluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import {
   assertRunnableStatements,
+  marksNoTransaction,
   splitSqlStatements,
 } from "../../domains/schema/migrate/split-sql";
 import {
@@ -124,13 +130,21 @@ export interface MigrateDownCoreDeps {
   };
   listFileApplies: () => Promise<SchemaEventRow[]>;
   fileExists: (filename: string) => Promise<boolean>;
-  /** Returns the parsed `-- DOWN` SQL for a filename (may be empty string). */
-  readDownSql: (filename: string) => Promise<string>;
   /**
-   * Executes a target's DOWN statements — the ones the guards judged — in
-   * one transaction; returns how many ran.
+   * Returns the parsed `-- DOWN` SQL for a filename (may be empty string),
+   * and whether it runs in a transaction: false for a file marked
+   * `-- nextly:no-transaction` or a module with `transaction: false`.
    */
-  execDown: (statements: readonly string[]) => Promise<number>;
+  readDownSql: (filename: string) => Promise<MigrationDown>;
+  /**
+   * Executes a target's DOWN statements — the ones the guards judged — as
+   * `unit` says: in one transaction unless it is marked to run outside one;
+   * returns how many ran.
+   */
+  execDown: (
+    statements: readonly string[],
+    unit: MigrationUnit
+  ) => Promise<number>;
   /** Records a `rolled_back` event (retires the applied row). */
   recordRolledBack: (filename: string) => Promise<void>;
   /**
@@ -141,8 +155,15 @@ export interface MigrateDownCoreDeps {
    * supplies nothing.
    */
   recordPluginSchemaVersion?: () => Promise<void>;
-  /** Records a `failed` event for an errored DOWN. */
-  recordFailed: (filename: string, message: string) => Promise<void>;
+  /**
+   * Records a `failed` event for an errored DOWN; `transaction` false says it
+   * ran outside a transaction, so part of it may have applied.
+   */
+  recordFailed: (
+    filename: string,
+    message: string,
+    transaction: boolean
+  ) => Promise<void>;
   /**
    * Owner rows for the drop guard; absent when no registry is reachable,
    * which refuses nothing (the pre-registry behaviour).
@@ -163,10 +184,19 @@ export interface MigrateDownResult {
   rolledBack: string[];
 }
 
+/** A migration's DOWN as the rollback reads it. */
+export interface MigrationDown {
+  sql: string;
+  /** False when the migration is marked to run outside a transaction. */
+  transaction: boolean;
+}
+
 /** One rollback target, as planned before anything runs. */
 interface PlannedDown {
   filename: string;
   downSql: string;
+  /** False when the DOWN runs outside a transaction. */
+  transaction: boolean;
   /** The DOWN split into the statements `execDown` runs. */
   statements: string[];
   /** Why the DOWN could not be read, when it could not. */
@@ -198,7 +228,10 @@ function refusalOf(
   try {
     // A statement the runner's transaction cannot hold, refused before any
     // target runs rather than when the executor reaches it.
-    assertRunnableStatements(p.statements, deps.dialect, p.filename);
+    assertRunnableStatements(p.statements, deps.dialect, p.filename, {
+      transaction: p.transaction,
+      unit: deps.options.plugin ? "module" : "file",
+    });
     // A rollback drops only what its own stream owns: an app file's DOWN
     // dropping a plugin-migrated table is refused whole, before any
     // statement runs, so the ledger records nothing.
@@ -257,14 +290,22 @@ export async function migrateDownCore(
   const planned: PlannedDown[] = [];
   for (const filename of targets) {
     try {
-      const downSql = (await deps.readDownSql(filename)).trim();
+      const down = await deps.readDownSql(filename);
+      const downSql = down.sql.trim();
       planned.push({
         filename,
         downSql,
+        transaction: down.transaction,
         statements: splitSqlStatements(downSql, deps.dialect),
       });
     } catch (unreadable) {
-      planned.push({ filename, downSql: "", statements: [], unreadable });
+      planned.push({
+        filename,
+        downSql: "",
+        transaction: true,
+        statements: [],
+        unreadable,
+      });
     }
   }
   let columns: LiveColumns =
@@ -294,6 +335,9 @@ export async function migrateDownCore(
         deps.logger.info(
           "    ⚠ drops a table or column — a real run needs --allow-data-loss"
         );
+      }
+      if (!p.transaction) {
+        deps.logger.info(`    ⚠ ${outsideTransactionNotice(p.filename)}`);
       }
       deps.logger.info(p.downSql);
     }
@@ -358,12 +402,19 @@ export async function migrateDownCore(
 
       try {
         for (const p of planned) {
+          if (!p.transaction) {
+            deps.logger.warn(outsideTransactionNotice(p.filename));
+          }
           try {
-            await deps.execDown(p.statements);
+            await deps.execDown(p.statements, {
+              source: p.filename,
+              transaction: p.transaction,
+            });
           } catch (err) {
             await deps.recordFailed(
               p.filename,
-              truncateErrorMessage(describeError(err, { context: false }))
+              truncateErrorMessage(describeError(err, { context: false })),
+              p.transaction
             );
             throw err;
           }
@@ -469,7 +520,7 @@ export async function runMigrateDown(
       return (await newestRows).get(filename)?.sha256;
     };
 
-    const readDownSql = async (filename: string): Promise<string> => {
+    const readDownSql = async (filename: string): Promise<MigrationDown> => {
       const pluginName = pluginOfLedgerRow(filename);
       if (pluginName !== null) {
         // A plugin module is read from the plugin's definition, verified as
@@ -491,21 +542,23 @@ export async function runMigrateDown(
           filename,
           recordedSha: await recordedSha(filename),
         });
-        return moduleSql(module, dialect, "down");
+        return {
+          sql: moduleSql(module, dialect, "down"),
+          transaction: module.transaction !== false,
+        };
       }
       const name = filename.endsWith(".sql") ? filename : `${filename}.sql`;
       const content = await readFile(resolve(migrationsDir, name), "utf-8");
-      return parseSqlSections(content).downSql;
+      return {
+        sql: parseSqlSections(content).downSql,
+        transaction: !marksNoTransaction(content),
+      };
     };
 
-    const execDown = async (statements: readonly string[]): Promise<number> => {
-      await executeTransaction(dz, async tx => {
-        for (const statement of statements) {
-          await tx.execute(statement);
-        }
-      });
-      return statements.length;
-    };
+    const execDown = (
+      statements: readonly string[],
+      unit: MigrationUnit
+    ): Promise<number> => runMigrationStatements(dz, statements, unit);
 
     const recordRolledBack = async (filename: string): Promise<void> => {
       await resolveMigration({
@@ -521,12 +574,14 @@ export async function runMigrateDown(
 
     const recordFailed = async (
       filename: string,
-      message: string
+      message: string,
+      transaction: boolean
     ): Promise<void> => {
       await recordRollbackFailed({
         repo,
         filename,
         dialect,
+        transaction,
         note: `migrate:down failed: ${message}`,
       });
     };

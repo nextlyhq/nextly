@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
-import { PARTIAL_ROLLBACK_NOTE } from "../plugin-module-rollback";
+import {
+  NO_TRANSACTION_ROLLBACK_NOTE,
+  PARTIAL_ROLLBACK_NOTE,
+} from "../plugin-module-rollback";
 import {
   buildMigrationStatuses,
   failedRollbacksSinceApply,
@@ -151,6 +154,49 @@ describe("ledgerRecords", () => {
     expect(failures.map(f => [f.filename, f.possiblyPartial])).toEqual([
       ["0001_a.sql", false],
       ["0002_b.sql", true],
+    ]);
+  });
+
+  it("flags a rollback that failed outside a transaction as partial", () => {
+    const applied = ledgerRecords([event("0001_a.sql", "applied", 1000)]);
+    const failures = failedRollbacksSinceApply(applied, [
+      {
+        ...event("0001_a.sql", "failed", 2000),
+        eventType: "file_rollback" as const,
+        note: `${NO_TRANSACTION_ROLLBACK_NOTE} migrate:down failed: x`,
+      },
+    ]);
+    expect(
+      failures.map(f => [f.filename, f.possiblyPartial, f.outsideTransaction])
+    ).toEqual([["0001_a.sql", true, true]]);
+  });
+
+  it("marks a file that runs outside a transaction, applied or pending", () => {
+    const file = (name: string, transaction?: boolean) => ({
+      name,
+      filePath: `/x/${name}.sql`,
+      checksum: "abc",
+      collections: [],
+      timestamp: "20260101_000000",
+      ...(transaction === undefined ? {} : { transaction }),
+    });
+    const statuses = buildMigrationStatuses(
+      [
+        file("0001_plain"),
+        file("0002_marked", false),
+        file("0003_pending_marked", false),
+      ],
+      ledgerRecords([
+        event("0001_plain.sql", "applied", 1000),
+        event("0002_marked.sql", "applied", 2000),
+      ]).map(record => ({ ...record, sha256: "abc" }))
+    );
+    expect(
+      statuses.map(s => [s.filename, s.status, s.outsideTransaction ?? false])
+    ).toEqual([
+      ["0001_plain", "applied", false],
+      ["0002_marked", "applied", true],
+      ["0003_pending_marked", "pending", true],
     ]);
   });
 

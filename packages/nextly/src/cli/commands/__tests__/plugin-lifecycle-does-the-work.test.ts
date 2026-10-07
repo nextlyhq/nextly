@@ -66,6 +66,7 @@ function deps(over: Partial<PluginLifecycleDeps> = {}): PluginLifecycleDeps {
         moduleName,
         filename: `plugin:@acme/fx/${moduleName}`,
         statements: [`DROP TABLE IF EXISTS fx__${moduleName}`],
+        transaction: true,
       }))
     ),
     runDown: vi.fn(async () => 2),

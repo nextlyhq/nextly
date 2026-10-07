@@ -294,26 +294,76 @@ Specific examples:
 
 Every migration file, plugin module and `-- DOWN` section runs as **one
 transaction on one database connection**, which the runner opens and commits
-itself. A few kinds of statement cannot live inside that, and `nextly migrate`,
+itself, unless it is [marked to run outside one](#running-a-file-outside-a-transaction).
+A few kinds of statement cannot live inside that, and `nextly migrate`,
 `migrate:down` and `plugins uninstall` refuse the whole file before any of it
-runs. `migrate:down --dry-run` reports the same refusals without executing
-anything.
+runs. `migrate --dry-run` and `migrate:down --dry-run` report the same
+refusals without executing anything, and `migrate:check` warns about them.
 
 | Statement | What happens | Why |
 |---|---|---|
 | `BEGIN`, `START TRANSACTION`, `COMMIT`, `END` (with any modifiers, such as `BEGIN IMMEDIATE` or `START TRANSACTION READ WRITE`) | Left out; the rest of the file runs | The runner's own transaction already brackets the file. |
-| `SAVEPOINT`, `ROLLBACK TO [SAVEPOINT]`, `RELEASE [SAVEPOINT]` | Run as written | A savepoint works inside the runner's transaction and undoes at most part of the file. On MySQL a schema statement commits on its own and ends the savepoint with it, so keep savepoints to data statements there. |
-| `ROLLBACK`, `ABORT`, `COMMIT PREPARED`, `PREPARE TRANSACTION`, `XA …` | File refused | Each one would undo or hand off the runner's transaction, which would then record work that did not happen. |
+| `SAVEPOINT`, `ROLLBACK [WORK \| TRANSACTION] TO [SAVEPOINT]`, `RELEASE [SAVEPOINT]` | Run as written | A savepoint works inside the runner's transaction and undoes at most part of the file. On MySQL a schema statement commits on its own and ends the savepoint with it, so keep savepoints to data statements there. |
+| `ROLLBACK [WORK \| TRANSACTION]`, `ABORT`, `COMMIT PREPARED`, `PREPARE TRANSACTION`, `XA …` | File refused | Each one would undo or hand off the runner's transaction, which would then record work that did not happen. |
 | PostgreSQL `SET …` (except `SET LOCAL`, `SET CONSTRAINTS`, `SET TRANSACTION`), `RESET`, `DISCARD` | File refused | A session setting stays on the pooled connection after the migration. Use `SET LOCAL`, which ends with the transaction. |
 | MySQL `SET …` (except user variables, `SET @name = …`), including one inside `/*!…*/` | File refused | The same: `SET FOREIGN_KEY_CHECKS = 0` would stay on a pooled connection and switch checks off for whatever it serves next. Order the statements instead (create a table before the tables that reference it, drop it after them), or drop the foreign key and add it back within the migration. |
-| PostgreSQL `VACUUM`, `CREATE`/`DROP INDEX CONCURRENTLY`, `REINDEX … CONCURRENTLY`, `CREATE`/`DROP DATABASE`, `CREATE`/`DROP TABLESPACE`, `ALTER SYSTEM`; SQLite `VACUUM`, `ATTACH`, `DETACH` | File refused | The database cannot run them inside a transaction. Run them outside the migration, after it has applied. |
-| MySQL `LOCK TABLES`, `UNLOCK TABLES` (and the `INSTANCE` forms) | File refused | They commit the migration's transaction implicitly, and the locks stay with the pooled connection. |
+| PostgreSQL `VACUUM`, `CREATE`/`DROP INDEX CONCURRENTLY`, `REINDEX … CONCURRENTLY`, `CREATE`/`DROP DATABASE`, `CREATE`/`DROP TABLESPACE`, `ALTER SYSTEM`; SQLite `VACUUM` | File refused, unless it is marked to run outside a transaction | The database cannot run them inside a transaction. Mark the file (`-- nextly:no-transaction` as its first line) or the module (`transaction: false`), and they run. |
+| SQLite `ATTACH`, `DETACH` | File refused, marked or not | They change which databases the process's one connection sees, after the migration too. |
+| MySQL `LOCK TABLES`, `UNLOCK TABLES` (and the `INSTANCE` forms) | File refused, marked or not | They commit the migration's transaction implicitly, and the locks stay with the pooled connection. |
 
 PostgreSQL's `ALTER TYPE … ADD VALUE` runs inside the transaction (PostgreSQL 12
 and later), but the value it adds cannot be used until the transaction commits,
 so use it in a later migration file.
 
 The error names the statement and says what to write instead.
+
+### Running a file outside a transaction
+
+Some statements cannot run inside a transaction at all. The one you are most
+likely to need is PostgreSQL's `CREATE INDEX CONCURRENTLY`, which builds an
+index on a large table without blocking its writes. To run one, put it in a
+migration file of its own whose **first line** is the marker:
+
+```sql
+-- nextly:no-transaction
+-- Migration: index_orders_customer
+
+-- UP
+CREATE INDEX CONCURRENTLY IF NOT EXISTS orders_customer_idx ON dc_orders (customer_id);
+
+-- DOWN
+DROP INDEX CONCURRENTLY IF EXISTS orders_customer_idx;
+```
+
+`nextly migrate:create --blank` writes a file you can start from; the marker
+goes above its `-- Migration:` line, and only the first line counts. A plugin's
+migration module says the same with `transaction: false` on the module; see
+[Plugin schema](/docs/plugins/schema).
+
+A marked file's UP and DOWN run **statement by statement**, each committing as
+it runs. `nextly migrate`, `migrate:down` and `plugins uninstall` print a line
+naming the file before they run it, and `migrate:status` shows it as
+`(no transaction)`.
+
+<Callout type="warn">
+A marked file has no all-or-nothing guarantee, on any dialect. If a statement
+fails, **the statements before it stay applied and are not undone**. The error
+says which statement failed and how many ran before it, and the ledger records
+the file as failed. Finish or reverse those statements by hand before running
+the file again. Keep a marked file to the statements that need it, and write
+them so they can run again (`IF NOT EXISTS`, `IF EXISTS`). A
+`CREATE INDEX CONCURRENTLY` that fails can leave an invalid index behind:
+drop it before you retry.
+</Callout>
+
+The marker does not lift every refusal. Session settings (`SET …`), a bare
+`ROLLBACK`, MySQL's `LOCK TABLES` and SQLite's `ATTACH`/`DETACH` are refused in
+a marked file too, because what they leave on the connection outlives the file.
+A file's own `BEGIN` and `COMMIT` are left out as in any other file.
+
+Marking a generated migration changes its contents, so `migrate:check` then
+reports `CHECKSUM_MISMATCH` for it; put statements that need the marker in a
+file of their own.
 
 **Routine and trigger bodies are one statement.** A `CREATE TRIGGER … BEGIN … END`
 (SQLite, MySQL), a MySQL `CREATE PROCEDURE`/`FUNCTION`/`EVENT … BEGIN … END`, and a
@@ -436,7 +486,12 @@ Single or Field Group left behind passes `migrate:check`, so nothing reminds you
 
 ## What `nextly migrate:check` does (CI-friendly, no DB)
 
-Runs five integrity checks; first failure exits non-zero with a specific code:
+Runs five integrity checks; first failure exits non-zero with a specific code.
+Before the drift check it also warns, without failing, about any statement
+`nextly migrate` or `migrate:down` would refuse (`REFUSED_STATEMENT`), and
+names each file marked `-- nextly:no-transaction`. It does not connect, so it
+cannot tell a file still pending from one already applied, which never runs
+again.
 
 | Check | What it catches |
 |---|---|

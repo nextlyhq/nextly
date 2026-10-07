@@ -19,6 +19,7 @@
  * @module cli/commands/plugin-lifecycle
  */
 
+import { outsideTransactionNotice } from "../../domains/schema/migrate/migration-transaction";
 import { assertDependenciesInstalled } from "../../domains/schema/ownership/install-plan";
 import { createOwnerRegistry } from "../../domains/schema/ownership/owner-registry";
 import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
@@ -66,6 +67,8 @@ export interface PreparedModuleDown {
   /** The module's ledger key, `plugin:<name>/<module>`. */
   filename: string;
   statements: string[];
+  /** False when the module is marked `transaction: false`. */
+  transaction: boolean;
 }
 
 export interface PluginLifecycleDeps {
@@ -369,6 +372,9 @@ async function executeUninstall(
   });
 
   for (const down of downs) {
+    if (!down.transaction) {
+      deps.logger.warn(outsideTransactionNotice(down.filename));
+    }
     const executed = await deps.runDown(plugin, down);
     deps.logger.info(
       `Reverted ${down.moduleName} (${String(executed)} statement(s))`

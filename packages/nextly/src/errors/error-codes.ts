@@ -85,6 +85,9 @@ export const NEXTLY_ERROR_STATUS = {
   // A SQLite migration unit would leave a row referencing a row that does
   // not exist, or could not switch foreign-key enforcement off to run.
   NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION: 409,
+  // A migration unit marked to run outside a transaction failed part-way;
+  // the statements before the failing one stayed applied.
+  NEXTLY_MIGRATION_PARTIALLY_APPLIED: 500,
   // Plan C3 — migrate:resolve recovery command.
   NEXTLY_MIGRATION_FILE_MISSING: 404,
   NEXTLY_MIGRATION_SNAPSHOT_MISSING: 404,

@@ -1,7 +1,5 @@
 /**
- * Migrate Check Command (F11 PR 4)
- *
- * Implements `nextly migrate:check` per the F11 spec §6.4.
+ * `nextly migrate:check`.
  *
  * CI-friendly integrity verification for migration files. Does NOT
  * connect to a database. Five checks run in order; first failure
@@ -20,6 +18,13 @@
  *   5. SCHEMA_DRIFT       - `nextly.config.ts` has uncommitted changes
  *      relative to the latest snapshot (operator forgot to run
  *      `migrate:create` after editing config).
+ *
+ * Before the drift check it also warns, without failing, about each file
+ * holding a statement `nextly migrate` or `migrate:down` would refuse
+ * (`REFUSED_STATEMENT`), and names each file marked
+ * `-- nextly:no-transaction`. A warning, because the check does not connect:
+ * a file already applied is never run again, and failing CI over one would
+ * leave the operator nothing to fix.
  *
  * Exit codes:
  *   0 - All checks passed.
@@ -48,6 +53,11 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
+import {
+  marksNoTransaction,
+  splitSqlStatements,
+  statementRefusals,
+} from "../../domains/schema/migrate/split-sql";
 import {
   appStreamSnapshots,
   compileAppStreamTables,
@@ -86,6 +96,13 @@ import {
 import { createContext, type CommandContext } from "../program";
 import { validateDatabaseEnv, type SupportedDialect } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import {
+  discoverMigrationGroups,
+  getSortedBaseNames,
+  selectVariant,
+} from "../utils/migration-discovery";
+
+import { parseSqlSections } from "./migrate";
 
 // ============================================================================
 // Types
@@ -270,6 +287,7 @@ export async function runMigrateCheck(
     migrationsDir,
     desiredSnapshot,
     appStream,
+    dialect,
     logger,
   });
 }
@@ -289,6 +307,11 @@ export async function runChecks(args: {
   desiredSnapshot: NextlySchemaSnapshot;
   /** The app stream's extension schema. Omitted, there is none. */
   appStream?: AppStreamTables;
+  /**
+   * The dialect the files will run on, for the statement check. Omitted, the
+   * check is skipped.
+   */
+  dialect?: SupportedDialect;
   logger: CommandContext["logger"];
 }): Promise<void> {
   const { migrationsDir, logger } = args;
@@ -372,6 +395,24 @@ export async function runChecks(args: {
     }
   }
 
+  // Statements a run would refuse, judged by the check the run makes, so CI
+  // shows them before a deploy meets them. Warned rather than failed: this
+  // check cannot tell a pending file from an applied one, which never runs
+  // again.
+  if (args.dialect !== undefined) {
+    const judged = await judgeStatements(migrationsDir, args.dialect);
+    for (const file of judged.outsideTransaction) {
+      logger.info(
+        `${file} is marked -- nextly:no-transaction: it runs outside a transaction, and a failure part-way leaves the statements before it applied.`
+      );
+    }
+    for (const { file, message } of judged.refused) {
+      logger.warn(
+        `REFUSED_STATEMENT: ${file}: nextly migrate and migrate:down refuse it while it is pending. ${message}`
+      );
+    }
+  }
+
   // Check 4: schema drift (config vs latest snapshot).
   //
   // Both sides come from `appStreamSnapshots`, the function `migrate:create`
@@ -424,6 +465,43 @@ export async function runChecks(args: {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/**
+ * What `nextly migrate` and `migrate:down` would make of each migration
+ * file's statements on `dialect`: the files marked to run outside a
+ * transaction, and every statement either would refuse. The file judged is
+ * the variant the run selects for the dialect, and both its UP and DOWN are
+ * read, through `statementRefusals`, the check both commands make.
+ */
+export async function judgeStatements(
+  migrationsDir: string,
+  dialect: SupportedDialect
+): Promise<{
+  outsideTransaction: string[];
+  refused: { file: string; message: string }[];
+}> {
+  const outsideTransaction: string[] = [];
+  const refused: { file: string; message: string }[] = [];
+  const groups = await discoverMigrationGroups(migrationsDir);
+  for (const baseName of getSortedBaseNames(groups)) {
+    const file = selectVariant(groups.get(baseName)?.variants ?? [], dialect);
+    if (file === undefined) continue;
+    const content = await readFile(resolve(migrationsDir, file), "utf-8");
+    const transaction = !marksNoTransaction(content);
+    if (!transaction) outsideTransaction.push(file);
+    const { upSql, downSql } = parseSqlSections(content);
+    for (const sql of [upSql, downSql]) {
+      for (const refusal of statementRefusals(
+        splitSqlStatements(sql, dialect),
+        dialect,
+        { transaction, unit: "file" }
+      )) {
+        refused.push({ file, message: refusal.message });
+      }
+    }
+  }
+  return { outsideTransaction, refused };
+}
 
 /**
  * Render an Operation as a short human-readable summary for the
