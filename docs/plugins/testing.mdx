@@ -31,6 +31,33 @@ Always `await t.destroy()` in teardown — it exercises your `destroy()` (catchi
 leaked subscriptions) and resets the global registries so tests don't bleed into each
 other.
 
+## A plugin that declares raw SQL
+
+An app lists the plugins it allows raw SQL in `db.rawSqlPlugins`, and the boot
+refuses a plugin that declares `capabilities.db.rawSql` without being listed.
+`createTestNextly` has no `nextly.config.ts`, so it takes the listing as its
+`pluginConsent` option (`@experimental`):
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { createTestNextly } from "@nextlyhq/plugin-sdk/testing";
+
+const reportsPlugin = definePlugin({
+  name: "@acme/nextly-reports",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.63",
+  capabilities: { db: { rawSql: true } },
+});
+
+const t = await createTestNextly({
+  plugins: [reportsPlugin],
+  pluginConsent: { rawSql: ["@acme/nextly-reports"] },
+});
+```
+
+Without it nothing is listed, and the refusal (`PLUGIN_RESOLUTION_ERROR`,
+`capability-not-listed`) names the option and the value to pass.
+
 ## What to assert
 
 - **Schema:** your contributed collections/fields exist; `extend` added the fields it
