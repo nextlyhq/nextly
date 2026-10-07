@@ -109,6 +109,8 @@ interface ConsentRule {
   listed: (consent: PluginConsent) => readonly string[];
   /** The `nextly.config.ts` line that lists exactly `names`. */
   configLine: (names: readonly string[]) => string;
+  /** The config key the app lists names under. */
+  configKey: string;
 }
 
 const CONSENT_RULES: readonly ConsentRule[] = [
@@ -119,6 +121,7 @@ const CONSENT_RULES: readonly ConsentRule[] = [
     listed: consent => consent.rawSql,
     configLine: names =>
       `db: { rawSqlPlugins: [${names.map(name => JSON.stringify(name)).join(", ")}] }`,
+    configKey: "db.rawSqlPlugins",
   },
 ];
 
@@ -189,4 +192,27 @@ export function assertConsentDeclaredBeforeSetup(
       );
     }
   }
+}
+
+/**
+ * One warning for each name the app lists that matches no configured plugin.
+ *
+ * Such an entry grants nothing today, and is not a failure: an app keeps its
+ * listing while it removes or renames a plugin. It is named because it is a
+ * grant waiting for whatever next arrives under that name, and because a
+ * misspelt name reads as a listing that works.
+ */
+export function unmatchedConsentWarnings(
+  plugins: readonly PluginDefinition[],
+  consent: PluginConsent
+): string[] {
+  const configured = new Set(plugins.map(plugin => plugin.name));
+  return CONSENT_RULES.flatMap(rule =>
+    [...new Set(rule.listed(consent))]
+      .filter(name => !configured.has(name))
+      .map(
+        name =>
+          `${rule.configKey} lists "${name}", which matches no configured plugin, so it grants nothing. Remove it, or correct the name if it is misspelt.`
+      )
+  );
 }

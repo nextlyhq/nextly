@@ -255,3 +255,47 @@ describe("a transformer and a listed name", () => {
     );
   });
 });
+
+describe("a listed name that matches no configured plugin", () => {
+  /** A logger that records its warnings. */
+  function recording() {
+    const warn = vi.fn();
+    return {
+      warn,
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    };
+  }
+
+  const reports: PluginDefinition = {
+    name: "@acme/reports",
+    version: "1.0.0",
+    nextly: "*",
+    capabilities: RAW_SQL,
+  };
+
+  it("warns once, naming it, and boots", async () => {
+    const { warn, logger } = recording();
+
+    const resolved = await resolveBootPlugins({
+      ...serviceConfig([reports], ["@acme/reports", "@acme/removed"]),
+      logger,
+    });
+
+    expect(named(resolved.plugins, "@acme/reports")).toBeDefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      'db.rawSqlPlugins lists "@acme/removed", which matches no configured plugin, so it grants nothing. Remove it, or correct the name if it is misspelt.'
+    );
+  });
+
+  it("says nothing when every listed name is configured", async () => {
+    const { warn, logger } = recording();
+
+    await resolveBootPlugins({
+      ...serviceConfig([reports], ["@acme/reports"]),
+      logger,
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+});

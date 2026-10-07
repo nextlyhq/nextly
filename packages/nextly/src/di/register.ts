@@ -145,6 +145,7 @@ import {
   type PluginConsent,
   setupTransformerInput,
   snapshotPluginConsent,
+  unmatchedConsentWarnings,
 } from "../plugins/plugin-consent";
 import type {
   AdapterTransactions,
@@ -1772,6 +1773,12 @@ export async function resolveBootPlugins(
     coreVersion: getCoreVersion(),
     consent: pluginConsent,
   });
+  for (const warning of unmatchedConsentWarnings(
+    resolvedPlugins,
+    pluginConsent
+  )) {
+    (config.logger ?? consoleLogger).warn(warning);
+  }
   const resolvedConfig = setupTransformerInput(config, resolvedPlugins);
 
   // ----------------------------------------
