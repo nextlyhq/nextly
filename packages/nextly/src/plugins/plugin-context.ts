@@ -68,6 +68,7 @@ import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
+import { PLUGIN_CONFIG_KEYS } from "./plugin-config-view";
 import { NO_PLUGIN_GRANTS, type PluginGrants } from "./plugin-consent";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
 import { createPluginSettings } from "./plugin-settings-provider";
@@ -1407,46 +1408,6 @@ function restrictDatabase(
         : native.transaction(tx => work(fluentOnly(tx))),
   };
 }
-
-/**
- * The keys of the service configuration a plugin reads at `ctx.config`.
- *
- * An allowlist of plain configuration, so a field added to the service
- * configuration later stays out of plugins' reach until someone decides it
- * belongs here. What is left out is live: the database `adapter`, the app's
- * own `db` block (it carries `db.rawSqlPlugins`, and is the object the next
- * boot reads), `pluginConsent`, `storagePlugins`, `imageProcessor`,
- * `logger`, `hookRegistry`, `passwordHasher` and `rateLimit` (whose `store`
- * is a live connection). Each of those either reaches past what the
- * plugin's own surfaces grant, the raw-SQL approval above all, or is
- * reached through a surface of its own (`ctx.logger`, `ctx.hooks`).
- */
-const PLUGIN_CONFIG_KEYS = [
-  "basePath",
-  "preview",
-  "schemasDir",
-  "migrationsDir",
-  "runMigrationsOnBoot",
-  "plugins",
-  "strictPluginTargets",
-  "permissions",
-  "roles",
-  "jobs",
-  "collections",
-  "singles",
-  "fieldGroups",
-  "users",
-  "email",
-  "apiKeys",
-  "security",
-  "admin",
-  "auth",
-  "localization",
-  "webhookRetention",
-  "auditRetention",
-  "emailRetention",
-  "webhookAuditEnabled",
-] as const satisfies readonly (keyof NextlyServiceConfig)[];
 
 /**
  * @experimental What a plugin reads at `ctx.config`: the application's plain

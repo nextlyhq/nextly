@@ -79,6 +79,59 @@ describe("a setup transformer and the consent the boot holds", () => {
     expect(received).not.toHaveProperty("pluginConsent");
   });
 
+  it("receives none of the app's live handles, and cannot replace them", async () => {
+    let received: NextlyServiceConfig | undefined;
+    const adapter = { live: "adapter" };
+    const logger = { debug() {}, info() {}, warn() {}, error() {} };
+    const hookRegistry = { live: "hooks" };
+    const passwordHasher = { hash: async () => "", verify: async () => true };
+    const rateLimit = { store: { live: "store" } };
+    const storagePlugins = [{ live: "storage" }];
+    const imageProcessor = { live: "images" };
+    const plugin: PluginDefinition = {
+      name: "@test/p",
+      version: "1.0.0",
+      nextly: "*",
+      setup: config => {
+        received = config;
+        return { ...config, adapter: undefined, logger: undefined };
+      },
+    };
+    const app = {
+      ...serviceConfig([plugin], []),
+      adapter,
+      logger,
+      hookRegistry,
+      passwordHasher,
+      rateLimit,
+      storagePlugins,
+      imageProcessor,
+    } as unknown as NextlyServiceConfig;
+
+    const resolved = await resolveBootPlugins(app);
+
+    for (const key of [
+      "adapter",
+      "logger",
+      "hookRegistry",
+      "passwordHasher",
+      "rateLimit",
+      "storagePlugins",
+      "imageProcessor",
+      "pluginConsent",
+    ]) {
+      expect(received).not.toHaveProperty(key);
+    }
+    // The settings a transformer configures are still there.
+    expect(received?.plugins?.map(entry => entry.name)).toEqual(["@test/p"]);
+    expect(received).toHaveProperty("db");
+    // And the boot carries on with the app's own handles.
+    expect(resolved.config.adapter).toBe(adapter);
+    expect(resolved.config.logger).toBe(logger);
+    expect(resolved.config.rateLimit).toBe(rateLimit);
+    expect(resolved.config.storagePlugins).toBe(storagePlugins);
+  });
+
   it("cannot list itself by pushing onto the consent it was passed", async () => {
     // The shape of the attack: push its own name onto whatever consent it
     // can reach, then declare rawSql on its own entry.

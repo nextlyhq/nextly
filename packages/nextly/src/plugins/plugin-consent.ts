@@ -21,6 +21,7 @@
  */
 import { copyPlainValues, isPlainObject } from "../shared/lib/plain-copy";
 
+import { setupConfigKeysOf } from "./plugin-config-view";
 import type { PluginDefinition } from "./plugin-context";
 import { resolutionError } from "./resolution-error";
 
@@ -226,41 +227,39 @@ function replacedCode(
 }
 
 /**
- * The config a plugin's `setup` transformers start from: `config` with a
- * copy of the resolved `plugins` (`copyPluginDefinitions`), a `db` block that
- * is a copy of the app's with a frozen `rawSqlPlugins`, and no
- * `pluginConsent`.
+ * The config a plugin's `setup` transformers start from: a copy of the
+ * settings `config` hands plugin code (`setupConfigKeysOf`), with a copy of
+ * the resolved `plugins` (`copyPluginDefinitions`) and a `db` block whose
+ * `rawSqlPlugins` is frozen. The live handles (`adapter`, `logger`,
+ * `hookRegistry`, `passwordHasher`, `rateLimit`, `storagePlugins`,
+ * `imageProcessor`) and `pluginConsent` are not in it; the caller puts the
+ * app's own back with `withWithheldConfig` once the transformers have run.
  *
  * A transformer is plugin code. Handed the app's own `db` object, one could
  * add its name to `db.rawSqlPlugins` there, and every later read of that
  * config would grant it: the CLI deriving consent from the config it
  * loaded, a boot retried after a failure, the dev server registering again.
  * Handed the resolved definitions themselves, one could rename another
- * plugin or flip its capabilities in place. Whatever a transformer does to
- * the copies stays in the config it returns. The boot and the CLI both start
- * their transformers from this, so neither hands plugin code a grant.
+ * plugin or flip its capabilities in place, and handed the adapter, one
+ * would hold the live database handle the listing withholds. Whatever a
+ * transformer does to the copies stays in the config it returns. The boot
+ * and the CLI both start their transformers from this, so neither hands
+ * plugin code a grant.
+ *
+ * Typed as the config it was derived from, because that is the type a
+ * transformer's `setup` declares; the withheld keys are absent at runtime.
  */
-export function setupTransformerInput<
-  C extends {
-    plugins?: PluginDefinition[];
-    db?: object;
-    pluginConsent?: PluginConsent;
-  },
->(
+export function setupTransformerInput<C extends object>(
   config: C,
   plugins: readonly PluginDefinition[]
 ): C & { plugins: PluginDefinition[] } {
-  const input: C & { plugins: PluginDefinition[] } = {
-    ...config,
-    plugins: copyPluginDefinitions(plugins),
-  };
-  delete input.pluginConsent;
-  if (config.db === undefined) return input;
-  const db: object = { ...config.db };
-  if ("rawSqlPlugins" in db && Array.isArray(db.rawSqlPlugins)) {
-    db.rawSqlPlugins = Object.freeze([...db.rawSqlPlugins]);
+  const input = copyPlainValues(setupConfigKeysOf(config));
+  input.plugins = copyPluginDefinitions(plugins);
+  const db = input.db;
+  if (isPlainObject(db) && Array.isArray(db.rawSqlPlugins)) {
+    db.rawSqlPlugins = Object.freeze([...(db.rawSqlPlugins as unknown[])]);
   }
-  return Object.assign(input, { db });
+  return input as C & { plugins: PluginDefinition[] };
 }
 
 /**

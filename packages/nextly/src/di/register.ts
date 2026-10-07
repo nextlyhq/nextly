@@ -140,6 +140,7 @@ import {
   finalizePermissionTargets,
 } from "../plugins/permissions/collect-permissions";
 import { setPluginAuthDepsResolver } from "../plugins/plugin-auth-provider";
+import { withWithheldConfig } from "../plugins/plugin-config-view";
 import {
   NO_PLUGIN_CONSENT,
   type PluginConsent,
@@ -1803,7 +1804,12 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
   // ----------------------------------------
   // Layer 0b: Process Plugin Config Transformers (resolved order)
   // ----------------------------------------
-  const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
+  // The app's own live handles and consent go back in after the
+  // transformers, which were handed neither (`setupTransformerInput`).
+  const setupConfig = withWithheldConfig(
+    config,
+    await applyPluginConfigTransformers(resolvedConfig)
+  );
 
   // RE-RESOLVED in full, not merely re-checked. A `setup` transformer may
   // add, rename or replace entries in `plugins`, and the rest of the boot

@@ -48,6 +48,7 @@ import { NextlyError, describeError } from "../../errors/index";
 import type { PluginFieldType } from "../../plugins/contributions";
 import { getCoreVersion } from "../../plugins/core-version";
 import { collectCustomPermissions } from "../../plugins/permissions/collect-permissions";
+import { withWithheldConfig } from "../../plugins/plugin-config-view";
 import {
   NO_PLUGIN_CONSENT,
   pluginConsentFromConfig,
@@ -620,11 +621,16 @@ async function loadConfigInternal(
       // order, is also what the fold and the field types below read, so a
       // transformer-added plugin's collections and field types reach the CLI
       // exactly as they reach the boot.
-      transformedConfig = resolveTransformedPlugins(transformedConfig, {
-        coreVersion: getCoreVersion(),
-        consent: pluginConsent,
-        declared: preSetup,
-      }).config;
+      transformedConfig = resolveTransformedPlugins(
+        // The app's own live handles back in: the transformers were handed
+        // none of them (`setupTransformerInput`).
+        withWithheldConfig(config, transformedConfig),
+        {
+          coreVersion: getCoreVersion(),
+          consent: pluginConsent,
+          declared: preSetup,
+        }
+      ).config;
       const transformedPlugins: PluginDefinition[] = transformedConfig.plugins;
 
       // Fold plugin contributions. Extend targets that aren't code/plugin
