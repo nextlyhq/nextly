@@ -22,6 +22,7 @@ import {
   type ResolveMode,
 } from "../../domains/schema/migrate/resolve";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
+import { marksNoTransaction } from "../../domains/schema/migrate/split-sql";
 import { parseSnapshotFile } from "../../domains/schema/migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
@@ -76,14 +77,30 @@ function pickMode(opts: ResolveCommandOptions): {
   return { mode: chosen[0][0], filename: chosen[0][1] };
 }
 
+/** `<dir>/<name>.sql`, from a bare or `.sql`-suffixed name. */
+function sqlPathIn(dir: string, filename: string): string {
+  return resolve(dir, filename.endsWith(".sql") ? filename : `${filename}.sql`);
+}
+
 async function fileExistsIn(dir: string, filename: string): Promise<boolean> {
-  const name = filename.endsWith(".sql") ? filename : `${filename}.sql`;
   try {
-    await access(resolve(dir, name));
+    await access(sqlPathIn(dir, filename));
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether `migrations/<name>.sql` is marked to run outside a transaction.
+ * Asked only after the file is known to exist, so a read failure here is a
+ * real one and travels.
+ */
+async function fileMarksNoTransaction(
+  dir: string,
+  filename: string
+): Promise<boolean> {
+  return marksNoTransaction(await readFile(sqlPathIn(dir, filename), "utf-8"));
 }
 
 async function loadSnapshot(
@@ -159,6 +176,8 @@ export async function runMigrateResolve(
         repo,
         fileExists: name => fileExistsIn(migrationsDir, name),
         loadTargetSnapshot: () => loadSnapshot(metaDir, filename),
+        marksNoTransaction: () =>
+          fileMarksNoTransaction(migrationsDir, filename),
         introspectLive: async () => {
           // Config and the Builder manifest, merged as generation merges them,
           // so the verifier excludes the same derived tables the snapshot never
@@ -222,6 +241,13 @@ export async function runMigrateResolve(
         logger.success(
           `Marked ${filename} as applied${result.supersededFailedId ? " (superseded prior failed event)" : ""}.`
         );
+        // Said when nothing was compared without the operator asking for
+        // that, so the record of what was checked stays honest.
+        if (!result.verified && !options.skipVerify) {
+          logger.info(
+            `${filename} is marked -- nextly:no-transaction and has no snapshot, so the live schema was not compared.`
+          );
+        }
         break;
       case "rolled-back":
         logger.success(

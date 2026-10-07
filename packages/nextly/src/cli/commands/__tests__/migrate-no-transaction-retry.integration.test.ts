@@ -192,6 +192,7 @@ describe.each(getConfiguredTestDialects())(
         repo: repo(),
         fileExists: () => Promise.resolve(true),
         loadTargetSnapshot: () => Promise.resolve(null),
+        marksNoTransaction: () => Promise.resolve(false),
         introspectLive: () => Promise.resolve({ tables: [] }),
       });
       await expect(migratePlugin([module])).resolves.toMatchObject({
@@ -240,6 +241,7 @@ describe.each(getConfiguredTestDialects())(
           repo: repo(),
           fileExists: () => Promise.resolve(true),
           loadTargetSnapshot: () => Promise.resolve(target),
+          marksNoTransaction: () => Promise.resolve(true),
           introspectLive: () =>
             introspectLiveSnapshot(handle.adapter.getDrizzle(), dialect, [
               "ntr_t",

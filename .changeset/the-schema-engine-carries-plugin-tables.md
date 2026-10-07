@@ -78,8 +78,9 @@ migration file the run refuses (see below). Applied files are never re-read.
   that failed attempt is the unit's newest, `nextly migrate` refuses to record
   the unit as applied without running it, even when the database already
   stands at its result: finish it by hand and mark it with
-  `nextly migrate:resolve --applied <file>` (a file written by `--blank` has no
-  snapshot to verify against, so add `--skip-verify`; for a plugin module,
+  `nextly migrate:resolve --applied <file>` (a marked file has no snapshot,
+  so it is recorded without comparing the live schema and needs no
+  `--skip-verify`; for a plugin module,
   `--failed-cleanup` and then `nextly migrate`), or reverse what ran and
   migrate again. `nextly migrate`, `migrate:down` and `migrate:status` name
   each unit that runs outside a transaction. A refusal's message names the
