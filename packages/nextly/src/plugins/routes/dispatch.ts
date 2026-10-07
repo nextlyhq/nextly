@@ -583,7 +583,20 @@ export async function runPluginRoute(
 ): Promise<Response> {
   // A root route may sit under `/auth`, where the refresh cookie is sent;
   // nothing past this point is core's refresh or logout handler.
-  const req = withoutRefreshCookie(incoming);
+  //
+  // Stripping the cookie copies the body, and the copy refuses a body past
+  // the CSRF cap with `VALIDATION_ERROR`. Answered here, through the same
+  // builder as every refusal below: the catch-all above this maps no thrown
+  // error to a response, so a throw would leave the request with none.
+  let req: Request;
+  try {
+    req = await withoutRefreshCookie(incoming);
+  } catch (error) {
+    return markPluginResponse(
+      withNoStore(toErrorResponse(incoming, error), matched.route),
+      matched.route
+    );
+  }
   const auth = await resolvePluginRouteAuth(
     req,
     matched.route,
