@@ -1,12 +1,12 @@
 /**
  * Columns added to a table somebody else owns.
  *
- * Part A refused these outright. It was the right call while nothing hid them
- * from the entry API: an entity read is `db.select().from(table)`, so a raw
- * column would either leak into every API response or — if kept out of the
- * runtime table — be proposed as a DROP by the next dev push.
+ * Such a column needs two things. An entity read is
+ * `db.select().from(table)`, so a raw column would either leak into every API
+ * response or — if kept out of the runtime table — be proposed as a DROP by
+ * the next dev push.
  *
- * They are allowed now because both halves exist: the column is added to the
+ * Both halves exist: the column is added to the
  * runtime table (so push and SQLite rebuilds keep it) AND removed where rows
  * become entries (so no API ever sees it). Neither half is optional, and the
  * second is why these are called HIDDEN rather than merely added.

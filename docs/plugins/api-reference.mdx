@@ -73,7 +73,8 @@ Component references are string paths: `"<package>/<path>#<Export>"`, e.g. `"@ac
 ```ts
 interface PluginContext {
   services: NextlyServices;       // managed, secure-by-default; .collections supports { as: 'user' | 'system' }
-  db: PluginDatabase;             // Drizzle builder + transaction; the live instance only with capabilities.db.rawSql
+  db: PluginDatabase & { raw: PluginRawDatabase }; // typed, owner-checked; .raw = Drizzle builder + transaction, the live instance only with capabilities.db.rawSql AND db.rawSqlPlugins
+  dialect: SupportedDialect;      // "postgresql" | "mysql" | "sqlite"; @experimental
   auth: PluginAuthApi;            // always present; completeLogin needs capabilities.auth.login
   settings?: PluginSettingsApi;   // with contributes.settings
   fetch?: typeof fetch;           // with a non-empty capabilities.net.outbound
@@ -83,7 +84,7 @@ interface PluginContext {
   filters: PluginFilterRegistry;  // transform values on typed seams (D63)
   actions: PluginActionRegistry;  // ordered side-effects on typed seams (D63)
   self: { name: string; collections: Record<string,string>; singles: Record<string,string> }; // resolved slugs (D54)
-  config: Readonly<NextlyConfig>;
+  config: Readonly<NextlyServiceConfig>; // plain configuration values only: no database adapter, no raw-SQL consent; reach the database through ctx.db
   logger: Logger;
   nextlyVersion: string;
 }

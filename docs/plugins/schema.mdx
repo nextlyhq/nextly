@@ -131,11 +131,11 @@ nextly prune --force   # actually drops them (and their data + seeded permission
 `prune` only ever targets `plugin:<name>` provenance. Code-first (`code`) and
 Builder (`ui`) entities are **always retained** — they're yours, not the plugin's. This
 is why declaring everything through `contributes` (rather than hand-writing tables via
-`ctx.db`) matters: it's what lets uninstall be clean and reversible.
+`ctx.db.raw`) matters: it's what lets uninstall be clean and reversible.
 
 > **Tip for plugin authors:** anything you create through `contributes` /
 > `ctx.services` is provenance-tagged and pruned automatically. Anything you create by
-> reaching into `ctx.db` (raw DDL, side tables) is **not** tracked and will be left
+> reaching into `ctx.db.raw` (raw DDL, side tables) is **not** tracked and will be left
 > behind on uninstall — document it, or avoid it.
 
 See also: [Data access](/docs/plugins/services) · [Testing](/docs/plugins/testing).

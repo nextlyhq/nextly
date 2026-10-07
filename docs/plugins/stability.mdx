@@ -46,14 +46,18 @@ than landing as silent breaks — but **pin your versions** while we're pre-`1.0
 
 These ship today but carry no guarantee yet — use them, but expect change:
 
-- The raw `ctx.db` escape hatch (D56 — prefer `ctx.services`)
+- `ctx.db` (D56 — prefer `ctx.services`): the typed, owner-checked surface,
+  and the `ctx.db.raw` escape hatch, which is the live Drizzle instance only
+  for a plugin that declares `capabilities.db.rawSql` and that the app lists
+  in `db.rawSqlPlugins`
+- `ctx.dialect` — which database the installation runs on
 - `ctx.hooks` plugin registration (`PluginHookRegistry`, `HookType`, `HookHandler`)
 - Filters & actions (D63): `ctx.filters` / `ctx.actions` + seam types
 - Secrets (D37): `secret`, `Secret`, `isSecret`
 - Client UX (`@nextlyhq/plugin-sdk/client`): `useCan`, `<Can>`
 - Admin dashboard widgets (`PluginAdminWidget`, D22 — rendered; shape still settling)
 - `contributes.events`, `dependsOn` / `optionalDependsOn`, `plugin.rename` (D54)
-- Schema extensibility (P2): `contributes.schema` (`tables`, `extend`,
+- Schema extensibility: `contributes.schema` (`tables`, `extend`,
   `migrations`), the `defineTable` / `col.*` DSL, `schema.extendTable`,
   `schema.adoptTable` and `db.schema.afterDrizzle`
 - `contributes.transforms` — changing entities another plugin declared

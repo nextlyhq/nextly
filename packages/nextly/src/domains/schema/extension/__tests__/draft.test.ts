@@ -141,7 +141,7 @@ describe("extendTable ownership", () => {
   });
 
   it("allows a HIDDEN column on an entity table", () => {
-    // Part A refused this. It is allowed now because both halves exist: the
+    // Allowed because both halves exist: the
     // column reaches the runtime table (so push and SQLite rebuilds keep it)
     // and is marked hidden (so no entry API returns it). Neither half alone
     // would be safe — unhidden it leaks into every response, and absent from

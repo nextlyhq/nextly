@@ -95,7 +95,7 @@ export interface ExtensionSchema {
   specs: TableSpec[];
   /** Compiled, sqlName → Drizzle table. */
   drizzle: Record<string, unknown>;
-  /** Table name → owner. P2-B persists this. */
+  /** Table name → owner. */
   owners: Map<string, SchemaOwner>;
   /** Table name → relation edges, for SchemaRegistry registration. */
   relations: Map<string, DynamicRelationEdge[]>;
