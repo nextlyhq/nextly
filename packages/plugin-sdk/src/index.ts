@@ -170,12 +170,21 @@ export type {
 } from "nextly";
 
 /**
- * The raw database handle `ctx.db` is typed as.
- * @experimental `PluginDatabase` — kept experimental on purpose (D56): a
- *   plugin reads and writes through `ctx.services`, and the raw handle is for
- *   aggregations beyond `count` (see STABILITY.md).
+ * The database handles a plugin receives: `ctx.db` is a `PluginDatabase`
+ * with a `raw` member that is a `PluginRawDatabase`.
+ * @experimental `PluginDatabase` — typed, owner-checked access to the tables
+ *   the plugin declared (`contributes.schema`) and the columns it contributed;
+ *   `PluginTransaction` — the handle `ctx.db.transaction` passes its work;
+ *   `PluginRawDatabase` — `ctx.db.raw`, the Drizzle fluent builder and a
+ *   transaction, with no ownership check, or the live instance for a plugin
+ *   that declares `capabilities.db.rawSql` and that the app lists in
+ *   `db.rawSqlPlugins` (see STABILITY.md).
  */
-export type { PluginDatabase } from "nextly";
+export type {
+  PluginDatabase,
+  PluginRawDatabase,
+  PluginTransaction,
+} from "nextly";
 
 /**
  * Field authoring — the factories and `FieldConfig` type a plugin uses to build

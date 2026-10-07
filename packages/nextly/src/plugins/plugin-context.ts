@@ -398,23 +398,19 @@ export interface PluginContext {
   };
 
   /**
-   * @experimental Drizzle's fluent query builder: `select`, `insert`,
-   * `update`, `delete`, and `transaction` to make several writes atomic.
-   * Unmanaged: bypasses validation, hooks, access control and events, so
-   * prefer `services`.
+   * @experimental Typed, owner-checked access to the tables this plugin
+   * declared (`contributes.schema`), its dependencies' tables, and the columns
+   * it contributed to other tables (`db.contributed`). The same on every
+   * dialect; `db.transaction` makes several writes atomic.
    *
-   * Without `capabilities.db.rawSql` it is a restricted handle that has no
-   * `execute` or `run`. That is a declaration a reviewer can read, not a
-   * sandbox: plugins run as trusted code, and one can still reach raw SQL
-   * through its own `sql` or the builder's internals. With `rawSql` it is the
-   * live Drizzle instance.
-   */
-  /**
-   * Typed, owner-checked access to the tables this plugin declared.
-   *
-   * `db.raw` is the handle this property used to be: the fluent builder and a
-   * transaction, or with `rawSql` the live Drizzle instance. It has no
-   * ownership check and no portability guarantee.
+   * `db.raw` is the handle this property used to be: Drizzle's fluent builder
+   * (`select`, `insert`, `update`, `delete`) and a `transaction`, with no
+   * ownership check and no portability guarantee. Unmanaged either way: both
+   * bypass validation, hooks, access control and events, so prefer
+   * `services` for content. `db.raw` has no `execute` or `run` unless the
+   * plugin declares `capabilities.db.rawSql` AND the app lists it in
+   * `db.rawSqlPlugins`; then it is the live Drizzle instance. That is a
+   * reviewed grant, not a sandbox: plugins run as trusted code.
    */
   db: PluginDatabase & { raw: PluginRawDatabase };
 
@@ -1265,8 +1261,11 @@ export interface AdapterTransactionHandles {
 }
 
 /**
- * @experimental The raw handle a plugin receives as `ctx.db.raw`: the fluent
- * builder and a transaction whose handle is the same restricted builder.
+ * @experimental The handle a plugin receives as `ctx.db.raw`: Drizzle's fluent
+ * builder and a transaction whose handle is the same restricted builder. For
+ * a plugin that declares `capabilities.db.rawSql` and that the app lists in
+ * `db.rawSqlPlugins`, it is the live Drizzle instance instead, `execute` and
+ * `run` included. No ownership check: it reaches every table.
  */
 export interface PluginRawDatabase extends DatabaseInstance {
   /**
@@ -1313,8 +1312,10 @@ export interface PluginCapabilities {
   net?: { outbound: string[] };
   /**
    * Declares that the plugin runs raw SQL. Default false. Without it,
-   * `ctx.db` has no `execute` or `run`; with it, `ctx.db` is the live
-   * Drizzle instance. A declaration for review, not an enforced boundary.
+   * `ctx.db.raw` has no `execute` or `run`; with it, `ctx.db.raw` is the live
+   * Drizzle instance. The app must also list the plugin in
+   * `db.rawSqlPlugins`, or the boot refuses, naming the line to add. A
+   * reviewed grant, not an enforced boundary.
    */
   db?: { rawSql?: boolean };
   /**

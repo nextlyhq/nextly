@@ -487,6 +487,8 @@ export {
   type PluginContext,
   type PluginContributions,
   type PluginDatabase,
+  type PluginRawDatabase,
+  type PluginTransaction,
   type PluginHookPointDeclaration,
   type PluginSettingsApi,
   type PluginDeclaration,
