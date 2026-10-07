@@ -1,8 +1,8 @@
 /**
  * Payload schema-extensibility parity, as an executable checklist.
  *
- * One `describe` per row of the parity matrix in the P2 plan. A row is done
- * when its `todo` becomes a real assertion; Part C is not finished while any
+ * One `describe` per row of the Payload parity matrix. A row is done when
+ * its `todo` becomes a real assertion, and parity is not reached while any
  * remains. Keeping them here rather than in a document means the checklist
  * cannot quietly disagree with the code.
  *

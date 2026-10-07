@@ -2,8 +2,8 @@
  * A fixture plugin that exercises the schema-extension surface end to end.
  *
  * It declares two tables with the DSL, adds an index to a collection through a
- * hook, and reads and writes through `ctx.db` — which is the whole of P2-A
- * from a plugin author's side. Kept in the playground because a surface nobody
+ * hook, and reads and writes through `ctx.db` — the whole table surface from a
+ * plugin author's side. Kept in the playground because a surface nobody
  * uses is a surface nobody notices breaking.
  *
  * Registered behind `NEXTLY_SCHEMA_FIXTURE=1` so the default `pnpm dev:app`

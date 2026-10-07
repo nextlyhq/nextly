@@ -112,7 +112,7 @@ export interface ExtensionColumn {
    *
    * Never a database constraint: `IndexSpec` cannot express a foreign key and
    * the Drizzle round-trip drops one, so emitting it would produce a constraint
-   * the diff engine could neither see nor drop. Part C adds real FKs.
+   * the diff engine could neither see nor drop.
    */
   references?: string;
 }

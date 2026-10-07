@@ -3330,8 +3330,8 @@ async function initializePlugins(
   transformedConfig: NextlyServiceConfig,
   /**
    * The routes and widget sources of `transformedConfig.plugins`, collected
-   * and validated by `registerServicesOnce` before the adapter connected
-   * (D25/D7).
+   * and validated by `registerServicesOnce` before the adapter connected,
+   * so an invalid plugin fails the boot before anything is migrated.
    */
   contributions: PluginBootContributions,
   adapterDrizzleDb: DatabaseInstance,
@@ -3742,7 +3742,7 @@ export function getInitializedPluginContext(
  * work, and could keep that process alive.
  *
  * Each destroy is isolated, so one failing teardown can't block the others or
- * whatever the caller does next (D4/D7).
+ * whatever the caller does next.
  *
  * Reads the recorded list rather than the registered flag, so it also covers a
  * registration that initialized plugins and then failed before completing —

@@ -12,8 +12,7 @@
  * failing — the same contract every other integration file here uses. SQLite
  * always runs, in memory.
  *
- * @see P2 plan, "Acceptance for Part C": this file is the executable
- * definition of "same as Payload or better".
+ * This file is the executable definition of "same as Payload or better".
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";

@@ -1,7 +1,7 @@
 /**
  * A plugin's declared tables actually reach a real database, on every dialect.
  *
- * Everything else about P2 is verified against fakes. The compiler, the draft,
+ * Everything else about the schema extension is verified against fakes. The compiler, the draft,
  * the migration runner and `ctx.db` all have unit tests with stubbed storage,
  * and those prove the DECISIONS are right — they say nothing about whether the
  * SQL that results is valid, whether the column types survive a round trip, or

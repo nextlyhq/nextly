@@ -110,7 +110,7 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
-  // Plugin platform (P2) — plugin schema lifecycle. All 409: each is a state
+  // Plugin schema lifecycle. All 409: each is a state
   // the database and the config disagree about, which retrying cannot change
   // and an operator command resolves.
   PLUGIN_DEPENDENCY_NOT_INSTALLED: 409,
