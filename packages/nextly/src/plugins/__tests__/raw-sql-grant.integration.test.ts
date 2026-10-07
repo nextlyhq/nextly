@@ -103,3 +103,25 @@ it("hands an auth hook raw SQL the boot granted", async () => {
 
   expect(seen).toEqual({ init: "function", hook: "function" });
 });
+
+it("names the pluginConsent option when createTestNextly refuses a plugin", async () => {
+  const reports = recording(
+    {},
+    { name: "@acme/reports", capabilities: { db: { rawSql: true } } }
+  );
+
+  const refused = await createTestNextly({
+    plugins: [reports],
+    pluginConsent: { rawSql: ["@acme/other"] },
+  }).catch((error: unknown) => error);
+
+  expect(refused).toMatchObject({
+    logContext: {
+      reason: "capability-not-listed",
+      testOption: 'pluginConsent: { rawSql: ["@acme/other", "@acme/reports"] }',
+    },
+  });
+  expect((refused as { logMessage?: string }).logMessage).toContain(
+    'Under createTestNextly the app\'s listing is its pluginConsent option: pass pluginConsent: { rawSql: ["@acme/other", "@acme/reports"] }.'
+  );
+});

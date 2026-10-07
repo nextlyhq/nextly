@@ -14,6 +14,8 @@ import {
   assertPluginConsent,
   NO_PLUGIN_CONSENT,
   pluginConsentFromConfig,
+  snapshotPluginConsent,
+  unmatchedConsentWarnings,
 } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { resolvePlugins } from "./resolve";
@@ -172,5 +174,20 @@ describe("the consent an app's config makes", () => {
       } as unknown as SanitizedNextlyConfig,
     } as Parameters<typeof buildServiceConfig>[0]);
     expect(result.pluginConsent).toEqual({ rawSql: ["@acme/reports"] });
+  });
+});
+
+describe("unmatchedConsentWarnings", () => {
+  it("warns once for a name the app lists twice", () => {
+    const warnings = unmatchedConsentWarnings(
+      [plugin("@acme/reports")],
+      snapshotPluginConsent({
+        rawSql: ["@acme/removed", "@acme/reports", "@acme/removed"],
+      })
+    );
+
+    expect(warnings).toEqual([
+      'db.rawSqlPlugins lists "@acme/removed", which matches no configured plugin, so it grants nothing. Remove it, or correct the name if it is misspelt.',
+    ]);
   });
 });

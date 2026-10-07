@@ -19,6 +19,7 @@
  * @module plugins/plugin-consent
  * @since 1.0.0
  */
+import { NextlyError } from "../errors/nextly-error";
 import { copyPlainValues, isPlainObject } from "../shared/lib/plain-copy";
 
 import { setupConfigKeysOf } from "./plugin-config-view";
@@ -311,6 +312,8 @@ interface ConsentRule {
   configLine: (names: readonly string[]) => string;
   /** The config key the app lists names under. */
   configKey: string;
+  /** The `PluginConsent` key the listing is carried under. */
+  consentKey: keyof PluginConsent;
 }
 
 const RAW_SQL_RULE: ConsentRule = {
@@ -321,6 +324,7 @@ const RAW_SQL_RULE: ConsentRule = {
   configLine: names =>
     `db: { rawSqlPlugins: [${names.map(name => JSON.stringify(name)).join(", ")}] }`,
   configKey: "db.rawSqlPlugins",
+  consentKey: "rawSql",
 };
 
 const CONSENT_RULES: readonly ConsentRule[] = [RAW_SQL_RULE];
@@ -354,9 +358,47 @@ export function assertPluginConsent(
       "capability-not-listed",
       `${who} ${rule.capability}, which grants ${rule.grants}, but the app does not list ${unlisted.length === 1 ? "it" : "them"}. ` +
         `Review the plugin, then add this line to nextly.config.ts: ${line}`,
-      { plugins: unlisted, capability: rule.capability, configLine: line }
+      {
+        plugins: unlisted,
+        capability: rule.capability,
+        configLine: line,
+        consentKey: rule.consentKey,
+      }
     );
   }
+}
+
+/**
+ * The refusal `assertPluginConsent` raises, reworded for an app whose
+ * listing is `createTestNextly`'s `pluginConsent` option rather than
+ * `nextly.config.ts`: the same refusal, naming the option to pass, with every
+ * name already listed there plus the missing ones. Anything else is returned
+ * as it is.
+ */
+export function namingTestConsentOption(
+  error: unknown,
+  consent: PluginConsent | undefined
+): unknown {
+  if (!NextlyError.is(error)) return error;
+  const context = error.logContext ?? {};
+  if (context.reason !== "capability-not-listed") return error;
+  const rule = CONSENT_RULES.find(
+    entry => entry.consentKey === context.consentKey
+  );
+  if (rule === undefined || !Array.isArray(context.plugins)) return error;
+  const names = [
+    ...new Set([
+      ...(consent?.[rule.consentKey] ?? []),
+      ...context.plugins.map(String),
+    ]),
+  ];
+  const option = `pluginConsent: { ${rule.consentKey}: [${names.map(name => JSON.stringify(name)).join(", ")}] }`;
+  const refusal = resolutionError(
+    "capability-not-listed",
+    `${error.logMessage ?? error.message} Under createTestNextly the app's listing is its pluginConsent option: pass ${option}.`,
+    { ...context, testOption: option }
+  );
+  return Object.assign(refusal, { cause: error });
 }
 
 /**

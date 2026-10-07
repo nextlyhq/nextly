@@ -300,6 +300,28 @@ export type {
 } from "nextly";
 
 /**
+ * What the rest of `ctx.services` and `ctx.config` expose, by name, so a
+ * plugin can type a helper that takes one of them.
+ * @experimental `PluginConfig` (`ctx.config`), `PluginSummary` (an entry of
+ *   `ctx.config.plugins`), `PluginEmailSettings` (`ctx.config.email`),
+ *   `PluginUserService`, `PluginMediaService`, `PluginEmailService`,
+ *   `PluginVersionsService` (the methods `ctx.services.users`, `media`,
+ *   `email` and `versions` expose) and `PluginCollectionTransaction` (what
+ *   `ctx.services.collections.withTransaction` hands its work). See
+ *   STABILITY.md.
+ */
+export type {
+  PluginConfig,
+  PluginSummary,
+  PluginEmailSettings,
+  PluginUserService,
+  PluginMediaService,
+  PluginEmailService,
+  PluginVersionsService,
+  PluginCollectionTransaction,
+} from "nextly";
+
+/**
  * @experimental Read-only registry access to the app's Singles.
  *
  * Forwarded here because this package is the supported import surface for a
