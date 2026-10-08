@@ -16,6 +16,9 @@ import {
 
 import { SCHEMA_OWNERS_TABLE } from "./table-name";
 
+// The same table in another dialect's Drizzle builders: each dialect's
+// column functions are distinct, so the declarations cannot be shared.
+// fallow-ignore-next-line code-duplication
 export const nextlySchemaOwners = sqliteTable(
   SCHEMA_OWNERS_TABLE,
   {

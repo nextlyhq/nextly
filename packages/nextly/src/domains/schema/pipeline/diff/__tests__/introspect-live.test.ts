@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { introspectLiveSnapshot } from "../introspect-live";
+import {
+  groupMysqlForeignKeys,
+  introspectLiveSnapshot,
+  parseSqliteIndexStatement,
+} from "../introspect-live";
 
 const PG_COLS = {
   rows: [
@@ -382,5 +386,93 @@ describe("introspectLiveSnapshot - sqlite", () => {
       "dc_nonexistent",
     ]);
     expect(snapshot.tables).toEqual([]);
+  });
+});
+
+describe("groupMysqlForeignKeys", () => {
+  const row = (
+    table: string,
+    constraint: string,
+    column: string,
+    refColumn: string,
+    rules: { DELETE_RULE?: string; UPDATE_RULE?: string } = {}
+  ) => ({
+    TABLE_NAME: table,
+    CONSTRAINT_NAME: constraint,
+    COLUMN_NAME: column,
+    REFERENCED_TABLE_NAME: "dc_users",
+    REFERENCED_COLUMN_NAME: refColumn,
+    DELETE_RULE: rules.DELETE_RULE ?? "NO ACTION",
+    UPDATE_RULE: rules.UPDATE_RULE ?? "NO ACTION",
+  });
+
+  it("collects one key per constraint, its columns in row order", () => {
+    const fks = groupMysqlForeignKeys([
+      row("dc_posts", "fk_a", "org_id", "org", { DELETE_RULE: "CASCADE" }),
+      row("dc_posts", "fk_a", "user_id", "id", { DELETE_RULE: "CASCADE" }),
+      row("dc_posts", "fk_b", "editor_id", "id", { UPDATE_RULE: "SET NULL" }),
+      row("dc_notes", "fk_a", "user_id", "id"),
+    ]);
+    expect(fks.get("dc_posts")).toEqual([
+      {
+        name: "fk_a",
+        columns: ["org_id", "user_id"],
+        referencesTable: "dc_users",
+        referencesColumns: ["org", "id"],
+        onDelete: "cascade",
+        onUpdate: "no action",
+      },
+      {
+        name: "fk_b",
+        columns: ["editor_id"],
+        referencesTable: "dc_users",
+        referencesColumns: ["id"],
+        onDelete: "no action",
+        onUpdate: "set null",
+      },
+    ]);
+    // A constraint name is scoped to its table, so the same name elsewhere is
+    // a different key.
+    expect(fks.get("dc_notes")?.map(fk => fk.columns)).toEqual([["user_id"]]);
+  });
+
+  it("reads an unknown rule as no action", () => {
+    const fks = groupMysqlForeignKeys([
+      row("dc_posts", "fk_a", "user_id", "id", { DELETE_RULE: "WHATEVER" }),
+    ]);
+    expect(fks.get("dc_posts")?.[0]?.onDelete).toBe("no action");
+  });
+});
+
+describe("parseSqliteIndexStatement", () => {
+  it("reads each key and no predicate", () => {
+    expect(
+      parseSqliteIndexStatement(
+        `CREATE INDEX "ix" ON "t" (lower(email), "a,b", status)`
+      )
+    ).toEqual({ keys: ["lower(email)", '"a,b"', "status"] });
+  });
+
+  it("reads the predicate after the key list", () => {
+    expect(
+      parseSqliteIndexStatement(
+        "CREATE UNIQUE INDEX ix ON t (email) WHERE deleted_at IS NULL"
+      )
+    ).toEqual({ keys: ["email"], where: "deleted_at IS NULL" });
+  });
+
+  it("ignores parentheses inside quoted names and literals", () => {
+    expect(
+      parseSqliteIndexStatement(`CREATE INDEX "ix(" ON t (coalesce(a, ')'))`)
+    ).toEqual({ keys: ["coalesce(a, ')')"] });
+  });
+
+  it("is null for text without a closed key list or with other trailing text", () => {
+    expect(parseSqliteIndexStatement(undefined)).toBeNull();
+    expect(parseSqliteIndexStatement("CREATE INDEX ix ON t")).toBeNull();
+    expect(parseSqliteIndexStatement("CREATE INDEX ix ON t (a")).toBeNull();
+    expect(
+      parseSqliteIndexStatement("CREATE INDEX ix ON t (a) junk")
+    ).toBeNull();
   });
 });

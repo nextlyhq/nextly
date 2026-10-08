@@ -73,6 +73,68 @@ function seedingPlugin(
   } as unknown as PluginDefinition;
 }
 
+/**
+ * A plugin owning one `notes` table, before and after an upgrade that adds a
+ * nullable `title` with an index (and, when `required`, a NOT NULL `slug`
+ * with no default). Its `init` records which new columns exist, and writes
+ * `title` when asked to.
+ */
+function notesPlugin(opts: {
+  withTitle: boolean;
+  required?: boolean;
+  seedRow?: boolean;
+  adapter?: Awaited<ReturnType<typeof adapterFor>>;
+  written?: string[];
+  seen?: Record<string, boolean>;
+}): PluginDefinition {
+  const columns = {
+    id: col.id(),
+    ...(opts.withTitle ? { title: col.text({ nullable: true }) } : {}),
+    ...(opts.required ? { slug: col.text() } : {}),
+  };
+  return {
+    name: "@acme/notes",
+    version: opts.withTitle ? "2.0.0" : "1.0.0",
+    nextly: "*",
+    contributes: {
+      schema: {
+        tables: [
+          defineTable(
+            "notes",
+            columns,
+            opts.withTitle ? { indexes: [{ columns: ["title"] }] } : {}
+          ),
+        ],
+      },
+    },
+    init: async () => {
+      const [spec] = getActiveExtensionSchema("sqlite")?.specs ?? [];
+      if (!spec) throw new Error("the notes table was not compiled");
+      const adapter = opts.adapter;
+      if (!adapter) return;
+      if (opts.seedRow) await adapter.insert(spec.name, { id: "existing" });
+      if (opts.seen) {
+        const { introspectLiveSnapshot } = await import(
+          "../../domains/schema/pipeline/diff/introspect-live"
+        );
+        const live = await introspectLiveSnapshot(
+          adapter.getDrizzle(),
+          "sqlite",
+          [spec.name]
+        );
+        const names = new Set(live.tables[0]?.columns.map(c => c.name));
+        opts.seen.title = names.has("title");
+        opts.seen.slug = names.has("slug");
+      }
+      if (opts.written) {
+        await adapter.insert(spec.name, { id: "n1", title: "seeded" });
+        const row = await adapter.selectOne<{ title?: string }>(spec.name, {});
+        opts.written.push(String(row?.title));
+      }
+    },
+  } as unknown as PluginDefinition;
+}
+
 /** First boot without the plugin: sets the database up, as an earlier session did. */
 async function setUpWithoutPlugin(file: string): Promise<void> {
   await registerServices({
@@ -97,6 +159,53 @@ describe("a plugin added to an existing development database", () => {
     expect(Object.keys(seen)).toHaveLength(1);
     // ...and existed by the time its init ran.
     expect(Object.values(seen)).toEqual([true]);
+  });
+
+  it("finds a column its upgrade added already on its existing table", async () => {
+    const file = join(dir, "nextly.db");
+    // The plugin's first version, which creates the table without the column.
+    await registerServices({
+      adapter: await adapterFor(file),
+      plugins: [notesPlugin({ withTitle: false })],
+    } as unknown as Parameters<typeof registerServices>[0]);
+    await shutdownServices();
+
+    // The upgrade adds a column and an index, and its `init` writes the
+    // column: it failed the boot when only missing tables were created.
+    const adapter = await adapterFor(file);
+    const written: string[] = [];
+    await registerServices({
+      adapter,
+      plugins: [notesPlugin({ withTitle: true, adapter, written })],
+    } as unknown as Parameters<typeof registerServices>[0]);
+
+    expect(written).toEqual(["seeded"]);
+  });
+
+  it("leaves a table with a change that needs a decision to the push", async () => {
+    // A column existing rows cannot satisfy (NOT NULL, no default) is the
+    // push's to prompt for, so this pass adds nothing to that table — not
+    // even the nullable column beside it.
+    const file = join(dir, "nextly.db");
+    const first = await adapterFor(file);
+    await registerServices({
+      adapter: first,
+      plugins: [
+        notesPlugin({ withTitle: false, seedRow: true, adapter: first }),
+      ],
+    } as unknown as Parameters<typeof registerServices>[0]);
+    await shutdownServices();
+
+    const adapter = await adapterFor(file);
+    const seen: Record<string, boolean> = {};
+    await registerServices({
+      adapter,
+      plugins: [
+        notesPlugin({ withTitle: true, required: true, adapter, seen }),
+      ],
+    } as unknown as Parameters<typeof registerServices>[0]);
+
+    expect(seen).toEqual({ title: false, slug: false });
   });
 
   it("creates nothing when boot apply is switched off", async () => {

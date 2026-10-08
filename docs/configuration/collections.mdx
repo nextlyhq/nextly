@@ -242,9 +242,14 @@ Compound database indexes. For single-field indexes, use `index: true` directly 
 ```typescript
 indexes: [
   { fields: ["authorId", "createdAt"] },
-  { fields: ["slug", "locale"], unique: true, name: "slug_locale_unique" },
+  { fields: ["slug", "locale"], unique: true, name: "uq_slug_locale" },
 ]
 ```
+
+A `name` is optional, and must start with `idx_` (or `uq_` for a unique index):
+those are the names schema changes manage, so an index you remove from the
+config is dropped from the database. Without one, a name is derived from the
+table and columns.
 
 ### `endpoints`
 

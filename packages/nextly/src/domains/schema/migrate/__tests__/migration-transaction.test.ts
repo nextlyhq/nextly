@@ -157,7 +157,7 @@ describe("a unit run outside a transaction that fails part-way", () => {
 
     expect(error.code).toBe("NEXTLY_MIGRATION_PARTIALLY_APPLIED");
     expect(error.publicMessage).toBe(
-      "0001_x.sql ran outside a transaction, and its statement 3 of 3 failed. The 2 statement(s) before it stayed applied, and were not undone. If you finish its remaining statements by hand, mark it applied with `nextly migrate:resolve --applied 0001_x.sql` rather than running it again; if you reverse the statements that ran, run `nextly migrate` again."
+      "0001_x.sql ran outside a transaction, and its statement 3 of 3 failed. The 2 statement(s) before it stayed applied, and were not undone. If you finish its remaining statements by hand, mark it applied with `nextly migrate:resolve --applied 0001_x.sql` rather than running it again; if you reverse the statements that ran, run `nextly migrate:resolve --failed-cleanup 0001_x.sql` and then `nextly migrate` again."
     );
     expect(error.publicMessage).not.toContain("missing_secret_table");
     // The reason travels where the operator reads it, not the wire.

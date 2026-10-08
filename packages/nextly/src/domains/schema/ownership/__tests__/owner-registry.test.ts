@@ -103,6 +103,97 @@ describe("owner changes", () => {
     expect((await registry.get("fx__notes"))?.schemaVersion).toBe(2);
   });
 
+  it("compares a table row with the table row, not an element row on it", async () => {
+    // The app's index on the plugin's table is a row with the same table
+    // name and another owner. Judged by name alone, whichever row was read
+    // last decided, and the plugin could not record its own table.
+    const s = store([
+      row({
+        elementKind: "index",
+        elementName: "idx_fx__notes_app",
+        ownerKind: "app",
+        ownerId: "app",
+        migratedBy: "app",
+      }),
+      row(),
+    ]);
+    const registry = createOwnerRegistry(s.impl);
+    await expect(
+      registry.record([row({ schemaVersion: 2 })])
+    ).resolves.toBeUndefined();
+  });
+
+  it("names both owners and the way out in the refusal", async () => {
+    const registry = createOwnerRegistry(store([row()]).impl);
+    const refusal = await registry
+      .record([row({ ownerId: "impostor", migratedBy: "plugin:impostor" })])
+      .catch((error: unknown) => error);
+    expect(NextlyError.is(refusal)).toBe(true);
+    expect((refusal as NextlyError).logContext).toMatchObject({
+      reason: "table-owner-would-change",
+      table: "fx__notes",
+      from: "fx",
+      to: "impostor",
+    });
+    expect((refusal as NextlyError).publicMessage).toMatch(
+      /^The table "fx__notes" is recorded as belonging to "fx".*nextly_schema_owners/
+    );
+  });
+
+  it.each([
+    [
+      "column",
+      "status",
+      /^The column "status" on the table "fx__notes"/,
+      "column",
+    ],
+    [
+      "index",
+      "fx__notes_status_idx",
+      /^The index "fx__notes_status_idx"/,
+      "index",
+    ],
+    [
+      "fk",
+      "fx__notes_author_fk",
+      /^The foreign key "fx__notes_author_fk"/,
+      "foreign key",
+    ],
+    [
+      "check",
+      "fx__notes_status_check",
+      /^The check constraint "fx__notes_status_check"/,
+      "check constraint",
+    ],
+  ] as const)(
+    "names the %s an element row claims, not the table",
+    async (elementKind, elementName, opening, noun) => {
+      const element = { elementKind, elementName } as const;
+      const registry = createOwnerRegistry(store([row(element)]).impl);
+      const refusal = await registry
+        .record([
+          row({
+            ...element,
+            ownerId: "impostor",
+            migratedBy: "plugin:impostor",
+          }),
+        ])
+        .catch((error: unknown) => error);
+      expect(NextlyError.is(refusal)).toBe(true);
+      const message = (refusal as NextlyError).publicMessage;
+      expect(message).toMatch(opening);
+      expect(message).toContain(`its ${noun} is meant to pass to "impostor"`);
+      expect((refusal as NextlyError).logContext).toMatchObject({
+        reason: "element-owner-would-change",
+        table: "fx__notes",
+        elementKind,
+        elementName,
+        from: "fx",
+        to: "impostor",
+      });
+    }
+  );
+
   it("allows an explicit transfer", async () => {
     const s = store([row()]);
     const registry = createOwnerRegistry(s.impl);

@@ -6,11 +6,13 @@
  * column would have to be wrong about one of them — and the wrong one decides
  * whether a drop is safe.
  *
- * ## The rule that makes this safe
+ * ## What a missing row means
  *
- * A table with NO row is never dropped by any path. Absence means "nobody has
- * claimed this", which is the conservative answer rather than an invitation:
- * an unrecognised table is far more likely to be someone's data than a stray.
+ * A table with NO row is one nobody has claimed, and only the app's own
+ * migrations may drop it: the app stream carries collection, Single and
+ * component tables, which have none. Dev push never drops it, and a plugin's
+ * migration is refused it (`assertNoForeignDrops`): an unrecognised table is
+ * far more likely to be someone's data than a stray.
  *
  * ## Why ownership cannot be re-derived from config
  *
@@ -81,6 +83,87 @@ export interface OwnerRegistry {
   appliedSchemaVersion(ownerId: string): Promise<number | null>;
 }
 
+/**
+ * The composite identity an owner row is keyed by: its table, element kind
+ * and element name. A table-level row and an element row on the same table
+ * are different claims.
+ */
+export function ownerRecordKey(
+  row: Pick<OwnerRecord, "tableName" | "elementKind" | "elementName">
+): string {
+  return `${row.tableName}\u0000${row.elementKind ?? "table"}\u0000${row.elementName ?? ""}`;
+}
+
+/**
+ * Refuse rows that would give a table or element a different owner than the
+ * row already recorded for it.
+ *
+ * A silent owner change is how one plugin takes over another's table: the
+ * second plugin declares the same name, the row is rewritten, and the drop
+ * guard then lets the newcomer drop data the first plugin's row protected.
+ * Called before the work that would record the change, and again by
+ * `record` on the rows as they stand when it writes.
+ */
+export function assertNoOwnerChange(
+  rows: ReadonlyArray<
+    Pick<OwnerRecord, "tableName" | "elementKind" | "elementName" | "ownerId">
+  >,
+  existing: Iterable<OwnerRecord>
+): void {
+  const recorded = new Map<string, OwnerRecord>();
+  for (const row of existing) recorded.set(ownerRecordKey(row), row);
+  for (const row of rows) {
+    const before = recorded.get(ownerRecordKey(row));
+    if (before === undefined || before.ownerId === row.ownerId) continue;
+    throw ownerChangeRefusal(row, before.ownerId);
+  }
+}
+
+/** How a refusal names each kind of element an owner row can record. */
+const ELEMENT_NOUNS: Record<
+  Exclude<NonNullable<OwnerRecord["elementKind"]>, "table">,
+  string
+> = {
+  column: "column",
+  index: "index",
+  fk: "foreign key",
+  check: "check constraint",
+};
+
+/**
+ * The refusal for `row` claiming what `from` already owns, naming what is
+ * claimed: the table for a table-level row, or the column, index, foreign
+ * key or check on it for an element row.
+ */
+function ownerChangeRefusal(
+  row: Pick<
+    OwnerRecord,
+    "tableName" | "elementKind" | "elementName" | "ownerId"
+  >,
+  from: string
+): NextlyError {
+  const kind = row.elementKind ?? "table";
+  const noun = kind === "table" ? "table" : ELEMENT_NOUNS[kind];
+  const what =
+    kind === "table"
+      ? `The table "${row.tableName}"`
+      : `The ${noun} "${row.elementName ?? ""}" on the table "${row.tableName}"`;
+  return NextlyError.conflict({
+    message: `${what} is recorded as belonging to "${from}", so "${row.ownerId}" cannot take it over. If "${from}" was removed and its ${noun} is meant to pass to "${row.ownerId}", delete "${from}"'s rows from nextly_schema_owners first.`,
+    logContext: {
+      reason:
+        kind === "table"
+          ? "table-owner-would-change"
+          : "element-owner-would-change",
+      table: row.tableName,
+      elementKind: kind,
+      elementName: row.elementName ?? "",
+      from,
+      to: row.ownerId,
+    },
+  });
+}
+
 export function createOwnerRegistry(store: OwnerRegistryStore): OwnerRegistry {
   return {
     async get(tableName) {
@@ -102,27 +185,14 @@ export function createOwnerRegistry(store: OwnerRegistryStore): OwnerRegistry {
      * `transfer: true` makes that an explicit act.
      */
     async record(rows, opts) {
-      const existing = new Map(
-        (await store.read(rows.map(row => row.tableName))).map(row => [
-          row.tableName,
-          row,
-        ])
-      );
-
       if (opts?.transfer !== true) {
-        for (const row of rows) {
-          const before = existing.get(row.tableName);
-          if (before && before.ownerId !== row.ownerId) {
-            throw NextlyError.conflict({
-              logContext: {
-                reason: "table-owner-would-change",
-                table: row.tableName,
-                from: before.ownerId,
-                to: row.ownerId,
-              },
-            });
-          }
-        }
+        // Compared by the full key: a table's rows include the element rows
+        // other owners hold on it, and an element row says nothing about who
+        // owns the table.
+        assertNoOwnerChange(
+          rows,
+          await store.read([...new Set(rows.map(row => row.tableName))])
+        );
       }
 
       await store.upsert(rows);

@@ -193,6 +193,31 @@ const PG_ERROR_CODES: Record<string, DatabaseErrorKind> = {
 };
 
 /**
+ * Create the configured schema when the database does not have it yet.
+ *
+ * Looked up before it is created, because `CREATE SCHEMA IF NOT EXISTS` is not
+ * a no-op for a schema that exists: PostgreSQL checks the database-level
+ * `CREATE` privilege before it checks for the schema, so a role that may use
+ * and create objects in `public` but may not create schemas would fail to
+ * connect over a schema that is already there. Reading `pg_namespace` needs no
+ * privilege, so only a schema that is genuinely missing asks for one.
+ */
+async function ensureSchemaExists(
+  client: PoolClient,
+  schema: string
+): Promise<void> {
+  const name = assertSchemaName(schema);
+  const existing = await client.query(
+    "SELECT 1 FROM pg_namespace WHERE nspname = $1",
+    [name]
+  );
+  if (existing.rows.length > 0) return;
+  // Still `IF NOT EXISTS`: another process connecting at the same moment may
+  // create it between the lookup and this statement.
+  await client.query(`CREATE SCHEMA IF NOT EXISTS ${name}`);
+}
+
+/**
  * Delay helper for retry logic.
  */
 function delay(ms: number): Promise<void> {
@@ -414,9 +439,7 @@ export class PostgresAdapter extends DrizzleAdapter {
           // path — so the first migration would create its tables in `public`
           // and the setting would appear to do nothing.
           if (this.config.schema) {
-            await client.query(
-              `CREATE SCHEMA IF NOT EXISTS ${assertSchemaName(this.config.schema)}`
-            );
+            await ensureSchemaExists(client, this.config.schema);
           }
           await checkDialectVersion(client, "postgresql", {
             // Why: route any future variant warnings through the adapter's

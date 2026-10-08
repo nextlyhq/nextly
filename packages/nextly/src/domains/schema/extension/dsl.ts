@@ -15,6 +15,10 @@
  * @since 1.0.0
  */
 import { NextlyError } from "../../../errors/nextly-error";
+import {
+  MAX_DECIMAL_PRECISION,
+  MAX_DECIMAL_SCALE,
+} from "../../../shared/decimal-bounds";
 import { orderedOrClassedKey } from "../pipeline/sql-templates/create-index";
 import {
   DEFAULT_DECIMAL_SCALE,
@@ -247,16 +251,22 @@ export const col = {
     scale: number,
     opts?: O
   ): ColumnBuilder<number, NullableOf<O>, HasDefaultOf<O>> {
-    if (!Number.isInteger(precision) || precision < 1 || precision > 65) {
+    // Both bounds are the narrowest dialect's, MySQL's, so a table that
+    // declares here creates on every dialect rather than on all but one.
+    if (
+      !Number.isInteger(precision) ||
+      precision < 1 ||
+      precision > MAX_DECIMAL_PRECISION
+    ) {
       invalid(
         "decimal.precision",
-        `A decimal precision must be an integer between 1 and 65; received ${String(precision)}.`
+        `A decimal precision must be an integer between 1 and ${String(MAX_DECIMAL_PRECISION)}; received ${String(precision)}.`
       );
     }
-    if (!Number.isInteger(scale) || scale < 0) {
+    if (!Number.isInteger(scale) || scale < 0 || scale > MAX_DECIMAL_SCALE) {
       invalid(
         "decimal.scale",
-        `A decimal scale must be a non-negative integer; received ${String(scale)}.`
+        `A decimal scale must be an integer between 0 and ${String(MAX_DECIMAL_SCALE)}; received ${String(scale)}.`
       );
     }
     // A scale wider than the precision describes no representable number: the
@@ -704,6 +714,65 @@ function resolveColumns(
   return { resolved, byName };
 }
 
+/**
+ * Refuse an index whose key cannot be declared: one naming neither columns
+ * nor an expression, one naming both, or an expression key that orders or
+ * classes itself.
+ */
+function assertIndexKeyDeclarable(
+  path: string,
+  tableName: string,
+  index: TableIndexInput
+): void {
+  if (index.columns.length === 0 && !index.expression) {
+    invalid(
+      path,
+      "An index must name at least one column or carry an expression."
+    );
+  }
+  // An expression index is keyed by its expression IN PLACE of columns:
+  // the renderer writes only the expression and introspection reports the
+  // index with no columns, so an index declaring both would never compare
+  // equal to itself and be planned again on every push.
+  if (index.columns.length > 0 && index.expression) {
+    invalid(
+      path,
+      "An index declares either columns or an expression, not both; list the columns inside the expression."
+    );
+  }
+  // Refused here, where the table is declared, by the renderer's own rule:
+  // a key's ordering, collation or operator class is recorded by no
+  // introspection, so the index would be planned again on every push.
+  const refusedKey =
+    index.expression === undefined
+      ? undefined
+      : orderedOrClassedKey(index.expression);
+  if (refusedKey !== undefined) {
+    invalid(
+      path,
+      `Index ${index.name !== undefined ? `"${index.name}" ` : ""}on "${tableName}" declares the key "${refusedKey}", which orders or classes it. Ordering, collation and operator classes cannot be declared on an index key; index the expression itself.`
+    );
+  }
+}
+
+/** An index's column KEYS as SQL names, each one a column the table declares. */
+function indexColumnNames(
+  path: string,
+  byName: ReadonlyMap<string, string>,
+  columnKeys: readonly string[]
+): string[] {
+  return columnKeys.map(columnKey => {
+    const sqlName = toSnakeCase(columnKey);
+    if (!byName.has(sqlName)) {
+      invalid(
+        path,
+        `Index names the column "${columnKey}", which the table does not declare.`
+      );
+    }
+    return sqlName;
+  });
+}
+
 /** Index inputs with their column KEYS resolved to SQL names. */
 function resolveIndexes(
   tableName: string,
@@ -712,47 +781,9 @@ function resolveIndexes(
 ): ExtensionIndex[] {
   return inputs.map((index, position) => {
     const path = `${tableName}.indexes[${String(position)}]`;
-    if (index.columns.length === 0 && !index.expression) {
-      invalid(
-        path,
-        "An index must name at least one column or carry an expression."
-      );
-    }
-    // An expression index is keyed by its expression IN PLACE of columns:
-    // the renderer writes only the expression and introspection reports the
-    // index with no columns, so an index declaring both would never compare
-    // equal to itself and be planned again on every push.
-    if (index.columns.length > 0 && index.expression) {
-      invalid(
-        path,
-        "An index declares either columns or an expression, not both; list the columns inside the expression."
-      );
-    }
-    // Refused here, where the table is declared, by the renderer's own rule:
-    // a key's ordering, collation or operator class is recorded by no
-    // introspection, so the index would be planned again on every push.
-    const refusedKey =
-      index.expression === undefined
-        ? undefined
-        : orderedOrClassedKey(index.expression);
-    if (refusedKey !== undefined) {
-      invalid(
-        path,
-        `Index ${index.name !== undefined ? `"${index.name}" ` : ""}on "${tableName}" declares the key "${refusedKey}", which orders or classes it. Ordering, collation and operator classes cannot be declared on an index key; index the expression itself.`
-      );
-    }
-    const columns = index.columns.map(columnKey => {
-      const sqlName = toSnakeCase(columnKey);
-      if (!byName.has(sqlName)) {
-        invalid(
-          path,
-          `Index names the column "${columnKey}", which the table does not declare.`
-        );
-      }
-      return sqlName;
-    });
+    assertIndexKeyDeclarable(path, tableName, index);
     return {
-      columns,
+      columns: indexColumnNames(path, byName, index.columns),
       unique: index.unique === true,
       ...(index.name !== undefined ? { name: index.name } : {}),
       ...(index.where !== undefined ? { where: index.where } : {}),
@@ -771,6 +802,12 @@ function resolveForeignKeys(
 ): DeclaredForeignKey[] {
   return inputs.map((input, position) => {
     const path = `${tableName}.foreignKeys[${String(position)}]`;
+    // A key over no columns renders as `FOREIGN KEY () REFERENCES t ()`,
+    // which every dialect refuses only when the table is created. With the
+    // count check below, this also requires a referenced column.
+    if (input.columns.length === 0) {
+      invalid(path, "A foreign key must declare at least one column.");
+    }
     const columns = input.columns.map(columnKey => {
       const sqlName = toSnakeCase(columnKey);
       if (!byName.has(sqlName)) {

@@ -25,6 +25,7 @@
  */
 
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { isManagedIndexName } from "../../domains/schema/pipeline/diff/index-util";
 import {
   fieldProducesColumn,
   toSnakeCase,
@@ -347,6 +348,19 @@ function validateIndexes(
         errors.push({
           path: `${indexPath}.name`,
           message: `Invalid index name '${i.name}'. Must start with a letter and contain only letters, numbers, and underscores`,
+          code: "INDEX_NAME_INVALID",
+        });
+      } else if (!isManagedIndexName(i.name)) {
+        // The schema diff matches an index by its columns, but drops only the
+        // names it owns: a live index under any other name may be one a
+        // database administrator added, and is left alone. A declared index
+        // named outside the prefixes would be created and then never removed
+        // when the declaration is, so the name is refused where the
+        // collection is defined rather than when its schema is first pushed.
+        const prefix = i.unique === true ? "uq_" : "idx_";
+        errors.push({
+          path: `${indexPath}.name`,
+          message: `Index name '${i.name}' must start with "idx_" or "uq_", the names schema changes manage. Rename it (for example '${prefix}${i.name}') or leave 'name' out to have one derived.`,
           code: "INDEX_NAME_INVALID",
         });
       }

@@ -68,6 +68,7 @@ import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import {
   isEmptyRequiredValue,
+  isJudgedOnWrite,
   isRequired,
   type ValidatableField,
 } from "../../../shared/lib/entry-validation";
@@ -451,6 +452,9 @@ function missesARequiredChild(
       if (missesARequiredChild(child.fields, filled)) return true;
       continue;
     }
+    // A virtual child stores nothing, so the write validator does not judge
+    // it and its absence leaves the container complete.
+    if (!isJudgedOnWrite(child)) continue;
     const value = filled[child.name];
     // Both halves of the question the write validator will ask of this
     // document later, taken from the validator itself. Reading `required` off

@@ -8,7 +8,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import type { SchemaEventRow } from "../../events/schema-events-repository";
 import {
+  assertPluginSchemaVersionsUsable,
   assertSchemaVersionDeclarable,
   assertSchemaVersionUsable,
   judgeSchemaVersion,
@@ -128,5 +130,127 @@ describe("assertSchemaVersionDeclarable", () => {
         migrationVersions: [],
       })
     ).not.toThrow();
+  });
+
+  it("refuses versions that go down in the order the modules run", () => {
+    // The highest is 2, as declared, but the module that runs last carries
+    // 1: every module applies and the database ends at 1, behind for good.
+    let refusal: unknown;
+    try {
+      assertSchemaVersionDeclarable({
+        pluginName: "auth",
+        declaredVersion: 2,
+        migrationVersions: [2, 1],
+      });
+    } catch (error) {
+      refusal = error;
+    }
+    expect(NextlyError.is(refusal)).toBe(true);
+    expect(JSON.stringify((refusal as NextlyError).publicData)).toMatch(
+      /no lower than the one before/
+    );
+  });
+
+  it("accepts a later module that keeps the version, as a data module does", () => {
+    expect(() =>
+      assertSchemaVersionDeclarable({
+        pluginName: "auth",
+        declaredVersion: 2,
+        migrationVersions: [1, 2, 2],
+      })
+    ).not.toThrow();
+  });
+});
+
+/** One `file_apply` ledger row. */
+function applied(
+  filename: string,
+  startedAtMs: number,
+  status: SchemaEventRow["status"] = "applied"
+): SchemaEventRow {
+  return {
+    id: `${filename}-${status}-${startedAtMs}`,
+    eventType: "file_apply",
+    status,
+    source: "cli-migrate",
+    filename,
+    sha256: null,
+    scopeKind: null,
+    scopeSlug: null,
+    startedAt: new Date(startedAtMs),
+    endedAt: new Date(startedAtMs),
+    durationMs: null,
+    note: null,
+    statementsExecuted: null,
+    supersededEventIds: null,
+    supersededBy: null,
+  };
+}
+
+describe("assertPluginSchemaVersionsUsable", () => {
+  /** A plugin whose only module backfills data: it owns no table. */
+  const backfill = {
+    name: "backfill",
+    schemaVersion: 1,
+    migrations: [{ name: "001_backfill", schemaVersion: 1 }],
+  };
+
+  it("passes a plugin that owns no table once its modules are in the ledger", async () => {
+    // Read from owner rows, a plugin with none had no applied version at all,
+    // and production refused it as behind after its module had applied.
+    await expect(
+      assertPluginSchemaVersionsUsable({
+        plugins: [backfill],
+        readLedger: async () => [applied("plugin:backfill/001_backfill", 1)],
+        ledgerExists: async () => true,
+        production: true,
+        warn: () => {},
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses in production once the module is rolled back", async () => {
+    // The control: the same plugin, its module's newest event a rollback.
+    await expect(
+      assertPluginSchemaVersionsUsable({
+        plugins: [backfill],
+        readLedger: async () => [
+          applied("plugin:backfill/001_backfill", 1),
+          applied("plugin:backfill/001_backfill", 2, "rolled_back"),
+        ],
+        ledgerExists: async () => true,
+        production: true,
+        warn: () => {},
+      })
+    ).rejects.toMatchObject({ code: "PLUGIN_SCHEMA_BEHIND" });
+  });
+
+  it("reads a missing ledger as nothing applied, and says so", async () => {
+    const warn = vi.fn();
+    await expect(
+      assertPluginSchemaVersionsUsable({
+        plugins: [backfill],
+        readLedger: () => Promise.reject(new Error("no such table")),
+        ledgerExists: async () => false,
+        production: true,
+        warn,
+      })
+    ).rejects.toMatchObject({ code: "PLUGIN_SCHEMA_BEHIND" });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/ledger not found/)
+    );
+  });
+
+  it("does not turn a ledger it cannot read into nothing applied", async () => {
+    const fault = new Error("connection reset");
+    await expect(
+      assertPluginSchemaVersionsUsable({
+        plugins: [backfill],
+        readLedger: () => Promise.reject(fault),
+        ledgerExists: async () => true,
+        production: false,
+        warn: () => {},
+      })
+    ).rejects.toBe(fault);
   });
 });

@@ -4,15 +4,18 @@
  * Flips `file_apply` bookkeeping without (re-)running SQL, for three
  * recovery situations:
  *   --applied        record a file as applied (live must equal the file's
- *                    target snapshot, unless --skip-verify, or the file is
- *                    marked `-- nextly:no-transaction` and has none);
- *                    supersede a prior failed row. An app file only: a
+ *                    target snapshot, unless --skip-verify, or the file has
+ *                    none and is marked `-- nextly:no-transaction`, or the
+ *                    database is MySQL and its newest attempt failed);
+ *                    supersede the prior failed rows. An app file only: a
  *                    plugin module is recorded by `nextly migrate`, after
  *                    --failed-cleanup.
  *   --rolled-back    record a rolled_back event so the next `migrate` re-runs
  *                    the file (requires a prior applied row).
- *   --failed-cleanup flip a stuck failed row to rolled_back so the .sql can be
- *                    edited before the next attempt (no new row).
+ *   --failed-cleanup flip the stuck failed rows (every failed attempt since
+ *                    the file's last other event) to rolled_back so the
+ *                    .sql can be edited before the next attempt (no new
+ *                    row).
  *
  * Effects (repo, fs existence, snapshot load, live introspection) are injected
  * so the state machine unit-tests against the in-memory SQLite fixture without
@@ -21,12 +24,15 @@
  * @module domains/schema/migrate/resolve
  * @since v0.0.3-alpha
  */
+import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors";
 import { isPluginLedgerRow, ledgerFilename } from "../events/ledger-scope";
-import { newestEvent } from "../events/newest-event";
+import { newestEvent, newestFirst } from "../events/newest-event";
 import type { SchemaEventRow } from "../events/schema-events-repository";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
+
+import { failedAttemptMayBePartial } from "./drift-reconcile";
 
 export type ResolveMode = "applied" | "rolled-back" | "failed-cleanup";
 
@@ -46,6 +52,11 @@ export interface ResolveMigrationArgs {
   /** Bare or `.sql`-suffixed migration name; normalized internally. */
   filename: string;
   skipVerify?: boolean;
+  /**
+   * The database the ledger lives in. It decides whether a failed attempt
+   * can have left part of a file's work behind (`hasNoSnapshotToCompare`).
+   */
+  dialect: SupportedDialect;
   repo: ResolveRepo;
   /** True iff `migrations/<name>.sql` exists on disk. */
   fileExists: (filename: string) => Promise<boolean>;
@@ -66,7 +77,11 @@ export type ResolveResult =
       verified: boolean;
     }
   | { kind: "rolled-back"; eventId: string }
-  | { kind: "failed-cleanup"; updatedId: string }
+  | {
+      kind: "failed-cleanup";
+      /** Each failed attempt flipped to rolled_back, newest first. */
+      updatedIds: string[];
+    }
   | { kind: "noop"; reason: string };
 
 const NOTE = "manual-resolve";
@@ -125,7 +140,9 @@ async function resolveApplied(
     return { kind: "noop", reason: `${filename} is already marked applied.` };
   }
 
-  const verified = args.skipVerify ? false : await verifyTarget(args, filename);
+  const verified = args.skipVerify
+    ? false
+    : await verifyTarget(args, filename, rows);
 
   const eventId = await args.repo.insertEvent({
     eventType: "file_apply",
@@ -137,10 +154,10 @@ async function resolveApplied(
     note: NOTE,
   });
 
-  const failed = rows.find(r => r.status === "failed");
-  if (failed) {
+  const failed = unclearedFailures(rows);
+  if (failed.length > 0) {
     await args.repo.supersede({
-      supersededEventIds: [failed.id],
+      supersededEventIds: failed.map(row => row.id),
       byEventId: eventId,
     });
   }
@@ -148,9 +165,25 @@ async function resolveApplied(
   return {
     kind: "applied",
     eventId,
-    supersededFailedId: failed?.id ?? null,
+    supersededFailedId: failed[0]?.id ?? null,
     verified,
   };
+}
+
+/**
+ * The failed attempts no later event accounts for: the unbroken run of
+ * failures at the newest end of a file's history, newest first.
+ *
+ * What `--failed-cleanup` clears and `--applied` supersedes. Every one of
+ * them is an attempt that may have left work behind, so clearing only one
+ * would leave the next newest still failed, and `nextly migrate` refusing
+ * the file again. A failure older than a later applied or rolled-back event
+ * is history the file has already moved past, and is left as recorded.
+ */
+function unclearedFailures(rows: readonly SchemaEventRow[]): SchemaEventRow[] {
+  const ordered = newestFirst(rows);
+  const firstOther = ordered.findIndex(row => row.status !== "failed");
+  return firstOther === -1 ? ordered : ordered.slice(0, firstOther);
 }
 
 /**
@@ -158,23 +191,19 @@ async function resolveApplied(
  * True when it was compared and matched; false when there was nothing to
  * compare it with.
  *
- * A file marked `-- nextly:no-transaction` is written by
- * `migrate:create --blank --no-transaction`, which pairs no snapshot with it:
- * a generated file is never marked, because the marker would change the text
- * its snapshot was taken over. Its missing snapshot is therefore the file's
- * design, not a lost artifact, and the check has nothing to hold it to. It is
- * also the file a partial failure tells the operator to mark applied, so
- * refusing it here would make that recovery need `--skip-verify`. Any other
- * file without its snapshot is still refused, and a marked file that does
- * have one is still compared.
+ * A file without its snapshot is refused, so that recording it unchecked is
+ * the operator's explicit `--skip-verify`, except in the cases the recovery
+ * itself leads to (`hasNoSnapshotToCompare`). A file that does have one is
+ * always compared.
  */
 async function verifyTarget(
   args: ResolveMigrationArgs,
-  filename: string
+  filename: string,
+  rows: readonly SchemaEventRow[]
 ): Promise<boolean> {
   const target = await args.loadTargetSnapshot();
   if (!target) {
-    if (await args.marksNoTransaction()) return false;
+    if (await hasNoSnapshotToCompare(args, rows)) return false;
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
       publicMessage: `No paired snapshot for ${filename}; cannot verify. Re-run with --skip-verify to override.`,
@@ -188,6 +217,35 @@ async function verifyTarget(
     });
   }
   return true;
+}
+
+/**
+ * Whether a file with no snapshot is recorded without a comparison rather
+ * than refused.
+ *
+ * A file marked `-- nextly:no-transaction` is written by
+ * `migrate:create --blank --no-transaction`, and a blank file is paired with
+ * no snapshot; a generated file is never marked, because the marker would
+ * change the text its snapshot was taken over. On MySQL, whose DDL commits
+ * as it runs, an unmarked blank file run in a transaction can also stop
+ * part way: its newest attempt failed, and the partially-applied refusal
+ * tells the operator to mark it applied once its statements are finished by
+ * hand. Neither has anything to compare against, and refusing either would
+ * make the recovery the refusal names need `--skip-verify`.
+ *
+ * On PostgreSQL and SQLite a failed attempt of an unmarked file was undone
+ * whole, so none of it ran: recording it unchecked would record a file that
+ * never ran, and it stays refused.
+ */
+async function hasNoSnapshotToCompare(
+  args: ResolveMigrationArgs,
+  rows: readonly SchemaEventRow[]
+): Promise<boolean> {
+  if (await args.marksNoTransaction()) return true;
+  return (
+    failedAttemptMayBePartial({ transaction: true }, args.dialect) &&
+    newestEvent(rows)?.status === "failed"
+  );
 }
 
 async function resolveRolledBack(
@@ -238,9 +296,9 @@ async function resolveFailedCleanup(
   filename: string
 ): Promise<ResolveResult> {
   const rows = await args.repo.findFileApplies(filename);
-  const failed = rows.find(r => r.status === "failed");
-  if (!failed) {
-    if (rows.some(r => r.status === "rolled_back")) {
+  const failed = unclearedFailures(rows);
+  if (failed.length === 0) {
+    if (newestEvent(rows)?.status === "rolled_back") {
       return { kind: "noop", reason: `${filename} is already rolled back.` };
     }
     throw new NextlyError({
@@ -248,6 +306,14 @@ async function resolveFailedCleanup(
       publicMessage: `No failed event found for ${filename}; nothing to clean up.`,
     });
   }
-  await args.repo.markRolledBack(failed.id, { note: NOTE });
-  return { kind: "failed-cleanup", updatedId: failed.id };
+  // Flipped in place rather than answered with a new row, so each attempt
+  // keeps its own start and end times and its error, and the history still
+  // reads in order.
+  for (const row of failed) {
+    await args.repo.markRolledBack(row.id, { note: NOTE });
+  }
+  return {
+    kind: "failed-cleanup",
+    updatedIds: failed.map(row => row.id),
+  };
 }

@@ -19,6 +19,7 @@ import { buildExtensionSchema } from "../../../domains/schema/extension/build-ex
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
+import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
 import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
 import {
   pluginModuleStatements,
@@ -32,6 +33,11 @@ import {
 import { CORE_TABLE_NAMES } from "../../../schemas/index";
 import { createLogger } from "../../utils/logger";
 import { runPluginPhase } from "../migrate";
+import {
+  buildMigrationStatuses,
+  ledgerRecords,
+  migrationEntries,
+} from "../migrate-status";
 
 const ALL = ["postgresql", "mysql", "sqlite"] as const;
 
@@ -198,6 +204,69 @@ describe.each(getConfiguredTestDialects())(
       expect(await ledger("plugb")).toEqual([
         { filename: `plugin:plugb/${b1.name}`, status: "applied", ran: false },
         { filename: `plugin:plugb/${b2.name}`, status: "applied", ran: true },
+      ]);
+    });
+
+    it("records the ownership a run stopped before writing, once every module is recorded", async () => {
+      const r1 = await generate("plugr", 1, notesV1);
+      const r2 = await generate("plugr", 2, notesV2, [r1]);
+      await runPhase("plugr", [r1, r2]);
+      const owners = new SchemaOwnersRepository(
+        handle.adapter.getDrizzle(),
+        dialect
+      );
+      const mine = async () =>
+        (await owners.read())
+          .filter(row => row.ownerId === "plugr")
+          .map(row => ({ table: row.tableName, version: row.schemaVersion }));
+      const claimed = r2.snapshot[dialect].tables.map(table => ({
+        table: table.name,
+        version: 2,
+      }));
+      expect(await mine()).toEqual(claimed);
+
+      // What a run that stopped between the module's ledger row and its
+      // owner rows leaves: both modules recorded applied, no table claimed.
+      await owners.deleteByOwner("plugr");
+      await runPhase("plugr", [r1, r2]);
+
+      expect(await mine()).toEqual(claimed);
+      expect(await ledger("plugr")).toEqual([
+        { filename: `plugin:plugr/${r1.name}`, status: "applied", ran: true },
+        { filename: `plugin:plugr/${r2.name}`, status: "applied", ran: true },
+      ]);
+    });
+
+    it("lists a module no run has applied yet as pending in the plugin's status", async () => {
+      const s1 = await generate("plugs", 1, notesV1);
+      const s2 = await generate("plugs", 2, notesV2, [s1]);
+      await runPhase("plugs", [s1]);
+
+      const entries = await migrationEntries({
+        plugin: "plugs",
+        plugins: [
+          {
+            name: "plugs",
+            version: "1.0.0",
+            nextly: "*",
+            contributes: { schema: { migrations: [s1, s2] } },
+          },
+        ],
+        migrationsDir: "unused",
+        dialect,
+      });
+      const repo = new SchemaEventsRepository(
+        handle.adapter.getDrizzle(),
+        dialect
+      );
+      const statuses = buildMigrationStatuses(
+        entries,
+        ledgerRecords(await repo.listFileApplies(), "plugs")
+      );
+
+      expect(statuses.map(s => [s.filename, s.status])).toEqual([
+        [`plugin:plugs/${s1.name}`, "applied"],
+        [`plugin:plugs/${s2.name}`, "pending"],
       ]);
     });
   }

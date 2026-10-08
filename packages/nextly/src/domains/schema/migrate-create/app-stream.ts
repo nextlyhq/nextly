@@ -33,6 +33,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { getCoreSchema } from "../../../schemas";
+import type { ExtensionSchema } from "../extension/build-extension-schema";
 import {
   coreContributions,
   type EntityContributionSource,
@@ -110,6 +111,139 @@ interface ConfigLike {
 }
 
 /**
+ * The stream when nothing is contributed now — but the entity pass still
+ * runs, because a contribution withdrawn since the last snapshot is removed by
+ * it: its column is dropped by the diff, and its CHECK only by that pass.
+ */
+function uncontributedAppStreamTables(
+  dialect: SupportedDialect
+): AppStreamTables {
+  return {
+    ...NO_APP_STREAM_TABLES,
+    // And the core tables' baselines, for the same reason: a core-table
+    // element withdrawn since is diffed against them.
+    baselines: coreTableSpecs(dialect),
+    entityContributions: {
+      source: { entityColumns: new Map(), entityIndexes: new Map() },
+      dialect,
+    },
+  };
+}
+
+/**
+ * The tables the app owns.
+ *
+ * Read off the compiled ownership map, not off `schema.tables`: that list
+ * holds only the tables the DSL declared, while a table a
+ * `db.schema.afterDrizzle` hook introduces is added to `owners` (as the
+ * app's) and to `specs`, and nowhere else. Deriving from `tables` left such a
+ * table out of this stream, so it reached dev push and no migration, and
+ * `migrate:check` saw nothing pending. `owners` also names adopted tables as
+ * the app's; they stay out because everything that reads this set reads
+ * `specs`, which never carries an adopted table.
+ */
+function appOwnedTableNames(schema: ExtensionSchema): Set<string> {
+  return new Set(
+    [...schema.owners]
+      .filter(([, owner]) => owner.kind === "app")
+      .map(([name]) => name)
+  );
+}
+
+/** Tables another owner declares that carry an element the app contributed. */
+function appContributedTables(
+  schema: ExtensionSchema,
+  appOwned: ReadonlySet<string>
+): AppStreamTables["contributed"] {
+  const specByName = new Map(schema.specs.map(spec => [spec.name, spec]));
+  const contributed: AppStreamTables["contributed"] = new Map();
+  for (const [table, elements] of schema.elementOwners) {
+    if (appOwned.has(table)) continue;
+    const spec = specByName.get(table);
+    if (spec === undefined) continue;
+    const mine = elements.filter(element => element.owner.kind === "app");
+    if (mine.length === 0) continue;
+    contributed.set(table, { spec, elements: contributedElementsOf(mine) });
+  }
+  return contributed;
+}
+
+/**
+ * The same plugins without the app's hooks: what each foreign table looks
+ * like as its owner declares it. Compiled for every non-app table, not only
+ * the contributed ones, because a table the app has just STOPPED
+ * contributing to still needs a baseline to diff its removal against.
+ *
+ * With no app hooks there is nothing to remove, so the first compile IS the
+ * baseline and a second would run every plugin hook again for the same
+ * answer — on every `migrate:create` and every `migrate:check`.
+ */
+async function foreignTableBaselines(
+  input: { config: ConfigLike; dialect: SupportedDialect; logger: WarnLogger },
+  schema: ExtensionSchema,
+  appOwned: ReadonlySet<string>
+): Promise<Map<string, TableSpec>> {
+  const { compileExtensionSchema } = await import("../extension/publish");
+  const baselineSchema =
+    appExtendHooks(input.config).length === 0
+      ? schema
+      : await compileExtensionSchema({
+          dialect: input.dialect,
+          plugins: input.config.plugins ?? [],
+          config: withoutAppExtend(input.config),
+          logger: input.logger,
+        });
+  const baselines = new Map<string, TableSpec>();
+  for (const spec of baselineSchema?.specs ?? []) {
+    if (!appOwned.has(spec.name)) baselines.set(spec.name, spec);
+  }
+  return baselines;
+}
+
+/**
+ * Add the extendable CORE tables to the stream.
+ *
+ * Core tables are Nextly's and ride no app snapshot, so each is carried like
+ * any table another owner declares: its baseline is the bare core table,
+ * from the dialect bundle the runtime serves, and the elements are
+ * everything contributed — by the app or by a plugin, since a plugin's module
+ * cannot carry a core-table element either. The contributed side is built by
+ * the same helper that builds an entity's.
+ *
+ * Every core table gets its baseline, contributed to or not: one the app has
+ * just stopped contributing to still needs it, to diff the removal.
+ */
+function addCoreTables(
+  schema: ExtensionSchema,
+  dialect: SupportedDialect,
+  baselines: Map<string, TableSpec>,
+  contributed: AppStreamTables["contributed"]
+): void {
+  const coreSpecs = coreTableSpecs(dialect);
+  for (const [name, bare] of coreSpecs) baselines.set(name, bare);
+  for (const [name, { names }] of coreContributions(
+    [...coreSpecs.values()],
+    schema,
+    dialect
+  )) {
+    contributed.set(name, {
+      spec: withEntityContributions(
+        coreSpecs.get(name) ?? { name, columns: [] },
+        schema,
+        coreSpecs.get(name),
+        dialect
+      ),
+      elements: names,
+    });
+  }
+}
+
+/** The logger the compile is handed. */
+interface WarnLogger {
+  warn: (message: string) => void;
+}
+
+/**
  * Compile the app stream's tables the way boot compiles them.
  *
  * Compiled rather than published: nothing in a migration command serves
@@ -120,108 +254,21 @@ interface ConfigLike {
 export async function compileAppStreamTables(input: {
   config: ConfigLike;
   dialect: SupportedDialect;
-  logger: { warn: (message: string) => void };
+  logger: WarnLogger;
 }): Promise<AppStreamTables> {
   const { compileExtensionSchema } = await import("../extension/publish");
-  const plugins = input.config.plugins ?? [];
   const schema = await compileExtensionSchema({
     dialect: input.dialect,
-    plugins,
+    plugins: input.config.plugins ?? [],
     config: input.config,
     logger: input.logger,
   });
-  // Nothing contributed now — but the entity pass still runs, because a
-  // contribution withdrawn since the last snapshot is removed by it: its
-  // column is dropped by the diff, and its CHECK only by that pass.
-  if (!schema) {
-    return {
-      ...NO_APP_STREAM_TABLES,
-      // And the core tables' baselines, for the same reason: a core-table
-      // element withdrawn since is diffed against them.
-      baselines: coreTableSpecs(input.dialect),
-      entityContributions: {
-        source: { entityColumns: new Map(), entityIndexes: new Map() },
-        dialect: input.dialect,
-      },
-    };
-  }
+  if (!schema) return uncontributedAppStreamTables(input.dialect);
 
-  const specByName = new Map(schema.specs.map(spec => [spec.name, spec]));
-  // Read off the compiled ownership map, not off `schema.tables`: that list
-  // holds only the tables the DSL declared, while a table a
-  // `db.schema.afterDrizzle` hook introduces is added to `owners` (as the
-  // app's) and to `specs`, and nowhere else. Deriving from `tables` left such a
-  // table out of this stream, so it reached dev push and no migration, and
-  // `migrate:check` saw nothing pending. `owners` also names adopted tables as
-  // the app's; they stay out because everything below reads `specs`, which
-  // never carries an adopted table.
-  const appOwned = new Set(
-    [...schema.owners]
-      .filter(([, owner]) => owner.kind === "app")
-      .map(([name]) => name)
-  );
-
-  const contributed = new Map<
-    string,
-    { spec: TableSpec; elements: ContributedElements }
-  >();
-  for (const [table, elements] of schema.elementOwners) {
-    if (appOwned.has(table)) continue;
-    const spec = specByName.get(table);
-    if (spec === undefined) continue;
-    const mine = elements.filter(element => element.owner.kind === "app");
-    if (mine.length === 0) continue;
-    contributed.set(table, { spec, elements: contributedElementsOf(mine) });
-  }
-
-  // The same plugins without the app's hooks: what each foreign table looks
-  // like as its owner declares it. Compiled for every non-app table, not only
-  // the contributed ones, because a table the app has just STOPPED
-  // contributing to still needs a baseline to diff its removal against.
-  //
-  // With no app hooks there is nothing to remove, so the first compile IS the
-  // baseline and a second would run every plugin hook again for the same
-  // answer — on every `migrate:create` and every `migrate:check`.
-  const baselineSchema =
-    appExtendHooks(input.config).length === 0
-      ? schema
-      : await compileExtensionSchema({
-          dialect: input.dialect,
-          plugins,
-          config: withoutAppExtend(input.config),
-          logger: input.logger,
-        });
-  const baselines = new Map<string, TableSpec>();
-  for (const spec of baselineSchema?.specs ?? []) {
-    if (!appOwned.has(spec.name)) baselines.set(spec.name, spec);
-  }
-
-  // The extendable CORE tables hooks contributed to. Core tables are Nextly's
-  // and ride no app snapshot, so each is carried like any table another owner
-  // declares: its baseline is the bare core table, from the dialect bundle
-  // the runtime serves, and the elements are everything contributed — by the
-  // app or by a plugin, since a plugin's module cannot carry a core-table
-  // element either. The contributed side is built by the same helper that
-  // builds an entity's.
-  // Every core table gets its baseline, contributed to or not: one the app
-  // has just stopped contributing to still needs it, to diff the removal.
-  const coreSpecs = coreTableSpecs(input.dialect);
-  for (const [name, bare] of coreSpecs) baselines.set(name, bare);
-  for (const [name, { names }] of coreContributions(
-    [...coreSpecs.values()],
-    schema,
-    input.dialect
-  )) {
-    contributed.set(name, {
-      spec: withEntityContributions(
-        coreSpecs.get(name) ?? { name, columns: [] },
-        schema,
-        coreSpecs.get(name),
-        input.dialect
-      ),
-      elements: names,
-    });
-  }
+  const appOwned = appOwnedTableNames(schema);
+  const contributed = appContributedTables(schema, appOwned);
+  const baselines = await foreignTableBaselines(input, schema, appOwned);
+  addCoreTables(schema, input.dialect, baselines, contributed);
 
   return {
     owned: schema.specs.filter(spec => appOwned.has(spec.name)),

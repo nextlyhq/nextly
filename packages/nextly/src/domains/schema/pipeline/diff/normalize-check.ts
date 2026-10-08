@@ -128,28 +128,49 @@ export function splitTopLevel(text: string): string[] {
   const parts: string[] = [];
   let depth = 0;
   let start = 0;
-  let quote: string | null = null;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
-    if (quote !== null) {
-      // A backslash escapes the next character in MySQL's printed literals;
-      // a doubled quote closes and reopens, which the scan handles as two.
-      if (ch === "\\" && quote === "'") i += 1;
-      else if (ch === quote) quote = null;
+    if (SPLIT_QUOTES.has(ch)) {
+      i = closingQuoteAt(text, i);
+      if (i === -1) return [text];
       continue;
     }
-    if (ch === "'" || ch === '"' || ch === "`") quote = ch;
-    else if (ch === "(" || ch === "[") depth += 1;
-    else if (ch === ")" || ch === "]") depth -= 1;
-    else if (ch === "," && depth === 0) {
+    depth += NESTING_STEP.get(ch) ?? 0;
+    if (depth < 0) return [text];
+    if (ch === "," && depth === 0) {
       parts.push(text.slice(start, i));
       start = i + 1;
     }
-    if (depth < 0) return [text];
   }
-  if (depth !== 0 || quote !== null) return [text];
+  if (depth !== 0) return [text];
   parts.push(text.slice(start));
   return parts;
+}
+
+/** The characters that open a string literal or a quoted identifier. */
+const SPLIT_QUOTES = new Set(["'", '"', "`"]);
+
+/** How each bracket moves the nesting depth. */
+const NESTING_STEP = new Map([
+  ["(", 1],
+  ["[", 1],
+  [")", -1],
+  ["]", -1],
+]);
+
+/**
+ * The index of the quote closing the one opened at `open`, or -1 when it
+ * never closes. A backslash escapes the next character in MySQL's printed
+ * literals; a doubled quote closes and reopens, which the caller's scan
+ * handles as two.
+ */
+function closingQuoteAt(text: string, open: number): number {
+  const quote = text[open];
+  for (let i = open + 1; i < text.length; i++) {
+    if (text[i] === "\\" && quote === "'") i += 1;
+    else if (text[i] === quote) return i;
+  }
+  return -1;
 }
 
 // =============================================================================
@@ -1073,15 +1094,22 @@ class Parser {
     if (expr === null || !this.takeKeyword("AS")) return null;
     const type = this.parseTypeName();
     if (type === null) return null;
-    let base = type.base;
-    if (this.takeKeyword("CHARSET") || this.takeCharacterSet()) {
-      const charset = this.take();
-      if (charset?.kind !== "word") return null;
-      const name = charset.text.toLowerCase();
-      if (name !== "utf8mb4") base = `${base} charset ${name}`;
-    }
-    if (!this.expectPunct(")")) return null;
+    const base = this.parseCastCharset(type.base);
+    if (base === null || !this.expectPunct(")")) return null;
     return { kind: "cast", expr, ...type, base };
+  }
+
+  /**
+   * The cast's base type with a `CHARSET <name>` or `CHARACTER SET <name>`
+   * clause applied when one is next; utf8mb4 leaves it unchanged. Null when
+   * the clause names no character set.
+   */
+  private parseCastCharset(base: string): string | null {
+    if (!this.takeKeyword("CHARSET") && !this.takeCharacterSet()) return base;
+    const charset = this.take();
+    if (charset?.kind !== "word") return null;
+    const name = charset.text.toLowerCase();
+    return name === "utf8mb4" ? base : `${base} charset ${name}`;
   }
 
   /** Consumes `CHARACTER SET` when it is next, reporting whether it was. */
@@ -1267,25 +1295,33 @@ const CANONICALISERS: ByKind<Node> = {
  * MySQL reports never read alike without folding one into the other.
  */
 function canonicalCall(node: NodeOfKind["call"]): Node {
-  const [first, second] = node.args;
-  if (
-    node.name === "json_extract" &&
-    node.args.length === 2 &&
-    first &&
-    second
-  ) {
-    return { kind: "arithmetic", op: "->", left: first, right: second };
-  }
-  if (
-    node.name === "json_unquote" &&
-    node.args.length === 1 &&
-    first?.kind === "arithmetic" &&
-    first.op === "->"
-  ) {
-    return { ...first, op: "->>" };
-  }
-  return node;
+  return JSON_ACCESSOR_CALLS.get(node.name)?.(node.args) ?? node;
 }
+
+/** `json_extract(data, path)` as `data -> path`. */
+function foldJsonExtract(args: readonly Node[]): Node | undefined {
+  const [first, second] = args;
+  if (args.length !== 2 || !first || !second) return undefined;
+  return { kind: "arithmetic", op: "->", left: first, right: second };
+}
+
+/** `json_unquote(data -> path)` as `data ->> path`. */
+function foldJsonUnquote(args: readonly Node[]): Node | undefined {
+  const [first] = args;
+  if (args.length !== 1 || first?.kind !== "arithmetic" || first.op !== "->") {
+    return undefined;
+  }
+  return { ...first, op: "->>" };
+}
+
+/** The calls MySQL prints in place of a JSON accessor operator. */
+const JSON_ACCESSOR_CALLS = new Map<
+  string,
+  (args: readonly Node[]) => Node | undefined
+>([
+  ["json_extract", foldJsonExtract],
+  ["json_unquote", foldJsonUnquote],
+]);
 
 /** `!=` and `<>` are one operator; `<>` is the standard spelling. */
 function canonicalOperator(op: string): string {

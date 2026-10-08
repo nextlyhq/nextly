@@ -14,14 +14,47 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 // Read with node rather than through a `?raw` import: that is a bundler
 // feature with no type, and `check-types` compiles this file with plain tsc.
-const registerSource = readFileSync(
-  fileURLToPath(new URL("../register.ts", import.meta.url)),
-  "utf8"
+const registerFile = fileURLToPath(new URL("../register.ts", import.meta.url));
+const registerAst = ts.createSourceFile(
+  registerFile,
+  readFileSync(registerFile, "utf8"),
+  ts.ScriptTarget.Latest,
+  true
 );
+
+/**
+ * Printed without comments, so a call that only survives in a comment — a
+ * line commented out, or a sentence naming the call — is not found as code.
+ */
+const printer = ts.createPrinter({ removeComments: true });
+
+/** `register.ts` as code alone. */
+const registerSource = printer.printFile(registerAst);
+
+/**
+ * The code of one top-level function in `register.ts`, exported or not.
+ *
+ * Taken from the parsed declaration rather than sliced between two matches in
+ * the text, so it ends where the function ends: never inside the next
+ * function's JSDoc, and never past a boundary a text search did not expect.
+ */
+function bodyOf(name: string): string {
+  const declaration = registerAst.statements.find(
+    (statement): statement is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(statement) && statement.name?.text === name
+  );
+  expect(declaration, `function ${name} in register.ts`).toBeDefined();
+  return printer.printNode(
+    ts.EmitHint.Unspecified,
+    declaration as ts.FunctionDeclaration,
+    registerAst
+  );
+}
 
 describe("the boot sequence in registerServices", () => {
   /**
@@ -32,19 +65,39 @@ describe("the boot sequence in registerServices", () => {
    * a source read — that it matches a comment rather than the code — is
    * answered by anchoring on the CALL, not on the layer banner.
    */
-  const migrationCall = registerSource.indexOf(
-    "await runProdMigrationsIfEnabled("
-  );
-  const pluginCall = registerSource.indexOf("await initializePlugins(");
+  //
+  // `registerServicesOnce` runs one named function per boot phase, so the
+  // order is read from its calls, and each phase function is checked to make
+  // the call the ordering is about.
+  const boot = bodyOf("registerServicesOnce");
+  const pluginCall = boot.indexOf("await initializePlugins(");
+  /**
+   * What has to stand before a plugin's `init` runs: its migrations applied,
+   * the applied schema version checked against what it declares, and the
+   * tables it declares created.
+   */
+  const beforePlugins = [
+    "await runBootMigrations(",
+    "await assertBootPluginSchemaVersions(",
+    "await prepareExtensionTablesForInit(",
+  ];
 
-  it("calls both, so the comparison below has something to compare", () => {
-    // The population check: two -1s would satisfy "before" perfectly.
-    expect(migrationCall).toBeGreaterThan(-1);
-    expect(pluginCall).toBeGreaterThan(-1);
+  it("runs the boot migrations inside the migration phase", () => {
+    expect(bodyOf("runBootMigrations")).toContain(
+      "await runProdMigrationsIfEnabled("
+    );
   });
 
-  it("runs migrations before plugins initialise", () => {
-    expect(migrationCall).toBeLessThan(pluginCall);
+  it("calls each, so the comparisons below have something to compare", () => {
+    // The population check: two -1s would satisfy "before" perfectly.
+    expect(pluginCall).toBeGreaterThan(-1);
+    for (const call of beforePlugins) {
+      expect(boot.indexOf(call), call).toBeGreaterThan(-1);
+    }
+  });
+
+  it.each(beforePlugins)("runs %s before plugins initialise", call => {
+    expect(boot.indexOf(call)).toBeLessThan(pluginCall);
   });
 
   /**
@@ -55,9 +108,29 @@ describe("the boot sequence in registerServices", () => {
    * created nothing in the schema the adapter writes to.
    */
   const schemaPublication = registerSource.indexOf("setActivePostgresSchema(");
+  const schemaPhase = registerSource.indexOf("await prepareBootSchema(");
   const schemaRegistryInit = registerSource.indexOf(
     "await initializeSchemaRegistry("
   );
+
+  it("publishes the PostgreSQL schema inside the schema phase", () => {
+    expect(bodyOf("prepareBootSchema")).toContain("publishBootPostgresSchema(");
+    expect(bodyOf("publishBootPostgresSchema")).toContain(
+      "setActivePostgresSchema("
+    );
+  });
+
+  it("publishes the PostgreSQL schema before the extension schema compiles", () => {
+    // Everything after the publication reads the PostgreSQL schema as its one
+    // answer, so it is published as soon as the dialect is known, before the
+    // extension schema compiles and is published beside it.
+    const phase = bodyOf("prepareBootSchema");
+    const publication = phase.indexOf("publishBootPostgresSchema(");
+    const compilation = phase.indexOf("compileAndPublishExtensionSchema(");
+    expect(publication).toBeGreaterThan(-1);
+    expect(compilation).toBeGreaterThan(-1);
+    expect(publication).toBeLessThan(compilation);
+  });
 
   it("publishes the PostgreSQL schema exactly once", () => {
     // Once, so a later second publication cannot quietly replace the value
@@ -71,6 +144,7 @@ describe("the boot sequence in registerServices", () => {
   });
 
   it("publishes the PostgreSQL schema before first-run setup can run", () => {
-    expect(schemaPublication).toBeLessThan(schemaRegistryInit);
+    expect(schemaPhase).toBeGreaterThan(-1);
+    expect(schemaPhase).toBeLessThan(schemaRegistryInit);
   });
 });

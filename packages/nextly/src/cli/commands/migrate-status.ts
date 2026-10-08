@@ -37,8 +37,14 @@ import {
   SchemaEventsRepository,
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
+import {
+  migrationChecksum,
+  orderedMigrations,
+  qualifiedFilename,
+} from "../../domains/schema/migrate/plugin/plugin-migration";
 import { marksNoTransaction } from "../../domains/schema/migrate/split-sql";
 import { describeError } from "../../errors/index";
+import type { PluginDefinition } from "../../plugins/plugin-context";
 import type {
   MigrationErrorJson,
   MigrationRecordStatus,
@@ -109,6 +115,17 @@ interface ParsedMigration {
   /** Timestamp extracted from filename */
   timestamp: string;
 }
+
+/**
+ * What a migration's status is judged from: its ledger key, the checksum of
+ * what would run, and whether it runs outside a transaction. An app file and
+ * a plugin module both reduce to this, so one function compares either with
+ * the ledger (`buildMigrationStatuses`).
+ */
+export type MigrationEntry = Pick<
+  ParsedMigration,
+  "name" | "checksum" | "transaction"
+>;
 
 /**
  * Database migration record (F11 schema). Mirrors `nextly_migrations`.
@@ -269,12 +286,12 @@ export async function runMigrateStatus(
 
     logger.debug(`Scanning migrations in ${migrationsDir}...`);
 
-    // A plugin's rows name files that live in its package, not the app's
-    // migrations directory, so file discovery and matching cannot apply to
-    // them — the row itself is the truth.
-    const migrationFiles = options.plugin
-      ? []
-      : await discoverMigrations(migrationsDir, dialect);
+    const migrationFiles = await migrationEntries({
+      plugin: options.plugin,
+      plugins: configResult.config.plugins ?? [],
+      migrationsDir,
+      dialect,
+    });
     logger.debug(`Found ${migrationFiles.length} migration file(s)`);
 
     const appliedMigrations = await getAppliedMigrations(
@@ -284,9 +301,10 @@ export async function runMigrateStatus(
     );
     logger.debug(`${appliedMigrations.length} migration(s) in database`);
 
-    const migrationStatuses = options.plugin
-      ? pluginRowsToStatuses(appliedMigrations)
-      : buildMigrationStatuses(migrationFiles, appliedMigrations);
+    const migrationStatuses = buildMigrationStatuses(
+      migrationFiles,
+      appliedMigrations
+    );
 
     const failedRollbacks = failedRollbacksSinceApply(
       appliedMigrations,
@@ -333,6 +351,25 @@ export async function runMigrateStatus(
   } finally {
     await adapter.disconnect();
   }
+}
+
+/**
+ * The migrations a status run lists: the app's files under its migrations
+ * directory, or with `plugin` the modules that plugin ships.
+ *
+ * A plugin's migrations are modules in its definition, not files under the
+ * app's directory, so they are read from there; a module no run has applied
+ * yet then reads as pending, as an app file without a ledger row does.
+ */
+export async function migrationEntries(args: {
+  plugin?: string;
+  plugins: readonly PluginDefinition[];
+  migrationsDir: string;
+  dialect: SupportedDialect;
+}): Promise<MigrationEntry[]> {
+  return args.plugin
+    ? pluginModuleEntries(args.plugins, args.plugin)
+    : discoverMigrations(args.migrationsDir, args.dialect);
 }
 
 async function discoverMigrations(
@@ -584,26 +621,31 @@ async function getCollectionsWithPendingChanges(
 //   investigate and either restore the file or contact whoever deleted it.
 
 /**
- * Statuses for a plugin's ledger rows (`--plugin <name>`). A plugin's files
- * live in its package rather than the app's migrations directory, so file
- * matching cannot apply: the row itself is the truth, and no row may read
- * as "applied (file missing)" for that reason alone.
+ * The modules plugin `plugin` ships (`--plugin <name>`), in the order they
+ * run, as the entries their status is judged from.
+ *
+ * Each is keyed by its ledger filename (`qualifiedFilename`) and carries the
+ * checksum of its content as it is now, the value the runner compares an
+ * applied module with, so a module changed since it ran reads as modified.
+ * A plugin the config does not list ships nothing, and each of its recorded
+ * rows reads as applied with its module missing.
  */
-export function pluginRowsToStatuses(
-  applied: MigrationRecord[]
-): MigrationStatus[] {
-  return applied.map(record => ({
-    filename: record.filename,
-    status: record.status === "failed" ? "failed" : "applied",
-    appliedAt: record.appliedAt,
-    durationMs: record.durationMs,
-    errorJson: record.errorJson,
-    checksumMismatch: false,
+export function pluginModuleEntries(
+  plugins: readonly PluginDefinition[],
+  plugin: string
+): MigrationEntry[] {
+  const definition = plugins.find(p => p.name === plugin);
+  return orderedMigrations(
+    definition?.contributes?.schema?.migrations ?? []
+  ).map(module => ({
+    name: qualifiedFilename(plugin, module.name),
+    checksum: migrationChecksum(module),
+    transaction: module.transaction !== false,
   }));
 }
 
 export function buildMigrationStatuses(
-  files: ParsedMigration[],
+  files: readonly MigrationEntry[],
   applied: MigrationRecord[]
 ): MigrationStatus[] {
   const stripSql = (f: string): string => f.replace(/\.sql$/i, "");
@@ -701,7 +743,7 @@ function displayStatus(
 
     if (migrations.some(m => m.outsideTransaction && m.status === "pending")) {
       logger.info(
-        "(no transaction): marked -- nextly:no-transaction, so it runs outside a transaction; if a statement fails, the statements before it stay applied."
+        "(no transaction): marked -- nextly:no-transaction (a plugin module: transaction: false), so it runs outside a transaction; if a statement fails, the statements before it stay applied."
       );
     }
 

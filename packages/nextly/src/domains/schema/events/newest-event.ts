@@ -2,13 +2,23 @@
 // the newest file_apply event (by startedAt) decides whether a file is applied.
 import type { SchemaEventRow } from "./schema-events-repository";
 
+/**
+ * The set ordered most-recently-started first. A startedAt tie keeps the
+ * order the rows came in, since the sort is stable.
+ */
+export function newestFirst<T extends Pick<SchemaEventRow, "startedAt">>(
+  rows: readonly T[]
+): T[] {
+  return [...rows].sort(
+    (a, b) => +new Date(b.startedAt) - +new Date(a.startedAt)
+  );
+}
+
 /** The most-recently-started event in the set, or undefined if empty. */
 export function newestEvent<T extends Pick<SchemaEventRow, "startedAt">>(
   rows: readonly T[]
 ): T | undefined {
-  return [...rows].sort(
-    (a, b) => +new Date(b.startedAt) - +new Date(a.startedAt)
-  )[0];
+  return newestFirst(rows)[0];
 }
 
 /**

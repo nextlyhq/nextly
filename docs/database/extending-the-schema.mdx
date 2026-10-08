@@ -357,7 +357,10 @@ so migrations and SQLite rebuilds keep it, and it is stripped from every REST
 response, Direct API read, version snapshot and webhook payload, while a value
 sent for it on an entry write is dropped. Both halves matter — unhidden it
 leaks into every response, and absent from the runtime table the next push
-proposes dropping it.
+proposes dropping it. A read cannot probe its values either: a `where` naming
+it is refused with `FIELD_NOT_FILTERABLE` (for a column on a component's
+table, under the component field's path, such as `seo.searchVector`), a group
+key naming it is refused, and a sort by it is ignored.
 
 ## What is not supported
 

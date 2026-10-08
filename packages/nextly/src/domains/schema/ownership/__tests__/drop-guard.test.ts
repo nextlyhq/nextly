@@ -75,6 +75,7 @@ describe("assertNoForeignDrops", () => {
         ],
         stream: "app",
         owners,
+        elementOwners: [],
         dialect: "postgresql",
         source: "0007_cleanup.sql",
       })
@@ -87,6 +88,7 @@ describe("assertNoForeignDrops", () => {
         statements: ["DROP TABLE auth__identities"],
         stream: "plugin:auth",
         owners,
+        elementOwners: [],
         dialect: "postgresql",
         source: "plugin:auth/002_down",
       })
@@ -99,18 +101,20 @@ describe("assertNoForeignDrops", () => {
         statements: ["DROP TABLE b__x"],
         stream: "plugin:a",
         owners,
+        elementOwners: [],
         dialect: "postgresql",
         source: "plugin:a/003",
       })
     ).toThrow(/different owner/i);
   });
 
-  it("keeps today's behaviour for a table no owner row claims", () => {
+  it("lets the app drop a table no owner row claims", () => {
     expect(() =>
       assertNoForeignDrops({
         statements: ["DROP TABLE legacy_orders"],
         stream: "app",
         owners,
+        elementOwners: [],
         dialect: "postgresql",
         source: "0008.sql",
       })
@@ -123,6 +127,7 @@ describe("assertNoForeignDrops", () => {
         statements: ["DROP TABLE b__x"],
         stream: "plugin:a",
         owners,
+        elementOwners: [],
         dialect: "postgresql",
         source: "plugin:a/003",
       });

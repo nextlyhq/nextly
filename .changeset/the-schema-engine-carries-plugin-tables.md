@@ -78,11 +78,13 @@ migration file the run refuses (see below). Applied files are never re-read.
   that failed attempt is the unit's newest, `nextly migrate` refuses to record
   the unit as applied without running it, even when the database already
   stands at its result: finish it by hand and mark it with
-  `nextly migrate:resolve --applied <file>` (a marked file has no snapshot,
-  so it is recorded without comparing the live schema and needs no
-  `--skip-verify`; for a plugin module,
-  `--failed-cleanup` and then `nextly migrate`), or reverse what ran and
-  migrate again. `nextly migrate`, `migrate:down` and `migrate:status` name
+  `nextly migrate:resolve --applied <file>` (a file with no snapshot is
+  recorded without comparing the live schema, and needs no `--skip-verify`,
+  when it is marked, or on MySQL after a failed attempt; for a plugin module,
+  `--failed-cleanup` and then `nextly migrate`), or reverse what ran, clear
+  the attempt with `nextly migrate:resolve --failed-cleanup <file>` and
+  migrate again. It is not run again over what stayed either, even when the
+  database still stands at its start. `nextly migrate`, `migrate:down` and `migrate:status` name
   each unit that runs outside a transaction. A refusal's message names the
   marker, `migrate --dry-run` lists refusals, and `migrate:check` warns about
   them (`REFUSED_STATEMENT`). `nextly migrate:create --blank --no-transaction`
@@ -148,6 +150,46 @@ migration file the run refuses (see below). Applied files are never re-read.
   the next `migrate:create` adds it, and it is stripped from every entry the
   API returns.
 
+- **An app migration that drops or renames a core table is refused.** Core
+  tables (`users`, `media`, …) are core's. An app migration may still drop or
+  rename any column of a core table that no plugin's records name as its own,
+  since a column the app contributed cannot be told apart from core's.
+- **A plugin's migration modules must have unique names**, including names
+  that differ only in case, since a module's name is its key in the
+  migration ledger. A module name may not contain `/`, and each module's
+  `schemaVersion` may not be lower than the one before it in name order; the
+  last must equal the plugin's `schemaVersion`. Each is refused when the
+  configuration loads, before any migration runs.
+- **On MySQL, a failed migration attempt is never adopted.** MySQL commits
+  each schema statement as it runs, even inside a transaction, so a
+  migration whose data statement failed after its schema statements could be
+  recorded as applied on retry with that data change skipped. While a
+  migration's newest attempt is a failed one, `nextly migrate` on MySQL
+  refuses it with `NEXTLY_MIGRATION_PARTIALLY_APPLIED` and names the
+  recovery. PostgreSQL and SQLite run it again as before.
+- **On MySQL, a failed migration attempt is never run again either.** MySQL
+  also commits what ran before a schema statement, so a migration whose
+  schema statement failed after a data statement left the data change applied
+  while the schema still matches its start, and a retry repeated it. While
+  its newest attempt is a failed one, `nextly migrate` refuses to run it with
+  `NEXTLY_MIGRATION_PARTIALLY_APPLIED`, with or without a snapshot, as it does
+  on every dialect for a unit marked to run outside a transaction. After
+  fixing a failed MySQL migration, clear the attempt with
+  `nextly migrate:resolve --failed-cleanup <file>` before running it again.
+- **An explicit collection index `name` must start with `idx_` or `uq_`.**
+  Those are the only names schema changes drop, so an index named otherwise
+  would be created and never removed once its declaration was. A collection
+  declaring `{ fields: ["slug", "locale"], unique: true, name: "slug_locale_unique" }`
+  is refused by `defineCollection` with the rename to make; use
+  `name: "uq_slug_locale"`, or leave `name` out to have one derived. No
+  database carries an index under the old name, because collection indexes
+  were not created before this release.
+- **Virtual fields are not validated on write.** A virtual field's value is
+  dropped before the write, so `required` and `validate` on it no longer
+  refuse a create or update that omits it or sends a value.
+- **`defineTable` refuses a decimal scale above 30** (MySQL's maximum) and a
+  foreign key over no columns.
+
 ## Schema
 
 A plugin declares tables in `contributes.schema` with a dialect-neutral DSL
@@ -158,9 +200,31 @@ database-assigned key, which must be the table's primary key. A collection can
 choose `db.idType` between random and time-ordered UUIDs, and accept a
 client-supplied id with `db.allowIdOnCreate`.
 
-Ownership is recorded per table and per element, so no path drops a table or
-a column on behalf of an owner that does not own it, and a table with no owner
-record is never dropped. Schema pushes never run a `DROP SCHEMA`.
+Ownership is recorded per table and per element, and a migration is refused
+before it runs (`DROP_OF_FOREIGN_TABLE`) if it drops or renames a table or a
+column another owner holds. A table with no owner record (every collection,
+Single and component table, and tables your own migrations created) is the
+app's to drop and never a plugin's: a plugin migration may drop only tables
+its records name, or a table the same module creates that did not exist
+before the module ran, created and dropped under one unqualified, lower-case
+name (`CREATE TABLE t`, not `scratch.t` or `"T"`; SQLite's `temp.t` counts).
+A `CREATE` of a table that already exists earns nothing, and a module that
+runs a PostgreSQL `SET`, `RESET`, `DISCARD`, `set_config()`, `CREATE SCHEMA`
+or `ALTER SCHEMA`, or a MySQL `USE`, earns nothing for any table it creates.
+MariaDB's `CREATE OR REPLACE TABLE t` is read as a drop of `t`, unless no
+table `t` existed before the module ran, and then as its creation. On
+PostgreSQL, a `CREATE FUNCTION` or `CREATE PROCEDURE` whose body is a quoted
+string rather than `$$`-quoted is refused, as a `DO` with one is, and so is
+`CASCADE` on a `DROP` of anything but a table (a type, domain, extension,
+function, view, sequence or index), which also drops whatever depends on it:
+drop the dependents first, then the object without `CASCADE`. On SQLite, a
+table rebuild that removes a column (how a column carrying a check, such as an
+enum, is removed) is judged as that column's drop, so the app may remove an
+enum it added to `users`. Dev push never drops a table no record claims. A
+plugin whose table, or column, index, foreign key or check, is recorded as
+another owner's is refused (`CONFLICT`) rather than taking it over; delete the
+old owner's rows from `nextly_schema_owners` if it is meant to pass to it.
+Schema pushes never run a `DROP SCHEMA`.
 
 `nextly migrate:create --plugin <name>` generates a plugin's migration
 modules for all three dialects. `nextly migrate` applies them with the app's
@@ -193,9 +257,39 @@ adopts a multi-module history that development push already created.
 `migrate:create --plugin` accepts a plugin exported by name, and reports no
 changes (exit 2) when the plugin's schema matches its last migration.
 `migrate:create --plugin --blank` now writes a blank module; before, `--blank`
-was ignored with `--plugin`. `migrate:resolve --applied plugin:…` now refuses,
+was ignored with `--plugin`. `migrate:resolve --failed-cleanup` clears every
+failed attempt since the file's last other event, and `--applied` supersedes
+them all, so a file that failed twice in a row needs one cleanup rather than
+two. A cleared attempt keeps its own start and end times and its error;
+before, the cleanup overwrote its end time with the time of the cleanup. `migrate:resolve --applied plugin:…` now refuses,
 naming `--failed-cleanup` and then `nextly migrate`, instead of reporting the
 module's file missing.
+
+In development, a plugin's existing tables gain the columns, indexes and
+constraints its upgraded declaration added before its `init` runs, so an
+`init` reading a new column no longer fails the boot. Changes that need a
+decision (drops, type or nullability changes, renames, a NOT NULL column
+without a default) stay with the development push and its prompts.
+
+`nextly migrate` records a plugin's table ownership again when its last
+migration is applied but the owner rows were never written, for example
+after a run that stopped between the two. A production boot no longer
+refuses a plugin whose migrations only change data: its applied schema
+version is read from the migration ledger. `migrate:status --plugin <name>`
+lists the modules the plugin ships, so one that has not run yet shows as
+pending. `migrate:down` rolls back migrations recorded in the same
+millisecond in reverse run order.
+
+A hidden contributed column cannot be a group key and is ignored as a sort
+key, so a grouped read cannot publish its values as bucket labels. A `where`
+naming one, in either spelling and at any depth, is refused with
+`FIELD_NOT_FILTERABLE` for every caller, so a filter cannot probe its values;
+that includes a column contributed to a component's table, named under the
+component field (`seo.searchVector`). When
+startup fails while several requests wait for it, only one retries. The
+PostgreSQL adapter no longer runs `CREATE SCHEMA` for a schema that already
+exists, so a role without database-level CREATE can connect with
+`schema: "public"`.
 
 Full details: `docs/database/extending-the-schema.mdx`,
 `docs/plugins/schema.mdx` and `docs/guides/production-migrations.mdx`.

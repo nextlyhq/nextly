@@ -23,11 +23,16 @@ import {
   type ExtensionSchema,
   getActiveExtensionSchema,
 } from "../domains/schema/extension/build-extension-schema";
+import { classifyForMode } from "../domains/schema/pipeline/classifier/modes";
 import {
+  canEmitWithoutDrizzleKit,
   emitDdl,
   tableConstraintOps,
 } from "../domains/schema/pipeline/ddl-emitter";
-import type { TableSpec } from "../domains/schema/pipeline/diff/types";
+import type {
+  Operation,
+  TableSpec,
+} from "../domains/schema/pipeline/diff/types";
 
 import { runBoundedDiagnostic } from "./bounded-diagnostic";
 
@@ -432,42 +437,47 @@ export async function ensureFirstRunSetup(
 }
 
 /**
- * Create the extension tables an EXISTING database does not have yet, with
- * their indexes and constraints — before any plugin initialises.
+ * Bring an EXISTING database's extension tables up to their declarations
+ * before any plugin initialises: create the tables it does not have, and add
+ * to the ones it has what needs no decision.
  *
  * First-run creates every extension table, but only on a fresh database. On an
- * existing one, a plugin added since the last boot had its tables compiled and
- * nothing to create them until the development push, which runs after
- * `registerServices` — after the plugin's `init()` has already run. An `init`
- * that seeds its own table then failed the boot, and the push that would have
- * created the table never ran. Production creates the same tables through the
- * plugin's migration modules, which `registerServices` also applies before
- * plugins initialise.
+ * existing one, a plugin added or upgraded since the last boot had its tables
+ * compiled and nothing to reconcile them until the development push, which
+ * runs after `registerServices` — after the plugin's `init()` has already run.
+ * An `init` that seeds its own table, or reads a column its new version added,
+ * then failed the boot, and the push that would have repaired the table never
+ * ran. Production reaches the same shapes through the plugin's migration
+ * modules, which `registerServices` also applies before plugins initialise.
  *
- * Only MISSING tables, and only creation: the push is scoped to them, so an
- * existing table's alterations stay with the development push, which has the
- * classifier and prompts a change to existing data needs. The same push,
- * index replay and constraint replay first-run uses, so a table created here
- * is the table first-run would have created.
+ * Only what needs no decision: a missing table, and on an existing table the
+ * columns, indexes and constraints it lacks, when the table has no other
+ * change pending. A drop, a type or nullability change, a rename, or a column
+ * that existing rows cannot satisfy stays with the development push, which has
+ * the classifier and prompts a change to existing data needs. A table with any
+ * of those is left whole: adding a renamed column here would leave the push a
+ * bare drop, and it would offer to destroy the column's data rather than
+ * rename it.
  *
- * Failure-safe like first-run: a table that cannot be created is reported, and
- * the plugin whose `init` needs it then fails with the query that names it.
+ * Failure-safe like first-run: a table that cannot be reconciled is reported,
+ * and the plugin whose `init` needs it then fails with the query that names it.
  */
-export async function createMissingExtensionTables(args: {
+export async function prepareExtensionTablesBeforeInit(args: {
   adapter: AdapterLike;
   logger: LoggerLike;
   extensionSchema: ExtensionSchema | null | undefined;
   deps?: Partial<Pick<EnsureFirstRunSetupDeps, "freshPushSchema">>;
-}): Promise<string[]> {
+}): Promise<{ created: string[]; altered: string[] }> {
   const { adapter, logger, extensionSchema } = args;
-  if (!extensionSchema) return [];
-  const dialect = adapter.dialect;
+  if (!extensionSchema) return { created: [], altered: [] };
 
   const missing: TableSpec[] = [];
+  const existing: TableSpec[] = [];
   for (const spec of extensionSchema.specs) {
     if (!(spec.name in extensionSchema.drizzle)) continue;
     try {
-      if (!(await adapter.tableExists(spec.name))) missing.push(spec);
+      if (await adapter.tableExists(spec.name)) existing.push(spec);
+      else missing.push(spec);
     } catch (error) {
       logger.warn(
         `[nextly] could not check whether ${spec.name} exists: ${
@@ -476,11 +486,35 @@ export async function createMissingExtensionTables(args: {
       );
     }
   }
-  if (missing.length === 0) return [];
 
+  const created = await createMissingTables(
+    adapter,
+    logger,
+    extensionSchema,
+    missing,
+    args.deps?.freshPushSchema
+  );
+  const altered = await addUndecidedChanges(adapter, logger, existing);
+  return { created, altered };
+}
+
+/**
+ * Create `missing` with the same push, index replay and constraint replay
+ * first-run uses, so a table created here is the table first-run would have
+ * created.
+ */
+async function createMissingTables(
+  adapter: AdapterLike,
+  logger: LoggerLike,
+  extensionSchema: ExtensionSchema,
+  missing: readonly TableSpec[],
+  injectedPush: EnsureFirstRunSetupDeps["freshPushSchema"] | undefined
+): Promise<string[]> {
+  if (missing.length === 0) return [];
+  const dialect = adapter.dialect;
   try {
     const freshPushSchema =
-      args.deps?.freshPushSchema ??
+      injectedPush ??
       (await import("../domains/schema/pipeline/fresh-push")).freshPushSchema;
     await freshPushSchema(
       dialect,
@@ -500,6 +534,154 @@ export async function createMissingExtensionTables(args: {
   await createExtensionIndexes(adapter, dialect, logger, missing);
   await createExtensionConstraints(adapter, dialect, logger, missing);
   return missing.map(spec => spec.name);
+}
+
+/** The operations this pass may run against a table that already exists. */
+const ADDITIVE_OP_TYPES = new Set<Operation["type"]>([
+  "add_column",
+  "add_index",
+  "add_check",
+  "add_foreign_key",
+]);
+
+/**
+ * Add to each existing table the columns, indexes and constraints its
+ * declaration has and the database lacks, when nothing else about the table
+ * is pending. Returns the tables changed.
+ *
+ * Diffed exactly as the development push diffs them — the live tables
+ * against the compiled specs — and judged by the push's own `dev-additive`
+ * classification, so "needs no decision" has one answer.
+ */
+async function addUndecidedChanges(
+  adapter: AdapterLike,
+  logger: LoggerLike,
+  existing: readonly TableSpec[]
+): Promise<string[]> {
+  if (existing.length === 0) return [];
+  const operations = await diffExistingTables(adapter, logger, existing);
+  if (operations === undefined) return [];
+  const { generateSQL } = await import(
+    "../domains/schema/pipeline/sql-templates/index"
+  );
+
+  const altered: string[] = [];
+  for (const spec of existing) {
+    const statements = undecidedStatements(
+      operations.filter(op => "tableName" in op && op.tableName === spec.name),
+      adapter.dialect,
+      op => generateSQL(op, adapter.dialect)
+    );
+    if (statements.length === 0) continue;
+    if (await runTableStatements(adapter, logger, spec.name, statements)) {
+      altered.push(spec.name);
+    }
+  }
+  return altered;
+}
+
+/** The live tables diffed against their specs, or `undefined` if unreadable. */
+async function diffExistingTables(
+  adapter: AdapterLike,
+  logger: LoggerLike,
+  existing: readonly TableSpec[]
+): Promise<Operation[] | undefined> {
+  const [{ introspectLiveSnapshot }, { diffSnapshots }] = await Promise.all([
+    import("../domains/schema/pipeline/diff/introspect-live"),
+    import("../domains/schema/pipeline/diff/diff"),
+  ]);
+  try {
+    const live = await introspectLiveSnapshot(
+      adapter.getDrizzle(),
+      adapter.dialect,
+      existing.map(spec => spec.name)
+    );
+    return diffSnapshots(live, { tables: [...existing] });
+  } catch (error) {
+    logger.warn(
+      `[nextly] could not compare extension tables with their declarations: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return undefined;
+  }
+}
+
+/**
+ * Whether every operation pending on one table is an addition the
+ * development push would make without asking.
+ *
+ * `dev-additive` never refuses; it sorts each operation into what it applies
+ * and what it skips for a decision. Any skipped operation leaves the table
+ * whole to the push, and so does any applied one that is not an addition.
+ */
+function needsNoDecision(
+  tableOps: Operation[],
+  dialect: AdapterLike["dialect"]
+): boolean {
+  const verdict = classifyForMode(tableOps, dialect, "dev-additive");
+  return (
+    verdict.verdict === "apply" &&
+    verdict.skipped.length === 0 &&
+    tableOps.every(op => ADDITIVE_OP_TYPES.has(op.type))
+  );
+}
+
+/**
+ * The statements adding one table's pending additions, or none when the
+ * table is the development push's to change.
+ *
+ * Each kind through the renderer the push uses for it, and only where that
+ * renderer can spell it. What is left over — an index MySQL needs column
+ * types to key, a constraint SQLite accepts only in a rebuilt CREATE TABLE —
+ * is the push's, and is missing from `init`'s view only until the push runs.
+ */
+function undecidedStatements(
+  tableOps: Operation[],
+  dialect: AdapterLike["dialect"],
+  renderConstraint: (op: Operation) => string
+): string[] {
+  if (tableOps.length === 0 || !needsNoDecision(tableOps, dialect)) return [];
+  const columns = tableOps.filter(op => op.type === "add_column");
+  if (columns.length > 0 && !canEmitWithoutDrizzleKit(columns, dialect)) {
+    return [];
+  }
+  const indexes = tableOps.filter(op => op.type === "add_index");
+  const constraints =
+    dialect === "sqlite"
+      ? []
+      : tableOps.filter(
+          op => op.type === "add_check" || op.type === "add_foreign_key"
+        );
+  return [
+    ...emitDdl(columns, dialect),
+    ...(canEmitWithoutDrizzleKit(indexes, dialect)
+      ? emitDdl(indexes, dialect)
+      : []),
+    ...constraints.map(renderConstraint),
+  ];
+}
+
+/** Run one table's statements in order; reports and stops at a failure. */
+async function runTableStatements(
+  adapter: AdapterLike,
+  logger: LoggerLike,
+  table: string,
+  statements: readonly string[]
+): Promise<boolean> {
+  try {
+    for (const statement of statements) {
+      await adapter.executeQuery(statement);
+    }
+    return true;
+  } catch (error) {
+    logger.warn(
+      `[nextly] could not update extension table ${table}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return false;
+  }
 }
 
 async function resolveDeps(

@@ -278,20 +278,14 @@ function targetColumnKey(
   return found;
 }
 
-export async function buildExtensionSchema(
-  input: ExtensionSchemaInput
-): Promise<ExtensionSchema> {
-  const store = new SchemaDraftStore({
-    dialect: input.dialect,
-    coreTableNames: input.coreTableNames,
-    entities: input.entities,
-    pluginPrefixes: input.pluginPrefixes,
-    dependencies: input.dependencies,
-  });
+/** Table name → elements contributed to a table another owner declared. */
+type ElementOwners = ExtensionSchema["elementOwners"];
+type ElementOwner =
+  ElementOwners extends Map<string, Array<infer Element>> ? Element : never;
 
-  await runExtensionHooks(store, input.plugins, input.app);
-
-  const tables: ExtensionTable[] = store.extensionTables().map(table => ({
+/** The store's plugin and app tables, in the form the schema carries them. */
+function extensionTablesOf(store: SchemaDraftStore): ExtensionTable[] {
+  return store.extensionTables().map(table => ({
     name: table.name,
     authored: table.authored,
     owner: table.owner as SchemaOwner,
@@ -303,90 +297,99 @@ export async function buildExtensionSchema(
     ...(table.checks !== undefined ? { checks: table.checks } : {}),
     ...(table.relations !== undefined ? { relations: table.relations } : {}),
   }));
+}
 
-  // Elements contributed to a table another owner declared: keyed for the
-  // per-element owner rows. An app-contributed index on a plugin table rides
-  // the APP migration stream while the table itself rides the plugin's —
-  // recording the element is what lets the plugin's reconcile ignore it.
-  const elementOwners = new Map<
-    string,
-    Array<{
-      elementKind: "column" | "index" | "fk" | "check";
-      elementName: string;
-      owner: SchemaOwner;
-    }>
-  >();
-  const recordElement = (
-    table: string,
-    element: {
-      elementKind: "column" | "index" | "fk" | "check";
-      elementName: string;
-      owner: SchemaOwner;
-    }
-  ): void => {
-    const list = elementOwners.get(table) ?? [];
-    list.push(element);
-    elementOwners.set(table, list);
-  };
-  for (const table of tables) {
-    for (const index of table.indexes) {
-      if (index.contributedBy === undefined) continue;
-      // The name the table's SPEC gives the index, from the one rule that
-      // names it. A recorded name the spec does not use — a hand-spelled
-      // `idx_<table>_<cols>` where the spec says `uq_` or a hashed form —
-      // named an element the table never has: the contributor's side of the
-      // diff then lacked the index, so every generation added it again, and
-      // its removal was never emitted.
-      recordElement(table.name, {
-        elementKind: "index",
-        elementName: resolveIndexName(table.name, index),
-        owner: index.contributedBy,
-      });
-    }
-    // Hidden columns a foreign contributor added, element-recorded the same
-    // way: the column rides the contributor's stream, and the table owner's
-    // reconcile excludes it.
-    for (const column of table.columns) {
-      if (column.contributedBy === undefined) continue;
-      recordElement(table.name, {
-        elementKind: "column",
-        elementName: column.name,
+/** The elements a foreign contributor added to one table, in table order. */
+function elementsContributedTo(
+  table: ExtensionTable,
+  dialect: SupportedDialect
+): ElementOwner[] {
+  const elements: ElementOwner[] = [];
+  for (const index of table.indexes) {
+    if (index.contributedBy === undefined) continue;
+    // The name the table's SPEC gives the index, from the one rule that
+    // names it. A recorded name the spec does not use — a hand-spelled
+    // `idx_<table>_<cols>` where the spec says `uq_` or a hashed form —
+    // named an element the table never has: the contributor's side of the
+    // diff then lacked the index, so every generation added it again, and
+    // its removal was never emitted.
+    elements.push({
+      elementKind: "index",
+      elementName: resolveIndexName(table.name, index),
+      owner: index.contributedBy,
+    });
+  }
+  // Hidden columns a foreign contributor added, element-recorded the same
+  // way: the column rides the contributor's stream, and the table owner's
+  // reconcile excludes it.
+  for (const column of table.columns) {
+    if (column.contributedBy === undefined) continue;
+    elements.push({
+      elementKind: "column",
+      elementName: column.name,
+      owner: column.contributedBy,
+    });
+    // The CHECK a contributed `col.enum()` implies belongs to the same
+    // contributor as its column. The table's spec carries it (`toTableSpec`
+    // derives it from every column), so left unrecorded it was on the
+    // compiled table and in no stream's elements: the owner's module never
+    // declares it and the contributor's diff never saw it.
+    for (const check of enumChecks(table.name, [column], dialect)) {
+      elements.push({
+        elementKind: "check",
+        elementName: check.name,
         owner: column.contributedBy,
       });
-      // The CHECK a contributed `col.enum()` implies belongs to the same
-      // contributor as its column. The table's spec carries it (`toTableSpec`
-      // derives it from every column), so left unrecorded it was on the
-      // compiled table and in no stream's elements: the owner's module never
-      // declares it and the contributor's diff never saw it.
-      for (const check of enumChecks(table.name, [column], input.dialect)) {
-        recordElement(table.name, {
-          elementKind: "check",
-          elementName: check.name,
-          owner: column.contributedBy,
-        });
-      }
     }
   }
+  return elements;
+}
 
-  // Relation edges for the registry: keys snake-cased at declaration, targets
-  // kept as final table names, so a registration composes straight into the
-  // schema-wide relations config that powers db.query.
+/**
+ * Elements contributed to a table another owner declared: keyed for the
+ * per-element owner rows. An app-contributed index on a plugin table rides
+ * the APP migration stream while the table itself rides the plugin's —
+ * recording the element is what lets the plugin's reconcile ignore it.
+ */
+function collectElementOwners(
+  tables: readonly ExtensionTable[],
+  dialect: SupportedDialect
+): ElementOwners {
+  const elementOwners: ElementOwners = new Map();
+  for (const table of tables) {
+    const elements = elementsContributedTo(table, dialect);
+    if (elements.length > 0) elementOwners.set(table.name, elements);
+  }
+  return elementOwners;
+}
+
+/**
+ * Relation edges for the registry: keys snake-cased at declaration, targets
+ * kept as final table names, so a registration composes straight into the
+ * schema-wide relations config that powers db.query.
+ */
+function relationsOf(
+  tables: readonly ExtensionTable[],
+  byName: ReadonlyMap<string, ExtensionTable>,
+  coreTables: Readonly<Record<string, unknown>>
+): Map<string, DynamicRelationEdge[]> {
   const relations = new Map<string, DynamicRelationEdge[]>();
-  const byName = new Map<string, ExtensionTable>(
-    [...tables, ...store.adoptedTables()].map(table => [
-      table.name,
-      table as ExtensionTable,
-    ])
-  );
-  // The core tables a relation may target, as the registry will resolve them.
-  const coreTables = staticRelationTables(input.dialect);
   for (const table of tables) {
     const edges = relationEdgesOf(table, byName, coreTables);
     if (edges.length > 0) relations.set(table.name, edges);
   }
+  return relations;
+}
 
-  // Indexes contributed to entity tables are carried separately: they belong
-  // to a table this module does not own and must not be emitted as one.
+/**
+ * Indexes and columns contributed to entity and core tables, carried
+ * separately: they belong to a table this module does not own and must not
+ * be emitted as one.
+ */
+function foreignTableContributions(store: SchemaDraftStore): {
+  entityIndexes: Map<string, ExtensionIndex[]>;
+  entityColumns: Map<string, ExtensionColumn[]>;
+} {
   const entityIndexes = new Map<string, ExtensionIndex[]>();
   const entityColumns = new Map<string, ExtensionColumn[]>();
   for (const table of store.all()) {
@@ -405,58 +408,190 @@ export async function buildExtensionSchema(
       entityColumns.set(table.name, added);
     }
   }
+  return { entityIndexes, entityColumns };
+}
 
-  const compiledSpecs = tables.map(table => toTableSpec(table, input.dialect));
+/** Each extension table compiled to Drizzle, and its owner. */
+function compileDrizzleTables(
+  tables: readonly ExtensionTable[],
+  dialect: SupportedDialect
+): { compiled: Record<string, unknown>; owners: Map<string, SchemaOwner> } {
   const compiled: Record<string, unknown> = {};
   const owners = new Map<string, SchemaOwner>();
   for (const table of tables) {
-    compiled[table.name] = toDrizzleTable(table, input.dialect);
+    compiled[table.name] = toDrizzleTable(table, dialect);
     owners.set(table.name, table.owner);
   }
-  // Second pass, SQLite only: tables with foreign keys are rebuilt with a
-  // resolver, so the kit-bound definition carries every constraint and a
-  // change travels through the rebuild — SQLite has no other way to get one.
-  //
-  // A table in this bundle resolves to its pass-one object. Anything else —
-  // core, entity, adopted — resolves to a stand-in built from the declaration
-  // itself, because the foreign key clause needs only the table's name and
-  // the referenced columns'. Resolving the REAL object instead made the
-  // constraint depend on boot order (this runs before the schema registry
-  // exists) and could never reach an entity table at all, so the constraint
-  // was compiled away and SQLite silently never enforced it.
-  if (input.dialect === "sqlite") {
-    for (const table of tables) {
-      if ((table.foreignKeys ?? []).length === 0) continue;
-      compiled[table.name] = toDrizzleTable(
-        table,
-        input.dialect,
-        (name, columns) => compiled[name] ?? referenceTableStub(name, columns)
-      );
-    }
-  }
+  if (dialect === "sqlite") recompileWithForeignKeys(tables, compiled);
+  return { compiled, owners };
+}
 
-  // Core and entity tables are Nextly's to maintain, so a hook may not return
-  // one. Built from the same two inputs the draft store seeds itself from,
-  // rather than from the compiled tables: `compiled` holds only extension
-  // tables, so deriving the protected set from it would be empty and the
-  // refusal would never fire.
-  //
-  // Adopted tables are protected for the opposite reason: nobody here
-  // maintains them. A hook returning one would otherwise be taken as a table
-  // the hook INTRODUCED — owned by the app and given a spec below — and the
-  // app's migrations would then create or alter a table Nextly promised never
-  // to touch. Read from the store, which already holds them: the adoption
-  // loop further down runs after the hooks.
-  const protectedTables = new Set<string>([
+/**
+ * Second pass, SQLite only: tables with foreign keys are rebuilt with a
+ * resolver, so the kit-bound definition carries every constraint and a
+ * change travels through the rebuild — SQLite has no other way to get one.
+ *
+ * A table in this bundle resolves to its pass-one object. Anything else —
+ * core, entity, adopted — resolves to a stand-in built from the declaration
+ * itself, because the foreign key clause needs only the table's name and
+ * the referenced columns'. Resolving the REAL object instead made the
+ * constraint depend on boot order (this runs before the schema registry
+ * exists) and could never reach an entity table at all, so the constraint
+ * was compiled away and SQLite silently never enforced it.
+ */
+function recompileWithForeignKeys(
+  tables: readonly ExtensionTable[],
+  compiled: Record<string, unknown>
+): void {
+  for (const table of tables) {
+    if ((table.foreignKeys ?? []).length === 0) continue;
+    compiled[table.name] = toDrizzleTable(
+      table,
+      "sqlite",
+      (name, columns) => compiled[name] ?? referenceTableStub(name, columns)
+    );
+  }
+}
+
+/**
+ * The tables a hook may not return.
+ *
+ * Core and entity tables are Nextly's to maintain, so a hook may not return
+ * one. Built from the same two inputs the draft store seeds itself from,
+ * rather than from the compiled tables: `compiled` holds only extension
+ * tables, so deriving the protected set from it would be empty and the
+ * refusal would never fire.
+ *
+ * Adopted tables are protected for the opposite reason: nobody here
+ * maintains them. A hook returning one would otherwise be taken as a table
+ * the hook INTRODUCED — owned by the app and given a spec below — and the
+ * app's migrations would then create or alter a table Nextly promised never
+ * to touch. Read from the store, which already holds them: the adoption
+ * loop further down runs after the hooks.
+ */
+function protectedTableNames(
+  input: ExtensionSchemaInput,
+  store: SchemaDraftStore
+): Set<string> {
+  return new Set<string>([
     ...input.coreTableNames,
     ...input.entities.map(entity => entity.name),
     ...store.adoptedTables().map(table => table.name),
   ]);
+}
 
+/** What `specsAfterHooks` compares: the tables before and after the hooks. */
+interface HookedTables {
+  dialect: SupportedDialect;
+  tables: readonly ExtensionTable[];
+  compiled: Record<string, unknown>;
+  compiledSpecs: readonly TableSpec[];
+}
+
+/** One table's spec after the hooks ran. */
+function specAfterHooks(
+  name: string,
+  table: unknown,
+  hooked: HookedTables
+): TableSpec {
+  const compiledSpec = hooked.compiledSpecs.find(spec => spec.name === name);
+  // Untouched tables keep the spec COMPILED from the declaration.
+  //
+  // The Drizzle object is a lossy view of it: the neutral model
+  // carries declared checks and foreign keys that `toDrizzleTable`
+  // deliberately leaves off on PostgreSQL and MySQL, where they are
+  // applied as separate statements. Re-deriving every table from
+  // Drizzle therefore erased them, and constraints vanished from
+  // migration generation and drift.
+  //
+  // Identity again, matching what `runAfterDrizzle` validates: the
+  // same object means the hook did not touch it, so the declaration
+  // remains the better description of it.
+  if (compiledSpec !== undefined && table === hooked.compiled[name]) {
+    return compiledSpec;
+  }
+  // A table the hook introduced has no declaration to start from, so
+  // its Drizzle table is the whole description. One it reshaped keeps
+  // its declaration and takes only the hook's changes.
+  if (compiledSpec === undefined) {
+    return drizzleTableToTableSpec(table as Table, hooked.dialect);
+  }
+  return specAfterHook({
+    compiledSpec,
+    compiledTable: hooked.compiled[name] as Table,
+    hookTable: table as Table,
+    declared: hooked.tables.find(declared => declared.name === name),
+    dialect: hooked.dialect,
+  });
+}
+
+/**
+ * Adopted tables, compiled to drizzle ONLY: registered for typed access and
+ * queries, absent from specs (so no diff ever proposes DDL for them), from
+ * the fingerprint (a cache key over managed state), and from the kit bundle
+ * (so drizzle-kit never sees — never mind alters — a table Nextly does not
+ * own). Their exclusion is structural, not a filter somebody must remember.
+ */
+function compileAdoptedTables(
+  store: SchemaDraftStore,
+  dialect: SupportedDialect,
+  owners: Map<string, SchemaOwner>,
+  byName: ReadonlyMap<string, ExtensionTable>,
+  coreTables: Readonly<Record<string, unknown>>
+): {
+  adopted: Record<string, unknown>;
+  adoptedRelations: Map<string, DynamicRelationEdge[]>;
+} {
+  const adopted: Record<string, unknown> = {};
+  const adoptedRelations = new Map<string, DynamicRelationEdge[]>();
+  for (const table of store.adoptedTables()) {
+    adopted[table.name] = toDrizzleTable(table as never, dialect);
+    // App-owned, so the app's own `ctx.db` surface reaches the table and a
+    // plugin's owner check does not — the access rule adopted tables follow.
+    owners.set(table.name, { kind: "app" });
+    const edges = relationEdgesOf(table as ExtensionTable, byName, coreTables);
+    if (edges.length > 0) adoptedRelations.set(table.name, edges);
+  }
+  return { adopted, adoptedRelations };
+}
+
+export async function buildExtensionSchema(
+  input: ExtensionSchemaInput
+): Promise<ExtensionSchema> {
+  const store = new SchemaDraftStore({
+    dialect: input.dialect,
+    coreTableNames: input.coreTableNames,
+    entities: input.entities,
+    pluginPrefixes: input.pluginPrefixes,
+    dependencies: input.dependencies,
+  });
+
+  await runExtensionHooks(store, input.plugins, input.app);
+
+  const tables = extensionTablesOf(store);
+  const elementOwners = collectElementOwners(tables, input.dialect);
+
+  const byName = new Map<string, ExtensionTable>(
+    [...tables, ...store.adoptedTables()].map(table => [
+      table.name,
+      table as ExtensionTable,
+    ])
+  );
+  // The core tables a relation may target, as the registry will resolve them.
+  const coreTables = staticRelationTables(input.dialect);
+  const relations = relationsOf(tables, byName, coreTables);
+
+  const { entityIndexes, entityColumns } = foreignTableContributions(store);
+
+  const compiledSpecs = tables.map(table => toTableSpec(table, input.dialect));
+  const { compiled, owners } = compileDrizzleTables(tables, input.dialect);
+  const protectedTables = protectedTableNames(input, store);
+
+  const hooks = input.afterDrizzle ?? [];
   const drizzle = await runAfterDrizzle({
     dialect: input.dialect,
     tables: compiled,
-    hooks: input.afterDrizzle ?? [],
+    hooks,
     owners,
     protectedTables,
     naming: {
@@ -498,56 +633,26 @@ export async function buildExtensionSchema(
     if (!owners.has(name)) owners.set(name, { kind: "app" });
   }
 
+  const hooked: HookedTables = {
+    dialect: input.dialect,
+    tables,
+    compiled,
+    compiledSpecs,
+  };
   const specs =
-    (input.afterDrizzle ?? []).length === 0
+    hooks.length === 0
       ? compiledSpecs
-      : Object.entries(drizzle).map(([name, table]) => {
-          const compiledSpec = compiledSpecs.find(spec => spec.name === name);
-          // Untouched tables keep the spec COMPILED from the declaration.
-          //
-          // The Drizzle object is a lossy view of it: the neutral model
-          // carries declared checks and foreign keys that `toDrizzleTable`
-          // deliberately leaves off on PostgreSQL and MySQL, where they are
-          // applied as separate statements. Re-deriving every table from
-          // Drizzle therefore erased them, and constraints vanished from
-          // migration generation and drift.
-          //
-          // Identity again, matching what `runAfterDrizzle` validates: the
-          // same object means the hook did not touch it, so the declaration
-          // remains the better description of it.
-          if (compiledSpec !== undefined && table === compiled[name]) {
-            return compiledSpec;
-          }
-          // A table the hook introduced has no declaration to start from, so
-          // its Drizzle table is the whole description. One it reshaped keeps
-          // its declaration and takes only the hook's changes.
-          if (compiledSpec === undefined) {
-            return drizzleTableToTableSpec(table as Table, input.dialect);
-          }
-          return specAfterHook({
-            compiledSpec,
-            compiledTable: compiled[name] as Table,
-            hookTable: table as Table,
-            declared: tables.find(declared => declared.name === name),
-            dialect: input.dialect,
-          });
-        });
+      : Object.entries(drizzle).map(([name, table]) =>
+          specAfterHooks(name, table, hooked)
+        );
 
-  // Adopted tables compile to drizzle ONLY: registered for typed access and
-  // queries, absent from specs (so no diff ever proposes DDL for them), from
-  // the fingerprint (a cache key over managed state), and from the kit bundle
-  // (so drizzle-kit never sees — never mind alters — a table Nextly does not
-  // own). Their exclusion is structural, not a filter somebody must remember.
-  const adopted: Record<string, unknown> = {};
-  const adoptedRelations = new Map<string, DynamicRelationEdge[]>();
-  for (const table of store.adoptedTables()) {
-    adopted[table.name] = toDrizzleTable(table as never, input.dialect);
-    // App-owned, so the app's own `ctx.db` surface reaches the table and a
-    // plugin's owner check does not — the access rule adopted tables follow.
-    owners.set(table.name, { kind: "app" });
-    const edges = relationEdgesOf(table as ExtensionTable, byName, coreTables);
-    if (edges.length > 0) adoptedRelations.set(table.name, edges);
-  }
+  const { adopted, adoptedRelations } = compileAdoptedTables(
+    store,
+    input.dialect,
+    owners,
+    byName,
+    coreTables
+  );
   // An adopted table cannot be reshaped, but it can point at one that was.
   rekeyRelationEdges({
     edges: adoptedRelations,

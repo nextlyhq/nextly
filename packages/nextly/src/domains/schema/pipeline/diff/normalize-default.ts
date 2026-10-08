@@ -202,6 +202,27 @@ function isNumericColumnType(columnType: string | undefined): boolean {
  * `1000`. Undefined for anything that is not a single number.
  */
 function canonicalNumber(expr: string): string | undefined {
+  const parts = numberLiteralParts(expr);
+  if (parts === undefined) return undefined;
+  const { sign, whole, fraction, exponent } = parts;
+  const significant = `${whole}${fraction}`.replace(/^0+/, "");
+  if (significant === "") return "0";
+  const trimmed = significant.replace(/0+$/, "");
+  const scale =
+    Number(exponent) - fraction.length + (significant.length - trimmed.length);
+  return spellNumber(sign === "-" ? "-" : "", trimmed, scale);
+}
+
+/**
+ * The sign, whole digits, fraction digits and exponent of a number literal,
+ * bare or single-quoted. Undefined for anything that is not a single number,
+ * including one with no digits at all.
+ */
+function numberLiteralParts(
+  expr: string
+):
+  | { sign: string; whole: string; fraction: string; exponent: string }
+  | undefined {
   const match = /^\s*(?:'([^']*)'|(\S+))\s*$/.exec(expr);
   const text = match?.[1] ?? match?.[2];
   if (text === undefined) return undefined;
@@ -209,13 +230,14 @@ function canonicalNumber(expr: string): string | undefined {
   if (parts === null) return undefined;
   const [, sign, whole = "", fraction = "", exponent = "0"] = parts;
   if (whole === "" && fraction === "") return undefined;
-  const allDigits = `${whole}${fraction}`;
-  const significant = allDigits.replace(/^0+/, "");
-  if (significant === "") return "0";
-  const trimmed = significant.replace(/0+$/, "");
-  const scale =
-    Number(exponent) - fraction.length + (significant.length - trimmed.length);
-  const minus = sign === "-" ? "-" : "";
+  return { sign, whole, fraction, exponent };
+}
+
+/**
+ * Significant digits with no trailing zeros, times ten to `scale`, with the
+ * given sign prefix.
+ */
+function spellNumber(minus: string, trimmed: string, scale: number): string {
   // Written out in positional notation, so an integer default reads as the
   // integer; an exponent too large to spell out keeps exponent form, which is
   // still one spelling per value.

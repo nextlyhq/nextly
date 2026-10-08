@@ -470,6 +470,67 @@ async function recordRetiredDrop(
   }
 }
 
+/** One table's contributions, as `coreContributions` reports them. */
+type CoreContribution =
+  ReturnType<typeof coreContributions> extends Map<string, infer Entry>
+    ? Entry
+    : never;
+
+/** The names of a live table's elements of one kind. */
+function liveElementNames(
+  elements: readonly { name: string }[] | undefined
+): string[] {
+  return (elements ?? []).map(element => element.name);
+}
+
+/**
+ * The contributed elements the live table actually has, by element name.
+ * Foreign keys are never contributed to a core table, so none are kept.
+ */
+function liveContributedElements(
+  entry: CoreContribution,
+  liveTable: NextlySchemaSnapshot["tables"][number]
+): ReturnType<typeof onlyElements> {
+  return onlyElements(entry.elements, {
+    columns: entry.names.columns.filter(column =>
+      liveElementNames(liveTable.columns).includes(column)
+    ),
+    indexes: entry.names.indexes.filter(index =>
+      liveElementNames(liveTable.indexes).includes(index)
+    ),
+    foreignKeys: [],
+    checks: entry.names.checks.filter(check =>
+      liveElementNames(liveTable.checks).includes(check)
+    ),
+  });
+}
+
+/**
+ * One bundle entry, rebuilt with its live contributions when it is a core
+ * table that was contributed to and that the database has; otherwise as is.
+ */
+function bundleTableWithLiveContributions(
+  table: unknown,
+  contributed: ReturnType<typeof coreContributions>,
+  liveByName: ReadonlyMap<string, NextlySchemaSnapshot["tables"][number]>,
+  source: EntityContributionSource,
+  dialect: Dialect
+): unknown {
+  if (!isTable(table)) return table;
+  const name = getTableName(table);
+  const entry = contributed.get(name);
+  const liveTable = liveByName.get(name);
+  if (entry === undefined || liveTable === undefined) return table;
+  return (
+    coreTableWithLiveContributions(
+      name,
+      liveContributedElements(entry, liveTable),
+      source.entityColumns.get(name) ?? [],
+      dialect
+    ) ?? table
+  );
+}
+
 /**
  * The core push bundle, each contributed-to table replaced by its definition
  * rebuilt with the contributions `live` holds (`coreTableWithLiveContributions`).
@@ -489,34 +550,13 @@ function pushBundleWithLiveContributions(
   const liveByName = new Map(live.tables.map(table => [table.name, table]));
   const out: Record<string, unknown> = {};
   for (const [key, table] of Object.entries(bundle)) {
-    const name = isTable(table) ? getTableName(table) : undefined;
-    const entry = name === undefined ? undefined : contributed.get(name);
-    const liveTable = name === undefined ? undefined : liveByName.get(name);
-    if (name === undefined || entry === undefined || liveTable === undefined) {
-      out[key] = table;
-      continue;
-    }
-    const present = (elements: readonly { name: string }[] | undefined) =>
-      (elements ?? []).map(element => element.name);
-    const liveElements = onlyElements(entry.elements, {
-      columns: entry.names.columns.filter(column =>
-        present(liveTable.columns).includes(column)
-      ),
-      indexes: entry.names.indexes.filter(index =>
-        present(liveTable.indexes).includes(index)
-      ),
-      foreignKeys: [],
-      checks: entry.names.checks.filter(check =>
-        present(liveTable.checks).includes(check)
-      ),
-    });
-    out[key] =
-      coreTableWithLiveContributions(
-        name,
-        liveElements,
-        source.entityColumns.get(name) ?? [],
-        dialect
-      ) ?? table;
+    out[key] = bundleTableWithLiveContributions(
+      table,
+      contributed,
+      liveByName,
+      source,
+      dialect
+    );
   }
   return out;
 }

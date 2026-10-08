@@ -118,6 +118,17 @@ async function loadSnapshot(
   }
 }
 
+/**
+ * What `--failed-cleanup` reports. Every failed attempt since the file's last
+ * other event is cleared together, so it says how many when that is more
+ * than one.
+ */
+function cleanedUpMessage(filename: string, cleared: number): string {
+  return cleared === 1
+    ? `Cleaned up failed event for ${filename}.`
+    : `Cleaned up ${cleared} failed events for ${filename}.`;
+}
+
 async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
   try {
     return await (
@@ -173,6 +184,7 @@ export async function runMigrateResolve(
         mode,
         filename,
         skipVerify: options.skipVerify,
+        dialect,
         repo,
         fileExists: name => fileExistsIn(migrationsDir, name),
         loadTargetSnapshot: () => loadSnapshot(metaDir, filename),
@@ -245,7 +257,7 @@ export async function runMigrateResolve(
         // that, so the record of what was checked stays honest.
         if (!result.verified && !options.skipVerify) {
           logger.info(
-            `${filename} is marked -- nextly:no-transaction and has no snapshot, so the live schema was not compared.`
+            `${filename} has no snapshot, so the live schema was not compared.`
           );
         }
         break;
@@ -255,7 +267,7 @@ export async function runMigrateResolve(
         );
         break;
       case "failed-cleanup":
-        logger.success(`Cleaned up failed event for ${filename}.`);
+        logger.success(cleanedUpMessage(filename, result.updatedIds.length));
         break;
       case "noop":
         logger.info(result.reason);

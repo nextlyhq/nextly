@@ -247,7 +247,10 @@ the statement, so it reaches a database with the app's next migration.
 A column added to a table you do not own is **hidden**: it exists on the table,
 so migrations and dev push keep it, and on an entity table it is stripped
 from every REST response, Direct API read, version snapshot and webhook
-payload, and a value sent for it through the entry API is dropped. The column
+payload, and a value sent for it through the entry API is dropped. A `where`
+naming it is refused, including under a component field's path for a column
+on a component's table; a group key naming it is refused, and a sort by it is
+ignored. The column
 must be nullable or have a default, since the table may already have rows.
 
 A hidden column is storage for your plugin's own bookkeeping, not a field. To
@@ -359,6 +362,22 @@ Either way the module is written to `src/migrations/` and added to its barrel.
 A hand-sealed module gives up one check: that its SQL is the SQL that was
 generated. The ledger still refuses a module that changed after it was
 applied, so finish editing it before it ships.
+
+Two rules hold for every module, and a plugin that breaks one is refused
+when the configuration loads, before anything runs:
+
+- Its `name` cannot contain `/`. The ledger records it as
+  `plugin:<plugin>/<name>`, and a slash in the name would file it under
+  another plugin.
+- Modules run in name order, and each one's `schemaVersion` is no lower than
+  the one before it. The version the database ends at is the last module's,
+  so it is the one that must equal the plugin's `schemaVersion`.
+
+And when it runs, a module may drop or rename only what the owner registry
+says is the plugin's: its own tables, the columns it contributed to other
+owners' tables, and tables the module itself creates. A table no record
+claims, such as an app table from before the registry, is refused
+(`DROP_OF_FOREIGN_TABLE`).
 
 The entry `--plugin` points at may export the plugin as its default export or
 as a named one (`export const myPlugin = definePlugin(...)`), beside the tables

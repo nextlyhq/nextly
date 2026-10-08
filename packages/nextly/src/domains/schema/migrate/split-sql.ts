@@ -13,7 +13,7 @@
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 
-import { scanSql } from "./sql-scan";
+import { scanSql, type SqlSegment } from "./sql-scan";
 
 /** The marker drizzle-kit writes between the statements of a generated file. */
 const BREAKPOINT = "--> statement-breakpoint";
@@ -158,26 +158,43 @@ function leadingWords(
 ): string[] {
   const words: string[] = [];
   for (const segment of scanSql(statement, dialect)) {
-    if (segment.kind === "line-comment") continue;
-    let code: string;
-    if (segment.kind === "code") {
-      code = statement.slice(segment.start, segment.end);
-    } else if (segment.kind === "block-comment") {
-      if (!segment.executable) continue;
-      // `/*!40014 SET ... */`: the version number is not part of the code.
-      code = statement
-        .slice(segment.start, segment.end)
-        .replace(/^\/\*M?!\d*/i, "")
-        .replace(/\*\/$/, "");
-    } else {
-      break;
-    }
+    const code = serverCode(statement, segment);
+    if (code === null) break;
+    if (code === undefined) continue;
     for (const token of code.match(/@{0,2}[A-Za-z_][\w$.]*|\S/g) ?? []) {
       words.push(token.toUpperCase());
       if (words.length === count) return words;
     }
   }
   return words;
+}
+
+/**
+ * The code a segment holds as the server reads it: a code segment's text,
+ * and on MySQL an executable comment's body. `undefined` for a segment the
+ * server skips, a comment; `null` for a quoted segment, where reading the
+ * leading words stops.
+ */
+function serverCode(
+  statement: string,
+  segment: SqlSegment
+): string | null | undefined {
+  switch (segment.kind) {
+    case "code":
+      return statement.slice(segment.start, segment.end);
+    case "line-comment":
+      return undefined;
+    case "block-comment":
+      // `/*!40014 SET ... */`: the version number is not part of the code.
+      return segment.executable
+        ? statement
+            .slice(segment.start, segment.end)
+            .replace(/^\/\*M?!\d*/i, "")
+            .replace(/\*\/$/, "")
+        : undefined;
+    default:
+      return null;
+  }
 }
 
 /**
@@ -205,35 +222,52 @@ function leadingWords(
 export function transactionControlOf(
   statement: string,
   dialect?: SupportedDialect
-): "bracket" | "refused" | "savepoint" | null {
+): TransactionControl | null {
   const [first, second, third] = leadingWords(statement, dialect, 3);
-  switch (first) {
-    case "BEGIN":
-    case "END":
-      return "bracket";
-    case "START":
-      return second === "TRANSACTION" ? "bracket" : null;
-    case "COMMIT":
-      return second === "PREPARED" ? "refused" : "bracket";
-    case "ROLLBACK": {
-      // `ROLLBACK [WORK | TRANSACTION] TO` returns to a savepoint the file
-      // set, inside the runner's transaction; a bare ROLLBACK, with or
-      // without the optional word, ends that transaction.
-      const next =
-        second === "WORK" || second === "TRANSACTION" ? third : second;
-      return next === "TO" ? "savepoint" : "refused";
-    }
-    case "SAVEPOINT":
-    case "RELEASE":
-      return "savepoint";
-    case "ABORT":
-    case "XA":
-      return "refused";
-    case "PREPARE":
-      return second === "TRANSACTION" ? "refused" : null;
-    default:
-      return null;
-  }
+  const control = TRANSACTION_CONTROL.get(first ?? "");
+  return control === undefined ? null : control(second, third);
+}
+
+/** What a statement does to the runner's transaction (`transactionControlOf`). */
+type TransactionControl = "bracket" | "refused" | "savepoint";
+
+/** Reads a statement's transaction control from its second and third words. */
+type ControlReader = (
+  second: string | undefined,
+  third: string | undefined
+) => TransactionControl | null;
+
+/**
+ * A statement's transaction control by its first keyword, read from the
+ * words after it. A first keyword missing here controls no transaction.
+ */
+const TRANSACTION_CONTROL: ReadonlyMap<string, ControlReader> = new Map<
+  string,
+  ControlReader
+>([
+  ["BEGIN", () => "bracket"],
+  ["END", () => "bracket"],
+  ["START", second => (second === "TRANSACTION" ? "bracket" : null)],
+  ["COMMIT", second => (second === "PREPARED" ? "refused" : "bracket")],
+  ["ROLLBACK", rollbackControl],
+  ["SAVEPOINT", () => "savepoint"],
+  ["RELEASE", () => "savepoint"],
+  ["ABORT", () => "refused"],
+  ["XA", () => "refused"],
+  ["PREPARE", second => (second === "TRANSACTION" ? "refused" : null)],
+]);
+
+/**
+ * `ROLLBACK [WORK | TRANSACTION] TO` returns to a savepoint the file set,
+ * inside the runner's transaction; a bare ROLLBACK, with or without the
+ * optional word, ends that transaction.
+ */
+function rollbackControl(
+  second: string | undefined,
+  third: string | undefined
+): TransactionControl {
+  const next = second === "WORK" || second === "TRANSACTION" ? third : second;
+  return next === "TO" ? "savepoint" : "refused";
 }
 
 /**
@@ -261,33 +295,64 @@ function sessionSettingOf(
   statement: string,
   dialect: SupportedDialect | undefined
 ): string | undefined {
+  if (dialect !== "postgresql" && dialect !== "mysql") return undefined;
   const [first, second, third] = leadingWords(statement, dialect, 3);
-  // The setting a SET names, past a SESSION/GLOBAL scope word and MySQL's
-  // `@@session.` prefix: what the refusal tells the operator they changed.
-  const setting = (
+  return dialect === "postgresql"
+    ? postgresSessionSetting(first, second, third)
+    : mysqlSessionSetting(first, second, third);
+}
+
+/**
+ * PostgreSQL's `SET` and `SET SESSION`, and `RESET` and `DISCARD`, which
+ * the setting reads as their own keyword. Not the transaction-scoped forms.
+ */
+function postgresSessionSetting(
+  first: string | undefined,
+  second: string | undefined,
+  third: string | undefined
+): string | undefined {
+  if (first === "RESET" || first === "DISCARD") return first;
+  if (first !== "SET" || TRANSACTION_SCOPED_SETS.has(second ?? "")) {
+    return undefined;
+  }
+  return setSettingName(second, third) ?? first;
+}
+
+/** MySQL's `SET` of a system variable; not of a user variable (`@x`). */
+function mysqlSessionSetting(
+  first: string | undefined,
+  second: string | undefined,
+  third: string | undefined
+): string | undefined {
+  if (first !== "SET") return undefined;
+  if (second?.startsWith("@") === true && !second.startsWith("@@")) {
+    return undefined;
+  }
+  return setSettingName(second, third) ?? first;
+}
+
+/**
+ * The setting a SET names, past a SESSION/GLOBAL scope word and MySQL's
+ * `@@session.` prefix: what the refusal tells the operator they changed.
+ */
+function setSettingName(
+  second: string | undefined,
+  third: string | undefined
+): string | undefined {
+  return (
     second === "SESSION" || second === "GLOBAL" ? third : second
   )?.replace(/^@@(?:SESSION\.|GLOBAL\.)?/, "");
-  if (dialect === "postgresql") {
-    if (first === "RESET" || first === "DISCARD") return first;
-    if (
-      first !== "SET" ||
-      second === "LOCAL" ||
-      second === "CONSTRAINTS" ||
-      second === "TRANSACTION"
-    ) {
-      return undefined;
-    }
-    return setting ?? first;
-  }
-  if (dialect === "mysql") {
-    if (first !== "SET") return undefined;
-    if (second?.startsWith("@") === true && !second.startsWith("@@")) {
-      return undefined;
-    }
-    return setting ?? first;
-  }
-  return undefined;
 }
+
+/**
+ * The words after PostgreSQL's SET that make it last only until the
+ * transaction ends: `SET LOCAL`, `SET CONSTRAINTS`, `SET TRANSACTION`.
+ */
+const TRANSACTION_SCOPED_SETS = new Set([
+  "LOCAL",
+  "CONSTRAINTS",
+  "TRANSACTION",
+]);
 
 /**
  * Why a statement needs the transaction that a unit run outside one does
@@ -318,8 +383,7 @@ function needsTransactionReason(
   }
   if (dialect !== "postgresql") return undefined;
   const [first, second] = leadingWords(statement, dialect, 2);
-  return first === "SET" &&
-    (second === "LOCAL" || second === "CONSTRAINTS" || second === "TRANSACTION")
+  return first === "SET" && TRANSACTION_SCOPED_SETS.has(second ?? "")
     ? "lasts only until the transaction ends, and outside one PostgreSQL ignores it."
     : undefined;
 }
@@ -531,58 +595,102 @@ function outsideTransactionReason(
   statement: string,
   dialect: SupportedDialect | undefined,
   mode: MigrationRunMode
-): { reason: string; markable: boolean } | undefined {
+): OutsideTransactionReason | undefined {
   const words = leadingWords(statement, dialect, 6);
-  const [first, second] = words;
-  const inOne = `cannot run inside a transaction, and this ${mode.unit} runs in one.`;
-  if (dialect === "postgresql") {
-    if (first === "VACUUM") return { reason: inOne, markable: true };
-    if (
-      (first === "CREATE" || first === "DROP" || first === "REINDEX") &&
-      words.includes("CONCURRENTLY")
-    ) {
-      return {
-        reason: `builds or drops concurrently, which PostgreSQL cannot do inside a transaction, and this ${mode.unit} runs in one.`,
-        markable: true,
-      };
-    }
-    if (
-      (first === "CREATE" || first === "DROP") &&
-      (second === "DATABASE" || second === "TABLESPACE")
-    ) {
-      return { reason: inOne, markable: true };
-    }
-    if (first === "ALTER" && second === "SYSTEM") {
-      return {
-        reason: `changes the server's configuration, which cannot be done inside a transaction, and this ${mode.unit} runs in one.`,
-        markable: true,
-      };
-    }
-    return undefined;
+  switch (dialect) {
+    case "postgresql":
+      return postgresOutsideTransactionReason(words, mode.unit);
+    case "sqlite":
+      return sqliteOutsideTransactionReason(words[0], mode.unit);
+    case "mysql":
+      return mysqlOutsideTransactionReason(words, mode.transaction);
+    default:
+      return undefined;
   }
-  if (dialect === "sqlite") {
-    if (first === "VACUUM") return { reason: inOne, markable: true };
-    return first === "ATTACH" || first === "DETACH"
-      ? {
-          reason:
-            "changes which databases the process's one connection sees, and that outlives the migration.",
-          markable: false,
-        }
-      : undefined;
+}
+
+/** Why a statement cannot run inside a transaction, and whether marking helps. */
+interface OutsideTransactionReason {
+  reason: string;
+  markable: boolean;
+}
+
+/** The reason a statement the database refuses inside a transaction gives. */
+function cannotRunInOne(unit: MigrationRunMode["unit"]): string {
+  return `cannot run inside a transaction, and this ${unit} runs in one.`;
+}
+
+/** The first words of PostgreSQL's statements that may run CONCURRENTLY. */
+const CONCURRENT_STATEMENTS = new Set(["CREATE", "DROP", "REINDEX"]);
+
+/** The first words of PostgreSQL's `CREATE`/`DROP DATABASE|TABLESPACE`. */
+const CREATE_OR_DROP = new Set(["CREATE", "DROP"]);
+
+/** What PostgreSQL's `CREATE`/`DROP` refuses inside a transaction. */
+const SERVER_OBJECTS = new Set(["DATABASE", "TABLESPACE"]);
+
+/** PostgreSQL's statements that run only outside a transaction. */
+function postgresOutsideTransactionReason(
+  words: readonly string[],
+  unit: MigrationRunMode["unit"]
+): OutsideTransactionReason | undefined {
+  const [first = "", second = ""] = words;
+  if (first === "VACUUM")
+    return { reason: cannotRunInOne(unit), markable: true };
+  if (CONCURRENT_STATEMENTS.has(first) && words.includes("CONCURRENTLY")) {
+    return {
+      reason: `builds or drops concurrently, which PostgreSQL cannot do inside a transaction, and this ${unit} runs in one.`,
+      markable: true,
+    };
   }
-  if (dialect === "mysql") {
-    const locking = first === "LOCK" || first === "UNLOCK";
-    return locking &&
-      (second === "TABLES" || second === "TABLE" || second === "INSTANCE")
-      ? {
-          reason: mode.transaction
-            ? "commits the migration's transaction implicitly and holds its locks on the pooled connection after the migration."
-            : "holds its locks on the pooled connection after the migration.",
-          markable: false,
-        }
-      : undefined;
+  if (CREATE_OR_DROP.has(first) && SERVER_OBJECTS.has(second)) {
+    return { reason: cannotRunInOne(unit), markable: true };
+  }
+  if (first === "ALTER" && second === "SYSTEM") {
+    return {
+      reason: `changes the server's configuration, which cannot be done inside a transaction, and this ${unit} runs in one.`,
+      markable: true,
+    };
   }
   return undefined;
+}
+
+/**
+ * SQLite's `VACUUM`, which runs only outside a transaction, and its
+ * `ATTACH`/`DETACH`, which change the connection whatever the transaction.
+ */
+function sqliteOutsideTransactionReason(
+  first: string | undefined,
+  unit: MigrationRunMode["unit"]
+): OutsideTransactionReason | undefined {
+  if (first === "VACUUM")
+    return { reason: cannotRunInOne(unit), markable: true };
+  return first === "ATTACH" || first === "DETACH"
+    ? {
+        reason:
+          "changes which databases the process's one connection sees, and that outlives the migration.",
+        markable: false,
+      }
+    : undefined;
+}
+
+/** What MySQL's `LOCK` and `UNLOCK` lock, as a statement this refuses. */
+const MYSQL_LOCK_TARGETS = new Set(["TABLES", "TABLE", "INSTANCE"]);
+
+/** MySQL's `LOCK`/`UNLOCK TABLES` and the INSTANCE forms. */
+function mysqlOutsideTransactionReason(
+  words: readonly string[],
+  inTransaction: boolean
+): OutsideTransactionReason | undefined {
+  const [first, second = ""] = words;
+  if (first !== "LOCK" && first !== "UNLOCK") return undefined;
+  if (!MYSQL_LOCK_TARGETS.has(second)) return undefined;
+  return {
+    reason: inTransaction
+      ? "commits the migration's transaction implicitly and holds its locks on the pooled connection after the migration."
+      : "holds its locks on the pooled connection after the migration.",
+    markable: false,
+  };
 }
 
 /**
@@ -678,11 +786,28 @@ function insideRoutineBody(
   dialect: SupportedDialect | undefined
 ): boolean {
   const words = codeTokens(text, dialect);
-  if (words[0] !== "CREATE") return false;
+  const kindAt = routineKindAt(words);
+  return kindAt !== undefined && openBlocks(words, kindAt + 1) > 0;
+}
+
+/**
+ * Where a routine or trigger definition names its kind, or undefined when
+ * the words are not one: they open with CREATE, and a kind comes before any
+ * parenthesis.
+ */
+function routineKindAt(words: readonly string[]): number | undefined {
+  if (words[0] !== "CREATE") return undefined;
   const kindAt = words.findIndex(w => ROUTINE_KINDS.has(w) || w === "(");
-  if (kindAt === -1 || words[kindAt] === "(") return false;
+  return kindAt === -1 || words[kindAt] === "(" ? undefined : kindAt;
+}
+
+/**
+ * How many `BEGIN` and `CASE` blocks are still open after the words from
+ * `from` on, each `END` closing one and never going below none.
+ */
+function openBlocks(words: readonly string[], from: number): number {
   let depth = 0;
-  for (let i = kindAt + 1; i < words.length; i++) {
+  for (let i = from; i < words.length; i++) {
     const word = words[i];
     if (!isBlockKeyword(words, i)) continue;
     if (word === "BEGIN" || word === "CASE") depth += 1;
@@ -692,7 +817,7 @@ function insideRoutineBody(
       if (words[i + 1] === "CASE") i += 1;
     }
   }
-  return depth > 0;
+  return depth;
 }
 
 /**

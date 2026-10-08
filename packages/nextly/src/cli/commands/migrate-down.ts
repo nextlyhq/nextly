@@ -32,7 +32,11 @@ import {
   runMigrationStatements,
   type MigrationUnit,
 } from "../../domains/schema/migrate/migration-transaction";
-import { moduleSql } from "../../domains/schema/migrate/plugin/plugin-migration";
+import {
+  compareModuleNames,
+  moduleSql,
+  qualifiedFilename,
+} from "../../domains/schema/migrate/plugin/plugin-migration";
 import { recordPluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import {
@@ -44,7 +48,9 @@ import {
   assertNoForeignDrops,
   columnsAfter,
   readLiveColumns,
+  readLiveTables,
   rebuildBlockStatements,
+  tablesCreatedBy,
   type LiveColumns,
 } from "../../domains/schema/ownership/drop-guard";
 import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
@@ -60,6 +66,7 @@ import {
   type SupportedDialect,
 } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
+import { compareMigrationBaseNames } from "../utils/migration-discovery";
 
 import { parseSqlSections } from "./migrate";
 import {
@@ -100,10 +107,20 @@ export function isDestructiveDown(
  * Newest-applied-first filenames, limited to `step`. A file counts as applied
  * only when the NEWEST event for it is `applied` (a later rolled_back retires
  * it). Ordered by that newest event's startedAt, descending.
+ *
+ * Migrations recorded in the same millisecond — a run of plugin modules
+ * adopted together, say — share a `startedAt`, and the ledger is read with no
+ * ORDER BY, so a tie is broken by the order the stream runs them in, the
+ * later first (`laterInRunOrder`). Left to the read order, `--step 1` could
+ * reverse a module before the later one that depends on it.
+ *
+ * `plugin` names the stream the rows were scoped to: its modules' run order
+ * is by module name, the app's by file name.
  */
 export function selectAppliedTargets(
   rows: SchemaEventRow[],
-  step: number
+  step: number,
+  plugin?: string
 ): string[] {
   const applied: { filename: string; at: number }[] = [];
   for (const [filename, newest] of newestEventsByFilename(rows)) {
@@ -111,8 +128,24 @@ export function selectAppliedTargets(
       applied.push({ filename, at: newest.startedAt.getTime() });
     }
   }
-  applied.sort((a, b) => b.at - a.at);
+  applied.sort(
+    (a, b) => b.at - a.at || laterInRunOrder(a.filename, b.filename, plugin)
+  );
   return applied.slice(0, Math.max(0, step)).map(a => a.filename);
+}
+
+/**
+ * Negative when ledger filename `a` runs after `b` in its stream: by module
+ * name for a plugin's rows (`compareModuleNames`, the order the runner applies
+ * them in), by base name for the app's (`compareMigrationBaseNames`).
+ */
+function laterInRunOrder(a: string, b: string, plugin?: string): number {
+  if (plugin !== undefined) {
+    const prefix = qualifiedFilename(plugin, "");
+    return compareModuleNames(b.slice(prefix.length), a.slice(prefix.length));
+  }
+  const base = (filename: string) => filename.replace(/\.sql$/i, "");
+  return compareMigrationBaseNames(base(b), base(a));
 }
 
 export interface MigrateDownCoreDeps {
@@ -165,10 +198,12 @@ export interface MigrateDownCoreDeps {
     transaction: boolean
   ) => Promise<void>;
   /**
-   * Owner rows for the drop guard; absent when no registry is reachable,
-   * which refuses nothing (the pre-registry behaviour).
+   * Table-level owner rows for the drop guard; absent when no registry is
+   * reachable, which reads as nothing being claimed.
    */
   owners?: ReadonlyMap<string, OwnerRecord>;
+  /** Every owner row, element rows included, for the guard's column check. */
+  elementOwners?: readonly OwnerRecord[];
   /**
    * The live columns of the tables the targets' DOWNs rebuild
    * (`readLiveColumns`). Absent, a rebuild is read as the drop it would
@@ -177,6 +212,14 @@ export interface MigrateDownCoreDeps {
   readLiveColumns?: (
     statementLists: ReadonlyArray<readonly string[]>
   ) => Promise<LiveColumns>;
+  /**
+   * The tables the targets' DOWNs create that exist already
+   * (`readLiveTables`). Absent, the guard credits a DOWN with no table it
+   * creates.
+   */
+  readLiveTables?: (
+    statementLists: ReadonlyArray<readonly string[]>
+  ) => Promise<ReadonlySet<string>>;
   withLock: typeof withMigrateLock;
 }
 
@@ -206,6 +249,8 @@ interface PlannedDown {
    * for the first target, then as the targets before it leave them.
    */
   liveColumns?: LiveColumns;
+  /** The tables it creates that exist before it runs (`readLiveState`). */
+  liveTables?: ReadonlySet<string>;
 }
 
 /**
@@ -216,7 +261,10 @@ interface PlannedDown {
  */
 function refusalOf(
   p: PlannedDown,
-  deps: Pick<MigrateDownCoreDeps, "dialect" | "options" | "owners">
+  deps: Pick<
+    MigrateDownCoreDeps,
+    "dialect" | "options" | "owners" | "elementOwners"
+  >
 ): Error | undefined {
   if (p.unreadable !== undefined) return asError(p.unreadable);
   if (p.statements.length === 0) {
@@ -237,9 +285,11 @@ function refusalOf(
     // statement runs, so the ledger records nothing.
     assertNoForeignDrops({
       liveColumns: p.liveColumns,
+      liveTables: p.liveTables,
       statements: p.statements,
       stream: deps.options.plugin ? `plugin:${deps.options.plugin}` : "app",
       owners: deps.owners ?? new Map(),
+      elementOwners: deps.elementOwners ?? [],
       dialect: deps.dialect,
       source: p.filename,
     });
@@ -247,6 +297,34 @@ function refusalOf(
     return asError(refusal);
   }
   return undefined;
+}
+
+/**
+ * Hands each target the live state it will run against, read once before any
+ * runs: the columns of the tables it rebuilds, as the targets before it leave
+ * them, and the tables it creates that exist already. Every table an earlier
+ * target creates counts as existing for the later ones, whether or not it is
+ * dropped again in between — which can only withhold a creation's credit from
+ * a later target, never lend it one.
+ */
+async function readLiveState(
+  planned: PlannedDown[],
+  deps: Pick<
+    MigrateDownCoreDeps,
+    "dialect" | "readLiveColumns" | "readLiveTables"
+  >
+): Promise<void> {
+  const lists = planned.map(p => p.statements);
+  let columns: LiveColumns = (await deps.readLiveColumns?.(lists)) ?? new Map();
+  let tables = await deps.readLiveTables?.(lists);
+  for (const p of planned) {
+    p.liveColumns = columns;
+    p.liveTables = tables;
+    columns = columnsAfter(p.statements, deps.dialect, columns);
+    tables =
+      tables &&
+      new Set([...tables, ...tablesCreatedBy(p.statements, deps.dialect)]);
+  }
 }
 
 /** A thrown value as an Error, so it can be thrown again as one. */
@@ -267,7 +345,7 @@ export async function migrateDownCore(
     await deps.listFileApplies(),
     deps.options.plugin
   );
-  const targets = selectAppliedTargets(rows, step);
+  const targets = selectAppliedTargets(rows, step, deps.options.plugin);
 
   if (targets.length === 0) {
     deps.logger.info("Nothing to roll back.");
@@ -308,12 +386,7 @@ export async function migrateDownCore(
       });
     }
   }
-  let columns: LiveColumns =
-    (await deps.readLiveColumns?.(planned.map(p => p.statements))) ?? new Map();
-  for (const p of planned) {
-    p.liveColumns = columns;
-    columns = columnsAfter(p.statements, deps.dialect, columns);
-  }
+  await readLiveState(planned, deps);
 
   // Dry-run is a non-destructive preview: it never throws and never
   // executes. Every refusal a real run would make is reported instead, by
@@ -564,6 +637,7 @@ export async function runMigrateDown(
       await resolveMigration({
         mode: "rolled-back",
         filename,
+        dialect,
         repo,
         // rolled-back mode does not read these; provide inert resolvers.
         fileExists: () => Promise.resolve(true),
@@ -591,13 +665,16 @@ export async function runMigrateDown(
     // is refused before any statement executes.
     const { SchemaOwnersRepository: OwnersRepo, tableOwnersByName } =
       await import("../../domains/schema/ownership/schema-owners-repository");
-    const owners = tableOwnersByName(await new OwnersRepo(db, dialect).read());
+    const ownerRows = await new OwnersRepo(db, dialect).read();
+    const owners = tableOwnersByName(ownerRows);
 
     const result = await migrateDownCore({
       dialect,
       db,
       owners,
+      elementOwners: ownerRows,
       readLiveColumns: lists => readLiveColumns(db, dialect, lists),
+      readLiveTables: lists => readLiveTables(db, dialect, lists),
 
       nodeEnv: process.env.NODE_ENV,
       logger,

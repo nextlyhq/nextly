@@ -177,7 +177,7 @@ describe.each(getConfiguredTestDialects())(
       expect(error).toMatchObject({
         code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
         publicMessage:
-          "20261001_000001_marks.sql ran outside a transaction, and its statement 2 of 2 failed. The 1 statement(s) before it stayed applied, and were not undone. If you finish its remaining statements by hand, mark it applied with `nextly migrate:resolve --applied 20261001_000001_marks.sql` rather than running it again; if you reverse the statements that ran, run `nextly migrate` again.",
+          "20261001_000001_marks.sql ran outside a transaction, and its statement 2 of 2 failed. The 1 statement(s) before it stayed applied, and were not undone. If you finish its remaining statements by hand, mark it applied with `nextly migrate:resolve --applied 20261001_000001_marks.sql` rather than running it again; if you reverse the statements that ran, run `nextly migrate:resolve --failed-cleanup 20261001_000001_marks.sql` and then `nextly migrate` again.",
         logContext: { reason: "partially-applied" },
       });
       // The database's reason is not public; the cause carries it.

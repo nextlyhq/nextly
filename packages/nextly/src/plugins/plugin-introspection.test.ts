@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { NextlyServiceConfig } from "../di/register";
+import {
+  migrationChecksum,
+  type PluginMigration,
+} from "../domains/schema/migrate/plugin/plugin-migration";
 
 import type { PluginDefinition } from "./plugin-context";
 import { collectPluginInfo, findPluginInfo } from "./plugin-introspection";
@@ -16,6 +20,26 @@ function basePlugin(): PluginDefinition {
     version: "1.0.0",
     nextly: "*",
   } as unknown as PluginDefinition;
+}
+
+/**
+ * A module of the shape resolution reads: named, versioned and sealed with
+ * its checksum, here with no statements and no tables of its own.
+ */
+function dataOnlyModule(name: string, schemaVersion: number): PluginMigration {
+  const empty = { tables: [] };
+  const content = {
+    name,
+    schemaVersion,
+    dialects: {
+      postgresql: { up: [], down: [] },
+      mysql: { up: [], down: [] },
+      sqlite: { up: [], down: [] },
+    },
+    snapshot: { postgresql: empty, mysql: empty, sqlite: empty },
+    before: { postgresql: empty, mysql: empty, sqlite: empty },
+  };
+  return { ...content, checksum: migrationChecksum(content) };
 }
 
 function fbPlugin(overrides: Record<string, unknown> = {}): PluginDefinition {
@@ -87,11 +111,7 @@ describe("collectPluginInfo", () => {
     const versioned = fbPlugin({ schemaVersion: 4 });
     versioned.contributes = {
       ...versioned.contributes,
-      schema: {
-        migrations: [{ schemaVersion: 4 }] as unknown as NonNullable<
-          NonNullable<PluginDefinition["contributes"]>["schema"]
-        >["migrations"],
-      },
+      schema: { migrations: [dataOnlyModule("20261001_100000_forms", 4)] },
     };
     const infos = collectPluginInfo(cfg(), [basePlugin(), versioned], {
       coreVersion: "1.0.0",

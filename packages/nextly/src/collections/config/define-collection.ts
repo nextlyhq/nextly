@@ -621,7 +621,7 @@ export interface CustomEndpoint {
  * const config: IndexConfig = {
  *   fields: ['slug', 'locale'],
  *   unique: true,
- *   name: 'slug_locale_unique',
+ *   name: 'uq_slug_locale',
  * };
  * ```
  */
@@ -649,10 +649,12 @@ export interface IndexConfig {
   /**
    * Optional custom index name.
    *
-   * If not provided, a name is auto-generated using the pattern:
-   * `{tableName}_{field1}_{field2}_idx` (or `_unique` for unique indexes)
+   * Must start with `idx_` (or `uq_` for a unique index): those are the names
+   * schema changes manage, so an index removed from the config is dropped
+   * from the database. If not provided, one is derived from the table and
+   * columns with the same prefixes.
    *
-   * @example 'posts_author_status_idx'
+   * @example 'idx_posts_author_status'
    */
   name?: string;
 }

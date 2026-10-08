@@ -105,6 +105,81 @@ const MYSQL_FK_ACTION: Record<string, ForeignKeySpec["onDelete"]> = {
 };
 
 /**
+ * The rows of a MySQL `execute` result. The mysql2 driver answers
+ * `[rows, fields]`; a double may answer the rows alone. Null reads as none.
+ */
+function mysqlResultRows<Row>(raw: unknown): Row[] {
+  const rows = (
+    Array.isArray(raw) && Array.isArray((raw as unknown[])[0])
+      ? (raw as [Row[], unknown])[0]
+      : raw
+  ) as Row[] | null | undefined;
+  return rows ?? [];
+}
+
+interface MysqlForeignKeyRow {
+  TABLE_NAME: string;
+  CONSTRAINT_NAME: string;
+  COLUMN_NAME: string;
+  REFERENCED_TABLE_NAME: string;
+  REFERENCED_COLUMN_NAME: string;
+  DELETE_RULE: string;
+  UPDATE_RULE: string;
+}
+
+interface MysqlCheckRow {
+  TABLE_NAME: string;
+  CONSTRAINT_NAME: string;
+  CHECK_CLAUSE: string;
+}
+
+/**
+ * Foreign keys by table, from one row per key column ordered by table,
+ * constraint and ordinal position. A key's columns are listed in that order.
+ */
+export function groupMysqlForeignKeys(
+  rows: readonly MysqlForeignKeyRow[]
+): Map<string, ForeignKeySpec[]> {
+  const fks = new Map<string, ForeignKeySpec[]>();
+  const byConstraint = new Map<string, ForeignKeySpec>();
+  for (const row of rows) {
+    const key = `${row.TABLE_NAME}\u0000${row.CONSTRAINT_NAME}`;
+    let fk = byConstraint.get(key);
+    if (fk === undefined) {
+      fk = {
+        name: row.CONSTRAINT_NAME,
+        columns: [],
+        referencesTable: row.REFERENCED_TABLE_NAME,
+        referencesColumns: [],
+        onDelete: MYSQL_FK_ACTION[row.DELETE_RULE] ?? "no action",
+        onUpdate: MYSQL_FK_ACTION[row.UPDATE_RULE] ?? "no action",
+      };
+      byConstraint.set(key, fk);
+      fks.set(row.TABLE_NAME, [...(fks.get(row.TABLE_NAME) ?? []), fk]);
+    }
+    fk.columns.push(row.COLUMN_NAME);
+    fk.referencesColumns.push(row.REFERENCED_COLUMN_NAME);
+  }
+  return fks;
+}
+
+/** Checks by table, each clause with information_schema's escaping undone. */
+function groupMysqlChecks(
+  rows: readonly MysqlCheckRow[]
+): Map<string, CheckSpec[]> {
+  const checks = new Map<string, CheckSpec[]>();
+  for (const row of rows) {
+    const list = checks.get(row.TABLE_NAME) ?? [];
+    list.push({
+      name: row.CONSTRAINT_NAME,
+      sql: mysqlCheckExpression(row.CHECK_CLAUSE),
+    });
+    checks.set(row.TABLE_NAME, list);
+  }
+  return checks;
+}
+
+/**
  * Read foreign keys and checks from information_schema for the snapshot's
  * tables, with the same empty-array-not-undefined contract as the other
  * dialects.
@@ -139,54 +214,7 @@ async function attachMysqlConstraints(
           AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
         ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION`
   );
-  const fkRows: Array<{
-    TABLE_NAME: string;
-    CONSTRAINT_NAME: string;
-    COLUMN_NAME: string;
-    REFERENCED_TABLE_NAME: string;
-    REFERENCED_COLUMN_NAME: string;
-    DELETE_RULE: string;
-    UPDATE_RULE: string;
-  }> = (
-    Array.isArray(fkRaw) && Array.isArray((fkRaw as unknown[])[0])
-      ? (fkRaw as [typeof fkRows, unknown])[0]
-      : fkRaw
-  ) as typeof fkRows;
-
-  const fks = new Map<string, ForeignKeySpec[]>();
-  const fkColumns = new Map<string, string[]>();
-  const fkRefColumns = new Map<string, string[]>();
-  for (const row of fkRows ?? []) {
-    const key = `${row.TABLE_NAME}\u0000${row.CONSTRAINT_NAME}`;
-    fkColumns.set(key, [...(fkColumns.get(key) ?? []), row.COLUMN_NAME]);
-    fkRefColumns.set(key, [
-      ...(fkRefColumns.get(key) ?? []),
-      row.REFERENCED_COLUMN_NAME,
-    ]);
-    const list = fks.get(row.TABLE_NAME);
-    if (
-      list === undefined ||
-      !list.some(fk => fk.name === row.CONSTRAINT_NAME)
-    ) {
-      const fresh: ForeignKeySpec = {
-        name: row.CONSTRAINT_NAME,
-        columns: [],
-        referencesTable: row.REFERENCED_TABLE_NAME,
-        referencesColumns: [],
-        onDelete: MYSQL_FK_ACTION[row.DELETE_RULE] ?? "no action",
-        onUpdate: MYSQL_FK_ACTION[row.UPDATE_RULE] ?? "no action",
-      };
-      if (list === undefined) fks.set(row.TABLE_NAME, [fresh]);
-      else list.push(fresh);
-    }
-  }
-  for (const [table, list] of fks) {
-    for (const fk of list) {
-      const key = `${table}\u0000${fk.name}`;
-      fk.columns = fkColumns.get(key) ?? [];
-      fk.referencesColumns = fkRefColumns.get(key) ?? [];
-    }
-  }
+  const fks = groupMysqlForeignKeys(mysqlResultRows<MysqlForeignKeyRow>(fkRaw));
 
   const checkRaw = await db.execute(
     sql`SELECT tc.TABLE_NAME, cc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
@@ -198,25 +226,7 @@ async function attachMysqlConstraints(
           AND tc.CONSTRAINT_TYPE = 'CHECK'
           AND tc.TABLE_NAME IN (${tableNamesIn})`
   );
-  const checkRows: Array<{
-    TABLE_NAME: string;
-    CONSTRAINT_NAME: string;
-    CHECK_CLAUSE: string;
-  }> = (
-    Array.isArray(checkRaw) && Array.isArray((checkRaw as unknown[])[0])
-      ? (checkRaw as [typeof checkRows, unknown])[0]
-      : checkRaw
-  ) as typeof checkRows;
-
-  const checks = new Map<string, CheckSpec[]>();
-  for (const row of checkRows ?? []) {
-    const list = checks.get(row.TABLE_NAME) ?? [];
-    list.push({
-      name: row.CONSTRAINT_NAME,
-      sql: mysqlCheckExpression(row.CHECK_CLAUSE),
-    });
-    checks.set(row.TABLE_NAME, list);
-  }
+  const checks = groupMysqlChecks(mysqlResultRows<MysqlCheckRow>(checkRaw));
 
   for (const table of snapshot.tables) {
     table.foreignKeys = fks.get(table.name) ?? [];
@@ -249,8 +259,14 @@ export function parsePgTextArray(value: unknown): string[] | null {
   const body = value.trim();
   if (!body.startsWith("{") || !body.endsWith("}")) return null;
   const inner = body.slice(1, -1);
-  if (inner === "") return [];
+  return inner === "" ? [] : splitPgArrayMembers(inner);
+}
 
+/**
+ * The members of an array literal's body, split at commas outside double
+ * quotes, with the quotes removed and backslash escapes applied.
+ */
+function splitPgArrayMembers(inner: string): string[] {
   const out: string[] = [];
   let current = "";
   let quoted = false;
@@ -1133,27 +1149,9 @@ function* sqlStructure(
   let depth = 0;
   for (let i = 0; i < text.length; i += 1) {
     const char = text[i];
-    const close =
-      char === "'" || char === '"' || char === "`"
-        ? char
-        : char === "["
-          ? "]"
-          : null;
-    if (close !== null) {
-      // Past the closing quote; a doubled quote inside is an escaped one and
-      // the scan simply continues through it.
-      let j = i + 1;
-      while (j < text.length) {
-        if (text[j] === close) {
-          if (close !== "]" && text[j + 1] === close) {
-            j += 2;
-            continue;
-          }
-          break;
-        }
-        j += 1;
-      }
-      i = j;
+    const close = SQL_QUOTE_CLOSE.get(char);
+    if (close !== undefined) {
+      i = quoteEnd(text, i, close);
       continue;
     }
     if (char === ")") depth -= 1;
@@ -1162,17 +1160,60 @@ function* sqlStructure(
   }
 }
 
+/** Each character that opens a quoted string or identifier, and its closer. */
+const SQL_QUOTE_CLOSE = new Map([
+  ["'", "'"],
+  ['"', '"'],
+  ["`", "`"],
+  ["[", "]"],
+]);
+
+/**
+ * The index of the quote that closes the one opened at `open`, or the text's
+ * length when it never closes. A doubled quote inside is an escaped one and
+ * the scan continues through it; a bracket has no such escape.
+ */
+function quoteEnd(text: string, open: number, close: string): number {
+  let j = open + 1;
+  while (j < text.length) {
+    if (text[j] !== close) {
+      j += 1;
+    } else if (close !== "]" && text[j + 1] === close) {
+      j += 2;
+    } else {
+      return j;
+    }
+  }
+  return j;
+}
+
 /**
  * The key list and predicate of a stored `CREATE INDEX` statement:
  * `CREATE [UNIQUE] INDEX name ON table (key, key, ...) [WHERE predicate]`.
  * Null when the text does not have that shape.
  */
-function parseSqliteIndexStatement(
+export function parseSqliteIndexStatement(
   statement: string | undefined
 ): { keys: string[]; where?: string } | null {
   if (statement === undefined) return null;
+  const bounds = keyListBounds(statement);
+  if (bounds === null) return null;
+  const keys = bounds
+    .slice(0, -1)
+    .map((start, i) => statement.slice(start + 1, bounds[i + 1]).trim());
+  const rest = statement.slice(bounds[bounds.length - 1] + 1).trim();
+  if (rest === "") return { keys };
+  const where = /^WHERE\s+([\s\S]+)$/i.exec(rest);
+  return where ? { keys, where: where[1].trim() } : null;
+}
+
+/**
+ * The positions that delimit the first top-level parenthesised list: its
+ * opening parenthesis, each comma between its items, and its closing
+ * parenthesis. Null when there is no such list or it never closes.
+ */
+function keyListBounds(statement: string): number[] | null {
   let open = -1;
-  let close = -1;
   const commas: number[] = [];
   for (const { char, index, depth } of sqlStructure(statement)) {
     if (open === -1) {
@@ -1180,20 +1221,9 @@ function parseSqliteIndexStatement(
       continue;
     }
     if (char === "," && depth === 1) commas.push(index);
-    if (char === ")" && depth === 0) {
-      close = index;
-      break;
-    }
+    if (char === ")" && depth === 0) return [open, ...commas, index];
   }
-  if (open === -1 || close === -1) return null;
-  const bounds = [open, ...commas, close];
-  const keys = bounds
-    .slice(0, -1)
-    .map((start, i) => statement.slice(start + 1, bounds[i + 1]).trim());
-  const rest = statement.slice(close + 1).trim();
-  if (rest === "") return { keys };
-  const where = /^WHERE\s+([\s\S]+)$/i.exec(rest);
-  return where ? { keys, where: where[1].trim() } : null;
+  return null;
 }
 
 /** An expression without the parentheses that enclose all of it, if any. */
@@ -1232,18 +1262,7 @@ function sqliteChecks(create: string | undefined): CheckSpec[] {
     const name = match[1] ?? match[2] ?? match[3];
     // Balance from the CHECK's own opening paren.
     const openAt = match.index + match[0].length - 1;
-    let depth = 0;
-    let end = -1;
-    for (let i = openAt; i < create.length; i += 1) {
-      if (create[i] === "(") depth += 1;
-      else if (create[i] === ")") {
-        depth -= 1;
-        if (depth === 0) {
-          end = i;
-          break;
-        }
-      }
-    }
+    const end = balancedCloseAt(create, openAt);
     if (end === -1) continue;
     checks.push({
       name,
@@ -1251,6 +1270,22 @@ function sqliteChecks(create: string | undefined): CheckSpec[] {
     });
   }
   return checks;
+}
+
+/**
+ * The index of the parenthesis that closes the one at `openAt`, counting every
+ * parenthesis in between, or -1 when it never closes.
+ */
+function balancedCloseAt(text: string, openAt: number): number {
+  let depth = 0;
+  for (let i = openAt; i < text.length; i += 1) {
+    if (text[i] === "(") depth += 1;
+    else if (text[i] === ")") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
 }
 
 /**

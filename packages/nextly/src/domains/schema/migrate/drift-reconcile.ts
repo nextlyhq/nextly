@@ -3,11 +3,14 @@
  *
  * For a pending migration file, compares the live managed schema against the
  * file's pre-baseline and target snapshots:
- *   - live ≡ before        → IN_SYNC: run the .sql verbatim, record file_apply.
+ *   - live ≡ before        → IN_SYNC: run the .sql verbatim, record file_apply
+ *                            — unless its last attempt failed and may have
+ *                            stopped part-way (`assertNotPartiallyApplied`).
  *   - live ≡ target        → ALREADY_APPLIED: skip SQL, record file_apply
  *                            (statements_executed=0), supersede prior dev events
- *                            — unless the file runs outside a transaction and
- *                            its last attempt failed (`assertNotPartiallyApplied`).
+ *                            — unless its last attempt failed and may have
+ *                            stopped part-way: it ran outside a transaction,
+ *                            or on MySQL (`assertNotPartiallyApplied`).
  *   - neither              → DRIFT: throw NEXTLY_MIGRATION_DRIFT.
  *
  * Two snapshots are equivalent when the diff engine finds no difference.
@@ -17,6 +20,7 @@
  * @module domains/schema/migrate/drift-reconcile
  * @since v0.0.3-alpha
  */
+import type { SupportedDialect } from "../../../database/schema-registry";
 import { describeError, NextlyError } from "../../../errors";
 import { newestEvent } from "../events/newest-event";
 import {
@@ -76,6 +80,11 @@ export interface ReconcileFileArgs {
   before: NextlySchemaSnapshot;
   target: NextlySchemaSnapshot;
   live: NextlySchemaSnapshot;
+  /**
+   * The database the file runs on. It decides whether a failed attempt can
+   * have left part of the file applied (`assertNotPartiallyApplied`).
+   */
+  dialect: SupportedDialect;
   repo: ReconcileRepo;
   /**
    * Execute the file's SQL as `unit` says — in one transaction unless it is
@@ -137,31 +146,75 @@ export async function recordAlreadyApplied(
 }
 
 /**
- * Refuses to record a unit as applied without running it when the unit runs
- * outside a transaction and its newest attempt failed.
+ * Why a unit whose last attempt may have stopped part-way is not recorded, or
+ * not run again: a statement that changes no schema leaves no trace the
+ * snapshot comparison can see, in either direction.
+ */
+const PARTIAL_REFUSALS = {
+  record:
+    "The database stands where it ends, but a statement that changes no schema may not have run, so it is not recorded as applied without running.",
+  rerun:
+    "Running it again would repeat what of it ran and stayed: a statement that changes no schema may have run even where the schema shows nothing of the attempt, so it is not run again.",
+} as const;
+
+/**
+ * Whether a failed attempt of a unit may have stopped part-way, leaving the
+ * statements before the failing one applied: always outside a transaction,
+ * and on MySQL inside one too, because MySQL commits each schema statement as
+ * it runs. On PostgreSQL and SQLite a failed attempt in a transaction was
+ * undone whole. `assertNotPartiallyApplied` explains each case.
+ */
+export function failedAttemptMayBePartial(
+  file: { transaction?: boolean },
+  dialect: SupportedDialect
+): boolean {
+  return file.transaction === false || dialect === "mysql";
+}
+
+/**
+ * Refuses to record a unit as applied without running it, or to run it
+ * again, when its newest attempt failed and may have stopped part-way.
  *
- * Such an attempt stopped part-way and left the statements before the
- * failing one applied. The database can then stand at the unit's target —
- * every schema statement ran — while a statement that changes no schema, a
- * data change, never did, and recording the unit applied would skip it for
- * good. Only the operator knows what is left, so the refusal says how to
- * record the unit once it is finished by hand, or to run it again once what
- * ran is reversed. A unit run in a transaction is not refused: where its
- * failure was undone, nothing of it is left half-done.
+ * Such an attempt can leave the statements before the failing one applied.
+ * The database can then stand at the unit's target — every schema statement
+ * ran — while a statement that changes no schema, a data change, never did,
+ * and recording the unit applied would skip it for good (`refusing:
+ * "record"`). Or it can stand at the unit's start — the schema statement
+ * failed — while a data statement before it ran and stayed, and running the
+ * unit again would repeat that statement (`refusing: "rerun"`). Only the
+ * operator knows what is left, so the refusal says how to record the unit
+ * once it is finished by hand, or to clear the attempt and run it again once
+ * what ran is reversed.
  *
- * Exported so every path that adopts a unit asks this one question: the
- * reconcile, and the plugin runner's adoption of a run of modules.
+ * A failed attempt may have stopped part-way when the unit runs outside a
+ * transaction, on any dialect, and on MySQL whether or not it runs in one:
+ * MySQL commits each schema statement as it runs, together with everything
+ * the transaction did before it, so a failure there undoes only what ran
+ * after the last schema statement. On PostgreSQL and SQLite a unit run in a
+ * transaction is not refused: its failure was undone whole, so nothing of it
+ * is left half-done.
+ *
+ * Exported so every path that adopts or runs a unit asks this one question:
+ * the reconcile, the plugin runner's adoption of a run of modules, and the
+ * run of an app file that has no snapshot to reconcile against.
  */
 export async function assertNotPartiallyApplied(
   file: { filename: string; transaction?: boolean },
-  repo: Pick<ReconcileRepo, "findFileApplies">
+  dialect: SupportedDialect,
+  repo: Pick<ReconcileRepo, "findFileApplies">,
+  /** What the caller would otherwise do with the unit. */
+  refusing: keyof typeof PARTIAL_REFUSALS = "record"
 ): Promise<void> {
-  if (file.transaction !== false) return;
+  if (!failedAttemptMayBePartial(file, dialect)) return;
+  const outsideTransaction = file.transaction === false;
   const newest = newestEvent(await repo.findFileApplies(file.filename));
   if (newest?.status !== "failed") return;
+  const why = outsideTransaction
+    ? `${file.filename} runs outside a transaction, and its last attempt failed part-way.`
+    : `${file.filename}'s last attempt failed, and MySQL commits each schema statement as it runs, even inside a transaction, so that attempt may have stopped part-way.`;
   throw new NextlyError({
     code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
-    publicMessage: `${file.filename} runs outside a transaction, and its last attempt failed part-way. The database stands where it ends, but a statement that changes no schema may not have run, so it is not recorded as applied without running. ${partiallyAppliedAdvice(file.filename)}`,
+    publicMessage: `${why} ${PARTIAL_REFUSALS[refusing]} ${partiallyAppliedAdvice(file.filename)}`,
     logContext: { source: file.filename, reason: "partially-applied" },
   });
 }
@@ -203,8 +256,10 @@ export async function reconcileFile(
   const { file, before, target, live, repo, executeSql } = args;
   const migration = file.filename.replace(/\.sql$/, "");
 
-  // IN_SYNC — live matches the pre-migration baseline → run the file.
+  // IN_SYNC — live matches the pre-migration baseline → run the file, unless
+  // a failed attempt may have left a data statement of it applied.
   if (equiv(live, before)) {
+    await assertNotPartiallyApplied(file, args.dialect, repo, "rerun");
     const id = await repo.recordStart({
       eventType: "file_apply",
       source: "cli-migrate",
@@ -244,7 +299,7 @@ export async function reconcileFile(
 
   // ALREADY_APPLIED — live already matches the target → record without running.
   if (equiv(live, target)) {
-    await assertNotPartiallyApplied(file, repo);
+    await assertNotPartiallyApplied(file, args.dialect, repo);
     await recordAlreadyApplied(file, repo, args.supersedableEventIds);
     return { state: "already_applied" };
   }

@@ -101,6 +101,8 @@ vi.mock("../../../services/collections/query-operators", () => ({
     componentFilters: [],
     cleanedWhere: where,
   })),
+  // No key reaches a component table, as no condition is a component one.
+  componentFilterTargets: vi.fn(() => []),
 }));
 
 vi.mock("../../../services/collections/geo-utils", () => ({

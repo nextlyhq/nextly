@@ -14,30 +14,15 @@ import { and, eq, inArray } from "drizzle-orm";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { schemaOwnersTables } from "../../../schemas/schema-owners";
+import { asRepositoryDb, type RepositoryDb } from "../events/repository-db";
 
-import type {
-  OwnerKind,
-  OwnerRecord,
-  OwnerRegistryStore,
-  OwnerState,
+import {
+  ownerRecordKey,
+  type OwnerKind,
+  type OwnerRecord,
+  type OwnerRegistryStore,
+  type OwnerState,
 } from "./owner-registry";
-
-/** Structural shape of the Drizzle methods this repository uses. */
-type SelectChain = Promise<Array<Record<string, unknown>>> & {
-  where: (c: unknown) => Promise<Array<Record<string, unknown>>>;
-};
-interface AnyDb {
-  insert: (t: unknown) => {
-    values: (v: Record<string, unknown>) => Promise<unknown>;
-  };
-  select: () => { from: (t: unknown) => SelectChain };
-  update: (t: unknown) => {
-    set: (v: Record<string, unknown>) => {
-      where: (c: unknown) => Promise<unknown>;
-    };
-  };
-  delete: (t: unknown) => { where: (c: unknown) => Promise<unknown> };
-}
 
 function toRecord(row: Record<string, unknown>): OwnerRecord {
   return {
@@ -60,11 +45,6 @@ function toRecord(row: Record<string, unknown>): OwnerRecord {
       typeof row.schemaVersion === "number" ? row.schemaVersion : null,
     state: String(row.state) as OwnerState,
   };
-}
-
-/** The composite identity a row is keyed by. */
-function elementKeyOf(row: OwnerRecord): string {
-  return `${row.tableName}\u0000${row.elementKind ?? "table"}\u0000${row.elementName ?? ""}`;
 }
 
 /**
@@ -90,13 +70,13 @@ export function tableOwnersByName(
 }
 
 export class SchemaOwnersRepository {
-  private readonly db: AnyDb;
+  private readonly db: RepositoryDb;
   private readonly table: ReturnType<
     typeof schemaOwnersTables
   >["nextlySchemaOwners"];
 
   constructor(db: unknown, dialect: SupportedDialect) {
-    this.db = db as AnyDb;
+    this.db = asRepositoryDb(db);
     this.table = schemaOwnersTables(dialect).nextlySchemaOwners;
   }
 
@@ -131,7 +111,7 @@ export class SchemaOwnersRepository {
     if (rows.length === 0) return;
     const existing = new Set(
       (await this.read([...new Set(rows.map(row => row.tableName))])).map(row =>
-        elementKeyOf(row)
+        ownerRecordKey(row)
       )
     );
     const now = new Date();
@@ -146,7 +126,7 @@ export class SchemaOwnersRepository {
         state: row.state,
         updatedAt: now,
       };
-      if (existing.has(elementKeyOf(row))) {
+      if (existing.has(ownerRecordKey(row))) {
         await this.db
           .update(this.table)
           .set(values)

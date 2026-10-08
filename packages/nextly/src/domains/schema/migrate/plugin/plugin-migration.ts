@@ -246,6 +246,35 @@ export function qualifiedFilename(
 }
 
 /**
+ * Refuse a module whose name cannot be told apart from its plugin's in the
+ * ledger.
+ *
+ * A module is recorded as `plugin:<plugin>/<name>`, and a plugin's own name
+ * may hold a slash (`@acme/nextly-plugin-auth`), so the LAST slash is what
+ * separates the two (`pluginOfLedgerRow`). A module named `data/backfill`
+ * would be filed under the plugin `<plugin>/data`, where `migrate:status`
+ * and `migrate:down` for its real plugin never find it. The generator's
+ * names never hold one; a module written by hand is refused here, where the
+ * manifest is read, before anything runs.
+ */
+export function assertModuleNames(
+  pluginName: string,
+  migrations: readonly Pick<PluginMigration, "name">[]
+): void {
+  const slashed = migrations.find(migration => migration.name.includes("/"));
+  if (slashed === undefined) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: `plugin.${pluginName}.contributes.schema.migrations`,
+        code: "INVALID",
+        message: `Plugin "${pluginName}" ships a migration named "${slashed.name}". A migration name cannot contain "/", which separates the plugin from the migration in the ledger.`,
+      },
+    ],
+  });
+}
+
+/**
  * Refuse a module whose content no longer matches its checksum.
  *
  * An edited module is refused rather than re-hashed. Re-hashing would accept
@@ -313,5 +342,48 @@ export function assertAppliedUnchanged(
 export function orderedMigrations(
   migrations: readonly PluginMigration[]
 ): PluginMigration[] {
-  return [...migrations].sort((a, b) => a.name.localeCompare(b.name));
+  return [...migrations].sort((a, b) => compareModuleNames(a.name, b.name));
+}
+
+/**
+ * The order two of one plugin's modules run in, by name. The comparator
+ * `orderedMigrations` sorts by, exported so anything that has to agree with
+ * the run order asks this rather than sorting by a rule of its own.
+ */
+export function compareModuleNames(a: string, b: string): number {
+  return a.localeCompare(b);
+}
+
+/**
+ * Refuse a plugin whose modules share a name.
+ *
+ * The name is the module's ledger key (`qualifiedFilename`), so two modules
+ * named alike are one migration to the ledger: both run on the first
+ * migrate, only one can stay recorded applied, and every later migrate finds
+ * the other pending and runs its SQL again. Names that differ only in case
+ * are refused too: MySQL compares the ledger's filenames without regard to
+ * case by default, so there they collide in the same way, and a plugin is
+ * refused alike on every dialect.
+ */
+export function assertUniqueModuleNames(
+  pluginName: string,
+  migrations: readonly Pick<PluginMigration, "name">[]
+): void {
+  const seen = new Map<string, string>();
+  for (const migration of migrations) {
+    const key = migration.name.toLowerCase();
+    const earlier = seen.get(key);
+    if (earlier === undefined) {
+      seen.set(key, migration.name);
+      continue;
+    }
+    throw NextlyError.invalidInput({
+      message: `Plugin "${pluginName}" ships more than one migration named "${migration.name}". Each module's name is its key in the migration ledger, so every name must be unique (ignoring case). Rename one, then reseal it with \`migrationChecksum\`.`,
+      logContext: {
+        plugin: pluginName,
+        migration: migration.name,
+        clashesWith: earlier,
+      },
+    });
+  }
 }

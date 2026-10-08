@@ -59,11 +59,14 @@ describe("SchemaEventsRepository — C3 additions", () => {
       startedAt: new Date(1),
     });
 
+    expect((await repo.findById(id))?.endedAt).toBeNull();
     await repo.markRolledBack(id, { note: "manual-resolve" });
 
     const row = await repo.findById(id);
     expect(row?.status).toBe("rolled_back");
     expect(row?.note).toBe("manual-resolve");
+    // An attempt recorded with no end time is given one when it is cleared.
+    expect(row?.endedAt).toBeInstanceOf(Date);
   });
 
   it("records a live event strictly after the file's newest one", async () => {

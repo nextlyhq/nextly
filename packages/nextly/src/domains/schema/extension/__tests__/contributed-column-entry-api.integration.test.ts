@@ -22,6 +22,7 @@ import {
   text,
 } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
+import type { WhereFilter } from "../../../collections/query/query-operators";
 import { clearServices } from "../../../../di/register";
 import { definePlugin } from "../../../../plugins/plugin-context";
 import {
@@ -261,6 +262,279 @@ describe.each(getConfiguredTestDialects())(
         expect((await storedRow(handle, POSTS_TABLE)).search_vector).toBe(
           "indexed"
         );
+      });
+    });
+
+    describe("to a collection, through an aggregate or an ordering", () => {
+      /** Two posts whose contributed values order them opposite to their ids. */
+      async function seeded(): Promise<TestNextly> {
+        const handle = await boot(dialect, [POSTS_TABLE]);
+        for (const [title, vector] of [
+          ["alpha", "zz-secret"],
+          ["beta", "aa-secret"],
+        ] as const) {
+          const created = await handle.nextly.create({
+            collection: "posts",
+            data: { title },
+            overrideAccess: true,
+          });
+          await handle.adapter.update(
+            POSTS_TABLE,
+            { search_vector: vector },
+            {
+              and: [
+                {
+                  column: "id",
+                  op: "=",
+                  value: (created.item as { id: string }).id,
+                },
+              ],
+            }
+          );
+        }
+        return handle;
+      }
+
+      it("is no group key, in either spelling, even for a trusted caller", async () => {
+        const handle = await seeded();
+        for (const groupBy of ["searchVector", "search_vector"]) {
+          const refused = await handle.nextly
+            .group({ collection: "posts", groupBy, overrideAccess: true })
+            .then(
+              () => undefined,
+              (error: unknown) => error
+            );
+          // Refused as a column that is not there: the buckets would otherwise
+          // carry every stored value as a label.
+          expect(refused, groupBy).toMatchObject({
+            publicData: {
+              errors: [
+                {
+                  path: `groupBy.${groupBy}`,
+                  code: "FIELD_NOT_GROUPABLE",
+                },
+              ],
+            },
+          });
+        }
+        // A declared field beside it still groups, so the refusal is about the
+        // column and not about grouping.
+        const { buckets } = await handle.nextly.group({
+          collection: "posts",
+          groupBy: "title",
+          overrideAccess: true,
+        });
+        expect(buckets).toHaveLength(2);
+      });
+
+      it("orders nothing when named as a sort", async () => {
+        const handle = await seeded();
+        const titles = async (sort: string) =>
+          (
+            await handle.nextly.find({
+              collection: "posts",
+              sort,
+              overrideAccess: true,
+            })
+          ).items.map(item => (item as { title?: unknown }).title);
+        const unsorted = await titles("-createdAt");
+        // Ordered by the hidden values this would put "beta" first in one
+        // direction and "alpha" first in the other; ignored, both directions
+        // read the same order back.
+        expect(await titles("searchVector")).toEqual(
+          await titles("-searchVector")
+        );
+        expect(await titles("search_vector")).toEqual(
+          await titles("-search_vector")
+        );
+        expect(new Set(unsorted)).toEqual(new Set(["alpha", "beta"]));
+      });
+
+      it("is no filter key, in either spelling or position, on any read", async () => {
+        const handle = await seeded();
+        const nextly = handle.nextly;
+        // Every read that takes a `where`, each asked by a trusted caller: a
+        // row set, a count or a bucket set that varied with the guess would
+        // answer it.
+        const reads: Array<[string, (where: WhereFilter) => Promise<unknown>]> =
+          [
+            [
+              "find",
+              where =>
+                nextly.find({
+                  collection: "posts",
+                  where,
+                  overrideAccess: true,
+                }),
+            ],
+            [
+              "count",
+              where =>
+                nextly.count({
+                  collection: "posts",
+                  where,
+                  overrideAccess: true,
+                }),
+            ],
+            [
+              "group",
+              where =>
+                nextly.group({
+                  collection: "posts",
+                  groupBy: "title",
+                  where,
+                  overrideAccess: true,
+                }),
+            ],
+            [
+              "timeseries",
+              where =>
+                nextly.timeseries({
+                  collection: "posts",
+                  dateField: "createdAt",
+                  interval: "day",
+                  where,
+                  overrideAccess: true,
+                }),
+            ],
+          ];
+        for (const key of ["searchVector", "search_vector"]) {
+          const guess = { equals: "zz-secret" };
+          const wheres: WhereFilter[] = [
+            { [key]: guess },
+            { and: [{ title: { equals: "alpha" } }, { [key]: guess }] },
+            { or: [{ [`${key}.inner`]: guess }] },
+          ];
+          for (const [name, read] of reads) {
+            for (const where of wheres) {
+              const refused = await read(where).then(
+                () => undefined,
+                (error: unknown) => error
+              );
+              expect(refused, `${name} ${JSON.stringify(where)}`).toMatchObject(
+                {
+                  publicData: {
+                    errors: [
+                      { path: `where.${key}`, code: "FIELD_NOT_FILTERABLE" },
+                    ],
+                  },
+                }
+              );
+            }
+          }
+        }
+        // A declared field beside it still filters, so the refusal is about
+        // the column and not about filtering.
+        const { items } = await nextly.find({
+          collection: "posts",
+          where: { title: { equals: "alpha" } },
+          overrideAccess: true,
+        });
+        expect(items.map(item => (item as { title?: unknown }).title)).toEqual([
+          "alpha",
+        ]);
+      });
+    });
+
+    describe("to a field group, through a filter on the embedding collection", () => {
+      /**
+       * Two posts whose `seo` rows carry different contributed values, so a
+       * component filter on that column would pick out one of them.
+       */
+      async function seeded(): Promise<TestNextly> {
+        const handle = await boot(dialect, [SEO_TABLE]);
+        for (const [title, vector] of [
+          ["alpha", "zz-secret"],
+          ["beta", "aa-secret"],
+        ] as const) {
+          const created = await handle.nextly.create({
+            collection: "posts",
+            data: { title, seo: { metaTitle: `${title}-meta` } },
+            overrideAccess: true,
+          });
+          await handle.adapter.update(
+            SEO_TABLE,
+            { search_vector: vector },
+            {
+              and: [
+                {
+                  column: "_parent_id",
+                  op: "=",
+                  value: (created.item as { id: string }).id,
+                },
+              ],
+            }
+          );
+        }
+        return handle;
+      }
+
+      it("is no filter key under the component field, in either spelling or position", async () => {
+        const handle = await seeded();
+        const nextly = handle.nextly;
+        // A list and a count: either answers the guess, one by the rows it
+        // returns and one by how many there are.
+        const reads: Array<[string, (where: WhereFilter) => Promise<unknown>]> =
+          [
+            [
+              "find",
+              where =>
+                nextly.find({
+                  collection: "posts",
+                  where,
+                  overrideAccess: true,
+                }),
+            ],
+            [
+              "count",
+              where =>
+                nextly.count({
+                  collection: "posts",
+                  where,
+                  overrideAccess: true,
+                }),
+            ],
+          ];
+        for (const key of ["seo.searchVector", "seo.search_vector"]) {
+          const wheres: WhereFilter[] = [
+            { [key]: { equals: "zz-secret" } },
+            { [key]: "zz-secret" },
+            {
+              and: [{ title: { equals: "alpha" } }, { [key]: { like: "zz%" } }],
+            },
+            { or: [{ [`${key}.inner`]: { equals: "zz-secret" } }] },
+          ];
+          for (const [name, read] of reads) {
+            for (const where of wheres) {
+              const refused = await read(where).then(
+                () => undefined,
+                (error: unknown) => error
+              );
+              const path = Object.keys(
+                (where.and?.[1] ?? where.or?.[0] ?? where) as object
+              )[0];
+              expect(refused, `${name} ${JSON.stringify(where)}`).toMatchObject(
+                {
+                  publicData: {
+                    errors: [
+                      { path: `where.${path}`, code: "FIELD_NOT_FILTERABLE" },
+                    ],
+                  },
+                }
+              );
+            }
+          }
+        }
+        // A declared component field beside it still filters, so the refusal
+        // is about the column and not about component filtering.
+        const { items } = await nextly.find({
+          collection: "posts",
+          where: { "seo.metaTitle": { equals: "alpha-meta" } },
+          overrideAccess: true,
+        });
+        expect(items.map(item => (item as { title?: unknown }).title)).toEqual([
+          "alpha",
+        ]);
       });
     });
 

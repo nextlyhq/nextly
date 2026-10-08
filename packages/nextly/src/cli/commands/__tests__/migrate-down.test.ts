@@ -44,12 +44,83 @@ describe("selectAppliedTargets", () => {
   it("returns [] when nothing is applied", () => {
     expect(selectAppliedTargets([row("a.sql", "failed", 1)], 1)).toEqual([]);
   });
+
+  describe("migrations recorded in the same millisecond", () => {
+    // `B_more` runs after `a_init`: modules run in `orderedMigrations`'
+    // order, which puts "a" before "B". Code-unit order would put "B" first,
+    // so these names tell the two rules apart.
+    const tied = [
+      row("plugin:auth/B_more", "applied", 5000),
+      row("plugin:auth/a_init", "applied", 5000),
+    ];
+
+    it.each([
+      ["as read", tied],
+      ["reversed", [...tied].reverse()],
+    ])(
+      "rolls a plugin's later module back first, whatever the read order (%s)",
+      (_order, rows) => {
+        expect(selectAppliedTargets(rows, 2, "auth")).toEqual([
+          "plugin:auth/B_more",
+          "plugin:auth/a_init",
+        ]);
+      }
+    );
+
+    it.each([
+      ["as read", ["20260101_000000_a.sql", "20260101_000001_b.sql"]],
+      ["reversed", ["20260101_000001_b.sql", "20260101_000000_a.sql"]],
+    ])(
+      "rolls the app's later file back first, whatever the read order (%s)",
+      (_order, filenames) => {
+        expect(
+          selectAppliedTargets(
+            filenames.map(filename => row(filename, "applied", 5000)),
+            1
+          )
+        ).toEqual(["20260101_000001_b.sql"]);
+      }
+    );
+
+    it("still puts a newer migration first, whatever its name", () => {
+      expect(
+        selectAppliedTargets(
+          [
+            row("plugin:auth/B_more", "applied", 5000),
+            row("plugin:auth/a_init", "applied", 5001),
+          ],
+          1,
+          "auth"
+        )
+      ).toEqual(["plugin:auth/a_init"]);
+    });
+  });
 });
 
 /** A DOWN that runs in a transaction, as an unmarked migration's does. */
 function down(sql: string) {
   return { sql, transaction: true };
 }
+
+/**
+ * The registry for a database where the `auth` plugin owns `t`, the table the
+ * default DOWN alters: a plugin's DOWN may change only what a record says it
+ * holds.
+ */
+const authOwnsT = new Map<string, OwnerRecord>([
+  [
+    "t",
+    {
+      tableName: "t",
+      ownerKind: "plugin",
+      ownerId: "auth",
+      migratedBy: "plugin:auth",
+      ownerVersion: "1.0.0",
+      schemaVersion: 1,
+      state: "active",
+    },
+  ],
+]);
 
 function baseDeps(overrides: Record<string, unknown> = {}) {
   const recorded: string[] = [];
@@ -381,6 +452,7 @@ describe("migrateDownCore", () => {
 
     it("selects only the named plugin's rows under --plugin", async () => {
       const { deps, recorded } = baseDeps({
+        owners: authOwnsT,
         options: {
           step: 1,
           allowDataLoss: true,
@@ -403,6 +475,7 @@ describe("migrateDownCore", () => {
       // A run scoped to a plugin must not touch the app's rows even when the
       // step budget would allow more targets.
       const { deps, recorded } = baseDeps({
+        owners: authOwnsT,
         options: {
           step: 5,
           allowDataLoss: true,
@@ -419,6 +492,26 @@ describe("migrateDownCore", () => {
       const res = await migrateDownCore(deps);
       expect(res.rolledBack).toEqual(["plugin:auth/001_init.sql"]);
       expect(recorded).toEqual(["plugin:auth/001_init.sql"]);
+    });
+
+    it("rolls back the plugin's later module when two share a timestamp", async () => {
+      const { deps, recorded } = baseDeps({
+        owners: authOwnsT,
+        options: {
+          step: 1,
+          allowDataLoss: true,
+          yes: false,
+          dryRun: false,
+          plugin: "auth",
+        },
+        listFileApplies: async () => [
+          row("plugin:auth/B_more", "applied", 5000),
+          row("plugin:auth/a_init", "applied", 5000),
+        ],
+      });
+      const res = await migrateDownCore(deps);
+      expect(res.rolledBack).toEqual(["plugin:auth/B_more"]);
+      expect(recorded).toEqual(["plugin:auth/B_more"]);
     });
 
     it("reports nothing to roll back for a plugin with no rows", async () => {
@@ -469,6 +562,7 @@ describe("plugin schema version after a rollback", () => {
     let owners: OwnerRecord[] = [ownerRow];
 
     const { deps } = baseDeps({
+      owners: authOwnsT,
       options: {
         step: 1,
         allowDataLoss: true,
@@ -515,6 +609,7 @@ describe("plugin schema version after a rollback", () => {
     let calls = 0;
 
     const { deps } = baseDeps({
+      owners: authOwnsT,
       options: {
         step: 2,
         allowDataLoss: true,
@@ -566,5 +661,66 @@ describe("plugin schema version after a rollback", () => {
       },
     });
     expect(owners.map(o => o.schemaVersion)).toEqual([null]);
+  });
+});
+
+describe("migrateDownCore and the tables a DOWN creates", () => {
+  /** Two of the auth plugin's modules applied, rolled back together. */
+  function plugin(
+    downs: Record<string, string>,
+    readLiveTables?: () => Promise<ReadonlySet<string>>
+  ) {
+    return baseDeps({
+      owners: authOwnsT,
+      options: {
+        step: 2,
+        allowDataLoss: true,
+        yes: false,
+        dryRun: false,
+        plugin: "auth",
+      },
+      listFileApplies: async () =>
+        Object.keys(downs).map((filename, at) =>
+          row(filename, "applied", 1000 + at)
+        ),
+      readDownSql: async (filename: string) => down(downs[filename]),
+      readLiveTables,
+    });
+  }
+
+  const scratch = 'CREATE TABLE "scratch" (id INT);\nDROP TABLE "scratch";';
+
+  it("lets a DOWN drop a new table it created", async () => {
+    const { deps, recorded } = plugin(
+      { "plugin:auth/001_init": scratch },
+      async () => new Set()
+    );
+    await migrateDownCore(deps);
+    expect(recorded).toEqual(["plugin:auth/001_init"]);
+  });
+
+  it("credits no creation when the live tables were not read", async () => {
+    const { deps, executed } = plugin({ "plugin:auth/001_init": scratch });
+    await expect(migrateDownCore(deps)).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+    });
+    expect(executed).toEqual([]);
+  });
+
+  it("counts a table an earlier target creates as existing for a later one", async () => {
+    // The newer module's DOWN runs first and leaves `scratch` in place, so
+    // the older one's CREATE of it cannot be what its DROP then drops.
+    const { deps, executed } = plugin(
+      {
+        "plugin:auth/001_init": scratch,
+        "plugin:auth/002_more": 'CREATE TABLE "scratch" (id INT);',
+      },
+      async () => new Set()
+    );
+    await expect(migrateDownCore(deps)).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+      logContext: { table: "scratch", source: "plugin:auth/001_init" },
+    });
+    expect(executed).toEqual([]);
   });
 });

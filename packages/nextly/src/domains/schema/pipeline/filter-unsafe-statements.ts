@@ -168,93 +168,122 @@ export function filterUnsafeStatements(
 ): string[] {
   const desiredSet = new Set(desiredTableNames.map(t => t.toLowerCase()));
 
-  return statements.filter(stmt => {
-    // ── DROP SCHEMA ─────────────────────────────────────────────────
-    // First and unconditional: no desired set makes this intended.
-    if (isDropSchemaStatement(stmt)) {
-      console.warn(
-        `[Nextly schema] Blocked a statement that drops a schema, emitted by drizzle-kit pushSchema: ${stmt}. Nextly never drops a schema; if one should go, drop it manually.`
-      );
-      return false;
-    }
+  // Each rule either decides a statement or passes it on; the first rule
+  // that decides wins, and a statement no rule decides passes through.
+  return statements.filter(
+    stmt =>
+      dropSchemaVerdict(stmt) ??
+      pluginTableVerdict(stmt, pluginMigratedTables, dialect) ??
+      dropTableVerdict(stmt, desiredSet) ??
+      orphanDropVerdict(stmt, desiredSet) ??
+      true
+  );
+}
 
-    // ── Plugin-migrated tables ──────────────────────────────────────
-    if (
-      pluginMigratedTables !== undefined &&
-      dialect !== undefined &&
-      dropsPluginMigratedTable(stmt, pluginMigratedTables, dialect)
-    ) {
-      console.warn(
-        `[Nextly schema] Blocked a statement that drops a table whose owner row names a plugin migration stream, or that the drop reader cannot read: ${stmt}. Plugin tables are removed by the plugin's migrations, never by dev push.`
-      );
-      return false;
-    }
+/**
+ * Whether one rule keeps (true) or blocks (false) a statement; undefined when
+ * the rule does not apply to it.
+ */
+type Verdict = boolean | undefined;
 
-    // ── DROP TABLE ──────────────────────────────────────────────────
-    const dropMatch = stmt.match(
-      /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
-    );
-    if (dropMatch) {
-      const tableName = dropMatch[1] ?? "<unknown>";
-      const isInDesired = desiredSet.has(tableName.toLowerCase());
+/** DROP SCHEMA: first and unconditional, since no desired set makes it intended. */
+function dropSchemaVerdict(stmt: string): Verdict {
+  if (!isDropSchemaStatement(stmt)) return undefined;
+  console.warn(
+    `[Nextly schema] Blocked a statement that drops a schema, emitted by drizzle-kit pushSchema: ${stmt}. Nextly never drops a schema; if one should go, drop it manually.`
+  );
+  return false;
+}
 
-      if (isInDesired) {
-        // Intentional drop — rebuild pattern, system-table refresh, etc.
-        return true;
-      }
+/** A drop of a plugin-migrated table, or one the drop reader cannot read. */
+function pluginTableVerdict(
+  stmt: string,
+  pluginMigratedTables: ReadonlySet<string> | undefined,
+  dialect: SupportedDialect | undefined
+): Verdict {
+  if (
+    pluginMigratedTables === undefined ||
+    dialect === undefined ||
+    !dropsPluginMigratedTable(stmt, pluginMigratedTables, dialect)
+  ) {
+    return undefined;
+  }
+  console.warn(
+    `[Nextly schema] Blocked a statement that drops a table whose owner row names a plugin migration stream, or that the drop reader cannot read: ${stmt}. Plugin tables are removed by the plugin's migrations, never by dev push.`
+  );
+  return false;
+}
 
-      // Internal framework tables (nextly_ prefix: ledger, migrate lock, meta)
-      // are bootstrapped out-of-band and never part of the desired schema. Block
-      // their drop SILENTLY — they must never be dropped, and warning on every
-      // reconcile is just noise. (User/collection slugs can't start with
-      // `nextly_` — the slug validator reserves that prefix.)
-      if (tableName.toLowerCase().startsWith("nextly_")) {
-        return false;
-      }
+/** DROP TABLE: allowed for a desired table, blocked for any other. */
+function dropTableVerdict(
+  stmt: string,
+  desiredSet: ReadonlySet<string>
+): Verdict {
+  const dropMatch = stmt.match(
+    /^DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
+  );
+  if (!dropMatch) return undefined;
+  const tableName = dropMatch[1] ?? "<unknown>";
 
-      // Localized companion tables are migration-owned (Option B) and never part
-      // of the desired schema. Block their drop SILENTLY — the localization
-      // migration layer owns their lifecycle; warning on every reconcile is noise.
-      if (isCompanionTable(tableName)) {
-        return false;
-      }
-
-      // Accidental drop — table not in desired schema. Block and log so
-      // operators see the protection.
-      console.warn(
-        `[Nextly schema] Blocked DROP TABLE "${tableName}" emitted by ` +
-          `drizzle-kit pushSchema (table not in current desired schema). ` +
-          `If this drop was intentional, route it through the ` +
-          `pre-resolution executor with explicit user confirmation. ` +
-          `(managed=${isManagedTable(tableName)})`
-      );
-      return false;
-    }
-
-    // ── DROP SEQUENCE / DROP INDEX ───────────────────────────────────
-    // Block when the inferred owner table is not in desiredSet
-    // (longest-prefix match — see inferOwnerTableFromObjectName).
-    for (const { kind, re } of ORPHAN_DROP_PATTERNS) {
-      const m = stmt.match(re);
-      if (!m) continue;
-      const objectName = m[1] ?? "";
-      if (inferOwnerTableFromObjectName(objectName, desiredSet) !== null) {
-        return true;
-      }
-      console.warn(
-        `[Nextly schema] Blocked DROP ${kind} "${objectName}" emitted by ` +
-          `drizzle-kit pushSchema (owner table not in current desired ` +
-          `schema or name is non-conventional). If this drop was ` +
-          `intentional, route it through the pre-resolution executor ` +
-          `with explicit user confirmation, or drop it manually before ` +
-          `re-running if the ${kind.toLowerCase()} name is custom.`
-      );
-      return false;
-    }
-
-    // ── Everything else passes through ──────────────────────────────
+  if (desiredSet.has(tableName.toLowerCase())) {
+    // Intentional drop — rebuild pattern, system-table refresh, etc.
     return true;
-  });
+  }
+
+  // Internal framework tables (nextly_ prefix: ledger, migrate lock, meta)
+  // are bootstrapped out-of-band and never part of the desired schema. Block
+  // their drop SILENTLY — they must never be dropped, and warning on every
+  // reconcile is just noise. (User/collection slugs can't start with
+  // `nextly_` — the slug validator reserves that prefix.)
+  if (tableName.toLowerCase().startsWith("nextly_")) {
+    return false;
+  }
+
+  // Localized companion tables are migration-owned (Option B) and never part
+  // of the desired schema. Block their drop SILENTLY — the localization
+  // migration layer owns their lifecycle; warning on every reconcile is noise.
+  if (isCompanionTable(tableName)) {
+    return false;
+  }
+
+  // Accidental drop — table not in desired schema. Block and log so
+  // operators see the protection.
+  console.warn(
+    `[Nextly schema] Blocked DROP TABLE "${tableName}" emitted by ` +
+      `drizzle-kit pushSchema (table not in current desired schema). ` +
+      `If this drop was intentional, route it through the ` +
+      `pre-resolution executor with explicit user confirmation. ` +
+      `(managed=${isManagedTable(tableName)})`
+  );
+  return false;
+}
+
+/**
+ * DROP SEQUENCE / DROP INDEX: blocked when the inferred owner table is not in
+ * desiredSet (longest-prefix match — see inferOwnerTableFromObjectName).
+ */
+function orphanDropVerdict(
+  stmt: string,
+  desiredSet: ReadonlySet<string>
+): Verdict {
+  for (const { kind, re } of ORPHAN_DROP_PATTERNS) {
+    const m = stmt.match(re);
+    if (!m) continue;
+    const objectName = m[1] ?? "";
+    if (inferOwnerTableFromObjectName(objectName, desiredSet) !== null) {
+      return true;
+    }
+    console.warn(
+      `[Nextly schema] Blocked DROP ${kind} "${objectName}" emitted by ` +
+        `drizzle-kit pushSchema (owner table not in current desired ` +
+        `schema or name is non-conventional). If this drop was ` +
+        `intentional, route it through the pre-resolution executor ` +
+        `with explicit user confirmation, or drop it manually before ` +
+        `re-running if the ${kind.toLowerCase()} name is custom.`
+    );
+    return false;
+  }
+  return undefined;
 }
 
 /**

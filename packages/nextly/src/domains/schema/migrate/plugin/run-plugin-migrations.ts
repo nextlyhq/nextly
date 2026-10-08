@@ -39,6 +39,7 @@ import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
 import {
   assertAppliedUnchanged,
   assertModuleIntact,
+  assertUniqueModuleNames,
   moduleSql,
   orderedMigrations,
   pluginModuleStatements,
@@ -50,7 +51,10 @@ import {
   assertNoForeignDrops,
   type LiveColumns,
 } from "../../ownership/drop-guard";
-import type { OwnerRecord } from "../../ownership/owner-registry";
+import {
+  assertNoOwnerChange,
+  type OwnerRecord,
+} from "../../ownership/owner-registry";
 import {
   mergeContributions,
   narrowToContributions,
@@ -87,17 +91,29 @@ export interface RunPluginMigrationsDeps {
   /** Ledger rows are recorded through this — `reconcileFile`'s own repo. */
   repo: ReconcileRepo;
   /**
-   * Owner records for the drop guard. Absent (or empty) when no registry is
-   * available, which reads as "no table is claimed" and refuses nothing —
-   * exactly the behaviour of a database predating the registry.
+   * Table-level owner records for the drop guard. Absent (or empty) when no
+   * registry is available, which reads as "no table is claimed": a module
+   * may then drop only tables it creates itself.
    */
   owners?: ReadonlyMap<string, OwnerRecord>;
+  /**
+   * Every owner record, element rows included, for the drop guard's column
+   * check.
+   */
+  elementOwners?: readonly OwnerRecord[];
   /**
    * The live columns of the tables a module's statements rebuild, read just
    * before that module is judged (`readLiveColumns`). Absent, a rebuild is
    * read as the drop it would otherwise be.
    */
   liveColumns?: (statements: readonly string[]) => Promise<LiveColumns>;
+  /**
+   * The tables a module's statements create that exist already, read just
+   * before that module is judged (`readLiveTables`), so a table an earlier
+   * module of the run made counts. Absent, the guard credits a module with
+   * no table it creates.
+   */
+  liveTables?: (statements: readonly string[]) => Promise<ReadonlySet<string>>;
   /** Owner-registry upsert after a module lands or is adopted. */
   recordOwner: (args: {
     pluginName: string;
@@ -158,33 +174,100 @@ export async function runPluginMigrations(
   sets: readonly PluginMigrationSet[],
   deps: RunPluginMigrationsDeps
 ): Promise<PluginMigrationRunResult> {
+  // Every plugin, before any module of any of them runs: a clash in a later
+  // plugin would otherwise be found only after the earlier ones had applied.
+  for (const set of sets) {
+    assertUniqueModuleNames(set.pluginName, set.migrations);
+  }
   const result: PluginMigrationRunResult = {
     applied: 0,
     adopted: 0,
     skipped: 0,
   };
   for (const set of sets) {
-    const ordered = orderedMigrations(set.migrations);
-    for (let position = 0; position < ordered.length; position += 1) {
-      const through = await fastForward(set, ordered, position, deps);
-      if (through !== undefined) {
-        result.adopted += through - position + 1;
-        position = through;
-        continue;
-      }
-      // Not caught: the first failure must stop later plugins and the app
-      // phase, which assume a state that was never reached.
-      result[
-        await applyModule(
-          set,
-          ordered[position],
-          ordered.slice(0, position),
-          deps
-        )
-      ] += 1;
-    }
+    await runSet(set, deps, result);
   }
   return result;
+}
+
+/** Apply one plugin's pending modules, counting each outcome into `result`. */
+async function runSet(
+  set: PluginMigrationSet,
+  deps: RunPluginMigrationsDeps,
+  result: PluginMigrationRunResult
+): Promise<void> {
+  const ordered = orderedMigrations(set.migrations);
+  let lastOutcome: keyof PluginMigrationRunResult = "skipped";
+  for (let position = 0; position < ordered.length; position += 1) {
+    const through = await fastForward(set, ordered, position, deps);
+    if (through !== undefined) {
+      result.adopted += through - position + 1;
+      position = through;
+      lastOutcome = "adopted";
+      continue;
+    }
+    // Not caught: the first failure must stop later plugins and the app
+    // phase, which assume a state that was never reached.
+    lastOutcome = await applyModule(
+      set,
+      ordered[position],
+      ordered.slice(0, position),
+      deps
+    );
+    result[lastOutcome] += 1;
+  }
+  // A module that ran or was adopted just now recorded its ownership itself.
+  if (lastOutcome === "skipped") {
+    await repairOwnership(set, ordered[ordered.length - 1], deps);
+  }
+}
+
+/**
+ * Record a plugin's ownership again when its last module is recorded applied
+ * but the owner rows do not stand where that module leaves them.
+ *
+ * A module's ledger row and its owner rows are written one after the other,
+ * not together, so a run that stops between the two leaves the module
+ * recorded applied and its tables unclaimed, or claimed at the previous
+ * module's schema version. Every later run skips the module, so nothing else
+ * writes those rows again: the drop guard would protect none of the plugin's
+ * tables, and the production boot gate would read a schema version the plugin
+ * is no longer at, for good. The last module's tables are the plugin's whole
+ * owned shape, so recording them is exactly what that module's run would
+ * have recorded.
+ *
+ * Only a row that is missing, or is this plugin's at another schema version,
+ * is repaired. A table another owner's row names is left as it is: who owns a
+ * table changes only through an explicit transfer, never as a repair.
+ */
+async function repairOwnership(
+  set: PluginMigrationSet,
+  last: PluginMigration,
+  deps: RunPluginMigrationsDeps
+): Promise<void> {
+  const owners = deps.owners ?? new Map<string, OwnerRecord>();
+  const tables = (last.snapshot[deps.dialect]?.tables ?? []).map(
+    table => table.name
+  );
+  const stale = (row: OwnerRecord): boolean =>
+    row.ownerId === set.pluginName && row.schemaVersion !== last.schemaVersion;
+  const repaired = tables.filter(name => {
+    const row = owners.get(name);
+    return row === undefined || stale(row);
+  });
+  // A plugin left owning no table records its version on the rows it still
+  // has (`recordOwner` carries them forward), so those are the ones read.
+  const needsRepair =
+    tables.length > 0 ? repaired.length > 0 : [...owners.values()].some(stale);
+  if (!needsRepair) return;
+  await deps.recordOwner({
+    pluginName: set.pluginName,
+    pluginVersion: set.pluginVersion,
+    schemaVersion: last.schemaVersion,
+    tables: repaired,
+    // The module ran, or was adopted, in an earlier run; nothing runs now.
+    adopted: false,
+  });
 }
 
 /**
@@ -282,7 +365,7 @@ async function furthestMatched(
  * Record each module as applied without running it, and its ownership.
  *
  * Every module is checked intact, and not left part-way by a failed attempt
- * outside a transaction, before any row is written, so such a module later in
+ * (`assertNotPartiallyApplied`), before any row is written, so such a module later in
  * the run refuses the whole adoption rather than leaving the modules before it
  * recorded.
  */
@@ -293,11 +376,13 @@ async function adoptModules(
 ): Promise<void> {
   for (const migration of modules) {
     assertModuleIntact(set.pluginName, migration);
+    assertTakesNoOwnedTable(set, migration, deps);
     await assertNotPartiallyApplied(
       {
         filename: qualifiedFilename(set.pluginName, migration.name),
         transaction: migration.transaction !== false,
       },
+      deps.dialect,
       deps.repo
     );
   }
@@ -313,12 +398,42 @@ async function adoptModules(
       pluginName: set.pluginName,
       pluginVersion: set.pluginVersion,
       schemaVersion: migration.schemaVersion,
-      tables: (migration.snapshot[deps.dialect]?.tables ?? []).map(
-        table => table.name
-      ),
+      tables: ownedTables(migration, deps.dialect),
       adopted: true,
     });
   }
+}
+
+/**
+ * The tables a module leaves its plugin OWNING, never the foreign ones it
+ * only contributes an element to — the rows `recordOwner` writes for it.
+ */
+function ownedTables(
+  migration: PluginMigration,
+  dialect: SupportedDialect
+): string[] {
+  return (migration.snapshot[dialect]?.tables ?? []).map(table => table.name);
+}
+
+/**
+ * Refuse, before a module runs or is adopted, one whose tables are recorded
+ * as another owner's: a removed plugin's table taken over by a newcomer of
+ * the same name. Recording the module would rewrite the owner row and let
+ * the newcomer drop the old owner's data, so the decision is made before
+ * the ledger or the database changes, not when the row is written.
+ */
+function assertTakesNoOwnedTable(
+  set: PluginMigrationSet,
+  migration: PluginMigration,
+  deps: RunPluginMigrationsDeps
+): void {
+  assertNoOwnerChange(
+    ownedTables(migration, deps.dialect).map(tableName => ({
+      tableName,
+      ownerId: set.pluginName,
+    })),
+    deps.owners?.values() ?? []
+  );
 }
 
 /**
@@ -396,6 +511,7 @@ async function applyModule(
     return "skipped";
   }
 
+  assertTakesNoOwnedTable(set, migration, deps);
   // Judged for the module as a whole, before anything executes: a module
   // dropping another stream's table is refused with the ledger untouched,
   // never partly applied.
@@ -413,16 +529,21 @@ async function applyModule(
     statements,
     stream: `plugin:${set.pluginName}`,
     owners: deps.owners ?? new Map(),
+    elementOwners: deps.elementOwners ?? [],
+    // The columns this plugin's earlier modules contributed are its own
+    // before any element row records them: rows are written once the run
+    // ends, and a fresh install runs every module in one run.
+    ownedElements: recordedContributions(earlier, deps.dialect),
     dialect: deps.dialect,
     source: filename,
     liveColumns: await deps.liveColumns?.(statements),
+    liveTables: await deps.liveTables?.(statements),
   });
   assertRunnableStatements(statements, deps.dialect, filename, {
     transaction: migration.transaction !== false,
     unit: "module",
   });
 
-  const ownedTarget = migration.snapshot[deps.dialect]?.tables ?? [];
   const sides = await moduleSides(set, migration, earlier, deps);
 
   const { state } = await reconcileFile({
@@ -437,6 +558,7 @@ async function applyModule(
     before: sides.before,
     target: sides.target,
     live: sides.live,
+    dialect: deps.dialect,
     repo: deps.repo,
     executeSql: deps.executeSql,
     pluginName: set.pluginName,
@@ -450,7 +572,7 @@ async function applyModule(
     // an element to. `recordOwner` upserts ownership, so a dependency's table
     // listed here would hand this plugin the row naming its real owner — and
     // the drop guard would then let this plugin's DOWN drop it.
-    tables: ownedTarget.map(table => table.name),
+    tables: ownedTables(migration, deps.dialect),
     adopted: state === "already_applied",
   });
   return state === "already_applied" ? "adopted" : "applied";

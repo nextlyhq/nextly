@@ -338,4 +338,109 @@ describe("resolvePlugins: schemaVersion declarations", () => {
       )
     ).toHaveLength(1);
   });
+
+  /** A plugin declaring `schemaVersion` with modules of these names and versions. */
+  const shipping = (
+    declared: number,
+    modules: Array<[name: string, version: number]>
+  ) =>
+    p("stub", {
+      schemaVersion: declared,
+      contributes: {
+        schema: {
+          migrations: modules.map(([name, schemaVersion]) => ({
+            name,
+            schemaVersion,
+            checksum: name,
+            dialects: {} as never,
+            snapshot: {} as never,
+            before: {} as never,
+          })),
+        },
+      },
+    } as Partial<PluginDefinition>);
+
+  it("reads the versions in the order the modules run, not as listed", () => {
+    // Listed `002` (v1) then `001` (v2): highest 2, as declared, but `002`
+    // runs last and leaves the database at 1.
+    expect(() =>
+      resolvePlugins(
+        [
+          shipping(2, [
+            ["002_backfill", 1],
+            ["001_init", 2],
+          ]),
+        ],
+        opts
+      )
+    ).toThrow(NextlyError);
+    // The control: the same modules whose run order raises the version.
+    expect(
+      resolvePlugins(
+        [
+          shipping(2, [
+            ["002_more", 2],
+            ["001_init", 1],
+          ]),
+        ],
+        opts
+      )
+    ).toHaveLength(1);
+  });
+
+  it("refuses a migration whose name holds a slash", () => {
+    // The ledger key is `plugin:<plugin>/<module>`, split at the last slash:
+    // `data/backfill` would be filed under the plugin `stub/data`.
+    let refusal: unknown;
+    try {
+      resolvePlugins([shipping(1, [["data/backfill", 1]])], opts);
+    } catch (error) {
+      refusal = error;
+    }
+    expect(NextlyError.is(refusal)).toBe(true);
+    expect(JSON.stringify((refusal as NextlyError).publicData)).toMatch(
+      /data\/backfill/
+    );
+    // The control: the same module named without one.
+    expect(
+      resolvePlugins([shipping(1, [["data-backfill", 1]])], opts)
+    ).toHaveLength(1);
+  });
+
+  it("refuses modules that share a name, ignoring case", () => {
+    // The name is the module's ledger key, so two alike are one migration to
+    // the ledger; refused when the configuration loads, as the slash is.
+    for (const second of ["001_init", "001_INIT"]) {
+      let refusal: unknown;
+      try {
+        resolvePlugins(
+          [
+            shipping(2, [
+              ["001_init", 1],
+              [second, 2],
+            ]),
+          ],
+          opts
+        );
+      } catch (error) {
+        refusal = error;
+      }
+      expect(NextlyError.is(refusal), second).toBe(true);
+      expect((refusal as NextlyError).publicMessage).toContain(
+        `more than one migration named "${second}"`
+      );
+    }
+    // The control: the same modules named apart.
+    expect(
+      resolvePlugins(
+        [
+          shipping(2, [
+            ["001_init", 1],
+            ["002_more", 2],
+          ]),
+        ],
+        opts
+      )
+    ).toHaveLength(1);
+  });
 });

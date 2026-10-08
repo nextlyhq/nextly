@@ -412,6 +412,56 @@ function assertForeignColumnAllowed(
 }
 
 /**
+ * Whether a plugin is extending a table of a plugin it declared a dependency
+ * on.
+ *
+ * A plugin may index a DEPENDENCY's table: dependsOn (or optionalDependsOn)
+ * is what makes the extension deliberate — the resolver orders the two
+ * plugins and refuses an incompatible version — and the element travels in
+ * the contributor's own migration stream. Columns follow the same rule.
+ */
+function isPluginOnDependencyTable(
+  table: DraftTable,
+  scope: ExtendScope
+): boolean {
+  return (
+    scope.owner.kind === "plugin" &&
+    table.owner.kind === "plugin" &&
+    (scope.mayIndexForeignTablesOf?.has(table.owner.id) ?? false)
+  );
+}
+
+/**
+ * Refuse a column the table already declares, or a second primary key.
+ *
+ * The one-key rule `defineTable` applies, applied to the table as it stands:
+ * `defineTable` only sees the columns being added, so a `col.serial()`
+ * (itself the key) added beside an existing `col.id()` passed it and reached
+ * the renderers as two primary keys.
+ */
+function assertColumnFitsTable(
+  column: ExtensionColumn,
+  table: DraftTable,
+  scope: ExtendScope
+): void {
+  if (table.columns.some(existing => existing.name === column.name)) {
+    refuse(
+      `${scope.ownerPath}.extendTable.${table.name}`,
+      `Column "${column.name}" is already declared on "${table.name}".`
+    );
+  }
+  const existingKey = table.columns.find(
+    existing => existing.primaryKey === true
+  );
+  if (column.primaryKey === true && existingKey !== undefined) {
+    refuse(
+      `${scope.ownerPath}.extendTable.${table.name}`,
+      `Column "${column.name}" is a primary key, and "${table.name}" already has one ("${existingKey.name}"). A table has one primary key; col.serial() is itself the key, so it cannot be added beside another.`
+    );
+  }
+}
+
+/**
  * Add columns to a table: freely to the caller's own; as a HIDDEN column to
  * an entity table (collection, Single or field group) or an extendable core
  * table, by the app or any plugin; and to another owner's table by the app, or
@@ -434,15 +484,11 @@ function addColumns(
   // Same foreign-contribution rule as indexes: the app anywhere, a plugin on
   // a declared dependency's tables. The column is hidden either way, so the
   // entry API never sees it, and per-element rows name the contributor.
-  const pluginOnDependencyTable =
-    scope.owner.kind === "plugin" &&
-    table.owner.kind === "plugin" &&
-    (scope.mayIndexForeignTablesOf?.has(table.owner.id) ?? false);
   assertMayAddColumns(
     targetOf(table, scope),
     table.name,
     scope.owner,
-    pluginOnDependencyTable
+    isPluginOnDependencyTable(table, scope)
   );
 
   // Reuse the DSL so an extension column is validated exactly as a declared
@@ -452,25 +498,7 @@ function addColumns(
   const onSomeoneElsesTable = !scope.isOwn;
 
   for (const column of resolved.columns) {
-    if (table.columns.some(existing => existing.name === column.name)) {
-      refuse(
-        `${scope.ownerPath}.extendTable.${table.name}`,
-        `Column "${column.name}" is already declared on "${table.name}".`
-      );
-    }
-    // The one-key rule `defineTable` applies, applied to the table as it
-    // stands: `defineTable` above only sees the columns being added, so a
-    // `col.serial()` (itself the key) added beside an existing `col.id()`
-    // passed it and reached the renderers as two primary keys.
-    const existingKey = table.columns.find(
-      existing => existing.primaryKey === true
-    );
-    if (column.primaryKey === true && existingKey !== undefined) {
-      refuse(
-        `${scope.ownerPath}.extendTable.${table.name}`,
-        `Column "${column.name}" is a primary key, and "${table.name}" already has one ("${existingKey.name}"). A table has one primary key; col.serial() is itself the key, so it cannot be added beside another.`
-      );
-    }
+    assertColumnFitsTable(column, table, scope);
     // Only on a table that already exists with rows in it. A table this
     // caller is declaring right now is empty by construction, so requiring a
     // default there would be a rule with no failure to prevent.
@@ -489,6 +517,45 @@ function addColumns(
       ...(onSomeoneElsesTable ? { contributedBy: scope.owner } : {}),
     });
   }
+}
+
+/**
+ * Whether this caller may index the table: its own, an entity's, an
+ * extendable core table, or a plugin's table the app or a dependent plugin is
+ * contributing to.
+ */
+function mayIndexTable(table: DraftTable, scope: ExtendScope): boolean {
+  const appOnPluginTable =
+    scope.owner.kind === "app" && table.owner.kind === "plugin";
+  const contributedForeign =
+    appOnPluginTable || isPluginOnDependencyTable(table, scope);
+  // An EXTENDABLE core table takes indexes as it takes columns: the app's
+  // migration stream carries both as elements of the core table, whoever
+  // contributed them (`compileAppStreamTables`). Any other core table stays
+  // refused, for the reason its columns are.
+  const extendableCore =
+    table.owner.kind === "core" && EXTENDABLE_CORE_TABLES.has(table.name);
+  return scope.isOwn || scope.isEntity || extendableCore || contributedForeign;
+}
+
+/** An index input as the table records it, naming who contributed it. */
+function contributedIndexOf(
+  index: { columns: string[]; unique?: boolean; name?: string },
+  scope: ExtendScope
+): ExtensionIndex {
+  return {
+    // Snake-cased as `defineTable` resolves an index's columns, so a hook
+    // may name a column by its key or its SQL name alike. Passed through
+    // raw, `publishedAt` named no column of the table and the index was
+    // dropped from the desired spec without a word.
+    columns: index.columns.map(toSnakeCase),
+    unique: index.unique === true,
+    ...(index.name !== undefined ? { name: index.name } : {}),
+    // Who CONTRIBUTED the element — distinct from who owns the table, and
+    // what the per-element owner rows are written from. Recorded wherever
+    // the caller is not the owner, as a column's is.
+    ...(!scope.isOwn ? { contributedBy: scope.owner } : {}),
+  };
 }
 
 /**
@@ -511,48 +578,15 @@ function addIndexes(
   indexes: readonly { columns: string[]; unique?: boolean; name?: string }[],
   scope: ExtendScope
 ): void {
-  const appOnPluginTable =
-    scope.owner.kind === "app" && table.owner.kind === "plugin";
-  // A plugin may index a DEPENDENCY's table: dependsOn (or
-  // optionalDependsOn) is what makes the extension deliberate — the resolver
-  // orders the two plugins and refuses an incompatible version — and the
-  // element travels in the contributor's own migration stream.
-  const pluginOnDependencyTable =
-    scope.owner.kind === "plugin" &&
-    table.owner.kind === "plugin" &&
-    (scope.mayIndexForeignTablesOf?.has(table.owner.id) ?? false);
-  const contributedForeign = appOnPluginTable || pluginOnDependencyTable;
-  // An EXTENDABLE core table takes indexes as it takes columns: the app's
-  // migration stream carries both as elements of the core table, whoever
-  // contributed them (`compileAppStreamTables`). Any other core table stays
-  // refused, for the reason its columns are.
-  const extendableCore =
-    table.owner.kind === "core" && EXTENDABLE_CORE_TABLES.has(table.name);
+  const mayIndex = mayIndexTable(table, scope);
   for (const index of indexes) {
-    if (
-      !scope.isOwn &&
-      !scope.isEntity &&
-      !extendableCore &&
-      !contributedForeign
-    ) {
+    if (!mayIndex) {
       refuse(
         `${scope.ownerPath}.extendTable.${table.name}`,
         `${describeOwner(scope.owner)} may not index "${table.name}", which belongs to ${describeOwner(table.owner)}. Name the owner in dependsOn (or optionalDependsOn) to extend its tables.`
       );
     }
-    const resolved: ExtensionIndex = {
-      // Snake-cased as `defineTable` resolves an index's columns, so a hook
-      // may name a column by its key or its SQL name alike. Passed through
-      // raw, `publishedAt` named no column of the table and the index was
-      // dropped from the desired spec without a word.
-      columns: index.columns.map(toSnakeCase),
-      unique: index.unique === true,
-      ...(index.name !== undefined ? { name: index.name } : {}),
-      // Who CONTRIBUTED the element — distinct from who owns the table, and
-      // what the per-element owner rows are written from. Recorded wherever
-      // the caller is not the owner, as a column's is.
-      ...(!scope.isOwn ? { contributedBy: scope.owner } : {}),
-    };
+    const resolved = contributedIndexOf(index, scope);
     assertSeededIndexBuildable(resolved, table);
     table.indexes.push(resolved);
   }

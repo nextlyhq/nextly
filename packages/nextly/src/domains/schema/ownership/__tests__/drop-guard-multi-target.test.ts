@@ -24,6 +24,22 @@ import type { OwnerRecord } from "../owner-registry";
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
+/** A table `plugin:fx` owns, as the plugin phase records one. */
+function fxOwned(tableName: string): [string, OwnerRecord] {
+  return [
+    tableName,
+    {
+      tableName,
+      ownerKind: "plugin",
+      ownerId: "fx",
+      migratedBy: "plugin:fx",
+      ownerVersion: "1.0.0",
+      schemaVersion: 1,
+      state: "active",
+    },
+  ];
+}
+
 const owners = new Map<string, OwnerRecord>([
   [
     "app_notes",
@@ -37,6 +53,17 @@ const owners = new Map<string, OwnerRecord>([
       state: "active",
     },
   ],
+  // The plugin's own tables: a plugin may drop only what a record says it
+  // holds, so the tables these cases expect it to drop are recorded as its.
+  ...[
+    "fx__notes",
+    "fx__a",
+    "fx__b",
+    "fx__c",
+    "fx__archive",
+    "fx__scratch",
+    "fx__tags",
+  ].map(fxOwned),
 ]);
 
 function guard(statements: string[], dialect: SupportedDialect): void {
@@ -44,8 +71,10 @@ function guard(statements: string[], dialect: SupportedDialect): void {
     statements,
     stream: "plugin:fx",
     owners,
+    elementOwners: [],
     dialect,
     source: "plugin:fx/001",
+    liveTables: new Set(owners.keys()),
   });
 }
 
@@ -718,14 +747,13 @@ describe("renaming another owner's table", () => {
     ["sqlite", 'ALTER TABLE "__new_fx__notes" RENAME TO "fx__notes"'],
     ["mysql", "RENAME TABLE fx__notes TO fx__archive"],
     ["postgresql", "ALTER TABLE fx__notes SET SCHEMA archive"],
-    // Column and index renames on the foreign table rename no table.
-    ["postgresql", "ALTER TABLE app_notes RENAME COLUMN a TO b"],
+    // An index rename on the foreign table renames no table and no column.
     ["mysql", "ALTER TABLE app_notes RENAME INDEX i1 TO i2"],
   ])(
     "leaves a rename that takes no foreign table alone on %s: %s",
     (dialect, statement) => {
       // The control: the same guard, owners and stream, with the renamed table
-      // one this stream owns or nobody claims.
+      // one this stream owns.
       expect(() => guard([statement], dialect)).not.toThrow();
     }
   );
@@ -828,15 +856,18 @@ describe("a complete SQLite rebuild of another owner's table", () => {
   function guardLive(
     statements: string[],
     liveColumns: ReturnType<typeof live> | undefined,
-    dialect: SupportedDialect = "sqlite"
+    dialect: SupportedDialect = "sqlite",
+    elementOwners: OwnerRecord[] = []
   ) {
     assertNoForeignDrops({
       statements,
       stream: "plugin:fx",
       owners,
+      elementOwners,
       dialect,
       source: "plugin:fx/001",
       liveColumns,
+      liveTables: new Set(owners.keys()),
     });
   }
 
@@ -864,7 +895,8 @@ describe("a complete SQLite rebuild of another owner's table", () => {
 
   it("follows a column dropped before the rebuild in the same list", () => {
     // A contribution's DOWN: its column goes first, then the table is
-    // rebuilt without the column or its check.
+    // rebuilt without the column or its check. The column is the plugin's,
+    // as the element row recorded for a contribution says.
     expect(() =>
       guardLive(
         [
@@ -874,7 +906,21 @@ describe("a complete SQLite rebuild of another owner's table", () => {
           drop,
           rename,
         ],
-        live("id", "body", "status")
+        live("id", "body", "status"),
+        "sqlite",
+        [
+          {
+            tableName: "app_notes",
+            elementKind: "column",
+            elementName: "status",
+            ownerKind: "plugin",
+            ownerId: "fx",
+            migratedBy: "plugin:fx",
+            ownerVersion: "1.0.0",
+            schemaVersion: 1,
+            state: "active",
+          },
+        ]
       )
     ).not.toThrow();
   });
@@ -917,12 +963,14 @@ describe("a complete SQLite rebuild of another owner's table", () => {
     ).toThrow(/different owner/i);
   });
 
-  it("refuses a twin that leaves out a live column", () => {
+  it("refuses a twin that leaves out a live column it does not hold", () => {
     // Everything the text shows is a complete block; only the live table
-    // shows the rebuild would drop `secret` with the old table.
+    // shows the rebuild drops `secret`, the app's column, with the old table.
     expect(() =>
       guardLive([create, copy, drop, rename], live("id", "body", "secret"))
-    ).toThrow(/different owner/i);
+    ).toThrow(
+      /would drop or rename a column that belongs to a different owner/
+    );
   });
 
   it("refuses a rebuild whose table's live columns were not read", () => {

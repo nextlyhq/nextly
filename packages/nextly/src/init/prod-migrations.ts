@@ -150,46 +150,27 @@ async function pluginMigrationArgs(
   };
 }
 
-export async function runProdMigrationsIfEnabled(
-  args: RunProdMigrationsArgs
-): Promise<void> {
-  // Before the environment checks, because a process that has already refused
-  // must keep refusing regardless of how the next caller reaches this.
-  //
-  // The REFUSAL only, not the pending gate: this function is what settles that
-  // gate, so awaiting it here would deadlock the very boot it was called to
-  // perform.
-  assertBootMigrationsNotRefused();
+/** Whether this boot migrates: only in production, and only when opted in. */
+function bootMigrationsEnabled(args: RunProdMigrationsArgs): boolean {
+  return (
+    process.env.NODE_ENV === "production" &&
+    args.config.db.runMigrationsOnBoot === true
+  );
+}
 
-  // Nothing to run: the gate is never opened for this boot. Settled anyway,
-  // so a gate some earlier code path left pending cannot outlive a boot that
-  // decided not to migrate.
-  if (process.env.NODE_ENV !== "production") {
-    allowBootMigrations();
-    return;
-  }
-  if (args.config.db.runMigrationsOnBoot !== true) {
-    allowBootMigrations();
-    return;
-  }
-
-  // Opened here, once the decision to run is made, because every path below
-  // settles it: the success path and the tolerated failure allow serving, the
-  // refusal refuses. The function that settles the gate is the only one that
-  // opens it, so the decision to run is read in one place.
-  openBootMigrationsGate();
-
-  const { adapter, logger } = args;
-  const migrationsDir = resolve(process.cwd(), args.config.db.migrationsDir);
-
-  // migrateCore -> runFileMigrations expects the full CLI `Logger` surface
-  // (notably `.success`, plus cosmetic helpers). The boot caller
-  // (`registerServices`) provides only info/warn/error/debug, so adapt the
-  // minimal boot logger to a complete Logger here. Without this, the first
-  // applied migration throws "logger.success is not a function" mid-run, which
-  // is caught below as a (false) failure and aborts any remaining migrations.
+/**
+ * The boot logger, widened to the full CLI `Logger` surface.
+ *
+ * migrateCore -> runFileMigrations expects the full CLI `Logger` surface
+ * (notably `.success`, plus cosmetic helpers). The boot caller
+ * (`registerServices`) provides only info/warn/error/debug, so adapt the
+ * minimal boot logger to a complete Logger here. Without this, the first
+ * applied migration throws "logger.success is not a function" mid-run, which
+ * is caught below as a (false) failure and aborts any remaining migrations.
+ */
+function bootCoreLogger(logger: LoggerLike) {
   const noop = (): void => {};
-  const coreLogger = {
+  return {
     debug: logger.debug ?? noop,
     info: logger.info,
     warn: logger.warn,
@@ -206,8 +187,11 @@ export async function runProdMigrationsIfEnabled(
     setOptions: noop,
     getOptions: () => ({}),
   };
+}
 
-  const ensureLedger = async (): Promise<void> => {
+/** Create `nextly_schema_events` when the database does not have it yet. */
+function schemaLedgerEnsurer(adapter: AdapterLike): () => Promise<void> {
+  return async (): Promise<void> => {
     if (!(await adapter.tableExists("nextly_schema_events"))) {
       const { getSchemaEventsDdl } = await import(
         "../domains/schema/events/schema-events-ddl"
@@ -217,149 +201,228 @@ export async function runProdMigrationsIfEnabled(
       }
     }
   };
+}
 
-  const core: MigrateCoreLike =
+/** The injected `migrateCore`, or the real one, loaded on first use. */
+function migrateCoreFor(args: RunProdMigrationsArgs): MigrateCoreLike {
+  return (
     args.migrateCore ??
     (async deps => {
       const { migrateCore } = await import("../cli/commands/migrate");
       // migrateCore's typed deps require a CLIDatabaseAdapter + Logger; the
       // boot adapter/logger are structurally compatible for the paths used.
       return migrateCore(deps as never);
-    });
+    })
+  );
+}
+
+/** What one boot-migration run is handed besides the caller's arguments. */
+interface BootMigrationRun {
+  core: MigrateCoreLike;
+  coreLogger: LoggerLike;
+  migrationsDir: string;
+  ensureLedger: () => Promise<void>;
+}
+
+/**
+ * Apply pending migrations under the wait-mode lock, refuse when the lock was
+ * never acquired, and on success reload the registry and allow serving.
+ */
+async function applyBootMigrations(
+  args: RunProdMigrationsArgs,
+  run: BootMigrationRun
+): Promise<void> {
+  const { adapter, logger } = args;
+  logger.info("[Nextly] Running production migrations on boot...");
+  const resolvedSchema = await resolveDeclaredSchema({
+    projectRoot: process.cwd(),
+    config: args.config,
+    deferredExtends: args.deferredExtends,
+  });
+  // Compiled from this call's config, as every migrate entry point
+  // compiles it; see `MigrateCoreDeps.extensionSchema`.
+  const { compileExtensionSchema } = await import(
+    "../domains/schema/extension/publish"
+  );
+  const extensionSchema = await compileExtensionSchema({
+    dialect: adapter.dialect,
+    plugins: args.config.plugins ?? [],
+    config: args.config,
+    logger: { warn: m => logger.warn(m) },
+  });
+  const { applied, ran } = await run.core({
+    extensionSchema,
+    dialect: adapter.dialect,
+    db: adapter.getDrizzle(),
+    adapter,
+    migrationsDir: run.migrationsDir,
+    logger: run.coreLogger,
+    lockMode: "wait",
+    ttlSeconds: args.config.db.migrateLockTtlSeconds,
+    knownJunctions: resolvedSchema.knownJunctions,
+    // The same sets the CLI applies, from the same config: a boot that
+    // skipped them would serve against a schema missing every plugin
+    // table while reporting a clean migrate.
+    ...(await pluginMigrationArgs(args.config.plugins ?? [])),
+    ensureLedger: run.ensureLedger,
+  });
+  // REFUSES rather than serving. `ran: false` means the migrate lock stayed
+  // held past the wait deadline, so this process never learned whether the
+  // schema it is about to serve matches the code. The tempting reading — "the
+  // holder did the work, carry on" — is an assumption: the holder may have
+  // died, been killed, or still be mid-flight, and a lock timing out says
+  // nothing about whether migrations ran.
+  //
+  // `applied` is 0 here and 0 on an up-to-date database, which is why this
+  // previously logged `complete (0 applied)` and started anyway. On a rolling
+  // deploy that is the second replica serving traffic against a schema it
+  // never migrated.
+  //
+  // Failing startup is recoverable and quiet in an orchestrator: the process
+  // exits, the platform restarts it, and by then the holder has usually
+  // finished. A genuinely stuck lock needs `nextly migrate --force-unlock`,
+  // which is the intervention the situation actually calls for.
+  if (!ran) {
+    throw bootMigrationsNotRun(adapter.dialect);
+  }
+  logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);
+
+  /*
+   * 🔴 Reloaded whenever migrations RAN, never on how many entities this
+   * process registered. `registerServices` built this registry before the
+   * lock was ever taken, so it predates the rows regardless of who wrote
+   * them — and `migrateCore` reports `collectionsRegistered` for the work
+   * THIS process did, not for whether its own view is current.
+   *
+   * The two differ on a rolling deploy, which is the case that matters. A
+   * replica that waits on the lock and acquires it after another replica has
+   * already migrated runs `migrateCore` against a settled database: `ran` is
+   * true, `applied` and the registration counts are 0, and its registry is
+   * exactly as stale as the migrating replica's was. Gated on those counts it
+   * would never reload, and would serve the entities it can see but not
+   * query. `ran === true` is the condition every replica that goes on to
+   * SERVE satisfies — the ones that do not throw a few lines above rather
+   * than reaching here.
+   *
+   * Before `allowBootMigrations`, so nothing waiting on that gate is released
+   * onto a registry this boot already knows is behind. It cannot throw, which
+   * is what makes that ordering safe: an exception here would leave the gate
+   * closed and hang every consumer of it.
+   */
+  const { reloadDynamicTables } = await import("./reload-dynamic-tables");
+  await reloadDynamicTables("[Nextly]");
+
+  allowBootMigrations();
+}
+
+/**
+ * The refusal a failed run amounts to, or undefined when the failure is one
+ * the app can serve through.
+ *
+ * Two fatal shapes, and MySQL is why the second is here: `withMigrateLock`
+ * reports a busy lock as `ran: false` on Postgres but THROWS
+ * `NEXTLY_MIGRATE_LOCK_BUSY` on MySQL when the wait expires mid-flight.
+ * Rethrowing only the first would have left MySQL serving the unmigrated
+ * schema this whole change exists to prevent.
+ */
+function fatalBootMigrationError(
+  err: unknown,
+  dialect: string
+): NextlyError | undefined {
+  if (!(err instanceof NextlyError)) return undefined;
+  if (err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN") return err;
+  if (err.code === "NEXTLY_MIGRATE_LOCK_BUSY") {
+    return bootMigrationsNotRun(dialect);
+  }
+  return undefined;
+}
+
+/**
+ * Settle the gate after a failed run: refuse for a fatal failure, otherwise
+ * log it, reload the registry and allow serving.
+ */
+async function settleFailedBootMigrations(
+  err: unknown,
+  args: RunProdMigrationsArgs
+): Promise<void> {
+  const { logger } = args;
+  // A refusal is not a failure to swallow. Every other error here is
+  // recoverable by running `nextly migrate` against a database the app can
+  // still usefully serve; this one means the app does not know what it is
+  // serving, which is the case the refusal exists for.
+  const fatal = fatalBootMigrationError(err, args.adapter.dialect);
+  if (fatal !== undefined) {
+    // Recorded before rethrowing: `registerServices` checks it before it
+    // connects anything, so every later boot attempt in this process refuses
+    // at once. The throw itself makes `registerServices` release the adapter
+    // and container this boot acquired.
+    refuseBootMigrations(fatal);
+    logger.error(`[Nextly] ${fatal.publicMessage}`);
+    throw fatal;
+  }
+  logger.error(
+    `[Nextly] Boot migrations failed: ${
+      err instanceof Error ? err.message : String(err)
+    }. The app will continue; run \`nextly migrate\` to resolve.`
+  );
+
+  /*
+   * 🔴 Reloaded on the FAILING path too, because this process goes on to
+   * serve. `runFileMigrations` commits and records each migration file
+   * independently before propagating a later file's error, so a batch that
+   * failed part-way has already written whatever metadata its earlier files
+   * carried — and skipping the reload here served exactly those entities
+   * against the pre-migration registry, which is the defect this whole path
+   * exists to close, reached through the error branch instead of the happy
+   * one.
+   *
+   * Before `allowBootMigrations` for the same reason as the success path, and
+   * safe there for the same reason: the reload cannot throw.
+   */
+  const { reloadDynamicTables } = await import("./reload-dynamic-tables");
+  await reloadDynamicTables("[Nextly]");
+
+  // The app continues on this path, so the gate must open — a swallowed
+  // failure that left it pending would hang every consumer forever, turning a
+  // recoverable error into a worse outage than the one being tolerated.
+  allowBootMigrations();
+}
+
+export async function runProdMigrationsIfEnabled(
+  args: RunProdMigrationsArgs
+): Promise<void> {
+  // Before the environment checks, because a process that has already refused
+  // must keep refusing regardless of how the next caller reaches this.
+  //
+  // The REFUSAL only, not the pending gate: this function is what settles that
+  // gate, so awaiting it here would deadlock the very boot it was called to
+  // perform.
+  assertBootMigrationsNotRefused();
+
+  // Nothing to run: the gate is never opened for this boot. Settled anyway,
+  // so a gate some earlier code path left pending cannot outlive a boot that
+  // decided not to migrate.
+  if (!bootMigrationsEnabled(args)) {
+    allowBootMigrations();
+    return;
+  }
+
+  // Opened here, once the decision to run is made, because every path below
+  // settles it: the success path and the tolerated failure allow serving, the
+  // refusal refuses. The function that settles the gate is the only one that
+  // opens it, so the decision to run is read in one place.
+  openBootMigrationsGate();
+
+  const run: BootMigrationRun = {
+    migrationsDir: resolve(process.cwd(), args.config.db.migrationsDir),
+    coreLogger: bootCoreLogger(args.logger),
+    ensureLedger: schemaLedgerEnsurer(args.adapter),
+    core: migrateCoreFor(args),
+  };
 
   try {
-    logger.info("[Nextly] Running production migrations on boot...");
-    const resolvedSchema = await resolveDeclaredSchema({
-      projectRoot: process.cwd(),
-      config: args.config,
-      deferredExtends: args.deferredExtends,
-    });
-    // Compiled from this call's config, as every migrate entry point
-    // compiles it; see `MigrateCoreDeps.extensionSchema`.
-    const { compileExtensionSchema } = await import(
-      "../domains/schema/extension/publish"
-    );
-    const extensionSchema = await compileExtensionSchema({
-      dialect: adapter.dialect,
-      plugins: args.config.plugins ?? [],
-      config: args.config,
-      logger: { warn: m => logger.warn(m) },
-    });
-    const { applied, ran } = await core({
-      extensionSchema,
-      dialect: adapter.dialect,
-      db: adapter.getDrizzle(),
-      adapter,
-      migrationsDir,
-      logger: coreLogger,
-      lockMode: "wait",
-      ttlSeconds: args.config.db.migrateLockTtlSeconds,
-      knownJunctions: resolvedSchema.knownJunctions,
-      // The same sets the CLI applies, from the same config: a boot that
-      // skipped them would serve against a schema missing every plugin
-      // table while reporting a clean migrate.
-      ...(await pluginMigrationArgs(args.config.plugins ?? [])),
-      ensureLedger,
-    });
-    // REFUSES rather than serving. `ran: false` means the migrate lock stayed
-    // held past the wait deadline, so this process never learned whether the
-    // schema it is about to serve matches the code. The tempting reading — "the
-    // holder did the work, carry on" — is an assumption: the holder may have
-    // died, been killed, or still be mid-flight, and a lock timing out says
-    // nothing about whether migrations ran.
-    //
-    // `applied` is 0 here and 0 on an up-to-date database, which is why this
-    // previously logged `complete (0 applied)` and started anyway. On a rolling
-    // deploy that is the second replica serving traffic against a schema it
-    // never migrated.
-    //
-    // Failing startup is recoverable and quiet in an orchestrator: the process
-    // exits, the platform restarts it, and by then the holder has usually
-    // finished. A genuinely stuck lock needs `nextly migrate --force-unlock`,
-    // which is the intervention the situation actually calls for.
-    if (!ran) {
-      throw bootMigrationsNotRun(adapter.dialect);
-    }
-    logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);
-
-    /*
-     * 🔴 Reloaded whenever migrations RAN, never on how many entities this
-     * process registered. `registerServices` built this registry before the
-     * lock was ever taken, so it predates the rows regardless of who wrote
-     * them — and `migrateCore` reports `collectionsRegistered` for the work
-     * THIS process did, not for whether its own view is current.
-     *
-     * The two differ on a rolling deploy, which is the case that matters. A
-     * replica that waits on the lock and acquires it after another replica has
-     * already migrated runs `migrateCore` against a settled database: `ran` is
-     * true, `applied` and the registration counts are 0, and its registry is
-     * exactly as stale as the migrating replica's was. Gated on those counts it
-     * would never reload, and would serve the entities it can see but not
-     * query. `ran === true` is the condition every replica that goes on to
-     * SERVE satisfies — the ones that do not throw a few lines above rather
-     * than reaching here.
-     *
-     * Before `allowBootMigrations`, so nothing waiting on that gate is released
-     * onto a registry this boot already knows is behind. It cannot throw, which
-     * is what makes that ordering safe: an exception here would leave the gate
-     * closed and hang every consumer of it.
-     */
-    const { reloadDynamicTables } = await import("./reload-dynamic-tables");
-    await reloadDynamicTables("[Nextly]");
-
-    allowBootMigrations();
+    await applyBootMigrations(args, run);
   } catch (err) {
-    // A refusal is not a failure to swallow. Every other error here is
-    // recoverable by running `nextly migrate` against a database the app can
-    // still usefully serve; this one means the app does not know what it is
-    // serving, which is the case the refusal exists for.
-    // Two fatal shapes, and MySQL is why the second is here: `withMigrateLock`
-    // reports a busy lock as `ran: false` on Postgres but THROWS
-    // `NEXTLY_MIGRATE_LOCK_BUSY` on MySQL when the wait expires mid-flight.
-    // Rethrowing only the first would have left MySQL serving the unmigrated
-    // schema this whole change exists to prevent.
-    if (
-      err instanceof NextlyError &&
-      (err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN" ||
-        err.code === "NEXTLY_MIGRATE_LOCK_BUSY")
-    ) {
-      const fatal =
-        err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN"
-          ? err
-          : bootMigrationsNotRun(args.adapter.dialect);
-      // Recorded before rethrowing: `registerServices` checks it before it
-      // connects anything, so every later boot attempt in this process refuses
-      // at once. The throw itself makes `registerServices` release the adapter
-      // and container this boot acquired.
-      refuseBootMigrations(fatal);
-      logger.error(`[Nextly] ${fatal.publicMessage}`);
-      throw fatal;
-    }
-    logger.error(
-      `[Nextly] Boot migrations failed: ${
-        err instanceof Error ? err.message : String(err)
-      }. The app will continue; run \`nextly migrate\` to resolve.`
-    );
-
-    /*
-     * 🔴 Reloaded on the FAILING path too, because this process goes on to
-     * serve. `runFileMigrations` commits and records each migration file
-     * independently before propagating a later file's error, so a batch that
-     * failed part-way has already written whatever metadata its earlier files
-     * carried — and skipping the reload here served exactly those entities
-     * against the pre-migration registry, which is the defect this whole path
-     * exists to close, reached through the error branch instead of the happy
-     * one.
-     *
-     * Before `allowBootMigrations` for the same reason as the success path, and
-     * safe there for the same reason: the reload cannot throw.
-     */
-    const { reloadDynamicTables } = await import("./reload-dynamic-tables");
-    await reloadDynamicTables("[Nextly]");
-
-    // The app continues on this path, so the gate must open — a swallowed
-    // failure that left it pending would hang every consumer forever, turning a
-    // recoverable error into a worse outage than the one being tolerated.
-    allowBootMigrations();
+    await settleFailedBootMigrations(err, args);
   }
 }

@@ -16,7 +16,7 @@
  */
 import type { NextlySchemaSnapshot, TableSpec } from "../pipeline/diff/types";
 
-import type { OwnerRecord } from "./owner-registry";
+import { ownerRecordKey, type OwnerRecord } from "./owner-registry";
 
 type ElementKind = "column" | "index" | "fk" | "check";
 
@@ -53,7 +53,7 @@ export function retiredElementRows(input: {
   const declaredKeys = new Set<string>();
   for (const [table, elements] of input.declared) {
     for (const element of elements) {
-      declaredKeys.add(keyOf(table, element.elementKind, element.elementName));
+      declaredKeys.add(ownerRecordKey({ tableName: table, ...element }));
     }
   }
   const liveByName = new Map(
@@ -64,7 +64,7 @@ export function retiredElementRows(input: {
     const kind = row.elementKind ?? "table";
     if (kind === "table") return false;
     const name = row.elementName ?? "";
-    if (declaredKeys.has(keyOf(row.tableName, kind, name))) return false;
+    if (declaredKeys.has(ownerRecordKey(row))) return false;
     const liveTable = liveByName.get(row.tableName);
     if (liveTable === undefined) return true;
     const present = liveTable[LIVE_DIMENSION[kind]] as
@@ -73,8 +73,4 @@ export function retiredElementRows(input: {
     if (present === undefined) return false;
     return !present.some(element => element.name === name);
   });
-}
-
-function keyOf(table: string, kind: string, name: string): string {
-  return `${table}\u0000${kind}\u0000${name}`;
 }

@@ -4,11 +4,16 @@
  */
 import { describe, it, expect, vi } from "vitest";
 
+import { createTestDb } from "../../../__tests__/fixtures/db";
 import { NextlyError } from "../../../errors/nextly-error";
-import type { SchemaEventRow } from "../events/schema-events-repository";
+import {
+  SchemaEventsRepository,
+  type SchemaEventRow,
+} from "../events/schema-events-repository";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
 import { reconcileFile, type ReconcileRepo } from "./drift-reconcile";
+import { resolveMigration } from "./resolve";
 
 const tbl = (name: string): NextlySchemaSnapshot["tables"][number] => ({
   name,
@@ -68,14 +73,47 @@ const file = {
   path: "m/0006_x.sql",
 };
 
+/**
+ * A real ledger in which `failures` attempts of the file failed, then
+ * cleared by the real `migrate:resolve --failed-cleanup`. The cleanup flips
+ * the failed rows to `rolled_back` in place and adds no newer row, so a fake
+ * ledger that appends one models a history the command never writes.
+ */
+async function clearedLedger(failures = 1): Promise<SchemaEventsRepository> {
+  const repo = new SchemaEventsRepository((await createTestDb()).db, "sqlite");
+  for (let t = 1; t <= failures; t++) {
+    await repo.insertEvent({
+      eventType: "file_apply",
+      status: "failed",
+      source: "cli-migrate",
+      filename: file.filename,
+      startedAt: new Date(t),
+    });
+  }
+  await resolveMigration({
+    mode: "failed-cleanup",
+    filename: file.filename,
+    dialect: "sqlite",
+    repo,
+    fileExists: () => Promise.resolve(true),
+    loadTargetSnapshot: () => Promise.resolve(null),
+    marksNoTransaction: () => Promise.resolve(false),
+    introspectLive: () => Promise.resolve({ tables: [] }),
+  });
+  return repo;
+}
+
+/** The file's ledger statuses, oldest attempt first. */
+async function ledgerStatuses(repo: SchemaEventsRepository): Promise<string[]> {
+  const rows = await repo.findFileApplies(file.filename);
+  return [...rows]
+    .sort((a, b) => +new Date(a.startedAt) - +new Date(b.startedAt))
+    .map(row => row.status);
+}
+
 describe("reconcileFile (Phase 2 three-state)", () => {
   describe("a file run outside a transaction whose last attempt failed", () => {
     const outside = { ...file, transaction: false };
-    const failedThenRolledBack = [
-      { status: "failed" as const, startedAt: new Date(1) },
-      { status: "rolled_back" as const, startedAt: new Date(2) },
-    ];
-
     it("refuses to record it applied without running it when live ≡ target", async () => {
       // Its schema statements ran, so the database stands at its target, but
       // a data statement after the failure may never have.
@@ -122,17 +160,19 @@ describe("reconcileFile (Phase 2 three-state)", () => {
     });
 
     it("records it applied once the failed attempt is cleared", async () => {
-      const repo = fakeRepo(failedThenRolledBack);
+      const repo = await clearedLedger();
+      const executeSql = vi.fn();
       const r = await reconcileFile({
         file: outside,
         before: snap("a"),
         target: snap("a", "b"),
         live: snap("a", "b"),
         repo,
-        executeSql: vi.fn(),
+        executeSql,
       });
       expect(r.state).toBe("already_applied");
-      expect(repo.applied[0].statementsExecuted).toBe(0);
+      expect(executeSql).not.toHaveBeenCalled();
+      expect(await ledgerStatuses(repo)).toEqual(["rolled_back", "applied"]);
     });
 
     it("still records a file run in a transaction, whose failure was undone", async () => {
@@ -288,5 +328,135 @@ describe("reconcileFile (Phase 2 three-state)", () => {
         executeSql: () => Promise.reject(new Error("constraint violation")),
       })
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
+  });
+});
+
+describe("a file run in a transaction whose last attempt failed", () => {
+  const failed = [{ status: "failed" as const, startedAt: new Date(1) }];
+  const args = (dialect: "postgresql" | "mysql" | "sqlite") => ({
+    file,
+    before: snap("a"),
+    target: snap("a", "b"),
+    live: snap("a", "b"),
+    dialect,
+    executeSql: vi.fn(),
+  });
+
+  it("refuses to record it applied without running it on MySQL, which committed its schema statements", async () => {
+    const repo = fakeRepo(failed);
+    await expect(
+      reconcileFile({ ...args("mysql"), repo })
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      logContext: { source: "0006_x.sql", reason: "partially-applied" },
+      publicMessage: expect.stringContaining(
+        "0006_x.sql's last attempt failed, and MySQL commits each schema statement as it runs, even inside a transaction"
+      ) as unknown,
+    });
+    expect(repo.starts).toBe(0);
+    expect(repo.applied).toEqual([]);
+  });
+
+  it.each(["postgresql", "sqlite"] as const)(
+    "records it applied on %s, where the failed attempt was undone whole",
+    async dialect => {
+      const repo = fakeRepo(failed);
+      await expect(reconcileFile({ ...args(dialect), repo })).resolves.toEqual({
+        state: "already_applied",
+      });
+      expect(repo.applied).toEqual([
+        { statementsExecuted: 0, uniqueFilename: "0006_x.sql" },
+      ]);
+    }
+  );
+
+  it("records it applied on MySQL once the failed attempt is cleared", async () => {
+    const repo = await clearedLedger();
+    await expect(reconcileFile({ ...args("mysql"), repo })).resolves.toEqual({
+      state: "already_applied",
+    });
+    expect(await ledgerStatuses(repo)).toEqual(["rolled_back", "applied"]);
+  });
+});
+
+describe("a file whose last attempt failed, with the database at its start", () => {
+  const failed = [{ status: "failed" as const, startedAt: new Date(1) }];
+  // The schema statement failed, so the database stands where the file
+  // starts; a data statement before it may still have run and stayed.
+  const args = (
+    dialect: "postgresql" | "mysql" | "sqlite",
+    transaction?: boolean
+  ) => ({
+    file: { ...file, transaction },
+    before: snap("a"),
+    target: snap("a", "b"),
+    live: snap("a"),
+    dialect,
+    executeSql: vi.fn(() => Promise.resolve(1)),
+  });
+
+  it("refuses to run it again on MySQL, which committed what ran before the schema statement", async () => {
+    const repo = fakeRepo(failed);
+    const run = args("mysql");
+    await expect(reconcileFile({ ...run, repo })).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      logContext: { source: "0006_x.sql", reason: "partially-applied" },
+      publicMessage: expect.stringContaining(
+        "Running it again would repeat what of it ran and stayed"
+      ) as unknown,
+    });
+    expect(run.executeSql).not.toHaveBeenCalled();
+    expect(repo.starts).toBe(0);
+  });
+
+  it.each(["postgresql", "mysql", "sqlite"] as const)(
+    "refuses to run it again on %s when it runs outside a transaction",
+    async dialect => {
+      const repo = fakeRepo(failed);
+      const run = args(dialect, false);
+      await expect(reconcileFile({ ...run, repo })).rejects.toThrow(
+        "if you reverse the statements that ran, run `nextly migrate:resolve --failed-cleanup 0006_x.sql` and then `nextly migrate` again"
+      );
+      expect(run.executeSql).not.toHaveBeenCalled();
+      expect(repo.starts).toBe(0);
+    }
+  );
+
+  it.each(["postgresql", "sqlite"] as const)(
+    "runs it again on %s, where the failed attempt was undone whole",
+    async dialect => {
+      const repo = fakeRepo(failed);
+      const run = args(dialect);
+      await expect(reconcileFile({ ...run, repo })).resolves.toEqual({
+        state: "in_sync",
+      });
+      expect(run.executeSql).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("runs it on MySQL once the failed attempt is cleared", async () => {
+    const repo = await clearedLedger();
+    const run = args("mysql");
+    await expect(reconcileFile({ ...run, repo })).resolves.toEqual({
+      state: "in_sync",
+    });
+    expect(run.executeSql).toHaveBeenCalledTimes(1);
+    expect(await ledgerStatuses(repo)).toEqual(["rolled_back", "applied"]);
+  });
+
+  it("runs it on MySQL after one cleanup of two failed attempts in a row", async () => {
+    // One `--failed-cleanup` clears both: clearing only one would leave the
+    // other as the newest attempt, and the file refused again.
+    const repo = await clearedLedger(2);
+    const run = args("mysql");
+    await expect(reconcileFile({ ...run, repo })).resolves.toEqual({
+      state: "in_sync",
+    });
+    expect(run.executeSql).toHaveBeenCalledTimes(1);
+    expect(await ledgerStatuses(repo)).toEqual([
+      "rolled_back",
+      "rolled_back",
+      "applied",
+    ]);
   });
 });

@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import type { NextlySchemaSnapshot } from "../../../pipeline/diff/types";
 import type { ColumnSpec, TableSpec } from "../../../pipeline/diff/types";
+import type { OwnerRecord } from "../../../ownership/owner-registry";
 import type { ReconcileRepo } from "../../drift-reconcile";
 
 import { migrationChecksum, type PluginMigration } from "../plugin-migration";
@@ -450,6 +451,70 @@ describe("runPluginMigrations", () => {
     // The failed module is recorded as failed; nothing after it starts.
     expect(h.failed.length).toBe(1);
     expect(h.started).toEqual(["plugin:a/001"]);
+  });
+
+  describe("modules sharing one ledger key", () => {
+    const valid = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec("fx__a", false)],
+    });
+    const named = (name: string, table: string) =>
+      module({
+        name,
+        schemaVersion: 1,
+        before: [],
+        target: [tableSpec(table, false)],
+      });
+
+    it.each([
+      ["the same name", "001_backfill", "001_backfill"],
+      ["names differing only in case", "001_backfill", "001_Backfill"],
+    ])(
+      "refuses a plugin shipping two modules with %s, before any plugin runs",
+      async (_case, first, second) => {
+        const h = deps();
+        await expect(
+          runPluginMigrations(
+            [
+              { pluginName: "a", pluginVersion: "1.0.0", migrations: [valid] },
+              {
+                pluginName: "b",
+                pluginVersion: "1.0.0",
+                migrations: [named(first, "fx__b"), named(second, "fx__c")],
+              },
+            ],
+            h.deps
+          )
+        ).rejects.toMatchObject({
+          code: "INVALID_INPUT",
+          logContext: { plugin: "b", migration: second, clashesWith: first },
+        });
+        // Plugin a sorts first and is valid, yet nothing of it ran: the clash
+        // in b is found before any module of any plugin executes.
+        expect(h.started).toEqual([]);
+        expect(h.executed).toEqual([]);
+        expect(h.owners).toEqual([]);
+      }
+    );
+
+    it("accepts the same module name in two different plugins", async () => {
+      const h = deps();
+      await expect(
+        runPluginMigrations(
+          [
+            { pluginName: "a", pluginVersion: "1.0.0", migrations: [valid] },
+            {
+              pluginName: "b",
+              pluginVersion: "1.0.0",
+              migrations: [named("001", "fx__b")],
+            },
+          ],
+          h.deps
+        )
+      ).resolves.toMatchObject({ applied: 2 });
+    });
   });
 });
 
@@ -955,5 +1020,124 @@ describe("a database already past some of a plugin's modules", () => {
     });
     expect(d.started).toEqual([]);
     expect(d.executed).toEqual([]);
+  });
+});
+
+describe("ownership of a plugin whose modules are all recorded", () => {
+  const first = module({
+    name: "001",
+    schemaVersion: 1,
+    before: [],
+    target: [tableSpec("fx__a", false)],
+  });
+  const second = module({
+    name: "002",
+    schemaVersion: 2,
+    before: [tableSpec("fx__a", false)],
+    target: [tableSpec("fx__a", true), tableSpec("fx__b", false)],
+  });
+  const recorded = new Map([
+    ["plugin:a/001", first.checksum],
+    ["plugin:a/002", second.checksum],
+  ]);
+  const set = [
+    { pluginName: "a", pluginVersion: "1.0.0", migrations: [second, first] },
+  ];
+
+  function row(
+    tableName: string,
+    ownerId: string,
+    schemaVersion: number
+  ): OwnerRecord {
+    return {
+      tableName,
+      ownerKind: "plugin",
+      ownerId,
+      migratedBy: `plugin:${ownerId}`,
+      ownerVersion: "1.0.0",
+      schemaVersion,
+      state: "active",
+    };
+  }
+
+  it("records the last module's ownership when a run stopped before writing it", async () => {
+    // The ledger holds both modules, the owner registry nothing: the run that
+    // applied them stopped between the two writes.
+    const h = deps({ appliedShas: recorded, owners: new Map() });
+    const result = await runPluginMigrations(set, h.deps);
+    expect(result).toEqual({ applied: 0, adopted: 0, skipped: 2 });
+    expect(h.executed).toEqual([]);
+    expect(h.started).toEqual([]);
+    expect(h.owners).toEqual([
+      expect.objectContaining({
+        pluginName: "a",
+        schemaVersion: 2,
+        tables: ["fx__a", "fx__b"],
+      }),
+    ]);
+  });
+
+  it("moves rows left at the previous module's schema version", async () => {
+    const h = deps({
+      appliedShas: recorded,
+      owners: new Map([
+        ["fx__a", row("fx__a", "a", 1)],
+        ["fx__b", row("fx__b", "a", 2)],
+      ]),
+    });
+    await runPluginMigrations(set, h.deps);
+    expect(h.owners).toEqual([
+      expect.objectContaining({ schemaVersion: 2, tables: ["fx__a"] }),
+    ]);
+  });
+
+  it("writes nothing when the rows already stand at the last module", async () => {
+    const h = deps({
+      appliedShas: recorded,
+      owners: new Map([
+        ["fx__a", row("fx__a", "a", 2)],
+        ["fx__b", row("fx__b", "a", 2)],
+      ]),
+    });
+    await runPluginMigrations(set, h.deps);
+    expect(h.owners).toEqual([]);
+  });
+
+  it("never claims a table another owner's row names", async () => {
+    // fx__a was transferred to plugin z; only the missing fx__b is repaired.
+    const h = deps({
+      appliedShas: recorded,
+      owners: new Map([["fx__a", row("fx__a", "z", 7)]]),
+    });
+    await runPluginMigrations(set, h.deps);
+    expect(h.owners).toEqual([
+      expect.objectContaining({ pluginName: "a", tables: ["fx__b"] }),
+    ]);
+  });
+
+  it("moves the version of a plugin left owning no table", async () => {
+    const dropped = module({
+      name: "003",
+      schemaVersion: 3,
+      before: [tableSpec("fx__a", true), tableSpec("fx__b", false)],
+      target: [],
+    });
+    const h = deps({
+      appliedShas: new Map([...recorded, ["plugin:a/003", dropped.checksum]]),
+      owners: new Map([["fx__a", row("fx__a", "a", 2)]]),
+    });
+    await runPluginMigrations(
+      [
+        {
+          pluginName: "a",
+          pluginVersion: "1.0.0",
+          migrations: [first, second, dropped],
+        },
+      ],
+      h.deps
+    );
+    expect(h.owners).toEqual([
+      expect.objectContaining({ schemaVersion: 3, tables: [] }),
+    ]);
   });
 });

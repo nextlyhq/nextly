@@ -24,25 +24,9 @@ import type {
 } from "../../../schemas/schema-events/types";
 
 import { newestEvent } from "./newest-event";
+import { asRepositoryDb, type RepositoryDb } from "./repository-db";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
-
-/** Structural shape of the Drizzle DB methods this repository uses. */
-type SelectChain = Promise<Array<Record<string, unknown>>> & {
-  where: (c: unknown) => Promise<Array<Record<string, unknown>>>;
-};
-interface AnyDb {
-  insert: (t: unknown) => {
-    values: (v: Record<string, unknown>) => Promise<unknown>;
-  };
-  select: () => { from: (t: unknown) => SelectChain };
-  update: (t: unknown) => {
-    set: (v: Record<string, unknown>) => {
-      where: (c: unknown) => Promise<unknown>;
-    };
-  };
-  delete: (t: unknown) => { where: (c: unknown) => Promise<unknown> };
-}
 
 /** A read-back schema-events row (camelCase, as Drizzle maps it). */
 export interface SchemaEventRow {
@@ -111,6 +95,11 @@ export interface MarkFailedInput {
  */
 export const ERROR_MESSAGE_MAX_LEN = 8000;
 
+/** `note` added after the note a row already carries, if any. */
+function appendNote(existing: string | null, note: string): string {
+  return existing ? `${existing}; ${note}` : note;
+}
+
 /** Marks a truncated message; its length is reserved from the budget. */
 const TRUNCATION_SUFFIX = "...";
 
@@ -134,13 +123,13 @@ export function truncateErrorMessage(message: string | undefined): string {
 }
 
 export class SchemaEventsRepository {
-  private readonly db: AnyDb;
+  private readonly db: RepositoryDb;
   private readonly table: ReturnType<
     typeof schemaEventsTables
   >["nextlySchemaEvents"];
 
   constructor(db: unknown, dialect: Dialect) {
-    this.db = db as AnyDb;
+    this.db = asRepositoryDb(db);
     this.table = schemaEventsTables(dialect).nextlySchemaEvents;
   }
 
@@ -392,16 +381,23 @@ export class SchemaEventsRepository {
       )) as unknown as SchemaEventRow[];
   }
 
-  /** Transition a row to rolled_back (used by migrate:resolve --failed-cleanup). */
+  /**
+   * Transition a row to rolled_back (used by migrate:resolve --failed-cleanup).
+   *
+   * Only the status changes on the record of the attempt itself: its start
+   * and end times and its error stay as the attempt left them, so a cleared
+   * attempt still says when it ran and why it failed. A row with no end time
+   * gets one now, and `note` is added after any note the row already had.
+   */
   async markRolledBack(
     id: string,
     input: { note?: string | null } = {}
   ): Promise<void> {
-    const set: Record<string, unknown> = {
-      status: "rolled_back",
-      endedAt: new Date(),
-    };
-    if (input.note !== undefined) set.note = input.note;
+    const row = await this.findById(id);
+    if (!row) return;
+    const set: Record<string, unknown> = { status: "rolled_back" };
+    if (row.endedAt === null) set.endedAt = new Date();
+    if (input.note) set.note = appendNote(row.note, input.note);
     await this.db
       .update(this.table)
       .set(set)

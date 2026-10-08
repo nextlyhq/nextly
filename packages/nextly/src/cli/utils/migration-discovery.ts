@@ -140,5 +140,16 @@ export function selectVariant(
 export function getSortedBaseNames(
   groups: Map<string, MigrationGroup>
 ): string[] {
-  return Array.from(groups.keys()).sort();
+  return Array.from(groups.keys()).sort(compareMigrationBaseNames);
+}
+
+/**
+ * The order two app migrations run in, by base name (the filename without
+ * `.sql`): code-unit order, so the timestamp prefix decides. The comparator
+ * `getSortedBaseNames` sorts by, exported so anything that has to agree with
+ * the run order asks this rather than sorting by a rule of its own.
+ */
+export function compareMigrationBaseNames(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
 }

@@ -156,36 +156,57 @@ function quotedAt(
   at: number,
   dialect: SupportedDialect | undefined
 ): SqlSegment | undefined {
-  const c = text[at];
   if (isLineCommentAt(text, at, dialect)) {
     return { kind: "line-comment", start: at, end: lineEnd(text, at) };
   }
-  if (c === "/" && text[at + 1] === "*") {
-    return blockComment(text, at, dialect);
-  }
+  if (text.startsWith("/*", at)) return blockComment(text, at, dialect);
   if (dialect === "postgresql") {
-    const prefixed = postgresPrefixedAt(text, at);
-    if (prefixed !== undefined) return prefixed;
-    if (c === "$" && !afterWordChar(text, at)) {
-      const body = dollarBody(text, at);
-      if (body !== undefined) return body;
-    }
+    const postgres = postgresQuotedAt(text, at);
+    if (postgres !== undefined) return postgres;
   }
-  if (c === "'") {
-    // MySQL reads a backslash in a string as an escape by default; SQLite and
-    // an ordinary PostgreSQL string never do (`E'...'` is its prefix's case).
-    return stringAt(text, at, at, "'", dialect === "mysql", dialect);
+  return quoteCharacterAt(text, at, dialect);
+}
+
+/**
+ * The PostgreSQL-only segments that start at `at`: a prefixed string or
+ * name, or a dollar-quoted body. A `$` that continues a word (`a$b`) opens
+ * no body.
+ */
+function postgresQuotedAt(text: string, at: number): SqlSegment | undefined {
+  const prefixed = postgresPrefixedAt(text, at);
+  if (prefixed !== undefined) return prefixed;
+  if (text[at] !== "$" || afterWordChar(text, at)) return undefined;
+  return dollarBody(text, at);
+}
+
+/**
+ * The string or quoted name a quote character at `at` opens, by what that
+ * character quotes on the dialect.
+ */
+function quoteCharacterAt(
+  text: string,
+  at: number,
+  dialect: SupportedDialect | undefined
+): SqlSegment | undefined {
+  switch (text[at]) {
+    case "'":
+      // MySQL reads a backslash in a string as an escape by default; SQLite
+      // and an ordinary PostgreSQL string never do (`E'...'` is its prefix's
+      // case).
+      return stringAt(text, at, at, "'", dialect === "mysql", dialect);
+    case '"':
+      return dialect === "mysql"
+        ? stringAt(text, at, at, '"', true, dialect)
+        : quotedName(text, at, '"', false);
+    case "`":
+      return dialect === "mysql" || dialect === "sqlite"
+        ? quotedName(text, at, "`", false)
+        : undefined;
+    case "[":
+      return dialect === "sqlite" ? bracketedName(text, at) : undefined;
+    default:
+      return undefined;
   }
-  if (c === '"') {
-    return dialect === "mysql"
-      ? stringAt(text, at, at, '"', true, dialect)
-      : quotedName(text, at, '"', false);
-  }
-  if (c === "`" && (dialect === "mysql" || dialect === "sqlite")) {
-    return quotedName(text, at, "`", false);
-  }
-  if (c === "[" && dialect === "sqlite") return bracketedName(text, at);
-  return undefined;
 }
 
 /**

@@ -236,13 +236,16 @@ function markAppliedAdvice(source: string): string {
 }
 
 /**
- * What the operator does about a unit that ran outside a transaction and
- * stopped part-way. A unit finished by hand is recorded, never run again:
- * running it would repeat the statements that already ran. A unit whose
- * statements were reversed by hand stands at its start, and runs again.
+ * What the operator does about a unit that stopped part-way. A unit finished
+ * by hand is recorded, never run again: running it would repeat the
+ * statements that already ran. A unit whose statements were reversed by hand
+ * stands at its start, and runs again once its failed attempt is cleared:
+ * while that attempt is the newest, `nextly migrate` refuses to run it,
+ * because it cannot tell a reversed unit from one whose data statements
+ * stayed.
  */
 export function partiallyAppliedAdvice(source: string): string {
-  return `If you finish its remaining statements by hand, ${markAppliedAdvice(source)} rather than running it again; if you reverse the statements that ran, run \`nextly migrate\` again.`;
+  return `If you finish its remaining statements by hand, ${markAppliedAdvice(source)} rather than running it again; if you reverse the statements that ran, run \`nextly migrate:resolve --failed-cleanup ${source}\` and then \`nextly migrate\` again.`;
 }
 
 /**

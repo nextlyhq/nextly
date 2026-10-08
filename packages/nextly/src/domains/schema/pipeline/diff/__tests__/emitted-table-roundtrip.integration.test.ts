@@ -118,16 +118,22 @@ function roundTrip(
   it("reads the predicate and the expression back", async () => {
     const live = await introspectLiveSnapshot(db(), dialect, [TABLE]);
     const indexes = live.tables[0]?.indexes ?? [];
-    const lower = indexes.find(i => i.name === `idx_${TABLE}_email_lower`);
-    expect(lower?.columns).toEqual([]);
-    expect(lower?.expression).toMatch(/lower/i);
-    const pair = indexes.find(i => i.name === `idx_${TABLE}_email_deleted`);
-    expect(pair?.columns).toEqual([]);
-    expect(pair?.expression).toMatch(/lower.*,\s*`?deleted_at`?$/i);
+    const index = (suffix: string) =>
+      indexes.find(i => i.name === `idx_${TABLE}_${suffix}`);
+    expect(index("email_lower")).toMatchObject({
+      columns: [],
+      expression: expect.stringMatching(/lower/i),
+    });
+    expect(index("email_deleted")).toMatchObject({
+      columns: [],
+      expression: expect.stringMatching(/lower.*,\s*`?deleted_at`?$/i),
+    });
+    // MySQL has no partial indexes, so only the other two declare this one.
     if (dialect !== "mysql") {
-      const liveOnly = indexes.find(i => i.name === `idx_${TABLE}_email_live`);
-      expect(liveOnly?.columns).toEqual(["email"]);
-      expect(liveOnly?.where).toMatch(/deleted_at/i);
+      expect(index("email_live")).toMatchObject({
+        columns: ["email"],
+        where: expect.stringMatching(/deleted_at/i),
+      });
     }
   });
 

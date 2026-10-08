@@ -36,8 +36,9 @@ export function pluginOfLedgerRow(filename: string | null): string | null {
   // first one returned `@acme`, so `scopeLedgerRows(rows, "@acme/...")`
   // matched nothing and both `migrate:status --plugin` and
   // `migrate:down --plugin` silently reported no migrations for every scoped
-  // plugin. A module name cannot contain a slash — `slugify` produces none —
-  // so the last one is the separator, whatever the plugin is called.
+  // plugin. A module name cannot contain a slash — `assertModuleNames`
+  // refuses one where the manifest is read — so the last one is the
+  // separator, whatever the plugin is called.
   const slash = withoutPrefix.lastIndexOf("/");
   // Without any separator the row is malformed rather than the app's, and
   // treating it as the app's would hand it to `migrate:down`.

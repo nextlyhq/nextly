@@ -103,6 +103,15 @@ describe("defineTable", () => {
     expect(validationPaths(() => col.decimal(3, 5))).toEqual(["decimal.scale"]);
   });
 
+  it("refuses a decimal scale MySQL cannot declare, at the widest one it can", () => {
+    // MySQL caps DECIMAL scale at 30 while PostgreSQL accepts more, so 31
+    // would create on one dialect and fail on the other.
+    expect(validationPaths(() => col.decimal(31, 31))).toEqual([
+      "decimal.scale",
+    ]);
+    expect(() => col.decimal(31, 30)).not.toThrow();
+  });
+
   it("refuses two keys that collide once snake-cased", () => {
     // `fooBar` and `foo_bar` are one SQL column, so the table would declare it
     // twice and fail at CREATE rather than here.
@@ -131,6 +140,25 @@ describe("defineTable", () => {
         defineTable("t", { id: col.id() }, { indexes: [{ columns: [] }] })
       )
     ).toEqual(["t.indexes[0]"]);
+  });
+
+  it("refuses a foreign key over no columns, and accepts one over a column", () => {
+    // Two empty lists agree in length, so only a count of at least one keeps
+    // `FOREIGN KEY () REFERENCES users ()` from reaching the database.
+    const declare = (columns: string[], referenced: string[]) =>
+      defineTable(
+        "t",
+        { id: col.id(), ownerId: col.shortText() },
+        {
+          foreignKeys: [
+            { columns, references: { table: "users", columns: referenced } },
+          ],
+        }
+      );
+    expect(validationPaths(() => declare([], []))).toEqual([
+      "t.foreignKeys[0]",
+    ]);
+    expect(() => declare(["ownerId"], ["id"])).not.toThrow();
   });
 
   it("refuses an explicit foreign key name past 63 characters, and accepts 63", () => {

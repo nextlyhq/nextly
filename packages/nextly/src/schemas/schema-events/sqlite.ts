@@ -18,6 +18,9 @@ import type {
   SchemaEventType,
 } from "./types";
 
+// The same table in another dialect's Drizzle builders: each dialect's
+// column functions are distinct, so the declarations cannot be shared.
+// fallow-ignore-next-line code-duplication
 export const nextlySchemaEventsSqlite = sqliteTable(
   "nextly_schema_events",
   {

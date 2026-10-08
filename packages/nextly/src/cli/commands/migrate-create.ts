@@ -808,21 +808,20 @@ function pluginDefinitionFrom(
   return isPluginDefinition(mod) ? mod : undefined;
 }
 
-/**
- * Generate one plugin's migration module: compile the plugin's declared
- * tables per dialect, diff against the previous module's snapshot, and write
- * the module plus the rewritten `index.ts` barrel beside the entry.
- */
-async function runMigrateCreatePlugin(
-  name: string | undefined,
-  options: ResolvedMigrateCreateOptions,
-  context: CommandContext
-): Promise<void> {
-  const { logger } = context;
-  const cwd = options.cwd ?? process.cwd();
-  const entryPath = resolve(cwd, options.plugin!);
-  const migrationsDir = resolve(dirname(entryPath), "migrations");
+/** A plugin definition carrying the two fields generation cannot do without. */
+type GeneratablePlugin = Partial<PluginDefinition> & {
+  name: string;
+  schemaVersion: number;
+};
 
+/**
+ * Load a `--plugin` entry and the definition it exports, refusing one with
+ * no name or no schemaVersion.
+ */
+async function loadPluginEntry(
+  entryPath: string,
+  cwd: string
+): Promise<GeneratablePlugin> {
   const { mod } = await bundleAndRequire({
     filepath: entryPath,
     cwd: dirname(entryPath),
@@ -844,71 +843,318 @@ async function runMigrateCreatePlugin(
       statusCode: 400,
     });
   }
+  return definition as GeneratablePlugin;
+}
 
-  const tables = definition.contributes?.schema?.tables ?? [];
-  // The HOOKS as well as the declarative tables. `schema.addTable()` inside
-  // `schema.extend` is a documented way to declare one — boot compiles and
-  // pushes whatever it produces — and passing only `tables` here generated an
-  // empty module for such a plugin. The table then existed through dev push
-  // and was missing after a production migration, which is the one difference
-  // migrations exist to prevent.
-  //
-  // A hook reaching for an ENTITY table finds none: this command compiles the
-  // plugin alone, deliberately, because a plugin's migration must not depend
-  // on which app installs it. Such a hook is refused by name here rather than
-  // silently producing a module without it.
-  const extend = definition.contributes?.schema?.extend ?? [];
+/**
+ * The plugin's declared tables and its schema hooks.
+ *
+ * The HOOKS as well as the declarative tables. `schema.addTable()` inside
+ * `schema.extend` is a documented way to declare one — boot compiles and
+ * pushes whatever it produces — and passing only `tables` here generated an
+ * empty module for such a plugin. The table then existed through dev push
+ * and was missing after a production migration, which is the one difference
+ * migrations exist to prevent.
+ *
+ * A hook reaching for an ENTITY table finds none: this command compiles the
+ * plugin alone, deliberately, because a plugin's migration must not depend
+ * on which app installs it. Such a hook is refused by name here rather than
+ * silently producing a module without it.
+ */
+function pluginSchemaOf(definition: GeneratablePlugin): {
+  tables: SchemaContribution["tables"];
+  extend: SchemaContribution["extend"];
+} {
+  return {
+    tables: definition.contributes?.schema?.tables ?? [],
+    extend: definition.contributes?.schema?.extend ?? [],
+  };
+}
 
-  // Modules the plugin already ships; absent on first generation.
-  //
-  // "Absent" is decided by asking whether the barrel EXISTS, not by catching
-  // whatever loading it throws. Treating every failure as a first generation
-  // meant a barrel with a syntax error, a bad import or a throwing module read
-  // as "no history" — and generation then rewrote `index.ts` to export only
-  // the new module, orphaning every migration the plugin had shipped. The next
-  // deployment either skips modules it needs or reconciles against a snapshot
-  // that no longer describes anything.
+/**
+ * Modules the plugin already ships; empty on first generation.
+ *
+ * "Absent" is decided by asking whether the barrel EXISTS, not by catching
+ * whatever loading it throws. Treating every failure as a first generation
+ * meant a barrel with a syntax error, a bad import or a throwing module read
+ * as "no history" — and generation then rewrote `index.ts` to export only
+ * the new module, orphaning every migration the plugin had shipped. The next
+ * deployment either skips modules it needs or reconciles against a snapshot
+ * that no longer describes anything.
+ */
+async function loadShippedMigrations(
+  migrationsDir: string,
+  cwd: string
+): Promise<PluginMigration[]> {
   const barrelPath = resolve(migrationsDir, "index.ts");
-  let existing: PluginMigration[] = [];
-  if (existsSync(barrelPath)) {
-    let loaded;
-    try {
-      loaded = await bundleAndRequire({
-        filepath: barrelPath,
-        cwd: migrationsDir,
-        external: PLUGIN_BUNDLE_EXTERNALS,
-      });
-    } catch (error) {
-      throw new NextlyError({
-        code: "INVALID_INPUT",
-        publicMessage:
-          `The plugin's existing migrations barrel at ${relative(cwd, barrelPath)} could not be loaded: ${describeError(error)}. ` +
-          `Generation stops here rather than treating it as a first generation — doing that would rewrite the barrel and orphan the modules it lists. ` +
-          `Fix the barrel (or the module it imports) and run this again.`,
-        statusCode: 400,
-      });
-    }
-    const shipped = (loaded.mod as { migrations?: PluginMigration[] })
-      .migrations;
-    existing = orderedMigrations(shipped ?? []);
+  if (!existsSync(barrelPath)) return [];
+  let loaded;
+  try {
+    loaded = await bundleAndRequire({
+      filepath: barrelPath,
+      cwd: migrationsDir,
+      external: PLUGIN_BUNDLE_EXTERNALS,
+    });
+  } catch (error) {
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage:
+        `The plugin's existing migrations barrel at ${relative(cwd, barrelPath)} could not be loaded: ${describeError(error)}. ` +
+        `Generation stops here rather than treating it as a first generation — doing that would rewrite the barrel and orphan the modules it lists. ` +
+        `Fix the barrel (or the module it imports) and run this again.`,
+      statusCode: 400,
+    });
+  }
+  const shipped = (loaded.mod as { migrations?: PluginMigration[] }).migrations;
+  return orderedMigrations(shipped ?? []);
+}
+
+/** Where a plugin's module is being generated, and from what. */
+interface PluginGeneration {
+  definition: GeneratablePlugin;
+  name: string | undefined;
+  cwd: string;
+  migrationsDir: string;
+  existing: PluginMigration[];
+  options: ResolvedMigrateCreateOptions;
+  logger: CommandContext["logger"];
+}
+
+/**
+ * A blank module changes no declared table, so nothing is compiled: it
+ * carries the last module's schema on both sides, for SQL the author adds.
+ */
+async function writeBlankPluginMigration(
+  generation: PluginGeneration
+): Promise<void> {
+  const { definition, cwd, logger } = generation;
+  const blank = await generateBlankPluginMigration({
+    pluginName: definition.name,
+    schemaVersion: definition.schemaVersion,
+    name: generation.name ?? "migration",
+    migrationsDir: generation.migrationsDir,
+    existing: generation.existing,
+    transaction: generation.options.transaction,
+  });
+  logger.success(`Created ${relative(cwd, blank.modulePath)}`);
+  logger.info(`Rewrote ${relative(cwd, blank.indexPath)}`);
+  logger.info(
+    "Add the module's SQL to each dialect's `up` and `down`. It is sealed with `migrationChecksum` when it loads, so editing it keeps it intact."
+  );
+}
+
+/**
+ * The entry's definition as the dependency closure takes it.
+ *
+ * `version` and `nextly` are required by the definition type and read by
+ * nothing here: the closure orders by name and dependency maps alone. The
+ * entry is only checked for a name and a schemaVersion, so an absent value is
+ * carried as empty rather than refused.
+ */
+function closureTargetOf(definition: GeneratablePlugin): PluginDefinition {
+  return {
+    ...definition,
+    name: definition.name,
+    version: definition.version ?? "",
+    nextly: definition.nextly ?? "",
+  };
+}
+
+/**
+ * The app's config, read ONLY to find the dependency definitions this plugin
+ * declares. Its collections and entity tables are deliberately not compiled
+ * — a plugin's module must not vary with the app that generates it.
+ */
+async function configuredPluginsFor(
+  target: PluginDefinition,
+  options: ResolvedMigrateCreateOptions,
+  cwd: string
+): Promise<readonly PluginDefinition[]> {
+  if (declaredDependencies(target).length === 0) return [];
+  return (
+    (await loadConfig({ configPath: options.config, cwd })).config.plugins ?? []
+  );
+}
+
+/** What every per-dialect draft of one plugin is compiled from. */
+type PluginDraftInput = Omit<Parameters<typeof buildPluginDraft>[0], "dialect">;
+type PluginDraft = Awaited<ReturnType<typeof buildPluginDraft>>;
+
+/** One dialect's share of the plugin module. */
+interface PluginDialectTables {
+  tables: TableSpec[];
+  contributed: TableSpec[];
+  contributedBaseline: TableSpec[];
+  contributions: Record<string, ContributedElements>;
+}
+
+/** The tables this plugin OWNS on one dialect. */
+function ownedTableNames(built: PluginDraft, pluginName: string): Set<string> {
+  return new Set(
+    built.tables
+      .filter(
+        table => table.owner.kind === "plugin" && table.owner.id === pluginName
+      )
+      .map(table => table.name)
+  );
+}
+
+/**
+ * Tables somebody else owns that carry an ELEMENT this plugin contributed,
+ * with those elements.
+ *
+ * Filtering by table owner alone dropped these, and with them the column
+ * the plugin added to its dependency's table — so the contribution existed
+ * at boot and could never reach an installation that only applies shipped
+ * modules. A plugin ships its own migrations so installing it does not
+ * require the app to regenerate; a column missing from them is a column
+ * that never arrives.
+ */
+function foreignElementsOf(
+  built: PluginDraft,
+  owned: ReadonlySet<string>,
+  pluginName: string
+): Map<string, ElementOwnerOf<PluginDraft>[]> {
+  return new Map(
+    [...built.elementOwners.entries()]
+      .filter(([table]) => !owned.has(table))
+      .map(
+        ([table, elements]) =>
+          [
+            table,
+            elements.filter(
+              element =>
+                element.owner.kind === "plugin" &&
+                element.owner.id === pluginName
+            ),
+          ] as const
+      )
+      .filter(([, elements]) => elements.length > 0)
+  );
+}
+
+/** An element-owner row of a compiled draft. */
+type ElementOwnerOf<Draft extends PluginDraft> =
+  Draft["elementOwners"] extends Map<string, Array<infer Element>>
+    ? Element
+    : never;
+
+/** Compile one dialect's tables, contributions and foreign baselines. */
+async function compilePluginDialect(
+  dialect: SupportedDialect,
+  draft: PluginDraftInput
+): Promise<PluginDialectTables> {
+  const built = await buildPluginDraft({ dialect, ...draft });
+  // The tables this plugin OWNS. Its module creates exactly these — never
+  // an app's table, and never a dependency's.
+  const owned = ownedTableNames(built, draft.pluginName);
+  const mine = foreignElementsOf(built, owned, draft.pluginName);
+  // By name, for the module to record: the next generation reads which
+  // elements were this plugin's from here, never from the stored tables.
+  // Per dialect: a hook may add an element on one dialect only.
+  const contributions: Record<string, ContributedElements> = {};
+  for (const [table, elements] of mine) {
+    contributions[table] = contributedElementsOf(elements);
   }
 
-  // A blank module changes no declared table, so nothing is compiled: it
-  // carries the last module's schema on both sides, for SQL the author adds.
+  // Every table this plugin does not own, as its OWN owner declares it —
+  // compiled without this plugin's hooks. Both sides of the foreign-table
+  // diff are built on it, so the module emits the added column rather than a
+  // CREATE TABLE for a table it does not own, and emits the drop when this
+  // plugin stops contributing. Only a plugin with dependencies can have a
+  // foreign table at all.
+  const contributedBaseline =
+    draft.dependencyPlugins.length > 0
+      ? (
+          await buildPluginDraft({ dialect, ...draft, extend: [] })
+        ).specs.filter(spec => !owned.has(spec.name))
+      : [];
+
+  return {
+    tables: built.specs.filter(spec => owned.has(spec.name)),
+    contributed: built.specs.filter(spec => mine.has(spec.name)),
+    contributedBaseline,
+    contributions,
+  };
+}
+
+/** Every dialect's share of the plugin module, keyed by dialect. */
+async function compilePluginDialects(draft: PluginDraftInput): Promise<{
+  tablesByDialect: Record<SupportedDialect, TableSpec[]>;
+  contributedByDialect: Record<SupportedDialect, TableSpec[]>;
+  contributedBaselineByDialect: Record<SupportedDialect, TableSpec[]>;
+  contributions: Partial<
+    Record<SupportedDialect, Record<string, ContributedElements>>
+  >;
+}> {
+  const tablesByDialect = {} as Record<SupportedDialect, TableSpec[]>;
+  const contributedByDialect = {} as Record<SupportedDialect, TableSpec[]>;
+  const contributedBaselineByDialect = {} as Record<
+    SupportedDialect,
+    TableSpec[]
+  >;
+  const contributions: Partial<
+    Record<SupportedDialect, Record<string, ContributedElements>>
+  > = {};
+  for (const dialect of PLUGIN_DIALECTS) {
+    const compiled = await compilePluginDialect(dialect, draft);
+    tablesByDialect[dialect] = compiled.tables;
+    contributedByDialect[dialect] = compiled.contributed;
+    contributions[dialect] = compiled.contributions;
+    contributedBaselineByDialect[dialect] = compiled.contributedBaseline;
+  }
+  return {
+    tablesByDialect,
+    contributedByDialect,
+    contributedBaselineByDialect,
+    contributions,
+  };
+}
+
+/** Report a generated module: its path, each dialect's count, the barrel. */
+function reportPluginMigration(
+  result: NonNullable<Awaited<ReturnType<typeof generatePluginMigration>>>,
+  cwd: string,
+  logger: CommandContext["logger"]
+): void {
+  logger.success(`Created ${relative(cwd, result.modulePath)}`);
+  for (const dialect of PLUGIN_DIALECTS) {
+    logger.info(
+      `  ${getDialectDisplayName(dialect)}: ${result.operationCounts[dialect]} operation(s)`
+    );
+  }
+  logger.info(`Rewrote ${relative(cwd, result.indexPath)}`);
+}
+
+/**
+ * Generate one plugin's migration module: compile the plugin's declared
+ * tables per dialect, diff against the previous module's snapshot, and write
+ * the module plus the rewritten `index.ts` barrel beside the entry.
+ */
+async function runMigrateCreatePlugin(
+  name: string | undefined,
+  options: ResolvedMigrateCreateOptions,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  const cwd = options.cwd ?? process.cwd();
+  const entryPath = resolve(cwd, options.plugin!);
+  const migrationsDir = resolve(dirname(entryPath), "migrations");
+
+  const definition = await loadPluginEntry(entryPath, cwd);
+  const { tables, extend } = pluginSchemaOf(definition);
+  const existing = await loadShippedMigrations(migrationsDir, cwd);
+
   if (options.blank) {
-    const blank = await generateBlankPluginMigration({
-      pluginName: definition.name,
-      schemaVersion: definition.schemaVersion,
-      name: name ?? "migration",
+    await writeBlankPluginMigration({
+      definition,
+      name,
+      cwd,
       migrationsDir,
       existing,
-      transaction: options.transaction,
+      options,
+      logger,
     });
-    logger.success(`Created ${relative(cwd, blank.modulePath)}`);
-    logger.info(`Rewrote ${relative(cwd, blank.indexPath)}`);
-    logger.info(
-      "Add the module's SQL to each dialect's `up` and `down`. It is sealed with `migrationChecksum` when it loads, so editing it keeps it intact."
-    );
     return;
   }
 
@@ -922,8 +1168,8 @@ async function runMigrateCreatePlugin(
   // to generate a migration for.
   //
   // The dependency's tables go into the DRAFT so the hook resolves, and never
-  // into the emitted module — the `owned` filter below keeps this module to
-  // the tables this plugin's stream owns. The contributed COLUMN reaches
+  // into the emitted module — the `owned` filter keeps this module to the
+  // tables this plugin's stream owns. The contributed COLUMN reaches
   // production the way every cross-owner element does in this codebase: on the
   // app's migration stream, with a per-element owner row naming the
   // contributor (see `recordElementOwners` in migrate.ts). A plugin module
@@ -933,121 +1179,27 @@ async function runMigrateCreatePlugin(
   // The dependencies' own dependencies come too, since a dependency's hook
   // can reach into a table of its own dependency (see
   // `pluginDependencyClosure`).
-  //
-  // `version` and `nextly` are required by the definition type and read by
-  // nothing here: the closure orders by name and dependency maps alone. The
-  // entry is only checked for a name and a schemaVersion above, so an absent
-  // value is carried as empty rather than refused.
-  const target: PluginDefinition = {
-    ...definition,
-    name: definition.name,
-    version: definition.version ?? "",
-    nextly: definition.nextly ?? "",
-  };
-  // The app's config, read ONLY to find the dependency definitions this plugin
-  // declares. Its collections and entity tables are deliberately not compiled
-  // — a plugin's module must not vary with the app that generates it.
-  const configured: readonly PluginDefinition[] =
-    declaredDependencies(target).length === 0
-      ? []
-      : ((await loadConfig({ configPath: options.config, cwd })).config
-          .plugins ?? []);
+  const target = closureTargetOf(definition);
+  const configured = await configuredPluginsFor(target, options, cwd);
   const { dependencyPlugins, dependencies, pluginPrefixes } =
     pluginDependencyClosure(target, configured);
 
-  const tablesByDialect = {} as Record<SupportedDialect, TableSpec[]>;
-  const contributedByDialect = {} as Record<SupportedDialect, TableSpec[]>;
-  const contributedBaselineByDialect = {} as Record<
-    SupportedDialect,
-    TableSpec[]
-  >;
-  const contributions: Partial<
-    Record<SupportedDialect, Record<string, ContributedElements>>
-  > = {};
-  for (const dialect of PLUGIN_DIALECTS) {
-    const built = await buildPluginDraft({
-      dialect,
-      pluginName: definition.name,
-      pluginPrefixes,
-      tables,
-      extend,
-      dependencies,
-      // Dependencies FIRST, and among them each before its dependents:
-      // `runExtensionHooks` takes the list already topologically sorted, and a
-      // hook cannot extend a table the draft has not been told about yet.
-      dependencyPlugins,
-    });
-    // The tables this plugin OWNS. Its module creates exactly these — never
-    // an app's table, and never a dependency's.
-    const owned = new Set(
-      built.tables
-        .filter(
-          table =>
-            table.owner.kind === "plugin" && table.owner.id === definition.name
-        )
-        .map(table => table.name)
-    );
-    tablesByDialect[dialect] = built.specs.filter(spec => owned.has(spec.name));
-
-    // Tables somebody else owns that carry an ELEMENT this plugin contributed.
-    //
-    // Filtering by table owner alone dropped these, and with them the column
-    // the plugin added to its dependency's table — so the contribution existed
-    // at boot and could never reach an installation that only applies shipped
-    // modules. A plugin ships its own migrations so installing it does not
-    // require the app to regenerate; a column missing from them is a column
-    // that never arrives.
-    const mine = new Map(
-      [...built.elementOwners.entries()]
-        .filter(([table]) => !owned.has(table))
-        .map(
-          ([table, elements]) =>
-            [
-              table,
-              elements.filter(
-                element =>
-                  element.owner.kind === "plugin" &&
-                  element.owner.id === definition.name
-              ),
-            ] as const
-        )
-        .filter(([, elements]) => elements.length > 0)
-    );
-    contributedByDialect[dialect] = built.specs.filter(spec =>
-      mine.has(spec.name)
-    );
-    // By name, for the module to record: the next generation reads which
-    // elements were this plugin's from here, never from the stored tables.
-    // Per dialect: a hook may add an element on one dialect only.
-    const onDialect: Record<string, ContributedElements> = {};
-    for (const [table, elements] of mine) {
-      onDialect[table] = contributedElementsOf(elements);
-    }
-    contributions[dialect] = onDialect;
-
-    // Every table this plugin does not own, as its OWN owner declares it —
-    // compiled without this plugin's hooks. Both sides of the foreign-table
-    // diff are built on it, so the module emits the added column rather than a
-    // CREATE TABLE for a table it does not own, and emits the drop when this
-    // plugin stops contributing. Only a plugin with dependencies can have a
-    // foreign table at all.
-    if (dependencyPlugins.length > 0) {
-      const baseline = await buildPluginDraft({
-        dialect,
-        pluginName: definition.name,
-        pluginPrefixes,
-        tables,
-        extend: [],
-        dependencies,
-        dependencyPlugins,
-      });
-      contributedBaselineByDialect[dialect] = baseline.specs.filter(
-        spec => !owned.has(spec.name)
-      );
-    } else {
-      contributedBaselineByDialect[dialect] = [];
-    }
-  }
+  const {
+    tablesByDialect,
+    contributedByDialect,
+    contributedBaselineByDialect,
+    contributions,
+  } = await compilePluginDialects({
+    pluginName: definition.name,
+    pluginPrefixes,
+    tables,
+    extend,
+    dependencies,
+    // Dependencies FIRST, and among them each before its dependents:
+    // `runExtensionHooks` takes the list already topologically sorted, and a
+    // hook cannot extend a table the draft has not been told about yet.
+    dependencyPlugins,
+  });
 
   const result = await generatePluginMigration({
     contributedByDialect,
@@ -1073,13 +1225,7 @@ async function runMigrateCreatePlugin(
     process.exit(2);
   }
 
-  logger.success(`Created ${relative(cwd, result.modulePath)}`);
-  for (const dialect of PLUGIN_DIALECTS) {
-    logger.info(
-      `  ${getDialectDisplayName(dialect)}: ${result.operationCounts[dialect]} operation(s)`
-    );
-  }
-  logger.info(`Rewrote ${relative(cwd, result.indexPath)}`);
+  reportPluginMigration(result, cwd, logger);
 }
 
 export function registerMigrateCreateCommand(program: Command): void {

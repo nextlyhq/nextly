@@ -56,7 +56,10 @@ import {
 import type { ExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import { compileExtensionSchema } from "../../domains/schema/extension/publish";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
-import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
+import {
+  assertNotPartiallyApplied,
+  reconcileFile,
+} from "../../domains/schema/migrate/drift-reconcile";
 import {
   outsideTransactionNotice,
   runMigrationStatements,
@@ -93,7 +96,12 @@ import {
 import {
   assertNoForeignDrops,
   readLiveColumns,
+  readLiveTables,
 } from "../../domains/schema/ownership/drop-guard";
+import {
+  createOwnerRegistry,
+  ownerRecordKey,
+} from "../../domains/schema/ownership/owner-registry";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type {
   ContributedElements,
@@ -761,7 +769,10 @@ export async function recordAppTableOwners(
   const { SchemaOwnersRepository: OwnersRepo } = await import(
     "../../domains/schema/ownership/schema-owners-repository"
   );
-  await new OwnersRepo(deps.db, deps.dialect).upsert(
+  // Through the registry's policy: a table another owner's row records is
+  // not the app's to claim by declaring the same name, and refusing here
+  // stops the run before any stream applies anything.
+  await createOwnerRegistry(new OwnersRepo(deps.db, deps.dialect)).record(
     appTables.map(tableName => ({
       tableName,
       ownerKind: "app" as const,
@@ -858,22 +869,21 @@ export async function runPluginPhase(
   const allRows = await owners.read();
   const elementStream = new Map<string, string>();
   for (const record of allRows) {
-    const kind = record.elementKind ?? "table";
-    if (kind === "table") continue;
-    // Keyed by KIND as well as name: a column and an index on one table can
-    // share a name, and a kind-blind key would let one decide the other's
-    // stream.
-    elementStream.set(
-      `${record.tableName}\u0000${kind}\u0000${record.elementName ?? ""}`,
-      record.migratedBy
-    );
+    if ((record.elementKind ?? "table") === "table") continue;
+    // Keyed by KIND as well as name (`ownerRecordKey`): a column and an index
+    // on one table can share a name, and a kind-blind key would let one
+    // decide the other's stream.
+    elementStream.set(ownerRecordKey(record), record.migratedBy);
   }
   const pluginOutcome = await runPluginMigrations(deps.pluginMigrationSets, {
     dialect: deps.dialect,
     appliedShas,
     owners: ownerRows,
+    elementOwners: allRows,
     liveColumns: statements =>
       readLiveColumns(deps.db, deps.dialect, [statements]),
+    liveTables: statements =>
+      readLiveTables(deps.db, deps.dialect, [statements]),
     introspect: async (names, stream) => {
       // Exactly the tables this module's snapshots name, as they stand now.
       // Not the app stream's comparable set: that is every collection, Single
@@ -899,7 +909,7 @@ export async function runPluginPhase(
         elementName: string
       ): boolean => {
         const owner = elementStream.get(
-          `${tableName}\u0000${kind}\u0000${elementName}`
+          ownerRecordKey({ tableName, elementKind: kind, elementName })
         );
         return owner !== undefined && owner !== stream;
       };
@@ -924,15 +934,13 @@ export async function runPluginPhase(
       tables,
     }) => {
       // A module that leaves this plugin owning NOTHING still moved its
-      // schema version.
-      //
-      // `upsert([])` returns early, so a migration removing a plugin's last
-      // table left its existing rows at the old version — and the production
-      // boot gate then reads that stale number and rejects the configured
-      // plugin as behind, permanently, over a migration that applied
-      // correctly. The rows are carried forward rather than deleted: they are
-      // what records that the tables were this plugin's, which the drop guard
-      // and a later uninstall both still need.
+      // schema version, so the rows it already has carry the new one rather
+      // than keep the old. They are carried forward rather than deleted:
+      // they are what records that the tables were this plugin's, which the
+      // drop guard and a later uninstall both still need. A plugin with no
+      // rows at all (one that only ships data migrations) records nothing
+      // here, and needs nothing: the boot gate reads the applied version
+      // from the ledger.
       if (tables.length === 0) {
         const existing = (await owners.read()).filter(
           row => row.ownerId === pluginName
@@ -958,7 +966,10 @@ export async function runPluginPhase(
         schemaVersion,
         state: "active" as const,
       }));
-      await owners.upsert(recorded);
+      // Through the registry's policy, which refuses a row naming a table
+      // another owner holds. The runner refused such a module before it ran;
+      // this decides again on the rows as they stand when the write happens.
+      await createOwnerRegistry(owners).record(recorded);
       // The drop guard reads `ownerRows` before every module, so it has to
       // learn what each module created as the run goes. Read once before the
       // phase, it did not know a table a dependency's module had just made,
@@ -1413,9 +1424,11 @@ export async function runFileMigrations(args: {
 
   // Owner rows for the drop guard: an app file dropping a plugin-migrated
   // table is refused whole, before its first statement. Read once; an absent
-  // registry reads as "nothing is claimed" and refuses nothing, which is a
-  // database predating the registry. Absent only when the listing says so: a
-  // listing that fails stops the run rather than disabling the guard.
+  // registry, a database predating it, reads as no owner rows. The guard
+  // still refuses an app file dropping or renaming a core table, which needs
+  // no row to be core's; any other table is the app's. Absent only when the
+  // listing says so: a listing that fails stops the run rather than
+  // disabling the guard.
   const { SchemaOwnersRepository: OwnersRepoForFiles, tableOwnersByName } =
     await import("../../domains/schema/ownership/schema-owners-repository");
   const registryExists = (
@@ -1423,9 +1436,10 @@ export async function runFileMigrations(args: {
       adapter as unknown as { listTables: () => Promise<string[]> }
     ).listTables()
   ).includes(SCHEMA_OWNERS_TABLE);
-  const fileOwners = tableOwnersByName(
-    registryExists ? await new OwnersRepoForFiles(db, dialect).read() : []
-  );
+  const fileOwnerRows = registryExists
+    ? await new OwnersRepoForFiles(db, dialect).read()
+    : [];
+  const fileOwners = tableOwnersByName(fileOwnerRows);
 
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;
   let beforeContributions: Record<string, ContributedElements> = {};
@@ -1457,9 +1471,15 @@ export async function runFileMigrations(args: {
       statements: upStatements,
       stream: "app",
       owners: fileOwners,
+      elementOwners: fileOwnerRows,
+      // What the app's earlier files contributed to other owners' tables is
+      // the app's before the run ends and writes its element rows.
+      ownedElements: beforeContributions,
       dialect,
       source: filename,
       liveColumns: await readLiveColumns(db, dialect, [upStatements]),
+      // Read before each file, after the files before it have run.
+      liveTables: await readLiveTables(db, dialect, [upStatements]),
     });
     const unit: MigrationUnit = {
       source: filename,
@@ -1474,6 +1494,15 @@ export async function runFileMigrations(args: {
       // No paired snapshot (hand-written migration): run verbatim + record.
       logger.warn(
         `No snapshot for ${filename}; applying verbatim without drift checks.`
+      );
+      // With no snapshot to place the database, a failed attempt that may
+      // have left statements applied is refused here as the reconcile
+      // refuses it, rather than run again on top of what stayed.
+      await assertNotPartiallyApplied(
+        { filename, transaction: m.transaction },
+        dialect,
+        repo,
+        "rerun"
       );
       const id = await repo.recordStart({
         eventType: "file_apply",
@@ -1561,6 +1590,7 @@ export async function runFileMigrations(args: {
       before: sides.before,
       target: sides.target,
       live: sides.live,
+      dialect,
       repo,
       executeSql,
     });

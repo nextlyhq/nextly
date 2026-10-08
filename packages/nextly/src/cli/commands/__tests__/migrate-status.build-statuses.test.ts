@@ -2,6 +2,10 @@ import { describe, it, expect } from "vitest";
 
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
 import {
+  migrationChecksum,
+  type PluginMigration,
+} from "../../../domains/schema/migrate/plugin/plugin-migration";
+import {
   NO_TRANSACTION_ROLLBACK_NOTE,
   PARTIAL_ROLLBACK_NOTE,
 } from "../plugin-module-rollback";
@@ -9,7 +13,7 @@ import {
   buildMigrationStatuses,
   failedRollbacksSinceApply,
   ledgerRecords,
-  pluginRowsToStatuses,
+  pluginModuleEntries,
 } from "../migrate-status";
 
 describe("buildMigrationStatuses", () => {
@@ -48,11 +52,44 @@ describe("buildMigrationStatuses", () => {
   });
 });
 
-describe("pluginRowsToStatuses", () => {
-  const appliedRow = (filename: string, status: "applied" | "failed") => ({
+describe("a plugin's status (--plugin)", () => {
+  function sealed(name: string, transaction?: false): PluginMigration {
+    const statements = { up: ["SELECT 1"], down: [] };
+    const tables = { tables: [] };
+    const content = {
+      name,
+      schemaVersion: 1,
+      ...(transaction === false ? { transaction } : {}),
+      dialects: {
+        postgresql: statements,
+        mysql: statements,
+        sqlite: statements,
+      },
+      snapshot: { postgresql: tables, mysql: tables, sqlite: tables },
+      before: { postgresql: tables, mysql: tables, sqlite: tables },
+    };
+    return { ...content, checksum: migrationChecksum(content) };
+  }
+
+  const init = sealed("001_init");
+  const addCol = sealed("002_add_col");
+  const reindex = sealed("003_reindex", false);
+  const auth = {
+    name: "auth",
+    version: "1.0.0",
+    nextly: "*",
+    // Shipped out of order: the status lists them in the order they run.
+    contributes: { schema: { migrations: [reindex, init, addCol] } },
+  };
+
+  const record = (
+    filename: string,
+    status: "applied" | "failed",
+    sha256: string
+  ) => ({
     id: `e-${filename}`,
     filename,
-    sha256: "",
+    sha256,
     status,
     appliedBy: null,
     durationMs: 7,
@@ -60,30 +97,60 @@ describe("pluginRowsToStatuses", () => {
     appliedAt: new Date("2026-09-23T00:00:00Z"),
   });
 
-  it("lists a plugin's rows without file matching, so none reads as file-missing", async () => {
-    // A plugin's files live in its package, not the app's migrations
-    // directory; running them through `buildMigrationStatuses` would report
-    // every one as "applied (file missing)".
-    const statuses = pluginRowsToStatuses([
-      appliedRow("plugin:auth/001_init", "applied"),
-      appliedRow("plugin:auth/002_add_col", "failed"),
+  function statuses(applied: ReturnType<typeof record>[]) {
+    return buildMigrationStatuses(
+      pluginModuleEntries([auth], "auth"),
+      applied
+    ).map(s => [s.filename, s.status, s.outsideTransaction ?? false]);
+  }
+
+  it("lists a module no run has applied yet as pending", () => {
+    // Only the first module has a ledger row; the two after it are work
+    // `nextly migrate` still has to do.
+    expect(
+      statuses([record("plugin:auth/001_init", "applied", init.checksum)])
+    ).toEqual([
+      ["plugin:auth/001_init", "applied", false],
+      ["plugin:auth/002_add_col", "pending", false],
+      ["plugin:auth/003_reindex", "pending", true],
     ]);
-    expect(statuses.map(s => [s.filename, s.status])).toEqual([
-      ["plugin:auth/001_init", "applied"],
-      ["plugin:auth/002_add_col", "failed"],
-    ]);
-    expect(statuses.some(s => s.status === "applied (file missing)")).toBe(
-      false
-    );
   });
 
-  it("carries the row's timing and never claims a checksum mismatch", async () => {
-    const statuses = pluginRowsToStatuses([
-      appliedRow("plugin:auth/001_init", "applied"),
+  it("lists every shipped module as pending before the first run", () => {
+    expect(statuses([]).map(([, status]) => status)).toEqual([
+      "pending",
+      "pending",
+      "pending",
     ]);
-    expect(statuses[0].appliedAt).toEqual(new Date("2026-09-23T00:00:00Z"));
-    expect(statuses[0].durationMs).toBe(7);
-    expect(statuses[0].checksumMismatch).toBe(false);
+  });
+
+  it("carries a failed attempt and an applied module's timing", () => {
+    const [applied] = buildMigrationStatuses(
+      pluginModuleEntries([auth], "auth"),
+      [record("plugin:auth/001_init", "applied", init.checksum)]
+    );
+    expect(applied.appliedAt).toEqual(new Date("2026-09-23T00:00:00Z"));
+    expect(applied.durationMs).toBe(7);
+    expect(applied.checksumMismatch).toBe(false);
+    expect(
+      statuses([record("plugin:auth/002_add_col", "failed", addCol.checksum)])
+    ).toContainEqual(["plugin:auth/002_add_col", "failed", false]);
+  });
+
+  it("reads a module changed since it ran as modified", () => {
+    expect(
+      statuses([record("plugin:auth/001_init", "applied", "other")])
+    ).toContainEqual(["plugin:auth/001_init", "applied (modified)", false]);
+  });
+
+  it("reads a recorded module the plugin no longer ships as missing", () => {
+    expect(
+      statuses([record("plugin:auth/000_gone", "applied", "x")])
+    ).toContainEqual(["plugin:auth/000_gone", "applied (file missing)", false]);
+  });
+
+  it("finds no modules for a plugin the config does not list", () => {
+    expect(pluginModuleEntries([auth], "billing")).toEqual([]);
   });
 });
 

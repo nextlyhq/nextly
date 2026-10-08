@@ -17,12 +17,14 @@
  * @since 1.0.0
  */
 import { NextlyError } from "../../../errors/nextly-error";
+import type { SchemaEventRow } from "../events/schema-events-repository";
+import { pluginSchemaVersionFromLedger } from "../migrate/plugin/plugin-schema-version";
 
 export interface PluginSchemaState {
   name: string;
   /** What the plugin's code expects. Absent means it never declared one. */
   declaredVersion: number | undefined;
-  /** What the database has applied, from the owner registry. */
+  /** What the database has applied, from the migration ledger. */
   appliedVersion: number | null;
 }
 
@@ -87,6 +89,64 @@ export function assertSchemaVersionUsable(
   });
 }
 
+/** What the boot gate reads about one configured plugin. */
+export interface PluginSchemaDeclaration {
+  name: string;
+  /** The `schemaVersion` the plugin declares, if any. */
+  schemaVersion?: number;
+  /** The migration modules it ships. */
+  migrations: ReadonlyArray<{ name: string; schemaVersion: number }>;
+}
+
+/**
+ * The boot gate: judge every configured plugin's declared schema version
+ * against what the database has applied.
+ *
+ * The applied version is read from the migration LEDGER — the newest
+ * `schemaVersion` among a plugin's modules still applied — the reading
+ * `migrate:down` and the element rows already share. The owner registry
+ * cannot answer it: a plugin whose modules only change data owns no table,
+ * so it has no owner row to carry a version, and its production boot was
+ * refused as behind after every one of its modules had applied.
+ *
+ * A ledger that is not there yet is an install whose migrations have not run,
+ * so every plugin reads as having applied nothing; a ledger that is there and
+ * cannot be read is a fault, and is not turned into "nothing applied".
+ */
+export async function assertPluginSchemaVersionsUsable(args: {
+  plugins: readonly PluginSchemaDeclaration[];
+  /** The ledger's `file_apply` rows. */
+  readLedger: () => Promise<SchemaEventRow[]>;
+  /** Whether the ledger table exists, asked only when reading it fails. */
+  ledgerExists: () => Promise<boolean>;
+  production: boolean;
+  warn: (message: string) => void;
+}): Promise<void> {
+  let ledger: SchemaEventRow[] = [];
+  try {
+    ledger = await args.readLedger();
+  } catch (error) {
+    if (await args.ledgerExists()) throw error;
+    args.warn(
+      'Migration ledger not found — plugin schema versions cannot be checked yet. Run "nextly migrate" to create it.'
+    );
+  }
+  for (const plugin of args.plugins) {
+    assertSchemaVersionUsable(
+      {
+        name: plugin.name,
+        declaredVersion: plugin.schemaVersion,
+        appliedVersion: pluginSchemaVersionFromLedger(
+          ledger,
+          plugin.name,
+          plugin.migrations
+        ),
+      },
+      { production: args.production, warn: args.warn }
+    );
+  }
+}
+
 /**
  * Refuse, at RESOLVE time, a plugin that could never satisfy the check above.
  *
@@ -98,6 +158,10 @@ export function assertSchemaVersionUsable(
 export function assertSchemaVersionDeclarable(args: {
   pluginName: string;
   declaredVersion: number | undefined;
+  /**
+   * Each module's `schemaVersion`, in the order the modules RUN
+   * (`orderedMigrations`), not the order they are listed in.
+   */
   migrationVersions: readonly number[];
 }): void {
   if (args.declaredVersion === undefined) return;
@@ -114,14 +178,34 @@ export function assertSchemaVersionDeclarable(args: {
     });
   }
 
-  const highest = Math.max(...args.migrationVersions);
-  if (highest !== args.declaredVersion) {
+  // In run order, never lower than the module before. The version applied
+  // is the one the LAST module to run carries, so a later module with a lower
+  // version would leave the database behind the declaration after every
+  // module had applied. Equal is allowed: a module that only changes data
+  // does not move the schema.
+  const lowered = args.migrationVersions.findIndex(
+    (version, at) => at > 0 && version < args.migrationVersions[at - 1]
+  );
+  if (lowered !== -1) {
     throw NextlyError.validation({
       errors: [
         {
           path: `plugin.${args.pluginName}.schemaVersion`,
           code: "INVALID",
-          message: `Plugin "${args.pluginName}" declares schemaVersion ${String(args.declaredVersion)}, but its newest migration declares ${String(highest)}. They must agree, or the boot check can never pass.`,
+          message: `Plugin "${args.pluginName}" ships a migration declaring schemaVersion ${String(args.migrationVersions[lowered])} after one declaring ${String(args.migrationVersions[lowered - 1])}. Migrations run in name order, and each must declare a version no lower than the one before it.`,
+        },
+      ],
+    });
+  }
+
+  const last = args.migrationVersions[args.migrationVersions.length - 1];
+  if (last !== args.declaredVersion) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `plugin.${args.pluginName}.schemaVersion`,
+          code: "INVALID",
+          message: `Plugin "${args.pluginName}" declares schemaVersion ${String(args.declaredVersion)}, but its newest migration declares ${String(last)}. They must agree, or the boot check can never pass.`,
         },
       ],
     });
