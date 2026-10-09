@@ -104,6 +104,16 @@ describe("pluginTableName", () => {
       /at most 63 characters/
     );
   });
+
+  it("refuses a name holding a quote character any dialect wraps names in", () => {
+    expect(refusal(() => pluginTableName("auth", 'th"ing'))).toMatch(
+      /no dialect's quoting can carry/
+    );
+    expect(refusal(() => pluginTableName("auth", "th`ing"))).toMatch(
+      /no dialect's quoting can carry/
+    );
+    expect(() => pluginTableName("auth", "thing")).not.toThrow();
+  });
 });
 
 describe("assertUsableAppTableName", () => {

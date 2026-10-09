@@ -190,6 +190,31 @@ describe("refused: constructs migrations cannot carry", () => {
     ).toMatch(/expression index/);
   });
 
+  it("refuses a column or index name the DDL cannot carry", async () => {
+    expect(
+      await refusal(() => ({
+        app_notes: pgTable("app_notes", {
+          id: pgText("id"),
+          bad: pgText('sh"out'),
+        }),
+      }))
+    ).toMatch(/no dialect's quoting can carry/);
+    expect(
+      await refusal(() => ({
+        app_notes: pgTable("app_notes", { id: pgText("id") }, t => [
+          index("idx_app`notes").on(t.id),
+        ]),
+      }))
+    ).toMatch(/no dialect's quoting can carry/);
+    expect(
+      await refusal(() => ({
+        app_notes: pgTable("app_notes", { id: pgText("id") }, t => [
+          index(`idx_${"n".repeat(60)}`).on(t.id),
+        ]),
+      }))
+    ).toMatch(/at most 63 characters/);
+  });
+
   it("refuses a column-level unique constraint", async () => {
     expect(
       await refusal(() => ({

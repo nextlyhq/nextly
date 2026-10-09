@@ -274,11 +274,11 @@ async function markApplied(
 /**
  * Register what the snapshots describe, then record what the tables prove.
  *
- * Called INSIDE the migrate lock, unlike the dev-boot path, which runs its
- * equivalent outside for reasons scoped to several dev-server workers racing.
- * A CLI invocation holds the lock already, so the read-then-write below cannot
- * interleave with another migrate — which is what lets it be a plain sweep
- * rather than a conflict-tolerant one.
+ * Called INSIDE the migrate lock. The development boot also runs a snapshot
+ * pass of its own outside it, for reasons scoped to several dev-server workers
+ * racing. A migrate run holds the lock already, so the read-then-write below
+ * cannot interleave with another migrate — which is what lets it be a plain
+ * sweep rather than a conflict-tolerant one.
  */
 export async function reconcileMigrationMetadata(
   deps: ReconcileMetadataDeps

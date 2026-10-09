@@ -55,7 +55,8 @@ migration file the run refuses (see below). Applied files are never re-read.
   outlive it on a pooled connection (`SET` other than `SET LOCAL`,
   `SET CONSTRAINTS` and `SET TRANSACTION`, `RESET`, `DISCARD`), or a statement
   the database cannot run inside a transaction (`VACUUM`, `CONCURRENTLY` index
-  builds, MySQL `LOCK TABLES`, SQLite `ATTACH`). In a file that runs in a
+  builds, PostgreSQL's `CLUSTER` naming no table, MySQL `LOCK TABLES`, SQLite
+  `ATTACH`). In a file that runs in a
   transaction, its own `BEGIN`, `START TRANSACTION`, `COMMIT` and `END` are
   left out, and `SAVEPOINT`, `ROLLBACK TO` (also spelled `ROLLBACK WORK TO` or
   `ROLLBACK TRANSACTION TO`) and `RELEASE` run as written. **A pending file
@@ -75,7 +76,8 @@ migration file the run refuses (see below). Applied files are never re-read.
   before it stay applied and the run fails with
   `NEXTLY_MIGRATION_PARTIALLY_APPLIED`, whose message gives the statement
   count and the recovery (the database's own error is in its cause). While
-  that failed attempt is the unit's newest, `nextly migrate` refuses to record
+  that failed attempt is the unit's newest, or one that never finished because
+  the process running it stopped, `nextly migrate` refuses to record
   the unit as applied without running it, even when the database already
   stands at its result: finish it by hand and mark it with
   `nextly migrate:resolve --applied <file>` (a file with no snapshot is
@@ -100,14 +102,15 @@ migration file the run refuses (see below). Applied files are never re-read.
   `NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION`: a unit run in a transaction is
   rolled back; one marked to run outside a transaction keeps its statements
   and is recorded as failed, to be repaired and then marked applied.
-- **A large body on an auth request carrying the refresh cookie is refused.**
+- **A large body handed on without the refresh cookie is refused.**
   Before an auth hook, a strategy or a plugin route sees a request that
   carries the refresh cookie (any `/admin/api/auth/*` request from a signed-in
   browser), the cookie is removed from a copy of the request, and that copy
-  now reads at most 64 KiB of the body, the same cap as the `csrf` route
-  option's reader. A larger body is refused with a `400` `VALIDATION_ERROR`
-  response (`too_large`) before authentication and rate limiting, instead of
-  being buffered whole.
+  now reads at most 64 KiB of a body nothing has read yet, the same cap as the
+  `csrf` route option's reader. A larger body is refused with a `400`
+  `VALIDATION_ERROR` response (`too_large`) instead of being buffered whole. A
+  body the handler has already read, as core login reads its own, is not
+  read again, and the copy carries none.
 - **Collection `indexes` now reach the database.** They were validated and
   then discarded, so an app that declared a compound index has been running
   without one. The next dev push or `migrate:create` adds it, and a unique
@@ -201,7 +204,9 @@ migration file the run refuses (see below). Applied files are never re-read.
   and the app declare, since MySQL requires a foreign key's name to be unique
   per database, two different indexes that do, since PostgreSQL and SQLite
   require an index's name to be unique per schema (the same index contributed
-  to one table twice is one index), and a foreign key referencing a
+  to one table twice is one index), one name given to two indexes a table
+  declares, alike or not, since each is its own `CREATE INDEX`, and a foreign
+  key referencing a
   column its target does not have (`references.columns` are SQL names).
 - **A declared collection index is checked on every dialect** when the
   schema is built from the config (development push, `db:sync`,
@@ -210,6 +215,12 @@ migration file the run refuses (see below). Applied files are never re-read.
   where a text field counts 4 bytes for each character of its width (1,020 at
   the default 255), so an index over four text fields is refused; and an
   explicit `name` may be at most 63 characters, the longest PostgreSQL keeps.
+- **A declared name the DDL cannot quote is refused before any DDL is
+  generated.** A table, column or explicit index, foreign key or check name,
+  and a foreign key's referenced table and columns, may not be empty or hold
+  `"`, a backtick or NUL, on every dialect, when the table is declared or the
+  schema compiles; before, such a name failed while the migration was being
+  generated.
 
 ## Schema
 
@@ -289,13 +300,23 @@ module file that already exists: it fails with `CONFLICT` and leaves the
 module and the barrel as they were. `nextly migrate --step N` counts a plugin's
 modules toward N together with the app's files, the plugin's first, and a
 module recorded because the database already stood at its result counts as
-one. `migrate:resolve --failed-cleanup` clears every
-failed attempt since the file's last other event, and `--applied` supersedes
+one. `migrate:status` lists a migration whose last attempt recorded no
+outcome as `unfinished` (and counts it in `summary.unfinished` with `--json`)
+rather than as pending. `migrate:resolve --failed-cleanup` clears every
+failed or unfinished attempt since the file's last other event, and `--applied` supersedes
 them all, so a file that failed twice in a row needs one cleanup rather than
-two. A cleared attempt keeps its own start and end times and its error;
-before, the cleanup overwrote its end time with the time of the cleanup. `migrate:resolve --applied plugin:…` now refuses,
+two. A cleared attempt keeps its own start time and its error, and a failed
+one its end time; before, the cleanup overwrote that end time with the time
+of the cleanup. `migrate:resolve --applied plugin:…` now refuses,
 naming `--failed-cleanup` and then `nextly migrate`, instead of reporting the
 module's file missing.
+
+A development boot applies plugins' migration modules before the app's
+pending migration files, as `nextly migrate` and the production boot do, then
+brings the collection registry into agreement with the tables as `nextly
+migrate` does, and counts both streams in what it logs. A disabled plugin declaring a route
+option boot would refuse no longer fails the admin's plugins page; its routes
+are left out of what the page advertises.
 
 In development, a plugin's existing tables gain the columns, indexes and
 constraints its upgraded declaration added before its `init` runs, so an

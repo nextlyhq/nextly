@@ -26,7 +26,11 @@ import {
   toSnakeCase,
 } from "../services/field-column-descriptor";
 
-import { assertExplicitIdentifier, MAX_VARCHAR_LENGTH } from "./naming";
+import {
+  assertExplicitIdentifier,
+  assertQuotableIdentifier,
+  MAX_VARCHAR_LENGTH,
+} from "./naming";
 import type {
   DeclaredCheck,
   DeclaredForeignKey,
@@ -720,6 +724,7 @@ function resolveColumns(
       );
     }
     byName.set(sqlName, key);
+    assertQuotableIdentifier(sqlName, `${tableName}.${key}`, "A column name");
     assertDefaultFitsScale(tableName, key, builder);
     resolved.push(toResolvedColumn(key, sqlName, builder));
   }
@@ -834,6 +839,22 @@ function resolveForeignKeys(
       }
       return sqlName;
     });
+    // Copied into the DDL as written, as SQL names: a target the compile
+    // knows has them checked against its columns too
+    // (`assertForeignKeyTargetsExist`); one it does not is the database's to
+    // judge, but no name the DDL cannot render gets that far.
+    assertQuotableIdentifier(
+      input.references.table,
+      path,
+      "A foreign key's referenced table"
+    );
+    for (const column of input.references.columns) {
+      assertQuotableIdentifier(
+        column,
+        path,
+        "A foreign key's referenced column"
+      );
+    }
     if (input.references.columns.length !== columns.length) {
       invalid(
         path,
@@ -969,12 +990,13 @@ function resolveChecks(
   inputs: readonly TableCheckInput[]
 ): DeclaredCheck[] {
   return inputs.map((input, position) => {
+    const path = `${tableName}.checks[${String(position)}]`;
     if (input.sql.trim() === "") {
-      invalid(
-        `${tableName}.checks[${String(position)}]`,
-        "A check must carry a SQL expression."
-      );
+      invalid(path, "A check must carry a SQL expression.");
     }
+    // The name reaches the DDL inside the derived `ck_<table>_<name>`, which
+    // bounds its length with a hash but keeps its characters.
+    assertQuotableIdentifier(input.name, path, "A check name");
     return { name: input.name, sql: input.sql };
   });
 }

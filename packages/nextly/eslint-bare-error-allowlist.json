@@ -62,7 +62,6 @@
   "src/domains/users/services/user-ext-schema-service.ts": 1,
   "src/domains/users/services/user-field-definition-service.ts": 1,
   "src/domains/versions/versions-repository.ts": 1,
-  "src/init/boot-apply.ts": 1,
   "src/plugins/roles/collect-roles.ts": 2,
   "src/plugins/services/plugin-services-registry.ts": 1,
   "src/schemas/api-keys/index.ts": 1,

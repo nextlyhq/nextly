@@ -1050,6 +1050,26 @@ describe("index names", () => {
     ).toEqual(["b__widgets.indexes"]);
   });
 
+  it("refuses one name twice on one table, though both indexes are alike", async () => {
+    // Both reach the table's DDL: MySQL refuses the second CREATE INDEX
+    // part-way through the file, and the other dialects skip it.
+    const twice = defineTable(
+      "things",
+      { id: col.id(), label: col.shortText() },
+      {
+        indexes: [
+          { columns: ["label"], name: "idx_label" },
+          { columns: ["label"], name: "idx_label" },
+        ],
+      }
+    );
+    expect(
+      await refusedAt(
+        base([{ owner: { kind: "plugin", id: "a" }, tables: [twice] }])
+      )
+    ).toEqual(["a__things.indexes"]);
+  });
+
   it("refuses an explicit name equal to another table's derived one", async () => {
     // `a__things`'s index is derived as `idx_a__things_label`.
     expect(

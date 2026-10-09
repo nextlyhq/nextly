@@ -40,6 +40,7 @@ import {
   SchemaEventsRepository,
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
+import { attemptUnfinished } from "../../domains/schema/migrate/drift-reconcile";
 import {
   migrationChecksum,
   compareModuleNames,
@@ -138,7 +139,11 @@ interface MigrationRecord {
   id: string;
   filename: string;
   sha256: string;
-  status: MigrationRecordStatus;
+  /**
+   * `unfinished` for an attempt that recorded no outcome (`attemptUnfinished`):
+   * its process stopped, or is still running.
+   */
+  status: MigrationRecordStatus | "unfinished";
   appliedBy: string | null;
   durationMs: number | null;
   errorJson: MigrationErrorJson | null;
@@ -159,7 +164,8 @@ interface MigrationStatus {
     | "applied (modified)"
     | "applied (file missing)"
     | "pending"
-    | "failed";
+    | "failed"
+    | "unfinished";
   appliedAt: Date | null;
   durationMs: number | null;
   errorJson: MigrationErrorJson | null;
@@ -193,6 +199,7 @@ interface MigrateStatusResult {
     applied: number;
     pending: number;
     failed: number;
+    unfinished: number;
     collectionsWithPendingChanges: number;
   };
 }
@@ -337,6 +344,8 @@ export async function runMigrateStatus(
       ).length,
       pending: migrationStatuses.filter(m => m.status === "pending").length,
       failed: migrationStatuses.filter(m => m.status === "failed").length,
+      unfinished: migrationStatuses.filter(m => m.status === "unfinished")
+        .length,
       collectionsWithPendingChanges: pendingCollections.length,
     };
 
@@ -515,7 +524,8 @@ function displayFailedRollbacks(
 
 /**
  * Each migration's current state in the ledger: the NEWEST `file_apply`
- * event per filename, kept when it is `applied` or `failed`.
+ * event per filename, kept when it is `applied`, or an attempt that did not
+ * finish (`attemptUnfinished`: `failed`, or still `in_progress`).
  *
  * Newest per filename by `newestEventsByFilename`, the rule `migrate`
  * and `migrate:down` read the ledger by. A rollback is
@@ -535,12 +545,19 @@ export function ledgerRecords(
   for (const r of newestEventsByFilename(
     scopeLedgerRows(rows, plugin)
   ).values()) {
-    if (r.status !== "applied" && r.status !== "failed") continue;
+    // An attempt that never finished is listed as one, not as pending:
+    // `nextly migrate` may refuse it until it is finished or cleared.
+    if (r.status !== "applied" && !attemptUnfinished(r)) continue;
     records.push({
       id: r.id,
       filename: r.filename ?? "",
       sha256: r.sha256 ?? "",
-      status: r.status === "failed" ? "failed" : "applied",
+      status:
+        r.status === "applied"
+          ? "applied"
+          : r.status === "failed"
+            ? "failed"
+            : "unfinished",
       appliedBy: null,
       durationMs: r.durationMs ?? null,
       errorJson: null,
@@ -664,8 +681,8 @@ export function buildMigrationStatuses(
     if (record) {
       const checksumMismatch = record.sha256 !== file.checksum;
       let status: MigrationStatus["status"];
-      if (record.status === "failed") {
-        status = "failed";
+      if (record.status !== "applied") {
+        status = record.status;
       } else if (checksumMismatch) {
         status = "applied (modified)";
       } else {
@@ -699,7 +716,8 @@ export function buildMigrationStatuses(
   for (const [filename, record] of appliedMap) {
     statuses.push({
       filename,
-      status: record.status === "failed" ? "failed" : "applied (file missing)",
+      status:
+        record.status === "applied" ? "applied (file missing)" : record.status,
       appliedAt: record.appliedAt,
       durationMs: record.durationMs,
       errorJson: record.errorJson,
@@ -738,7 +756,6 @@ function displayStatus(
   context: CommandContext
 ): void {
   const { logger } = context;
-  const verbose = context.options.verbose;
 
   if (migrations.length === 0) {
     logger.newline();
@@ -765,81 +782,108 @@ function displayStatus(
     });
 
     logger.table(headers, rows);
-
-    if (migrations.some(m => m.outsideTransaction && m.status === "pending")) {
-      logger.info(
-        "(no transaction): marked -- nextly:no-transaction (a plugin module: transaction: false), so it runs outside a transaction; if a statement fails, the statements before it stay applied."
-      );
-    }
-
-    if (verbose) {
-      const failedMigrations = migrations.filter(
-        m => m.status === "failed" && m.errorJson
-      );
-      if (failedMigrations.length > 0) {
-        logger.newline();
-        logger.error("Error Details:");
-        for (const m of failedMigrations) {
-          // F11: render the structured error_json so operators see SQLSTATE
-          // and the failing statement, not just an opaque message.
-          const e = m.errorJson;
-          logger.error(`  ${m.filename}: ${e?.message ?? "unknown error"}`);
-          if (e?.sqlState) logger.error(`    sqlState: ${e.sqlState}`);
-          if (e?.statement) logger.error(`    statement: ${e.statement}`);
-        }
-      }
-
-      const modifiedMigrations = migrations.filter(m => m.checksumMismatch);
-      if (modifiedMigrations.length > 0) {
-        logger.newline();
-        logger.warn("Modified Migrations (checksum mismatch):");
-        for (const m of modifiedMigrations) {
-          logger.warn(`  ${m.filename}`);
-        }
-      }
-    }
+    for (const hint of statusHints(migrations)) logger.info(hint);
+    if (context.options.verbose) logVerboseDetails(migrations, logger);
 
     logger.newline();
-    const summaryParts: string[] = [];
-    if (summary.applied > 0) {
-      summaryParts.push(`${summary.applied} applied`);
-    }
-    if (summary.pending > 0) {
-      summaryParts.push(`${summary.pending} pending`);
-    }
-    if (summary.failed > 0) {
-      summaryParts.push(`${summary.failed} failed`);
-    }
+    const line = summaryLine(summary);
+    if (line !== undefined) logger.info(line);
+  }
 
-    if (summaryParts.length > 0) {
-      logger.info(`Summary: ${summaryParts.join(", ")}`);
+  if (collections.length > 0) logPendingCollections(collections, logger);
+}
+
+/** The notes under the table that explain a status some row shows. */
+function statusHints(migrations: readonly MigrationStatus[]): string[] {
+  const hints: string[] = [];
+  if (migrations.some(m => m.status === "unfinished")) {
+    hints.push(
+      "(unfinished): its last attempt recorded no outcome: the process running it stopped, or is still running. `nextly migrate` refuses one that runs outside a transaction, or any on MySQL, until it is finished by hand and recorded, or reversed and cleared with `nextly migrate:resolve --failed-cleanup <file>`."
+    );
+  }
+  if (migrations.some(m => m.outsideTransaction && m.status === "pending")) {
+    hints.push(
+      "(no transaction): marked -- nextly:no-transaction (a plugin module: transaction: false), so it runs outside a transaction; if a statement fails, the statements before it stay applied."
+    );
+  }
+  return hints;
+}
+
+/** `--verbose`: each failure's recorded error, and each edited migration. */
+function logVerboseDetails(
+  migrations: readonly MigrationStatus[],
+  logger: CommandContext["logger"]
+): void {
+  const failedMigrations = migrations.filter(
+    m => m.status === "failed" && m.errorJson
+  );
+  if (failedMigrations.length > 0) {
+    logger.newline();
+    logger.error("Error Details:");
+    for (const m of failedMigrations) {
+      // F11: render the structured error_json so operators see SQLSTATE
+      // and the failing statement, not just an opaque message.
+      const e = m.errorJson;
+      logger.error(`  ${m.filename}: ${e?.message ?? "unknown error"}`);
+      if (e?.sqlState) logger.error(`    sqlState: ${e.sqlState}`);
+      if (e?.statement) logger.error(`    statement: ${e.statement}`);
     }
   }
 
-  if (collections.length > 0) {
+  const modifiedMigrations = migrations.filter(m => m.checksumMismatch);
+  if (modifiedMigrations.length > 0) {
     logger.newline();
-    logger.divider();
-    logger.newline();
-    logger.info("Collections with Pending Changes");
-    logger.newline();
-
-    const collHeaders = ["Collection", "Slug", "Status"];
-    const collRows: (string | number | boolean)[][] = collections.map(c => [
-      c.name,
-      c.slug,
-      c.migrationStatus,
-    ]);
-
-    logger.table(collHeaders, collRows);
-
-    logger.newline();
-    logger.info(
-      `${formatCount(collections.length, "collection")} with pending schema changes.`
-    );
-    logger.info(
-      'Run `nextly migrate:create --name="<migration-name>"` to generate migrations.'
-    );
+    logger.warn("Modified Migrations (checksum mismatch):");
+    for (const m of modifiedMigrations) {
+      logger.warn(`  ${m.filename}`);
+    }
   }
+}
+
+/** The summary line, naming each non-zero count, or undefined for none. */
+export function summaryLine(
+  summary: MigrateStatusResult["summary"]
+): string | undefined {
+  const parts = (
+    [
+      [summary.applied, "applied"],
+      [summary.pending, "pending"],
+      [summary.failed, "failed"],
+      [summary.unfinished, "unfinished"],
+    ] as const
+  )
+    .filter(([count]) => count > 0)
+    .map(([count, label]) => `${count} ${label}`);
+  return parts.length > 0 ? `Summary: ${parts.join(", ")}` : undefined;
+}
+
+/** The collections whose schema changed with no migration for it yet. */
+function logPendingCollections(
+  collections: readonly CollectionPendingChange[],
+  logger: CommandContext["logger"]
+): void {
+  logger.newline();
+  logger.divider();
+  logger.newline();
+  logger.info("Collections with Pending Changes");
+  logger.newline();
+
+  const collHeaders = ["Collection", "Slug", "Status"];
+  const collRows: (string | number | boolean)[][] = collections.map(c => [
+    c.name,
+    c.slug,
+    c.migrationStatus,
+  ]);
+
+  logger.table(collHeaders, collRows);
+
+  logger.newline();
+  logger.info(
+    `${formatCount(collections.length, "collection")} with pending schema changes.`
+  );
+  logger.info(
+    'Run `nextly migrate:create --name="<migration-name>"` to generate migrations.'
+  );
 }
 
 // F11: render the status union as a human-friendly string. Title-cased
@@ -858,6 +902,8 @@ function formatStatusForDisplay(status: MigrationStatus["status"]): string {
       return "Pending";
     case "failed":
       return "Failed";
+    case "unfinished":
+      return "Unfinished";
   }
 }
 

@@ -48,7 +48,7 @@ import {
 } from "../../domains/i18n/migration/migration-intent";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
-import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
+import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
 import {
   SchemaEventsRepository,
   truncateErrorMessage,
@@ -67,7 +67,7 @@ import {
 } from "../../domains/schema/migrate/migration-transaction";
 import { pluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import {
-  pluginMigrationSetsFrom,
+  pluginMigrationArgs,
   runPluginMigrations,
   type PluginMigrationRunResult,
   type PluginMigrationSet,
@@ -361,9 +361,6 @@ export async function runMigrate(
     // extraneous table) and BEFORE the event is recorded; idempotent. A thrown
     // error here maps to a non-zero CLI exit (the core itself never exits).
     try {
-      const pluginMigrationSets = await pluginMigrationSetsFrom(
-        configResult.config.plugins ?? []
-      );
       const extensionSchema = await compileExtensionSchema({
         dialect,
         plugins: configResult.config.plugins ?? [],
@@ -377,10 +374,7 @@ export async function runMigrate(
         adapter,
         migrationsDir: appMigrationsDir,
         logger,
-        pluginMigrationSets,
-        pluginsWithMigrations: new Set(
-          pluginMigrationSets.map(set => set.pluginName)
-        ),
+        ...(await pluginMigrationArgs(configResult.config.plugins ?? [])),
         lockMode: "fail-fast",
         ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
         // A custom `options.junctionTable` name cannot be inferred from any
@@ -391,13 +385,7 @@ export async function runMigrate(
         allowDestructive: allowCoreDestructive,
         dropRetiredAuthTables,
         allowDropNonEmptyRetired,
-        ensureLedger: async () => {
-          if (!(await dz.tableExists("nextly_schema_events"))) {
-            for (const stmt of getSchemaEventsDdl(dialect)) {
-              await dz.executeQuery(stmt);
-            }
-          }
-        },
+        ensureLedger: () => ensureSchemaEventsTable(dz),
         step: options.step,
       });
 
@@ -1214,13 +1202,12 @@ export async function migrateCore(
         dialect: deps.dialect,
         getDrizzle: <T>() => deps.db as T,
       });
-      // DETECTED rather than asserted. Not every caller builds a full adapter:
-      // the dev-boot path wraps the Drizzle adapter in a small object carrying
-      // `executeQuery` and nothing else, so a cast to a shape with
-      // `tableExists` produced a call on `undefined` — a TypeError the boot
-      // handler catches, which silently skipped the whole migration phase. The
-      // cleanup already reports itself as skipped when these are absent, so
-      // omitting them degrades to a note instead of a crash.
+      // DETECTED rather than asserted: a caller of this seam may hand an
+      // adapter without these operations, and a cast to a shape with
+      // `tableExists` would then call `undefined`, a TypeError that skips the
+      // whole migration phase. The cleanup already reports itself as skipped
+      // when these are absent, so omitting them degrades to a note instead of
+      // a crash.
       const retiredOps = deps.adapter as unknown as {
         tableExists?: (table: string) => Promise<boolean>;
         executeQuery?: (sql: string) => Promise<unknown>;
@@ -1297,10 +1284,11 @@ export async function migrateCore(
       /*
        * Phase 3 — make the registry agree with the tables Phase 2 just created.
        *
-       * 🔴 Inside the lock, unlike the dev-boot path, which runs its equivalent
-       * outside because several dev-server workers race there. A CLI invocation
-       * already holds the lock, so this sweep cannot interleave with another
-       * migrate and needs no conflict tolerance of its own.
+       * 🔴 Inside the lock. The development boot runs a snapshot pass of its
+       * own after this one, outside the lock, because several dev-server
+       * workers race there (`registerMigrationMetadata`). A run of this
+       * function already holds the lock, so this sweep cannot interleave with
+       * another migrate and needs no conflict tolerance of its own.
        *
        * CAUGHT, and the command still succeeds. The DDL has landed by now, and
        * MySQL commits DDL implicitly, so there is no transaction to roll back

@@ -348,8 +348,8 @@ async function fillCoreData(deps: ReconcileCoreDeps): Promise<boolean> {
  * The operations the retired-table cleanup needs, when it was asked for and
  * the caller can run it; null otherwise.
  *
- * A caller without these operations cannot do this work, which is true of the
- * in-process boot path. Said rather than thrown, because what actually went
+ * A caller without these operations cannot do this work. Said rather than
+ * thrown, because what actually went
  * wrong was that the CLI supplied none of them: the cleanup returned here and
  * the documented flow dropped nothing. That is now covered by asserting what
  * the CLI passes, which is the thing that regressed.

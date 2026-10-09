@@ -22,6 +22,7 @@
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import { MANAGED_TABLE_PREFIXES_REGEX } from "../pipeline/managed-tables";
+import { identifierQuote } from "../pipeline/sql-templates/identifier-quoting";
 import {
   type ColumnKind,
   DEFAULT_DECIMAL_PRECISION,
@@ -146,8 +147,46 @@ export function pluginTableName(prefix: string, table: string): string {
   return name;
 }
 
+/**
+ * The characters no declared identifier may hold: the quote every dialect
+ * wraps names in, read from the quoting the DDL is rendered with, and NUL,
+ * which PostgreSQL refuses anywhere in a statement.
+ */
+const UNQUOTABLE_CHARACTERS: readonly string[] = [
+  ...new Set(ALL_DIALECTS.map(identifierQuote)),
+  "\u0000",
+];
+
+/**
+ * Refuse a name the DDL cannot render on every dialect: an empty one, or one
+ * holding a character `UNQUOTABLE_CHARACTERS` names.
+ *
+ * Every name is quoted when the DDL is rendered, so such a name is no
+ * injection; but the quoting refuses it there (`quoteIdent`), part-way through
+ * `migrate:create` and far from the declaration. A declaration is checked for
+ * every dialect, so a name one dialect cannot quote is refused on all of them,
+ * here, when it is written.
+ */
+export function assertQuotableIdentifier(
+  name: string,
+  path: string,
+  what: string
+): void {
+  if (name.length === 0) refuse(path, `${what} may not be empty.`);
+  const held = UNQUOTABLE_CHARACTERS.find(character =>
+    name.includes(character)
+  );
+  if (held !== undefined) {
+    refuse(
+      path,
+      `${what} ${JSON.stringify(name)} holds ${JSON.stringify(held)}, which no dialect's quoting can carry.`
+    );
+  }
+}
+
 /** Refuse a table name that something else already owns, whoever declared it. */
 export function assertUsableTableName(name: string, path: string): void {
+  assertQuotableIdentifier(name, path, "A table name");
   if (name.length > MAX_IDENTIFIER_LENGTH) {
     refuse(
       path,
@@ -184,6 +223,7 @@ export function assertUsableTableName(name: string, path: string): void {
  * dropping and re-adding it. Refused here, at declaration, on every dialect.
  */
 export function assertExplicitIdentifier(name: string, path: string): void {
+  assertQuotableIdentifier(name, path, "An explicit name");
   if (name.length > MAX_IDENTIFIER_LENGTH) {
     refuse(
       path,

@@ -187,7 +187,7 @@ Schema changes live as `.sql` files in your repo. Nextly's runtime never auto-ap
 
 ```bash
 pnpm nextly migrate:create --name=add-posts-table   # scaffold a new migration
-pnpm nextly migrate:status                          # show applied / pending / failed
+pnpm nextly migrate:status                          # show applied / pending / failed / unfinished
 pnpm nextly migrate:check                           # CI gate: integrity + drift, no DB connection
 pnpm nextly migrate                                 # apply pending migrations
 pnpm nextly migrate:fresh                           # destructive: drop all tables and re-apply

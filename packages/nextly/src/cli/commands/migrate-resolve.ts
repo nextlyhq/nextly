@@ -119,14 +119,14 @@ async function loadSnapshot(
 }
 
 /**
- * What `--failed-cleanup` reports. Every failed attempt since the file's last
- * other event is cleared together, so it says how many when that is more
- * than one.
+ * What `--failed-cleanup` reports. Every attempt since the file's last other
+ * event that failed or recorded no outcome is cleared together, so it says
+ * how many when that is more than one.
  */
 function cleanedUpMessage(filename: string, cleared: number): string {
   return cleared === 1
-    ? `Cleaned up failed event for ${filename}.`
-    : `Cleaned up ${cleared} failed events for ${filename}.`;
+    ? `Cleaned up the failed or unfinished attempt for ${filename}.`
+    : `Cleaned up ${cleared} failed or unfinished attempts for ${filename}.`;
 }
 
 async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
@@ -251,7 +251,7 @@ export async function runMigrateResolve(
     switch (result.kind) {
       case "applied":
         logger.success(
-          `Marked ${filename} as applied${result.supersededFailedId ? " (superseded prior failed event)" : ""}.`
+          `Marked ${filename} as applied${result.supersededFailedId ? " (superseded the prior failed or unfinished attempt)" : ""}.`
         );
         // Said when nothing was compared without the operator asking for
         // that, so the record of what was checked stays honest.
@@ -282,7 +282,7 @@ export function registerMigrateResolveCommand(program: Command): void {
   program
     .command("migrate:resolve")
     .description(
-      "Recover migration bookkeeping: mark a file applied/rolled-back, or clean up a failed attempt"
+      "Recover migration bookkeeping: mark a file applied/rolled-back, or clean up a failed or unfinished attempt"
     )
     .option(
       "--applied <filename>",
@@ -294,7 +294,7 @@ export function registerMigrateResolveCommand(program: Command): void {
     )
     .option(
       "--failed-cleanup <filename>",
-      "Flip a stuck failed event for <filename> to rolled_back (edit the .sql before retrying)"
+      "Flip the stuck failed or unfinished attempts of <filename> to rolled_back (edit the .sql before retrying)"
     )
     .option(
       "--skip-verify",

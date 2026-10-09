@@ -40,6 +40,19 @@ describe("isRouteError", () => {
    */
   it("does not claim an unrelated failure", () => {
     expect(isRouteError(new TypeError("boom"))).toBe(false);
+    // The resolution code alone is not a route refusal: a dependency cycle
+    // raises it too.
+    expect(
+      isRouteError(
+        new NextlyError({
+          code: "PLUGIN_RESOLUTION_ERROR",
+          statusCode: 500,
+          publicMessage: "x",
+          logMessage: "x",
+          logContext: { reason: "dependency-cycle" },
+        })
+      )
+    ).toBe(false);
     expect(
       isRouteError(
         new NextlyError({

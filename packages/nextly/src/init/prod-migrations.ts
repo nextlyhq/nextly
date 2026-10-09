@@ -11,7 +11,7 @@ import { resolve } from "node:path";
 
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import {
-  pluginMigrationSetsFrom,
+  pluginMigrationArgs,
   type PluginMigrationSet,
 } from "../domains/schema/migrate/plugin/run-plugin-migrations";
 import { resolveDeclaredSchema } from "../domains/schema/migrate/resolved-schema";
@@ -127,29 +127,6 @@ function bootMigrationsNotRun(dialect: string): NextlyError {
   });
 }
 
-/**
- * The two arguments `migrateCore` needs about plugin migrations, from one read.
- *
- * `pluginsWithMigrations` is not optional: `migrateCore` checks every active
- * plugin table against it BEFORE `runPluginPhase` can apply anything, so an
- * empty set makes it reject every such table as having no production migration
- * path — with the modules sitting right there in `pluginMigrationSets`. Passing
- * one without the other was the bug; deriving both from a single call is what
- * stops them drifting apart again.
- */
-async function pluginMigrationArgs(
-  plugins: readonly PluginDefinition[]
-): Promise<{
-  pluginMigrationSets: Awaited<ReturnType<typeof pluginMigrationSetsFrom>>;
-  pluginsWithMigrations: Set<string>;
-}> {
-  const sets = await pluginMigrationSetsFrom(plugins);
-  return {
-    pluginMigrationSets: sets,
-    pluginsWithMigrations: new Set(sets.map(set => set.pluginName)),
-  };
-}
-
 /** Whether this boot migrates: only in production, and only when opted in. */
 function bootMigrationsEnabled(args: RunProdMigrationsArgs): boolean {
   return (
@@ -192,14 +169,10 @@ function bootCoreLogger(logger: LoggerLike) {
 /** Create `nextly_schema_events` when the database does not have it yet. */
 function schemaLedgerEnsurer(adapter: AdapterLike): () => Promise<void> {
   return async (): Promise<void> => {
-    if (!(await adapter.tableExists("nextly_schema_events"))) {
-      const { getSchemaEventsDdl } = await import(
-        "../domains/schema/events/schema-events-ddl"
-      );
-      for (const stmt of getSchemaEventsDdl(adapter.dialect)) {
-        await adapter.executeQuery(stmt);
-      }
-    }
+    const { ensureSchemaEventsTable } = await import(
+      "../domains/schema/events/schema-events-ddl"
+    );
+    await ensureSchemaEventsTable(adapter);
   };
 }
 

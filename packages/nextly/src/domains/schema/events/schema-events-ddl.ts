@@ -12,6 +12,22 @@
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
+/**
+ * Create the events table and its indexes when the database does not have
+ * it: the one ledger bootstrap the CLI, the production boot and the
+ * development boot each run before a migrate records anything.
+ */
+export async function ensureSchemaEventsTable(adapter: {
+  dialect: Dialect;
+  tableExists(name: string): Promise<boolean>;
+  executeQuery(sql: string): Promise<unknown>;
+}): Promise<void> {
+  if (await adapter.tableExists("nextly_schema_events")) return;
+  for (const stmt of getSchemaEventsDdl(adapter.dialect)) {
+    await adapter.executeQuery(stmt);
+  }
+}
+
 /** Returns the ordered DDL statements that create the events table + indexes. */
 export function getSchemaEventsDdl(dialect: Dialect): string[] {
   switch (dialect) {

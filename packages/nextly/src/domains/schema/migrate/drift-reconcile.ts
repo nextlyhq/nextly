@@ -172,8 +172,27 @@ export function failedAttemptMayBePartial(
 }
 
 /**
+ * Whether a ledger row is an attempt that did not finish: one that failed,
+ * or one still `in_progress`, which recorded no outcome — its process
+ * stopped (killed, out of memory, its connection dropped), or is still
+ * running where the migrate lock does not hold it off (SQLite takes none,
+ * and PostgreSQL's expires). Either way the reader cannot know what of it
+ * ran, so it is treated as the failure it may be.
+ *
+ * The one reading of "did the last attempt finish" for the partially-applied
+ * refusal, and for `migrate:resolve`, which clears such attempts or records
+ * past them.
+ */
+export function attemptUnfinished(
+  row: Pick<SchemaEventRow, "status"> | undefined
+): boolean {
+  return row?.status === "failed" || row?.status === "in_progress";
+}
+
+/**
  * Refuses to record a unit as applied without running it, or to run it
- * again, when its newest attempt failed and may have stopped part-way.
+ * again, when its newest attempt did not finish (`attemptUnfinished`) and may
+ * have stopped part-way.
  *
  * Such an attempt can leave the statements before the failing one applied.
  * The database can then stand at the unit's target — every schema statement
@@ -208,10 +227,16 @@ export async function assertNotPartiallyApplied(
   if (!failedAttemptMayBePartial(file, dialect)) return;
   const outsideTransaction = file.transaction === false;
   const newest = newestEvent(await repo.findFileApplies(file.filename));
-  if (newest?.status !== "failed") return;
+  if (!attemptUnfinished(newest)) return;
+  const unfinished =
+    newest?.status === "failed"
+      ? undefined
+      : "recorded no outcome (the process running it stopped, or is still running)";
   const why = outsideTransaction
-    ? `${file.filename} runs outside a transaction, and its last attempt failed part-way.`
-    : `${file.filename}'s last attempt failed, and MySQL commits each schema statement as it runs, even inside a transaction, so that attempt may have stopped part-way.`;
+    ? unfinished === undefined
+      ? `${file.filename} runs outside a transaction, and its last attempt failed part-way.`
+      : `${file.filename} runs outside a transaction, and its last attempt ${unfinished}, so it may have stopped part-way.`
+    : `${file.filename}'s last attempt ${unfinished ?? "failed"}, and MySQL commits each schema statement as it runs, even inside a transaction, so that attempt may have stopped part-way.`;
   throw new NextlyError({
     code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
     publicMessage: `${why} ${PARTIAL_REFUSALS[refusing]} ${partiallyAppliedAdvice(file.filename)}`,

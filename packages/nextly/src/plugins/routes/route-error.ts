@@ -3,6 +3,7 @@ import {
   type NextlyErrorCode,
 } from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
+import { resolutionError } from "../resolution-error";
 
 /**
  * Fail-fast boot error when two contributed routes resolve to the same
@@ -42,7 +43,34 @@ export function routeInvalidPathError(
 }
 
 /**
- * Every refusal a route fold raises, in one list.
+ * A route option that cannot mean what it says (`validateRouteOptions`): a
+ * method outside the allowed set, a raw body on a method with none, a
+ * rate-limit mode that does not exist, a CSRF opt-out on a public route.
+ *
+ * Raised under the plugin resolution code, with reason
+ * `invalid-route-options`, and built here so `isRouteError` knows it as one
+ * of the fold's own refusals.
+ */
+export function routeInvalidOptionsError(
+  pluginName: string,
+  method: string,
+  path: string,
+  problem: string
+): NextlyError {
+  return resolutionError(
+    ROUTE_RESOLUTION_REASON,
+    `Plugin "${pluginName}" route ${method} ${path}: ${problem}.`,
+    { plugin: pluginName, path, problem }
+  );
+}
+
+/** The resolution refusal reason `routeInvalidOptionsError` raises. */
+const ROUTE_RESOLUTION_REASON = "invalid-route-options";
+
+/**
+ * The codes of the refusals a route fold raises under a route code, in one
+ * list; `routeInvalidOptionsError`, raised under the plugin resolution code,
+ * is recognised by its reason instead.
  *
  * `isRouteError` reads it, and so does each constructor's status. Spelled out
  * per site, a new refusal is recognised by whichever of them its author
@@ -66,9 +94,13 @@ const ROUTE_ERROR_CODES = [
  * plugin declaring bad routes, which sends them to fix the wrong thing.
  */
 export function isRouteError(error: unknown): boolean {
+  if (!(error instanceof NextlyError)) return false;
+  if ((ROUTE_ERROR_CODES as readonly string[]).includes(error.code)) {
+    return true;
+  }
   return (
-    error instanceof NextlyError &&
-    (ROUTE_ERROR_CODES as readonly string[]).includes(error.code)
+    error.code === "PLUGIN_RESOLUTION_ERROR" &&
+    error.logContext?.reason === ROUTE_RESOLUTION_REASON
   );
 }
 

@@ -154,9 +154,10 @@ export interface PluginMigrationRunResult {
  * The sets one run should apply, from the config's plugin list, in the order
  * the resolver produces.
  *
- * Both callers — the CLI command and production boot — build nothing of their
- * own, so the two cannot disagree about which plugins ship migrations or the
- * order they run in.
+ * Every caller — the CLI command, production boot and development boot —
+ * reaches it through `pluginMigrationArgs` and builds nothing of its own, so
+ * none can disagree about which plugins ship migrations or the order they run
+ * in.
  */
 export async function pluginMigrationSetsFrom(
   plugins: readonly PluginDefinition[]
@@ -181,6 +182,30 @@ export async function pluginMigrationSetsFrom(
         migrations: plugin.contributes!.schema!.migrations!,
       }))
   );
+}
+
+/**
+ * The two arguments `migrateCore` takes about plugin migrations, from one read
+ * of the config's plugin list.
+ *
+ * `pluginsWithMigrations` is not optional: `migrateCore` checks every active
+ * plugin table against it BEFORE its plugin phase can apply anything, so an
+ * empty set makes it reject every such table as having no production migration
+ * path — with the modules sitting right there in `pluginMigrationSets`. Passing
+ * one without the other, or neither, is how a caller stops migrating; deriving
+ * both here, for every caller, is what keeps them together.
+ */
+export async function pluginMigrationArgs(
+  plugins: readonly PluginDefinition[]
+): Promise<{
+  pluginMigrationSets: PluginMigrationSet[];
+  pluginsWithMigrations: Set<string>;
+}> {
+  const sets = await pluginMigrationSetsFrom(plugins);
+  return {
+    pluginMigrationSets: sets,
+    pluginsWithMigrations: new Set(sets.map(set => set.pluginName)),
+  };
 }
 
 /**
@@ -265,8 +290,11 @@ async function runSet(
     if (lastOutcome !== "skipped") budget.remaining -= 1;
   }
   // A module that ran or was adopted just now recorded its ownership itself.
-  if (lastOutcome === "skipped") {
-    await repairOwnership(set, ordered[ordered.length - 1], deps);
+  // A set with no modules has no last one, and nothing of its to repair;
+  // the callers pass none such today, which keeps the guard free.
+  const last = ordered.at(-1);
+  if (lastOutcome === "skipped" && last !== undefined) {
+    await repairOwnership(set, last, deps);
   }
 }
 

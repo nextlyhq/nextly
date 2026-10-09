@@ -255,10 +255,11 @@ export function assertDistinctIndexNames(
   assertDistinctNames(
     [
       ...specs.flatMap(spec =>
+        // No identity: a table's own indexes all reach its DDL, so two under
+        // one name are two `CREATE INDEX` statements whatever their shape.
         (spec.indexes ?? []).map(index => ({
           table: spec.name,
           name: index.name,
-          identity: indexKey(index),
         }))
       ),
       // Two contributors adding the same index to one entity or core table

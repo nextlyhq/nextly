@@ -599,6 +599,9 @@ describe("statementRefusals", () => {
       "NOT_TRANSACTIONAL_IN_MIGRATION",
     ],
     ["postgresql", "CREATE DATABASE other", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+    // CLUSTER naming no table, which PostgreSQL refuses in a transaction.
+    ["postgresql", "CLUSTER", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+    ["postgresql", "CLUSTER VERBOSE", "NOT_TRANSACTIONAL_IN_MIGRATION"],
     [
       "postgresql",
       "ALTER SYSTEM SET work_mem = '64MB'",
@@ -644,6 +647,13 @@ describe("statementRefusals", () => {
     ["postgresql", "SET CONSTRAINTS ALL DEFERRED"],
     ["postgresql", "CREATE INDEX i ON t (a)"],
     ["postgresql", "ALTER TYPE mood ADD VALUE 'meh'"],
+    // Both run inside a transaction: CLUSTER naming its table, quoted or
+    // not, and a concurrent refresh of a materialized view.
+    ["postgresql", "CLUSTER t"],
+    ["postgresql", "CLUSTER VERBOSE t USING t_pkey"],
+    ["postgresql", "CLUSTER (VERBOSE) t"],
+    ["postgresql", `CLUSTER "Posts"`],
+    ["postgresql", "REFRESH MATERIALIZED VIEW CONCURRENTLY mv"],
     ["postgresql", "COMMENT ON TABLE t IS 'VACUUM me'"],
     ["postgresql", "DO $$ BEGIN ROLLBACK; END $$"],
     ["postgresql", `ALTER TABLE "t" ADD COLUMN "a" TEXT`],
@@ -698,6 +708,7 @@ describe("a migration marked to run outside a transaction", () => {
     ["postgresql", "REINDEX (CONCURRENTLY) TABLE t"],
     ["postgresql", "VACUUM ANALYZE t"],
     ["postgresql", "ALTER SYSTEM SET work_mem = '64MB'"],
+    ["postgresql", "CLUSTER"],
     ["sqlite", "VACUUM"],
   ] as const)("lets a marked file run on %s: %s", (dialect, statement) => {
     expect(statementRefusals([statement], dialect, outside)).toEqual([]);

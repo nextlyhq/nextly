@@ -14,6 +14,7 @@ import {
   failedRollbacksSinceApply,
   ledgerRecords,
   pluginModuleEntries,
+  summaryLine,
 } from "../migrate-status";
 
 describe("buildMigrationStatuses", () => {
@@ -289,6 +290,32 @@ describe("ledgerRecords", () => {
     ]);
   });
 
+  it("lists an attempt that never finished as unfinished, not pending", () => {
+    // A process killed mid-attempt leaves its newest row `in_progress`;
+    // `nextly migrate` may refuse the file until it is finished or cleared.
+    const file = (name: string) => ({
+      name,
+      filePath: `/x/${name}.sql`,
+      checksum: "abc",
+      collections: [],
+      timestamp: "20260101_000000",
+    });
+    const statuses = buildMigrationStatuses(
+      [file("0001_crashed"), file("0002_after")],
+      ledgerRecords([
+        event("0001_crashed.sql", "applied", 1000),
+        event("0001_crashed.sql", "rolled_back", 2000),
+        event("0001_crashed.sql", "in_progress", 3000),
+        event("0003_gone.sql", "in_progress", 1000),
+      ])
+    );
+    expect(statuses.map(s => [s.filename, s.status])).toEqual([
+      ["0001_crashed", "unfinished"],
+      ["0002_after", "pending"],
+      ["0003_gone", "unfinished"],
+    ]);
+  });
+
   it("applies the same rule to the app's own files", () => {
     const rows = [
       event("0001_init.sql", "applied", 1000),
@@ -299,5 +326,28 @@ describe("ledgerRecords", () => {
     expect(ledgerRecords(rows).map(r => [r.filename, r.status])).toEqual([
       ["0001_init.sql", "applied"],
     ]);
+  });
+});
+
+describe("the migrate:status summary line", () => {
+  it("names unfinished migrations beside the other counts", () => {
+    expect(
+      summaryLine({
+        applied: 3,
+        pending: 0,
+        failed: 0,
+        unfinished: 1,
+        collectionsWithPendingChanges: 0,
+      })
+    ).toBe("Summary: 3 applied, 1 unfinished");
+    expect(
+      summaryLine({
+        applied: 0,
+        pending: 0,
+        failed: 0,
+        unfinished: 0,
+        collectionsWithPendingChanges: 0,
+      })
+    ).toBeUndefined();
   });
 });

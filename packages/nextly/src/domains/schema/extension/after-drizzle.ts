@@ -31,7 +31,11 @@ import { scanSql } from "../migrate/sql-scan";
 import type { ColumnSpec, IndexSpec, TableSpec } from "../pipeline/diff/types";
 
 import { enumChecks } from "./enum-check";
-import { assertUsableAppTableName } from "./naming";
+import {
+  assertExplicitIdentifier,
+  assertQuotableIdentifier,
+  assertUsableAppTableName,
+} from "./naming";
 import type { ExtensionTable, SchemaOwner } from "./types";
 
 export type DrizzleSchemaHook = (args: {
@@ -126,6 +130,12 @@ function unconvertibleIndex(
 /** Column-level constructs the model cannot express. */
 function assertColumnsConvertible(table: Table, name: string): void {
   for (const column of Object.values(getColumns(table))) {
+    // A name the hook wrote reaches the DDL as written, as a declared one does.
+    assertQuotableIdentifier(
+      column.name,
+      `db.schema.afterDrizzle.${name}`,
+      "A column name"
+    );
     const shape = column as unknown as {
       isUnique?: unknown;
       generated?: unknown;
@@ -211,6 +221,13 @@ function assertTableConvertible(
   }
 
   for (const entry of config.indexes ?? []) {
+    const indexName = (entry as { config?: { name?: unknown } }).config?.name;
+    // An index name the hook wrote is explicit, and held to what a declared
+    // explicit name is: a name past the bound is refused by MySQL and cut
+    // short by PostgreSQL, which then never matches the declaration.
+    if (typeof indexName === "string") {
+      assertExplicitIdentifier(indexName, `db.schema.afterDrizzle.${name}`);
+    }
     const problem = unconvertibleIndex(entry);
     if (problem) refuse(name, problem.reason, problem.remedy);
   }

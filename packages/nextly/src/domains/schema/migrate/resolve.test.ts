@@ -186,6 +186,59 @@ describe("resolveMigration", () => {
       expect(rows.map(row => row.status)).toEqual(["applied"]);
     });
 
+    it("supersedes an attempt that recorded no outcome with the failures before it", async () => {
+      // A process killed mid-attempt leaves its row `in_progress`; it is as
+      // unaccounted for as a failure, so recording the file retires it too.
+      const { repo, base } = makeDeps(testDb);
+      const ids = [
+        await repo.insertEvent({
+          eventType: "file_apply",
+          status: "failed",
+          source: "cli-migrate",
+          filename: "001_add_posts.sql",
+          startedAt: new Date(1),
+        }),
+        await repo.insertEvent({
+          eventType: "file_apply",
+          status: "in_progress",
+          source: "cli-migrate",
+          filename: "001_add_posts.sql",
+          startedAt: new Date(2),
+        }),
+      ];
+      const r = await resolveMigration({
+        mode: "applied",
+        filename: "001_add_posts.sql",
+        ...base,
+      });
+      expect(r).toMatchObject({ kind: "applied", supersededFailedId: ids[1] });
+      for (const id of ids) {
+        expect((await repo.findById(id))?.status).toBe("superseded");
+      }
+    });
+
+    it("records on MySQL an unmarked file with no snapshot whose newest attempt recorded no outcome", async () => {
+      const { repo, base } = makeDeps(testDb, {
+        dialect: "mysql",
+        loadTargetSnapshot: () => Promise.resolve(null),
+        introspectLive: () =>
+          Promise.reject(new Error("nothing to compare it with")),
+      });
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "in_progress",
+        source: "cli-migrate",
+        filename: "003_seed.sql",
+        startedAt: new Date(1),
+      });
+      const r = await resolveMigration({
+        mode: "applied",
+        filename: "003_seed.sql",
+        ...base,
+      });
+      expect(r).toMatchObject({ kind: "applied", verified: false });
+    });
+
     it("records on MySQL an unmarked file with no snapshot whose newest attempt failed, without --skip-verify", async () => {
       // On MySQL a partial-failure refusal tells the operator to mark such a
       // file applied once it is finished by hand, and an unmarked
@@ -427,6 +480,26 @@ describe("resolveMigration", () => {
       // A failure the file later recovered from stays as recorded.
       expect(await status(recovered)).toBe("failed");
       expect(await repo.findFileApplies(file)).toHaveLength(5);
+    });
+
+    it("clears an attempt that recorded no outcome, giving it an end", async () => {
+      const { repo, base } = makeDeps(testDb);
+      const id = await repo.insertEvent({
+        eventType: "file_apply",
+        status: "in_progress",
+        source: "cli-migrate",
+        filename: "001_add_posts.sql",
+        startedAt: new Date(1),
+      });
+      const r = await resolveMigration({
+        mode: "failed-cleanup",
+        filename: "001_add_posts.sql",
+        ...base,
+      });
+      expect(r).toEqual({ kind: "failed-cleanup", updatedIds: [id] });
+      const row = await repo.findById(id);
+      expect(row?.status).toBe("rolled_back");
+      expect(row?.endedAt).not.toBeNull();
     });
 
     it("is idempotent when already rolled_back", async () => {

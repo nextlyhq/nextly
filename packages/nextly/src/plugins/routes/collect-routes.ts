@@ -1,10 +1,10 @@
 import type { PluginDefinition } from "../plugin-context";
-import { resolutionError } from "../resolution-error";
 
 import { rootMountUnreachableReason } from "./root-mount-reach";
 import {
   routeCollisionError,
   routeInvalidMountError,
+  routeInvalidOptionsError,
   routeInvalidPathError,
   routeUnreachableRootError,
 } from "./route-error";
@@ -116,9 +116,10 @@ function assertUnclaimed(
  * collision-checked routes. Disabled plugins (`enabled: false`) skip
  * behavior, routes included, while their schema is still applied.
  *
- * Every refusal it raises is built in `route-error.ts` and listed there, so a
- * caller deciding what a throw means reads that list rather than one repeated
- * here, which is how the reachability refusal came to be unhandled.
+ * Every refusal it raises is built in `route-error.ts`, whose `isRouteError`
+ * recognises each of them, so a caller deciding what a throw means asks that
+ * rather than a list repeated here, which is how the reachability refusal
+ * came to be unhandled.
  */
 export function collectPluginRoutes(
   plugins: PluginDefinition[]
@@ -136,10 +137,11 @@ export function collectPluginRoutes(
       // look like a decision the route does not carry out.
       const optionProblem = validateRouteOptions(route);
       if (optionProblem) {
-        throw resolutionError(
-          "invalid-route-options",
-          `Plugin "${plugin.name}" route ${route.method} ${route.path}: ${optionProblem}.`,
-          { plugin: plugin.name, path: route.path, problem: optionProblem }
+        throw routeInvalidOptionsError(
+          plugin.name,
+          route.method,
+          route.path,
+          optionProblem
         );
       }
       // Resolved once, so the claim is checked against the same mount the

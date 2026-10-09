@@ -575,7 +575,7 @@ function transactionControlMessage(
  *
  * - PostgreSQL: `VACUUM`, anything `CONCURRENTLY` (`CREATE`/`DROP INDEX`,
  *   `REINDEX`), `CREATE`/`DROP DATABASE`, `CREATE`/`DROP TABLESPACE`,
- *   `ALTER SYSTEM`.
+ *   `ALTER SYSTEM`, and `CLUSTER` naming no table.
  * - SQLite: `VACUUM`.
  *
  * Not markable: they leave state on the connection after the migration, so
@@ -589,7 +589,9 @@ function transactionControlMessage(
  *
  * PostgreSQL's `ALTER TYPE ... ADD VALUE` is not among them: from
  * PostgreSQL 12 it runs inside a transaction, though the value it adds
- * cannot be used before that transaction commits.
+ * cannot be used before that transaction commits. Nor is `REFRESH
+ * MATERIALIZED VIEW CONCURRENTLY`, or `CLUSTER` naming its table: both run
+ * inside one.
  */
 function outsideTransactionReason(
   statement: string,
@@ -599,7 +601,10 @@ function outsideTransactionReason(
   const words = leadingWords(statement, dialect, 6);
   switch (dialect) {
     case "postgresql":
-      return postgresOutsideTransactionReason(words, mode.unit);
+      return (
+        postgresOutsideTransactionReason(words, mode.unit) ??
+        clusterOutsideTransactionReason(statement, mode.unit)
+      );
     case "sqlite":
       return sqliteOutsideTransactionReason(words[0], mode.unit);
     case "mysql":
@@ -653,6 +658,33 @@ function postgresOutsideTransactionReason(
     };
   }
   return undefined;
+}
+
+/**
+ * PostgreSQL's `CLUSTER` naming no table — `CLUSTER` or `CLUSTER VERBOSE` —
+ * which reclusters every table clustered before and which the server refuses
+ * inside a transaction block, where `CLUSTER t` runs.
+ *
+ * The leading words stop at a quoted segment, so a statement holding one —
+ * `CLUSTER "Posts"` — names a table, and is left to run. Any other shape,
+ * an option list among them, is left to the server to judge.
+ */
+function clusterOutsideTransactionReason(
+  statement: string,
+  unit: MigrationRunMode["unit"]
+): OutsideTransactionReason | undefined {
+  const words = leadingWords(statement, "postgresql", 3);
+  if (words[0] !== "CLUSTER") return undefined;
+  const quoted = scanSql(statement, "postgresql").some(
+    segment => segment.kind === "string" || segment.kind === "quoted-name"
+  );
+  if (quoted) return undefined;
+  const rest = words[1] === "VERBOSE" ? words.slice(2) : words.slice(1);
+  if (rest.some(word => word !== ";")) return undefined;
+  return {
+    reason: `reclusters every table, which PostgreSQL cannot do inside a transaction, and this ${unit} runs in one.`,
+    markable: true,
+  };
 }
 
 /**

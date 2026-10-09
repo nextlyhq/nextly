@@ -213,8 +213,8 @@ describe("runPluginMigrations", () => {
       target: [tableSpec("fx__a", true)],
     });
     const h = deps();
-    h.live.set("fx__a", [tableSpec("fx__a", false)]);
-    // Live == before here would APPLY; make it neither by altering a column set.
+    // Live equal to either side would apply or adopt; a column neither side
+    // declares makes it match neither.
     h.live.set("fx__a", [
       {
         ...empty,
@@ -849,6 +849,20 @@ describe("contributed tables are judged on the plugin's own elements", () => {
   });
 });
 
+describe("a plugin set with no modules", () => {
+  it("runs nothing and records nothing", async () => {
+    const d = deps();
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "@acme/empty", pluginVersion: "1.0.0", migrations: [] }],
+        d.deps
+      )
+    ).resolves.toEqual({ applied: 0, adopted: 0, skipped: 0 });
+    expect(d.started).toEqual([]);
+    expect(d.owners).toEqual([]);
+  });
+});
+
 /**
  * Dev push creates a plugin's tables in their CURRENT shape, which for a
  * plugin with several modules is the last module's result — a state the first
@@ -1059,6 +1073,25 @@ describe("a database already past some of a plugin's modules", () => {
       "plugin:@acme/p/20260115_000000_seed",
     ]);
     expect(d.failed).toEqual(["id-plugin:@acme/p/20260115_000000_seed"]);
+  });
+
+  it("refuses to adopt a module run outside a transaction whose last attempt never finished", async () => {
+    // A process killed part-way through it left its row `in_progress`: the
+    // tables may stand at its result while a statement after them never ran.
+    const { checksum: _sealed, ...content } = create;
+    const outside = { ...content, transaction: false };
+    const unsealed = { ...outside, checksum: migrationChecksum(outside) };
+    const d = deps();
+    d.live.set(T, [tableSpec(T, true)]);
+    d.deps.repo.findFileApplies = async (filename: string) =>
+      filename === "plugin:@acme/p/20260101_000000_create"
+        ? [{ status: "in_progress" as const, startedAt: new Date(1) }]
+        : [];
+
+    await expect(
+      runPluginMigrations(set([unsealed, addScore]), d.deps)
+    ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED" });
+    expect(d.started).toEqual([]);
   });
 
   it("leaves a fresh install to run every module", async () => {

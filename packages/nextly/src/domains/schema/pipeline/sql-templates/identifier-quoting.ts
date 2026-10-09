@@ -11,8 +11,18 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+/**
+ * The character `dialect` wraps an identifier in. Exported so a declaration
+ * holding one is refused when it is written (`assertQuotableIdentifier`,
+ * which also refuses an empty name and NUL) rather than here, when the DDL
+ * is rendered.
+ */
+export function identifierQuote(dialect: SupportedDialect): string {
+  return dialect === "mysql" ? "`" : '"';
+}
+
 export function quoteIdent(name: string, dialect: SupportedDialect): string {
-  const q = dialect === "mysql" ? "`" : '"';
+  const q = identifierQuote(dialect);
   if (name.includes(q)) {
     throw new Error(
       `Invalid identifier ${JSON.stringify(name)}: contains the dialect quote character (${q}). ` +

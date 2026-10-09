@@ -12,9 +12,9 @@
  *                    --failed-cleanup.
  *   --rolled-back    record a rolled_back event so the next `migrate` re-runs
  *                    the file (requires a prior applied row).
- *   --failed-cleanup flip the stuck failed rows (every failed attempt since
- *                    the file's last other event) to rolled_back so the
- *                    .sql can be edited before the next attempt (no new
+ *   --failed-cleanup flip the stuck attempts (every failed or unfinished one
+ *                    since the file's last other event) to rolled_back so
+ *                    the .sql can be edited before the next attempt (no new
  *                    row).
  *
  * Effects (repo, fs existence, snapshot load, live introspection) are injected
@@ -32,7 +32,10 @@ import type { SchemaEventRow } from "../events/schema-events-repository";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
-import { failedAttemptMayBePartial } from "./drift-reconcile";
+import {
+  attemptUnfinished,
+  failedAttemptMayBePartial,
+} from "./drift-reconcile";
 
 export type ResolveMode = "applied" | "rolled-back" | "failed-cleanup";
 
@@ -53,8 +56,9 @@ export interface ResolveMigrationArgs {
   filename: string;
   skipVerify?: boolean;
   /**
-   * The database the ledger lives in. It decides whether a failed attempt
-   * can have left part of a file's work behind (`hasNoSnapshotToCompare`).
+   * The database the ledger lives in. It decides whether an attempt that did
+   * not finish can have left part of a file's work behind
+   * (`hasNoSnapshotToCompare`).
    */
   dialect: SupportedDialect;
   repo: ResolveRepo;
@@ -79,7 +83,10 @@ export type ResolveResult =
   | { kind: "rolled-back"; eventId: string }
   | {
       kind: "failed-cleanup";
-      /** Each failed attempt flipped to rolled_back, newest first. */
+      /**
+       * Each attempt flipped to rolled_back, failed or unfinished, newest
+       * first.
+       */
       updatedIds: string[];
     }
   | { kind: "noop"; reason: string };
@@ -171,18 +178,19 @@ async function resolveApplied(
 }
 
 /**
- * The failed attempts no later event accounts for: the unbroken run of
- * failures at the newest end of a file's history, newest first.
+ * The attempts that did not finish (`attemptUnfinished`: failed, or stopped
+ * while `in_progress`) and no later event accounts for: the unbroken run of
+ * them at the newest end of a file's history, newest first.
  *
  * What `--failed-cleanup` clears and `--applied` supersedes. Every one of
  * them is an attempt that may have left work behind, so clearing only one
- * would leave the next newest still failed, and `nextly migrate` refusing
- * the file again. A failure older than a later applied or rolled-back event
- * is history the file has already moved past, and is left as recorded.
+ * would leave the next newest still unfinished, and `nextly migrate` refusing
+ * the file again. One older than a later applied or rolled-back event is
+ * history the file has already moved past, and is left as recorded.
  */
 function unclearedFailures(rows: readonly SchemaEventRow[]): SchemaEventRow[] {
   const ordered = newestFirst(rows);
-  const firstOther = ordered.findIndex(row => row.status !== "failed");
+  const firstOther = ordered.findIndex(row => !attemptUnfinished(row));
   return firstOther === -1 ? ordered : ordered.slice(0, firstOther);
 }
 
@@ -228,14 +236,15 @@ async function verifyTarget(
  * no snapshot; a generated file is never marked, because the marker would
  * change the text its snapshot was taken over. On MySQL, whose DDL commits
  * as it runs, an unmarked blank file run in a transaction can also stop
- * part way: its newest attempt failed, and the partially-applied refusal
- * tells the operator to mark it applied once its statements are finished by
- * hand. Neither has anything to compare against, and refusing either would
- * make the recovery the refusal names need `--skip-verify`.
+ * part way: its newest attempt did not finish (`attemptUnfinished`), and
+ * the partially-applied refusal tells the operator to mark it applied once
+ * its statements are finished by hand. Neither has anything to compare
+ * against, and refusing either would make the recovery the refusal names
+ * need `--skip-verify`.
  *
- * On PostgreSQL and SQLite a failed attempt of an unmarked file was undone
- * whole, so none of it ran: recording it unchecked would record a file that
- * never ran, and it stays refused.
+ * On PostgreSQL and SQLite an unfinished attempt of an unmarked file was
+ * undone whole, so none of it ran: recording it unchecked would record a
+ * file that never ran, and it stays refused.
  */
 async function hasNoSnapshotToCompare(
   args: ResolveMigrationArgs,
@@ -244,7 +253,7 @@ async function hasNoSnapshotToCompare(
   if (await args.marksNoTransaction()) return true;
   return (
     failedAttemptMayBePartial({ transaction: true }, args.dialect) &&
-    newestEvent(rows)?.status === "failed"
+    attemptUnfinished(newestEvent(rows))
   );
 }
 
@@ -303,7 +312,7 @@ async function resolveFailedCleanup(
     }
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
-      publicMessage: `No failed event found for ${filename}; nothing to clean up.`,
+      publicMessage: `No failed or unfinished attempt found for ${filename}; nothing to clean up.`,
     });
   }
   // Flipped in place rather than answered with a new row, so each attempt

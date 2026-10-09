@@ -194,6 +194,67 @@ describe("defineTable", () => {
     ]);
   });
 
+  it("refuses a referenced table or column the DDL cannot render, and accepts a plain one", () => {
+    // `REFERENCES "" ("id")` would compile and fail only when it ran; a quote
+    // in a name would fail when the DDL was rendered, mid-`migrate:create`.
+    const declare = (table: string, column: string) =>
+      defineTable(
+        "t",
+        { id: col.id(), ownerId: col.shortText() },
+        {
+          foreignKeys: [
+            { columns: ["ownerId"], references: { table, columns: [column] } },
+          ],
+        }
+      );
+    expect(() => declare("users", "id")).not.toThrow();
+    for (const [table, column] of [
+      ["", "id"],
+      ["users", ""],
+      ['us"ers', "id"],
+      ["users", "i`d"],
+      ["users\u0000x", "id"],
+    ]) {
+      expect(validationPaths(() => declare(table, column))).toEqual([
+        "t.foreignKeys[0]",
+      ]);
+    }
+  });
+
+  it("refuses an explicit name or a column name holding a quote character", () => {
+    expect(
+      validationPaths(() =>
+        defineTable(
+          "t",
+          { id: col.id(), ownerId: col.shortText() },
+          {
+            foreignKeys: [
+              {
+                columns: ["ownerId"],
+                references: { table: "users", columns: ["id"] },
+                name: 'fk_a"b',
+              },
+            ],
+          }
+        )
+      )
+    ).toEqual(["t.foreignKeys[0]"]);
+    expect(
+      validationPaths(() =>
+        defineTable("t", { id: col.id(), "la`bel": col.shortText() })
+      )
+    ).toEqual(["t.la`bel"]);
+    expect(
+      validationPaths(() =>
+        defineTable(
+          "t",
+          { id: col.id(), price: col.integer() },
+          { checks: [{ name: 'po"s', sql: "price >= 0" }] }
+        )
+      )
+    ).toEqual(["t.checks[0]"]);
+  });
+
   it("refuses a decimal default finer than the column's scale, naming the column", () => {
     // MySQL 8.0.46 stores `DECIMAL(10,2) DEFAULT 1.555` as 1.56, so the live
     // default would never match the declaration.
