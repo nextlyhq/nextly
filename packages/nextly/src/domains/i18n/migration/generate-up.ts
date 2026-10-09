@@ -119,12 +119,12 @@ function buildCompanionCreateStatement(
  * faithful path: it reproduces the table as it is, with no kind→type round trip
  * to lose anything.
  *
- * Two things a snapshot cannot express are added back. The composite key comes
- * free — introspection records `primaryKey` per column, so `createTableBody`
- * emits `PRIMARY KEY (_parent, _locale)` from the live shape. The foreign key
- * does not exist in the snapshot model at all, so it is spelled here, and
- * INLINE: SQLite cannot add a constraint by `ALTER` at any point after the
- * table is created.
+ * The composite key comes free — introspection records `primaryKey` per
+ * column, so `createTableBody` emits `PRIMARY KEY (_parent, _locale)` from the
+ * live shape. So does the foreign key to the main table, when introspection
+ * tracked it; only a live shape without it has it spelled here, and INLINE:
+ * SQLite cannot add a constraint by `ALTER` at any point after the table is
+ * created. Spelling it regardless declared the same key twice.
  */
 export function buildCompanionCreateFromLive(args: {
   live: TableSpec;
@@ -134,15 +134,19 @@ export function buildCompanionCreateFromLive(args: {
   const { live, mainTable, dialect } = args;
   const quote = (id: string): string => q(id, dialect);
   const body = createTableBody(live, quote);
+  const parentKeyTracked = (live.foreignKeys ?? []).some(
+    fk =>
+      fk.columns.length === 1 &&
+      fk.columns[0] === "_parent" &&
+      fk.referencesTable === mainTable
+  );
+  const parentKey = parentKeyTracked
+    ? ""
+    : `,\n  FOREIGN KEY (${quote("_parent")}) REFERENCES ${quote(mainTable)} (${quote("id")}) ON DELETE CASCADE`;
   // `IF NOT EXISTS` for the same reason the spec-derived file form uses it: a
   // baseline reaches databases that already have the companion, and the file is
   // applied statement by statement with no enclosing transaction.
-  return (
-    `CREATE TABLE IF NOT EXISTS ${quote(live.name)} (\n` +
-    `${body},\n` +
-    `  FOREIGN KEY (${quote("_parent")}) REFERENCES ${quote(mainTable)} (${quote("id")}) ON DELETE CASCADE\n` +
-    `);`
-  );
+  return `CREATE TABLE IF NOT EXISTS ${quote(live.name)} (\n${body}${parentKey}\n);`;
 }
 
 /**

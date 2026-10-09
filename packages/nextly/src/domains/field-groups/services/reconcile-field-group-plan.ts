@@ -307,8 +307,9 @@ const typeModifier = sizeFromDeclaration;
  * Matched by the ordered column LIST and uniqueness rather than by NAME: an engine appends a
  * collision suffix and truncates at its identifier limit, so the name is the engine's choice rather
  * than a property of the object. Order is significant — only `(a, b)` serves a left-prefix lookup on
- * `a` — which is why `indexKey` from the diff utilities is deliberately not reused here: it SORTS
- * the columns and so reads `(a, b)` and `(b, a)` as one index.
+ * `a` — matched by hand here because `indexKey` from the diff utilities used
+ * to SORT its columns and so read `(a, b)` and `(b, a)` as one index. It no longer sorts, so this
+ * could now be derived from it instead.
  */
 function hasIndexOverColumns(
   indexes: readonly IndexSpec[] | undefined,
@@ -562,8 +563,9 @@ function deriveLocalized(
  * Compares the column LIST rather than the index name: an engine appends a collision suffix and
  * truncates at its identifier limit, so there is no single name to match. The list's ORDER is
  * significant for a composite index, which is why this asks for a single-column index by exact
- * membership rather than reusing `indexKey` from the diff utilities — that helper SORTS the columns
- * and so cannot separate `(a, b)` from `(b, a)`.
+ * membership. `indexKey` from the diff utilities used to SORT the columns
+ * and so could not separate `(a, b)` from `(b, a)`; it no longer sorts, so this could now be
+ * derived from it instead.
  */
 function indexOver(
   indexes: readonly IndexSpec[] | undefined,

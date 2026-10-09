@@ -14,12 +14,23 @@
  * writable: they are content and lifecycle, not provenance. Only the columns the service alone
  * decides are closed, which is exactly what `writableByClient` records.
  *
+ * A column a schema hook contributed to the entity's table is closed for the same reason: it is a
+ * real column that is no field, so nothing before the write removes it, and its contributor writes
+ * it through `ctx.db.contributed`, which reaches that column and no other. It is dropped rather
+ * than refused because that is what happens to every other real column that is not a field here,
+ * and a caller round-tripping a document cannot have read it in the first place.
+ *
  * @module lib/immutable-system-fields
  */
 
+import { fieldProducesColumn } from "../domains/schema/services/field-column-descriptor";
+import { hiddenColumnMatcher } from "../shared/lib/password-fields";
+
+import { toSnakeCase } from "./case-conversion";
 import {
   immutableSystemColumnNames,
   immutableSystemColumnNamesAnyEntity,
+  systemColumnNames,
   type SystemColumnEntity,
 } from "./system-columns";
 
@@ -59,19 +70,86 @@ export function immutableSystemFieldsFor(
 }
 
 /**
- * A copy of `data` without any client-supplied system column for that entity.
+ * The payload keys that name a declared field with no column on the entity's own row.
+ *
+ * Asked of `fieldProducesColumn`, the descriptor's answer to which fields become columns, so the
+ * write cannot disagree with the table the pipeline generated. A virtual field is the case this
+ * exists for: it is declared, validated and hooked like any other, and a document computed on read
+ * carries it back on the next write. Component and many-to-many fields are column-less too; every
+ * write path moves their values to their own tables before the row is built, so matching them here
+ * only ever removes a key that could not have been written.
+ *
+ * Both spellings, because a payload reaches the strip camelCased on some paths and snake_cased on
+ * others — the snake form by the same conversion the write paths use to build column keys. A name that is itself one of the entity's system columns is left alone: a column-less
+ * field does not claim the column (the generator still injects it beside the field), so the key
+ * addresses that column.
+ */
+function columnlessFieldKeys(
+  fields: Iterable<DeclaredField | null | undefined>,
+  entity: WritableEntityKind
+): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const field of fields) {
+    if (!field || typeof field.name !== "string") continue;
+    if (fieldProducesColumn(field)) continue;
+    keys.add(field.name);
+    keys.add(toSnakeCase(field.name));
+  }
+  for (const column of SYSTEM_COLUMN_KEYS_BY_ENTITY[entity])
+    keys.delete(column);
+  return keys;
+}
+
+/** Every spelling of every system column each entity's table carries. */
+const SYSTEM_COLUMN_KEYS_BY_ENTITY: Readonly<
+  Record<WritableEntityKind, readonly string[]>
+> = {
+  collection: systemColumnNames(column =>
+    column.appliesTo.includes("collection")
+  ),
+  single: systemColumnNames(column => column.appliesTo.includes("single")),
+};
+
+/** The loose shape of a declared field this module reads; see `fieldProducesColumn`. */
+type DeclaredField = {
+  name?: unknown;
+  type?: unknown;
+  options?: unknown;
+  virtual?: unknown;
+};
+
+/**
+ * A copy of `data` holding only what may be written to that entity's row: without its immutable
+ * system columns, the columns schema hooks contributed to it, and any declared field that has no
+ * column there.
  *
  * Returns a new object rather than mutating, so a caller can keep the original for hooks or
  * event payloads that legitimately describe what was requested.
+ *
+ * The contributed set is matched by the same predicate `stripServerOnlyColumns` uses on
+ * responses, so the read and the write cannot disagree about which columns are hidden. It is
+ * asked per TABLE, as that read is: a contributed name is not namespaced, and a field of the same
+ * name on another entity is that entity's own.
+ *
+ * `fields` is required rather than optional because a caller that forgot it would reach the
+ * adapter with a virtual field's value, which names a column the table does not have and fails
+ * the whole write.
  */
 export function stripImmutableSystemFields(
   data: Record<string, unknown>,
-  entity: WritableEntityKind
+  entity: WritableEntityKind,
+  /** The SQL table the payload is written to. */
+  tableName: string,
+  /** The entity's declared top-level fields. */
+  fields: Iterable<DeclaredField | null | undefined>
 ): Record<string, unknown> {
   const reserved = immutableSystemFieldsFor(entity);
+  const isHidden = hiddenColumnMatcher(tableName);
+  const columnless = columnlessFieldKeys(fields, entity);
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
-    if (!reserved.has(key)) out[key] = value;
+    if (reserved.has(key) || isHidden(key) || columnless.has(key)) continue;
+    out[key] = value;
   }
   return out;
 }

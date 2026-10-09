@@ -852,6 +852,29 @@ describe("dormant routes", () => {
     expect(meta.whenEnabled).toBeUndefined();
   });
 
+  /**
+   * The route-option refusal is raised under the plugin resolution code, not
+   * a route code. Unclassified, a disabled plugin declaring a lowercase
+   * method would fail `/api/admin-meta` for every reader.
+   */
+  it("omits a dormant route whose options boot would refuse", () => {
+    const [meta] = buildPluginAdminMeta(
+      [
+        {
+          name: "@acme/lowercase",
+          version: "1.0.0",
+          enabled: false,
+          contributes: {
+            routes: [{ method: "post", path: "/items" }],
+          },
+        } as unknown as PluginDefinition,
+      ],
+      undefined
+    );
+
+    expect(meta.whenEnabled).toBeUndefined();
+  });
+
   it("omits the dormant branch for a plugin that declares no routes", () => {
     const [meta] = buildPluginAdminMeta(
       [

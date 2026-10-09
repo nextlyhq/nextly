@@ -1,12 +1,12 @@
 /**
  * Whether this process may serve, with respect to boot migrations.
  *
- * `isServicesRegistered()` is not that question and never was. The request-path
- * boot registers services and THEN runs migrations, so between those two steps
- * the container is fully registered while the schema is still unverified — and
- * `getCachedNextly()` builds and returns an instance on the registered flag
- * alone. A second surface can therefore serve during the first surface's
- * migration wait, whatever that wait eventually decides.
+ * `isServicesRegistered()` is not that question. It says the container is
+ * built; this says whether the schema that container serves was verified, and
+ * — the part no flag can answer — whether a refusal earlier in this process
+ * forbids serving at all. Migrations run inside `registerServices`, before the
+ * container is published, so the gate is pending only while that run is in
+ * flight, and a refusal it records stays for every later boot attempt.
  *
  * This gate is the missing question, asked in one place. Consumers AWAIT it
  * rather than test it: a request arriving mid-boot should wait for the boot it
@@ -31,26 +31,23 @@ const globalForGate = globalThis as unknown as {
 };
 
 /**
- * Open the gate, if this boot will run migrations.
+ * Open the gate: this boot is about to run migrations.
  *
- * Called from `registerServices()` BEFORE it publishes the container, because
- * that is the only boundary both boot paths cross. Opening it inside the
- * migration helper was too late: the request path publishes services and only
- * calls that helper afterwards, leaving a window in which `isServicesRegistered()`
- * is true, the gate is not yet open, and a concurrent `getNextly()` serves.
+ * Called by `runProdMigrationsIfEnabled` itself, once it has decided to run and
+ * immediately before it does, so the function that opens the gate is the one
+ * that settles it on every path out — success, a tolerated failure, or a
+ * refusal — and the decision to run is read in one place only.
  *
- * Gated on the conditions under which `runProdMigrationsIfEnabled` will settle
- * it. Opening it more widely would hang every caller that registers services
- * without ever running boot migrations — the test harness and the CLI.
+ * The helper runs inside `registerServices`, before the container is marked
+ * registered, so no surface sees the container as registered while the schema
+ * is still unverified.
  */
-export function openBootMigrationsGate(willRunMigrations: boolean): void {
-  if (process.env.NODE_ENV !== "production") return;
-  if (!willRunMigrations) return;
+export function openBootMigrationsGate(): void {
   if (globalForGate.__nextly_bootMigrationsPending) return;
   // A refusal is FINAL for the process, so a retry cannot reopen its way past
   // one. The refusal path calls `shutdownServices()`, which makes the next
-  // request re-register — and re-registration is what opens the gate, so
-  // clearing the refusal here handed every retry a clean slate and let it
+  // request re-register — and re-registration runs the helper again, so
+  // clearing the refusal here would hand every retry a clean slate and let it
   // proceed to migrate as though nothing had been decided.
   if (globalForGate.__nextly_bootMigrationsRefused) return;
 
@@ -95,10 +92,11 @@ export function refuseBootMigrations(error: NextlyError): void {
 /**
  * Throw if a previous boot already refused, WITHOUT waiting on a pending gate.
  *
- * For the migration helper itself, which is the code that settles the gate: it
- * must still honour an earlier refusal, but awaiting a gate it is responsible
- * for closing deadlocks the boot it was called to perform. Serving surfaces
- * want {@link awaitBootMigrations} instead.
+ * For `registerServices`, before it connects anything, and for the migration
+ * helper, which is the code that settles the gate: both must honour an earlier
+ * refusal, and awaiting a gate the helper is responsible for closing would
+ * deadlock the boot it was called to perform. Serving surfaces want
+ * {@link awaitBootMigrations} instead.
  */
 export function assertBootMigrationsNotRefused(): void {
   const refused = globalForGate.__nextly_bootMigrationsRefused;
@@ -108,10 +106,10 @@ export function assertBootMigrationsNotRefused(): void {
 /**
  * Throw unless boot migrations have SETTLED and allowed serving.
  *
- * For synchronous consumers, which cannot wait. The Direct API's `getNextly()`
- * is one: it is exported from the package root and a Server Component can call
- * `nextly.find()` on it, and it decides readiness from `isServicesRegistered()`
- * alone — which is true throughout a migration wait.
+ * For synchronous consumers, which cannot wait. The Direct API's
+ * `requireNextly()` is one: it is exported from the package root and a Server
+ * Component can call `nextly.find()` on it, and `isServicesRegistered()` alone
+ * does not say whether this process's boot migrations allowed it to serve.
  *
  * Refusing while merely PENDING is the deliberate part. An async consumer waits
  * for the answer; a synchronous one cannot, so its only choices are to throw or

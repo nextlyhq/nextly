@@ -8,7 +8,7 @@
  * **Runtime restriction (F11):** CLI-only; never import from runtime code.
  *
  * @module cli/commands/migrate-resolve
- * @since v0.0.3-alpha (Plan C3)
+ * @since v0.0.3-alpha
  */
 import { access, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -22,6 +22,7 @@ import {
   type ResolveMode,
 } from "../../domains/schema/migrate/resolve";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
+import { marksNoTransaction } from "../../domains/schema/migrate/split-sql";
 import { parseSnapshotFile } from "../../domains/schema/migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
@@ -76,14 +77,30 @@ function pickMode(opts: ResolveCommandOptions): {
   return { mode: chosen[0][0], filename: chosen[0][1] };
 }
 
+/** `<dir>/<name>.sql`, from a bare or `.sql`-suffixed name. */
+function sqlPathIn(dir: string, filename: string): string {
+  return resolve(dir, filename.endsWith(".sql") ? filename : `${filename}.sql`);
+}
+
 async function fileExistsIn(dir: string, filename: string): Promise<boolean> {
-  const name = filename.endsWith(".sql") ? filename : `${filename}.sql`;
   try {
-    await access(resolve(dir, name));
+    await access(sqlPathIn(dir, filename));
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether `migrations/<name>.sql` is marked to run outside a transaction.
+ * Asked only after the file is known to exist, so a read failure here is a
+ * real one and travels.
+ */
+async function fileMarksNoTransaction(
+  dir: string,
+  filename: string
+): Promise<boolean> {
+  return marksNoTransaction(await readFile(sqlPathIn(dir, filename), "utf-8"));
 }
 
 async function loadSnapshot(
@@ -99,6 +116,17 @@ async function loadSnapshot(
     if ((err as { code?: string }).code === "ENOENT") return null;
     throw err;
   }
+}
+
+/**
+ * What `--failed-cleanup` reports. Every attempt since the file's last other
+ * event that failed or recorded no outcome is cleared together, so it says
+ * how many when that is more than one.
+ */
+function cleanedUpMessage(filename: string, cleared: number): string {
+  return cleared === 1
+    ? `Cleaned up the failed or unfinished attempt for ${filename}.`
+    : `Cleaned up ${cleared} failed or unfinished attempts for ${filename}.`;
 }
 
 async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
@@ -156,9 +184,12 @@ export async function runMigrateResolve(
         mode,
         filename,
         skipVerify: options.skipVerify,
+        dialect,
         repo,
         fileExists: name => fileExistsIn(migrationsDir, name),
         loadTargetSnapshot: () => loadSnapshot(metaDir, filename),
+        marksNoTransaction: () =>
+          fileMarksNoTransaction(migrationsDir, filename),
         introspectLive: async () => {
           // Config and the Builder manifest, merged as generation merges them,
           // so the verifier excludes the same derived tables the snapshot never
@@ -220,8 +251,15 @@ export async function runMigrateResolve(
     switch (result.kind) {
       case "applied":
         logger.success(
-          `Marked ${filename} as applied${result.supersededFailedId ? " (superseded prior failed event)" : ""}.`
+          `Marked ${filename} as applied${result.supersededFailedId ? " (superseded the prior failed or unfinished attempt)" : ""}.`
         );
+        // Said when nothing was compared without the operator asking for
+        // that, so the record of what was checked stays honest.
+        if (!result.verified && !options.skipVerify) {
+          logger.info(
+            `${filename} has no snapshot, so the live schema was not compared.`
+          );
+        }
         break;
       case "rolled-back":
         logger.success(
@@ -229,7 +267,7 @@ export async function runMigrateResolve(
         );
         break;
       case "failed-cleanup":
-        logger.success(`Cleaned up failed event for ${filename}.`);
+        logger.success(cleanedUpMessage(filename, result.updatedIds.length));
         break;
       case "noop":
         logger.info(result.reason);
@@ -244,7 +282,7 @@ export function registerMigrateResolveCommand(program: Command): void {
   program
     .command("migrate:resolve")
     .description(
-      "Recover migration bookkeeping: mark a file applied/rolled-back, or clean up a failed attempt"
+      "Recover migration bookkeeping: mark a file applied/rolled-back, or clean up a failed or unfinished attempt"
     )
     .option(
       "--applied <filename>",
@@ -256,7 +294,7 @@ export function registerMigrateResolveCommand(program: Command): void {
     )
     .option(
       "--failed-cleanup <filename>",
-      "Flip a stuck failed event for <filename> to rolled_back (edit the .sql before retrying)"
+      "Flip the stuck failed or unfinished attempts of <filename> to rolled_back (edit the .sql before retrying)"
     )
     .option(
       "--skip-verify",

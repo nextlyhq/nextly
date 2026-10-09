@@ -108,14 +108,18 @@ describe("the comment extractor", () => {
   });
 
   it("reads block comments whole", () => {
-    const found = commentText("/**\n * Codex asked for this.\n */\nconst x = 1;");
+    const found = commentText(
+      "/**\n * Codex asked for this.\n */\nconst x = 1;"
+    );
     expect(found.join("")).toContain("Codex asked for this.");
   });
 
   it("does not read comment syntax inside a string literal", () => {
     // A fixture holding comment syntax is DATA. Reporting it makes the check comment on the
     // contents of tests rather than on prose, which is how a check like this becomes noise.
-    expect(offencesIn('const fixture = "/* Codex flagged this */";')).toEqual([]);
+    expect(offencesIn('const fixture = "/* Codex flagged this */";')).toEqual(
+      []
+    );
     expect(offencesIn("const s = `see the pull request`;")).toEqual([]);
     // Control: the same text as an actual comment IS reported.
     expect(offencesIn("/* Codex flagged this */").length).toBeGreaterThan(0);
@@ -124,9 +128,9 @@ describe("the comment extractor", () => {
   it("does not treat a URL as a comment", () => {
     // `https://example.com` contains `//`. Treating it as a comment would let a link's text
     // trigger the patterns, which is the commonest way a scan like this becomes noise.
-    expect(commentText('const url = "https://example.com/pull-request";')).toEqual(
-      []
-    );
+    expect(
+      commentText('const url = "https://example.com/pull-request";')
+    ).toEqual([]);
   });
 });
 
@@ -146,8 +150,23 @@ describe("the file walk", () => {
     // Pinned independently of SOURCE_EXTENSIONS. Iterating the exported list alone makes the
     // assertion vacuous for a deleted entry: drop ".cjs" from the code and the loop simply stops
     // asking about it, so tracked .cjs files leave CI with every test still green.
-    for (const required of [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".css", ".yml", ".yaml", ".sh"]) {
-      expect(SOURCE_EXTENSIONS, `${required} is no longer scanned`).toContain(required);
+    for (const required of [
+      ".ts",
+      ".tsx",
+      ".mts",
+      ".cts",
+      ".js",
+      ".jsx",
+      ".mjs",
+      ".cjs",
+      ".css",
+      ".yml",
+      ".yaml",
+      ".sh",
+    ]) {
+      expect(SOURCE_EXTENSIONS, `${required} is no longer scanned`).toContain(
+        required
+      );
     }
 
     const scanned = sourceFiles(".");
@@ -162,9 +181,10 @@ describe("the file walk", () => {
         // rather than loosening it to an inequality that would hide a real gap.
         .filter(path => !EXCLUDED_FILES.has(path));
       const seen = scanned.filter(path => path.endsWith(ext));
-      expect(seen.length, `${ext}: scanner saw ${seen.length} of ${tracked.length}`).toBe(
-        tracked.length
-      );
+      expect(
+        seen.length,
+        `${ext}: scanner saw ${seen.length} of ${tracked.length}`
+      ).toBe(tracked.length);
     }
   });
 
@@ -174,7 +194,10 @@ describe("the file walk", () => {
     // code would leave this passing over the roots it still names.
     expect(DEFAULT_ROOTS.length).toBeGreaterThan(0);
     for (const root of DEFAULT_ROOTS) {
-      expect(sourceFiles(root).length, `${root} contributed no files`).toBeGreaterThan(0);
+      expect(
+        sourceFiles(root).length,
+        `${root} contributed no files`
+      ).toBeGreaterThan(0);
     }
   });
 
@@ -185,8 +208,18 @@ describe("the file walk", () => {
     // "." is listed because it is what reaches the repository ROOT, where eslint.config.mjs and
     // lint-staged.config.mjs live. The named roots below it are covered by "." and kept because
     // they are what the scope MEANS to a reader; dropping "." alone would silently narrow it.
-    for (const required of [".", "packages", "apps", "e2e", "templates", "scripts"]) {
-      expect(DEFAULT_ROOTS, `${required} is outside the enforced scope`).toContain(required);
+    for (const required of [
+      ".",
+      "packages",
+      "apps",
+      "e2e",
+      "templates",
+      "scripts",
+    ]) {
+      expect(
+        DEFAULT_ROOTS,
+        `${required} is outside the enforced scope`
+      ).toContain(required);
     }
   });
 
@@ -195,7 +228,9 @@ describe("the file walk", () => {
     // machine's build commands left behind, and generated bundles embed the comments of every
     // module they bundle — so the same sources scanned clean in a fresh worktree and reported
     // twenty findings against `.next-e2e/` paths in a checkout where that directory existed.
-    const generated = sourceFiles("apps").filter(path => /\/\.next|\/dist\//.test(path));
+    const generated = sourceFiles("apps").filter(path =>
+      /\/\.next|\/dist\//.test(path)
+    );
     expect(generated, "generated output is not authored source").toEqual([]);
   });
 });
@@ -220,12 +255,15 @@ describe("the allowlist", () => {
   // entries without removing or lowering any, one more when it learned the bracketed form, and one
   // more when patterns began reading normalised text and a label wrapped across lines became
   // visible. A raise for any other reason is the silencing this guards against.
-  const EXPECTED_ENTRIES = 226;
+  const EXPECTED_ENTRIES = 222;
   // 503 -> 498: recorded offences in `services/users.ts`, the Direct API auth
   // namespace and its test, and `auth-service.ts` no longer exist, so the list
   // shrank by five digests. Each entry itself remains, which is why the count
-  // above does not move.
-  const EXPECTED_TOTAL = 498;
+  // above does not move. 498 -> 491: the comments in the register, migrate
+  // check, drift and resolve modules that named a plan or spec section were
+  // rewritten to describe the code, and four of those entries emptied (226 ->
+  // 222).
+  const EXPECTED_TOTAL = 491;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
@@ -235,7 +273,10 @@ describe("the allowlist", () => {
     // The size alone cannot see growth: adding an offence to a file already listed raises that
     // entry's count and leaves the number of entries untouched, so a shrink-only list grows
     // while every size assertion still passes. Lower both numbers as offences are fixed.
-    const total = [...readAllowlist().values()].reduce((sum, e) => sum + e.count, 0);
+    const total = [...readAllowlist().values()].reduce(
+      (sum, e) => sum + e.count,
+      0
+    );
     expect(total).toBe(EXPECTED_TOTAL);
   });
 
@@ -243,15 +284,27 @@ describe("the allowlist", () => {
     // A path that no longer resolves exempts nothing, so it cannot fail visibly. It just sits
     // there making the count overstate how much is left to clean up.
     for (const path of readAllowlist().keys()) {
-      expect(existsSync(path), `${path} is on the allowlist but not on disk`).toBe(true);
+      expect(
+        existsSync(path),
+        `${path} is on the allowlist but not on disk`
+      ).toBe(true);
     }
   });
 
   it("maps every entry to a positive whole number", () => {
     for (const [path, entry] of readAllowlist()) {
-      expect(Number.isInteger(entry.count), `${path} must record an integer count`).toBe(true);
-      expect(entry.count, `${path} must record a positive count`).toBeGreaterThan(0);
-      expect(entry.digests, `${path} must record one digest per offence`).toHaveLength(entry.count);
+      expect(
+        Number.isInteger(entry.count),
+        `${path} must record an integer count`
+      ).toBe(true);
+      expect(
+        entry.count,
+        `${path} must record a positive count`
+      ).toBeGreaterThan(0);
+      expect(
+        entry.digests,
+        `${path} must record one digest per offence`
+      ).toHaveLength(entry.count);
     }
   });
 
@@ -303,9 +356,21 @@ describe("normalised comment text", () => {
     // Each fixture splits a forbidden shape across a block-comment wrap, where the continuation
     // line's decoration sits between its parts in the raw text. Two different patterns, so the
     // property is shown for the READER rather than for one expression.
-    ["a bracketed milestone closed on the next line", "/** stored per locale since i18n (M7\n * ) */", "names a roadmap milestone rather than the code"],
-    ["a milestone code wrapped away from its word", "/** reachable since i18n\n   * M7; withdrawing them had no equivalent */", "names a roadmap milestone rather than the code"],
-    ["a task label whose colon wrapped", "/** Task 17\n * : migrate the records */", "names a task or plan rather than the code"],
+    [
+      "a bracketed milestone closed on the next line",
+      "/** stored per locale since i18n (M7\n * ) */",
+      "names a roadmap milestone rather than the code",
+    ],
+    [
+      "a milestone code wrapped away from its word",
+      "/** reachable since i18n\n   * M7; withdrawing them had no equivalent */",
+      "names a roadmap milestone rather than the code",
+    ],
+    [
+      "a task label whose colon wrapped",
+      "/** Task 17\n * : migrate the records */",
+      "names a task or plan rather than the code",
+    ],
   ])("reports %s, as it would on one line", (_name, text, why) => {
     expect(offencesIn(text).map(one => one.why)).toContain(why);
   });
@@ -325,9 +390,13 @@ describe("the checker's own source", () => {
 
   it("is still held to genuine narration", () => {
     // The exemption covers domain vocabulary and nothing else, so the file is not waved through.
-    for (const line of ["// The founder asked for this", "// Task 17: do the thing"]) {
+    for (const line of [
+      "// The founder asked for this",
+      "// Task 17: do the thing",
+    ]) {
       expect(
-        offencesIn(line, readOptionsFor("scripts/check-comment-convention.mjs")).length
+        offencesIn(line, readOptionsFor("scripts/check-comment-convention.mjs"))
+          .length
       ).toBeGreaterThan(0);
     }
   });
@@ -356,7 +425,10 @@ describe("actors that can be runtime concepts", () => {
   it("still forbids a founder or a tool even in review tooling", () => {
     // Neither is ever a runtime actor, so the domain exemption must not reach them - that was the
     // hole an earlier, broader exemption opened.
-    for (const line of ["// The founder asked for this", "// Codex asked for this"]) {
+    for (const line of [
+      "// The founder asked for this",
+      "// Codex asked for this",
+    ]) {
       expect(
         offencesIn(line, readOptionsFor("scripts/verify-merge.mjs")).length
       ).toBeGreaterThan(0);
@@ -406,10 +478,11 @@ describe("review-process tooling", () => {
     // What changed is that quoting a forbidden shape in order to explain it is the file's job,
     // and four separate CI failures came from an explanation instantiating its own pattern.
     expect(isReviewDomain("scripts/check-comment-convention.mjs")).toBe(true);
-    expect(isReviewDomain("scripts/check-comment-convention.test.mjs")).toBe(true);
+    expect(isReviewDomain("scripts/check-comment-convention.test.mjs")).toBe(
+      true
+    );
   });
 });
-
 
 /**
  * The CLI itself, run as a process.
@@ -423,7 +496,8 @@ describe("review-process tooling", () => {
  * only thing a CI step consults.
  */
 describe("the command", () => {
-  const CHECKER = new URL("check-comment-convention.mjs", import.meta.url).pathname;
+  const CHECKER = new URL("check-comment-convention.mjs", import.meta.url)
+    .pathname;
   const FIXTURE_SOURCE = "// Codex asked for this\nexport const x = 1;\n";
 
   /** A throwaway repository holding one offence, with the allowlist the run should consult. */
@@ -437,13 +511,20 @@ describe("the command", () => {
     );
     writeFileSync(joinPath(root, "packages", "offender.ts"), FIXTURE_SOURCE);
     // Tracked-ness decides what the walk reads, so the fixture needs to be a repository.
-    for (const args of [["init", "-q"], ["add", "-A"]]) {
+    for (const args of [
+      ["init", "-q"],
+      ["add", "-A"],
+    ]) {
       spawnSync("git", args, { cwd: root });
     }
     return root;
   }
 
-  const run = root => spawnSync(process.execPath, [CHECKER, "packages"], { cwd: root, encoding: "utf8" });
+  const run = root =>
+    spawnSync(process.execPath, [CHECKER, "packages"], {
+      cwd: root,
+      encoding: "utf8",
+    });
 
   it("exits nonzero and names the file when an offence is not allowlisted", () => {
     const root = fixture({});
@@ -493,7 +574,12 @@ describe("the command", () => {
       writeFileSync(
         joinPath(root, "scripts", "comment-convention-allowlist.json"),
         `${JSON.stringify(
-          { "packages/offender.ts": { count: found.length, digests: digestOffences(found) } },
+          {
+            "packages/offender.ts": {
+              count: found.length,
+              digests: digestOffences(found),
+            },
+          },
           null,
           2
         )}\n`
@@ -512,31 +598,45 @@ describe("numbered task and plan labels", () => {
   // commonest spelling passing. The fixtures below carry the literal shapes; this comment cannot,
   // because the extractor reads comment text and would report it.
   it("matches a hash-prefixed number", () => {
-    expect(offencesIn("// Task #17: migrate the records").length).toBeGreaterThan(0);
-    expect(offencesIn("// Plan #12: split the adapter").length).toBeGreaterThan(0);
+    expect(
+      offencesIn("// Task #17: migrate the records").length
+    ).toBeGreaterThan(0);
+    expect(offencesIn("// Plan #12: split the adapter").length).toBeGreaterThan(
+      0
+    );
   });
 
   it("still matches the bare number", () => {
-    expect(offencesIn("// Task 17: migrate the records").length).toBeGreaterThan(0);
+    expect(
+      offencesIn("// Task 17: migrate the records").length
+    ).toBeGreaterThan(0);
   });
 
   it("does not match numbered runtime concepts", () => {
     // A number alone does not separate a label from ordinary technical English: a scheduler
     // really does assign work items by number, and a query planner really does number its plans.
-    expect(offencesIn("// The scheduler assigns task 17 to worker 2")).toEqual([]);
-    expect(offencesIn("// Query plan 2 is invalidated when the schema changes")).toEqual([]);
+    expect(offencesIn("// The scheduler assigns task 17 to worker 2")).toEqual(
+      []
+    );
+    expect(
+      offencesIn("// Query plan 2 is invalidated when the schema changes")
+    ).toEqual([]);
   });
 
   it("matches the parenthesised label form", () => {
     // The second unambiguous shape. Prose does not bracket a runtime concept this way.
-    expect(offencesIn("/** @since v0.0.3-alpha (Plan D4) */").length).toBeGreaterThan(0);
+    expect(
+      offencesIn("/** @since v0.0.3-alpha (Plan D4) */").length
+    ).toBeGreaterThan(0);
   });
 
   it("does not match a bare plan colon in ordinary prose", () => {
     // "query plan", "execution plan" and "cache the plan" are ordinary technical English. Matching
     // a bare `plan:` rejected correct comments describing runtime behaviour, and a check that
     // rejects correct comments gets switched off rather than fixed.
-    expect(offencesIn("// The query plan: use an index scan to avoid sorting")).toEqual([]);
+    expect(
+      offencesIn("// The query plan: use an index scan to avoid sorting")
+    ).toEqual([]);
     expect(offencesIn("// execution plan: nested loop")).toEqual([]);
   });
 
@@ -562,7 +662,9 @@ describe("localization roadmap milestones", () => {
     const found = offencesIn(text);
     // The WHY is asserted, not just a non-empty result, so a different pattern firing on the same
     // fixture cannot satisfy this test while the milestone pattern matches nothing.
-    expect(found.map(one => one.why)).toContain("names a roadmap milestone rather than the code");
+    expect(found.map(one => one.why)).toContain(
+      "names a roadmap milestone rather than the code"
+    );
   });
 
   it.each([
@@ -587,15 +689,19 @@ describe("localization roadmap milestones", () => {
 
   it("does not match a bare milestone code, and says so rather than approximating it", () => {
     // The stated limit: without the anchoring word nothing separates a code from prose.
-    expect(offencesIn("// translated, but the source moved since (M7)")).toEqual([]);
+    expect(
+      offencesIn("// translated, but the source moved since (M7)")
+    ).toEqual([]);
   });
 
   it("applies inside the checker's own files, where review vocabulary is exempt", () => {
     // A roadmap milestone is not domain vocabulary anywhere, so the review-tooling exemption must
     // not reach it.
     expect(
-      offencesIn("// i18n M6 added this", readOptionsFor("scripts/check-comment-convention.mjs"))
-        .length
+      offencesIn(
+        "// i18n M6 added this",
+        readOptionsFor("scripts/check-comment-convention.mjs")
+      ).length
     ).toBeGreaterThan(0);
   });
 });
@@ -605,9 +711,14 @@ describe("interpreter directives", () => {
     // A shebang is an interpreter directive rather than prose, but YAML has no shebang: there a
     // first line beginning `#!` is simply a comment, and skipping it unconditionally left the
     // first line of every YAML file unreadable.
-    expect(offencesIn("#!/bin/sh\necho hi", readOptionsFor("f.sh"))).toEqual([]);
+    expect(offencesIn("#!/bin/sh\necho hi", readOptionsFor("f.sh"))).toEqual(
+      []
+    );
     expect(
-      offencesIn(`#! ${"Codex"} asked for this\nkey: value`, readOptionsFor("f.yml")).length
+      offencesIn(
+        `#! ${"Codex"} asked for this\nkey: value`,
+        readOptionsFor("f.yml")
+      ).length
     ).toBeGreaterThan(0);
   });
 });
@@ -640,14 +751,18 @@ describe("the hash dialects", () => {
     });
 
     it("consumes two heredocs opened on one line in order", () => {
-      expect(names(shell(`cmd <<A <<B\n# ${NARRATION}\nA\n# ${NARRATION}\nB\n`))).toBe(false);
+      expect(
+        names(shell(`cmd <<A <<B\n# ${NARRATION}\nA\n# ${NARRATION}\nB\n`))
+      ).toBe(false);
     });
 
     it("quote-removes the whole delimiter word", () => {
       // The shell reads `<<'E'OF` as the single word EOF. Stopping at the first closing quote
       // names `E`, no later line matches the terminator, and every remaining line is suppressed -
       // a miss that grows to the end of the file.
-      expect(names(shell(`cat <<'E'OF\ndata\nEOF\n# ${NARRATION}\n`))).toBe(true);
+      expect(names(shell(`cat <<'E'OF\ndata\nEOF\n# ${NARRATION}\n`))).toBe(
+        true
+      );
     });
 
     it("still treats a mixed-quoted heredoc body as data", () => {
@@ -657,7 +772,9 @@ describe("the hash dialects", () => {
     it("reads a comment after the heredoc closes", () => {
       // The positive control. Without it every assertion above is satisfied by a reader that
       // stopped at the first heredoc and never emitted anything again.
-      expect(names(shell(`cat <<'EOF'\ndata\nEOF\n# ${NARRATION}\n`))).toBe(true);
+      expect(names(shell(`cat <<'EOF'\ndata\nEOF\n# ${NARRATION}\n`))).toBe(
+        true
+      );
     });
 
     it("does not treat a here-string as opening a body", () => {
@@ -700,7 +817,9 @@ describe("the hash dialects", () => {
     it("tracks nested parentheses before restoring the outer quote", () => {
       // A subshell inside the substitution closes with the same character. Popping on it would
       // restore the enclosing double quote and read the real comment after it as data.
-      expect(names(shell(`value="$( (echo ok); # ${NARRATION}\n)"`))).toBe(true);
+      expect(names(shell(`value="$( (echo ok); # ${NARRATION}\n)"`))).toBe(
+        true
+      );
     });
 
     it("honours backslash escapes inside ANSI-C quoting", () => {
@@ -728,7 +847,9 @@ describe("the hash dialects", () => {
     it("does not read the data under a header that carried a comment", () => {
       // The pair to the case above: the header line holds prose AND opens a scalar, so the two
       // must be decided separately.
-      expect(names(yaml(`description: | # plain header\n  # ${NARRATION}\n`))).toBe(false);
+      expect(
+        names(yaml(`description: | # plain header\n  # ${NARRATION}\n`))
+      ).toBe(false);
     });
 
     it("enters a scalar introduced by a sequence entry", () => {

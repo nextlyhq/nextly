@@ -129,6 +129,15 @@ export function junctionTablesAmong(
  * `isSnapshotComparableTable` answers it for one name; this needs the whole
  * list, because whether a table is a junction depends on which other tables
  * are standing beside it.
+ *
+ * A DECLARED table is comparable whatever its name looks like. The scope was
+ * derived from the managed prefixes alone, so an app-owned extension table
+ * such as `app_notes` sat in a migration's `before` and `target` snapshots and
+ * never in `live` — and `reconcileFile`, finding `live` equal to neither,
+ * threw a drift error on the next migration. The CLI never boots, so no
+ * boot-time registry could have fixed it: the snapshots on either side of the
+ * file ARE the declaration, and deriving the scope from them is what makes the
+ * three sides describe the same set of tables.
  */
 export function snapshotComparableTables(
   liveTables: readonly string[],
@@ -141,6 +150,8 @@ export function snapshotComparableTables(
     knownJunctions
   );
   return liveTables.filter(
-    name => isSnapshotComparableTable(name) && !junctions.has(name)
+    name =>
+      (isSnapshotComparableTable(name) || declaredTables.has(name)) &&
+      !junctions.has(name)
   );
 }

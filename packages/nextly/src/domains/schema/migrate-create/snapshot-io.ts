@@ -21,12 +21,27 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
+import { normalizeContributions } from "../pipeline/diff/contributions";
+import type {
+  ContributedElements,
+  NextlySchemaSnapshot,
+} from "../pipeline/diff/types";
 
 export interface SnapshotFile {
   version: 1;
   migrationHash: string;
   snapshot: NextlySchemaSnapshot;
+  /**
+   * Elements the app contributed to tables another owner declares, by table.
+   *
+   * The snapshot holds such a table whole — the database has all of it, and
+   * `migrate:resolve` compares the live table against this file — so which
+   * parts of it are the APP's cannot be read back from the table itself. The
+   * next diff needs exactly that; see `app-stream.ts`. Absent when the app
+   * contributes to nobody's table, so a file that has none stays byte-identical
+   * to one written before this field existed.
+   */
+  contributions?: Record<string, ContributedElements>;
 }
 
 /** Empty snapshot used for "first migration" (no prior state). */
@@ -129,6 +144,12 @@ export function parseSnapshotFile(
       "expected snapshot.tables to be an array"
     );
   }
+  if (obj.contributions !== undefined && !isContributions(obj.contributions)) {
+    throw new SnapshotFileError(
+      filename,
+      "expected contributions to map table names to their contributed element names"
+    );
+  }
   return obj as unknown as SnapshotFile;
 }
 
@@ -142,12 +163,20 @@ export async function writeSnapshot(
   metaDir: string,
   baseName: string,
   snapshot: NextlySchemaSnapshot,
-  sqlContent: string
+  sqlContent: string,
+  contributions: Readonly<Record<string, ContributedElements>> = {}
 ): Promise<string> {
   await mkdir(metaDir, { recursive: true });
+  const byName = (a: { name: string }, b: { name: string }) =>
+    a.name.localeCompare(b.name);
   const file: SnapshotFile = {
     version: 1,
     migrationHash: computeMigrationHash(sqlContent),
+    ...(Object.keys(contributions).length > 0
+      ? {
+          contributions: normalizeContributions(contributions),
+        }
+      : {}),
     // Sort tables by name for reproducibility across machines.
     snapshot: {
       tables: [...snapshot.tables]
@@ -165,6 +194,17 @@ export async function writeSnapshot(
                     a.columns.join().localeCompare(b.columns.join())
                 ),
               }
+            : {}),
+          // Foreign keys and checks, on the same terms as indexes: persisted
+          // only when tracked, because `undefined` tells the diff to skip the
+          // dimension. Leaving them out entirely made every later snapshot read
+          // an extension table's constraints as untracked, so a change to one
+          // after its first migration was never emitted.
+          ...(t.foreignKeys !== undefined
+            ? { foreignKeys: [...t.foreignKeys].sort(byName) }
+            : {}),
+          ...(t.checks !== undefined
+            ? { checks: [...t.checks].sort(byName) }
             : {}),
           // persist the localization marker only when the entity IS localized, so a
           // non-localized table's JSON is byte-identical to a pre-marker snapshot (no churn).
@@ -188,6 +228,26 @@ export async function writeSnapshot(
   const path = resolve(metaDir, `${baseName}.snapshot.json`);
   await writeFile(path, json + "\n", "utf-8");
   return path;
+}
+
+/** Structural check of a snapshot file's `contributions`. */
+function isContributions(
+  value: unknown
+): value is Record<string, ContributedElements> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const isNames = (names: unknown) =>
+    Array.isArray(names) && names.every(name => typeof name === "string");
+  return Object.values(value).every(
+    elements =>
+      elements !== null &&
+      typeof elements === "object" &&
+      isNames((elements as ContributedElements).columns) &&
+      isNames((elements as ContributedElements).indexes) &&
+      isNames((elements as ContributedElements).foreignKeys) &&
+      isNames((elements as ContributedElements).checks)
+  );
 }
 
 /**

@@ -18,6 +18,9 @@ import type {
   SchemaEventType,
 } from "./types";
 
+// The same table in another dialect's Drizzle builders: each dialect's
+// column functions are distinct, so the declarations cannot be shared.
+// fallow-ignore-next-line code-duplication
 export const nextlySchemaEventsSqlite = sqliteTable(
   "nextly_schema_events",
   {
@@ -34,6 +37,11 @@ export const nextlySchemaEventsSqlite = sqliteTable(
 
     scopeKind: text("scope_kind").$type<SchemaEventScopeKind>(),
     scopeSlug: text("scope_slug"),
+    // Nullable and additive; an existing row reads as core or app, which is
+    // what every row written before plugins could own a migration was.
+    ownerKind: text("owner_kind"),
+    ownerId: text("owner_id"),
+    ownerVersion: text("owner_version"),
 
     startedAt: integer("started_at", { mode: "timestamp_ms" })
       .$defaultFn(() => new Date())

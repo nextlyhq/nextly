@@ -70,6 +70,7 @@ import {
   buildWhereClause,
   extractGeoFilters,
   extractComponentFieldConditions,
+  componentFilterTargets,
 } from "../../../services/collections/query-operators";
 import type {
   WhereFilter,
@@ -97,14 +98,18 @@ import {
 import {
   assertFilterableFields,
   assertGroupableField,
+  assertNoHiddenColumnFilter,
   assertSortableField,
+  filterKeys,
   filterSearchableFields,
+  refuseHiddenColumnFilter,
 } from "../../../shared/lib/filterable-fields";
 import {
   hasPasswordField,
+  hiddenColumnMatcher,
   isPasswordFieldName,
   stripPasswordFieldValues,
-  stripSystemOwnerField,
+  stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import {
   buildPaginatedResponse,
@@ -183,7 +188,7 @@ import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import {
-  getTableName,
+  collectionTableName,
   getSearchableFields,
   getMinSearchLength,
   decodeJsonFieldValues,
@@ -323,6 +328,16 @@ function collectionFieldsFor(collection: unknown): FieldDefinition[] {
     | Record<string, unknown>
     | undefined;
   return (schemaDefinition?.fields || record.fields || []) as FieldDefinition[];
+}
+
+/**
+ * Whether a component path names a hidden contributed column of `tableName`:
+ * the whole path, which is the column the component predicate emits, or its
+ * first segment, the column a deeper path is read out of.
+ */
+function namesHiddenColumn(tableName: string, path: string): boolean {
+  const isHidden = hiddenColumnMatcher(tableName);
+  return isHidden(path) || isHidden(path.split(".")[0]);
 }
 
 /**
@@ -732,11 +747,20 @@ interface FilteredReadParams {
  * difference from the sort path. A dropped ORDER BY returns the right rows in
  * the wrong order; a dropped GROUP BY collapses every bucket into one row and
  * answers with a single total that reads exactly like a real one.
+ *
+ * A column a schema hook contributed as hidden is refused as one that is not
+ * there. It is on the physical table, so the runtime schema resolves it, but
+ * the entry API strips it from every row it returns — and an aggregate returns
+ * no rows for that strip to act on, so its buckets would publish every
+ * distinct stored value as a label. Whatever the caller's trust, because the
+ * strip applies to trusted reads too.
  */
 function assertGroupKeyUsable(
   groupBy: string,
   column: unknown,
-  declaredFields: FieldDefinition[]
+  declaredFields: FieldDefinition[],
+  /** Whether a key names a hidden contributed column of the read's table. */
+  isHiddenColumn: (key: string) => boolean
 ): FieldDefinition | undefined {
   const snake = toSnakeCase(groupBy);
   const isOwner =
@@ -778,7 +802,7 @@ function assertGroupKeyUsable(
     });
   }
 
-  if (!column) {
+  if (!column || isHiddenColumn(groupBy)) {
     throw NextlyError.validation({
       errors: [
         {
@@ -1164,14 +1188,24 @@ export class CollectionQueryService extends BaseService {
    * guessed value and returns no row to redact -- so the two must not be able
    * to drift. One method rather than a copy in each.
    */
-  private assertQueryReadable(params: {
+  private async assertQueryReadable(params: {
     collectionName: string;
     where?: WhereFilter;
     sort?: string;
     groupBy?: string;
     overrideAccess?: boolean;
     frameworkFilter?: boolean;
-  }): void {
+    readHooksAlreadyRan?: boolean;
+  }): Promise<void> {
+    // The settled filter a list forwards to its own count already passed this
+    // check as the caller's, and what a read hook added to it is trusted
+    // server code, which may scope by the column its own plugin contributed.
+    if (!params.readHooksAlreadyRan) {
+      await this.assertNoHiddenFilterColumn(
+        params.collectionName,
+        params.where
+      );
+    }
     const opts = {
       overrideAccess: fieldTrustOf(params),
       frameworkFilter: params.frameworkFilter,
@@ -1202,6 +1236,54 @@ export class CollectionQueryService extends BaseService {
     assertGroupableField("collection", params.collectionName, params.groupBy, {
       overrideAccess: opts.overrideAccess,
     });
+  }
+
+  /**
+   * Refuse a filter that names a hidden contributed column, on whichever table
+   * its key resolves to.
+   *
+   * A plain key, and the first segment of a dotted one, address the
+   * collection's own table: judged against the table the response strip
+   * reads, so a filter is refused on exactly the columns rows are stripped
+   * of. A dotted key whose head is a component field addresses that
+   * component's table instead -- the filter becomes an EXISTS over
+   * `<component table>.<snake_case path>` -- so its path is judged against
+   * every table the field can hold, the same tables the field-group read
+   * strips. Every key is judged, whatever its operator, so a filter cannot
+   * name one in any position.
+   */
+  private async assertNoHiddenFilterColumn(
+    collectionName: string,
+    where: WhereFilter | undefined
+  ): Promise<void> {
+    if (!where) return;
+    const collection =
+      await this.collectionService.getCollection(collectionName);
+    assertNoHiddenColumnFilter(
+      where,
+      hiddenColumnMatcher(collectionTableName(collection, collectionName))
+    );
+
+    const targets = componentFilterTargets(
+      filterKeys(where),
+      collectionFieldsFor(collection)
+    );
+    if (targets.length === 0) return;
+    const tables = await this.componentTableNamesFor(
+      targets.flatMap(target => target.componentSlugs)
+    );
+    refuseHiddenColumnFilter(
+      targets
+        .filter(target =>
+          target.componentSlugs.some(slug =>
+            namesHiddenColumn(
+              tables.get(slug) ?? resolveComponentTableName(slug),
+              target.componentFieldPath
+            )
+          )
+        )
+        .map(target => target.key)
+    );
   }
 
   /**
@@ -1744,7 +1826,10 @@ export class CollectionQueryService extends BaseService {
 
     const componentCondition = this.buildComponentFieldConditions(
       componentFilters,
-      getTableName(params.collectionName),
+      // Components record their parent under the physical table the write
+      // resolved, so the filter must name the same one for a `dbName`
+      // collection or it matches no component row.
+      collectionTableName(collection, params.collectionName),
       params.schema.id,
       this.queryDialect,
       componentTables,
@@ -1961,12 +2046,14 @@ export class CollectionQueryService extends BaseService {
    */
   private redactServerOnlyFields(
     rows: Record<string, unknown>[],
-    fields: FieldDefinition[]
+    fields: FieldDefinition[],
+    /** The SQL table the rows came from, for its contributed columns. */
+    tableName: string
   ): void {
     const clearsPasswords = hasPasswordField(fields);
     for (const row of rows) {
       if (clearsPasswords) stripPasswordFieldValues(row, fields);
-      stripSystemOwnerField(row);
+      stripServerOnlyColumns(row, tableName);
     }
   }
 
@@ -2026,6 +2113,14 @@ export class CollectionQueryService extends BaseService {
      */
     single?: boolean;
     collectionName: string;
+    /**
+     * The physical table the rows were read from, resolved by the caller from
+     * the same collection record the read used. Handed in rather than rebuilt
+     * from `collectionName`: contributed hidden columns are keyed by the
+     * physical name, which for a `dbName` collection is not `dc_<slug>`, and a
+     * rebuilt name would match none of them and leave them in the response.
+     */
+    tableName: string;
     fields: FieldDefinition[];
     storedHooks: ReturnType<CollectionHookService["getStoredHooks"]>;
     sharedContext: Record<string, unknown>;
@@ -2046,13 +2141,13 @@ export class CollectionQueryService extends BaseService {
     richTextFormat?: RichTextOutputFormat;
     locale?: string;
   }): Promise<Record<string, unknown>[]> {
-    const { rows, collectionName, fields } = params;
+    const { rows, collectionName, tableName, fields } = params;
 
     // (1) Before any afterRead hook — collection, stored, or field-level — so a
     // hook receiving the hash cannot copy it into an allowed property the later
     // redaction does not look at. The final strip below stays as defense in
     // depth.
-    this.redactServerOnlyFields(rows, fields);
+    this.redactServerOnlyFields(rows, fields, tableName);
 
     // (2) On SQLite these columns come back as strings, and a hook is
     // documented against the configured value.
@@ -2161,7 +2256,7 @@ export class CollectionQueryService extends BaseService {
     // path already did both here while the list path did only the password —
     // the stricter of the two is kept, so a field-level hook below cannot
     // observe an owner id on either path.
-    this.redactServerOnlyFields(finalData, fields);
+    this.redactServerOnlyFields(finalData, fields, tableName);
 
     // A stored hook may likewise have reintroduced a denied related field;
     // sanitize before the field-level hooks read the assembled document.
@@ -2229,7 +2324,7 @@ export class CollectionQueryService extends BaseService {
     // Final owner-column strip at the response boundary — after every afterRead
     // hook, field-level read access and transform — so nothing downstream can
     // re-expose the creator's user id.
-    for (const row of finalData) stripSystemOwnerField(row);
+    for (const row of finalData) stripServerOnlyColumns(row, tableName);
 
     return finalData;
   }
@@ -2586,7 +2681,7 @@ export class CollectionQueryService extends BaseService {
       // "caller-only" check reading a predicate the caller never sent, and
       // rejecting the read that hook exists to make safe. Running first is what
       // makes "what the caller sent" true rather than intended.
-      this.assertQueryReadable(params);
+      await this.assertQueryReadable(params);
 
       // The read hooks settle the filter before any seam or constraint touches
       // it, so `beforeOperation` and `beforeRead` both narrow the rows actually
@@ -2667,6 +2762,12 @@ export class CollectionQueryService extends BaseService {
         );
       }
 
+      // Collection metadata: the sort below needs its table, and the response
+      // pipeline its relation fields and hooks.
+      const collection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+
       // ============================================================
       // SORTING: Apply ORDER BY clause
       // ============================================================
@@ -2702,12 +2803,19 @@ export class CollectionQueryService extends BaseService {
           sortField === "created_by" ||
           sortField === "createdBy" ||
           sortFieldSnake === "created_by";
+        // A hidden contributed column is stripped from every row as the owner
+        // column is, so it is ignored as a sort for the same reason: the
+        // order of the page would be a comparison of values never returned.
+        const hiddenSort = hiddenColumnMatcher(
+          collectionTableName(collection, params.collectionName)
+        )(sortField);
 
         // Try both camelCase and snake_case versions of the field name
         // This handles both user-defined fields (often camelCase) and system fields (snake_case in DB)
-        const column = ownerSort
-          ? undefined
-          : schema[sortField] || schema[sortFieldSnake];
+        const column =
+          ownerSort || hiddenSort
+            ? undefined
+            : schema[sortField] || schema[sortFieldSnake];
 
         if (localizedSortField && companion && localeChain) {
           const orderExpr = buildLocalizedOrderExpr({
@@ -2878,10 +2986,6 @@ export class CollectionQueryService extends BaseService {
         );
       }
 
-      // Get collection metadata to identify relation fields and hooks
-      const collection = await this.collectionService.getCollection(
-        params.collectionName
-      );
       const fields = collectionFieldsFor(collection);
       const storedHooks = this.hookService.getStoredHooks(
         collection as Record<string, unknown>
@@ -2937,7 +3041,8 @@ export class CollectionQueryService extends BaseService {
         expandedEntries =
           await this.fieldGroupDataService.populateComponentDataMany({
             entries: expandedEntries,
-            parentTable: getTableName(params.collectionName),
+            // The physical table, as the write recorded it in `_parent_table`.
+            parentTable: collectionTableName(collection, params.collectionName),
             fields: fields as FieldConfig[],
             depth: params.depth,
             select: params.select,
@@ -3027,6 +3132,9 @@ export class CollectionQueryService extends BaseService {
       const finalData = await this.finalizeReadRows({
         rows: expandedEntries,
         collectionName: params.collectionName,
+        // The collection record this read was planned from, so a `dbName`
+        // collection's contributed columns are found under its real table.
+        tableName: collectionTableName(collection, params.collectionName),
         fields,
         storedHooks,
         sharedContext,
@@ -3274,11 +3382,18 @@ export class CollectionQueryService extends BaseService {
     const key = [groupBy, toSnakeCase(groupBy)].find(name =>
       Object.prototype.hasOwnProperty.call(schema, name)
     );
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
     const field = assertGroupKeyUsable(
       groupBy,
       key === undefined ? undefined : schema[key],
-      addressedFieldsFor(
-        await this.collectionService.getCollection(params.collectionName)
+      addressedFieldsFor(collection),
+      // The table the response strip reads, from the same collection record,
+      // so a `dbName` collection's hidden columns are found under its real
+      // table here as they are there.
+      hiddenColumnMatcher(
+        collectionTableName(collection, params.collectionName)
       )
     );
     return { key, field };
@@ -3337,7 +3452,7 @@ export class CollectionQueryService extends BaseService {
     // A count is a cleaner oracle than a listing, not a lesser one: "how many
     // rows carry this value" answers 1 or 0 without returning a row at all.
     // A bucket set is the same oracle with more places to read it.
-    this.assertQueryReadable(params);
+    await this.assertQueryReadable(params);
 
     const schema = await this.fileManager.loadDynamicSchema(
       params.collectionName
@@ -4078,7 +4193,8 @@ export class CollectionQueryService extends BaseService {
       if (this.fieldGroupDataService) {
         expandedEntry = await this.fieldGroupDataService.populateComponentData({
           entry: expandedEntry,
-          parentTable: getTableName(params.collectionName),
+          // The physical table, as the write recorded it in `_parent_table`.
+          parentTable: collectionTableName(collection, params.collectionName),
           fields: fields as FieldConfig[],
           depth: params.depth,
           select: params.select,
@@ -4357,6 +4473,8 @@ export class CollectionQueryService extends BaseService {
         // afterRead handlers on a read by id receive the document itself.
         single: true,
         collectionName: params.collectionName,
+        // See the listing: the physical table, not one rebuilt from the slug.
+        tableName: collectionTableName(collection, params.collectionName),
         fields,
         storedHooks,
         sharedContext,
@@ -4601,10 +4719,7 @@ export class CollectionQueryService extends BaseService {
   private async resolveComponentTableNames(
     componentFilters: ComponentFieldFilter[]
   ): Promise<Map<string, string>> {
-    const resolved = new Map<string, string>();
-    if (componentFilters.length === 0 || !this.fieldGroupDataService) {
-      return resolved;
-    }
+    if (componentFilters.length === 0) return new Map();
 
     // Mirror the condition builder's own narrowing: a _componentType filter
     // pinned to one type queries only that table, so resolving the whole zone
@@ -4616,11 +4731,22 @@ export class CollectionQueryService extends BaseService {
           : f.componentSlugs
       )
     );
+    return this.componentTableNamesFor(slugs);
+  }
 
+  /**
+   * The physical table name of each component slug the registry knows; a
+   * slug it does not know is left out, for the caller's canonical fallback.
+   */
+  private async componentTableNamesFor(
+    slugs: Iterable<string>
+  ): Promise<Map<string, string>> {
+    const resolved = new Map<string, string>();
+    if (!this.fieldGroupDataService) return resolved;
     // Resolved together rather than in sequence: these are independent point
     // lookups, and this runs on every list request carrying a component filter.
     const lookups = await Promise.all(
-      [...slugs].map(async slug => ({
+      [...new Set(slugs)].map(async slug => ({
         slug,
         tableName:
           await this.fieldGroupDataService?.getComponentTableName(slug),

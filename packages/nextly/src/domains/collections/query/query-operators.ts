@@ -587,6 +587,61 @@ function buildComponentFieldMap(
 }
 
 /**
+ * The component tables a field's values live in: one for a single component,
+ * one per allowed component for a dynamic zone.
+ *
+ * Read through the shared reader so a definition referencing its field group
+ * through either key spelling resolves to the same tables.
+ */
+function componentSlugsOf(field: ComponentFieldDefinition): string[] {
+  const { single, many } = extractFieldGroupReferences(field);
+  return single ? [single] : (many ?? []);
+}
+
+/**
+ * A filter key that addresses a column of a component table rather than of
+ * the entity's own.
+ */
+export interface ComponentFilterTarget {
+  /** The key as the caller wrote it, e.g. `seo.metaTitle`. */
+  key: string;
+  /** Every component the key's field can hold, so every table it can reach. */
+  componentSlugs: string[];
+  /** The path within the component, e.g. `metaTitle`. */
+  componentFieldPath: string;
+}
+
+/**
+ * Which of these filter keys reach a component table, and which column path
+ * they name there.
+ *
+ * Decided by the same field map and slug reader as
+ * {@link extractComponentFieldConditions}, so a key judged here is exactly a
+ * key that extraction turns into a component predicate. Takes keys rather
+ * than a filter, and ignores operators, so a caller can judge every key a
+ * filter names, at any depth, whatever it is compared with.
+ */
+export function componentFilterTargets(
+  keys: Iterable<string>,
+  fields: ComponentFieldDefinition[]
+): ComponentFilterTarget[] {
+  const componentFieldMap = buildComponentFieldMap(fields);
+  const targets: ComponentFilterTarget[] = [];
+  for (const key of keys) {
+    const dotIndex = key.indexOf(".");
+    if (dotIndex <= 0) continue;
+    const field = componentFieldMap.get(key.slice(0, dotIndex));
+    if (!field) continue;
+    targets.push({
+      key,
+      componentSlugs: componentSlugsOf(field),
+      componentFieldPath: key.slice(dotIndex + 1),
+    });
+  }
+  return targets;
+}
+
+/**
  * Extract component field conditions from a where clause.
  *
  * Component field conditions use dot notation (e.g., `seo.metaTitle`) and
@@ -699,11 +754,8 @@ export function extractComponentFieldConditions(
       const componentField = componentFieldMap.get(fieldName);
 
       if (componentField) {
-        // This is a component field condition — extract it. The slugs come from
-        // the shared reader so a definition referencing its field group through
-        // either key spelling resolves to the same filter targets.
-        const { single, many } = extractFieldGroupReferences(componentField);
-        const componentSlugs = single ? [single] : (many ?? []);
+        // This is a component field condition — extract it.
+        const componentSlugs = componentSlugsOf(componentField);
 
         // Check if it's a field condition with operators
         if (isFieldCondition(value)) {

@@ -18,9 +18,11 @@ import { NextlyError } from "../../errors/nextly-error";
  *
  * The token is consulted only as a top-level `csrfToken` string, so a body
  * that needs more than this to reach it is one the `x-csrf-token` header
- * exists to serve.
+ * exists to serve. Also the most `withoutRefreshCookie` copies of a body
+ * that carries the refresh cookie: both read before the request is
+ * authenticated or rate limited.
  */
-const MAX_CSRF_BODY_BYTES = 64 * 1024;
+export const MAX_CSRF_BODY_BYTES = 64 * 1024;
 
 /**
  * The body fields the CSRF check may consult, read WITHOUT buffering whatever

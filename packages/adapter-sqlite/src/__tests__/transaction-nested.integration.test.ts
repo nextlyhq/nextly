@@ -2,6 +2,8 @@
 // savepoint. Queued behind the transaction that was waiting for it, it hung
 // both — and every later transaction on the instance.
 
+import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createSqliteAdapter } from "../index";
@@ -241,6 +243,28 @@ describe("SQLite nested transaction()", () => {
     });
     seen.push(adapter.inTransaction());
     expect(seen).toEqual([false, true, true, false]);
+  });
+
+  // The handle a savepoint's context hands out (`drizzle()`) runs on the
+  // connection the savepoint is open on: what it writes rolls back with the
+  // savepoint and nothing else, and a read through it sees the savepoint's
+  // own writes.
+  it("runs its Drizzle handle inside the savepoint", async () => {
+    const rows = sqliteTable(TABLE, { id: text("id").primaryKey() });
+    let seen: string[] = [];
+    await adapter.transaction(async () => {
+      await insert("outer");
+      await adapter
+        .transaction(async tx => {
+          const db = tx.drizzle<BetterSQLite3Database>();
+          await db.insert(rows).values({ id: "inner" });
+          seen = (await db.select().from(rows)).map(row => row.id).sort();
+          throw new Error("inner failed");
+        })
+        .catch(() => undefined);
+    });
+    expect(seen).toEqual(["inner", "outer"]);
+    expect(await ids()).toEqual(["outer"]);
   });
 
   it("leaves a later, unrelated transaction its own", async () => {

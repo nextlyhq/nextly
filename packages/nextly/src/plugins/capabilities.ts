@@ -17,6 +17,7 @@
  */
 import { z } from "zod";
 
+import { SCHEMA_VERSION_SHAPE } from "../domains/schema/migrate/plugin/schema-version-shape";
 import { nextlyPluginSettings as mysqlPluginSettings } from "../schemas/plugin-settings/mysql";
 
 import type { PluginDefinition } from "./plugin-context";
@@ -52,7 +53,8 @@ const MANIFEST_SHAPE = z.object({
       z.string().min(1).refine(isValidRange, { message: "not a semver range" })
     )
     .optional(),
-  schemaVersion: z.number().int().positive().optional(),
+  // The rule every migration module's version is held to as well.
+  schemaVersion: SCHEMA_VERSION_SHAPE.optional(),
 });
 
 /** Refuse a manifest whose shape is not the one the runtime reads. */

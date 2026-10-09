@@ -201,6 +201,25 @@ describe("PostgresAdapter", () => {
     });
   });
 
+  describe("getConfiguredSchema()", () => {
+    // The report is only useful if it is the schema the connections actually
+    // use, so each case reads it beside the `search_path` the pool was given.
+    it.each([
+      [{ schema: "cms" }, "cms", "-c search_path=cms"],
+      [{}, undefined, undefined],
+      [{ schema: "" }, undefined, undefined],
+    ])(
+      "reports %j as %s, matching the pool's search_path",
+      async (extra, reported, options) => {
+        const configured = new PostgresAdapter({ ...testConfig, ...extra });
+        await configured.connect();
+
+        expect(configured.getConfiguredSchema()).toBe(reported);
+        expect(MockPool.lastConfig?.options).toBe(options);
+      }
+    );
+  });
+
   describe("isConnected()", () => {
     it("should return false when not connected", () => {
       expect(adapter.isConnected()).toBe(false);
@@ -647,6 +666,19 @@ describe("PostgresAdapter", () => {
         expect(typeof ctx.upsert).toBe("function");
         expect(typeof ctx.execute).toBe("function");
         expect(typeof ctx.insert).toBe("function");
+      });
+    });
+
+    // A migration records its ledger rows through this handle, so they commit
+    // or roll back with the statements they record. The pooled `getDrizzle()`
+    // would write on a different connection.
+    it("drizzle() is an instance on the transaction's connection, built once", async () => {
+      type Handle = { $client: unknown };
+
+      await adapter.transaction(async ctx => {
+        const bare = ctx.drizzle<Handle>();
+        expect(bare.$client).toBe(mockClient);
+        expect(ctx.drizzle()).toBe(bare);
       });
     });
 

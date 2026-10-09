@@ -217,4 +217,19 @@ describe("findUnexpectedDestructiveStatements — managed-table restriction", ()
       findUnexpectedDestructiveStatements(rebuild, new Set(), managed)
     ).toEqual(["DROP TABLE `dc_posts`"]);
   });
+
+  it("does not read a string literal's text as the statement's own verb", () => {
+    // A check admitting the value 'drop off' is an ADD, whatever its text
+    // says; so is one naming a table in a literal.
+    expect(
+      findUnexpectedDestructiveStatements([
+        `ALTER TABLE "dc_orders" ADD CONSTRAINT "ck_dc_orders_mode_enum" CHECK (mode IN ('drop off', 'pickup'))`,
+        "ALTER TABLE `dc_orders` ADD CONSTRAINT `ck_dc_orders_note` CHECK (note <> 'it''s a drop table dc_posts')",
+        `ALTER TABLE "dc_orders" ADD CONSTRAINT "ck_dc_orders_t" CHECK (t <> 'truncate dc_posts')`,
+      ])
+    ).toEqual([]);
+    // The same verbs outside a literal are still found, and reported as written.
+    const drop = `ALTER TABLE "dc_orders" DROP COLUMN "mode" -- 'x'`;
+    expect(findUnexpectedDestructiveStatements([drop])).toEqual([drop]);
+  });
 });

@@ -11,7 +11,7 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
 import { schemaEventsTables } from "../../../schemas/schema-events";
@@ -24,25 +24,9 @@ import type {
 } from "../../../schemas/schema-events/types";
 
 import { newestEvent } from "./newest-event";
+import { asRepositoryDb, type RepositoryDb } from "./repository-db";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
-
-/** Structural shape of the Drizzle DB methods this repository uses. */
-type SelectChain = Promise<Array<Record<string, unknown>>> & {
-  where: (c: unknown) => Promise<Array<Record<string, unknown>>>;
-};
-interface AnyDb {
-  insert: (t: unknown) => {
-    values: (v: Record<string, unknown>) => Promise<unknown>;
-  };
-  select: () => { from: (t: unknown) => SelectChain };
-  update: (t: unknown) => {
-    set: (v: Record<string, unknown>) => {
-      where: (c: unknown) => Promise<unknown>;
-    };
-  };
-  delete: (t: unknown) => { where: (c: unknown) => Promise<unknown> };
-}
 
 /** A read-back schema-events row (camelCase, as Drizzle maps it). */
 export interface SchemaEventRow {
@@ -111,6 +95,11 @@ export interface MarkFailedInput {
  */
 export const ERROR_MESSAGE_MAX_LEN = 8000;
 
+/** `note` added after the note a row already carries, if any. */
+function appendNote(existing: string | null, note: string): string {
+  return existing ? `${existing}; ${note}` : note;
+}
+
 /** Marks a truncated message; its length is reserved from the budget. */
 const TRUNCATION_SUFFIX = "...";
 
@@ -134,14 +123,42 @@ export function truncateErrorMessage(message: string | undefined): string {
 }
 
 export class SchemaEventsRepository {
-  private readonly db: AnyDb;
+  private readonly db: RepositoryDb;
   private readonly table: ReturnType<
     typeof schemaEventsTables
   >["nextlySchemaEvents"];
 
   constructor(db: unknown, dialect: Dialect) {
-    this.db = db as AnyDb;
+    this.db = asRepositoryDb(db);
     this.table = schemaEventsTables(dialect).nextlySchemaEvents;
+  }
+
+  /**
+   * The start time for an event being recorded NOW, strictly after every event
+   * already recorded for the same file.
+   *
+   * "Is this file applied?" is answered by the file's newest event, so two
+   * events for one file must never share a `startedAt`: the ledger is read
+   * with no ORDER BY and event ids are random, so a tie — an apply and the
+   * rollback recorded after it in the same millisecond — had no defined
+   * answer. Guaranteeing the order where events are WRITTEN makes every
+   * reader agree without each inventing a tie-break. The columns hold
+   * milliseconds on all three dialects, so one millisecond is enough.
+   */
+  private async startAfterNewest(
+    filename: string | null | undefined
+  ): Promise<Date> {
+    const now = new Date();
+    if (filename === undefined || filename === null) return now;
+    const rows = (await this.db
+      .select()
+      .from(this.table)
+      .where(eq(this.table.filename, filename))) as { startedAt: Date }[];
+    let newest = Number.NEGATIVE_INFINITY;
+    for (const row of rows) {
+      newest = Math.max(newest, new Date(row.startedAt).getTime());
+    }
+    return newest >= now.getTime() ? new Date(newest + 1) : now;
   }
 
   /** Insert an in_progress event and return its generated id. */
@@ -152,7 +169,7 @@ export class SchemaEventsRepository {
       eventType: input.eventType,
       status: "in_progress",
       source: input.source,
-      startedAt: new Date(),
+      startedAt: await this.startAfterNewest(input.filename),
     };
     if (input.filename !== undefined) values.filename = input.filename;
     if (input.sha256 !== undefined) values.sha256 = input.sha256;
@@ -163,10 +180,22 @@ export class SchemaEventsRepository {
     return id;
   }
 
-  /** Insert an already-terminal event in one shot (used by the upgrade backfill). */
+  /**
+   * Insert an already-terminal event in one shot.
+   *
+   * Without a `startedAt` the event is being recorded now, and is stamped
+   * after the file's newest event as `recordStart` is. An explicit one is
+   * kept as given: the upgrade backfill imports history whose times are facts,
+   * not "now".
+   */
   async insertEvent(values: Record<string, unknown>): Promise<string> {
     const id = (values.id as string | undefined) ?? crypto.randomUUID();
-    await this.db.insert(this.table).values({ id, ...values });
+    const startedAt =
+      values.startedAt ??
+      (await this.startAfterNewest(
+        typeof values.filename === "string" ? values.filename : undefined
+      ));
+    await this.db.insert(this.table).values({ id, ...values, startedAt });
     return id;
   }
 
@@ -331,6 +360,17 @@ export class SchemaEventsRepository {
       .where(sql`event_type = 'file_apply'`)) as unknown as SchemaEventRow[];
   }
 
+  /**
+   * Every `file_rollback` row: rollbacks that failed. Kept apart from
+   * `listFileApplies`, whose rows alone decide whether a migration is applied.
+   */
+  async listFailedRollbacks(): Promise<SchemaEventRow[]> {
+    return (await this.db
+      .select()
+      .from(this.table)
+      .where(sql`event_type = 'file_rollback'`)) as unknown as SchemaEventRow[];
+  }
+
   /** All `file_apply` rows for a single filename (applied + failed + rolled_back). */
   async findFileApplies(filename: string): Promise<SchemaEventRow[]> {
     return (await this.db
@@ -341,16 +381,23 @@ export class SchemaEventsRepository {
       )) as unknown as SchemaEventRow[];
   }
 
-  /** Transition a row to rolled_back (used by migrate:resolve --failed-cleanup). */
+  /**
+   * Transition a row to rolled_back (used by migrate:resolve --failed-cleanup).
+   *
+   * Only the status changes on the record of the attempt itself: its start
+   * and end times and its error stay as the attempt left them, so a cleared
+   * attempt still says when it ran and why it failed. A row with no end time
+   * gets one now, and `note` is added after any note the row already had.
+   */
   async markRolledBack(
     id: string,
     input: { note?: string | null } = {}
   ): Promise<void> {
-    const set: Record<string, unknown> = {
-      status: "rolled_back",
-      endedAt: new Date(),
-    };
-    if (input.note !== undefined) set.note = input.note;
+    const row = await this.findById(id);
+    if (!row) return;
+    const set: Record<string, unknown> = { status: "rolled_back" };
+    if (row.endedAt === null) set.endedAt = new Date();
+    if (input.note) set.note = appendNote(row.note, input.note);
     await this.db
       .update(this.table)
       .set(set)

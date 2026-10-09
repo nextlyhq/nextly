@@ -258,6 +258,46 @@ export function getTableName(collectionName: string): string {
 }
 
 /**
+ * A collection record's field definitions: those of its schema definition when
+ * it carries one, else its own `fields`, else none.
+ */
+export function collectionFields(collection: unknown): FieldDefinition[] {
+  const record =
+    typeof collection === "object" && collection !== null
+      ? (collection as Record<string, unknown>)
+      : {};
+  const schemaDefinition = record.schemaDefinition as
+    | Record<string, unknown>
+    | undefined;
+  return (
+    (schemaDefinition?.fields as FieldDefinition[] | undefined) ||
+    (record.fields as FieldDefinition[] | undefined) ||
+    []
+  );
+}
+
+/**
+ * The physical table a collection's rows live in: the `tableName` its registry
+ * record carries, which honours a configured `dbName`, else the `dc_<slug>`
+ * convention.
+ *
+ * The one answer every read, write and response boundary uses. Anything keyed
+ * by table — contributed hidden columns, a component's `_parent_table` — was
+ * recorded under the physical name, so a caller that rebuilds the name from
+ * the slug with `getTableName` misses it for every collection with a custom
+ * `dbName`: silently, because an unknown table simply matches nothing.
+ */
+export function collectionTableName(collection: unknown, slug: string): string {
+  const stored =
+    typeof collection === "object" && collection !== null
+      ? (collection as { tableName?: unknown }).tableName
+      : undefined;
+  return typeof stored === "string" && stored.length > 0
+    ? stored
+    : getTableName(slug);
+}
+
+/**
  * Generate a URL-friendly slug from a string.
  * Converts to lowercase, replaces spaces and special characters with hyphens,
  * and removes consecutive hyphens.

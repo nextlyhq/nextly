@@ -1,5 +1,12 @@
 import { MUST_CHANGE_PASSWORD_CHALLENGE } from "../auth/pipeline/pending-token";
 import { collectPluginAuditKinds } from "../domains/audit/plugin-audit";
+import {
+  assertModuleNames,
+  assertModuleSchemaVersions,
+  assertUniqueModuleNames,
+  orderedMigrations,
+} from "../domains/schema/migrate/plugin/plugin-migration";
+import { assertSchemaVersionDeclarable } from "../domains/schema/ownership/schema-version-check";
 import type { NextlyError } from "../errors/nextly-error";
 import { isReservedEventName } from "../events/event-bus";
 
@@ -190,6 +197,9 @@ export function resolvePlugins(
 ): PluginDefinition[] {
   validatePluginVersions(plugins, opts.coreVersion);
   assertPluginManifests(plugins);
+  // Last, because it reads what the earlier validators already accepted: a
+  // declared schemaVersion must be one the plugin's own migrations reach.
+  validatePluginMigrations(plugins);
   return topoSortPlugins(plugins);
 }
 
@@ -208,4 +218,35 @@ export function resolveTransformedPlugins<
   C extends { plugins?: PluginDefinition[] },
 >(config: C, opts: ResolvePluginsOptions): C & { plugins: PluginDefinition[] } {
   return { ...config, plugins: resolvePlugins(config.plugins ?? [], opts) };
+}
+
+/**
+ * A plugin's migration modules must have names the ledger can attribute to
+ * it, and a declared `schemaVersion` must be one its own migrations reach,
+ * or the boot check could never pass — caught where the manifest is read so
+ * the failure names the declaration rather than arriving later as a
+ * production boot refusal nothing explains.
+ */
+function validatePluginMigrations(plugins: PluginDefinition[]): void {
+  for (const plugin of plugins) {
+    // Before the versions are read in name order: the name is also the
+    // module's ledger key, and one the ledger cannot attribute to its plugin,
+    // or that another of its modules shares, is refused before anything runs:
+    // wherever the configuration loads, at boot and in every CLI command, and
+    // not only when `nextly migrate` reaches the modules. Each module's
+    // version is checked the same way, before anything compares versions.
+    const migrations = plugin.contributes?.schema?.migrations ?? [];
+    assertModuleNames(plugin.name, migrations);
+    assertUniqueModuleNames(plugin.name, migrations);
+    assertModuleSchemaVersions(plugin.name, migrations);
+    assertSchemaVersionDeclarable({
+      pluginName: plugin.name,
+      declaredVersion: plugin.schemaVersion,
+      // In run order: the version the last module to run carries is the one
+      // the database ends at.
+      migrationVersions: orderedMigrations(migrations).map(
+        m => m.schemaVersion
+      ),
+    });
+  }
 }

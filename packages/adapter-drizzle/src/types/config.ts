@@ -147,7 +147,21 @@ export interface BaseAdapterConfig {
   /** Logger instance for queries and errors */
   logger?: AdapterLogger;
 
-  /** Schema name (PostgreSQL) */
+  /**
+   * Schema name (PostgreSQL only).
+   *
+   * Applied as `search_path` in the pool's startup options, which is the
+   * pooled-safe way to set it: a `SET search_path` issued as a query belongs
+   * to whichever pooled connection happened to run it, so the next checkout
+   * would see the default again.
+   *
+   * The adapter creates the schema if it is missing, because `search_path`
+   * naming a schema that does not exist does not fail — it falls through, and
+   * the tables land somewhere else.
+   *
+   * Declared here since the first release and read by nothing until now, which
+   * is why setting it appeared to work and changed nothing.
+   */
   schema?: string;
 
   /** SSL/TLS configuration */

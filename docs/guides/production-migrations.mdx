@@ -23,7 +23,7 @@ This page covers the common deploy patterns. Pick whichever fits your stack.
 | `nextly migrate:create [name]` | After you edit `nextly.config.ts`, generate a `.sql` file capturing the change. Commit it to git. |
 | `nextly migrate:check` | CI gate. Verifies migration file integrity and config drift. Does NOT connect to a database. |
 | `nextly migrate` | Applies pending `.sql` files to the target database. Run from CI or your laptop. |
-| `nextly migrate:status` | Shows applied / pending / failed migrations with their checksums and durations. |
+| `nextly migrate:status` | Shows applied / pending / failed / unfinished migrations with their checksums and durations. An unfinished one's last attempt recorded no outcome: the process running it stopped, or is still running. |
 | `nextly migrate:resolve` | Recovery: mark a file applied/rolled-back or clean up a failed attempt without running SQL. See [Recovering from a failed migration](#recovering-from-a-failed-migration). |
 | `nextly migrate:fresh` | Wipes all tables and re-applies every migration. Local-dev only. Confirmation required. |
 | `nextly migrate:down` | Rolls back the most-recently-applied migration(s) using their `-- DOWN` section. CLI-only; never runs on boot. See [Rolling back a migration](#rolling-back-a-migration). |
@@ -34,11 +34,11 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 
 ### Per-command flags
 
-- `nextly migrate` -- `--dry-run` (preview without executing), `--step <n>` (apply only N pending migrations), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
+- `nextly migrate` -- `--dry-run` (preview without executing), `--step <n>` (apply only N pending migrations, counting a plugin's migration modules, which run first, together with the app's files), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
 - `nextly migrate:baseline` -- `--name <name>` (the migration's name; defaults to `baseline`), `--force-unlock`.
-- `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--non-interactive`, `--accept-renames`.
+- `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--no-transaction` (with `--blank`, a file whose first line is the [no-transaction marker](#running-a-file-outside-a-transaction); with `--plugin`, a module with `transaction: false`), `--non-interactive`, `--accept-renames`.
 - `nextly migrate:status` -- `--json` (machine-readable output for CI scripting).
-- `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check).
+- `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished).
 - `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
 - `nextly migrate:down` -- `--step <n>` (roll back the last N migrations), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--force-unlock`.
 
@@ -280,7 +280,7 @@ Specific examples:
 2. Reads the `nextly_schema_events` ledger to see which `.sql` files have been applied (a `file_apply` event per file).
 3. Verifies SHA-256 hashes of already-applied files. **Hash mismatch = abort with `MIGRATION_TAMPERED` (exit 2).** No partial state, nothing else runs.
 4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp).
-5. Applies each pending file in a transaction (PostgreSQL/SQLite) or statement-by-statement (MySQL; see [database support](/docs/database/support) for MySQL caveats).
+5. Applies each pending file in one transaction on one connection (on MySQL each DDL statement still commits as it runs; see [database support](/docs/database/support) for MySQL caveats). What a file may contain is below.
 6. Records each applied file in `nextly_schema_events` as a `file_apply` event, opened with `started_at`, `filename` and `sha256` and closed with `ended_at` and `statements_executed`.
 
 | Exit code | Meaning |
@@ -289,6 +289,168 @@ Specific examples:
 | 1 | A migration failed during execution |
 | 2 | `MIGRATION_TAMPERED`. Abort before running any. |
 | 3 | `MIGRATION_MISSING`. Abort; file referenced in DB but missing from disk. |
+
+## What a migration file may contain
+
+Every migration file, plugin module and `-- DOWN` section runs as **one
+transaction on one database connection**, which the runner opens and commits
+itself, unless it is [marked to run outside one](#running-a-file-outside-a-transaction).
+A few kinds of statement cannot live inside that, and `nextly migrate` and
+`migrate:down` refuse the whole file before any of it runs. `migrate --dry-run` and `migrate:down --dry-run` report the same
+refusals without executing anything, and `migrate:check` warns about them.
+
+| Statement | What happens | Why |
+|---|---|---|
+| `BEGIN`, `START TRANSACTION`, `COMMIT`, `END` (with any modifiers, such as `BEGIN IMMEDIATE` or `START TRANSACTION READ WRITE`) | Left out; the rest of the file runs. Refused in a no-transaction file | The runner's own transaction already brackets the file. |
+| `SAVEPOINT`, `ROLLBACK [WORK \| TRANSACTION] TO [SAVEPOINT]`, `RELEASE [SAVEPOINT]` | Run as written. Refused in a no-transaction file | A savepoint works inside the runner's transaction and undoes at most part of the file. On MySQL a schema statement commits on its own and ends the savepoint with it, so keep savepoints to data statements there. |
+| `ROLLBACK [WORK \| TRANSACTION]`, `ABORT`, `COMMIT PREPARED`, `PREPARE TRANSACTION`, `XA …` | File refused | Each one would undo or hand off the runner's transaction, which would then record work that did not happen. |
+| PostgreSQL `SET …` (except `SET LOCAL`, `SET CONSTRAINTS`, `SET TRANSACTION`), `RESET`, `DISCARD` | File refused | A session setting stays on the pooled connection after the migration. Use `SET LOCAL`, which ends with the transaction. |
+| MySQL `SET …` (except user variables, `SET @name = …`), including one inside `/*!…*/` | File refused | The same: `SET FOREIGN_KEY_CHECKS = 0` would stay on a pooled connection and switch checks off for whatever it serves next. Order the statements instead (create a table before the tables that reference it, drop it after them), or drop the foreign key and add it back within the migration. |
+| PostgreSQL `VACUUM`, `CREATE`/`DROP INDEX CONCURRENTLY`, `REINDEX … CONCURRENTLY`, `CREATE`/`DROP DATABASE`, `CREATE`/`DROP TABLESPACE`, `ALTER SYSTEM`, `CLUSTER` naming no table; SQLite `VACUUM` | File refused, unless it is marked to run outside a transaction | The database cannot run them inside a transaction. Mark the file (`-- nextly:no-transaction` as its first line) or the module (`transaction: false`), and they run. |
+| In a no-transaction file: its own `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`; `SAVEPOINT`, `ROLLBACK … TO`, `RELEASE`; PostgreSQL `SET LOCAL`, `SET CONSTRAINTS`, `SET TRANSACTION` | Refused in a no-transaction file | Each one needs a transaction, and a no-transaction file has none: each statement commits as it runs. Outside one, PostgreSQL ignores `SET LOCAL` and refuses a savepoint, SQLite opens a transaction for a `BEGIN` or a savepoint that nothing ends, and a `COMMIT` has nothing to commit. Move the statement to a file without the marker, which runs in a transaction. |
+| In a no-transaction file on SQLite: `PRAGMA foreign_keys = …`, `PRAGMA defer_foreign_keys = …` | Refused in a no-transaction file | The runner switches foreign-key enforcement off for the file and restores it afterwards; see [foreign keys on SQLite](#foreign-keys-on-sqlite). Reading the setting (`PRAGMA foreign_keys`) is allowed. |
+| SQLite `ATTACH`, `DETACH` | File refused, marked or not | They change which databases the process's one connection sees, after the migration too. |
+| MySQL `LOCK TABLES`, `UNLOCK TABLES` (and the `INSTANCE` forms) | File refused, marked or not | They commit the migration's transaction implicitly, and the locks stay with the pooled connection. |
+
+PostgreSQL's `ALTER TYPE … ADD VALUE` runs inside the transaction (PostgreSQL 12
+and later), but the value it adds cannot be used until the transaction commits,
+so use it in a later migration file.
+
+The error names the statement and says what to write instead.
+
+### Running a file outside a transaction
+
+Some statements cannot run inside a transaction at all. The one you are most
+likely to need is PostgreSQL's `CREATE INDEX CONCURRENTLY`, which builds an
+index on a large table without blocking its writes. To run one, put it in a
+migration file of its own whose **first line** is the marker:
+
+```sql
+-- nextly:no-transaction
+-- Migration: index_orders_customer
+
+-- UP
+CREATE INDEX CONCURRENTLY IF NOT EXISTS orders_customer_idx ON dc_orders (customer_id);
+
+-- DOWN
+DROP INDEX CONCURRENTLY IF EXISTS orders_customer_idx;
+```
+
+`nextly migrate:create --blank --no-transaction` writes a file you can start
+from, with the marker as its first line. In any other file the marker goes
+above its `-- Migration:` line: only the first line counts. A plugin's
+migration module says the same with `transaction: false` on the module; see
+[Plugin schema](/docs/plugins/schema).
+
+A marked file's UP and DOWN run **statement by statement**, each committing as
+it runs. `nextly migrate` and `migrate:down` print a line naming the file
+before they run it, and `migrate:status` shows it as
+`(no transaction)`.
+
+<Callout type="warn">
+A marked file has no all-or-nothing guarantee, on any dialect. If a statement
+fails, **the statements before it stay applied and are not undone**. The error
+says which statement failed and how many ran before it, and the ledger records
+the file as failed. Then either:
+
+- **finish the remaining statements by hand** and mark the file applied with
+  `nextly migrate:resolve --applied <file>`. Do not run it again: that would
+  repeat the statements that already ran.
+- **reverse the statements that ran**, clear the failed attempt with
+  `nextly migrate:resolve --failed-cleanup <file>`, and run `nextly migrate`
+  again.
+
+Keep a marked file to the statements that need it, and write them so they can
+run again (`IF NOT EXISTS`, `IF EXISTS`). A `CREATE INDEX CONCURRENTLY` that
+fails can leave an invalid index behind: drop it before you retry.
+</Callout>
+
+When every schema statement in a failed marked file ran and a later data
+statement did not, the database already stands where the file ends. `nextly
+migrate` does not take that as the file being applied, which would skip the data
+change for good: while the file's newest attempt is the failed one, it refuses
+with `NEXTLY_MIGRATION_PARTIALLY_APPLIED` (`logContext.reason` is
+`partially-applied`) and names the recovery above.
+
+On MySQL the same holds for a file that runs in a transaction. MySQL commits
+each schema statement as it runs, together with what the transaction did before
+it, so a failed attempt can leave the statements before the failure applied even
+without the marker. While such a file's newest attempt is a failed one,
+`nextly migrate` refuses it in the same way rather than recording it applied,
+and the same recoveries apply: `--applied` records such a file without
+comparing the live schema when it has no snapshot, as a `--blank` file has
+none. On PostgreSQL and SQLite the failed attempt was undone whole, and
+`nextly migrate` runs the file again. None of that attempt ran, so `--applied`
+still refuses such a file without a snapshot there
+(`NEXTLY_MIGRATION_SNAPSHOT_MISSING`) unless you pass `--skip-verify`.
+
+The same holds the other way round. When the statement that failed changes the
+schema and a data statement before it ran, the database still stands where the
+file starts, but the data change stayed: in a marked file on any dialect, and on
+MySQL in any file, because MySQL commits what the transaction did before a
+schema statement runs. Running the file again would repeat that data change, so
+while its newest attempt is the failed one `nextly migrate` refuses to run it,
+with the same error and the same recoveries. This holds for a file with no
+snapshot too.
+
+A plugin module marked `transaction: false` is recovered the same way, except
+the marking: `migrate:resolve --applied` does not take a module, because
+`nextly migrate` records a module together with the tables it owns. Once its
+statements are finished by hand, run
+`nextly migrate:resolve --failed-cleanup plugin:<name>/<module>` and then
+`nextly migrate`, which records it applied without running it.
+
+The marker does not lift every refusal. Session settings (`SET …`), a bare
+`ROLLBACK`, MySQL's `LOCK TABLES` and SQLite's `ATTACH`/`DETACH` are refused in
+a marked file too, because what they leave on the connection outlives the file.
+A marked file also may not hold what needs a transaction: its own `BEGIN`,
+`START TRANSACTION`, `COMMIT` or `END`, a savepoint, or PostgreSQL's
+`SET LOCAL`, `SET CONSTRAINTS` and `SET TRANSACTION`. The refusal names the
+statement; move it to a file without the marker. On SQLite a marked file may
+not write `PRAGMA foreign_keys` or `PRAGMA defer_foreign_keys` either.
+
+Marking a generated migration changes its contents, so `migrate:check` then
+reports `CHECKSUM_MISMATCH` for it; put statements that need the marker in a
+file of their own.
+
+**Routine and trigger bodies are one statement.** A `CREATE TRIGGER … BEGIN … END`
+(SQLite, MySQL), a MySQL `CREATE PROCEDURE`/`FUNCTION`/`EVENT … BEGIN … END`, and a
+PostgreSQL `BEGIN ATOMIC` function body reach the database whole, so no
+`DELIMITER` line is needed. A PostgreSQL `$$ … $$` body is likewise never split.
+A `DROP TABLE` inside such a body is judged like any other drop in the file: a
+body that drops a table another owner holds is refused. A PostgreSQL function
+or procedure whose body is an ordinary quoted string (`AS 'DROP TABLE x'`) is
+refused, because the check cannot read a string as code: write the body with
+`$$ … $$`.
+
+### Foreign keys on SQLite
+
+**On SQLite, foreign-key enforcement is off while a file runs, and checked before
+it commits.** The runner sets `PRAGMA foreign_keys = OFF` before the transaction,
+runs the file, then runs `PRAGMA foreign_key_check`; if any row would reference a
+row that no longer exists, the file is rolled back and refused with
+`NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION` (`logContext.reason` is
+`dangling-reference`). The setting is restored afterwards. The same error with
+`reason` `enforcement-still-on` means enforcement could not be switched off,
+because another transaction was open on the connection when the migration
+started; nothing was applied — re-run the command once that work has finished
+(at boot, restart the process).
+This is SQLite's documented way to rebuild a table (create `__new_x`, copy the
+rows, drop `x`, rename): dropping a parent table this way keeps the rows of
+tables that reference it, instead of deleting them through `ON DELETE CASCADE`.
+
+A file [marked to run outside a transaction](#running-a-file-outside-a-transaction)
+gets the same treatment, except the rollback. Enforcement is switched off before
+its first statement (and the file is refused with `enforcement-still-on` if it
+could not be), `PRAGMA foreign_key_check` runs after its last statement, and the
+setting is restored afterwards, whether the file finished or failed. If the
+check finds a new dangling reference, the file is refused with
+`NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION` (`reason` `dangling-reference`) and
+recorded as failed, but its statements stay applied, because each committed as
+it ran: repair or remove the rows the error names, then mark the file applied
+with `nextly migrate:resolve --applied <file>`. Because the runner owns the
+setting, a marked file may not write `PRAGMA foreign_keys` or
+`PRAGMA defer_foreign_keys`.
 
 ## Builder entities and production
 
@@ -388,7 +550,12 @@ Single or Field Group left behind passes `migrate:check`, so nothing reminds you
 
 ## What `nextly migrate:check` does (CI-friendly, no DB)
 
-Runs five integrity checks; first failure exits non-zero with a specific code:
+Runs five integrity checks; first failure exits non-zero with a specific code.
+Before the drift check it also warns, without failing, about any statement
+`nextly migrate` or `migrate:down` would refuse (`REFUSED_STATEMENT`), and
+names each file marked `-- nextly:no-transaction`. It does not connect, so it
+cannot tell a file still pending from one already applied, which never runs
+again.
 
 | Check | What it catches |
 |---|---|
@@ -462,7 +629,8 @@ If `nextly migrate` fails partway through:
 2. Inspect with `nextly migrate:status --verbose`. The error JSON tells you what broke.
 3. Pick the recovery that matches what actually happened:
    - **The file actually applied but wasn't recorded** (e.g. the process died after the DDL committed): `nextly migrate:resolve --applied <file>`. This verifies the live schema matches the file's target snapshot before recording it. Pass `--skip-verify` only if you have manually confirmed the state.
-   - **A failed attempt is blocking retries and the `.sql` needs editing first:** `nextly migrate:resolve --failed-cleanup <file>` flips the stuck failed row to `rolled_back`. Edit the file, then run `nextly migrate` again.
+   - **A failed attempt is blocking retries and the `.sql` needs editing first:** `nextly migrate:resolve --failed-cleanup <file>` flips the stuck attempts (every attempt since the file's last other event that failed, or recorded no outcome because the process running it stopped) to `rolled_back`; each keeps its start time and its error in the ledger, and a failed one its end time. Edit the file, then run `nextly migrate` again.
+   - **A file [marked to run outside a transaction](#running-a-file-outside-a-transaction) stopped part-way:** finish its remaining statements by hand and mark it with `nextly migrate:resolve --applied <file>`, rather than running it again, or reverse the statements that ran, clear the attempt with `nextly migrate:resolve --failed-cleanup <file>`, and run `nextly migrate` again. For a plugin module, `--failed-cleanup plugin:<name>/<module>` followed by `nextly migrate` records it once its statements are finished.
    - **You need to re-run a file** that was recorded as applied: `nextly migrate:resolve --rolled-back <file>` — the next `nextly migrate` treats it as pending again.
 4. Otherwise, fix the SQL (revert + regenerate via `migrate:create`) or the underlying database state, then re-run `nextly migrate`.
 
@@ -502,6 +670,14 @@ After a successful rollback, the migration is recorded as `rolled_back` in
 `nextly_schema_events` and becomes pending again, so the next `nextly migrate`
 re-applies it.
 
+A rollback whose DOWN fails is recorded as a `file_rollback` event, and the
+migration stays **applied**: on PostgreSQL and SQLite the DOWN ran in one
+transaction and was undone, so a later `migrate:down` starts from that same
+migration again. On MySQL each DDL statement commits as
+it runs, so part of the DOWN may have taken effect; `nextly migrate:status`
+lists every applied migration whose latest rollback failed, and flags the MySQL
+ones, so the schema can be checked before anything is run again.
+
 **In production, prefer rolling forward** (a new corrective migration) or
 restoring from a backup. `migrate:down` is a manual, CLI-only break-glass tool;
 it never runs on boot.
@@ -517,3 +693,199 @@ previous one. Examples:
 - Need to drop a table you added in a recent migration -> write a new migration with `DROP TABLE`.
 
 The audit trail in `nextly_schema_events` keeps both rows, so post-incident review can see exactly what was applied when, and by which CI job.
+
+## Plugins with tables of their own
+
+### The phase order
+
+```text
+1. Core reconcile        — Nextly's own tables
+2. Plugin migrations     — each plugin's, in dependency order
+3. App migrations        — your own files
+```
+
+All three run under one lock, and **all three run before any plugin
+initialises**. That last point is load-bearing: a plugin's `init()` hook
+queries its tables, and it used to run first. On an upgraded database the
+tables were still on their old shape, and the plugin failed on a column that
+did not exist yet.
+
+Plugins go before the app because app migrations may index entity tables that
+plugins contribute, and an index on a table that does not exist is not a
+recoverable error.
+
+### Adoption: when the tables are already there
+
+A plugin you added in development has its tables already — dev push
+created them. The first `nextly migrate` on a deployment finds them present,
+and that is the ordinary case rather than a failure.
+
+Each module is decided by comparing the live tables against its own two
+endpoints:
+
+| The database matches | What happens |
+| --- | --- |
+| the module's `before` | the UP runs |
+| the module's `snapshot` | recorded as applied; nothing runs |
+| neither | refused, with the difference named |
+
+The third row is why this is a comparison and not an existence check. A table
+created by push and then altered by hand matches neither, and running the UP
+against it would fail halfway — or succeed, against a shape nobody intended.
+
+### When something fails
+
+The first failure stops the whole run. Later plugins and the app phase do not
+execute, because migrations after a failed one assume a database state that
+was never reached.
+
+### Two checksums
+
+A plugin migration carries a checksum over its whole content — its name,
+schema version, SQL and table snapshots — and the ledger separately stores the
+sha256 of what actually ran.
+
+Neither covers the other. The first catches a module edited after generation —
+the SQL that will run is not the SQL that was reviewed. It covers more than
+the SQL because the runner acts on the rest too: the name is the module's
+ledger key and decides its order, the schema version is recorded against the
+plugin's tables, and the snapshots decide whether a module is already applied —
+a module whose target matches the live schema is recorded as adopted without
+its SQL running. Editing any of them is refused exactly like editing the SQL.
+A hand-written module computes its checksum with `migrationChecksum` from
+`nextly/schema-extension`, passing the module itself without its `checksum`.
+
+The second catches a module changed after it was applied, where the database
+no longer matches the file claiming to describe it. A regenerated module with a
+rewritten checksum passes the first and fails the second, which is exactly
+right.
+
+### Nothing drops a table it does not own
+
+A migration is scanned before its first statement runs and refused whole if it
+drops or renames a table or a column belonging to another owner. An app
+migration dropping `auth__identities` is refused; plugin-auth's own down
+migration dropping it is not.
+
+Who owns what comes from the owner registry (`nextly_schema_owners`):
+
+- **Tables.** A table belongs to the stream its owner row names, and a core
+  table (`users`, `media`, …) to core. A table with no owner row — every
+  collection, Single and component table, and any table your own migrations
+  created — is your app's to drop, and never a plugin's: a plugin migration
+  may drop only tables a row records as the plugin's, or a table the same
+  module creates. A table the module creates counts only when no table of
+  that name existed before the module ran (read from the database before
+  the module is judged), and only when the module creates and drops it under
+  the same unqualified, lower-case name (`CREATE TABLE t`, not
+  `CREATE TABLE scratch.t` or `CREATE TABLE "T"`; SQLite's `temp.t` also
+  counts). A `CREATE` naming a table that already exists cannot have made
+  it, so a drop of that name after it is judged as a drop of the existing
+  table. MariaDB's `CREATE OR REPLACE TABLE t` is read as a drop of `t`,
+  unless no table `t` existed before the module ran, and then a creation of
+  it. Nor does any table count once the module may change which table an
+  unqualified name reaches: a PostgreSQL `SET`, `RESET`, `DISCARD`,
+  `set_config()`, `CREATE SCHEMA` or `ALTER SCHEMA`, or a MySQL `USE`,
+  anywhere in it — including inside a `DO` block or function body — makes
+  every table it creates count as the table of that name it may reach
+  instead.
+- **Columns.** A column added to another owner's table belongs to whoever
+  added it, as its element row records. Any other column belongs to its
+  table, except that your app may drop a column on a core table, since what
+  is added to a core table rides your app's migrations.
+
+The scan happens before execution rather than filtering statements during it,
+because a file with some statements removed would still be recorded as
+applied — the ledger would claim a migration ran that partly did not.
+
+A **complete** SQLite table rebuild is not a drop: four adjacent statements —
+`CREATE TABLE __new_t (…)`, `INSERT INTO __new_t (columns) SELECT columns FROM t`
+copying every column the new table declares, `DROP TABLE t`,
+`ALTER TABLE __new_t RENAME TO t` — keep the table and its rows under the same
+name. This is how SQLite adds a check or a foreign key, including one that an
+app or plugin contributes to a table another owner holds. The runner compares
+the new table with the columns the live table has when the migration runs —
+read from the database first, following any `ADD`/`DROP`/`RENAME COLUMN`
+earlier in the same file. A live column the new table leaves out is dropped
+by the rebuild, and judged as a column drop: this is how SQLite removes a
+column a check names, such as an enum you added to `users`. A new table
+declaring a column the live table lacks, or one whose live columns could not
+be read, is read as the drop of the table it may be. A lone `DROP`, a rename of the table, or a
+rebuild that filters, reorders or renames elsewhere is still refused. A migration that **renames** another owner's table (or moves
+it with PostgreSQL's `SET SCHEMA`) is refused like a drop.
+
+On PostgreSQL, `CASCADE` on a `DROP` of anything but a table — a type, domain,
+extension, function, procedure, view, sequence or index, or an
+`ALTER TYPE … DROP ATTRIBUTE` — is refused. It also drops whatever depends on
+the object, such as every column of a dropped type or domain in whoever's
+table, and the text does not say which tables those are. Drop the columns or
+tables that use the object first, then the object without `CASCADE`:
+PostgreSQL refuses that drop while anything still depends on it. A
+`DROP SCHEMA` is refused with or without `CASCADE`.
+
+Development push never drops a plugin-migrated table at all, whatever your
+config says. A plugin removed from config is exactly when its data is most at
+risk, and dropping its tables is a deliberate decision rather than a side
+effect of a reload.
+
+<Callout type="warn">
+`nextly migrate:fresh` drops everything. The check above — that a migration
+dropping another owner's table is refused — applies to push, reconcile and
+`migrate`, within the limits below, and not to `migrate:fresh`.
+</Callout>
+
+#### Known limits
+
+The drop check catches mistakes. It is **not a security boundary**: plugins are
+trusted code that already run in your process with database access, so nothing
+that reads their migration text can stop a plugin set on dropping a table. Two
+limits are accepted:
+
+- **It reads SQL as text.** Where it cannot read a statement with certainty it
+  refuses it: an unterminated string or comment, a MySQL executable comment,
+  and MySQL's backslash escape inside a string (`'it\'s'`), whose meaning
+  depends on a server setting. Write the quote doubled (`'it''s'`) instead.
+  Code written as a string is refused too: `EXECUTE` and `PREPARE`, which run
+  SQL assembled at run time, and on PostgreSQL a `DO`, `CREATE FUNCTION` or
+  `CREATE PROCEDURE` whose body is a quoted string, such as
+  `CREATE FUNCTION f() RETURNS void AS 'DROP TABLE auth__identities' LANGUAGE sql`.
+  Write such bodies with `$$ … $$`, which is read as code. It does not read SQL
+  passed as a string to a function that runs it: that is data to the check, so
+  a drop inside it is not refused. Nor does it see what a PostgreSQL
+  `DROP TABLE … CASCADE`, which generated migrations write, removes besides
+  the table: the views and foreign keys that depend on it, and the tables that
+  inherit from it (`INHERITS`). Only the named table is judged.
+- **On MySQL, development push and an apply planned through drizzle-kit can
+  commit a change before the check refuses.** The checks that read
+  drizzle-kit's plan run after the renames and drops that plan resolves first,
+  and MySQL commits each schema statement as it runs. The next push plans again
+  from the database as it now stands, and converges. `nextly migrate` is not
+  affected: a migration's statements are fixed and checked before any of them
+  runs.
+
+### Boot refusals you may meet
+
+| Code | Meaning |
+| --- | --- |
+| `PLUGIN_SCHEMA_BEHIND` | The plugin expects a newer schema than the database has. Run `nextly migrate`. |
+| `PLUGIN_MIGRATIONS_UNAVAILABLE` | A plugin declares tables and ships no migrations to create them. |
+| `MIGRATION_CHECKSUM_MISMATCH` | A migration changed after it was generated or applied. |
+| `DROP_OF_FOREIGN_TABLE` | A migration would drop or rename another owner's table, column, index, foreign key or check, or a plugin migration a table no owner row claims. Nothing was applied. |
+
+In development, `PLUGIN_SCHEMA_BEHIND` only logs: push reconciles from config
+on every reload, so it resolves itself moments later and refusing would make
+the edit loop impossible.
+
+### Ledger commands and plugin rows
+
+`migrate:down`, `migrate:status`, `migrate:check` and `migrate:resolve` ignore
+plugin rows by default, and take `--plugin <name>` to select one plugin's.
+
+`migrate:status --plugin <name>` lists the modules the configured plugin ships
+beside its ledger rows, as the app's listing does with its files: a module no
+run has applied yet shows as pending, and a recorded module the plugin no
+longer ships shows as applied with its file missing.
+
+The default matters: `migrate:down` picks the newest applied migration of any
+kind, so without the exclusion it would revert a plugin's migration while
+reporting an app rollback.

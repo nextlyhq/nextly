@@ -156,7 +156,7 @@ Before going live, verify:
 - [ ] `NEXTLY_ALLOWED_ORIGINS` lists the origin browsers use whenever it differs from the address the self-hosted server listens on (behind a proxy, by IP or hostname, or in a container), and any additional CSRF origins (separate frontend domain, mobile bundle, etc.).
 - [ ] Storage adapter is configured for non-ephemeral filesystems (no local disk on serverless).
 - [ ] An email provider is configured (Resend, SMTP, or SendLayer) -- without one, password-reset and verification tokens are returned in the API response as a development fallback.
-- [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending).
+- [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending and zero unfinished).
 - [ ] The reverse proxy / load balancer terminates TLS and forwards real client headers.
 - [ ] Database backups are configured (your hosting provider's snapshots, point-in-time recovery, etc.).
 - [ ] Monitoring / error reporting is wired up (Sentry, Datadog, etc.).

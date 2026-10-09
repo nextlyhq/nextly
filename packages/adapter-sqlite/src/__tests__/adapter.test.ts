@@ -628,6 +628,22 @@ describe("SqliteAdapter", () => {
       });
     });
 
+    // A migration records its ledger rows through this handle, so they commit
+    // or roll back with the statements they record. SQLite has one
+    // connection, so the handle is bound to it.
+    it("drizzle() is an instance on the transaction's connection, built once", async () => {
+      const adapter = createSqliteAdapter({ memory: true });
+      await adapter.connect();
+      const CLIENT = adapter.getDrizzle<{ $client: unknown }>().$client;
+      type Handle = { $client: unknown };
+
+      await adapter.transaction(async tx => {
+        const bare = tx.drizzle<Handle>();
+        expect(bare.$client).toBe(CLIENT);
+        expect(tx.drizzle()).toBe(bare);
+      });
+    });
+
     it("should provide savepoint methods", async () => {
       const adapter = createSqliteAdapter({ memory: true });
       await adapter.connect();

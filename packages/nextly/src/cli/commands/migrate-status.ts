@@ -31,8 +31,25 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
-import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import {
+  pluginOfLedgerRow,
+  scopeLedgerRows,
+} from "../../domains/schema/events/ledger-scope";
+import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
+import {
+  SchemaEventsRepository,
+  type SchemaEventRow,
+} from "../../domains/schema/events/schema-events-repository";
+import { attemptUnfinished } from "../../domains/schema/migrate/drift-reconcile";
+import {
+  migrationChecksum,
+  compareModuleNames,
+  orderedMigrations,
+  qualifiedFilename,
+} from "../../domains/schema/migrate/plugin/plugin-migration";
+import { marksNoTransaction } from "../../domains/schema/migrate/split-sql";
 import { describeError } from "../../errors/index";
+import type { PluginDefinition } from "../../plugins/plugin-context";
 import type {
   MigrationErrorJson,
   MigrationRecordStatus,
@@ -53,6 +70,11 @@ import {
   getSortedBaseNames,
 } from "../utils/migration-discovery";
 
+import {
+  NO_TRANSACTION_ROLLBACK_NOTE,
+  PARTIAL_ROLLBACK_NOTE,
+} from "./plugin-module-rollback";
+
 /**
  * Options specific to the migrate:status command
  */
@@ -62,6 +84,10 @@ export interface MigrateStatusCommandOptions {
    * @default false
    */
   json?: boolean;
+  /**
+   * List <name>'s migration rows instead of the app's
+   */
+  plugin?: string;
 }
 
 /**
@@ -84,11 +110,27 @@ interface ParsedMigration {
   filePath: string;
   /** SHA-256 checksum of file content */
   checksum: string;
+  /**
+   * False when the file's first line is `-- nextly:no-transaction`. Absent,
+   * it runs in a transaction.
+   */
+  transaction?: boolean;
   /** Collection slugs (if present in file header) */
   collections: string[];
   /** Timestamp extracted from filename */
   timestamp: string;
 }
+
+/**
+ * What a migration's status is judged from: its ledger key, the checksum of
+ * what would run, and whether it runs outside a transaction. An app file and
+ * a plugin module both reduce to this, so one function compares either with
+ * the ledger (`buildMigrationStatuses`).
+ */
+export type MigrationEntry = Pick<
+  ParsedMigration,
+  "name" | "checksum" | "transaction"
+>;
 
 /**
  * Database migration record (F11 schema). Mirrors `nextly_migrations`.
@@ -97,7 +139,11 @@ interface MigrationRecord {
   id: string;
   filename: string;
   sha256: string;
-  status: MigrationRecordStatus;
+  /**
+   * `unfinished` for an attempt that recorded no outcome (`attemptUnfinished`):
+   * its process stopped, or is still running.
+   */
+  status: MigrationRecordStatus | "unfinished";
   appliedBy: string | null;
   durationMs: number | null;
   errorJson: MigrationErrorJson | null;
@@ -118,11 +164,17 @@ interface MigrationStatus {
     | "applied (modified)"
     | "applied (file missing)"
     | "pending"
-    | "failed";
+    | "failed"
+    | "unfinished";
   appliedAt: Date | null;
   durationMs: number | null;
   errorJson: MigrationErrorJson | null;
   checksumMismatch: boolean;
+  /**
+   * Present when the file is marked to run outside a transaction, so a
+   * failure part-way leaves what ran before it applied.
+   */
+  outsideTransaction?: true;
 }
 
 /**
@@ -140,11 +192,14 @@ interface CollectionPendingChange {
  */
 interface MigrateStatusResult {
   migrations: MigrationStatus[];
+  /** Applied migrations whose latest rollback attempt failed. */
+  failedRollbacks: FailedRollback[];
   collections: CollectionPendingChange[];
   summary: {
     applied: number;
     pending: number;
     failed: number;
+    unfinished: number;
     collectionsWithPendingChanges: number;
   };
 }
@@ -242,18 +297,34 @@ export async function runMigrateStatus(
 
     logger.debug(`Scanning migrations in ${migrationsDir}...`);
 
-    const migrationFiles = await discoverMigrations(migrationsDir, dialect);
+    const migrationFiles = await migrationEntries({
+      plugin: options.plugin,
+      plugins: configResult.config.plugins ?? [],
+      migrationsDir,
+      dialect,
+    });
     logger.debug(`Found ${migrationFiles.length} migration file(s)`);
 
     const appliedMigrations = await getAppliedMigrations(
       adapter as unknown as DrizzleAdapter,
-      dialect
+      dialect,
+      options.plugin
     );
     logger.debug(`${appliedMigrations.length} migration(s) in database`);
 
     const migrationStatuses = buildMigrationStatuses(
       migrationFiles,
       appliedMigrations
+    );
+
+    const failedRollbacks = failedRollbacksSinceApply(
+      appliedMigrations,
+      await new SchemaEventsRepository(
+        (adapter as unknown as DrizzleAdapter).getDrizzle(),
+        dialect
+      )
+        .listFailedRollbacks()
+        .catch(() => [])
     );
 
     const pendingCollections = await getCollectionsWithPendingChanges(
@@ -273,22 +344,45 @@ export async function runMigrateStatus(
       ).length,
       pending: migrationStatuses.filter(m => m.status === "pending").length,
       failed: migrationStatuses.filter(m => m.status === "failed").length,
+      unfinished: migrationStatuses.filter(m => m.status === "unfinished")
+        .length,
       collectionsWithPendingChanges: pendingCollections.length,
     };
 
     if (options.json) {
       const result: MigrateStatusResult = {
         migrations: migrationStatuses,
+        failedRollbacks,
         collections: pendingCollections,
         summary,
       };
       console.log(JSON.stringify(result, null, 2));
     } else {
       displayStatus(migrationStatuses, pendingCollections, summary, context);
+      displayFailedRollbacks(failedRollbacks, context);
     }
   } finally {
     await adapter.disconnect();
   }
+}
+
+/**
+ * The migrations a status run lists: the app's files under its migrations
+ * directory, or with `plugin` the modules that plugin ships.
+ *
+ * A plugin's migrations are modules in its definition, not files under the
+ * app's directory, so they are read from there; a module no run has applied
+ * yet then reads as pending, as an app file without a ledger row does.
+ */
+export async function migrationEntries(args: {
+  plugin?: string;
+  plugins: readonly PluginDefinition[];
+  migrationsDir: string;
+  dialect: SupportedDialect;
+}): Promise<MigrationEntry[]> {
+  return args.plugin
+    ? pluginModuleEntries(args.plugins, args.plugin)
+    : discoverMigrations(args.migrationsDir, args.dialect);
 }
 
 async function discoverMigrations(
@@ -341,6 +435,7 @@ function parseMigrationFile(
     name,
     filePath,
     checksum,
+    transaction: !marksNoTransaction(content),
     collections,
     timestamp,
   };
@@ -350,26 +445,126 @@ function parseMigrationFile(
 // (`file_apply` rows), not the legacy `nextly_migrations` ledger.
 async function getAppliedMigrations(
   adapter: DrizzleAdapter,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  plugin?: string
 ): Promise<MigrationRecord[]> {
   try {
     const repo = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
-    const rows = await repo.listFileApplies();
-    return rows
-      .filter(r => r.status === "applied" || r.status === "failed")
-      .map(r => ({
-        id: r.id,
-        filename: r.filename ?? "",
-        sha256: r.sha256 ?? "",
-        status: r.status === "failed" ? "failed" : "applied",
-        appliedBy: null,
-        durationMs: r.durationMs ?? null,
-        errorJson: null,
-        appliedAt: r.startedAt,
-      }));
+    return ledgerRecords(await repo.listFileApplies(), plugin);
   } catch {
     return [];
   }
+}
+
+/** An applied migration whose latest rollback attempt failed. */
+export interface FailedRollback {
+  filename: string;
+  failedAt: Date;
+  note: string | null;
+  /**
+   * The DOWN may have committed part of its statements: on MySQL, or where
+   * it ran outside a transaction (`outsideTransaction`).
+   */
+  possiblyPartial: boolean;
+  /** The DOWN ran outside a transaction, as its migration is marked to. */
+  outsideTransaction: boolean;
+}
+
+/**
+ * The applied migrations whose most recent rollback failed after they were
+ * applied. The failure does not change the migration's applied state — on
+ * PostgreSQL and SQLite the DOWN was rolled back whole — but on MySQL part
+ * of it may have committed, and the operator needs to know either way that
+ * the schema was touched since.
+ */
+export function failedRollbacksSinceApply(
+  applied: readonly MigrationRecord[],
+  rollbacks: SchemaEventRow[]
+): FailedRollback[] {
+  const newestFailure = newestEventsByFilename(rollbacks);
+  const failures: FailedRollback[] = [];
+  for (const record of applied) {
+    if (record.status !== "applied") continue;
+    const failure = newestFailure.get(record.filename);
+    if (failure === undefined || failure.startedAt <= record.appliedAt) {
+      continue;
+    }
+    failures.push({
+      filename: record.filename,
+      failedAt: failure.startedAt,
+      note: failure.note,
+      possiblyPartial:
+        failure.note?.startsWith(PARTIAL_ROLLBACK_NOTE) === true ||
+        failure.note?.startsWith(NO_TRANSACTION_ROLLBACK_NOTE) === true,
+      outsideTransaction:
+        failure.note?.startsWith(NO_TRANSACTION_ROLLBACK_NOTE) === true,
+    });
+  }
+  return failures;
+}
+
+/** Warns about each applied migration whose rollback failed. */
+function displayFailedRollbacks(
+  failures: readonly FailedRollback[],
+  context: CommandContext
+): void {
+  for (const failure of failures) {
+    const failed = `${failure.filename}: a rollback failed at ${formatDate(failure.failedAt)}`;
+    const compare =
+      "It is still recorded as applied; compare the schema with the migration before running migrate or migrate:down again.";
+    context.logger.warn(
+      failure.outsideTransaction
+        ? `${failed}. Its DOWN ran outside a transaction, so the statements before the failing one stayed applied. ${compare}`
+        : failure.possiblyPartial
+          ? `${failed}, and MySQL may have committed part of its DOWN. ${compare}`
+          : `${failed} and was undone; it is still applied.`
+    );
+  }
+}
+
+/**
+ * Each migration's current state in the ledger: the NEWEST `file_apply`
+ * event per filename, kept when it is `applied`, or an attempt that did not
+ * finish (`attemptUnfinished`: `failed`, or still `in_progress`).
+ *
+ * Newest per filename by `newestEventsByFilename`, the rule `migrate`
+ * and `migrate:down` read the ledger by. A rollback is
+ * recorded as a `rolled_back` event after the `applied` one, and the older
+ * `applied` row stays in the ledger, so only the newest event says whether a
+ * migration is applied now.
+ *
+ * Plugin rows belong to their own migration stream: excluded unless
+ * `plugin` names one, so the app's listing never reports them as
+ * "applied (file missing)".
+ */
+export function ledgerRecords(
+  rows: SchemaEventRow[],
+  plugin?: string
+): MigrationRecord[] {
+  const records: MigrationRecord[] = [];
+  for (const r of newestEventsByFilename(
+    scopeLedgerRows(rows, plugin)
+  ).values()) {
+    // An attempt that never finished is listed as one, not as pending:
+    // `nextly migrate` may refuse it until it is finished or cleared.
+    if (r.status !== "applied" && !attemptUnfinished(r)) continue;
+    records.push({
+      id: r.id,
+      filename: r.filename ?? "",
+      sha256: r.sha256 ?? "",
+      status:
+        r.status === "applied"
+          ? "applied"
+          : r.status === "failed"
+            ? "failed"
+            : "unfinished",
+      appliedBy: null,
+      durationMs: r.durationMs ?? null,
+      errorJson: null,
+      appliedAt: r.startedAt,
+    });
+  }
+  return records;
 }
 
 // F11: small coercion helpers for adapter-returned `Record<string, unknown>`.
@@ -445,8 +640,33 @@ async function getCollectionsWithPendingChanges(
 //   `nextly migrate` will treat the latter as MIGRATION_MISSING (exit 3),
 //   but `migrate:status` keeps surfacing it as a row so operators can
 //   investigate and either restore the file or contact whoever deleted it.
+
+/**
+ * The modules plugin `plugin` ships (`--plugin <name>`), in the order they
+ * run, as the entries their status is judged from.
+ *
+ * Each is keyed by its ledger filename (`qualifiedFilename`) and carries the
+ * checksum of its content as it is now, the value the runner compares an
+ * applied module with, so a module changed since it ran reads as modified.
+ * A plugin the config does not list ships nothing, and each of its recorded
+ * rows reads as applied with its module missing.
+ */
+export function pluginModuleEntries(
+  plugins: readonly PluginDefinition[],
+  plugin: string
+): MigrationEntry[] {
+  const definition = plugins.find(p => p.name === plugin);
+  return orderedMigrations(
+    definition?.contributes?.schema?.migrations ?? []
+  ).map(module => ({
+    name: qualifiedFilename(plugin, module.name),
+    checksum: migrationChecksum(module),
+    transaction: module.transaction !== false,
+  }));
+}
+
 export function buildMigrationStatuses(
-  files: ParsedMigration[],
+  files: readonly MigrationEntry[],
   applied: MigrationRecord[]
 ): MigrationStatus[] {
   const stripSql = (f: string): string => f.replace(/\.sql$/i, "");
@@ -455,12 +675,14 @@ export function buildMigrationStatuses(
 
   for (const file of files) {
     const record = appliedMap.get(stripSql(file.name));
+    const marked =
+      file.transaction === false ? { outsideTransaction: true as const } : {};
 
     if (record) {
       const checksumMismatch = record.sha256 !== file.checksum;
       let status: MigrationStatus["status"];
-      if (record.status === "failed") {
-        status = "failed";
+      if (record.status !== "applied") {
+        status = record.status;
       } else if (checksumMismatch) {
         status = "applied (modified)";
       } else {
@@ -474,6 +696,7 @@ export function buildMigrationStatuses(
         durationMs: record.durationMs,
         errorJson: record.errorJson,
         checksumMismatch,
+        ...marked,
       });
 
       appliedMap.delete(stripSql(file.name));
@@ -485,6 +708,7 @@ export function buildMigrationStatuses(
         durationMs: null,
         errorJson: null,
         checksumMismatch: false,
+        ...marked,
       });
     }
   }
@@ -492,7 +716,8 @@ export function buildMigrationStatuses(
   for (const [filename, record] of appliedMap) {
     statuses.push({
       filename,
-      status: record.status === "failed" ? "failed" : "applied (file missing)",
+      status:
+        record.status === "applied" ? "applied (file missing)" : record.status,
       appliedAt: record.appliedAt,
       durationMs: record.durationMs,
       errorJson: record.errorJson,
@@ -500,7 +725,28 @@ export function buildMigrationStatuses(
     });
   }
 
-  return statuses.sort((a, b) => a.filename.localeCompare(b.filename));
+  return statuses.sort((a, b) =>
+    compareStatusFilenames(a.filename, b.filename)
+  );
+}
+
+/**
+ * The order statuses are listed in: the app's files first, by name, then each
+ * plugin's modules, grouped by plugin, in the order the runner applies them
+ * (`compareModuleNames`). One comparison of whole filenames listed a plugin's
+ * modules in an order of its own, so `10_more` read as after `1_init` here
+ * while it runs before it.
+ */
+function compareStatusFilenames(a: string, b: string): number {
+  const pluginA = pluginOfLedgerRow(a);
+  const pluginB = pluginOfLedgerRow(b);
+  if (pluginA === null || pluginB === null) {
+    if (pluginA !== pluginB) return pluginA === null ? -1 : 1;
+    return a.localeCompare(b);
+  }
+  if (pluginA !== pluginB) return pluginA.localeCompare(pluginB);
+  const prefix = qualifiedFilename(pluginA, "").length;
+  return compareModuleNames(a.slice(prefix), b.slice(prefix));
 }
 
 function displayStatus(
@@ -510,7 +756,6 @@ function displayStatus(
   context: CommandContext
 ): void {
   const { logger } = context;
-  const verbose = context.options.verbose;
 
   if (migrations.length === 0) {
     logger.newline();
@@ -525,7 +770,9 @@ function displayStatus(
     // added Duration so operators can spot slow migrations at a glance.
     const headers = ["Migration", "Status", "Applied At", "Duration"];
     const rows: (string | number | boolean)[][] = migrations.map(m => {
-      const statusDisplay = formatStatusForDisplay(m.status);
+      const statusDisplay = `${formatStatusForDisplay(m.status)}${
+        m.outsideTransaction ? " (no transaction)" : ""
+      }`;
       return [
         m.filename,
         statusDisplay,
@@ -535,75 +782,108 @@ function displayStatus(
     });
 
     logger.table(headers, rows);
-
-    if (verbose) {
-      const failedMigrations = migrations.filter(
-        m => m.status === "failed" && m.errorJson
-      );
-      if (failedMigrations.length > 0) {
-        logger.newline();
-        logger.error("Error Details:");
-        for (const m of failedMigrations) {
-          // F11: render the structured error_json so operators see SQLSTATE
-          // and the failing statement, not just an opaque message.
-          const e = m.errorJson;
-          logger.error(`  ${m.filename}: ${e?.message ?? "unknown error"}`);
-          if (e?.sqlState) logger.error(`    sqlState: ${e.sqlState}`);
-          if (e?.statement) logger.error(`    statement: ${e.statement}`);
-        }
-      }
-
-      const modifiedMigrations = migrations.filter(m => m.checksumMismatch);
-      if (modifiedMigrations.length > 0) {
-        logger.newline();
-        logger.warn("Modified Migrations (checksum mismatch):");
-        for (const m of modifiedMigrations) {
-          logger.warn(`  ${m.filename}`);
-        }
-      }
-    }
+    for (const hint of statusHints(migrations)) logger.info(hint);
+    if (context.options.verbose) logVerboseDetails(migrations, logger);
 
     logger.newline();
-    const summaryParts: string[] = [];
-    if (summary.applied > 0) {
-      summaryParts.push(`${summary.applied} applied`);
-    }
-    if (summary.pending > 0) {
-      summaryParts.push(`${summary.pending} pending`);
-    }
-    if (summary.failed > 0) {
-      summaryParts.push(`${summary.failed} failed`);
-    }
+    const line = summaryLine(summary);
+    if (line !== undefined) logger.info(line);
+  }
 
-    if (summaryParts.length > 0) {
-      logger.info(`Summary: ${summaryParts.join(", ")}`);
+  if (collections.length > 0) logPendingCollections(collections, logger);
+}
+
+/** The notes under the table that explain a status some row shows. */
+function statusHints(migrations: readonly MigrationStatus[]): string[] {
+  const hints: string[] = [];
+  if (migrations.some(m => m.status === "unfinished")) {
+    hints.push(
+      "(unfinished): its last attempt recorded no outcome: the process running it stopped, or is still running. `nextly migrate` refuses one that runs outside a transaction, or any on MySQL, until it is finished by hand and recorded, or reversed and cleared with `nextly migrate:resolve --failed-cleanup <file>`."
+    );
+  }
+  if (migrations.some(m => m.outsideTransaction && m.status === "pending")) {
+    hints.push(
+      "(no transaction): marked -- nextly:no-transaction (a plugin module: transaction: false), so it runs outside a transaction; if a statement fails, the statements before it stay applied."
+    );
+  }
+  return hints;
+}
+
+/** `--verbose`: each failure's recorded error, and each edited migration. */
+function logVerboseDetails(
+  migrations: readonly MigrationStatus[],
+  logger: CommandContext["logger"]
+): void {
+  const failedMigrations = migrations.filter(
+    m => m.status === "failed" && m.errorJson
+  );
+  if (failedMigrations.length > 0) {
+    logger.newline();
+    logger.error("Error Details:");
+    for (const m of failedMigrations) {
+      // F11: render the structured error_json so operators see SQLSTATE
+      // and the failing statement, not just an opaque message.
+      const e = m.errorJson;
+      logger.error(`  ${m.filename}: ${e?.message ?? "unknown error"}`);
+      if (e?.sqlState) logger.error(`    sqlState: ${e.sqlState}`);
+      if (e?.statement) logger.error(`    statement: ${e.statement}`);
     }
   }
 
-  if (collections.length > 0) {
+  const modifiedMigrations = migrations.filter(m => m.checksumMismatch);
+  if (modifiedMigrations.length > 0) {
     logger.newline();
-    logger.divider();
-    logger.newline();
-    logger.info("Collections with Pending Changes");
-    logger.newline();
-
-    const collHeaders = ["Collection", "Slug", "Status"];
-    const collRows: (string | number | boolean)[][] = collections.map(c => [
-      c.name,
-      c.slug,
-      c.migrationStatus,
-    ]);
-
-    logger.table(collHeaders, collRows);
-
-    logger.newline();
-    logger.info(
-      `${formatCount(collections.length, "collection")} with pending schema changes.`
-    );
-    logger.info(
-      'Run `nextly migrate:create --name="<migration-name>"` to generate migrations.'
-    );
+    logger.warn("Modified Migrations (checksum mismatch):");
+    for (const m of modifiedMigrations) {
+      logger.warn(`  ${m.filename}`);
+    }
   }
+}
+
+/** The summary line, naming each non-zero count, or undefined for none. */
+export function summaryLine(
+  summary: MigrateStatusResult["summary"]
+): string | undefined {
+  const parts = (
+    [
+      [summary.applied, "applied"],
+      [summary.pending, "pending"],
+      [summary.failed, "failed"],
+      [summary.unfinished, "unfinished"],
+    ] as const
+  )
+    .filter(([count]) => count > 0)
+    .map(([count, label]) => `${count} ${label}`);
+  return parts.length > 0 ? `Summary: ${parts.join(", ")}` : undefined;
+}
+
+/** The collections whose schema changed with no migration for it yet. */
+function logPendingCollections(
+  collections: readonly CollectionPendingChange[],
+  logger: CommandContext["logger"]
+): void {
+  logger.newline();
+  logger.divider();
+  logger.newline();
+  logger.info("Collections with Pending Changes");
+  logger.newline();
+
+  const collHeaders = ["Collection", "Slug", "Status"];
+  const collRows: (string | number | boolean)[][] = collections.map(c => [
+    c.name,
+    c.slug,
+    c.migrationStatus,
+  ]);
+
+  logger.table(collHeaders, collRows);
+
+  logger.newline();
+  logger.info(
+    `${formatCount(collections.length, "collection")} with pending schema changes.`
+  );
+  logger.info(
+    'Run `nextly migrate:create --name="<migration-name>"` to generate migrations.'
+  );
 }
 
 // F11: render the status union as a human-friendly string. Title-cased
@@ -622,6 +902,8 @@ function formatStatusForDisplay(status: MigrationStatus["status"]): string {
       return "Pending";
     case "failed":
       return "Failed";
+    case "unfinished":
+      return "Unfinished";
   }
 }
 
@@ -646,6 +928,7 @@ export function registerMigrateStatusCommand(program: Command): void {
     .command("migrate:status")
     .description("Show current migration status")
     .option("--json", "Output as JSON for scripting/CI", false)
+    .option("--plugin <name>", "List <name>'s migrations instead of the app's")
     .action(async (cmdOptions: MigrateStatusCommandOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);

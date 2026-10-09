@@ -145,6 +145,18 @@ export function systemColumnDefaultSql(
   const value = shape.default;
   if (!value) return undefined;
   if (value.kind === "literal") return `'${value.value}'`;
+  return currentTimestampSql(dialect);
+}
+
+/**
+ * The dialect's expression for "the current moment", as a DDL default.
+ *
+ * Extracted because extension columns need exactly this answer for their `now`
+ * token, and a second spelling of it would mean `created_at` on a core table
+ * and `created_at` on a plugin table disagreeing — which the diff would read as
+ * a default change on every apply.
+ */
+export function currentTimestampSql(dialect: SystemColumnDialect): string {
   if (dialect === "postgresql") return "now()";
   if (dialect === "mysql") return "CURRENT_TIMESTAMP";
   return "(strftime('%s', 'now'))";

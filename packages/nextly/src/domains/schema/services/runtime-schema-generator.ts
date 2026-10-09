@@ -24,6 +24,11 @@ import {
   double as mysqlDouble,
   decimal as mysqlDecimal,
   int as mysqlInt,
+  bigint as mysqlBigint,
+  smallint as mysqlSmallint,
+  char as mysqlChar,
+  float as mysqlFloat,
+  longblob as mysqlLongblob,
 } from "drizzle-orm/mysql-core";
 import {
   pgTable,
@@ -35,18 +40,35 @@ import {
   numeric as pgNumeric,
   varchar as pgVarchar,
   integer as pgInteger,
+  bigint as pgBigint,
+  smallint as pgSmallint,
+  char as pgChar,
+  uuid as pgUuid,
+  real as pgReal,
+  serial as pgSerial,
+  bytea as pgBytea,
 } from "drizzle-orm/pg-core";
 import {
+  check as sqliteCheck,
   sqliteTable,
   text as sqliteText,
   integer as sqliteInteger,
   real as sqliteReal,
   numeric as sqliteNumeric,
+  blob as sqliteBlob,
 } from "drizzle-orm/sqlite-core";
 
+import { sqliteTimestamp } from "../../../schemas/_internal/sqlite-timestamp";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type { LocalizedColumnSpec } from "../../i18n/migration/types";
+import { getActiveExtensionSchema } from "../extension/active-schema";
+import {
+  toColumnDescriptor,
+  withDeclaredKeyAndDefault,
+} from "../extension/column-descriptor";
+import { enumChecks } from "../extension/enum-check";
+import type { ExtensionColumn } from "../extension/types";
 
 import {
   type ColumnDescriptor,
@@ -55,6 +77,7 @@ import {
   type SupportedDialect as DescriptorDialect,
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
+  ENUM_STORAGE_LENGTH,
   getColumnDescriptor,
   getSystemColumnDescriptors,
   toSnakeCase,
@@ -107,6 +130,20 @@ export interface RuntimeSchemaOptions {
    * owner column. Set internally by generateRuntimeSchema from the table name.
    */
   isSingle?: boolean;
+  /**
+   * Columns a schema hook contributed to THIS table.
+   *
+   * Defaulted from the active extension schema rather than required, because
+   * this generator is called from roughly twenty-five places and a
+   * contributed column missing from any one of them is worse than missing
+   * everywhere: the table would then be built without a column the desired
+   * spec has, and the next push would propose it as an add on a column that is
+   * already there.
+   *
+   * An explicit value still wins, so a test can build a table without
+   * reaching process state.
+   */
+  extensionColumns?: readonly ExtensionColumn[];
 }
 
 /**
@@ -129,6 +166,8 @@ export function generateRuntimeSchema(
   const resolvedOptions: RuntimeSchemaOptions = {
     ...options,
     isSingle: options.isSingle ?? tableName.startsWith("single_"),
+    extensionColumns:
+      options.extensionColumns ?? contributedColumnsFor(tableName, dialect),
   };
   let table: unknown;
   switch (dialect) {
@@ -253,6 +292,79 @@ function buildCompanionColumnRecord(
   return out;
 }
 
+/**
+ * The columns schema hooks contributed to `tableName`, from the active
+ * extension schema.
+ *
+ * One lookup for every runtime-table builder, so an entity table and a
+ * field-group table cannot disagree about whether a contribution exists.
+ */
+export function contributedColumnsFor(
+  tableName: string,
+  dialect: SupportedDialect
+): readonly ExtensionColumn[] {
+  return getActiveExtensionSchema(dialect)?.entityColumns.get(tableName) ?? [];
+}
+
+/**
+ * Add contributed columns to a runtime table's column record, in place.
+ *
+ * Keyed by their SQL name exactly as `toDrizzleTable` keys an extension
+ * table's own — so one column has one key wherever it is read from, and
+ * `ctx.db` sees the same handle on both.
+ *
+ * They must be in every runtime table and not only in the desired spec: the
+ * runtime tables are what drizzle-kit is handed, so a table built without them
+ * is created without them and the next push proposes DROPPING a column the
+ * desired spec still asks for. Present but unhidden, they reach every entry
+ * response — which is why `hidden` exists and why the response boundary strips
+ * them.
+ *
+ * A name the record already holds is left alone: a contribution never
+ * displaces a system or field column.
+ */
+export function addContributedDrizzleColumns(
+  // Drizzle's column builders are dialect-specific unions; the record is
+  // handed straight to pgTable / mysqlTable / sqliteTable.
+  columns: Record<string, unknown>,
+  contributed: readonly ExtensionColumn[],
+  dialect: SupportedDialect
+): void {
+  for (const column of contributed) {
+    if (column.name in columns) continue;
+    // With the declared default, through the one helper an extension table's
+    // own columns use. The desired spec keeps the default (`toColumnSpec`),
+    // so a builder without it described a different column: on the
+    // drizzle-kit route a NOT NULL contribution was added with no default —
+    // refused on a table that already has rows — or had its default removed,
+    // and an entry write omitting the hidden column then failed NOT NULL.
+    columns[column.name] = withDeclaredKeyAndDefault(
+      buildUserDrizzleColumn(toColumnDescriptor(column, dialect), dialect),
+      column,
+      dialect
+    );
+  }
+}
+
+/**
+ * The enum checks of the columns contributed to a SQLite runtime table.
+ *
+ * SQLite accepts a check nowhere but `CREATE TABLE`, and a change to one is
+ * applied by rebuilding the table from its runtime definition — so a check
+ * the desired spec carries and this definition lacks is never created, and a
+ * rebuild for any other reason would remove it. From `enumChecks`, the one
+ * source of the names and SQL the diff compares; PostgreSQL and MySQL add
+ * them with statements of their own instead, as they do for extension tables.
+ */
+export function contributedSqliteChecks(
+  tableName: string,
+  contributed: readonly ExtensionColumn[]
+): ReturnType<typeof sqliteCheck>[] {
+  return enumChecks(tableName, contributed, "sqlite").map(spec =>
+    sqliteCheck(spec.name, sql.raw(spec.sql))
+  );
+}
+
 function generatePostgresSchema(
   tableName: string,
   fields: FieldDefinition[],
@@ -277,7 +389,11 @@ function generateSQLiteSchema(
   options: RuntimeSchemaOptions
 ): unknown {
   const columns = buildDrizzleColumnRecord(fields, "sqlite", options);
-  return sqliteTable(tableName, columns);
+  const checks = contributedSqliteChecks(
+    tableName,
+    options.extensionColumns ?? []
+  );
+  return sqliteTable(tableName, columns, () => checks);
 }
 
 /**
@@ -340,6 +456,8 @@ function buildDrizzleColumnRecord(
     if (!desc) continue;
     out[field.name] = buildUserDrizzleColumn(desc, dialect);
   }
+
+  addContributedDrizzleColumns(out, options.extensionColumns ?? [], dialect);
 
   return out;
 }
@@ -434,11 +552,42 @@ function buildSystemDrizzleColumn(
 }
 
 /**
+ * Apply nullability once, rather than in every arm.
+ *
+ * Each builder below had `nullable ? col : col.notNull()` repeated per kind,
+ * which doubled the branch count of a function that is otherwise a lookup.
+ * The arms now return the column and this decides.
+ */
+function withNullability(column: unknown, nullable: boolean): unknown {
+  if (nullable) return column;
+  const chainable = column as { notNull?: () => unknown };
+  return typeof chainable.notNull === "function" ? chainable.notNull() : column;
+}
+
+/**
+ * The `created_at` / `updated_at` pair every SQLite runtime table built from
+ * fields declares: integer timestamps, not null, stamped by the application,
+ * since SQLite has no timestamp default of its own that Drizzle reads back as
+ * a Date.
+ */
+export function sqliteTimestampColumns(): {
+  created_at: unknown;
+  updated_at: unknown;
+} {
+  // The one builder for an application-stamped SQLite timestamp, shared with
+  // the core tables' own `created_at` / `updated_at`.
+  return {
+    created_at: sqliteTimestamp("created_at"),
+    updated_at: sqliteTimestamp("updated_at"),
+  };
+}
+
+/**
  * Translates a user-field descriptor into the appropriate Drizzle
  * column builder. The descriptor's `kind` is the dispatch key —
  * the per-dialect Drizzle imports stay isolated to this function.
  */
-function buildUserDrizzleColumn(
+export function buildUserDrizzleColumn(
   desc: ColumnDescriptor,
   dialect: SupportedDialect
 ): unknown {
@@ -473,7 +622,7 @@ function decimalConfig(desc: ColumnDescriptor): {
   };
 }
 
-function buildPgColumnFromKind(
+export function buildPgColumnFromKind(
   kind: ColumnKind,
   name: string,
   nullable: boolean,
@@ -483,37 +632,68 @@ function buildPgColumnFromKind(
     case "text":
     case "longText":
     case "varchar":
-      return nullable ? pgText(name) : pgText(name).notNull();
+      return withNullability(pgText(name), nullable);
     case "shortText": {
       // The one string kind PostgreSQL bounds. The others render `text` there, so binding this as
       // text too would leave the ORM describing a column the DDL declared with a width.
       const col = pgVarchar(name, { length: desc.length ?? 255 });
-      return nullable ? col : col.notNull();
+      return withNullability(col, nullable);
     }
     case "boolean":
-      return nullable ? pgBoolean(name) : pgBoolean(name).notNull();
+      return withNullability(pgBoolean(name), nullable);
     case "integer":
-      return nullable ? pgInteger(name) : pgInteger(name).notNull();
+      return withNullability(pgInteger(name), nullable);
     case "double":
-      return nullable
-        ? pgDoublePrecision(name)
-        : pgDoublePrecision(name).notNull();
+      return withNullability(pgDoublePrecision(name), nullable);
     case "decimal": {
       const col = pgNumeric(name, decimalConfig(desc));
-      return nullable ? col : col.notNull();
+      return withNullability(col, nullable);
     }
     case "timestamp":
-      return nullable ? pgTimestamp(name) : pgTimestamp(name).notNull();
+      return withNullability(pgTimestamp(name), nullable);
     case "json":
-      return nullable ? pgJsonb(name) : pgJsonb(name).notNull();
+      return withNullability(pgJsonb(name), nullable);
     case "fkSingle":
       return pgText(name);
+    // Extension-only kinds. Omitting them does NOT fail to compile — this
+    // function returns `unknown`, so a missing case falls through to
+    // `undefined` and the table receives a non-column. Every kind is listed
+    // for that reason.
+    case "bigint": {
+      const col = pgBigint(name, { mode: "number" });
+      return withNullability(col, nullable);
+    }
+    case "smallint":
+      return withNullability(pgSmallint(name), nullable);
+    case "serial":
+      // The database assigns it, so it is never nullable and never written:
+      // `withNullability` is deliberately not applied, because a generated
+      // key declared nullable would let an insert send an explicit NULL.
+      return pgSerial(name);
+    case "char": {
+      const col = pgChar(name, { length: desc.length ?? 1 });
+      return withNullability(col, nullable);
+    }
+    case "uuid":
+      return withNullability(pgUuid(name), nullable);
+    case "real":
+      return withNullability(pgReal(name), nullable);
+    case "bytes":
+      // `bytea`, the type the descriptor renders and the migration creates,
+      // so a table pushed from this builder and one built by the migration
+      // are the same physical column. Reads and writes are Buffers.
+      return withNullability(pgBytea(name), nullable);
+    case "enum":
+      // A native PostgreSQL enum needs its TYPE, which this builder has no
+      // handle on. Text keeps reads and writes working; the constraint is
+      // carried by the migration.
+      return withNullability(pgText(name), nullable);
     case "skip":
       return null;
   }
 }
 
-function buildMysqlColumnFromKind(
+export function buildMysqlColumnFromKind(
   kind: ColumnKind,
   name: string,
   nullable: boolean,
@@ -525,32 +705,64 @@ function buildMysqlColumnFromKind(
     case "shortText":
     case "varchar": {
       const col = mysqlVarchar(name, { length: length ?? 255 });
-      return nullable ? col : col.notNull();
+      return withNullability(col, nullable);
     }
     case "longText":
-      return nullable ? mysqlText(name) : mysqlText(name).notNull();
+      return withNullability(mysqlText(name), nullable);
     case "boolean":
-      return nullable ? mysqlBoolean(name) : mysqlBoolean(name).notNull();
+      return withNullability(mysqlBoolean(name), nullable);
     case "integer":
-      return nullable ? mysqlInt(name) : mysqlInt(name).notNull();
+      return withNullability(mysqlInt(name), nullable);
     case "double":
-      return nullable ? mysqlDouble(name) : mysqlDouble(name).notNull();
+      return withNullability(mysqlDouble(name), nullable);
     case "decimal": {
       const col = mysqlDecimal(name, decimalConfig(desc));
-      return nullable ? col : col.notNull();
+      return withNullability(col, nullable);
     }
     case "timestamp":
-      return nullable ? mysqlTimestamp(name) : mysqlTimestamp(name).notNull();
+      return withNullability(mysqlTimestamp(name), nullable);
     case "json":
-      return nullable ? mysqlJson(name) : mysqlJson(name).notNull();
+      return withNullability(mysqlJson(name), nullable);
     case "fkSingle":
       return mysqlVarchar(name, { length: length ?? 36 });
+    // See the PostgreSQL builder: a missing case falls through to `undefined`
+    // rather than failing to compile, so every kind is listed.
+    case "bigint": {
+      const col = mysqlBigint(name, { mode: "number" });
+      return withNullability(col, nullable);
+    }
+    case "smallint":
+      return withNullability(mysqlSmallint(name), nullable);
+    case "serial":
+      // `.autoincrement()` is what makes it AUTO_INCREMENT; MySQL requires
+      // such a column to be a key, which the DDL declares.
+      return mysqlInt(name).autoincrement().notNull();
+    case "char": {
+      const col = mysqlChar(name, { length: length ?? 1 });
+      return withNullability(col, nullable);
+    }
+    case "uuid": {
+      const col = mysqlChar(name, { length: 36 });
+      return withNullability(col, nullable);
+    }
+    case "real":
+      return withNullability(mysqlFloat(name), nullable);
+    case "bytes":
+      // `longblob`, as the descriptor renders it: variable length and
+      // unbounded, where a fixed `binary(n)` would pad every value to n bytes
+      // and refuse a longer one. Buffer mode, so values round-trip as bytes.
+      return withNullability(mysqlLongblob(name), nullable);
+    case "enum": {
+      // The width the descriptor renders, from the one constant both read.
+      const col = mysqlVarchar(name, { length: ENUM_STORAGE_LENGTH });
+      return withNullability(col, nullable);
+    }
     case "skip":
       return null;
   }
 }
 
-function buildSqliteColumnFromKind(
+export function buildSqliteColumnFromKind(
   kind: ColumnKind,
   name: string,
   nullable: boolean
@@ -560,32 +772,78 @@ function buildSqliteColumnFromKind(
     case "longText":
     case "shortText":
     case "varchar":
-      return nullable ? sqliteText(name) : sqliteText(name).notNull();
+      return withNullability(sqliteText(name), nullable);
     case "boolean":
-      return nullable
-        ? sqliteInteger(name, { mode: "boolean" })
-        : sqliteInteger(name, { mode: "boolean" }).notNull();
+      return withNullability(
+        sqliteInteger(name, { mode: "boolean" }),
+        nullable
+      );
     case "integer":
-      return nullable ? sqliteInteger(name) : sqliteInteger(name).notNull();
+      return withNullability(sqliteInteger(name), nullable);
     case "double":
-      return nullable ? sqliteReal(name) : sqliteReal(name).notNull();
+      return withNullability(sqliteReal(name), nullable);
     case "decimal": {
       // SQLite has no fixed-precision decimal; NUMERIC affinity is the closest,
       // read back as a JS number to match the field's value contract.
       const col = sqliteNumeric(name, { mode: "number" });
-      return nullable ? col : col.notNull();
+      return withNullability(col, nullable);
     }
     case "timestamp":
-      return nullable
-        ? sqliteInteger(name, { mode: "timestamp" })
-        : sqliteInteger(name, { mode: "timestamp" }).notNull();
+      return withNullability(
+        sqliteInteger(name, { mode: "timestamp" }),
+        nullable
+      );
     case "json":
       // SQLite stores JSON as text.
-      return nullable ? sqliteText(name) : sqliteText(name).notNull();
+      return withNullability(sqliteText(name), nullable);
     case "fkSingle":
       return sqliteText(name);
     case "skip":
       return null;
+    default:
+      return buildSqliteExtensionColumn(kind, name, nullable);
+  }
+}
+
+/**
+ * The kinds only an extension table can declare.
+ *
+ * Split from the field kinds above because they are a different list with a
+ * different author: a field kind comes from a collection's config, these come
+ * from the schema DSL. Kept apart so neither switch grows past the point
+ * where a missing case is easy to see — and a missing case here returns
+ * `undefined`, which Drizzle accepts as a non-column.
+ */
+function buildSqliteExtensionColumn(
+  kind: Exclude<ColumnKind, "skip">,
+  name: string,
+  nullable: boolean
+): unknown {
+  switch (kind) {
+    // SQLite has one integer type and one text type, so most of these
+    // collapse — the declaration stays portable because what it promises is
+    // the value's shape, not the storage word.
+    case "bigint":
+    case "smallint":
+      return withNullability(sqliteInteger(name), nullable);
+    case "serial":
+      // SQLite has no serial type: a plain INTEGER that is the table's
+      // primary key IS the rowid alias and auto-assigns, which is the closest
+      // faithful rendering and the one `renderDialectType` describes.
+      return sqliteInteger(name).notNull();
+    case "char":
+    case "uuid":
+    case "enum":
+      return withNullability(sqliteText(name), nullable);
+    case "real":
+      return withNullability(sqliteReal(name), nullable);
+    case "bytes":
+      // Buffer mode: without it Drizzle's SQLite blob is its JSON mode, which
+      // stores `JSON.stringify(value)` and reads back a parsed object, so the
+      // bytes written would not be the bytes read.
+      return withNullability(sqliteBlob(name, { mode: "buffer" }), nullable);
+    default:
+      return undefined;
   }
 }
 

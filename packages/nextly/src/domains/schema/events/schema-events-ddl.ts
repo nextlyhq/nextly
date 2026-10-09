@@ -12,6 +12,22 @@
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
+/**
+ * Create the events table and its indexes when the database does not have
+ * it: the one ledger bootstrap the CLI, the production boot and the
+ * development boot each run before a migrate records anything.
+ */
+export async function ensureSchemaEventsTable(adapter: {
+  dialect: Dialect;
+  tableExists(name: string): Promise<boolean>;
+  executeQuery(sql: string): Promise<unknown>;
+}): Promise<void> {
+  if (await adapter.tableExists("nextly_schema_events")) return;
+  for (const stmt of getSchemaEventsDdl(adapter.dialect)) {
+    await adapter.executeQuery(stmt);
+  }
+}
+
 /** Returns the ordered DDL statements that create the events table + indexes. */
 export function getSchemaEventsDdl(dialect: Dialect): string[] {
   switch (dialect) {
@@ -26,6 +42,12 @@ export function getSchemaEventsDdl(dialect: Dialect): string[] {
           sha256 TEXT,
           scope_kind TEXT,
           scope_slug TEXT,
+          -- Nullable and additive: an existing row has no owner, which reads
+          -- as core or app — what every row written before plugins could own
+          -- a migration actually was.
+          owner_kind TEXT,
+          owner_id TEXT,
+          owner_version TEXT,
           started_at TIMESTAMPTZ NOT NULL,
           ended_at TIMESTAMPTZ,
           duration_ms INTEGER,
@@ -60,6 +82,10 @@ export function getSchemaEventsDdl(dialect: Dialect): string[] {
           sha256 VARCHAR(64),
           scope_kind VARCHAR(32),
           scope_slug VARCHAR(255),
+          -- Nullable and additive; see the PostgreSQL block.
+          owner_kind VARCHAR(32),
+          owner_id VARCHAR(255),
+          owner_version VARCHAR(64),
           started_at DATETIME(3) NOT NULL,
           ended_at DATETIME(3),
           duration_ms INT,
@@ -92,6 +118,12 @@ export function getSchemaEventsDdl(dialect: Dialect): string[] {
           sha256 TEXT,
           scope_kind TEXT,
           scope_slug TEXT,
+          -- Nullable and additive: an existing row has no owner, which reads
+          -- as core or app — what every row written before plugins could own
+          -- a migration actually was.
+          owner_kind TEXT,
+          owner_id TEXT,
+          owner_version TEXT,
           started_at INTEGER NOT NULL,
           ended_at INTEGER,
           duration_ms INTEGER,

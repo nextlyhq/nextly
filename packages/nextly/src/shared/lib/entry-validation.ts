@@ -26,6 +26,7 @@
 import safeRegex from "safe-regex2";
 
 import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../collections/fields/catalog";
+import { isVirtualField } from "../../collections/fields/virtual";
 import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
 import type { ValidationPublicData } from "../../errors/public-data";
 import type { PluginFieldType } from "../../plugins/contributions";
@@ -57,6 +58,8 @@ export interface ValidatableField {
   type: string;
   label?: unknown;
   required?: boolean;
+  /** The root virtual flag; see `isVirtualField` for both spellings. */
+  virtual?: boolean;
   hasMany?: boolean;
   /**
    * Select/radio choices in FieldConfig shape; FieldDefinition reuses the
@@ -117,6 +120,20 @@ function rule(field: ValidatableField, key: string): unknown {
 function numberRule(field: ValidatableField, key: string): number | undefined {
   const v = rule(field, key);
   return typeof v === "number" ? v : undefined;
+}
+
+/**
+ * Whether a write is judged against this field at all.
+ *
+ * A virtual field stores nothing: a value sent for it is dropped before the
+ * write and its value is computed after a read. Neither its `required` rule
+ * nor any other has a stored value to hold, so a create that correctly omits
+ * it is not missing anything, and a value that is about to be discarded is
+ * not one to refuse. Exported because anything deciding whether a document
+ * would pass this validator has to leave the same fields out.
+ */
+export function isJudgedOnWrite(field: ValidatableField): boolean {
+  return !isVirtualField(field);
 }
 
 /**
@@ -757,6 +774,7 @@ async function validateFields(
 ): Promise<void> {
   for (const field of fields) {
     if (!field.name) continue;
+    if (!isJudgedOnWrite(field)) continue;
     const path = basePath ? `${basePath}.${field.name}` : field.name;
     // Own keys only. Field names may be camelCase, so `toString` is a legal
     // one, and `in` would answer for the prototype: the field would read as

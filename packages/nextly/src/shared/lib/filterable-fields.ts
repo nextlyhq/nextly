@@ -30,20 +30,32 @@ const STRUCTURAL_KEYS = new Set(["and", "or"]);
  * KEY is a field name and whose value is the operator object.
  */
 function referencedFields(node: unknown, into: Set<string>): void {
-  if (!node || typeof node !== "object") return;
+  // `a.b` addresses a nested field; the guard below is keyed on the field
+  // that OWNS the rule, so compare on the first segment.
+  for (const key of filterKeys(node)) into.add(key.split(".")[0]);
+}
+
+/**
+ * Every key a filter names, whole, at any nesting depth: `a.b` stays `a.b`.
+ *
+ * The one walk of a filter's shape. `referencedFields` reduces it to the
+ * owning fields, and a caller judging where a dotted key resolves (a
+ * component table rather than the entity's own) reads the whole key from it.
+ */
+export function filterKeys(
+  node: unknown,
+  into = new Set<string>()
+): Set<string> {
+  if (!node || typeof node !== "object") return into;
   if (Array.isArray(node)) {
-    for (const child of node) referencedFields(child, into);
-    return;
+    for (const child of node) filterKeys(child, into);
+    return into;
   }
   for (const [key, value] of Object.entries(node)) {
-    if (STRUCTURAL_KEYS.has(key)) {
-      referencedFields(value, into);
-      continue;
-    }
-    // `a.b` addresses a nested field; the guard below is keyed on the field
-    // that OWNS the rule, so compare on the first segment.
-    into.add(key.split(".")[0]);
+    if (STRUCTURAL_KEYS.has(key)) filterKeys(value, into);
+    else into.add(key);
   }
+  return into;
 }
 
 /**
@@ -246,6 +258,50 @@ export function assertFilterableFields(
 
   const denied = protectedFields(kind, slug, referenced);
   if (denied.length > 0) refuse(denied, "where");
+}
+
+/**
+ * Refuse a filter that names a column hidden from the entry API.
+ *
+ * A column a schema hook contributes as hidden is stripped from every row a
+ * read returns, but a filter on it changes WHICH rows come back, so a caller
+ * could guess its value one query at a time and read the answer off the
+ * result. Judged for every caller, trusted or not, because the strip applies
+ * to trusted reads too, and refused rather than ignored: ignoring a filter
+ * answers a wider question than the one asked.
+ *
+ * `isHidden` is the read table's `hiddenColumnMatcher`, so a key is judged in
+ * either spelling; nested `and`/`or` leaves and the first segment of a dotted
+ * path are judged as `assertFilterableFields` judges them. A dotted path that
+ * reaches a component table names that table's columns, not this one's, so
+ * the caller judges it against the component table as well.
+ */
+export function assertNoHiddenColumnFilter(
+  where: unknown,
+  isHidden: (key: string) => boolean
+): void {
+  const referenced = new Set<string>();
+  referencedFields(where, referenced);
+  refuseHiddenColumnFilter([...referenced].filter(isHidden));
+}
+
+/**
+ * Refuse these filter keys, each found to name a hidden column, if any.
+ *
+ * The one refusal for a filter on a hidden column, whichever table the key
+ * resolves to: the entity's own, judged by `assertNoHiddenColumnFilter`, or a
+ * component table a dotted key reaches, judged by its caller against that
+ * table's `hiddenColumnMatcher`.
+ */
+export function refuseHiddenColumnFilter(keys: readonly string[]): void {
+  if (keys.length === 0) return;
+  throw NextlyError.validation({
+    errors: [...keys].sort().map(field => ({
+      path: `where.${field}`,
+      code: REFUSALS.where.code,
+      message: `"${field}" is not a column on this collection, so there is nothing to filter on.`,
+    })),
+  });
 }
 
 /**

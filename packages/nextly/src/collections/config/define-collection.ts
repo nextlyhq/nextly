@@ -34,6 +34,7 @@
 import type { BeforeOperationHandler, HookHandler } from "@nextly/hooks/types";
 
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
+import type { CollectionDbOptions } from "../../domains/collections/services/collection-id";
 import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { WebhookEventType } from "../../domains/webhooks/types";
@@ -620,7 +621,7 @@ export interface CustomEndpoint {
  * const config: IndexConfig = {
  *   fields: ['slug', 'locale'],
  *   unique: true,
- *   name: 'slug_locale_unique',
+ *   name: 'uq_slug_locale',
  * };
  * ```
  */
@@ -648,10 +649,12 @@ export interface IndexConfig {
   /**
    * Optional custom index name.
    *
-   * If not provided, a name is auto-generated using the pattern:
-   * `{tableName}_{field1}_{field2}_idx` (or `_unique` for unique indexes)
+   * Must start with `idx_` (or `uq_` for a unique index): those are the names
+   * schema changes manage, so an index removed from the config is dropped
+   * from the database. If not provided, one is derived from the table and
+   * columns with the same prefixes.
    *
-   * @example 'posts_author_status_idx'
+   * @example 'idx_posts_author_status'
    */
   name?: string;
 }
@@ -882,6 +885,16 @@ export interface CollectionConfig {
    * Admin panel configuration options.
    */
   admin?: CollectionAdminOptions;
+
+  /**
+   * @experimental Per-collection database options.
+   *
+   * Storage-level choices that no field expresses: which id a create
+   * generates, and whether a create may supply one. Both leave the column
+   * unchanged — every id here is 36 characters — so neither needs a
+   * migration, and relations pointing at this collection are unaffected.
+   */
+  db?: CollectionDbOptions;
 
   /**
    * Collection-level access control.

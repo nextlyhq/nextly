@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { NextlyError } from "../errors/nextly-error";
 import type { PluginDefinition } from "./plugin-context";
 import { z } from "zod";
 
@@ -261,5 +262,264 @@ describe("a plugin event under a reserved prefix", () => {
     expect(() =>
       assertPluginManifests([declaring("t-cache.cleared")])
     ).not.toThrow();
+  });
+});
+
+describe("resolvePlugins: schemaVersion declarations", () => {
+  const opts = { coreVersion: "0.0.2-alpha.66" };
+
+  it("refuses a schemaVersion with no migrations to reach it", () => {
+    expect(() =>
+      resolvePlugins(
+        [p("stub", { schemaVersion: 2 } as Partial<PluginDefinition>)],
+        opts
+      )
+    ).toThrow(NextlyError);
+  });
+
+  it("refuses a schemaVersion its newest migration does not equal", () => {
+    expect(() =>
+      resolvePlugins(
+        [
+          p("stub", {
+            schemaVersion: 3,
+            contributes: {
+              schema: {
+                migrations: [
+                  {
+                    name: "001",
+                    schemaVersion: 1,
+                    checksum: "a",
+                    dialects: {} as never,
+                    snapshot: {} as never,
+                    before: {} as never,
+                  },
+                  {
+                    name: "002",
+                    schemaVersion: 2,
+                    checksum: "b",
+                    dialects: {} as never,
+                    snapshot: {} as never,
+                    before: {} as never,
+                  },
+                ],
+              },
+            },
+          } as Partial<PluginDefinition>),
+        ],
+        opts
+      )
+    ).toThrow(NextlyError);
+  });
+
+  it("accepts a declaration its newest migration reaches", () => {
+    expect(
+      resolvePlugins(
+        [
+          p("stub", {
+            schemaVersion: 2,
+            contributes: {
+              schema: {
+                migrations: [
+                  {
+                    name: "002",
+                    schemaVersion: 2,
+                    checksum: "b",
+                    dialects: {} as never,
+                    snapshot: {} as never,
+                    before: {} as never,
+                  },
+                ],
+              },
+            },
+          } as Partial<PluginDefinition>),
+        ],
+        opts
+      )
+    ).toHaveLength(1);
+  });
+
+  /** A plugin declaring `schemaVersion` with modules of these names and versions. */
+  const shipping = (
+    declared: number,
+    modules: Array<[name: string, version: number]>
+  ) =>
+    p("stub", {
+      schemaVersion: declared,
+      contributes: {
+        schema: {
+          migrations: modules.map(([name, schemaVersion]) => ({
+            name,
+            schemaVersion,
+            checksum: name,
+            dialects: {} as never,
+            snapshot: {} as never,
+            before: {} as never,
+          })),
+        },
+      },
+    } as Partial<PluginDefinition>);
+
+  it("reads the versions in the order the modules run, not as listed", () => {
+    // Listed `002` (v1) then `001` (v2): highest 2, as declared, but `002`
+    // runs last and leaves the database at 1.
+    expect(() =>
+      resolvePlugins(
+        [
+          shipping(2, [
+            ["002_backfill", 1],
+            ["001_init", 2],
+          ]),
+        ],
+        opts
+      )
+    ).toThrow(NextlyError);
+    // The control: the same modules whose run order raises the version.
+    expect(
+      resolvePlugins(
+        [
+          shipping(2, [
+            ["002_more", 2],
+            ["001_init", 1],
+          ]),
+        ],
+        opts
+      )
+    ).toHaveLength(1);
+  });
+
+  describe("each module's own schemaVersion", () => {
+    /** The refusal resolving these plugins throws, or undefined. */
+    const refusalOf = (plugin: PluginDefinition): unknown => {
+      try {
+        resolvePlugins([plugin], opts);
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    };
+
+    it("refuses a fractional version below a declared one it still reaches", () => {
+      // Rising, and ending at the declared version, so every other rule
+      // passes: only the module's own value is wrong.
+      const refusal = refusalOf(
+        shipping(1, [
+          ["001_init", 0.5],
+          ["002_more", 1],
+        ])
+      );
+      expect(NextlyError.isValidation(refusal)).toBe(true);
+      expect((refusal as NextlyError).publicData).toMatchObject({
+        errors: [
+          expect.objectContaining({
+            path: "plugin.stub.contributes.schema.migrations",
+            message: expect.stringContaining('"001_init"'),
+          }),
+        ],
+      });
+    });
+
+    /** A plugin declaring no version, shipping one module at `version`. */
+    const undeclared = (version: number) =>
+      p("stub", {
+        contributes: {
+          schema: {
+            migrations: [
+              {
+                name: "001_init",
+                schemaVersion: version,
+                checksum: "a",
+                dialects: {} as never,
+                snapshot: {} as never,
+                before: {} as never,
+              },
+            ],
+          },
+        },
+      } as Partial<PluginDefinition>);
+
+    it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+      "refuses %s from a plugin that declares no version of its own",
+      version => {
+        expect(
+          (refusalOf(undeclared(version)) as NextlyError | undefined)
+            ?.publicData
+        ).toMatchObject({
+          errors: [
+            expect.objectContaining({
+              path: "plugin.stub.contributes.schema.migrations",
+            }),
+          ],
+        });
+      }
+    );
+
+    it("accepts positive integers, declared or not", () => {
+      expect(refusalOf(undeclared(1))).toBeUndefined();
+      expect(
+        refusalOf(
+          shipping(2, [
+            ["001_init", 1],
+            ["002_more", 2],
+          ])
+        )
+      ).toBeUndefined();
+    });
+  });
+
+  it("refuses a migration whose name holds a slash", () => {
+    // The ledger key is `plugin:<plugin>/<module>`, split at the last slash:
+    // `data/backfill` would be filed under the plugin `stub/data`.
+    let refusal: unknown;
+    try {
+      resolvePlugins([shipping(1, [["data/backfill", 1]])], opts);
+    } catch (error) {
+      refusal = error;
+    }
+    expect(NextlyError.is(refusal)).toBe(true);
+    expect(JSON.stringify((refusal as NextlyError).publicData)).toMatch(
+      /data\/backfill/
+    );
+    // The control: the same module named without one.
+    expect(
+      resolvePlugins([shipping(1, [["data-backfill", 1]])], opts)
+    ).toHaveLength(1);
+  });
+
+  it("refuses modules that share a name, ignoring case", () => {
+    // The name is the module's ledger key, so two alike are one migration to
+    // the ledger; refused when the configuration loads, as the slash is.
+    for (const second of ["001_init", "001_INIT"]) {
+      let refusal: unknown;
+      try {
+        resolvePlugins(
+          [
+            shipping(2, [
+              ["001_init", 1],
+              [second, 2],
+            ]),
+          ],
+          opts
+        );
+      } catch (error) {
+        refusal = error;
+      }
+      expect(NextlyError.is(refusal), second).toBe(true);
+      expect((refusal as NextlyError).publicMessage).toContain(
+        `more than one migration named "${second}"`
+      );
+    }
+    // The control: the same modules named apart.
+    expect(
+      resolvePlugins(
+        [
+          shipping(2, [
+            ["001_init", 1],
+            ["002_more", 2],
+          ]),
+        ],
+        opts
+      )
+    ).toHaveLength(1);
   });
 });

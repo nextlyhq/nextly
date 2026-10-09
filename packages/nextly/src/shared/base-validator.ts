@@ -23,6 +23,7 @@
 import { MIGRATION_TARGET } from "../domains/field-groups/migration/target";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
+import { MAX_DECIMAL_PRECISION, MAX_DECIMAL_SCALE } from "./decimal-bounds";
 import { pluginFieldOptionIssues } from "./lib/plugin-field-options";
 import { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS } from "./sql-reserved";
 
@@ -466,12 +467,6 @@ export function validateSelectOptionsShared(
     });
   }
 }
-
-// Bounds are the most restrictive across the supported dialects so a decimal
-// field stays portable: MySQL caps DECIMAL at precision 65 and scale 30
-// (Postgres allows far more, SQLite ignores them).
-const MAX_DECIMAL_PRECISION = 65;
-const MAX_DECIMAL_SCALE = 30;
 
 /**
  * Validate the `precision`/`scale` of a `dbType: "decimal"` number field. They

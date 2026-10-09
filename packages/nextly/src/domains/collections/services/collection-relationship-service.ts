@@ -51,7 +51,7 @@ import {
 import {
   hasPasswordField,
   stripPasswordFieldValues,
-  stripSystemOwnerField,
+  stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import type { RBACAccessControlService } from "../../auth/services/rbac-access-control-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
@@ -66,7 +66,11 @@ import {
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
-import { decodeJsonFieldValues } from "./collection-utils";
+import {
+  collectionTableName,
+  decodeJsonFieldValues,
+  getTableName,
+} from "./collection-utils";
 
 /**
  * System-entity columns that hold secrets and must never ride along a
@@ -97,6 +101,12 @@ interface NestedHookStateBase {
   visited: Set<Record<string, unknown>>;
   /** One schema read per collection per read, rather than per row per depth. */
   fields: Map<string, FieldDefinition[]>;
+  /**
+   * Physical table per collection, filled by the same registry read as
+   * `fields`. A walked row's contributed hidden columns are keyed by this name,
+   * which for a `dbName` collection is not `dc_<slug>`.
+   */
+  tables: Map<string, string>;
   /**
    * Label field per target, keyed by collection AND the field's declared
    * override, since two relationships can point at one collection and name
@@ -157,6 +167,7 @@ function createNestedHookState(): NestedHookState {
   return {
     visited: new Set(),
     fields: new Map(),
+    tables: new Map(),
     labelFields: new Map(),
     redactions: new WeakMap(),
     pending: [],
@@ -765,6 +776,16 @@ function stripRelationshipsToIds(
 function isSystemEntity(targetName: string): boolean {
   const systemEntities = ["users", "roles", "permissions"];
   return systemEntities.includes(targetName.toLowerCase());
+}
+
+/**
+ * The physical table a system entity's rows are read from. The entity names
+ * above ARE their table names, so this is the name itself; it exists so no
+ * caller reaches for `getTableName`, whose `dc_` prefix names a table that does
+ * not exist and would match none of the columns contributed to the real one.
+ */
+function systemEntityTableName(targetName: string): string {
+  return targetName.toLowerCase();
 }
 
 /**
@@ -3011,7 +3032,7 @@ export class CollectionRelationshipService extends BaseService {
 
       const collection =
         await this.collectionService.getCollection(collectionName);
-      // Both shapes, the same way `getRedactionFields` reads them: a
+      // Both shapes, the same way `getRedactionTarget` reads them: a
       // Builder-created collection carries `schemaDefinition`, while
       // `getCollection` returns the raw row for a code-first one and its fields
       // sit at the top level. Reading only the first resolved a code-first
@@ -3043,26 +3064,56 @@ export class CollectionRelationshipService extends BaseService {
    * either one: it runs against the SOURCE collection's field registry, which
    * never describes a related collection's fields.
    */
+  /**
+   * Redact one row the relationship walk has just populated.
+   *
+   * Both walks do the same three things and did them in two copies; a
+   * redaction written twice is a redaction one copy can be updated without.
+   *
+   * The secret-column strip is unconditional and repeated on every walk: a
+   * system entity (users) has no field registry, so the password strip — which
+   * reads the registry — never sees its secret columns, and a source hook can
+   * reintroduce one onto the populated row after the fetch stripped it.
+   */
+  private redactWalkedRow(
+    collection: string,
+    row: Record<string, unknown>,
+    targetFields: FieldDefinition[],
+    /** The physical table `collection` reads from; see `tableForNestedWalk`. */
+    tableName: string
+  ): void {
+    if (hasPasswordField(targetFields)) {
+      stripPasswordFieldValues(row, targetFields);
+    }
+    if (isSystemEntity(collection)) {
+      for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) {
+        delete row[col];
+      }
+    }
+    stripServerOnlyColumns(row, tableName);
+  }
+
   private async redactRelatedRows(
     targetCollection: string,
     rows: Record<string, unknown>[],
     access: RelatedRowAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<void> {
     if (rows.length === 0) return;
-    // The system owner column must never ride along a populated relationship:
-    // a collection readable by non-creators would otherwise leak a related
-    // row's creator user id through the nested payload. Strip it from every
-    // related row up front (it's a reserved system column, so this can't touch
-    // a user field) — this runs at each expansion level, so nested relations
-    // are covered too.
-    for (const row of rows) {
-      stripSystemOwnerField(row);
-    }
+    // The system owner column and any contributed hidden column must never
+    // ride along a populated relationship: a collection readable by
+    // non-creators would otherwise leak a related row's creator user id
+    // through the nested payload. Stripped from every related row before
+    // anything else reads it — this runs at each expansion level, so nested
+    // relations are covered too. Keyed by the target's PHYSICAL table, which
+    // is where its contributed columns are recorded.
+    //
     // System entities expose secret columns that are not schema fields, so
     // strip them by name. They carry no user-defined field rules, so there is
     // nothing for the access pass below to evaluate.
     if (isSystemEntity(targetCollection)) {
+      const tableName = systemEntityTableName(targetCollection);
       for (const row of rows) {
+        stripServerOnlyColumns(row, tableName);
         for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) delete row[col];
       }
       return;
@@ -3072,7 +3123,11 @@ export class CollectionRelationshipService extends BaseService {
     // related row. If the schema can't be resolved we cannot tell which
     // fields are secret, so fail closed: strip every non-identity field
     // rather than risk returning a row that carries a password hash.
-    const targetFields = await this.getRedactionFields(targetCollection);
+    const target = await this.getRedactionTarget(targetCollection);
+    if (target !== null) {
+      for (const row of rows) stripServerOnlyColumns(row, target.tableName);
+    }
+    const targetFields = target?.fields ?? null;
     if (targetFields === null) {
       for (const row of rows) {
         for (const key of Object.keys(row)) {
@@ -3408,6 +3463,7 @@ export class CollectionRelationshipService extends BaseService {
     // hooks, so there is nothing to look up.
     if (isSystemEntity(collectionName)) {
       state.fields.set(collectionName, []);
+      state.tables.set(collectionName, systemEntityTableName(collectionName));
       return [];
     }
 
@@ -3415,6 +3471,12 @@ export class CollectionRelationshipService extends BaseService {
     try {
       const collection =
         await this.collectionService.getCollection(collectionName);
+      // Recorded from this same read so the walk's redaction costs no second
+      // registry lookup; see `tableForNestedWalk`.
+      state.tables.set(
+        collectionName,
+        collectionTableName(collection, collectionName)
+      );
       const raw =
         (
           (collection as Record<string, unknown>).schemaDefinition as
@@ -3436,6 +3498,23 @@ export class CollectionRelationshipService extends BaseService {
 
     state.fields.set(collectionName, fields);
     return fields;
+  }
+
+  /**
+   * The physical table a walked row's collection reads from, resolved by the
+   * registry read `fieldsForNestedWalk` already makes and caches.
+   *
+   * Falls back to the `dc_<slug>` convention only when that read failed, the
+   * case the walk has already logged as one it cannot describe. The row was
+   * stripped under its real table when it was fetched; this pass is the
+   * repeat that catches a hook reintroducing a column.
+   */
+  private async tableForNestedWalk(
+    collectionName: string,
+    state: NestedHookState
+  ): Promise<string> {
+    await this.fieldsForNestedWalk(collectionName, state);
+    return state.tables.get(collectionName) ?? getTableName(collectionName);
   }
 
   /**
@@ -3577,15 +3656,12 @@ export class CollectionRelationshipService extends BaseService {
         resolved.collection,
         state
       );
-      if (hasPasswordField(targetFields)) {
-        stripPasswordFieldValues(resolved.row, targetFields);
-      }
-      if (isSystemEntity(resolved.collection)) {
-        for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) {
-          delete resolved.row[col];
-        }
-      }
-      stripSystemOwnerField(resolved.row);
+      this.redactWalkedRow(
+        resolved.collection,
+        resolved.row,
+        targetFields,
+        await this.tableForNestedWalk(resolved.collection, state)
+      );
       // Rebuild the label from what survived, as the walk does before returning to a
       // parent: a field hook can mutate an existing child so its label field flips
       // from allowed to denied, and this access pass removes the field but leaves the
@@ -3806,19 +3882,12 @@ export class CollectionRelationshipService extends BaseService {
         resolved.collection,
         state
       );
-      if (hasPasswordField(targetFields)) {
-        stripPasswordFieldValues(resolved.row, targetFields);
-      }
-      // A system entity (users) has no field registry, so the password strip above
-      // — which reads the registry — never sees its secret columns. They are
-      // stripped by name at fetch, but a source hook can reintroduce one onto the
-      // populated row afterward, so re-strip them on every walk, override included.
-      if (isSystemEntity(resolved.collection)) {
-        for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) {
-          delete resolved.row[col];
-        }
-      }
-      stripSystemOwnerField(resolved.row);
+      this.redactWalkedRow(
+        resolved.collection,
+        resolved.row,
+        targetFields,
+        await this.tableForNestedWalk(resolved.collection, state)
+      );
     }
   }
 
@@ -3906,16 +3975,16 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Resolve a collection's fields for redaction. Uses the same
+   * Resolve a collection's fields and physical table for redaction. Uses the same
    * `schemaDefinition.fields` (API shape) OR `collection.fields` (raw DB row)
    * fallback the rest of this service uses — `getCollection` returns the raw
    * row, whose fields live at the top level, so a `schemaDefinition`-only
    * lookup silently resolves to nothing and skips stripping. Returns null
    * when the schema cannot be resolved so the caller fails closed.
    */
-  private async getRedactionFields(
+  private async getRedactionTarget(
     collectionName: string
-  ): Promise<FieldDefinition[] | null> {
+  ): Promise<{ fields: FieldDefinition[]; tableName: string } | null> {
     try {
       const collection =
         await this.collectionService.getCollection(collectionName);
@@ -3925,7 +3994,14 @@ export class CollectionRelationshipService extends BaseService {
             | Record<string, unknown>
             | undefined
         )?.fields || (collection as Record<string, unknown>).fields;
-      return Array.isArray(fields) ? (fields as FieldDefinition[]) : null;
+      // The physical table from the same record the fields came from, so the
+      // hidden-column strip and the password strip describe one collection.
+      return Array.isArray(fields)
+        ? {
+            fields: fields as FieldDefinition[],
+            tableName: collectionTableName(collection, collectionName),
+          }
+        : null;
     } catch {
       return null;
     }

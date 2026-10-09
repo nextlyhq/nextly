@@ -227,6 +227,51 @@ describe("validateEntryData", () => {
     ]);
   });
 
+  it("judges no virtual field, in either spelling or nested in a row", async () => {
+    // A virtual field stores nothing, so nothing about it can be missing or
+    // malformed. The stored required field beside each is still reported.
+    const issues = await validateEntryData(
+      { computedTotal: "not a number" },
+      [
+        { name: "summary", type: "text", required: true, virtual: true },
+        { name: "computedTotal", type: "number", virtual: true },
+        {
+          name: "stats",
+          type: "group",
+          options: { virtual: true },
+          fields: [{ name: "views", type: "number", required: true }],
+        },
+        {
+          name: "rows",
+          type: "repeater",
+          fields: [
+            { name: "derived", type: "text", required: true, virtual: true },
+            { name: "label", type: "text", required: true },
+          ],
+        },
+        { name: "author", type: "text", required: true },
+      ],
+      { mode: "create" }
+    );
+    expect(issues.map(issue => issue.path)).toEqual(["author"]);
+
+    const rowIssues = await validateEntryData(
+      { author: "Ada", rows: [{}] },
+      [
+        {
+          name: "rows",
+          type: "repeater",
+          fields: [
+            { name: "derived", type: "text", required: true, virtual: true },
+            { name: "label", type: "text", required: true },
+          ],
+        },
+      ],
+      { mode: "create" }
+    );
+    expect(rowIssues.map(issue => issue.path)).toEqual(["rows[0].label"]);
+  });
+
   describe("required password on update", () => {
     const fields: ValidatableField[] = [
       { name: "email", type: "email", required: true },

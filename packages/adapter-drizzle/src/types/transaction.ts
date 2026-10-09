@@ -84,6 +84,21 @@ export interface TransactionContext {
   execute<T = unknown>(sql: string, params?: SqlParam[]): Promise<T[]>;
 
   /**
+   * The Drizzle handle BOUND TO THIS TRANSACTION.
+   *
+   * `getDrizzle()` wraps the pool and would run on a different connection, so
+   * a caller that builds its own queries needs this one or its writes are not
+   * part of the transaction at all — they commit on their own and a later
+   * rollback leaves them behind.
+   *
+   * Exposed because a migration records its ledger rows through Drizzle, and
+   * those writes must commit or roll back with the statements they record.
+   * The adapters already construct this handle for their own delegated CRUD;
+   * this returns that same memoized instance rather than a second one.
+   */
+  drizzle<T = unknown>(): T;
+
+  /**
    * Run a Drizzle-built statement within the transaction, for its effect.
    *
    * @remarks

@@ -77,6 +77,41 @@ interface OrphanRecord {
 }
 
 // ============================================================================
+// Extension schema
+// ============================================================================
+
+/**
+ * Compile the config's extension schema — plugin tables with their indexes,
+ * and the columns and indexes plugins and the app contribute to entity
+ * tables — and make it the one the push pipeline plans from, as boot and a
+ * config reload do.
+ *
+ * Run before the syncs. Without it the CLI process holds no extension
+ * schema, so a push neither created plugin tables nor contributed columns,
+ * and planned a drop of a contributed column it found in the database. A
+ * config that declares none clears it, so a removed plugin's tables leave
+ * the desired set.
+ */
+export async function publishExtensionSchema(
+  configResult: LoadConfigResult,
+  adapter: CLIDatabaseAdapter,
+  context: CommandContext
+): Promise<void> {
+  const { compileAndPublishExtensionSchema } = await import(
+    "../../domains/schema/extension/publish"
+  );
+  await compileAndPublishExtensionSchema({
+    dialect: (adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
+    plugins: configResult.config.plugins ?? [],
+    config: configResult.config,
+    logger: {
+      warn: m => context.logger.warn(m),
+      debug: m => context.logger.debug(m),
+    },
+  });
+}
+
+// ============================================================================
 // Collection Sync
 // ============================================================================
 
