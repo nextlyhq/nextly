@@ -826,6 +826,59 @@ export async function introspectLiveColumns(
   return { tables };
 }
 
+/**
+ * The table each of the named indexes is on, by lower-cased index name, for
+ * the drop guard: PostgreSQL's and SQLite's `DROP INDEX` names only the
+ * index. Matched without regard to case, so a quoted mixed-case name is
+ * found too — matching more can only judge more drops. On PostgreSQL the
+ * table is the relation an unqualified name reaches, as every read here is
+ * scoped. MySQL's `DROP INDEX` always names its table, so nothing is read
+ * there. An index the database does not have is absent.
+ */
+export async function introspectIndexTables(
+  db: unknown,
+  dialect: SupportedDialect,
+  indexNames: readonly string[]
+): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  if (indexNames.length === 0 || dialect === "mysql") return found;
+  const namesIn = sql.join(
+    indexNames.map(name => sql`${name.toLowerCase()}`),
+    sql`, `
+  );
+  let rows: Array<{ index: string; table: string }>;
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT i.relname AS index, t.relname AS table
+          FROM pg_class t
+          JOIN pg_index ix ON ix.indrelid = t.oid
+          JOIN pg_class i ON i.oid = ix.indexrelid
+          WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+            AND lower(i.relname) IN (${namesIn})`
+    )) as { rows: Array<{ index: string; table: string }> };
+    rows = result.rows;
+  } else {
+    const sqliteRows: unknown = await Promise.resolve(
+      (db as { all(query: unknown): unknown }).all(
+        sql`SELECT name AS "index", tbl_name AS "table" FROM sqlite_master
+            WHERE type = 'index' AND lower(name) IN (${namesIn})`
+      )
+    );
+    rows = (Array.isArray(sqliteRows) ? sqliteRows : []).flatMap(
+      (row: unknown) => {
+        const { index, table } = (row ?? {}) as Record<string, unknown>;
+        return typeof index === "string" && typeof table === "string"
+          ? [{ index, table }]
+          : [];
+      }
+    );
+  }
+  for (const row of rows) {
+    found.set(row.index.toLowerCase(), row.table.toLowerCase());
+  }
+  return found;
+}
+
 export async function introspectLiveSnapshot(
   db: unknown,
   dialect: SupportedDialect,

@@ -199,7 +199,10 @@ migration file the run refuses (see below). Applied files are never re-read.
   columns do not fit MySQL's 65,535-byte row is refused on every dialect, and
   so are two foreign keys that resolve to one name across the tables plugins
   and the app declare, since MySQL requires a foreign key's name to be unique
-  per database.
+  per database, two different indexes that do, since PostgreSQL and SQLite
+  require an index's name to be unique per schema (the same index contributed
+  to one table twice is one index), and a foreign key referencing a
+  column its target does not have (`references.columns` are SQL names).
 - **A declared collection index is checked on every dialect** when the
   schema is built from the config (development push, `db:sync`,
   `migrate:create`). A JSON field or an unbounded text field (a textarea, say)
@@ -219,8 +222,9 @@ choose `db.idType` between random and time-ordered UUIDs, and accept a
 client-supplied id with `db.allowIdOnCreate`.
 
 Ownership is recorded per table and per element, and a migration is refused
-before it runs (`DROP_OF_FOREIGN_TABLE`) if it drops or renames a table or a
-column another owner holds. A table with no owner record (every collection,
+before it runs (`DROP_OF_FOREIGN_TABLE`) if it drops or renames a table, a
+column, an index, a foreign key or a check another owner holds; an index
+dropped by its name alone is judged by the table the database has it on. A table with no owner record (every collection,
 Single and component table, and tables your own migrations created) is the
 app's to drop and never a plugin's: a plugin migration may drop only tables
 its records name, or a table the same module creates that did not exist
@@ -271,7 +275,12 @@ the columns and indexes plugins or the app contribute to entity tables, and
 no longer plans to drop a contributed column it finds in the database.
 `nextly migrate` counts the plugin migrations it applied in its summary,
 applies a plugin's migrations on a database the app already migrated, and
-adopts a multi-module history that development push already created.
+adopts a multi-module history that development push already created. In that
+adoption, a module that only changes data, such as a seed or a backfill, runs
+rather than being recorded unrun, and so does a module whose schema snapshot
+does not change, whatever its SQL; one that changes the schema and data both is
+refused with its recovery, since it can be neither, and a data module that
+fails against the later tables it runs on is refused with its recovery too.
 `migrate:create --plugin` accepts a plugin exported by name, and reports no
 changes (exit 2) when the plugin's schema matches its last migration.
 `migrate:create --plugin --blank` now writes a blank module; before, `--blank`

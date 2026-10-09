@@ -48,6 +48,7 @@ import {
   assertNoForeignDrops,
   columnsAfter,
   readLiveColumns,
+  readLiveIndexTables,
   readLiveTables,
   rebuildBlockStatements,
   tablesCreatedBy,
@@ -220,6 +221,14 @@ export interface MigrateDownCoreDeps {
   readLiveTables?: (
     statementLists: ReadonlyArray<readonly string[]>
   ) => Promise<ReadonlySet<string>>;
+  /**
+   * The table each index the targets' DOWNs name without one is on
+   * (`readLiveIndexTables`), read once before any runs. Absent, such an index
+   * is judged as one on a table no record claims.
+   */
+  readLiveIndexTables?: (
+    statementLists: ReadonlyArray<readonly string[]>
+  ) => Promise<ReadonlyMap<string, string>>;
   withLock: typeof withMigrateLock;
 }
 
@@ -251,6 +260,8 @@ interface PlannedDown {
   liveColumns?: LiveColumns;
   /** The tables it creates that exist before it runs (`readLiveState`). */
   liveTables?: ReadonlySet<string>;
+  /** The table each index its DOWN names without one is on; see `readLiveState`. */
+  liveIndexTables?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -286,6 +297,7 @@ function refusalOf(
     assertNoForeignDrops({
       liveColumns: p.liveColumns,
       liveTables: p.liveTables,
+      liveIndexTables: p.liveIndexTables,
       statements: p.statements,
       stream: deps.options.plugin ? `plugin:${deps.options.plugin}` : "app",
       owners: deps.owners ?? new Map(),
@@ -311,15 +323,21 @@ async function readLiveState(
   planned: PlannedDown[],
   deps: Pick<
     MigrateDownCoreDeps,
-    "dialect" | "readLiveColumns" | "readLiveTables"
+    "dialect" | "readLiveColumns" | "readLiveTables" | "readLiveIndexTables"
   >
 ): Promise<void> {
   const lists = planned.map(p => p.statements);
   let columns: LiveColumns = (await deps.readLiveColumns?.(lists)) ?? new Map();
   let tables = await deps.readLiveTables?.(lists);
+  // Read once for every target. An index a target names is one the database
+  // has before the rollback; one it lacks then is absent here and judged as
+  // taking nothing — the only way it can exist by that target's turn is that
+  // an earlier target of this same rollback, this stream's, recreated it.
+  const indexTables = await deps.readLiveIndexTables?.(lists);
   for (const p of planned) {
     p.liveColumns = columns;
     p.liveTables = tables;
+    p.liveIndexTables = indexTables;
     columns = columnsAfter(p.statements, deps.dialect, columns);
     tables =
       tables &&
@@ -675,6 +693,7 @@ export async function runMigrateDown(
       elementOwners: ownerRows,
       readLiveColumns: lists => readLiveColumns(db, dialect, lists),
       readLiveTables: lists => readLiveTables(db, dialect, lists),
+      readLiveIndexTables: lists => readLiveIndexTables(db, dialect, lists),
 
       nodeEnv: process.env.NODE_ENV,
       logger,

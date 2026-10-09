@@ -870,7 +870,7 @@ limits are accepted:
 | `PLUGIN_SCHEMA_BEHIND` | The plugin expects a newer schema than the database has. Run `nextly migrate`. |
 | `PLUGIN_MIGRATIONS_UNAVAILABLE` | A plugin declares tables and ships no migrations to create them. |
 | `MIGRATION_CHECKSUM_MISMATCH` | A migration changed after it was generated or applied. |
-| `DROP_OF_FOREIGN_TABLE` | A migration would drop or rename another owner's table or column, or a plugin migration a table no owner row claims. Nothing was applied. |
+| `DROP_OF_FOREIGN_TABLE` | A migration would drop or rename another owner's table, column, index, foreign key or check, or a plugin migration a table no owner row claims. Nothing was applied. |
 
 In development, `PLUGIN_SCHEMA_BEHIND` only logs: push reconciles from config
 on every reload, so it resolves itself moments later and refusing would make

@@ -36,6 +36,7 @@ import {
 } from "./after-drizzle";
 import {
   assertDistinctForeignKeyNames,
+  assertDistinctIndexNames,
   authoredKeyOf,
   referenceTableStub,
   resolveIndexName,
@@ -413,6 +414,52 @@ function foreignTableContributions(store: SchemaDraftStore): {
   return { entityIndexes, entityColumns };
 }
 
+/**
+ * Refuse a foreign key naming a referenced column its target does not have.
+ *
+ * Asked of every table whose columns this compile knows — declared, adopted,
+ * core, and an entity seeded with its columns — by SQL name, which is what
+ * the constraint renders. Unchecked, a misspelt column, or the authored
+ * camelCase key where the SQL name belongs, reached SQLite's compile, which
+ * could not resolve it and left the constraint off the table, while the
+ * PostgreSQL and MySQL migrations kept it and failed when it was added. A
+ * target this compile does not know is the database's to judge.
+ */
+function assertForeignKeyTargetsExist(
+  tables: readonly ExtensionTable[],
+  store: SchemaDraftStore
+): void {
+  const known = new Map<string, readonly ExtensionColumn[]>(
+    [...store.all(), ...store.adoptedTables()]
+      .filter(table => table.columns.length > 0)
+      .map(table => [table.name, table.columns])
+  );
+  for (const table of tables) {
+    for (const [position, fk] of (table.foreignKeys ?? []).entries()) {
+      const target = known.get(fk.referencesTable);
+      if (target === undefined) continue;
+      const missing = fk.referencesColumns.find(
+        name => !target.some(column => column.name === name)
+      );
+      if (missing === undefined) continue;
+      const authored = target.find(column => column.key === missing);
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `${table.name}.foreignKeys[${String(position)}]`,
+            code: "INVALID",
+            message:
+              `The foreign key references the column "${missing}", which "${fk.referencesTable}" does not have.` +
+              (authored !== undefined && authored.name !== missing
+                ? ` "${missing}" is the authored key of its column "${authored.name}"; a foreign key references the SQL name.`
+                : ""),
+          },
+        ],
+      });
+    }
+  }
+}
+
 /** Each extension table compiled to Drizzle, and its owner. */
 function compileDrizzleTables(
   tables: readonly ExtensionTable[],
@@ -586,10 +633,13 @@ export async function buildExtensionSchema(
   const { entityIndexes, entityColumns } = foreignTableContributions(store);
 
   const compiledSpecs = tables.map(table => toTableSpec(table, input.dialect));
-  // Every declared key's resolved name, before any `afterDrizzle` hook sees
-  // the tables, so a clash is reported against the declaration rather than
-  // by the database; the specs a hook reshapes are judged again below.
+  // Every declared key's and index's resolved name, before any
+  // `afterDrizzle` hook sees the tables, so a clash is reported against the
+  // declaration rather than by the database; the foreign keys of specs a
+  // hook reshapes are judged again below.
   assertDistinctForeignKeyNames(compiledSpecs);
+  assertDistinctIndexNames(compiledSpecs, entityIndexes);
+  assertForeignKeyTargetsExist(tables, store);
   // Each table whole, its own columns and every one a hook added, so a row
   // only MySQL cannot hold is refused on every dialect alike.
   for (const table of tables) assertMysqlRowFits(table);

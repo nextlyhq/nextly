@@ -510,6 +510,26 @@ export interface TakenColumn {
 }
 
 /**
+ * What kind of named table element a statement takes away. `constraint` is
+ * PostgreSQL's and MySQL's `DROP CONSTRAINT` / `RENAME CONSTRAINT`, which
+ * names a foreign key, a check or a unique constraint alike, and MySQL's
+ * nameless `DROP PRIMARY KEY`.
+ */
+export type TakenElementKind = "index" | "fk" | "check" | "constraint";
+
+/**
+ * An index or constraint a statement list drops or renames away. `table` is
+ * undefined when the statement names only the element — PostgreSQL's and
+ * SQLite's `DROP INDEX`, PostgreSQL's `ALTER INDEX ... RENAME` — and the
+ * table is then the one the live database has it on (`readLiveIndexTables`).
+ */
+export interface TakenElement {
+  table: string | undefined;
+  name: string;
+  kind: TakenElementKind;
+}
+
+/**
  * Reads a statement list's tokens for the tables it drops.
  *
  * One reader per statement list, because table renames carry across
@@ -532,6 +552,11 @@ class DropReader {
    * name it had before the list renamed it.
    */
   readonly columns: TakenColumn[] = [];
+  /**
+   * Indexes and constraints this list drops or renames away, with the table
+   * named by the name it had before the list renamed it.
+   */
+  readonly elements: TakenElement[] = [];
   /**
    * Tables this list itself created, by their current name, while it has not
    * dropped them again. A drop or rename of one of these takes nothing from
@@ -653,6 +678,26 @@ class DropReader {
     this.columns.push({
       table: this.renamedFrom.get(table.name) ?? table.name,
       column,
+    });
+  }
+
+  /**
+   * Records an index or constraint dropped or renamed away. One on a table
+   * this list created is its own, and is not recorded.
+   */
+  takeElement(
+    table: TableRef | undefined,
+    name: string,
+    kind: TakenElementKind
+  ): void {
+    if (table?.local && this.created.has(table.name)) return;
+    this.elements.push({
+      table:
+        table === undefined
+          ? undefined
+          : (this.renamedFrom.get(table.name) ?? table.name),
+      name,
+      kind,
     });
   }
 
@@ -803,6 +848,7 @@ class StatementWalk {
       if (this.alteredTableAt(at) !== undefined) this.inAlterTable = true;
       this.readAlterTableRenames(at);
       this.readAlterTableColumns(at);
+      this.readAlterIndexRename(at);
     } else if (word === "CREATE") {
       this.readCreateTable(at);
       if (this.reader.isPostgres) this.assertDollarQuotedRoutine(at);
@@ -969,6 +1015,11 @@ class StatementWalk {
    * list it misunderstood is refused rather than trusted.
    */
   private readDrop(at: number): number {
+    // A statement of its own. Inside an ALTER TABLE, MySQL's `DROP INDEX i`
+    // is a clause naming its table, read by `readElementClause`.
+    if (!this.inAlterTable && this.word(at + 1) === "INDEX") {
+      return this.readDropIndex(at);
+    }
     const listAt = this.dropTableListAt(at);
     if (listAt === undefined) {
       this.assertNoDependentsDropped(at);
@@ -1003,6 +1054,38 @@ class StatementWalk {
     this.refuse(
       "CASCADE on a DROP of anything but a table also drops whatever depends on the object, which may be another owner's columns or tables; drop those dependents explicitly, then drop the object without CASCADE"
     );
+  }
+
+  /**
+   * `DROP INDEX`, from the DROP keyword: every index in its list, recorded as
+   * taken from its table. PostgreSQL's (`[CONCURRENTLY] [IF EXISTS] a, b`)
+   * and SQLite's name only the index; MySQL's names its table after `ON`.
+   * PostgreSQL's CASCADE is refused as on any drop of something that is not a
+   * table. Returns where to resume.
+   */
+  private readDropIndex(at: number): number {
+    this.assertNoDependentsDropped(at);
+    let k = this.word(at + 2) === "CONCURRENTLY" ? at + 3 : at + 2;
+    k = this.skipIfExists(k);
+    for (;;) {
+      const index = this.qualifiedName(k);
+      if (index === undefined) {
+        this.refuse("an index drop whose name cannot be read");
+      }
+      k = index.next;
+      let table: TableRef | undefined;
+      if (this.reader.isMysql && this.word(k) === "ON") {
+        const on = this.qualifiedName(k + 1);
+        if (on === undefined) {
+          this.refuse("an index drop whose table name cannot be read");
+        }
+        table = on;
+        k = on.next;
+      }
+      this.reader.takeElement(table, index.name, "index");
+      if (this.punct(k) !== ",") return k;
+      k += 1;
+    }
   }
 
   /**
@@ -1178,7 +1261,104 @@ class StatementWalk {
     const table = this.qualifiedName(tableAt);
     for (const clause of this.clauseStarts(table?.next ?? tableAt + 1)) {
       this.readColumnClause(table, clause);
+      this.readElementClause(table, clause);
     }
+  }
+
+  /**
+   * PostgreSQL's `ALTER INDEX [IF EXISTS] a RENAME TO b`, recorded as `a`
+   * taken from its table: after the rename no record names it. The tokens
+   * are not consumed.
+   */
+  private readAlterIndexRename(at: number): void {
+    if (this.word(at + 1) !== "INDEX") return;
+    const index = this.qualifiedName(this.skipIfExists(at + 2));
+    if (index === undefined) return;
+    if (
+      this.word(index.next) !== "RENAME" ||
+      this.word(index.next + 1) !== "TO"
+    ) {
+      return;
+    }
+    this.reader.takeElement(undefined, index.name, "index");
+  }
+
+  /**
+   * One ALTER TABLE clause starting at `at`, for an index or constraint it
+   * drops or renames away.
+   */
+  private readElementClause(table: TableRef | undefined, at: number): void {
+    const element = this.takenElementAt(at);
+    if (element === undefined) return;
+    if (element === null || table === undefined) {
+      this.refuse(
+        "an index or constraint drop or rename whose names cannot be read"
+      );
+    }
+    this.reader.takeElement(table, element.name, element.kind);
+  }
+
+  /**
+   * The index or constraint a clause drops or renames away: its name and
+   * kind, `undefined` when the clause takes none, or `null` when it does and
+   * the name cannot be read.
+   *
+   * - `DROP CONSTRAINT [IF EXISTS] c` (PostgreSQL, MySQL).
+   * - MySQL's `DROP INDEX|KEY i`, `DROP FOREIGN KEY f`, `DROP CHECK c` and
+   *   `DROP PRIMARY KEY`, which has no name of its own.
+   * - `RENAME CONSTRAINT c TO d` (PostgreSQL) and MySQL's
+   *   `RENAME INDEX|KEY i TO j`.
+   */
+  private takenElementAt(
+    at: number
+  ): { name: string; kind: TakenElementKind } | null | undefined {
+    if (this.word(at) === "DROP") return this.droppedElementAt(at + 1);
+    if (this.word(at) === "RENAME") return this.renamedElementAt(at + 1);
+    return undefined;
+  }
+
+  private droppedElementAt(
+    at: number
+  ): { name: string; kind: TakenElementKind } | null | undefined {
+    switch (this.word(at)) {
+      case "CONSTRAINT":
+        return this.elementNamedAt(this.skipIfExists(at + 1), "constraint");
+      case "INDEX":
+      case "KEY":
+        return this.elementNamedAt(this.skipIfExists(at + 1), "index");
+      case "FOREIGN":
+        return this.word(at + 1) === "KEY"
+          ? this.elementNamedAt(this.skipIfExists(at + 2), "fk")
+          : null;
+      case "CHECK":
+        return this.elementNamedAt(at + 1, "check");
+      case "PRIMARY":
+        return this.word(at + 1) === "KEY"
+          ? { name: "primary", kind: "constraint" }
+          : null;
+      default:
+        return undefined;
+    }
+  }
+
+  private renamedElementAt(
+    at: number
+  ): { name: string; kind: TakenElementKind } | null | undefined {
+    const what = this.word(at);
+    if (what === "CONSTRAINT") return this.elementNamedAt(at + 1, "constraint");
+    if (this.reader.isMysql && (what === "INDEX" || what === "KEY")) {
+      return this.elementNamedAt(at + 1, "index");
+    }
+    return undefined;
+  }
+
+  /** The element named at `at`, or null when no name can be read there. */
+  private elementNamedAt(
+    at: number,
+    kind: TakenElementKind
+  ): { name: string; kind: TakenElementKind } | null {
+    const name = this.nameAt(at);
+    return name === undefined ? null : { name, kind };
   }
 
   /**
@@ -1358,6 +1538,58 @@ export function tablesDroppedBy(
 }
 
 /**
+ * The tables one statement drops or renames away, by the unqualified names it
+ * writes them with, lower-cased — a rebuild's `__new_` copy under its own
+ * name, as `tableNamedByCreate` gives it, not the table it stands in for.
+ * Empty for a statement that is neither or cannot be read, and for a name
+ * written qualified: a caller asking whether a table is gone by some point
+ * then hears that it is not.
+ */
+export function tablesRemovedBy(
+  statement: string,
+  dialect: SupportedDialect
+): string[] {
+  const tokens = soleStatementTokens(statement, dialect);
+  if (tokens === undefined) return [];
+  const cursor = new TokenCursor(tokens);
+  if (cursor.word("DROP")) return tablesDroppedAt(cursor);
+  if (cursor.word("ALTER")) return tableRenamedByAlterAt(cursor);
+  if (cursor.word("RENAME")) return tablesRenamedAt(cursor);
+  return [];
+}
+
+/** `[TEMPORARY] TABLE [IF EXISTS] a, b`, from past the DROP. */
+function tablesDroppedAt(cursor: TokenCursor): string[] {
+  cursor.word("TEMPORARY");
+  if (!cursor.word("TABLE")) return [];
+  cursor.ifExists();
+  return cursor.bareNameList() ?? [];
+}
+
+/** `TABLE [IF EXISTS] [ONLY] a RENAME TO|AS b`, from past the ALTER. */
+function tableRenamedByAlterAt(cursor: TokenCursor): string[] {
+  if (!cursor.word("TABLE")) return [];
+  cursor.ifExists();
+  cursor.word("ONLY");
+  const table = cursor.name();
+  if (table === undefined || !cursor.word("RENAME")) return [];
+  return cursor.word("TO") || cursor.word("AS") ? [table] : [];
+}
+
+/** MySQL's `TABLE a TO b, c TO d`, from past the RENAME. */
+function tablesRenamedAt(cursor: TokenCursor): string[] {
+  if (!cursor.word("TABLE")) return [];
+  const renamed: string[] = [];
+  do {
+    const from = cursor.name();
+    if (from === undefined || !cursor.word("TO")) return [];
+    if (cursor.name() === undefined) return [];
+    renamed.push(from);
+  } while (cursor.punct(","));
+  return renamed;
+}
+
+/**
  * The local names a list creates a table under, lower-cased — by a CREATE
  * TABLE, or by renaming a table it created — the names whose existence
  * `readLiveTables` reads. Empty for a list that cannot be read, which the
@@ -1367,16 +1599,103 @@ export function tablesCreatedBy(
   statements: readonly string[],
   dialect: SupportedDialect
 ): string[] {
-  // Read as if no table existed, so a creation's credit carries through a
-  // rename to the name it is renamed to, which is asked about as well.
+  return [...(readAsIfNoTableExisted(statements, dialect)?.creating ?? [])];
+}
+
+/**
+ * A statement list read as if no table existed — so a creation's credit
+ * carries through a rename to the name it is renamed to — or undefined when
+ * the list cannot be read; the guard refuses such a list on its own.
+ */
+function readAsIfNoTableExisted(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): DropReader | undefined {
   const reader = new DropReader(dialect, new Set());
   try {
     readWith(statements, reader, new Map());
   } catch (error) {
-    if (error instanceof UnparsableDropTarget) return [];
+    if (error instanceof UnparsableDropTarget) return undefined;
     throw error;
   }
-  return [...reader.creating];
+  return reader;
+}
+
+/**
+ * The table a `CREATE [TEMPORARY] TABLE [IF NOT EXISTS]` statement names, as
+ * written and lower-cased — a rebuild's `__new_` copy under its own name, not
+ * the table it stands in for — or undefined when the statement creates no
+ * table or cannot be read. A qualified name gives its last part.
+ */
+export function tableNamedByCreate(
+  statement: string,
+  dialect: SupportedDialect
+): string | undefined {
+  const read = soleStatementWords(statement, dialect);
+  if (read === undefined || read.word(0) !== "CREATE") return undefined;
+  const { tokens, word } = read;
+  let k = 1;
+  while (CREATE_TABLE_MODIFIERS.has(word(k) ?? "")) k += 1;
+  if (word(k) !== "TABLE") return undefined;
+  k += 1;
+  if (word(k) === "IF" && word(k + 1) === "NOT" && word(k + 2) === "EXISTS") {
+    k += 3;
+  }
+  return lastNamePart(tokens, k);
+}
+
+/**
+ * One statement's tokens and an upper-cased reading of the word at each, or
+ * undefined when it holds more than one statement or cannot be read.
+ */
+function soleStatementWords(
+  statement: string,
+  dialect: SupportedDialect
+): { tokens: Token[]; word: (at: number) => string | undefined } | undefined {
+  const tokens = soleStatementTokens(statement, dialect);
+  if (tokens === undefined) return undefined;
+  return {
+    tokens,
+    word: at => {
+      const token = tokens[at];
+      return token?.kind === "word" ? token.upper : undefined;
+    },
+  };
+}
+
+/** The last part of a possibly qualified name starting at `at`, lower-cased. */
+function lastNamePart(
+  tokens: readonly Token[],
+  at: number
+): string | undefined {
+  let k = at;
+  for (;;) {
+    const next = tokens[k + 1];
+    if (next?.kind !== "punct" || next.char !== ".") break;
+    k += 2;
+  }
+  return writtenName(tokens[k])?.toLowerCase();
+}
+
+/**
+ * The table an `INSERT` or `REPLACE` statement writes into, lower-cased, or
+ * undefined when the statement is not one, writes through no `INTO`, or
+ * cannot be read. SQLite's `INSERT OR <conflict> INTO` and MySQL's `INSERT
+ * IGNORE INTO` are read too; a qualified name gives its last part.
+ */
+export function tableInsertedInto(
+  statement: string,
+  dialect: SupportedDialect
+): string | undefined {
+  const read = soleStatementWords(statement, dialect);
+  if (read === undefined) return undefined;
+  const { tokens, word } = read;
+  if (word(0) !== "INSERT" && word(0) !== "REPLACE") return undefined;
+  let k = 1;
+  if (word(k) === "OR") k += 2;
+  if (word(k) === "IGNORE") k += 1;
+  if (word(k) !== "INTO") return undefined;
+  return lastNamePart(tokens, k + 1);
 }
 
 /**
@@ -1389,7 +1708,7 @@ function readStatements(
   dialect: SupportedDialect,
   liveColumns: LiveColumns | undefined,
   liveTables: ReadonlySet<string> | undefined
-): Pick<DropReader, "dropped" | "renamed" | "columns"> {
+): Pick<DropReader, "dropped" | "renamed" | "columns" | "elements"> {
   const kept = keptTables(followColumns(statements, dialect, liveColumns));
   const reading = readWith(
     statements,
@@ -1934,6 +2253,44 @@ export async function readLiveTables(
   return new Set(live.keys());
 }
 
+/**
+ * The indexes a statement list takes away without naming their table, by
+ * lower-cased name — PostgreSQL's and SQLite's `DROP INDEX`, PostgreSQL's
+ * `ALTER INDEX ... RENAME` — read as the guard reads them. A list the guard
+ * cannot read names none here; the guard refuses it on its own.
+ */
+export function indexesNamedWithoutTable(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): string[] {
+  return (readAsIfNoTableExisted(statements, dialect)?.elements ?? [])
+    .filter(element => element.table === undefined)
+    .map(element => element.name);
+}
+
+/**
+ * The table each index the statement lists name without one is on, read from
+ * the database they are about to run on: what `assertNoForeignDrops` judges
+ * such a drop by (`liveIndexTables`). Keys and values lower-cased; an index
+ * the database does not have is absent.
+ */
+export async function readLiveIndexTables(
+  db: unknown,
+  dialect: SupportedDialect,
+  statementLists: ReadonlyArray<readonly string[]>
+): Promise<ReadonlyMap<string, string>> {
+  const names = [
+    ...new Set(
+      statementLists.flatMap(list => indexesNamedWithoutTable(list, dialect))
+    ),
+  ];
+  if (names.length === 0) return new Map();
+  const { introspectIndexTables } = await import(
+    "../pipeline/diff/introspect-live"
+  );
+  return introspectIndexTables(db, dialect, names);
+}
+
 /** The live columns of `tables`, lower-cased; a missing table is absent. */
 async function liveColumnsOf(
   db: unknown,
@@ -2182,8 +2539,16 @@ export function assertNoForeignDrops(args: {
    * by who holds the table.
    */
   liveTables?: ReadonlySet<string>;
+  /**
+   * The table each index the statements name without one is on, lower-cased
+   * (`readLiveIndexTables`): PostgreSQL's and SQLite's `DROP INDEX` names
+   * only the index. An index the map lacks is not in the database, so the
+   * drop takes nothing. Absent, such an index is judged as one on a table no
+   * record claims.
+   */
+  liveIndexTables?: ReadonlyMap<string, string>;
 }): void {
-  let read: Pick<DropReader, "dropped" | "renamed" | "columns">;
+  let read: Pick<DropReader, "dropped" | "renamed" | "columns" | "elements">;
   try {
     read = readStatements(
       args.statements,
@@ -2218,13 +2583,29 @@ export function assertNoForeignDrops(args: {
       act: "drop or rename",
     });
   }
+  for (const element of read.elements) {
+    const table = element.table ?? args.liveIndexTables?.get(element.name);
+    refuseUnlessHeld(holders.element(element, table, args.liveIndexTables), {
+      ...args,
+      table,
+      element: element.name,
+      act: "drop or rename",
+    });
+  }
 }
 
 /** Who holds each table and column, for one stream. */
 class OwnershipView {
   private readonly tables: Map<string, OwnerRecord[]>;
   private readonly columns: Map<string, OwnerRecord[]>;
+  /** Index, foreign-key and check rows, by lower-cased element name. */
+  private readonly elements: Map<string, OwnerRecord[]>;
   private readonly contributed: Set<string>;
+  /**
+   * The indexes, foreign keys and checks this stream's own migrations
+   * contributed, as `columnKey(table, name)`, lower-cased.
+   */
+  private readonly contributedElements: Set<string>;
   private readonly stream: MigrationStream;
 
   constructor(args: {
@@ -2252,6 +2633,18 @@ class OwnershipView {
         elements.columns.map(column => columnKey(table, column).toLowerCase())
       )
     );
+    this.elements = groupLowerCased(
+      args.elementOwners
+        .filter(record => ELEMENT_ROW_KINDS.has(record.elementKind ?? "table"))
+        .map(record => [record.elementName ?? "", record])
+    );
+    this.contributedElements = new Set(
+      Object.entries(args.ownedElements ?? {}).flatMap(([table, elements]) =>
+        [...elements.indexes, ...elements.foreignKeys, ...elements.checks].map(
+          name => columnKey(table, name).toLowerCase()
+        )
+      )
+    );
   }
 
   /** Who holds a table. */
@@ -2272,29 +2665,123 @@ class OwnershipView {
     const recorded = claimOf(this.columns.get(key), this.stream);
     if (recorded) return recorded;
     if (this.contributed.has(key)) return { kind: "own" };
+    return this.partOf(table);
+  }
+
+  /**
+   * Who holds a part of `table` — a column, index or constraint — that no row
+   * records and this stream did not contribute: whoever holds the table, save
+   * that what is contributed to a core table rides the app's migrations, so
+   * the app may drop such a part; nothing tells it apart from core's own.
+   */
+  private partOf(table: string): Claim {
     const held = this.table(table);
-    // What is contributed to a core table rides the app's migrations, so the
-    // app may drop such a column; nothing tells it apart from core's own.
     if (held.kind === "foreign" && CORE_TABLES.has(table)) {
       return this.stream === APP_STREAM ? { kind: "own" } : held;
     }
     return held;
   }
+
+  /**
+   * Who holds an index or constraint on `table` — the table the statement
+   * names, or the one the live database has the index on; undefined when
+   * neither says.
+   *
+   * Judged as a column is: an owner row naming the element decides, then
+   * what this stream's own migrations contributed, then the table's holder,
+   * whose own indexes and constraints carry no element row. A row is matched
+   * by name and by every kind the statement's word can mean — `DROP
+   * CONSTRAINT` names a foreign key, a check or a unique index alike — so
+   * folding can only match MORE rows than the database's own rules would.
+   */
+  element(
+    taken: TakenElement,
+    table: string | undefined,
+    liveIndexTables: ReadonlyMap<string, string> | undefined
+  ): Claim {
+    const recorded = this.recordedElement(taken, table);
+    if (recorded) return recorded;
+    if (table === undefined) return this.unlocated(liveIndexTables);
+    if (this.contributedElements.has(columnKey(table, taken.name))) {
+      return { kind: "own" };
+    }
+    return this.partOf(table);
+  }
+
+  /** The claim the element rows naming `taken` make, if any do. */
+  private recordedElement(
+    taken: TakenElement,
+    table: string | undefined
+  ): Claim | undefined {
+    const kinds = ELEMENT_KINDS_BY_WORD[taken.kind];
+    const rows = (this.elements.get(taken.name) ?? []).filter(
+      record =>
+        kinds.has(record.elementKind ?? "table") &&
+        (table === undefined || record.tableName.toLowerCase() === table)
+    );
+    return claimOf(rows, this.stream);
+  }
+
+  /**
+   * Who holds an index no row records, named without its table and not
+   * found on any: when the database was read, it does not have the index,
+   * and the drop takes nothing; when it was not, the index may be on any
+   * table, judged as one on a table no record claims.
+   */
+  private unlocated(
+    liveIndexTables: ReadonlyMap<string, string> | undefined
+  ): Claim {
+    if (liveIndexTables !== undefined) return { kind: "own" };
+    return this.stream === APP_STREAM ? { kind: "own" } : { kind: "unclaimed" };
+  }
 }
 
-/** Throw the refusal for a table or column the stream does not hold. */
+/** The element row kinds an index or constraint is recorded under. */
+const ELEMENT_ROW_KINDS = new Set(["index", "fk", "check"]);
+
+/** The element row kinds each word that takes an element can mean. */
+const ELEMENT_KINDS_BY_WORD: Record<TakenElementKind, ReadonlySet<string>> = {
+  index: new Set(["index"]),
+  fk: new Set(["fk"]),
+  check: new Set(["check"]),
+  constraint: ELEMENT_ROW_KINDS,
+};
+
+/** What a refusal says was taken: an element, a column or a table. */
+function takenThing(args: { column?: string; element?: string }): string {
+  if (args.element !== undefined) return "an index or constraint";
+  return args.column === undefined ? "a table" : "a column";
+}
+
+/**
+ * The names a refusal is about, each only when it is known: an index named
+ * without its table and found on none has no table to log.
+ */
+function knownNames(
+  names: Record<string, string | undefined>
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(names).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined
+    )
+  );
+}
+
+/** Throw the refusal for a table, column or element the stream does not hold. */
 function refuseUnlessHeld(
   claim: Claim,
   args: {
     stream: MigrationStream;
     source: string;
-    table: string;
+    /** Undefined for an index named without its table and found on none. */
+    table: string | undefined;
     column?: string;
+    element?: string;
     act: string;
   }
 ): void {
   if (claim.kind === "own") return;
-  const what = args.column === undefined ? "a table" : "a column";
+  const what = takenThing(args);
   // One code for every case: each takes something from whoever holds it, and
   // the operator's remedy is the same.
   throw new NextlyError({
@@ -2304,8 +2791,11 @@ function refuseUnlessHeld(
         ? `A migration would ${args.act} ${what} that belongs to a different owner. It has been refused, and nothing was applied.`
         : `A plugin migration would ${args.act} ${what} that no owner record says is the plugin's. It has been refused, and nothing was applied.`,
     logContext: {
-      table: args.table,
-      ...(args.column === undefined ? {} : { column: args.column }),
+      ...knownNames({
+        table: args.table,
+        column: args.column,
+        element: args.element,
+      }),
       [args.act === "rename" ? "renamedBy" : "droppedBy"]: args.stream,
       ...(claim.kind === "foreign"
         ? { belongsTo: claim.owner.migratedBy, ownerId: claim.owner.ownerId }

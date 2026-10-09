@@ -389,6 +389,83 @@ describe("kit-table foreign keys on sqlite (bundle pass two)", () => {
   );
 });
 
+describe("a foreign key's referenced columns", () => {
+  const notes = defineTable("notes", {
+    id: col.id(),
+    noteKey: col.shortText(),
+  });
+  const linking = (referenced: string) =>
+    defineTable(
+      "linked",
+      { id: col.id(), refId: col.shortText() },
+      {
+        foreignKeys: [
+          {
+            columns: ["refId"],
+            references: { table: "fx__notes", columns: [referenced] },
+          },
+        ],
+      }
+    );
+  const build = (dialect: SupportedDialect, referenced: string) =>
+    buildExtensionSchema({
+      dialect,
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [
+        {
+          owner: { kind: "plugin" as const, id: "fx" },
+          tables: [notes, linking(referenced)],
+        },
+      ],
+    });
+  /** The refusal's first message, or undefined when the build succeeds. */
+  const refusal = async (dialect: SupportedDialect, referenced: string) => {
+    try {
+      await build(dialect, referenced);
+      return undefined;
+    } catch (error) {
+      const data = (error as NextlyError).publicData as {
+        errors: { path: string; message: string }[];
+      };
+      return data.errors[0];
+    }
+  };
+
+  it.each<SupportedDialect>(["postgresql", "mysql", "sqlite"])(
+    "refuses a column the target does not have, on %s",
+    async dialect => {
+      expect(await refusal(dialect, "nid")).toMatchObject({
+        path: "fx__linked.foreignKeys[0]",
+        message: expect.stringContaining('"nid"'),
+      });
+    }
+  );
+
+  it("refuses the authored key, naming the SQL column to use", async () => {
+    expect((await refusal("sqlite", "noteKey"))?.message).toContain(
+      '"note_key"'
+    );
+    // The control: the SQL name compiles, and SQLite carries the key.
+    const { getTableConfig } = await import("drizzle-orm/sqlite-core");
+    const built = await build("sqlite", "note_key");
+    expect(
+      getTableConfig(built.drizzle["fx__linked"] as never).foreignKeys
+    ).toHaveLength(1);
+  });
+
+  it("refuses on SQLite a key whose target columns cannot be resolved, rather than leaving it off", async () => {
+    const built = await build("sqlite", "id");
+    const table = built.tables.find(t => t.name === "fx__linked")!;
+    // A resolver that cannot answer for the referenced column: the key used
+    // to be skipped, and the table created without it.
+    expect(() => toDrizzleTable(table, "sqlite", () => ({}))).toThrow(
+      NextlyError
+    );
+  });
+});
+
 describe("derived constraint names on long tables", () => {
   // A 59-character table and two 50-character columns sharing their first 46:
   // the composed names run past 100 characters. A plain truncation also fits

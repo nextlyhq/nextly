@@ -151,7 +151,7 @@ export function hasExecutableText(
  * comments skipped, and on MySQL an executable comment's body read as the
  * code it is. Reading stops at the first quoted segment.
  */
-function leadingWords(
+export function leadingWords(
   statement: string,
   dialect: SupportedDialect | undefined,
   count: number

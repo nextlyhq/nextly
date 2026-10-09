@@ -27,7 +27,7 @@ import { check, foreignKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
-import { isManagedIndexName } from "../pipeline/diff/index-util";
+import { indexKey, isManagedIndexName } from "../pipeline/diff/index-util";
 import type { ColumnSpec, IndexSpec, TableSpec } from "../pipeline/diff/types";
 import { renderDialectTypeModifier } from "../services/field-column-descriptor";
 import {
@@ -97,6 +97,21 @@ export function authoredKeyOf(table: ExtensionTable, sqlName: string): string {
   return table.columns.find(column => column.name === sqlName)?.key ?? sqlName;
 }
 
+/**
+ * One extension index as the diff engine compares it, on `table`: the one
+ * description of a declared index and of an index contributed to a table
+ * this module does not own, so the two are named and keyed alike.
+ */
+export function toIndexSpec(table: string, index: ExtensionIndex): IndexSpec {
+  return {
+    name: resolveIndexName(table, index),
+    columns: [...index.columns],
+    unique: index.unique,
+    ...(index.where !== undefined ? { where: index.where } : {}),
+    ...(index.expression !== undefined ? { expression: index.expression } : {}),
+  };
+}
+
 /** One index's name, derived rather than invented. */
 export function resolveIndexName(table: string, index: ExtensionIndex): string {
   if (index.name === undefined) {
@@ -156,6 +171,45 @@ function assertDistinctCheckNames(
   }
 }
 
+/** One named element of a compiled table, for the name rules below. */
+interface NamedElement {
+  table: string;
+  name: string;
+  /**
+   * What the element is, when two declarations of the same one may meet: an
+   * element under the same name, on the same table, with the same identity
+   * is one element, not two.
+   */
+  identity?: string;
+}
+
+/**
+ * Refuse the second of two elements resolving to one name, compared without
+ * regard to case: SQLite compares index names that way, and folding can only
+ * refuse more. `describe` words the refusal for the element kind.
+ */
+function assertDistinctNames(
+  elements: Iterable<NamedElement>,
+  path: (table: string) => string,
+  describe: (element: NamedElement, earlier: string) => string
+): void {
+  const holders = new Map<string, NamedElement>();
+  for (const element of elements) {
+    const key = element.name.toLowerCase();
+    const earlier = holders.get(key);
+    if (earlier === undefined) {
+      holders.set(key, element);
+      continue;
+    }
+    const same =
+      earlier.table === element.table &&
+      element.identity !== undefined &&
+      earlier.identity === element.identity;
+    if (same) continue;
+    invalid(path(element.table), describe(element, earlier.table));
+  }
+}
+
 /**
  * Refuse two foreign keys sharing a name anywhere in the compiled schema.
  *
@@ -171,22 +225,59 @@ function assertDistinctCheckNames(
 export function assertDistinctForeignKeyNames(
   specs: readonly TableSpec[]
 ): void {
-  const owners = new Map<string, string>();
-  for (const spec of specs) {
-    for (const fk of spec.foreignKeys ?? []) {
-      const earlier = owners.get(fk.name);
-      if (earlier === undefined) {
-        owners.set(fk.name, spec.name);
-        continue;
-      }
-      invalid(
-        `${spec.name}.foreignKeys`,
-        earlier === spec.name
-          ? `Two foreign keys on "${spec.name}" resolve to the name "${fk.name}"; name one of them differently.`
-          : `The foreign key "${fk.name}" on "${spec.name}" has the name of one on "${earlier}". MySQL requires a foreign key's name to be unique across the database; name one of them differently.`
-      );
-    }
-  }
+  assertDistinctNames(
+    specs.flatMap(spec =>
+      (spec.foreignKeys ?? []).map(fk => ({ table: spec.name, name: fk.name }))
+    ),
+    table => `${table}.foreignKeys`,
+    ({ table, name }, earlier) =>
+      earlier === table
+        ? `Two foreign keys on "${table}" resolve to the name "${name}"; name one of them differently.`
+        : `The foreign key "${name}" on "${table}" has the name of one on "${earlier}". MySQL requires a foreign key's name to be unique across the database; name one of them differently.`
+  );
+}
+
+/**
+ * Refuse two indexes sharing a name anywhere in the compiled schema: the
+ * extension tables' own, and those contributed to entity and core tables.
+ *
+ * PostgreSQL and SQLite keep one index namespace for a whole schema, where
+ * MySQL keeps one per table. The second `CREATE INDEX IF NOT EXISTS` of a
+ * name is therefore skipped on two dialects and run on the third, so the
+ * same declaration left one table without its index — a unique one included
+ * — only where it was not deployed on MySQL. Over the resolved names, so an
+ * explicit name colliding with a derived one is caught as well.
+ */
+export function assertDistinctIndexNames(
+  specs: readonly TableSpec[],
+  contributed: ReadonlyMap<string, readonly ExtensionIndex[]>
+): void {
+  assertDistinctNames(
+    [
+      ...specs.flatMap(spec =>
+        (spec.indexes ?? []).map(index => ({
+          table: spec.name,
+          name: index.name,
+          identity: indexKey(index),
+        }))
+      ),
+      // Two contributors adding the same index to one entity or core table
+      // add one index — the merge into the table's spec keeps the first and
+      // skips its twin (`withEntityContributions`) — so only a name shared
+      // by different indexes is a clash.
+      ...[...contributed].flatMap(([table, indexes]) =>
+        indexes.map(index => {
+          const spec = toIndexSpec(table, index);
+          return { table, name: spec.name, identity: indexKey(spec) };
+        })
+      ),
+    ],
+    table => `${table}.indexes`,
+    ({ table, name }, earlier) =>
+      earlier === table
+        ? `Two indexes on "${table}" resolve to the name "${name}"; name one of them differently.`
+        : `The index "${name}" on "${table}" has the name of one on "${earlier}". PostgreSQL and SQLite require an index's name to be unique across the schema; name one of them differently.`
+  );
 }
 
 /**
@@ -235,13 +326,9 @@ export function toTableSpec(
     toColumnSpec(column, dialect)
   );
 
-  const indexes: IndexSpec[] = table.indexes.map(index => ({
-    name: resolveIndexName(table.name, index),
-    columns: [...index.columns],
-    unique: index.unique,
-    ...(index.where !== undefined ? { where: index.where } : {}),
-    ...(index.expression !== undefined ? { expression: index.expression } : {}),
-  }));
+  const indexes: IndexSpec[] = table.indexes.map(index =>
+    toIndexSpec(table.name, index)
+  );
   // Names derive HERE, from the FINAL table name: live introspection derives
   // from the same name, and a name derived earlier (pre-prefix) could never
   // match the live side — the diff would propose a drop-plus-add on every
@@ -376,11 +463,19 @@ export function toDrizzleTable(
     const foreignColumns = fk.referencesColumns.map(name =>
       referencedColumn(referenced, name)
     );
+    // Refused rather than skipped: a key left off here exists on PostgreSQL
+    // and MySQL and not on SQLite. `defineTable` and the compile's target
+    // check refuse every case they can see first, so this is reached only
+    // by one they could not — and it still must not pass in silence.
     if (
       localKeys.some(key => columns[key] === undefined) ||
       foreignColumns.includes(undefined)
-    )
-      continue;
+    ) {
+      invalid(
+        `${table.name}.foreignKeys`,
+        `The foreign key "${resolveForeignKeyName(table, fk)}" names a column that "${table.name}" or "${fk.referencesTable}" does not have.`
+      );
+    }
     foreignKeys.push({
       name: resolveForeignKeyName(table, fk),
       localKeys,

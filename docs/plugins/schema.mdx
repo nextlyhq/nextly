@@ -379,10 +379,25 @@ when the configuration loads, before anything runs:
   must equal the plugin's `schemaVersion`.
 
 And when it runs, a module may drop or rename only what the owner registry
-says is the plugin's: its own tables, the columns it contributed to other
-owners' tables, and tables the module itself creates. A table no record
+says is the plugin's: its own tables, and the indexes and constraints on
+them; the columns, indexes, foreign keys and checks it contributed to other
+owners' tables; and tables the module itself creates. A table no record
 claims, such as an app table from before the registry, is refused
-(`DROP_OF_FOREIGN_TABLE`).
+(`DROP_OF_FOREIGN_TABLE`), and so is a drop of another owner's index or
+constraint — including an index named on its own (`DROP INDEX name`), whose
+table is read from the database.
+
+A database development push already brought to a plugin's latest shape is
+adopted: `nextly migrate` records the modules it stands past as applied
+without running them, since the tables already say they ran. That proof holds
+only for what a schema shows. A module that only changes data — a seed or a
+backfill, or one creating a trigger or function — runs where it stands
+instead, against the tables as they are, and so does any module whose schema
+does not change, such as one written with `--blank`, whatever its SQL. Such a
+module therefore has to hold against every later shape of the plugin's tables;
+one that fails there is refused with the recovery. A module that both changes
+the schema and does such work can be neither, and is refused with the
+recovery; keep data statements in modules of their own.
 
 The entry `--plugin` points at may export the plugin as its default export or
 as a named one (`export const myPlugin = definePlugin(...)`), beside the tables

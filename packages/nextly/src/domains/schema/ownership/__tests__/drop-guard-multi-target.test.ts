@@ -747,8 +747,10 @@ describe("renaming another owner's table", () => {
     ["sqlite", 'ALTER TABLE "__new_fx__notes" RENAME TO "fx__notes"'],
     ["mysql", "RENAME TABLE fx__notes TO fx__archive"],
     ["postgresql", "ALTER TABLE fx__notes SET SCHEMA archive"],
-    // An index rename on the foreign table renames no table and no column.
-    ["mysql", "ALTER TABLE app_notes RENAME INDEX i1 TO i2"],
+    // An index rename on the plugin's own table renames no table and no
+    // column, and takes nothing from anybody. On another owner's table it
+    // takes that owner's index: `drop-guard-elements.test.ts`.
+    ["mysql", "ALTER TABLE fx__notes RENAME INDEX i1 TO i2"],
   ])(
     "leaves a rename that takes no foreign table alone on %s: %s",
     (dialect, statement) => {

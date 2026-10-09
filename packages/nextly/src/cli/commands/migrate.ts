@@ -96,6 +96,7 @@ import {
 import {
   assertNoForeignDrops,
   readLiveColumns,
+  readLiveIndexTables,
   readLiveTables,
 } from "../../domains/schema/ownership/drop-guard";
 import {
@@ -890,6 +891,8 @@ export async function runPluginPhase(
       readLiveColumns(deps.db, deps.dialect, [statements]),
     liveTables: statements =>
       readLiveTables(deps.db, deps.dialect, [statements]),
+    liveIndexTables: statements =>
+      readLiveIndexTables(deps.db, deps.dialect, [statements]),
     introspect: async (names, stream) => {
       // Exactly the tables this module's snapshots name, as they stand now.
       // Not the app stream's comparable set: that is every collection, Single
@@ -1528,6 +1531,7 @@ export async function runFileMigrations(args: {
       liveColumns: await readLiveColumns(db, dialect, [upStatements]),
       // Read before each file, after the files before it have run.
       liveTables: await readLiveTables(db, dialect, [upStatements]),
+      liveIndexTables: await readLiveIndexTables(db, dialect, [upStatements]),
     });
     const unit: MigrationUnit = {
       source: filename,

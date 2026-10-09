@@ -354,6 +354,74 @@ describe("plugin migrations against a real database (sqlite)", () => {
       },
     ]);
   });
+
+  it("runs a data module within a history dev push left at its latest shape", async () => {
+    // A seed between two schema modules. The database stands past all three,
+    // but the seed's rows are in no snapshot: adopting it would leave the
+    // table empty with the seed recorded as applied.
+    const rowsV1 = defineTable("rows", {
+      id: col.id(),
+      label: col.shortText(),
+    });
+    const rowsV2 = defineTable("rows", {
+      id: col.id(),
+      label: col.shortText(),
+      score: col.integer({ nullable: true }),
+    });
+    const v1 = await generate("seeder", 1, [rowsV1]);
+    const seedContent = {
+      name: `${v1.name}_seed`,
+      schemaVersion: 1,
+      dialects: {
+        postgresql: { up: [], down: [] },
+        mysql: { up: [], down: [] },
+        sqlite: {
+          up: [`INSERT INTO "seeder__rows" ("id", "label") VALUES ('a', 'A')`],
+          down: [`DELETE FROM "seeder__rows" WHERE "id" = 'a'`],
+        },
+      },
+      snapshot: v1.snapshot,
+      before: v1.snapshot,
+    };
+    const seed: PluginMigration = {
+      ...seedContent,
+      checksum: migrationChecksum(seedContent),
+    };
+    const v2 = await generate("seeder", 2, [rowsV2], [v1, seed]);
+    for (const stmt of [...v1.dialects.sqlite.up, ...v2.dialects.sqlite.up]) {
+      sqlite.exec(stmt);
+    }
+
+    await runPluginPhase(
+      phaseArgs([{ pluginName: "seeder", migrations: [v1, seed, v2] }]) as never
+    );
+
+    expect(
+      sqlite.prepare('SELECT "id", "label" FROM "seeder__rows"').all()
+    ).toEqual([{ id: "a", label: "A" }]);
+    const ledger = sqlite
+      .prepare(
+        "SELECT filename, status, statements_executed FROM nextly_schema_events WHERE filename LIKE 'plugin:seeder/%' ORDER BY filename"
+      )
+      .all() as Array<Record<string, unknown>>;
+    expect(ledger).toEqual([
+      {
+        filename: `plugin:seeder/${v1.name}`,
+        status: "applied",
+        statements_executed: 0,
+      },
+      {
+        filename: `plugin:seeder/${seed.name}`,
+        status: "applied",
+        statements_executed: 1,
+      },
+      {
+        filename: `plugin:seeder/${v2.name}`,
+        status: "applied",
+        statements_executed: 0,
+      },
+    ]);
+  });
 });
 
 describe("foreign elements never block a plugin's reconcile", () => {

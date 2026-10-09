@@ -21,7 +21,7 @@ import type {
 } from "../pipeline/diff/types";
 
 import type { ExtensionSchema } from "./build-extension-schema";
-import { resolveIndexName, toColumnSpec } from "./compile";
+import { toColumnSpec, toIndexSpec } from "./compile";
 import { withContributedEnumChecks } from "./enum-check";
 
 /** The part of a compiled extension schema that holds contributions. */
@@ -71,11 +71,7 @@ export function withEntityContributions(
   for (const index of contributedIndexes) {
     if (index.columns.length === 0) continue;
     if (!index.columns.every(column => present.has(column))) continue;
-    const built: IndexSpec = {
-      name: resolveIndexName(spec.name, index),
-      columns: [...index.columns],
-      unique: index.unique,
-    };
+    const built = toIndexSpec(spec.name, index);
     if (keys.has(indexKey(built))) continue;
     keys.add(indexKey(built));
     indexes.push(built);

@@ -1005,3 +1005,154 @@ describe("a row MySQL cannot hold", () => {
     });
   });
 });
+
+describe("index names", () => {
+  const indexed = (name: string, indexName?: string) =>
+    defineTable(
+      name,
+      { id: col.id(), label: col.shortText() },
+      {
+        indexes: [
+          {
+            columns: ["label"],
+            ...(indexName !== undefined ? { name: indexName } : {}),
+          },
+        ],
+      }
+    );
+
+  /** The validation paths the build refuses with, or [] when it succeeds. */
+  const refusedAt = async (input: ExtensionSchemaInput): Promise<string[]> => {
+    try {
+      await buildExtensionSchema(input);
+      return [];
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as { errors?: { path: string }[] };
+      return (data.errors ?? []).map(issue => issue.path);
+    }
+  };
+
+  it("refuses one explicit name on two tables, which PostgreSQL and SQLite hold unique per schema", async () => {
+    expect(
+      await refusedAt(
+        base([
+          {
+            owner: { kind: "plugin", id: "a" },
+            tables: [indexed("things", "idx_label")],
+          },
+          {
+            owner: { kind: "plugin", id: "b" },
+            tables: [indexed("widgets", "idx_label")],
+          },
+        ])
+      )
+    ).toEqual(["b__widgets.indexes"]);
+  });
+
+  it("refuses an explicit name equal to another table's derived one", async () => {
+    // `a__things`'s index is derived as `idx_a__things_label`.
+    expect(
+      await refusedAt(
+        base([
+          { owner: { kind: "plugin", id: "a" }, tables: [indexed("things")] },
+          {
+            owner: { kind: "plugin", id: "b" },
+            tables: [indexed("widgets", "idx_a__things_label")],
+          },
+        ])
+      )
+    ).toEqual(["b__widgets.indexes"]);
+  });
+
+  it("refuses an index contributed to an entity under a declared table's name", async () => {
+    expect(
+      await refusedAt(
+        base([
+          {
+            owner: { kind: "plugin", id: "a" },
+            tables: [indexed("things", "idx_shared")],
+            extend: [
+              ({ schema }) => {
+                schema.extendTable("dc_posts", {
+                  indexes: [{ columns: ["title"], name: "idx_shared" }],
+                });
+              },
+            ],
+          },
+        ])
+      )
+    ).toEqual(["dc_posts.indexes"]);
+  });
+
+  /** A contribution adding `index` to the `dc_posts` entity table. */
+  const contributing = (
+    owner: SchemaContribution["owner"],
+    index: { columns: string[]; name?: string }
+  ): SchemaContribution => ({
+    owner,
+    extend: [
+      ({ schema }) => {
+        schema.extendTable("dc_posts", { indexes: [index] });
+      },
+    ],
+  });
+
+  it("accepts two contributors adding the same index to one table, which the merge holds as one", async () => {
+    // Derived names: both resolve to `idx_dc_posts_title`.
+    const built = await buildExtensionSchema(
+      base(
+        [contributing({ kind: "plugin", id: "a" }, { columns: ["title"] })],
+        contributing({ kind: "app" }, { columns: ["title"] })
+      )
+    );
+    expect(built.entityIndexes.get("dc_posts")).toHaveLength(2);
+    // An explicit name, the same on both.
+    expect(
+      await refusedAt(
+        base([
+          contributing(
+            { kind: "plugin", id: "a" },
+            { columns: ["title"], name: "idx_posts_title" }
+          ),
+          contributing(
+            { kind: "plugin", id: "b" },
+            { columns: ["title"], name: "idx_posts_title" }
+          ),
+        ])
+      )
+    ).toEqual([]);
+  });
+
+  it("refuses two different indexes contributed to one table under one name", async () => {
+    expect(
+      await refusedAt(
+        base([
+          contributing(
+            { kind: "plugin", id: "a" },
+            { columns: ["title"], name: "idx_posts_shared" }
+          ),
+          contributing(
+            { kind: "plugin", id: "b" },
+            { columns: ["id", "title"], name: "idx_posts_shared" }
+          ),
+        ])
+      )
+    ).toEqual(["dc_posts.indexes"]);
+  });
+
+  it("accepts distinct names, declared and derived", async () => {
+    const built = await buildExtensionSchema(
+      base([
+        { owner: { kind: "plugin", id: "a" }, tables: [indexed("things")] },
+        {
+          owner: { kind: "plugin", id: "b" },
+          tables: [indexed("widgets", "idx_widgets_label")],
+        },
+      ])
+    );
+    expect(
+      built.specs.flatMap(spec => (spec.indexes ?? []).map(index => index.name))
+    ).toEqual(["idx_a__things_label", "idx_widgets_label"]);
+  });
+});

@@ -536,6 +536,11 @@ export interface TableIndexInput {
 export interface TableForeignKeyInput {
   /** Column KEYS as authored; resolved to SQL names by `defineTable`. */
   columns: string[];
+  /**
+   * The referenced table's final name and its SQL column names, as the
+   * database spells them (`owner_id`, not the authored `ownerId`). A column
+   * the referenced table does not have is refused when the schema compiles.
+   */
   references: { table: string; columns: string[] };
   onDelete?: "cascade" | "set null" | "restrict" | "no action" | "set default";
   onUpdate?: "cascade" | "set null" | "restrict" | "no action" | "set default";

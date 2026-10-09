@@ -94,8 +94,13 @@ An explicit index or foreign key `name` is used exactly as written, so it may
 be at most 63 characters. Derived names (and every check name, which is
 `ck_<table>_<name>`) are shortened with a hash when they would be longer. A
 foreign key's name, written or derived, must also be unique across the
-tables plugins and the app declare, as MySQL requires of a database; two keys
-that resolve to one name are refused when the schema compiles.
+tables plugins and the app declare, as MySQL requires of a database, and so
+must an index's, as PostgreSQL and SQLite require of a schema; two that
+resolve to one name are refused when the schema compiles. The same index
+contributed to one table twice, by two plugins or a plugin and the app, is one
+index and is kept once. A foreign key's
+`references.columns` are the target's SQL column names (`owner_id`, not the
+authored `ownerId`), and a column the target does not have is refused.
 
 A table's columns must fit in one MySQL row: 65,535 bytes, where a
 `varchar(n)` counts up to 4 bytes a character plus its length, and a

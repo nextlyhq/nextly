@@ -912,6 +912,155 @@ describe("a database already past some of a plugin's modules", () => {
     expect(d.executed[0]).toContain("CREATE TABLE p__extras");
   });
 
+  /** A data module between `create` and `addScore`: a seed. */
+  const seed = module({
+    name: "20260115_000000_seed",
+    schemaVersion: 1,
+    before: [tableSpec(T, false)],
+    target: [tableSpec(T, false)],
+    up: ["INSERT INTO p__things (id, label) VALUES ('a', 'A')"],
+  });
+
+  it("runs a data module the database stands past, adopting the schema modules either side", async () => {
+    // Dev push left the tables at `addScore`'s result. The seed's work is in
+    // no snapshot, so standing past it says nothing about whether it ran.
+    const d = deps();
+    d.live.set(T, [tableSpec(T, true)]);
+
+    const result = await runPluginMigrations(
+      set([create, seed, addScore]),
+      d.deps
+    );
+
+    expect(result).toEqual({ applied: 1, adopted: 2, skipped: 0 });
+    expect(d.executed).toHaveLength(1);
+    expect(d.executed[0]).toContain(
+      "INSERT INTO p__things (id, label) VALUES ('a', 'A')"
+    );
+    // In run order: the seed is recorded between the two adoptions.
+    expect(d.started).toEqual([
+      "plugin:@acme/p/20260101_000000_create",
+      "plugin:@acme/p/20260115_000000_seed",
+      "plugin:@acme/p/20260201_000000_add_score",
+    ]);
+    expect(d.owners.map(owner => owner.adopted)).toEqual([true, false, true]);
+  });
+
+  it("refuses a module the database stands past that changes the schema and data both", async () => {
+    // Adopting it would skip the backfill; running it would repeat the
+    // ALTER the database already holds.
+    const backfilled = module({
+      name: "20260201_000000_add_score",
+      schemaVersion: 2,
+      before: [tableSpec(T, false)],
+      target: [tableSpec(T, true)],
+      up: ["ALTER TABLE p__things ADD score", "UPDATE p__things SET score = 0"],
+    });
+    const d = deps();
+    // The database stands at `addExtras`'s result, past the mixed module.
+    d.live.set(T, [tableSpec(T, true)]);
+    d.live.set(U, [tableSpec(U, false)]);
+
+    await expect(
+      runPluginMigrations(set([create, backfilled, addExtras]), d.deps)
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_DRIFT",
+      logContext: {
+        migration: "20260201_000000_add_score",
+        reason: "mixed-module-past",
+      },
+    });
+    // Refused before any row: nothing adopted ahead of it.
+    expect(d.started).toEqual([]);
+    expect(d.executed).toEqual([]);
+  });
+
+  it("judges an edited module before what its statements do", async () => {
+    // An edit is refused as one, not as whatever the edited SQL now reads as.
+    const edited = module({
+      name: "20260201_000000_add_score",
+      schemaVersion: 2,
+      before: [tableSpec(T, false)],
+      target: [tableSpec(T, true)],
+      up: ["ALTER TABLE p__things ADD score", "UPDATE p__things SET score = 0"],
+    });
+    const d = deps();
+    d.live.set(T, [tableSpec(T, true)]);
+    d.live.set(U, [tableSpec(U, false)]);
+
+    await expect(
+      runPluginMigrations(
+        set([create, { ...edited, checksum: "0".repeat(64) }, addExtras]),
+        d.deps
+      )
+    ).rejects.toMatchObject({ code: "MIGRATION_CHECKSUM_MISMATCH" });
+    expect(d.started).toEqual([]);
+  });
+
+  it("refuses a data module the database stands past that drops another stream's table, before any row", async () => {
+    const dropping = module({
+      name: "20260115_000000_seed",
+      schemaVersion: 1,
+      before: [tableSpec(T, false)],
+      target: [tableSpec(T, false)],
+      up: ["DROP TABLE legacy_cache"],
+    });
+    const owners = new Map<string, OwnerRecord>([
+      [
+        "legacy_cache",
+        {
+          tableName: "legacy_cache",
+          ownerKind: "app",
+          ownerId: "app",
+          migratedBy: "app",
+          ownerVersion: null,
+          schemaVersion: null,
+          state: "active",
+        },
+      ],
+    ]);
+    const d = deps({ owners });
+    d.live.set(T, [tableSpec(T, true)]);
+
+    await expect(
+      runPluginMigrations(set([create, dropping, addScore]), d.deps)
+    ).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+      logContext: { table: "legacy_cache" },
+    });
+    // Judged with the range: `create` is not adopted ahead of the refusal.
+    expect(d.started).toEqual([]);
+    expect(d.executed).toEqual([]);
+  });
+
+  it("names the way out when a data module fails against the later shape of the tables", async () => {
+    const d = deps({
+      executeSql: async () => {
+        throw new Error('column "label" does not exist');
+      },
+    });
+    d.live.set(T, [tableSpec(T, true)]);
+
+    await expect(
+      runPluginMigrations(set([create, seed, addScore]), d.deps)
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_APPLY_FAILED",
+      publicMessage: expect.stringContaining(
+        "drop the plugin's tables and run `nextly migrate`"
+      ),
+      logContext: {
+        migration: "20260115_000000_seed",
+        reason: "data-module-past",
+      },
+    });
+    // The schema module before it stands adopted; the seed's attempt failed.
+    expect(d.started).toEqual([
+      "plugin:@acme/p/20260101_000000_create",
+      "plugin:@acme/p/20260115_000000_seed",
+    ]);
+    expect(d.failed).toEqual(["id-plugin:@acme/p/20260115_000000_seed"]);
+  });
+
   it("leaves a fresh install to run every module", async () => {
     // The control: an empty database matches the first module's start, so
     // nothing is adopted and every module runs. The database follows the SQL,
