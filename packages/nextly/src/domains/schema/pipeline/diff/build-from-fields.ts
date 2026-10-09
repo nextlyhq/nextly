@@ -31,6 +31,10 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
+  assertIndexBuildable,
+  type WeighedColumn,
+} from "../../extension/naming";
+import {
   getColumnDescriptor,
   type ColumnOrigin,
   getSystemColumnDescriptors,
@@ -150,13 +154,16 @@ interface CollectionIndexContext<F> {
    */
   declaredIndexes?: readonly DeclaredIndex[];
   /**
-   * The logical kind of the column a field materialises.
+   * The logical kind of the column a field materialises, with the sizes that
+   * kind reads, or null when it materialises none.
    *
    * Needed because a declared index is refused for ALL THREE dialects rather
    * than the live one: an index that only works where its author develops is a
-   * deployment failure with no local reproduction.
+   * deployment failure with no local reproduction. The width matters as much
+   * as the kind: MySQL limits a whole key to 3,072 bytes, so four ordinary
+   * text fields can each be keyable and their index still not be.
    */
-  columnKindFor?: (field: F) => string | null;
+  columnFor?: (field: F) => Omit<WeighedColumn, "name"> | null;
   /**
    * Whether an index on this column can exist at all, asked per column.
    *
@@ -273,9 +280,6 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
   return dedupeIndexes(indexes);
 }
 
-/** Kinds no dialect can key without a prefix length the model cannot express. */
-const UNKEYABLE_KINDS = new Set(["json", "longText"]);
-
 /**
  * The specs for indexes the config DECLARED, as opposed to those derived from
  * individual fields.
@@ -317,26 +321,47 @@ function declaredIndexSpecs<F extends MinimalFieldDef>(
       });
     }
 
-    const columns = entry.fields.map(fieldName =>
+    const resolved = entry.fields.map(fieldName =>
       declaredIndexColumn(tableName, fieldName, fields, context)
     );
+    const columns = resolved.map(column => column.name);
+    const unique = entry.unique === true;
+    // Judged by the rules an extension table's index is judged by, on every
+    // dialect: which kinds can be keyed or carry uniqueness, and MySQL's
+    // limit on the whole key's width. A column whose kind the caller could
+    // not supply is left out, and the width is then not summed over the part
+    // that is known — a total too small passes for the wrong reason.
+    const weighed = resolved.flatMap(column =>
+      column.weighed === null ? [] : [column.weighed]
+    );
+    assertIndexBuildable(
+      {
+        columns,
+        unique,
+        ...(entry.name !== undefined ? { name: entry.name } : {}),
+      },
+      weighed,
+      tableName,
+      weighed.length === resolved.length
+    );
     return {
-      name:
-        entry.name ??
-        indexNameForColumns(tableName, columns, entry.unique === true),
+      name: entry.name ?? indexNameForColumns(tableName, columns, unique),
       columns,
-      unique: entry.unique === true,
+      unique,
     };
   });
 }
 
-/** The column one declared index field resolves to, or a refusal. */
+/**
+ * The column one declared index field resolves to, or a refusal: its name,
+ * and the column as the index rules weigh it when the caller can say.
+ */
 function declaredIndexColumn<F extends MinimalFieldDef>(
   tableName: string,
   fieldName: string,
   fields: readonly F[],
   context: CollectionIndexContext<F>
-): string {
+): { name: string; weighed: WeighedColumn | null } {
   const refuse = (message: string): never => {
     throw NextlyError.validation({
       errors: [{ path: `${tableName}.indexes`, code: "INVALID", message }],
@@ -362,13 +387,11 @@ function declaredIndexColumn<F extends MinimalFieldDef>(
       `Index names the field "${fieldName}", which materialises no column on this table.`
     );
   }
-  const kind = context.columnKindFor?.(field);
-  if (kind !== undefined && kind !== null && UNKEYABLE_KINDS.has(kind)) {
-    return refuse(
-      `Index names the field "${fieldName}", whose "${kind}" column cannot be keyed on every dialect. Use a bounded text field.`
-    );
-  }
-  return column;
+  const described = context.columnFor?.(field) ?? null;
+  return {
+    name: column,
+    weighed: described === null ? null : { ...described, name: column },
+  };
 }
 
 export function buildDesiredTableFromFields(
@@ -473,12 +496,25 @@ export function buildDesiredTableFromFields(
         dialect,
         options.builtBy
       )?.name ?? null,
-    columnKindFor: field =>
-      getColumnDescriptor(
+    columnFor: field => {
+      const descriptor = getColumnDescriptor(
         field as unknown as Parameters<typeof getColumnDescriptor>[0],
         dialect,
         options.builtBy
-      )?.kind ?? null,
+      );
+      // A field stored in another table has no column to weigh.
+      if (descriptor === null || descriptor.kind === "skip") return null;
+      return {
+        kind: descriptor.kind,
+        ...(descriptor.length !== undefined
+          ? { length: descriptor.length }
+          : {}),
+        ...(descriptor.precision !== undefined
+          ? { precision: descriptor.precision }
+          : {}),
+        ...(descriptor.scale !== undefined ? { scale: descriptor.scale } : {}),
+      };
+    },
     ...(options.indexes !== undefined
       ? { declaredIndexes: options.indexes }
       : {}),

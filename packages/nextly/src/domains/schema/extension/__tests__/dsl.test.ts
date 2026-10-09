@@ -97,6 +97,18 @@ describe("defineTable", () => {
     expect(validationPaths(() => col.varchar(0))).toEqual(["varchar.length"]);
   });
 
+  it("refuses a varchar wider than MySQL can declare, at the widest it can", () => {
+    // utf8mb4 spends up to 4 bytes a character, so 65,535 characters is a
+    // 262,140-byte column; MySQL's ceiling is 16,383.
+    expect(validationPaths(() => col.varchar(16_384))).toEqual([
+      "varchar.length",
+    ]);
+    expect(validationPaths(() => col.varchar(65_535))).toEqual([
+      "varchar.length",
+    ]);
+    expect(col.varchar(16_383).length).toBe(16_383);
+  });
+
   it("refuses a decimal whose scale exceeds its precision", () => {
     // DECIMAL(3,5) asks for five fractional digits out of three total, which
     // describes no representable number.
@@ -219,5 +231,57 @@ describe("defineTable", () => {
 
   it("refuses a table with no columns", () => {
     expect(validationPaths(() => defineTable("t", {}))).toEqual(["t"]);
+  });
+
+  describe("relation names", () => {
+    const edge = (name: string, targetTable: string) => ({
+      name,
+      kind: "one" as const,
+      targetTable,
+      fromColumn: "ownerId",
+    });
+
+    it("refuses two declared relations of one name, and accepts two names", () => {
+      // The registry keys edges by name, so the second would replace the
+      // first and a query would follow only the last declaration.
+      const declare = (second: string) =>
+        defineTable(
+          "t",
+          { id: col.id(), ownerId: col.shortText() },
+          { relations: [edge("owner", "users"), edge(second, "admins")] }
+        );
+      expect(validationPaths(() => declare("owner"))).toEqual([
+        "t.relations[1]",
+      ]);
+      expect(declare("admin").relations.map(rel => rel.name)).toEqual([
+        "owner",
+        "admin",
+      ]);
+    });
+
+    it("refuses two ref() columns implying one name, until one is declared", () => {
+      // `fooRefId` shortens to `fooRef`; `foo` has no Id suffix and takes
+      // `fooRef` as well.
+      const columns = {
+        id: col.id(),
+        fooRefId: col.ref("users"),
+        foo: col.ref("admins"),
+      };
+      expect(validationPaths(() => defineTable("t", columns))).toEqual([
+        "t.relations",
+      ]);
+      // A declared relation of that name replaces both implied edges.
+      const declared = defineTable("t", columns, {
+        relations: [
+          {
+            name: "fooRef",
+            kind: "one",
+            targetTable: "users",
+            fromColumn: "fooRefId",
+          },
+        ],
+      });
+      expect(declared.relations.map(rel => rel.name)).toEqual(["fooRef"]);
+    });
   });
 });

@@ -556,9 +556,12 @@ export interface MigrateCoreDeps {
 export interface MigrateCoreResult {
   applied: number;
   /**
-   * Plugin migration modules this run executed. Kept apart from `applied`,
-   * which counts the app's migration files, so "nothing to migrate" is said
-   * only when neither stream ran anything.
+   * Plugin migration modules this run recorded as applied — run, or adopted
+   * because the database already stood at their result, as an adopted app
+   * file counts in `applied`. Kept apart from `applied`, which counts the
+   * app's migration files, so "nothing to migrate" is said only when neither
+   * stream recorded anything; a `--step` spent on an adoption is a run that
+   * did something.
    */
   pluginModulesApplied: number;
   coreChanged: boolean;
@@ -878,6 +881,9 @@ export async function runPluginPhase(
   const pluginOutcome = await runPluginMigrations(deps.pluginMigrationSets, {
     dialect: deps.dialect,
     appliedShas,
+    // `--step` counts plugin modules first, as they run first; see
+    // `appStepAfter` for the app files' share.
+    limit: deps.step,
     owners: ownerRows,
     elementOwners: allRows,
     liveColumns: statements =>
@@ -1111,6 +1117,56 @@ function reportMetadataOutcome(
   }
 }
 
+/**
+ * What is left of `--step` for the app's files once the plugin phase has
+ * recorded `pluginRecorded` modules, applied or adopted.
+ *
+ * `--step N` is "run only N migrations", and the plugin phase runs first, so
+ * one budget is shared: handing the whole of it to each phase let
+ * `--step 1` apply every pending plugin module and then an app file as well.
+ * Undefined, as no limit, when no positive step was given — the meaning
+ * `runFileMigrations` already gives an absent one. Zero means the app phase
+ * must not run at all, which is why it is not passed on as a step: a zero
+ * step reads as no limit there.
+ */
+function appStepAfter(
+  step: number | undefined,
+  pluginRecorded: number
+): number | undefined {
+  if (step === undefined || !(step > 0)) return undefined;
+  return Math.max(0, step - pluginRecorded);
+}
+
+/**
+ * Phases 1.5 and 2: the plugins' modules, then the app's files, under one
+ * `--step` budget (`appStepAfter`).
+ */
+async function runMigrationStreams(
+  deps: MigrateCoreDeps,
+  runFiles: typeof runFileMigrations
+): Promise<{ pluginModulesApplied: number; applied: number }> {
+  const pluginOutcome = await runPluginPhase(deps);
+  const pluginModulesApplied = pluginOutcome.applied + pluginOutcome.adopted;
+  const appStep = appStepAfter(deps.step, pluginModulesApplied);
+  if (appStep === 0) {
+    deps.logger.info(
+      "Phase 2: skipped; --step was spent on plugin migrations."
+    );
+    return { pluginModulesApplied, applied: 0 };
+  }
+  deps.logger.info("Phase 2: applying user migrations...");
+  const applied = await runFiles({
+    adapter: deps.adapter,
+    db: deps.db,
+    dialect: deps.dialect,
+    migrationsDir: deps.migrationsDir,
+    step: appStep,
+    logger: deps.logger,
+    knownJunctions: deps.knownJunctions,
+  });
+  return { pluginModulesApplied, applied };
+}
+
 export async function migrateCore(
   deps: MigrateCoreDeps
 ): Promise<MigrateCoreResult> {
@@ -1222,18 +1278,10 @@ export async function migrateCore(
       coreChanged = r.changed;
 
       await recordAppTableOwners(deps);
-      pluginModulesApplied = (await runPluginPhase(deps)).applied;
-
-      deps.logger.info("Phase 2: applying user migrations...");
-      applied = await runFiles({
-        adapter: deps.adapter,
-        db: deps.db,
-        dialect: deps.dialect,
-        migrationsDir: deps.migrationsDir,
-        step: deps.step,
-        logger: deps.logger,
-        knownJunctions: deps.knownJunctions,
-      });
+      ({ pluginModulesApplied, applied } = await runMigrationStreams(
+        deps,
+        runFiles
+      ));
 
       // Element rows for contributed elements: written AFTER every stream has
       // applied, so a row exists exactly when the element does — then rows
@@ -1764,7 +1812,11 @@ export function registerMigrateCommand(program: Command): void {
     .command("migrate")
     .description("Run all pending database migrations")
     .option("--dry-run", "Show what would be migrated without executing", false)
-    .option("--step <n>", "Run only N migrations", parseInt)
+    .option(
+      "--step <n>",
+      "Run only N migrations, plugin modules and app files together",
+      parseInt
+    )
     .option(
       "--force-unlock",
       "Clear a stale migrate lock before running",

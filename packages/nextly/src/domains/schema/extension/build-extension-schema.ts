@@ -35,6 +35,7 @@ import {
   specAfterHook,
 } from "./after-drizzle";
 import {
+  assertDistinctForeignKeyNames,
   authoredKeyOf,
   referenceTableStub,
   resolveIndexName,
@@ -43,6 +44,7 @@ import {
 } from "./compile";
 import { type SeedEntityTable, SchemaDraftStore } from "./draft";
 import { enumChecks } from "./enum-check";
+import { assertMysqlRowFits } from "./naming";
 import { runExtensionHooks, type SchemaContribution } from "./run-hooks";
 import type {
   ExtensionColumn,
@@ -584,6 +586,13 @@ export async function buildExtensionSchema(
   const { entityIndexes, entityColumns } = foreignTableContributions(store);
 
   const compiledSpecs = tables.map(table => toTableSpec(table, input.dialect));
+  // Every declared key's resolved name, before any `afterDrizzle` hook sees
+  // the tables, so a clash is reported against the declaration rather than
+  // by the database; the specs a hook reshapes are judged again below.
+  assertDistinctForeignKeyNames(compiledSpecs);
+  // Each table whole, its own columns and every one a hook added, so a row
+  // only MySQL cannot hold is refused on every dialect alike.
+  for (const table of tables) assertMysqlRowFits(table);
   const { compiled, owners } = compileDrizzleTables(tables, input.dialect);
   const protectedTables = protectedTableNames(input, store);
 
@@ -645,6 +654,9 @@ export async function buildExtensionSchema(
       : Object.entries(drizzle).map(([name, table]) =>
           specAfterHooks(name, table, hooked)
         );
+  // What reaches the migration model when a hook changed it: a key the hook
+  // added or renamed is held to the same rule as a declared one.
+  if (hooks.length > 0) assertDistinctForeignKeyNames(specs);
 
   const { adopted, adoptedRelations } = compileAdoptedTables(
     store,

@@ -11,9 +11,11 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import { pluginAdminSlug } from "../../../../plugins/plugin-slug";
 import {
   assertIndexBuildable,
+  assertMysqlRowFits,
   assertUsableAppTableName,
   mysqlKeyBytes,
   judgeIndex,
+  MAX_VARCHAR_LENGTH,
   pluginTableName,
   pluginTablePrefix,
 } from "../naming";
@@ -288,5 +290,60 @@ describe("declaration-time index rules", () => {
         )
       )
     ).toMatch(/at most 63/);
+  });
+});
+
+describe("assertMysqlRowFits", () => {
+  /** One column of a table judged whole; NOT NULL unless said otherwise. */
+  const at = (
+    name: string,
+    kind: ExtensionColumn["kind"],
+    extra: Partial<ExtensionColumn> = {}
+  ) => ({ name, kind, nullable: false, ...extra });
+  const fits = (columns: ReturnType<typeof at>[]) => () =>
+    assertMysqlRowFits({ name: "fx__t", columns });
+
+  it("caps varchar where MySQL's utf8mb4 row does: (65,535 - 2) / 4", () => {
+    expect(MAX_VARCHAR_LENGTH).toBe(16_383);
+    // The widest varchar alone fits the row; with the conventional id it
+    // does not, which is why the row is judged as well as the column.
+    const widest = at("body", "varchar", { length: MAX_VARCHAR_LENGTH });
+    expect(fits([widest])).not.toThrow();
+    expect(
+      refusal(fits([at("id", "varchar", { length: 36 }), widest]))
+    ).toMatch(/mysql limits a row to 65535 bytes.* declares 65679\./);
+  });
+
+  it("refuses one byte past the limit, counting length bytes and the null bitmap", () => {
+    // 2 x (8,191 x 4 + 2) + 1 + 2 = 65,535 exactly.
+    const exact = [
+      at("a", "varchar", { length: 8191 }),
+      at("b", "varchar", { length: 8191 }),
+      at("flag", "boolean"),
+      at("rank", "smallint"),
+    ];
+    expect(fits(exact)).not.toThrow();
+    // A nullable column costs a bit of the null bitmap, so a byte.
+    exact[2] = at("flag", "boolean", { nullable: true });
+    expect(refusal(fits(exact))).toMatch(/declares 65536/);
+  });
+
+  it("counts a TEXT column's length and pointer, not its contents", () => {
+    // 16,380 x 4 + 2 = 65,522, and TEXT adds 10: inside the row.
+    expect(
+      fits([at("a", "varchar", { length: 16_380 }), at("notes", "longText")])
+    ).not.toThrow();
+  });
+
+  it("weighs a decimal as MySQL packs it", () => {
+    // 16,376 x 4 + 2 = 65,506. DECIMAL(65,30) packs 35 + 30 digits into
+    // 16 + 14 = 30 bytes, one past the limit; DECIMAL(10,2) into 5.
+    const beside = (precision: number, scale: number) =>
+      fits([
+        at("a", "varchar", { length: 16_376 }),
+        at("amount", "decimal", { precision, scale }),
+      ]);
+    expect(refusal(beside(65, 30))).toMatch(/declares 65536/);
+    expect(beside(10, 2)).not.toThrow();
   });
 });

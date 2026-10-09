@@ -1023,6 +1023,185 @@ describe("a database already past some of a plugin's modules", () => {
   });
 });
 
+describe("a limit on how many modules one run records", () => {
+  const T = "p__things";
+  const U = "p__extras";
+  const create = module({
+    name: "20260101_000000_create",
+    schemaVersion: 1,
+    before: [],
+    target: [tableSpec(T, false)],
+    up: ["CREATE TABLE p__things"],
+  });
+  const addScore = module({
+    name: "20260201_000000_add_score",
+    schemaVersion: 2,
+    before: [tableSpec(T, false)],
+    target: [tableSpec(T, true)],
+    up: ["ALTER TABLE p__things ADD score"],
+  });
+  const addExtras = module({
+    name: "20260301_000000_add_extras",
+    schemaVersion: 3,
+    before: [tableSpec(T, true)],
+    target: [tableSpec(T, true), tableSpec(U, false)],
+    up: ["CREATE TABLE p__extras"],
+  });
+  const other = module({
+    name: "001",
+    schemaVersion: 1,
+    before: [],
+    target: [tableSpec("q__other", false)],
+    up: ["CREATE TABLE q__other"],
+  });
+
+  /** Deps whose database follows the SQL it is handed, as a real one does. */
+  function following(limit: number) {
+    const d = deps({ limit });
+    d.deps.executeSql = async (sql: string) => {
+      d.executed.push(sql);
+      if (sql.includes("CREATE TABLE p__things")) {
+        d.live.set(T, [tableSpec(T, false)]);
+      }
+      if (sql.includes("ADD score")) d.live.set(T, [tableSpec(T, true)]);
+      if (sql.includes("CREATE TABLE q__other")) {
+        d.live.set("q__other", [tableSpec("q__other", false)]);
+      }
+      return 1;
+    };
+    return d;
+  }
+
+  it("runs only as many modules as the limit, across plugins", async () => {
+    const d = following(2);
+
+    const result = await runPluginMigrations(
+      [
+        {
+          pluginName: "@acme/p",
+          pluginVersion: "1.0.0",
+          migrations: [create, addScore, addExtras],
+        },
+        { pluginName: "q", pluginVersion: "1.0.0", migrations: [other] },
+      ],
+      d.deps
+    );
+
+    expect(result).toEqual({ applied: 2, adopted: 0, skipped: 0 });
+    expect(d.started).toEqual([
+      "plugin:@acme/p/20260101_000000_create",
+      "plugin:@acme/p/20260201_000000_add_score",
+    ]);
+  });
+
+  it("does not count a module the ledger already records", async () => {
+    const d = following(1);
+    d.deps.appliedShas = new Map([
+      ["plugin:@acme/p/20260101_000000_create", create.checksum],
+    ]);
+    d.live.set(T, [tableSpec(T, false)]);
+
+    const result = await runPluginMigrations(
+      [
+        {
+          pluginName: "@acme/p",
+          pluginVersion: "1.0.0",
+          migrations: [create, addScore],
+        },
+      ],
+      d.deps
+    );
+
+    expect(result).toEqual({ applied: 1, adopted: 0, skipped: 1 });
+    expect(d.started).toEqual(["plugin:@acme/p/20260201_000000_add_score"]);
+  });
+
+  it("adopts only as far as the limit reaches, and the next run adopts the rest", async () => {
+    // The database stands at `addScore`'s result: one adoption would record
+    // both modules, and a limit of one records the first.
+    const first = following(1);
+    first.live.set(T, [tableSpec(T, true)]);
+    const sets = [
+      {
+        pluginName: "@acme/p",
+        pluginVersion: "1.0.0",
+        migrations: [create, addScore, addExtras],
+      },
+    ];
+
+    expect(await runPluginMigrations(sets, first.deps)).toEqual({
+      applied: 0,
+      adopted: 1,
+      skipped: 0,
+    });
+    expect(first.started).toEqual(["plugin:@acme/p/20260101_000000_create"]);
+    expect(first.executed).toEqual([]);
+    expect(first.owners).toEqual([
+      expect.objectContaining({ schemaVersion: 1, adopted: true }),
+    ]);
+
+    const second = following(1);
+    second.live.set(T, [tableSpec(T, true)]);
+    second.deps.appliedShas = new Map([
+      ["plugin:@acme/p/20260101_000000_create", create.checksum],
+    ]);
+    expect(await runPluginMigrations(sets, second.deps)).toEqual({
+      applied: 0,
+      adopted: 1,
+      skipped: 1,
+    });
+    expect(second.started).toEqual([
+      "plugin:@acme/p/20260201_000000_add_score",
+    ]);
+    expect(second.executed).toEqual([]);
+  });
+
+  it("records no ownership for a module a stopped run never reached", async () => {
+    // `addScore` is recorded out of order: the run applies `create`, skips
+    // `addScore` and stops at `addExtras`. Ownership repair reads the LAST
+    // module as applied, which it is not, and must not run.
+    const d = following(1);
+    d.deps.appliedShas = new Map([
+      ["plugin:@acme/p/20260201_000000_add_score", addScore.checksum],
+    ]);
+
+    await runPluginMigrations(
+      [
+        {
+          pluginName: "@acme/p",
+          pluginVersion: "1.0.0",
+          migrations: [create, addScore, addExtras],
+        },
+      ],
+      d.deps
+    );
+
+    expect(d.started).toEqual(["plugin:@acme/p/20260101_000000_create"]);
+    expect(d.owners.map(owner => owner.schemaVersion)).toEqual([1]);
+  });
+
+  it.each([undefined, 0, Number.NaN])(
+    "runs every pending module when the limit is %s",
+    async limit => {
+      const d = following(1);
+      d.deps.limit = limit;
+
+      const result = await runPluginMigrations(
+        [
+          {
+            pluginName: "@acme/p",
+            pluginVersion: "1.0.0",
+            migrations: [create, addScore],
+          },
+        ],
+        d.deps
+      );
+
+      expect(result).toEqual({ applied: 2, adopted: 0, skipped: 0 });
+    }
+  );
+});
+
 describe("ownership of a plugin whose modules are all recorded", () => {
   const first = module({
     name: "001",

@@ -363,15 +363,20 @@ A hand-sealed module gives up one check: that its SQL is the SQL that was
 generated. The ledger still refuses a module that changed after it was
 applied, so finish editing it before it ships.
 
-Two rules hold for every module, and a plugin that breaks one is refused
+These rules hold for every module, and a plugin that breaks one is refused
 when the configuration loads, before anything runs:
 
 - Its `name` cannot contain `/`. The ledger records it as
   `plugin:<plugin>/<name>`, and a slash in the name would file it under
   another plugin.
-- Modules run in name order, and each one's `schemaVersion` is no lower than
-  the one before it. The version the database ends at is the last module's,
-  so it is the one that must equal the plugin's `schemaVersion`.
+- Its `schemaVersion` is a positive integer, as the plugin's own is, whether
+  or not the plugin declares one.
+- Modules run in name order — compared character by character, ignoring
+  case, the same on every machine whatever its locale, so `10_more` runs
+  before `1_init`: zero-pad a numbered name. When the plugin declares a
+  `schemaVersion`, each module's is no lower than the one before it. The
+  version the database ends at is the last module's, so it is the one that
+  must equal the plugin's `schemaVersion`.
 
 And when it runs, a module may drop or rename only what the owner registry
 says is the plugin's: its own tables, the columns it contributed to other

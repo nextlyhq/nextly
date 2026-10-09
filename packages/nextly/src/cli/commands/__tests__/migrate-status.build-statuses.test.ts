@@ -52,6 +52,28 @@ describe("buildMigrationStatuses", () => {
   });
 });
 
+describe("the order statuses are listed in", () => {
+  it("lists a plugin's modules in the order they run, after the app's files", () => {
+    // `10_more` runs before `1_init`: modules run in `compareModuleNames`
+    // order, where `0` (0x30) is before `_` (0x5f). A whole-filename
+    // collation lists them the other way round.
+    const entry = (name: string) => ({ name, checksum: "x" });
+    const statuses = buildMigrationStatuses(
+      [
+        entry("plugin:@acme/p/1_init"),
+        entry("plugin:@acme/p/10_more"),
+        entry("20260101_000000_000_app"),
+      ],
+      []
+    );
+    expect(statuses.map(status => status.filename)).toEqual([
+      "20260101_000000_000_app",
+      "plugin:@acme/p/10_more",
+      "plugin:@acme/p/1_init",
+    ]);
+  });
+});
+
 describe("a plugin's status (--plugin)", () => {
   function sealed(name: string, transaction?: false): PluginMigration {
     const statements = { up: ["SELECT 1"], down: [] };

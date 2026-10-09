@@ -31,7 +31,10 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
-import { scopeLedgerRows } from "../../domains/schema/events/ledger-scope";
+import {
+  pluginOfLedgerRow,
+  scopeLedgerRows,
+} from "../../domains/schema/events/ledger-scope";
 import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
 import {
   SchemaEventsRepository,
@@ -39,6 +42,7 @@ import {
 } from "../../domains/schema/events/schema-events-repository";
 import {
   migrationChecksum,
+  compareModuleNames,
   orderedMigrations,
   qualifiedFilename,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
@@ -703,7 +707,28 @@ export function buildMigrationStatuses(
     });
   }
 
-  return statuses.sort((a, b) => a.filename.localeCompare(b.filename));
+  return statuses.sort((a, b) =>
+    compareStatusFilenames(a.filename, b.filename)
+  );
+}
+
+/**
+ * The order statuses are listed in: the app's files first, by name, then each
+ * plugin's modules, grouped by plugin, in the order the runner applies them
+ * (`compareModuleNames`). One comparison of whole filenames listed a plugin's
+ * modules in an order of its own, so `10_more` read as after `1_init` here
+ * while it runs before it.
+ */
+function compareStatusFilenames(a: string, b: string): number {
+  const pluginA = pluginOfLedgerRow(a);
+  const pluginB = pluginOfLedgerRow(b);
+  if (pluginA === null || pluginB === null) {
+    if (pluginA !== pluginB) return pluginA === null ? -1 : 1;
+    return a.localeCompare(b);
+  }
+  if (pluginA !== pluginB) return pluginA.localeCompare(pluginB);
+  const prefix = qualifiedFilename(pluginA, "").length;
+  return compareModuleNames(a.slice(prefix), b.slice(prefix));
 }
 
 function displayStatus(

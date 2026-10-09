@@ -31,6 +31,8 @@ import { normalizeContributions } from "../../pipeline/diff/contributions";
 import type { ContributedElements, TableSpec } from "../../pipeline/diff/types";
 import { splitSqlStatements } from "../split-sql";
 
+import { SCHEMA_VERSION_SHAPE } from "./schema-version-shape";
+
 /** The statements one dialect runs, in order. */
 export interface DialectStatements {
   up: string[];
@@ -275,6 +277,36 @@ export function assertModuleNames(
 }
 
 /**
+ * Refuse a module whose `schemaVersion` is not a positive integer.
+ *
+ * Asked of every module, whether or not the plugin declares a version of its
+ * own: the value is written to the owner registry's integer column after the
+ * module's SQL has committed, so `0.5` left an applied migration whose owner
+ * rows PostgreSQL refused to record, on every run after it, while SQLite kept
+ * the fraction. Checked where the manifest is read, before any module runs,
+ * by the rule the manifest's own `schemaVersion` is held to.
+ */
+export function assertModuleSchemaVersions(
+  pluginName: string,
+  migrations: readonly Pick<PluginMigration, "name" | "schemaVersion">[]
+): void {
+  const invalid = migrations.find(
+    migration =>
+      !SCHEMA_VERSION_SHAPE.safeParse(migration.schemaVersion).success
+  );
+  if (invalid === undefined) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: `plugin.${pluginName}.contributes.schema.migrations`,
+        code: "INVALID",
+        message: `Plugin "${pluginName}" ships a migration "${invalid.name}" declaring schemaVersion ${String(invalid.schemaVersion)}; it must be a positive integer.`,
+      },
+    ],
+  });
+}
+
+/**
  * Refuse a module whose content no longer matches its checksum.
  *
  * An edited module is refused rather than re-hashed. Re-hashing would accept
@@ -349,9 +381,29 @@ export function orderedMigrations(
  * The order two of one plugin's modules run in, by name. The comparator
  * `orderedMigrations` sorts by, exported so anything that has to agree with
  * the run order asks this rather than sorting by a rule of its own.
+ *
+ * Independent of the host's locale. `localeCompare` collates by the runtime's
+ * default locale, so `001_ä` sorted before `001_z` on an English host and
+ * after it on a Swedish one, and a fresh install ran a plugin's modules in a
+ * different order depending on where it was deployed. Names are compared by
+ * UTF-16 code unit after Unicode's locale-independent lowercasing
+ * (`toLowerCase`, never `toLocaleLowerCase`), so `a_init` runs before
+ * `B_more`. Being code-unit order, a digit sorts before `_` and `_` after
+ * `-`: `10_more` runs before `1_init`, so numbered names are written at a
+ * fixed width, as the generator's timestamps are. The case-sensitive
+ * comparison only breaks a tie `assertUniqueModuleNames` refuses anyway,
+ * keeping the order total for a list that has not been through it.
  */
 export function compareModuleNames(a: string, b: string): number {
-  return a.localeCompare(b);
+  return (
+    compareCodeUnits(a.toLowerCase(), b.toLowerCase()) || compareCodeUnits(a, b)
+  );
+}
+
+/** Plain UTF-16 code-unit order: the same answer on every host. */
+function compareCodeUnits(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
 }
 
 /**

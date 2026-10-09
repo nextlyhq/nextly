@@ -102,20 +102,94 @@ describe("refusals", () => {
     // that works only where its author develops is a deployment failure with
     // no local reproduction.
     expect(refusal(() => build([{ fields: ["meta"] }]))).toMatch(
-      /cannot be keyed on every dialect/
+      /mysql cannot index a "json" column \("meta"\)/
     );
   });
 
   it("refuses an unbounded text column", () => {
     expect(refusal(() => build([{ fields: ["bio"] }]))).toMatch(
-      /cannot be keyed on every dialect/
+      /mysql cannot key a "longText" column \("bio"\)/
     );
+  });
+
+  it("refuses a compound key wider than MySQL allows, and accepts one that fits", () => {
+    // Each text field is keyable alone — varchar(255) on MySQL, 1,020 bytes
+    // under utf8mb4 — and four of them are 4,080 bytes, past InnoDB's 3,072.
+    const wide = [
+      { name: "a", type: "text" },
+      { name: "b", type: "text" },
+      { name: "c", type: "text" },
+      { name: "d", type: "text" },
+    ] as never;
+    const declare = (fields: string[]) =>
+      buildDesiredTableFromFields("dc_wide", wide, "postgresql", {
+        builtBy: "codeFirst",
+        indexes: [{ fields }],
+      } as never);
+    expect(refusal(() => declare(["a", "b", "c", "d"]))).toMatch(
+      /mysql limits an index key to 3072 bytes; this index declares 4080/
+    );
+    // Three are 3,060 bytes, inside the limit.
+    expect(
+      (declare(["a", "b", "c"]).indexes ?? []).some(
+        index => index.columns.length === 3
+      )
+    ).toBe(true);
+  });
+
+  it("weighs a short text field at the width it declares", () => {
+    // `maxLength: 1000` makes the column varchar(1000) on MySQL: 4,000 bytes
+    // of key, past the limit on its own. 700 is 2,800 bytes, inside it.
+    const declare = (maxLength: number) =>
+      buildDesiredTableFromFields(
+        "dc_codes",
+        [
+          {
+            name: "code",
+            type: "text",
+            options: { variant: "short" },
+            validation: { maxLength },
+          },
+        ] as never,
+        "postgresql",
+        { builtBy: "codeFirst", indexes: [{ fields: ["code"] }] } as never
+      );
+    expect(refusal(() => declare(1000))).toMatch(/this index declares 4000/);
+    expect(() => declare(700)).not.toThrow();
+  });
+
+  it("weighs a single relationship by the id it holds", () => {
+    // `author` is varchar(36) on MySQL, 144 bytes: beside three text fields
+    // the key is 3,204 bytes, past the limit; beside two, 2,184.
+    const mixed = [
+      { name: "a", type: "text" },
+      { name: "b", type: "text" },
+      { name: "c", type: "text" },
+      { name: "author", type: "relationship", relationTo: "authors" },
+    ] as never;
+    const declare = (fields: string[]) =>
+      buildDesiredTableFromFields("dc_mixed", mixed, "postgresql", {
+        builtBy: "codeFirst",
+        indexes: [{ fields }],
+      } as never);
+    expect(refusal(() => declare(["a", "b", "c", "author"]))).toMatch(
+      /this index declares 3204/
+    );
+    expect(() => declare(["a", "b", "author"])).not.toThrow();
   });
 
   it("refuses an index over no fields", () => {
     expect(refusal(() => build([{ fields: [] }]))).toMatch(
       /at least one field/
     );
+  });
+
+  it("refuses a name past 63 characters, which PostgreSQL would cut short", () => {
+    const at = `idx_${"n".repeat(59)}`;
+    expect(() => build([{ fields: ["country"], name: at }])).not.toThrow();
+    expect(
+      refusal(() => build([{ fields: ["country"], name: `${at}n` }]))
+    ).toMatch(/at most 63/);
   });
 
   it("refuses a name the diff engine would never reconcile", () => {

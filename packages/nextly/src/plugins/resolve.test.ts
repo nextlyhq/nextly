@@ -388,6 +388,85 @@ describe("resolvePlugins: schemaVersion declarations", () => {
     ).toHaveLength(1);
   });
 
+  describe("each module's own schemaVersion", () => {
+    /** The refusal resolving these plugins throws, or undefined. */
+    const refusalOf = (plugin: PluginDefinition): unknown => {
+      try {
+        resolvePlugins([plugin], opts);
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    };
+
+    it("refuses a fractional version below a declared one it still reaches", () => {
+      // Rising, and ending at the declared version, so every other rule
+      // passes: only the module's own value is wrong.
+      const refusal = refusalOf(
+        shipping(1, [
+          ["001_init", 0.5],
+          ["002_more", 1],
+        ])
+      );
+      expect(NextlyError.isValidation(refusal)).toBe(true);
+      expect((refusal as NextlyError).publicData).toMatchObject({
+        errors: [
+          expect.objectContaining({
+            path: "plugin.stub.contributes.schema.migrations",
+            message: expect.stringContaining('"001_init"'),
+          }),
+        ],
+      });
+    });
+
+    /** A plugin declaring no version, shipping one module at `version`. */
+    const undeclared = (version: number) =>
+      p("stub", {
+        contributes: {
+          schema: {
+            migrations: [
+              {
+                name: "001_init",
+                schemaVersion: version,
+                checksum: "a",
+                dialects: {} as never,
+                snapshot: {} as never,
+                before: {} as never,
+              },
+            ],
+          },
+        },
+      } as Partial<PluginDefinition>);
+
+    it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+      "refuses %s from a plugin that declares no version of its own",
+      version => {
+        expect(
+          (refusalOf(undeclared(version)) as NextlyError | undefined)
+            ?.publicData
+        ).toMatchObject({
+          errors: [
+            expect.objectContaining({
+              path: "plugin.stub.contributes.schema.migrations",
+            }),
+          ],
+        });
+      }
+    );
+
+    it("accepts positive integers, declared or not", () => {
+      expect(refusalOf(undeclared(1))).toBeUndefined();
+      expect(
+        refusalOf(
+          shipping(2, [
+            ["001_init", 1],
+            ["002_more", 2],
+          ])
+        )
+      ).toBeUndefined();
+    });
+  });
+
   it("refuses a migration whose name holds a slash", () => {
     // The ledger key is `plugin:<plugin>/<module>`, split at the last slash:
     // `data/backfill` would be filed under the plugin `stub/data`.

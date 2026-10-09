@@ -251,6 +251,15 @@ those are the names schema changes manage, so an index you remove from the
 config is dropped from the database. Without one, a name is derived from the
 table and columns.
 
+Every index is checked against PostgreSQL, MySQL and SQLite when the schema
+is built from the config (development push, `db:sync`, `migrate:create`),
+whichever one you run. A JSON field, or a text field with no bounded width
+such as a textarea, cannot be part of one. MySQL also limits a whole index key
+to 3,072 bytes, where a text field counts 4 bytes for each character of its
+width (1,020 at the default 255), so an index over four text fields is
+refused; index fewer, or narrower, fields. An explicit `name` may be at most
+63 characters, the longest PostgreSQL keeps.
+
 ### `endpoints`
 
 | | |

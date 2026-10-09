@@ -23,6 +23,9 @@ import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import { MANAGED_TABLE_PREFIXES_REGEX } from "../pipeline/managed-tables";
 import {
+  type ColumnKind,
+  DEFAULT_DECIMAL_PRECISION,
+  DEFAULT_DECIMAL_SCALE,
   ENUM_STORAGE_LENGTH,
   renderDialectType,
 } from "../services/field-column-descriptor";
@@ -33,6 +36,19 @@ import {
 } from "../services/index-name";
 
 import type { ExtensionColumn, ExtensionIndex } from "./types";
+
+/**
+ * A column as the index and row rules weigh it: its name, the kind that
+ * decides its type on each dialect, and the sizes that kind reads.
+ *
+ * Wider than an extension column's kinds by `fkSingle`, because a declared
+ * collection index is judged by these same rules, and a single relationship
+ * is a column a collection index can name.
+ */
+export type WeighedColumn = Pick<
+  ExtensionColumn,
+  "name" | "length" | "precision" | "scale"
+> & { kind: Exclude<ColumnKind, "skip"> };
 
 /** Every dialect a declaration is checked against, whatever the live one is. */
 export const ALL_DIALECTS: readonly SupportedDialect[] = [
@@ -215,20 +231,28 @@ const SHORT_TEXT_LENGTH = 255;
  * it.
  */
 const MYSQL_KEY_BYTES: Record<
-  ExtensionColumn["kind"],
-  number | ((column: Pick<ExtensionColumn, "length">) => number) | null
+  WeighedColumn["kind"],
+  | number
+  | ((column: Pick<WeighedColumn, "length" | "precision" | "scale">) => number)
+  | null
 > = {
   // MySQL counts the DECLARED width, four bytes per character under utf8mb4,
   // whatever the row actually holds — so a compound index over a few
   // varchar(255) columns reaches the cap long before it looks like it should.
-  text: SHORT_TEXT_LENGTH * UTF8MB4_BYTES_PER_CHAR,
-  shortText: SHORT_TEXT_LENGTH * UTF8MB4_BYTES_PER_CHAR,
+  // Both render as `varchar(length ?? 255)` on MySQL, so both are weighed
+  // at the width they render at: a collection's short text field declaring
+  // `maxLength: 1000` is a varchar(1000), 4,000 bytes of key.
+  text: c => (c.length ?? SHORT_TEXT_LENGTH) * UTF8MB4_BYTES_PER_CHAR,
+  shortText: c => (c.length ?? SHORT_TEXT_LENGTH) * UTF8MB4_BYTES_PER_CHAR,
   // The varchar width an enum renders at on MySQL, read from the constant
   // the renderer uses so the key width tracks the declared column.
   enum: ENUM_STORAGE_LENGTH * UTF8MB4_BYTES_PER_CHAR,
   varchar: c => (c.length ?? SHORT_TEXT_LENGTH) * UTF8MB4_BYTES_PER_CHAR,
   char: c => (c.length ?? 1) * UTF8MB4_BYTES_PER_CHAR,
   uuid: 36 * UTF8MB4_BYTES_PER_CHAR,
+  // A collection's single relationship: `varchar(36)` on MySQL, the id it
+  // holds.
+  fkSingle: 36 * UTF8MB4_BYTES_PER_CHAR,
   boolean: 1,
   smallint: 2,
   // The same four bytes `integer` occupies: what MySQL keys is the int, and
@@ -238,8 +262,14 @@ const MYSQL_KEY_BYTES: Record<
   real: 4,
   bigint: 8,
   double: 8,
-  decimal: 8,
-  timestamp: 8,
+  // As MySQL packs them, which is the width a key holds too.
+  decimal: c =>
+    mysqlDecimalBytes(
+      c.precision ?? DEFAULT_DECIMAL_PRECISION,
+      c.scale ?? DEFAULT_DECIMAL_SCALE
+    ),
+  // A TIMESTAMP with no fractional seconds, which is how every one renders.
+  timestamp: 4,
   // None can be keyed without a prefix length, which the neutral model has no
   // way to express.
   longText: null,
@@ -249,10 +279,104 @@ const MYSQL_KEY_BYTES: Record<
 
 /** The key width of one column, or null when it cannot be keyed. */
 export function mysqlKeyBytes(
-  column: Pick<ExtensionColumn, "kind" | "length">
+  column: Pick<WeighedColumn, "kind" | "length" | "precision" | "scale">
 ): number | null {
   const entry = MYSQL_KEY_BYTES[column.kind];
   return typeof entry === "function" ? entry(column) : entry;
+}
+
+/**
+ * MySQL's limit on one row: every column's in-row width together. TEXT, JSON
+ * and BLOB contents are stored apart from the row and count only their
+ * length and pointer toward it.
+ */
+const MYSQL_MAX_ROW_BYTES = 65_535;
+
+/** Bytes a VARCHAR spends on its length when a value may exceed 255 bytes. */
+const LONG_LENGTH_PREFIX_BYTES = 2;
+
+/**
+ * The widest `varchar(n)` every dialect can declare, which MySQL decides:
+ * under utf8mb4 a value may take 4 bytes a character, plus its 2-byte length,
+ * within the 65,535-byte row — (65,535 − 2) / 4, so 16,383. PostgreSQL and
+ * SQLite accept far wider, and a width only they accept is a table that
+ * cannot be created where it is deployed on MySQL.
+ */
+export const MAX_VARCHAR_LENGTH = Math.floor(
+  (MYSQL_MAX_ROW_BYTES - LONG_LENGTH_PREFIX_BYTES) / UTF8MB4_BYTES_PER_CHAR
+);
+
+/** The kinds MySQL stores as VARCHAR, which carry a length beside the value. */
+const MYSQL_VARCHAR_KINDS: ReadonlySet<WeighedColumn["kind"]> = new Set([
+  "text",
+  "shortText",
+  "varchar",
+  "enum",
+  "fkSingle",
+]);
+
+/**
+ * The bytes a DECIMAL(precision, scale) occupies on MySQL: four for every
+ * nine digits on each side of the point, and the leftover digits by this
+ * table, as MySQL packs them.
+ */
+const DECIMAL_LEFTOVER_BYTES = [0, 1, 1, 2, 2, 3, 3, 4, 4];
+
+function mysqlDecimalBytes(precision: number, scale: number): number {
+  const side = (digits: number): number =>
+    Math.floor(digits / 9) * 4 + DECIMAL_LEFTOVER_BYTES[digits % 9];
+  return side(precision - scale) + side(scale);
+}
+
+/**
+ * The kinds whose in-row width is not their key width: TEXT (2 bytes of
+ * length), and JSON and LONGBLOB (4), keep their contents out of the row and
+ * count that length plus an 8-byte pointer. None of them can be keyed, so
+ * the key table holds no width for them to share.
+ */
+const MYSQL_OFF_ROW_BYTES: Partial<Record<WeighedColumn["kind"], number>> = {
+  longText: 10,
+  json: 12,
+  bytes: 12,
+};
+
+/**
+ * The width one column takes in a MySQL row, as the row limit counts it.
+ *
+ * Its key width, so the declared widths are read in one place, unless its
+ * contents are stored off the row; a VARCHAR also stores its length beside
+ * the value.
+ */
+function mysqlRowBytes(column: WeighedColumn): number {
+  const offRow = MYSQL_OFF_ROW_BYTES[column.kind];
+  if (offRow !== undefined) return offRow;
+  const bytes = mysqlKeyBytes(column) ?? 0;
+  if (!MYSQL_VARCHAR_KINDS.has(column.kind)) return bytes;
+  return bytes + (bytes > 255 ? LONG_LENGTH_PREFIX_BYTES : 1);
+}
+
+/**
+ * Refuse a table whose row MySQL cannot hold.
+ *
+ * Each column can be declarable alone and the table still not be: MySQL
+ * refuses a CREATE TABLE whose columns' in-row widths, plus a bit per
+ * nullable column, exceed 65,535 bytes, while PostgreSQL and SQLite create
+ * it. Checked against the table's WHOLE column set, so it is asked of a
+ * table this layer declares, never of one it only seeds.
+ */
+export function assertMysqlRowFits(table: {
+  name: string;
+  columns: readonly (WeighedColumn & { nullable: boolean })[];
+}): void {
+  const nullable = table.columns.filter(column => column.nullable).length;
+  const bytes =
+    table.columns.reduce((sum, column) => sum + mysqlRowBytes(column), 0) +
+    Math.ceil(nullable / 8);
+  if (bytes <= MYSQL_MAX_ROW_BYTES) return;
+  refuse(
+    `${table.name}.columns`,
+    `mysql limits a row to ${String(MYSQL_MAX_ROW_BYTES)} bytes, not counting TEXT, JSON and BLOB contents; "${table.name}" declares ${String(bytes)}. Narrow a varchar, or use col.longText() for long values.`
+  );
 }
 
 /** One reason an index was refused, named so a test can assert which rule fired. */
@@ -277,7 +401,7 @@ export interface IndexVerdict {
  * the checks — which decides WHICH refusal an author sees — was buried in it.
  */
 function judgeIndexColumn(
-  column: ExtensionColumn,
+  column: WeighedColumn,
   unique: boolean,
   dialect: SupportedDialect
 ): IndexVerdict | null {
@@ -304,14 +428,14 @@ function judgeIndexColumn(
     return {
       dialect,
       reason: "unique-not-indexable",
-      message: `${dialect} cannot carry uniqueness on a "${column.kind}" column ("${column.name}"); use varchar(n) or shortText.`,
+      message: `${dialect} cannot carry uniqueness on a "${column.kind}" column ("${column.name}"); use a bounded text column: varchar(n) or shortText in a table, a text field in a collection.`,
     };
   }
   if (dialect === "mysql" && mysqlKeyBytes(column) === null) {
     return {
       dialect,
       reason: "not-indexable",
-      message: `mysql cannot key a "${column.kind}" column ("${column.name}") without a prefix length; use varchar(n) or shortText.`,
+      message: `mysql cannot key a "${column.kind}" column ("${column.name}") without a prefix length; use a bounded text column: varchar(n) or shortText in a table, a text field in a collection.`,
     };
   }
   return null;
@@ -325,7 +449,7 @@ function judgeIndexColumn(
  */
 export function judgeIndex(
   index: ExtensionIndex,
-  columns: readonly ExtensionColumn[],
+  columns: readonly WeighedColumn[],
   dialect: SupportedDialect,
   columnsAreKnown = true
 ): IndexVerdict | null {
@@ -375,7 +499,7 @@ export function judgeIndex(
     return {
       dialect,
       reason: "key-too-wide",
-      message: `mysql limits an index key to ${String(MYSQL_MAX_KEY_BYTES)} bytes; this index declares ${String(keyBytes)}. Narrow a varchar, or index fewer columns.`,
+      message: `mysql limits an index key to ${String(MYSQL_MAX_KEY_BYTES)} bytes; this index declares ${String(keyBytes)}. Index fewer or narrower columns.`,
     };
   }
 
@@ -390,7 +514,7 @@ export function judgeIndex(
  */
 export function assertIndexBuildable(
   index: ExtensionIndex,
-  columns: readonly ExtensionColumn[],
+  columns: readonly WeighedColumn[],
   tableName: string,
   /**
    * Whether `columns` is the table's WHOLE column set.

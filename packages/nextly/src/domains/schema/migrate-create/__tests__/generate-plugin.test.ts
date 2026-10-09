@@ -6,7 +6,7 @@
  * recomputed here from the same primitives the app path uses — so a second,
  * drifting SQL implementation cannot pass by producing plausible strings.
  */
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -352,6 +352,35 @@ describe("generatePluginMigration (file writes)", () => {
     expect(indexContent.indexOf(`./${first!.moduleName}`)).toBeLessThan(
       indexContent.indexOf(`./${second!.moduleName}`)
     );
+  });
+
+  it("refuses a module whose file exists, leaving it and the barrel as they were", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "nextly-plugin-migrations-"));
+    try {
+      const first = await generatePluginMigration({
+        ...FIRST,
+        migrationsDir: dir,
+      });
+      const moduleBefore = await readFile(first!.modulePath, "utf-8");
+      const indexBefore = await readFile(first!.indexPath, "utf-8");
+
+      // The same instant and slug resolve to the same module name, as two
+      // scripted generations in one millisecond do — with different content.
+      await expect(
+        generatePluginMigration({
+          ...FIRST,
+          schemaVersion: 2,
+          tablesByDialect: tablesByDialect(tableSpec(true)),
+          existing: [buildPluginMigration(FIRST)!.module],
+          migrationsDir: dir,
+        })
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+
+      expect(await readFile(first!.modulePath, "utf-8")).toBe(moduleBefore);
+      expect(await readFile(first!.indexPath, "utf-8")).toBe(indexBefore);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("writes nothing when there is no change", async () => {

@@ -2,6 +2,7 @@ import { MUST_CHANGE_PASSWORD_CHALLENGE } from "../auth/pipeline/pending-token";
 import { collectPluginAuditKinds } from "../domains/audit/plugin-audit";
 import {
   assertModuleNames,
+  assertModuleSchemaVersions,
   assertUniqueModuleNames,
   orderedMigrations,
 } from "../domains/schema/migrate/plugin/plugin-migration";
@@ -232,10 +233,12 @@ function validatePluginMigrations(plugins: PluginDefinition[]): void {
     // module's ledger key, and one the ledger cannot attribute to its plugin,
     // or that another of its modules shares, is refused before anything runs:
     // wherever the configuration loads, at boot and in every CLI command, and
-    // not only when `nextly migrate` reaches the modules.
+    // not only when `nextly migrate` reaches the modules. Each module's
+    // version is checked the same way, before anything compares versions.
     const migrations = plugin.contributes?.schema?.migrations ?? [];
     assertModuleNames(plugin.name, migrations);
     assertUniqueModuleNames(plugin.name, migrations);
+    assertModuleSchemaVersions(plugin.name, migrations);
     assertSchemaVersionDeclarable({
       pluginName: plugin.name,
       declaredVersion: plugin.schemaVersion,

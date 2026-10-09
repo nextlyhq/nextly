@@ -92,7 +92,19 @@ predicate would enforce it over rows you did not intend, so an index carrying
 
 An explicit index or foreign key `name` is used exactly as written, so it may
 be at most 63 characters. Derived names (and every check name, which is
-`ck_<table>_<name>`) are shortened with a hash when they would be longer.
+`ck_<table>_<name>`) are shortened with a hash when they would be longer. A
+foreign key's name, written or derived, must also be unique across the
+tables plugins and the app declare, as MySQL requires of a database; two keys
+that resolve to one name are refused when the schema compiles.
+
+A table's columns must fit in one MySQL row: 65,535 bytes, where a
+`varchar(n)` counts up to 4 bytes a character plus its length, and a
+`longText` or `json` column counts only a few bytes because its contents are
+stored apart. `col.varchar(n)` accepts at most 16,383 characters, the widest
+MySQL can declare, and a table whose columns together do not fit is refused
+when the schema compiles, on every dialect. An adopted table describing a
+wider existing column declares it with `col.longText()`, which reads and
+writes the same strings.
 
 ## Adopt an existing table
 
@@ -121,8 +133,8 @@ Tables declared with `ref()` columns carry a one-edge automatically, named for
 what it points at: `ownerId: col.ref("app__owners")` is read with
 `with: { owner: true }`, while the row keeps `ownerId` as the column. A key
 without an `Id` suffix gets `<key>Ref`. A relation and a column share the row's
-keys, so a declared relation may not reuse a column's name. Any table can
-declare more relations:
+keys, so a declared relation may not reuse a column's name, and each relation
+on a table needs a name of its own. Any table can declare more relations:
 
 ```ts
 const linked = defineTable("linked", {

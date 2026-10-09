@@ -869,3 +869,139 @@ describe("app-contributed elements on plugin tables", () => {
     ).rejects.toThrow(NextlyError);
   });
 });
+
+describe("foreign key names", () => {
+  /** A table whose keys point at `users`, each named as given (or derived). */
+  const keyed = (name: string, keyNames: (string | undefined)[]) =>
+    defineTable(
+      name,
+      {
+        id: col.id(),
+        ownerId: col.shortText(),
+        editorId: col.shortText(),
+      },
+      {
+        foreignKeys: keyNames.map((keyName, at) => ({
+          columns: [at === 0 ? "ownerId" : "editorId"],
+          references: { table: "users", columns: ["id"] },
+          ...(keyName !== undefined ? { name: keyName } : {}),
+        })),
+      }
+    );
+
+  /** The validation paths the build refuses with, or [] when it succeeds. */
+  const refusedAt = async (input: ExtensionSchemaInput): Promise<string[]> => {
+    try {
+      await buildExtensionSchema(input);
+      return [];
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as { errors?: { path: string }[] };
+      return (data.errors ?? []).map(issue => issue.path);
+    }
+  };
+
+  const plugin = (id: string, ...tables: ReturnType<typeof keyed>[]) => ({
+    owner: { kind: "plugin" as const, id },
+    tables,
+  });
+
+  it("refuses two keys on one table declaring one name", async () => {
+    expect(
+      await refusedAt(
+        base([plugin("a", keyed("things", ["fk_owner", "fk_owner"]))])
+      )
+    ).toEqual(["a__things.foreignKeys"]);
+  });
+
+  it("refuses an explicit name equal to another key's derived one", async () => {
+    // The first key's name is derived from the FINAL table name, which is
+    // what the second key spells out by hand.
+    expect(
+      await refusedAt(
+        base([
+          plugin("a", keyed("things", [undefined, "fk_a__things_owner_id"])),
+        ])
+      )
+    ).toEqual(["a__things.foreignKeys"]);
+  });
+
+  it("refuses one name on two tables, which MySQL holds unique per database", async () => {
+    expect(
+      await refusedAt(
+        base([
+          plugin("a", keyed("things", ["fk_owner"])),
+          plugin("b", keyed("widgets", ["fk_owner"])),
+        ])
+      )
+    ).toEqual(["b__widgets.foreignKeys"]);
+  });
+
+  it("accepts distinct names, declared and derived", async () => {
+    const built = await buildExtensionSchema(
+      base([
+        plugin("a", keyed("things", [undefined, "fk_editor"])),
+        plugin("b", keyed("widgets", ["fk_owner"])),
+      ])
+    );
+    expect(
+      built.specs.flatMap(spec => (spec.foreignKeys ?? []).map(fk => fk.name))
+    ).toEqual(["fk_a__things_owner_id", "fk_editor", "fk_owner"]);
+  });
+});
+
+describe("a row MySQL cannot hold", () => {
+  const wide = (name: string) =>
+    defineTable(name, {
+      id: col.id(),
+      body: col.varchar(16_000),
+    });
+
+  it("is refused when the schema compiles, on every dialect", async () => {
+    // 16,000 x 4 + 2 = 64,002 bytes beside the id's 145 fits; a second
+    // column that would on PostgreSQL does not on MySQL.
+    await expect(
+      buildExtensionSchema(
+        base([{ owner: { kind: "plugin", id: "a" }, tables: [wide("ok")] }])
+      )
+    ).resolves.toBeDefined();
+    const tooWide = defineTable("too_wide", {
+      id: col.id(),
+      body: col.varchar(16_000),
+      summary: col.varchar(500),
+    });
+    await expect(
+      buildExtensionSchema(
+        base([{ owner: { kind: "plugin", id: "a" }, tables: [tooWide] }])
+      )
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [expect.objectContaining({ path: "a__too_wide.columns" })],
+      },
+    });
+  });
+
+  it("counts a column a hook adds", async () => {
+    await expect(
+      buildExtensionSchema(
+        base([
+          {
+            owner: { kind: "plugin", id: "a" },
+            tables: [wide("notes")],
+            extend: [
+              ({ schema }) => {
+                schema.extendTable("a__notes", {
+                  columns: { summary: col.varchar(500) },
+                });
+              },
+            ],
+          },
+        ])
+      )
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [expect.objectContaining({ path: "a__notes.columns" })],
+      },
+    });
+  });
+});

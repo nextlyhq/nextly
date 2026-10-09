@@ -26,7 +26,7 @@ import {
   toSnakeCase,
 } from "../services/field-column-descriptor";
 
-import { assertExplicitIdentifier } from "./naming";
+import { assertExplicitIdentifier, MAX_VARCHAR_LENGTH } from "./naming";
 import type {
   DeclaredCheck,
   DeclaredForeignKey,
@@ -191,15 +191,24 @@ export const col = {
     >;
   },
 
-  /** `varchar(n)`. A bounded width is what makes a text column indexable on MySQL. */
+  /**
+   * `varchar(n)`. A bounded width is what makes a text column indexable on
+   * MySQL. At most `MAX_VARCHAR_LENGTH` (16,383) characters, the widest MySQL
+   * declares under utf8mb4; a table's columns together must also fit MySQL's
+   * row, which is checked when the schema compiles.
+   */
   varchar<const O extends ColOpts<string>>(
     length: number,
     opts?: O
   ): ColumnBuilder<string, NullableOf<O>, HasDefaultOf<O>> {
-    if (!Number.isInteger(length) || length < 1 || length > 65_535) {
+    if (
+      !Number.isInteger(length) ||
+      length < 1 ||
+      length > MAX_VARCHAR_LENGTH
+    ) {
       invalid(
         "varchar.length",
-        `A varchar length must be an integer between 1 and 65535; received ${String(length)}.`
+        `A varchar length must be an integer between 1 and ${String(MAX_VARCHAR_LENGTH)}, the widest MySQL can declare; received ${String(length)}.`
       );
     }
     return build<string>("varchar", opts, { length }) as ColumnBuilder<
@@ -532,7 +541,9 @@ export interface TableForeignKeyInput {
   onUpdate?: "cascade" | "set null" | "restrict" | "no action" | "set default";
   /**
    * Used verbatim, so at most 63 characters. Defaults to `fk_<table>_<cols>`,
-   * shortened with a hash when that is longer.
+   * shortened with a hash when that is longer. Unique across every table,
+   * as MySQL requires of a foreign key's name: a name another key already
+   * resolves to is refused when the schema compiles.
    */
   name?: string;
 }
@@ -904,6 +915,49 @@ function implicitEdgeName(
     : `${key}Ref`;
 }
 
+/**
+ * Refuse two relations of one name on a table.
+ *
+ * A relation's name is its key on the row and in the registry's edge map, so
+ * the second of two edges sharing one silently replaced the first there, and
+ * `ctx.db.query` followed only the last declaration. Asked of the FINAL list —
+ * declared edges first, then the ones `ref()` columns carry — because two
+ * `ref()` columns can imply one name as well: `fooRefId` and `foo` both carry
+ * `fooRef`. A declared relation of that name replaces both implied edges,
+ * which is the remedy the refusal names.
+ */
+function assertDistinctRelationNames(
+  tableName: string,
+  relations: readonly TableRelationInput[],
+  declaredCount: number,
+  columns: readonly ResolvedColumn[]
+): void {
+  // An implied edge's `fromColumn` is the SQL name; the author wrote the key.
+  const keyOf = (sqlName: string | undefined): string =>
+    columns.find(column => column.name === sqlName)?.key ?? String(sqlName);
+  const seen = new Map<string, number>();
+  for (const [position, rel] of relations.entries()) {
+    const earlier = seen.get(rel.name);
+    if (earlier === undefined) {
+      seen.set(rel.name, position);
+      continue;
+    }
+    // Implied edges never repeat a declared name — a declared relation
+    // replaces the implied edge of its name — so a clash with a declared one
+    // is always between two declared relations.
+    if (earlier < declaredCount) {
+      invalid(
+        `${tableName}.relations[${String(position)}]`,
+        `The relation "${rel.name}" is declared more than once; each relation on a table needs its own name.`
+      );
+    }
+    invalid(
+      `${tableName}.relations`,
+      `The ref() columns "${keyOf(relations[earlier].fromColumn)}" and "${keyOf(rel.fromColumn)}" both carry a relation named "${rel.name}". Declare a relation named "${rel.name}" to say which one it is.`
+    );
+  }
+}
+
 /** Resolve the author's checks to specs under the ck_ naming rule. */
 function resolveChecks(
   tableName: string,
@@ -1000,6 +1054,12 @@ export function defineTable<
     }))
     .filter(rel => !declaredNames.has(rel.name));
   const relations = [...declaredRelations, ...autoRelations];
+  assertDistinctRelationNames(
+    name,
+    relations,
+    declaredRelations.length,
+    resolved
+  );
 
   return Object.freeze({
     name,

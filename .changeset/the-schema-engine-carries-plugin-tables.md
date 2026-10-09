@@ -157,9 +157,14 @@ migration file the run refuses (see below). Applied files are never re-read.
 - **A plugin's migration modules must have unique names**, including names
   that differ only in case, since a module's name is its key in the
   migration ledger. A module name may not contain `/`, and each module's
-  `schemaVersion` may not be lower than the one before it in name order; the
-  last must equal the plugin's `schemaVersion`. Each is refused when the
-  configuration loads, before any migration runs.
+  `schemaVersion` must be a positive integer, whether or not the plugin
+  declares one. When the plugin declares a `schemaVersion`, no module's may be
+  lower than the one before it in name order, and the last must equal it.
+  Each is refused when the configuration loads, before any migration runs.
+  Modules run in name order compared character by character after
+  lowercasing, without the host's locale, so a plugin's modules run in the
+  same order on every machine (`10_more` before `1_init`: zero-pad numbered
+  names).
 - **On MySQL, a failed migration attempt is never adopted.** MySQL commits
   each schema statement as it runs, even inside a transaction, so a
   migration whose data statement failed after its schema statements could be
@@ -188,7 +193,20 @@ migration file the run refuses (see below). Applied files are never re-read.
   dropped before the write, so `required` and `validate` on it no longer
   refuse a create or update that omits it or sends a value.
 - **`defineTable` refuses a decimal scale above 30** (MySQL's maximum) and a
-  foreign key over no columns.
+  foreign key over no columns, `col.varchar(n)` refuses a width above 16,383
+  characters (the widest MySQL declares under utf8mb4), and two relations of
+  one name on a table are refused. When the schema compiles, a table whose
+  columns do not fit MySQL's 65,535-byte row is refused on every dialect, and
+  so are two foreign keys that resolve to one name across the tables plugins
+  and the app declare, since MySQL requires a foreign key's name to be unique
+  per database.
+- **A declared collection index is checked on every dialect** when the
+  schema is built from the config (development push, `db:sync`,
+  `migrate:create`). A JSON field or an unbounded text field (a textarea, say)
+  cannot be part of one; its whole key may not exceed MySQL's 3,072 bytes,
+  where a text field counts 4 bytes for each character of its width (1,020 at
+  the default 255), so an index over four text fields is refused; and an
+  explicit `name` may be at most 63 characters, the longest PostgreSQL keeps.
 
 ## Schema
 
@@ -257,7 +275,12 @@ adopts a multi-module history that development push already created.
 `migrate:create --plugin` accepts a plugin exported by name, and reports no
 changes (exit 2) when the plugin's schema matches its last migration.
 `migrate:create --plugin --blank` now writes a blank module; before, `--blank`
-was ignored with `--plugin`. `migrate:resolve --failed-cleanup` clears every
+was ignored with `--plugin`. `migrate:create --plugin` never overwrites a
+module file that already exists: it fails with `CONFLICT` and leaves the
+module and the barrel as they were. `nextly migrate --step N` counts a plugin's
+modules toward N together with the app's files, the plugin's first, and a
+module recorded because the database already stood at its result counts as
+one. `migrate:resolve --failed-cleanup` clears every
 failed attempt since the file's last other event, and `--applied` supersedes
 them all, so a file that failed twice in a row needs one cleanup rather than
 two. A cleared attempt keeps its own start and end times and its error;

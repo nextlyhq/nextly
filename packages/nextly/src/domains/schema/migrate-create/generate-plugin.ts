@@ -547,6 +547,31 @@ export async function generateBlankPluginMigration(
   );
 }
 
+/**
+ * Create a module file, refusing one that already exists.
+ *
+ * A module is reviewed SQL and, once applied, history: two generations that
+ * land on the same name — the same millisecond and slug from a script — must
+ * not truncate the first. `wx` makes the create itself refuse, rather than a
+ * check before it that a second writer could slip past.
+ */
+async function writeModuleExclusively(
+  modulePath: string,
+  content: string
+): Promise<void> {
+  try {
+    await writeFile(modulePath, content, { encoding: "utf-8", flag: "wx" });
+  } catch (error) {
+    if ((error as { code?: string }).code !== "EEXIST") throw error;
+    throw NextlyError.conflict({
+      reason: "state",
+      message: `A migration module already exists at ${modulePath}, and it was left as it is. Run the command again for a module with a new name.`,
+      cause: error as Error,
+      logContext: { modulePath },
+    });
+  }
+}
+
 /** Write one module and the barrel listing it beside the existing ones. */
 async function writePluginMigration(
   migrationsDir: string,
@@ -556,14 +581,16 @@ async function writePluginMigration(
 ): Promise<Omit<GeneratePluginMigrationResult, "operationCounts">> {
   await mkdir(migrationsDir, { recursive: true });
   const modulePath = resolve(migrationsDir, `${module.name}.ts`);
-  await writeFile(
+  await writeModuleExclusively(
     modulePath,
     handSealed
       ? formatHandSealedPluginMigrationModule(module)
-      : formatPluginMigrationModule(module),
-    "utf-8"
+      : formatPluginMigrationModule(module)
   );
 
+  // Rewritten whole on purpose: the barrel is the tool's own listing of the
+  // modules, regenerated from them every time. It is reached only once the
+  // module above was created, so a refused module leaves it untouched.
   const indexPath = resolve(migrationsDir, "index.ts");
   await writeFile(
     indexPath,

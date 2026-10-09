@@ -157,6 +157,39 @@ function assertDistinctCheckNames(
 }
 
 /**
+ * Refuse two foreign keys sharing a name anywhere in the compiled schema.
+ *
+ * Over the RESOLVED names, so an explicit name and one derived from another
+ * key's columns collide here as well as two explicit ones. Across tables, not
+ * only within one, because MySQL holds a foreign key's name to be unique in
+ * the whole database: two tables each declaring `fk_owner` create on
+ * PostgreSQL and SQLite and fail on MySQL, and a declaration is refused alike
+ * on every dialect rather than on the one its author did not develop on.
+ * Within one table every dialect refuses the pair, so without this the
+ * author learned of it from the database, part-way through a migration.
+ */
+export function assertDistinctForeignKeyNames(
+  specs: readonly TableSpec[]
+): void {
+  const owners = new Map<string, string>();
+  for (const spec of specs) {
+    for (const fk of spec.foreignKeys ?? []) {
+      const earlier = owners.get(fk.name);
+      if (earlier === undefined) {
+        owners.set(fk.name, spec.name);
+        continue;
+      }
+      invalid(
+        `${spec.name}.foreignKeys`,
+        earlier === spec.name
+          ? `Two foreign keys on "${spec.name}" resolve to the name "${fk.name}"; name one of them differently.`
+          : `The foreign key "${fk.name}" on "${spec.name}" has the name of one on "${earlier}". MySQL requires a foreign key's name to be unique across the database; name one of them differently.`
+      );
+    }
+  }
+}
+
+/**
  * One extension column as the diff engine compares it.
  *
  * Extracted from {@link toTableSpec} because a column contributed to a table

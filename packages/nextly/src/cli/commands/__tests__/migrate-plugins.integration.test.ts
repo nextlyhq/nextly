@@ -17,7 +17,7 @@
  *
  * @module cli/commands/__tests__/migrate-plugins.integration
  */
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -833,6 +833,168 @@ describe("ownership within and after one migrate run (sqlite)", () => {
         schema_version: 3,
       })
     );
+  });
+});
+
+describe("--step across plugin modules and app files (sqlite)", () => {
+  let sqlite: Database.Database;
+  let db: unknown;
+
+  beforeAll(async () => {
+    sqlite = new Database(":memory:");
+    db = drizzle({ client: sqlite });
+    await reconcileCore({
+      db,
+      dialect: DIALECT,
+      logger: { info: () => {}, warn: () => {} },
+    });
+  });
+
+  afterAll(() => sqlite.close());
+
+  it("runs N migrations in all, plugin modules first, then app files", async () => {
+    // The plugin phase runs first, so a run limited to one migration applies
+    // the plugin's first module and leaves its second, and the app's file,
+    // for the runs after it. Two modules, so a plugin phase that ignored the
+    // limit would apply both.
+    const migrationsDir = mkdtempSync(join(tmpdir(), "nx-step-"));
+    writeFileSync(
+      join(migrationsDir, "20260101_000000_app_table.sql"),
+      'CREATE TABLE "step_app" ("id" text PRIMARY KEY);\n'
+    );
+    const steps = defineTable("rows", { id: col.id() });
+    const more = defineTable("more", { id: col.id() });
+    const extensionSchema = await buildExtensionSchema({
+      dialect: DIALECT,
+      coreTableNames: CORE_TABLE_NAMES,
+      entities: [],
+      pluginPrefixes: new Map([["stepper", "stepper"]]),
+      plugins: [
+        { owner: { kind: "plugin", id: "stepper" }, tables: [steps, more] },
+      ],
+    });
+    const firstModule = buildPluginMigration({
+      pluginName: "stepper",
+      schemaVersion: 1,
+      name: "v1",
+      now: new Date(Date.UTC(2026, 8, 26, 10, 0, 0)),
+      tablesByDialect: await tablesByDialect("stepper", "stepper", [steps]),
+      existing: [],
+    })!.module;
+    const secondModule = buildPluginMigration({
+      pluginName: "stepper",
+      schemaVersion: 2,
+      name: "v2",
+      now: new Date(Date.UTC(2026, 8, 26, 10, 0, 1)),
+      tablesByDialect: await tablesByDialect("stepper", "stepper", [
+        steps,
+        more,
+      ]),
+      existing: [firstModule],
+    })!.module;
+    const adapter = {
+      ...adapterFor(sqlite),
+      tableExists: async (name: string) =>
+        (await adapterFor(sqlite).listTables()).includes(name),
+    };
+    const run = () =>
+      migrateCore({
+        extensionSchema,
+        dialect: DIALECT,
+        db,
+        adapter,
+        migrationsDir,
+        logger: createLogger({ quiet: true }),
+        lockMode: "fail-fast",
+        pluginMigrationSets: [
+          {
+            pluginName: "stepper",
+            pluginVersion: "1.0.0",
+            migrations: [firstModule, secondModule],
+          },
+        ],
+        pluginsWithMigrations: new Set(["stepper"]),
+        step: 1,
+      } as never);
+
+    try {
+      const first = await run();
+      expect([first.pluginModulesApplied, first.applied]).toEqual([1, 0]);
+      expect(await adapter.listTables()).toContain("stepper__rows");
+      expect(await adapter.listTables()).not.toContain("stepper__more");
+      expect(await adapter.listTables()).not.toContain("step_app");
+
+      const second = await run();
+      expect([second.pluginModulesApplied, second.applied]).toEqual([1, 0]);
+      expect(await adapter.listTables()).toContain("stepper__more");
+      expect(await adapter.listTables()).not.toContain("step_app");
+
+      const third = await run();
+      expect([third.pluginModulesApplied, third.applied]).toEqual([0, 1]);
+      expect(await adapter.listTables()).toContain("step_app");
+    } finally {
+      rmSync(migrationsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("counts a module it adopts toward the step, and as a migration run", async () => {
+    // The plugin's table already stands where its module leads, as dev push
+    // leaves it, so the module is adopted rather than run. That spends the
+    // step, and the run reports it rather than "up to date".
+    const migrationsDir = mkdtempSync(join(tmpdir(), "nx-step-adopt-"));
+    writeFileSync(
+      join(migrationsDir, "20260101_000000_adopt_app.sql"),
+      'CREATE TABLE "adopt_app" ("id" text PRIMARY KEY);\n'
+    );
+    const kept = defineTable("kept", { id: col.id() });
+    const extensionSchema = await buildExtensionSchema({
+      dialect: DIALECT,
+      coreTableNames: CORE_TABLE_NAMES,
+      entities: [],
+      pluginPrefixes: new Map([["adopter", "adopter"]]),
+      plugins: [{ owner: { kind: "plugin", id: "adopter" }, tables: [kept] }],
+    });
+    const pluginModule = buildPluginMigration({
+      pluginName: "adopter",
+      schemaVersion: 1,
+      name: "v1",
+      now: new Date(Date.UTC(2026, 8, 26, 11, 0, 0)),
+      tablesByDialect: await tablesByDialect("adopter", "adopter", [kept]),
+      existing: [],
+    })!.module;
+    for (const statement of pluginModule.dialects.sqlite.up) {
+      sqlite.exec(statement);
+    }
+    const adapter = {
+      ...adapterFor(sqlite),
+      tableExists: async (name: string) =>
+        (await adapterFor(sqlite).listTables()).includes(name),
+    };
+
+    try {
+      const result = await migrateCore({
+        extensionSchema,
+        dialect: DIALECT,
+        db,
+        adapter,
+        migrationsDir,
+        logger: createLogger({ quiet: true }),
+        lockMode: "fail-fast",
+        pluginMigrationSets: [
+          {
+            pluginName: "adopter",
+            pluginVersion: "1.0.0",
+            migrations: [pluginModule],
+          },
+        ],
+        pluginsWithMigrations: new Set(["adopter"]),
+        step: 1,
+      } as never);
+      expect([result.pluginModulesApplied, result.applied]).toEqual([1, 0]);
+      expect(await adapter.listTables()).not.toContain("adopt_app");
+    } finally {
+      rmSync(migrationsDir, { recursive: true, force: true });
+    }
   });
 });
 

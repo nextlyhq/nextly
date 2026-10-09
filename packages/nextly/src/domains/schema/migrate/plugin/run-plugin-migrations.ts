@@ -114,6 +114,16 @@ export interface RunPluginMigrationsDeps {
    * no table it creates.
    */
   liveTables?: (statements: readonly string[]) => Promise<ReadonlySet<string>>;
+  /**
+   * At most this many modules are applied or adopted, across every plugin,
+   * in run order. Absent, or not a positive number, every pending module is.
+   *
+   * The plugin phase's share of `nextly migrate --step N`, which counts a
+   * plugin's modules as it counts the app's files — including one recorded
+   * as applied because the database already stands where it leads, as an
+   * adopted app file is.
+   */
+  limit?: number;
   /** Owner-registry upsert after a module lands or is adopted. */
   recordOwner: (args: {
     pluginName: string;
@@ -184,8 +194,17 @@ export async function runPluginMigrations(
     adopted: 0,
     skipped: 0,
   };
+  const budget = {
+    remaining:
+      deps.limit !== undefined && deps.limit > 0
+        ? deps.limit
+        : Number.POSITIVE_INFINITY,
+  };
   for (const set of sets) {
-    await runSet(set, deps, result);
+    // A plugin after the budget ran out is left for the next run whole,
+    // rather than having its recorded modules re-judged now.
+    if (budget.remaining <= 0) break;
+    await runSet(set, deps, result, budget);
   }
   return result;
 }
@@ -194,14 +213,29 @@ export async function runPluginMigrations(
 async function runSet(
   set: PluginMigrationSet,
   deps: RunPluginMigrationsDeps,
-  result: PluginMigrationRunResult
+  result: PluginMigrationRunResult,
+  /** The modules this run may still apply or adopt; spent as they are. */
+  budget: { remaining: number }
 ): Promise<void> {
   const ordered = orderedMigrations(set.migrations);
   let lastOutcome: keyof PluginMigrationRunResult = "skipped";
   for (let position = 0; position < ordered.length; position += 1) {
-    const through = await fastForward(set, ordered, position, deps);
+    // Out of budget at a module still to run: stop here. Returning, not
+    // breaking, because the repair below assumes the LAST module is the one
+    // recorded applied, and a run that stopped short has not reached it.
+    if (budget.remaining <= 0 && isPending(set, ordered[position], deps)) {
+      return;
+    }
+    const through = await fastForward(
+      set,
+      ordered,
+      position,
+      deps,
+      budget.remaining
+    );
     if (through !== undefined) {
       result.adopted += through - position + 1;
+      budget.remaining -= through - position + 1;
       position = through;
       lastOutcome = "adopted";
       continue;
@@ -215,6 +249,7 @@ async function runSet(
       deps
     );
     result[lastOutcome] += 1;
+    if (lastOutcome !== "skipped") budget.remaining -= 1;
   }
   // A module that ran or was adopted just now recorded its ownership itself.
   if (lastOutcome === "skipped") {
@@ -291,13 +326,21 @@ async function fastForward(
   set: PluginMigrationSet,
   ordered: readonly PluginMigration[],
   position: number,
-  deps: RunPluginMigrationsDeps
+  deps: RunPluginMigrationsDeps,
+  /**
+   * How many modules this run may still record. The database stands at
+   * `last`; recording only the first of the modules up to it leaves the
+   * ledger behind the database, which is where it started, and the next run
+   * asks the same question from the module after them and adopts the rest.
+   */
+  budget: number
 ): Promise<number | undefined> {
   if (await reconcileDecides(set, ordered, position, deps)) return undefined;
   const last = await furthestMatched(set, ordered, position, deps);
   if (last === undefined) return undefined;
-  await adoptModules(set, ordered.slice(position, last + 1), deps);
-  return last;
+  const through = Math.min(last, position + budget - 1);
+  await adoptModules(set, ordered.slice(position, through + 1), deps);
+  return through;
 }
 
 /** Whether a module has not been recorded as applied yet. */

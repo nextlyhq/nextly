@@ -34,7 +34,7 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 
 ### Per-command flags
 
-- `nextly migrate` -- `--dry-run` (preview without executing), `--step <n>` (apply only N pending migrations), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
+- `nextly migrate` -- `--dry-run` (preview without executing), `--step <n>` (apply only N pending migrations, counting a plugin's migration modules, which run first, together with the app's files), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
 - `nextly migrate:baseline` -- `--name <name>` (the migration's name; defaults to `baseline`), `--force-unlock`.
 - `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--no-transaction` (with `--blank`, a file whose first line is the [no-transaction marker](#running-a-file-outside-a-transaction); with `--plugin`, a module with `transaction: false`), `--non-interactive`, `--accept-renames`.
 - `nextly migrate:status` -- `--json` (machine-readable output for CI scripting).
