@@ -231,6 +231,32 @@ if (warnings) {
 
 `deleteEntry` reports `item` as `{ id }`, since there is no row left to return.
 
+## Reading your own collections without site hooks
+
+A plugin's bookkeeping, such as a usage index or a backfill cursor, is read to decide
+something. A site hook that scopes every read to a tenant, retargets a read by id, or
+rewrites the document would make that answer wrong while it still looks exact. `{ as:
+"system" }` does not help, because it skips only the access check.
+
+`ctx.services.ownCollections` reads **only the collections your plugin declared**, and no
+`beforeOperation`, `beforeRead` or `afterRead` hook (code, stored or field-level) and no
+`collections.listQuery` filter shapes the read. It is `@experimental`.
+
+```ts
+const inUse = await ctx.services.ownCollections.count(
+  ctx.self.collections.usageIndex,
+  { where: { component: { equals: componentId } } }
+);
+```
+
+- It offers `listEntries`, `findEntryById` and `count`, and bypasses the access check as
+  `{ as: "system" }` does. Its options carry only `context`, `locale` and `fallbackLocale`.
+- Any other collection, whether another plugin's or the app's, is refused before anything
+  is read.
+- It only reads. Writes keep every hook.
+- Related documents expanded into the result keep their own collection's hooks and access
+  rules, and field access and server-only field redaction still apply.
+
 ## When to drop to `ctx.db`
 
 `ctx.db` (raw Drizzle) is the **`@experimental`** escape hatch — unmanaged: it bypasses

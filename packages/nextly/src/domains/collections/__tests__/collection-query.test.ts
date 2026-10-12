@@ -15,8 +15,10 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { StoredHookExecutor } from "../../../hooks/stored-hook-executor";
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import { runFieldHooks } from "../../../shared/lib/field-level-registry";
+import { issueHookExemptRead } from "../../../shared/lib/hook-exempt-read";
 import { CollectionQueryService } from "../services/collection-query-service";
 
 import {
@@ -271,6 +273,38 @@ describe("CollectionEntryService — Query Contracts", () => {
         "afterRead",
         expect.any(Object)
       );
+    });
+
+    it("waives a stored afterRead hook for a granted read", async () => {
+      // No prebuilt hook runs on afterRead today, so the executor itself is
+      // made to rewrite the page. The ungranted read is the control: the same
+      // rewrite reaches its result, which proves this is the executor the read
+      // path calls.
+      const rewrite = vi
+        .spyOn(StoredHookExecutor.prototype, "execute")
+        .mockResolvedValue({
+          data: [createSampleEntry({ title: "stored-hooked" })],
+          executedCount: 1,
+          skippedHookIds: [],
+          failures: [],
+        });
+      const titlesOf = (docs: unknown[]): unknown[] =>
+        docs.map(doc => (doc as { title?: unknown }).title);
+
+      try {
+        selectData.rows = [createSampleEntry()];
+        const ordinary = await service.listEntries({ collectionName: "posts" });
+        expect(titlesOf(ordinary.data!.docs)).toEqual(["stored-hooked"]);
+
+        selectData.rows = [createSampleEntry()];
+        const granted = await service.listEntries({
+          collectionName: "posts",
+          hookExemptRead: issueHookExemptRead(["posts"]),
+        });
+        expect(titlesOf(granted.data!.docs)).toEqual(["Test Post"]);
+      } finally {
+        rewrite.mockRestore();
+      }
     });
 
     it("should return 404 when collection does not exist", async () => {

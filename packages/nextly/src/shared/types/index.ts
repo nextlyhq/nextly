@@ -10,6 +10,7 @@
  */
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import type { HookExemptRead } from "../lib/hook-exempt-read";
 
 /**
  * Type alias for Drizzle database instance.
@@ -104,6 +105,16 @@ export interface RequestContext {
    * limit or a honeypot, to stand down rather than judge a server as a visitor.
    */
   request?: Request;
+
+  /**
+   * @internal A grant waiving the read hooks of the collections a plugin
+   * declared, set only by that plugin's `ctx.services.ownCollections`.
+   *
+   * Recognised by identity, so a context built anywhere else — including by
+   * app code holding the raw facade — carries nothing that waives a hook, even
+   * when it copies this field's shape.
+   */
+  hookExemptRead?: HookExemptRead;
 }
 
 /**

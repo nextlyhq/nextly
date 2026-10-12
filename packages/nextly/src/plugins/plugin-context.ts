@@ -37,6 +37,10 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
+import {
+  ownCollectionReads,
+  type PluginOwnCollectionReads,
+} from "./own-collection-reads";
 import type { PluginCategory } from "./plugin-categories";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
@@ -275,6 +279,11 @@ export interface PluginContext {
      * `ServiceOpts` (`as`/`user`) — secure-by-default; no-user runs as system.
      */
     collections: PluginCollectionService;
+    /**
+     * @experimental Reads of the collections THIS plugin declared, shaped by no
+     * hook or list-query filter.
+     */
+    ownCollections: PluginOwnCollectionReads;
     /** User service for user management */
     users: UserService;
     /** Media service for file operations */
@@ -952,9 +961,17 @@ export function createPluginContext(
       filterRegistry.runActions(name, payload, context),
   };
 
+  const self: PluginSelf = plugin
+    ? resolvePluginSelf(plugin)
+    : { name: "", collections: {}, singles: {} };
+
   return {
     services: {
       collections: wrapCollectionsForPlugin(collectionService),
+      ownCollections: ownCollectionReads(
+        collectionService,
+        Object.values(self.collections)
+      ),
       users: userService,
       media: mediaService,
       email: emailService,
@@ -989,9 +1006,7 @@ export function createPluginContext(
     logger,
     events,
     nextlyVersion: getCoreVersion(),
-    self: plugin
-      ? resolvePluginSelf(plugin)
-      : { name: "", collections: {}, singles: {} },
+    self,
     config: Object.freeze({ ...config }),
     hooks: pluginHooks,
     filters: pluginFilters,

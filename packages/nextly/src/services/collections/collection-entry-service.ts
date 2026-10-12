@@ -47,6 +47,7 @@ import type {
   CacheRevalidator,
   RevalidationIntent,
 } from "../../revalidation/types";
+import type { HookExemptRead } from "../../shared/lib/hook-exempt-read";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
@@ -201,6 +202,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** A grant waiving the collection's read hooks, honoured by the query service. */
+    hookExemptRead?: HookExemptRead;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return this.queryService.listEntries(params);
   }
@@ -236,6 +239,8 @@ export class CollectionEntryService extends BaseService {
      * one thing nobody re-checks is an option that appears not to exist.
      */
     status?: "published" | "draft" | "all";
+    /** A grant waiving the collection's read hooks, honoured by the query service. */
+    hookExemptRead?: HookExemptRead;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return this.queryService.countEntries(params);
   }
@@ -298,6 +303,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** A grant waiving the collection's read hooks, honoured by the query service. */
+    hookExemptRead?: HookExemptRead;
   }) {
     return this.queryService.getEntry(params);
   }

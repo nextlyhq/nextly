@@ -87,6 +87,7 @@ describe("createPluginContext (P1 reshape)", () => {
       "email",
       "jobs",
       "media",
+      "ownCollections",
       "plugins",
       "singles",
       "users",

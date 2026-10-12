@@ -24,6 +24,7 @@
  */
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import type { HookExemptRead } from "../../../shared/lib/hook-exempt-read";
 import type { RequestContext } from "../../../shared/types";
 
 /** What the entry service receives about the call it is being asked to make. */
@@ -61,6 +62,12 @@ export interface ForwardedContext {
    */
   locale: string | undefined;
   fallbackLocale: string | false | undefined;
+  /**
+   * A grant waiving the read hooks of the collections one plugin declared.
+   * Forwarded like the rest, and meaningful only to the query service, which
+   * honours it for a collection the grant covers and ignores it otherwise.
+   */
+  hookExemptRead: HookExemptRead | undefined;
 }
 
 /** Read what the entry service needs off a {@link RequestContext}, whole. */
@@ -75,5 +82,6 @@ export function forwardedFromContext(
     request: context.request,
     locale: context.locale,
     fallbackLocale: context.fallbackLocale,
+    hookExemptRead: context.hookExemptRead,
   };
 }

@@ -101,6 +101,10 @@ import {
   filterSearchableFields,
 } from "../../../shared/lib/filterable-fields";
 import {
+  readHooksWaived,
+  type HookExemptRead,
+} from "../../../shared/lib/hook-exempt-read";
+import {
   hasPasswordField,
   isPasswordFieldName,
   stripPasswordFieldValues,
@@ -599,6 +603,12 @@ interface FilteredReadParams {
   search?: string;
   /** Where clause for advanced filtering */
   where?: WhereFilter;
+  /**
+   * A grant waiving this collection's read hooks, issued to the plugin that
+   * declared it. Effective only for a collection it covers; see
+   * {@link readHooksWaived}.
+   */
+  hookExemptRead?: HookExemptRead;
   /** When true, bypass all access control checks */
   overrideAccess?: boolean;
   /**
@@ -2045,6 +2055,12 @@ export class CollectionQueryService extends BaseService {
     select?: Record<string, boolean>;
     richTextFormat?: RichTextOutputFormat;
     locale?: string;
+    /**
+     * The read carries a grant for this collection, so no afterRead phase runs
+     * on its rows: code, stored or field-level. Redaction, field access and
+     * related-row sanitization still run, because those are not hooks.
+     */
+    hooksWaived?: boolean;
   }): Promise<Record<string, unknown>[]> {
     const { rows, collectionName, fields } = params;
 
@@ -2110,17 +2126,19 @@ export class CollectionQueryService extends BaseService {
     };
 
     // Code-registered afterRead hooks, which may transform the data wholesale.
-    const transformed = await this.hookService.hookRegistry.execute(
-      "afterRead",
-      this.hookService.buildHookContext({
-        collection: collectionName,
-        operation: "read" as const,
-        data: toPayload(rows),
-        user: params.user,
-        context: params.sharedContext,
-        req: params.requestFacts,
-      })
-    );
+    const transformed = params.hooksWaived
+      ? undefined
+      : await this.hookService.hookRegistry.execute(
+          "afterRead",
+          this.hookService.buildHookContext({
+            collection: collectionName,
+            operation: "read" as const,
+            data: toPayload(rows),
+            user: params.user,
+            context: params.sharedContext,
+            req: params.requestFacts,
+          })
+        );
     const afterCodeHooks = toRows(transformed, rows);
 
     // (4) A code hook may have RETURNED a reshaped related row carrying a denied
@@ -2136,21 +2154,23 @@ export class CollectionQueryService extends BaseService {
     );
 
     // Stored afterRead hooks (UI-configured).
-    const storedAfterResult = await this.hookService.storedHookExecutor.execute(
-      "afterRead",
-      params.storedHooks,
-      this.hookService.buildPrebuiltHookContext({
-        collection: collectionName,
-        operation: "read",
-        data: toPayload(afterCodeHooks),
-        // The signature wants a thenable; `async` on a body with nothing to
-        // await only asked for a suppression.
-        queryDatabase: () => Promise.resolve(false),
-        req: params.requestFacts,
-        user: params.user,
-        sharedContext: params.sharedContext,
-      })
-    );
+    const storedAfterResult = params.hooksWaived
+      ? { data: undefined }
+      : await this.hookService.storedHookExecutor.execute(
+          "afterRead",
+          params.storedHooks,
+          this.hookService.buildPrebuiltHookContext({
+            collection: collectionName,
+            operation: "read",
+            data: toPayload(afterCodeHooks),
+            // The signature wants a thenable; `async` on a body with nothing to
+            // await only asked for a suppression.
+            queryDatabase: () => Promise.resolve(false),
+            req: params.requestFacts,
+            user: params.user,
+            sharedContext: params.sharedContext,
+          })
+        );
     let finalData = toRows(storedAfterResult.data, afterCodeHooks);
 
     // Snake_case timestamp columns to their camelCase API form.
@@ -2189,14 +2209,16 @@ export class CollectionQueryService extends BaseService {
         overrideAccess: skipFieldRules,
       };
       await applyFieldReadAccess(target, sourceRedactions);
-      await runFieldHooks({
-        kind: "collection",
-        slug: collectionName,
-        phase: "afterRead",
-        data: row,
-        operation: "read",
-        user: params.user,
-      });
+      if (!params.hooksWaived) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: collectionName,
+          phase: "afterRead",
+          data: row,
+          operation: "read",
+          user: params.user,
+        });
+      }
       await applyFieldReadAccess(target, sourceRedactions);
     }
 
@@ -2534,6 +2556,8 @@ export class CollectionQueryService extends BaseService {
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
     request?: Request;
+    /** A grant waiving this collection's read hooks; see {@link readHooksWaived}. */
+    hookExemptRead?: HookExemptRead;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     try {
       // Determine the effective user for access control
@@ -2591,33 +2615,42 @@ export class CollectionQueryService extends BaseService {
       // The read hooks settle the filter before any seam or constraint touches
       // it, so `beforeOperation` and `beforeRead` both narrow the rows actually
       // returned rather than being computed and dropped.
-      const hookedWhere = await this.resolveReadWhere({
-        collectionName: params.collectionName,
-        where: params.where,
-        user: params.user,
-        sharedContext,
-        requestFacts,
-      });
+      // A plugin reading a collection it declared carries a grant, and the
+      // grant waives everything below that could reshape the read: these
+      // hooks, the list-query filter and every afterRead phase.
+      const hooksWaived = readHooksWaived(
+        params.hookExemptRead,
+        params.collectionName
+      );
+      const hookedWhere = hooksWaived
+        ? params.where
+        : await this.resolveReadWhere({
+            collectionName: params.collectionName,
+            where: params.where,
+            user: params.user,
+            sharedContext,
+            requestFacts,
+          });
 
       // D63 seam: let plugins transform the structured list-query `where`.
       // Guarded by hasFilters so default behavior (no plugins) is unchanged. It
       // runs last, on what the hooks settled, because it is the only one of the
       // three that was already live.
       const filterRegistry = getFilterRegistry();
-      const listQueryWhere = filterRegistry.hasFilters(
-        FilterSeams.CollectionsListQuery
-      )
-        ? await filterRegistry.applyFilters(
-            FilterSeams.CollectionsListQuery,
-            hookedWhere ?? {},
-            {
-              collection: params.collectionName,
-              userId: params.user?.id,
-              search: params.search,
-              limit: params.limit,
-            }
-          )
-        : hookedWhere;
+      const listQueryWhere =
+        !hooksWaived &&
+        filterRegistry.hasFilters(FilterSeams.CollectionsListQuery)
+          ? await filterRegistry.applyFilters(
+              FilterSeams.CollectionsListQuery,
+              hookedWhere ?? {},
+              {
+                collection: params.collectionName,
+                userId: params.user?.id,
+                search: params.search,
+                limit: params.limit,
+              }
+            )
+          : hookedWhere;
 
       // Build base query using Drizzle (via BaseService db compatibility layer)
       let query = this.db.select().from(schema);
@@ -3026,6 +3059,7 @@ export class CollectionQueryService extends BaseService {
       // single document.
       const finalData = await this.finalizeReadRows({
         rows: expandedEntries,
+        hooksWaived,
         collectionName: params.collectionName,
         fields,
         storedHooks,
@@ -3121,7 +3155,12 @@ export class CollectionQueryService extends BaseService {
   private async hookSettledWhere(
     params: FilteredReadParams
   ): Promise<WhereFilter | undefined> {
-    if (params.readHooksAlreadyRan) return params.where;
+    if (
+      params.readHooksAlreadyRan ||
+      readHooksWaived(params.hookExemptRead, params.collectionName)
+    ) {
+      return params.where;
+    }
     return this.resolveReadWhere({
       collectionName: params.collectionName,
       where: params.where,
@@ -3870,6 +3909,8 @@ export class CollectionQueryService extends BaseService {
      * expose a draft to a caller who cannot edit the document.
      */
     includeWorkingDraft?: boolean;
+    /** A grant waiving this collection's read hooks; see {@link readHooksWaived}. */
+    hookExemptRead?: HookExemptRead;
   }): Promise<CollectionServiceResult> {
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
@@ -3899,13 +3940,21 @@ export class CollectionQueryService extends BaseService {
 
       // `beforeOperation` runs first and may rewrite the id, then `beforeRead`
       // sees the id it settled on.
-      const entryId = await this.resolveReadEntryId({
-        collectionName: params.collectionName,
-        entryId: params.entryId,
-        user: params.user,
-        sharedContext,
-        requestFacts,
-      });
+      // A granted read is not retargeted: the id asked for is the id read, and
+      // the afterRead phases below are waived with it.
+      const hooksWaived = readHooksWaived(
+        params.hookExemptRead,
+        params.collectionName
+      );
+      const entryId = hooksWaived
+        ? params.entryId
+        : await this.resolveReadEntryId({
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            user: params.user,
+            sharedContext,
+            requestFacts,
+          });
 
       // The Draft/Published filter, from the same resolver the listing uses.
       // A public caller asking for a draft entry by id gets a 404, never a hint
@@ -4354,6 +4403,7 @@ export class CollectionQueryService extends BaseService {
       // passes, same shared walk state as the listing above.
       const [finalData] = await this.finalizeReadRows({
         rows: [expandedEntry],
+        hooksWaived,
         // afterRead handlers on a read by id receive the document itself.
         single: true,
         collectionName: params.collectionName,
