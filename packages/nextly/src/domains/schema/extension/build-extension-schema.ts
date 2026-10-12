@@ -45,9 +45,10 @@ import {
 } from "./compile";
 import { type SeedEntityTable, SchemaDraftStore } from "./draft";
 import { enumChecks } from "./enum-check";
-import { assertMysqlRowFits } from "./naming";
+import { assertMysqlRowFits, foreignKeyColumnProblem } from "./naming";
 import { runExtensionHooks, type SchemaContribution } from "./run-hooks";
 import type {
+  DeclaredForeignKey,
   ExtensionColumn,
   ExtensionIndex,
   ExtensionTable,
@@ -415,7 +416,9 @@ function foreignTableContributions(store: SchemaDraftStore): {
 }
 
 /**
- * Refuse a foreign key naming a referenced column its target does not have.
+ * Refuse a foreign key naming a referenced column its target does not have,
+ * or one whose key columns cannot reference their target's on every dialect
+ * (`assertKeyColumnsComparable`).
  *
  * Asked of every table whose columns this compile knows — declared, adopted,
  * core, and an entity seeded with its columns — by SQL name, which is what
@@ -429,34 +432,82 @@ function assertForeignKeyTargetsExist(
   tables: readonly ExtensionTable[],
   store: SchemaDraftStore
 ): void {
-  const known = new Map<string, readonly ExtensionColumn[]>(
+  const known = new Map<string, StoredTable>(
     [...store.all(), ...store.adoptedTables()]
       .filter(table => table.columns.length > 0)
-      .map(table => [table.name, table.columns])
+      .map(table => [table.name, table])
   );
   for (const table of tables) {
     for (const [position, fk] of (table.foreignKeys ?? []).entries()) {
       const target = known.get(fk.referencesTable);
       if (target === undefined) continue;
-      const missing = fk.referencesColumns.find(
-        name => !target.some(column => column.name === name)
-      );
-      if (missing === undefined) continue;
-      const authored = target.find(column => column.key === missing);
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: `${table.name}.foreignKeys[${String(position)}]`,
-            code: "INVALID",
-            message:
-              `The foreign key references the column "${missing}", which "${fk.referencesTable}" does not have.` +
-              (authored !== undefined && authored.name !== missing
-                ? ` "${missing}" is the authored key of its column "${authored.name}"; a foreign key references the SQL name.`
-                : ""),
-          },
-        ],
-      });
+      const path = `${table.name}.foreignKeys[${String(position)}]`;
+      assertReferencedColumnsExist(fk, target, path);
+      assertKeyColumnsComparable(table, fk, target, path);
     }
+  }
+}
+
+/** A table the draft store holds, declared or seeded. */
+type StoredTable = ReturnType<SchemaDraftStore["all"]>[number];
+
+/** Refuse a referenced column the target does not have, by SQL name. */
+function assertReferencedColumnsExist(
+  fk: DeclaredForeignKey,
+  target: StoredTable,
+  path: string
+): void {
+  const missing = fk.referencesColumns.find(
+    name => !target.columns.some(column => column.name === name)
+  );
+  if (missing === undefined) return;
+  const authored = target.columns.find(column => column.key === missing);
+  throw NextlyError.validation({
+    errors: [
+      {
+        path,
+        code: "INVALID",
+        message:
+          `The foreign key references the column "${missing}", which "${fk.referencesTable}" does not have.` +
+          (authored !== undefined && authored.name !== missing
+            ? ` "${missing}" is the authored key of its column "${authored.name}"; a foreign key references the SQL name.`
+            : ""),
+      },
+    ],
+  });
+}
+
+/**
+ * Refuse a key column whose type cannot reference its target's on every
+ * dialect (`foreignKeyColumnProblem`). A seeded column known by name only —
+ * a core table's, or an entity system column the seed could not type — has
+ * a stand-in kind, and is left to the database to judge.
+ */
+function assertKeyColumnsComparable(
+  table: ExtensionTable,
+  fk: DeclaredForeignKey,
+  target: StoredTable,
+  path: string
+): void {
+  for (const [at, name] of fk.columns.entries()) {
+    const referencedName = fk.referencesColumns[at];
+    if (target.opaqueColumns?.has(referencedName)) continue;
+    const local = table.columns.find(column => column.name === name);
+    const referenced = target.columns.find(
+      column => column.name === referencedName
+    );
+    if (local === undefined || referenced === undefined) continue;
+    const problem = foreignKeyColumnProblem(local, referenced);
+    if (problem === undefined) continue;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path,
+          code: "INVALID",
+          message: `The foreign key's column "${name}" cannot reference "${fk.referencesTable}"."${referencedName}": ${problem}.`,
+        },
+      ],
+    });
   }
 }
 
@@ -704,9 +755,13 @@ export async function buildExtensionSchema(
       : Object.entries(drizzle).map(([name, table]) =>
           specAfterHooks(name, table, hooked)
         );
-  // What reaches the migration model when a hook changed it: a key the hook
-  // added or renamed is held to the same rule as a declared one.
-  if (hooks.length > 0) assertDistinctForeignKeyNames(specs);
+  // What reaches the migration model when a hook changed it: a key or an
+  // index the hook added or renamed is held to the same rule as a declared
+  // one, by the same checks.
+  if (hooks.length > 0) {
+    assertDistinctForeignKeyNames(specs);
+    assertDistinctIndexNames(specs, entityIndexes);
+  }
 
   const { adopted, adoptedRelations } = compileAdoptedTables(
     store,

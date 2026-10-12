@@ -127,6 +127,89 @@ describe("moduleEffects", () => {
     ).toBe("schema");
   });
 
+  it("reads a table created from a query that outlives the module as schema and data both", () => {
+    // Its rows are copied by the statement that creates it, and no snapshot
+    // shows them.
+    expect(
+      moduleEffects(
+        module(['CREATE TABLE "p__things" AS SELECT id, label FROM p__old']),
+        "postgresql"
+      )
+    ).toBe("mixed");
+    // The control: scaffolding filled the same way and dropped before the end.
+    expect(
+      moduleEffects(
+        module([
+          'CREATE TABLE "p__things" ("id" text PRIMARY KEY, "label" text NOT NULL)',
+          "CREATE TABLE p__tmp AS SELECT id FROM p__old",
+          'INSERT INTO "p__things" ("id", "label") SELECT id, id FROM p__tmp',
+          "DROP TABLE p__tmp",
+        ]),
+        "postgresql"
+      )
+    ).toBe("mixed");
+    expect(
+      moduleEffects(
+        module([
+          'CREATE TABLE "p__things" ("id" text PRIMARY KEY, "label" text NOT NULL)',
+          "CREATE TABLE p__tmp AS SELECT id FROM p__old",
+          "DROP TABLE p__tmp",
+        ]),
+        "postgresql"
+      )
+    ).toBe("schema");
+  });
+
+  it("reads a table created from a query in MySQL's parenthesised form as schema and data both", () => {
+    expect(
+      moduleEffects(
+        module(
+          ["CREATE TABLE p__things (SELECT id, label FROM legacy_things)"],
+          [THINGS],
+          "mysql"
+        ),
+        "mysql"
+      )
+    ).toBe("mixed");
+  });
+
+  it.each([
+    [
+      "created from a query",
+      ["CREATE TABLE p__new AS SELECT id, label FROM legacy_things"],
+    ],
+    [
+      "created empty and filled",
+      [
+        "CREATE TABLE p__new (id text PRIMARY KEY, label text NOT NULL)",
+        "INSERT INTO p__new (id, label) SELECT id, label FROM legacy_things",
+      ],
+    ],
+  ])(
+    "reads rows put into a new table %s and renamed into place as mixed",
+    (_how, fill) => {
+      // Renamed away is not gone: the rows live on in the table the module
+      // leaves, and no snapshot shows them.
+      expect(
+        moduleEffects(
+          module([...fill, "ALTER TABLE p__new RENAME TO p__things"]),
+          "postgresql"
+        )
+      ).toBe("mixed");
+    }
+  );
+
+  it("reads a rebuild-shaped block copying another table's rows as mixed", () => {
+    // The generated rebuild copies the table's own rows; this one brings
+    // others in under the rebuild's shape.
+    const rebuild = sqliteTableRebuildStatements(THINGS).map(statement =>
+      statement.replace('FROM "p__things"', 'FROM "legacy_things"')
+    );
+    expect(moduleEffects(module(rebuild, [THINGS], "sqlite"), "sqlite")).toBe(
+      "mixed"
+    );
+  });
+
   it("reads a module whose snapshot does not move as data, its DDL included", () => {
     // A `--blank` module: dev push builds the snapshot, which has no partial
     // index to build, so standing past it proves nothing about this one.

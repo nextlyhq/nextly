@@ -100,7 +100,21 @@ resolve to one name are refused when the schema compiles. The same index
 contributed to one table twice, by two plugins or a plugin and the app, is one
 index and is kept once. A foreign key's
 `references.columns` are the target's SQL column names (`owner_id`, not the
-authored `ownerId`), and a column the target does not have is refused.
+authored `ownerId`), and a column the target does not have is refused. So is a
+key column whose type cannot reference its target's on every dialect: an
+integer on a text column or a `uuid` on a text one (PostgreSQL has no equality
+between them), integers or floats of different widths (`bigint` on `integer`,
+`double` on `real`), or decimals of a different precision or scale (MySQL
+requires both to match), and a long text, JSON or
+bytes column in a key at all (MySQL cannot index one). Text columns of
+different lengths may reference each other, and a collection's relationship
+column is the text id it holds. A core table's columns are left to the
+database to judge.
+
+A numeric default must be a finite number, and a decimal's default must fit
+its column: no more fractional digits than its scale, and no more digits
+before the point than its precision leaves room for (`col.decimal(3, 1)` holds
+up to `99.9`).
 
 A table's columns must fit in one MySQL row: 65,535 bytes, where a
 `varchar(n)` counts up to 4 bytes a character plus its length, and a

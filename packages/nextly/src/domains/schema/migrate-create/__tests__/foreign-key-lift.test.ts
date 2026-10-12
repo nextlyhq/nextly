@@ -29,7 +29,14 @@ const logger = { warn: () => {} };
 
 /** An app table referencing another, with the reference column's kind given. */
 function tables(wide: boolean) {
-  const parent = defineTable("parent", { id: col.serial() });
+  // The key column and the unique column it references widen together:
+  // MySQL requires integer key columns of one size, so a `bigint` key on an
+  // `int` column is refused when the schema compiles.
+  const parent = defineTable(
+    "parent",
+    { id: col.serial(), ref: wide ? col.bigint() : col.integer() },
+    { indexes: [{ columns: ["ref"], unique: true }] }
+  );
   const child = defineTable(
     "child",
     {
@@ -40,7 +47,7 @@ function tables(wide: boolean) {
       foreignKeys: [
         {
           columns: ["parentId"],
-          references: { table: "parent", columns: ["id"] },
+          references: { table: "parent", columns: ["ref"] },
         },
       ],
     }

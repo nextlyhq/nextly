@@ -22,7 +22,7 @@ import {
   type SupportedDialect,
 } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
-import { toSnakeCase } from "../services/field-column-descriptor";
+import { kindAndSizes, toSnakeCase } from "../services/field-column-descriptor";
 
 import type { TableRelationInput, ColumnBuilder, TableDefinition } from "./dsl";
 import { defineTable } from "./dsl";
@@ -128,6 +128,9 @@ export interface SeedEntityTable {
     name: string;
     kind?: string;
     length?: number;
+    /** A decimal column's precision and scale, as it renders. */
+    precision?: number;
+    scale?: number;
     nullable: boolean;
   }[];
 }
@@ -238,11 +241,11 @@ export class SchemaDraftStore {
             : {
                 key: column.name,
                 name: column.name,
-                kind: column.kind as ExtensionColumn["kind"],
+                ...kindAndSizes({
+                  ...column,
+                  kind: column.kind as ExtensionColumn["kind"],
+                }),
                 nullable: column.nullable,
-                ...(column.length !== undefined
-                  ? { length: column.length }
-                  : {}),
               }
         ),
         indexes: [],

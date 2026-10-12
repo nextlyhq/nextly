@@ -38,6 +38,7 @@ import {
   getColumnDescriptor,
   type ColumnOrigin,
   getSystemColumnDescriptors,
+  kindAndSizes,
   toSnakeCase,
 } from "../../services/field-column-descriptor";
 import {
@@ -504,16 +505,8 @@ export function buildDesiredTableFromFields(
       );
       // A field stored in another table has no column to weigh.
       if (descriptor === null || descriptor.kind === "skip") return null;
-      return {
-        kind: descriptor.kind,
-        ...(descriptor.length !== undefined
-          ? { length: descriptor.length }
-          : {}),
-        ...(descriptor.precision !== undefined
-          ? { precision: descriptor.precision }
-          : {}),
-        ...(descriptor.scale !== undefined ? { scale: descriptor.scale } : {}),
-      };
+      // The kind narrowed past `skip`, which the object itself is not.
+      return kindAndSizes({ ...descriptor, kind: descriptor.kind });
     },
     ...(options.indexes !== undefined
       ? { declaredIndexes: options.indexes }

@@ -263,6 +263,27 @@ export function usesJunctionTable(field: {
 }
 
 /**
+ * A column's kind and the sizes it states, each only where stated: what the
+ * index, row and key rules weigh a column by, read the same way from a
+ * field's descriptor, a system column's, or a seeded column.
+ */
+export function kindAndSizes<K extends string>(descriptor: {
+  kind: K;
+  length?: number;
+  precision?: number;
+  scale?: number;
+}): { kind: K; length?: number; precision?: number; scale?: number } {
+  return {
+    kind: descriptor.kind,
+    ...(descriptor.length !== undefined ? { length: descriptor.length } : {}),
+    ...(descriptor.precision !== undefined
+      ? { precision: descriptor.precision }
+      : {}),
+    ...(descriptor.scale !== undefined ? { scale: descriptor.scale } : {}),
+  };
+}
+
+/**
  * Given a Nextly field config, returns the database column shape
  * for the requested dialect. Returns `null` for every field type
  * that gets no column of its own — see `fieldProducesColumn`.

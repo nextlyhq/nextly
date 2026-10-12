@@ -32,6 +32,8 @@ function module(args: {
   before: TableSpec[];
   target: TableSpec[];
   up?: string[];
+  /** `false` for a module run outside a transaction. */
+  transaction?: false;
 }): PluginMigration {
   const dialects = {
     postgresql: { up: args.up ?? ["-- up"], down: [] },
@@ -55,6 +57,7 @@ function module(args: {
     schemaVersion: args.schemaVersion,
     dialects,
     ...sides,
+    ...(args.transaction === false ? { transaction: false } : {}),
   };
   return { ...content, checksum: migrationChecksum(content) };
 }
@@ -876,7 +879,7 @@ describe("a database already past some of a plugin's modules", () => {
     schemaVersion: 1,
     before: [],
     target: [tableSpec(T, false)],
-    up: ["CREATE TABLE p__things"],
+    up: ["CREATE TABLE p__things (id text PRIMARY KEY, label text NOT NULL)"],
   });
   const addScore = module({
     name: "20260201_000000_add_score",
@@ -890,7 +893,7 @@ describe("a database already past some of a plugin's modules", () => {
     schemaVersion: 3,
     before: [tableSpec(T, true)],
     target: [tableSpec(T, true), tableSpec(U, false)],
-    up: ["CREATE TABLE p__extras"],
+    up: ["CREATE TABLE p__extras (id text PRIMARY KEY)"],
   });
   const set = (migrations: PluginMigration[]) => [
     { pluginName: "@acme/p", pluginVersion: "1.0.0", migrations },
@@ -923,7 +926,9 @@ describe("a database already past some of a plugin's modules", () => {
 
     expect(result).toEqual({ applied: 1, adopted: 2, skipped: 0 });
     expect(d.executed).toHaveLength(1);
-    expect(d.executed[0]).toContain("CREATE TABLE p__extras");
+    expect(d.executed[0]).toContain(
+      "CREATE TABLE p__extras (id text PRIMARY KEY)"
+    );
   });
 
   /** A data module between `create` and `addScore`: a seed. */
@@ -1085,13 +1090,219 @@ describe("a database already past some of a plugin's modules", () => {
     d.live.set(T, [tableSpec(T, true)]);
     d.deps.repo.findFileApplies = async (filename: string) =>
       filename === "plugin:@acme/p/20260101_000000_create"
-        ? [{ status: "in_progress" as const, startedAt: new Date(1) }]
+        ? [
+            {
+              status: "in_progress" as const,
+              startedAt: new Date(1),
+              supersededEventIds: null,
+            },
+          ]
         : [];
 
     await expect(
       runPluginMigrations(set([unsealed, addScore]), d.deps)
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED" });
     expect(d.started).toEqual([]);
+  });
+
+  it("refuses an only module whose result the database holds, when it changes schema and data both", async () => {
+    // Development push created the table; adopting the module on the
+    // strength of that would never run its seed.
+    const seeded = module({
+      name: "20260101_000000_create",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec(T, false)],
+      up: [
+        "CREATE TABLE p__things (id text PRIMARY KEY, label text NOT NULL)",
+        "INSERT INTO p__things (id, label) VALUES ('a', 'A')",
+      ],
+    });
+    const d = deps();
+    d.live.set(T, [tableSpec(T, false)]);
+
+    await expect(
+      runPluginMigrations(set([seeded]), d.deps)
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_DRIFT",
+      logContext: {
+        migration: "20260101_000000_create",
+        reason: "mixed-module-past",
+      },
+    });
+    expect(d.started).toEqual([]);
+    expect(d.executed).toEqual([]);
+  });
+
+  describe("a module changing schema and data both, whose last attempt failed", () => {
+    // Run outside a transaction, the attempt may have run the CREATE and
+    // stopped before the seed: that attempt is what put the database at the
+    // module's result, and its own refusal says how to finish or clear it.
+    const seededModule = (transaction?: false) =>
+      module({
+        name: "20260101_000000_create",
+        schemaVersion: 1,
+        before: [],
+        target: [tableSpec(T, false)],
+        up: [
+          "CREATE TABLE p__things (id text PRIMARY KEY, label text NOT NULL)",
+          "INSERT INTO p__things (id, label) VALUES ('a', 'A')",
+        ],
+        transaction,
+      });
+    const seeded = seededModule(false);
+    const failedAttempt = (d: ReturnType<typeof deps>) => {
+      d.deps.repo.findFileApplies = async (filename: string) =>
+        filename === "plugin:@acme/p/20260101_000000_create"
+          ? [
+              {
+                status: "failed",
+                startedAt: new Date(1),
+                supersededEventIds: null,
+              },
+            ]
+          : [];
+    };
+
+    it.each([
+      [
+        "standing at its result",
+        [tableSpec(T, false)],
+        [] as PluginMigration[],
+      ],
+      ["standing past it", [tableSpec(T, true)], [addScore]],
+    ])(
+      "is refused as possibly partly applied, %s",
+      async (_where, live, later) => {
+        const d = deps();
+        failedAttempt(d);
+        d.live.set(T, live);
+
+        await expect(
+          runPluginMigrations(set([seeded, ...later]), d.deps)
+        ).rejects.toMatchObject({
+          code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+          logContext: {
+            source: "plugin:@acme/p/20260101_000000_create",
+            reason: "partially-applied",
+          },
+        });
+        expect(d.started).toEqual([]);
+        expect(d.executed).toEqual([]);
+      }
+    );
+
+    it("is refused as mixed when the attempt ran in a transaction, undone whole", async () => {
+      const d = deps();
+      failedAttempt(d);
+      d.live.set(T, [tableSpec(T, false)]);
+
+      await expect(
+        runPluginMigrations(set([seededModule()]), d.deps)
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_DRIFT",
+        logContext: { reason: "mixed-module-past" },
+      });
+    });
+  });
+
+  describe("a module whose newest ledger event is a rolled_back row", () => {
+    /** The module's history: one rolled_back row retiring `retired`. */
+    const history = (d: ReturnType<typeof deps>, retired: string[] | null) => {
+      d.deps.repo.findFileApplies = async (filename: string) =>
+        filename === "plugin:@acme/p/20260101_000000_create"
+          ? [
+              {
+                status: "rolled_back",
+                startedAt: new Date(1),
+                supersededEventIds: retired,
+              },
+            ]
+          : [];
+    };
+    const mixed = module({
+      name: "20260101_000000_create",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec(T, false)],
+      up: [
+        "CREATE TABLE p__things (id text PRIMARY KEY, label text NOT NULL)",
+        "INSERT INTO p__things (id, label) VALUES ('a', 'A')",
+      ],
+    });
+    const backfill = module({
+      name: "20260101_000000_create",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec(T, false)],
+      up: ["INSERT INTO p__things (id, label) VALUES ('a', 'A')"],
+    });
+
+    it.each([
+      ["changing schema and data both", mixed],
+      ["changing data only", backfill],
+    ])(
+      "records one %s, standing at its result, whose attempt the operator cleared",
+      async (_what, migration) => {
+        // The recovery for an attempt finished by hand: its attempt cleared,
+        // flipped in place and retiring nothing, then `nextly migrate`.
+        const d = deps();
+        history(d, null);
+        d.live.set(T, [tableSpec(T, false)]);
+
+        const result = await runPluginMigrations(set([migration]), d.deps);
+
+        expect(result).toEqual({ applied: 0, adopted: 1, skipped: 0 });
+        expect(d.executed).toEqual([]);
+      }
+    );
+
+    it("refuses one changing schema and data both after a rollback, which cleared no attempt", async () => {
+      // `migrate:down` left the database at the module's start; standing at
+      // its result again is something else's doing, such as dev push.
+      const d = deps();
+      history(d, ["applied-row"]);
+      d.live.set(T, [tableSpec(T, false)]);
+
+      await expect(
+        runPluginMigrations(set([mixed]), d.deps)
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_DRIFT",
+        logContext: { reason: "mixed-module-past" },
+      });
+      expect(d.executed).toEqual([]);
+    });
+  });
+
+  it("runs, not adopts, a data module whose result the database holds", async () => {
+    // Its snapshot moves, but its statements only write rows: standing at
+    // its result says nothing about whether they ran.
+    const backfill = module({
+      name: "20260101_000000_create",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec(T, false)],
+      up: ["INSERT INTO p__things (id, label) VALUES ('a', 'A')"],
+    });
+    const d = deps();
+    d.live.set(T, [tableSpec(T, false)]);
+
+    const result = await runPluginMigrations(set([backfill]), d.deps);
+
+    expect(result).toEqual({ applied: 1, adopted: 0, skipped: 0 });
+    expect(d.executed).toHaveLength(1);
+    expect(d.executed[0]).toContain("INSERT INTO p__things");
+  });
+
+  it("still adopts an only schema module whose result the database holds", async () => {
+    // The control: nothing but DDL, so the snapshot is its whole effect.
+    const d = deps();
+    d.live.set(T, [tableSpec(T, false)]);
+
+    const result = await runPluginMigrations(set([create]), d.deps);
+
+    expect(result).toEqual({ applied: 0, adopted: 1, skipped: 0 });
+    expect(d.executed).toEqual([]);
   });
 
   it("leaves a fresh install to run every module", async () => {
@@ -1102,7 +1313,11 @@ describe("a database already past some of a plugin's modules", () => {
     const d = deps({
       executeSql: async (sql: string) => {
         executed.push(sql);
-        if (sql.includes("CREATE TABLE p__things")) {
+        if (
+          sql.includes(
+            "CREATE TABLE p__things (id text PRIMARY KEY, label text NOT NULL)"
+          )
+        ) {
           d.live.set(T, [tableSpec(T, false)]);
         }
         if (sql.includes("ADD score")) d.live.set(T, [tableSpec(T, true)]);
@@ -1187,7 +1402,13 @@ describe("a database already past some of a plugin's modules", () => {
     const d = deps();
     d.deps.repo.findFileApplies = async (filename: string) =>
       filename === "plugin:@acme/p/20260101_000000_create"
-        ? [{ status: "failed", startedAt: new Date(1) }]
+        ? [
+            {
+              status: "failed",
+              startedAt: new Date(1),
+              supersededEventIds: null,
+            },
+          ]
         : [];
     d.live.set(T, [tableSpec(T, true)]);
 
@@ -1213,7 +1434,7 @@ describe("a limit on how many modules one run records", () => {
     schemaVersion: 1,
     before: [],
     target: [tableSpec(T, false)],
-    up: ["CREATE TABLE p__things"],
+    up: ["CREATE TABLE p__things (id text PRIMARY KEY, label text NOT NULL)"],
   });
   const addScore = module({
     name: "20260201_000000_add_score",
@@ -1227,14 +1448,14 @@ describe("a limit on how many modules one run records", () => {
     schemaVersion: 3,
     before: [tableSpec(T, true)],
     target: [tableSpec(T, true), tableSpec(U, false)],
-    up: ["CREATE TABLE p__extras"],
+    up: ["CREATE TABLE p__extras (id text PRIMARY KEY)"],
   });
   const other = module({
     name: "001",
     schemaVersion: 1,
     before: [],
     target: [tableSpec("q__other", false)],
-    up: ["CREATE TABLE q__other"],
+    up: ["CREATE TABLE q__other (id text PRIMARY KEY)"],
   });
 
   /** Deps whose database follows the SQL it is handed, as a real one does. */
@@ -1242,11 +1463,15 @@ describe("a limit on how many modules one run records", () => {
     const d = deps({ limit });
     d.deps.executeSql = async (sql: string) => {
       d.executed.push(sql);
-      if (sql.includes("CREATE TABLE p__things")) {
+      if (
+        sql.includes(
+          "CREATE TABLE p__things (id text PRIMARY KEY, label text NOT NULL)"
+        )
+      ) {
         d.live.set(T, [tableSpec(T, false)]);
       }
       if (sql.includes("ADD score")) d.live.set(T, [tableSpec(T, true)]);
-      if (sql.includes("CREATE TABLE q__other")) {
+      if (sql.includes("CREATE TABLE q__other (id text PRIMARY KEY)")) {
         d.live.set("q__other", [tableSpec("q__other", false)]);
       }
       return 1;

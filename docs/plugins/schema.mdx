@@ -388,16 +388,23 @@ constraint — including an index named on its own (`DROP INDEX name`), whose
 table is read from the database.
 
 A database development push already brought to a plugin's latest shape is
-adopted: `nextly migrate` records the modules it stands past as applied
-without running them, since the tables already say they ran. That proof holds
+adopted: `nextly migrate` records the modules it stands past, or whose result
+it already holds, as applied without running them, since the tables already
+say they ran. That proof holds
 only for what a schema shows. A module that only changes data — a seed or a
 backfill, or one creating a trigger or function — runs where it stands
 instead, against the tables as they are, and so does any module whose schema
 does not change, such as one written with `--blank`, whatever its SQL. Such a
 module therefore has to hold against every later shape of the plugin's tables;
 one that fails there is refused with the recovery. A module that both changes
-the schema and does such work can be neither, and is refused with the
-recovery; keep data statements in modules of their own.
+the schema and does such work, such as one creating a table with
+`CREATE TABLE … AS SELECT` or filling a new table and renaming it into place,
+whose rows no schema shows, can be neither, and is refused with the recovery;
+keep data statements in modules of their own. A statement the runner cannot
+read counts as such work, so it is never recorded unrun. The exception is the
+recovery for an attempt that stopped part-way: once you finish its statements
+by hand and clear the attempt (`nextly migrate:resolve --failed-cleanup`),
+`nextly migrate` records the module where the database stands past its start.
 
 The entry `--plugin` points at may export the plugin as its default export or
 as a named one (`export const myPlugin = definePlugin(...)`), beside the tables

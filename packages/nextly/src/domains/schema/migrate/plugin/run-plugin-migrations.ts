@@ -15,6 +15,11 @@
  * what "equal" means, and the disagreement would surface as a plugin module
  * that refuses a database the app path would accept.
  *
+ * What this adds is a question the snapshots cannot answer: whether a module
+ * the database already holds the result of may be recorded at all
+ * (`pastModuleRuns`). Asked with the reconcile's own equivalence over the
+ * same sides, so the two never disagree about where the database stands.
+ *
  * ## The first failure stops everything
  *
  * Later plugins and the app phase do not run. That is today's behaviour for
@@ -26,8 +31,10 @@
  */
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import { NextlyError } from "../../../../errors/nextly-error";
+import { newestEvent } from "../../events/newest-event";
 import {
   assertNotPartiallyApplied,
+  attemptCleared,
   reconcileFile,
   recordAlreadyApplied,
   snapshotsEquivalent,
@@ -61,7 +68,7 @@ import {
   narrowToContributions,
 } from "../../migrate-create/app-stream";
 
-import { moduleEffects, type ModuleEffects } from "./module-effects";
+import { moduleEffects } from "./module-effects";
 import { recordedContributions } from "./recorded-contributions";
 
 /** One plugin's migrations, in the order the resolver placed the plugin. */
@@ -385,8 +392,8 @@ async function fastForward(
     range: ordered.slice(position, through + 1),
     earlier: at => ordered.slice(0, position + at),
   };
-  const effects = await judgeRange(forward, deps);
-  return { through, ...(await forwardRange(forward, effects, deps)) };
+  const runs = await judgeRange(forward, deps);
+  return { through, ...(await forwardRange(forward, runs, deps)) };
 }
 
 /** The modules a fast-forward records or runs, and what precedes each. */
@@ -400,29 +407,72 @@ interface ForwardRange {
 /**
  * Every module of the range judged before any row is written, as an adoption
  * is: a module refused part-way would leave the ones before it recorded. An
- * edited module first, whatever its statements say. Returns what each does.
+ * edited module first, whatever its statements say. Returns whether each
+ * runs where the database stands rather than being recorded unrun.
  */
 async function judgeRange(
   { set, range, earlier }: ForwardRange,
   deps: RunPluginMigrationsDeps
-): Promise<ModuleEffects[]> {
+): Promise<boolean[]> {
   for (const migration of range) assertModuleIntact(set.pluginName, migration);
-  const effects = range.map(migration =>
-    moduleEffects(migration, deps.dialect)
-  );
-  const mixedAt = effects.indexOf("mixed");
-  if (mixedAt !== -1) throw mixedModuleRefusal(set, range[mixedAt]);
+  const runs: boolean[] = [];
+  for (const migration of range) {
+    runs.push(await pastModuleRuns(set, migration, deps));
+  }
   await assertAdoptable(
     set,
-    range.filter((_, at) => effects[at] === "schema"),
+    range.filter((_, at) => !runs[at]),
     deps
   );
   for (const [at, migration] of range.entries()) {
-    if (effects[at] === "data") {
+    if (runs[at]) {
       await assertModuleRunnable(set, migration, earlier(at), deps);
     }
   }
-  return effects;
+  return runs;
+}
+
+/**
+ * Whether a module the database already stands past runs where it stands,
+ * rather than being recorded without running, by what its statements do
+ * (`moduleEffects`): a schema module is recorded, since the snapshot the
+ * database matches is its whole effect; a data module runs, since its work
+ * is in no snapshot; a module doing both is refused, since it can be
+ * neither. The one answer for a fast-forward range and for a module whose
+ * own result the database already holds.
+ *
+ * The ledger answers first where it can. A module whose newest attempt the
+ * operator cleared (`attemptCleared`) is recorded: with the database past its
+ * start, that is the recovery for an attempt finished by hand, which the
+ * partially-applied refusal names. A mixed module whose last attempt did not
+ * finish and may have stopped part-way is refused as that
+ * (`assertNotPartiallyApplied`): the attempt is what put the database past
+ * it, and that refusal says how to finish or clear it.
+ */
+async function pastModuleRuns(
+  set: PluginMigrationSet,
+  migration: PluginMigration,
+  deps: RunPluginMigrationsDeps
+): Promise<boolean> {
+  const effects = moduleEffects(migration, deps.dialect);
+  if (effects === "schema") return false;
+  const unit = ledgerUnit(set, migration);
+  const history = await deps.repo.findFileApplies(unit.filename);
+  if (attemptCleared(newestEvent(history))) return false;
+  if (effects === "data") return true;
+  await assertNotPartiallyApplied(unit, deps.dialect, deps.repo);
+  throw mixedModuleRefusal(set, migration);
+}
+
+/** A module as the ledger knows it: its file name and how it runs. */
+function ledgerUnit(
+  set: PluginMigrationSet,
+  migration: PluginMigration
+): { filename: string; transaction: boolean } {
+  return {
+    filename: qualifiedFilename(set.pluginName, migration.name),
+    transaction: migration.transaction !== false,
+  };
 }
 
 /**
@@ -435,24 +485,20 @@ async function judgeRange(
  */
 async function forwardRange(
   { set, range, earlier }: ForwardRange,
-  effects: readonly ModuleEffects[],
+  runs: readonly boolean[],
   deps: RunPluginMigrationsDeps
 ): Promise<{ adopted: number; applied: number }> {
   let adopted = 0;
   let pending: PluginMigration[] = [];
   for (const [at, migration] of range.entries()) {
-    if (effects[at] === "schema") {
+    if (!runs[at]) {
       pending.push(migration);
       continue;
     }
     await recordAdopted(set, pending, deps);
     adopted += pending.length;
     pending = [];
-    try {
-      await applyModule(set, migration, earlier(at), deps, "live");
-    } catch (error) {
-      throw dataModuleFailure(set, migration, error);
-    }
+    await applyModule(set, migration, earlier(at), deps, "live");
   }
   await recordAdopted(set, pending, deps);
   adopted += pending.length;
@@ -472,7 +518,7 @@ function mixedModuleRefusal(
   return new NextlyError({
     code: "NEXTLY_MIGRATION_DRIFT",
     publicMessage:
-      `Plugin "${set.pluginName}" migration ${migration.name} changes the schema and also does work the schema does not show (data, or objects such as triggers), and the database already holds its schema changes — so it can be neither recorded as applied, which would skip that work, nor run, which would repeat them. Nothing was applied. ` +
+      `Plugin "${set.pluginName}" migration ${migration.name} changes the schema and also does work the schema does not show (data, objects such as triggers, or a statement that cannot be read, which counts as such work), and the database already holds its schema changes — so it can be neither recorded as applied, which would skip that work, nor run, which would repeat them. Nothing was applied. ` +
       "Bring the plugin's tables back to the state this migration starts from and run `nextly migrate`, which then runs it; on a development database, drop the plugin's tables and run `nextly migrate`. " +
       "A plugin keeps its data statements in migrations of their own (`nextly migrate:create --plugin <entry> --blank`) so they can always run.",
     logContext: {
@@ -484,9 +530,9 @@ function mixedModuleRefusal(
 }
 
 /**
- * A data module that failed where a fast-forward ran it — against the
- * plugin's tables as the database holds them, later than the schema the
- * module was written for — with the way out. Any other refusal, from a check
+ * A data module that failed where it ran against the plugin's tables as the
+ * database holds them — at the module's result or past it, later than the
+ * schema it was written for — with the way out. Any other refusal, from a check
  * that runs before the module, is its own and passes through.
  */
 function dataModuleFailure(
@@ -504,7 +550,7 @@ function dataModuleFailure(
     code: "NEXTLY_MIGRATION_APPLY_FAILED",
     publicMessage:
       `${error.publicMessage} ` +
-      `Plugin "${set.pluginName}" migration ${migration.name} changes no schema the database can show, so it runs even though the plugin's tables already stand past it — and it failed against them, being written for an earlier shape of them. ` +
+      `Plugin "${set.pluginName}" migration ${migration.name} changes no schema the database can show, so it runs even though the plugin's tables already stand at or past its result — and it failed against them, being written for an earlier shape of them. ` +
       "Bring the plugin's tables back to the state this migration starts from and run `nextly migrate`, which then runs every later migration after it; on a development database, drop the plugin's tables and run `nextly migrate`. " +
       "A plugin's data migrations must hold against every later shape of its tables.",
     logContext: {
@@ -593,10 +639,7 @@ async function assertAdoptable(
     assertModuleIntact(set.pluginName, migration);
     assertTakesNoOwnedTable(set, migration, deps);
     await assertNotPartiallyApplied(
-      {
-        filename: qualifiedFilename(set.pluginName, migration.name),
-        transaction: migration.transaction !== false,
-      },
+      ledgerUnit(set, migration),
       deps.dialect,
       deps.repo
     );
@@ -728,8 +771,9 @@ async function applyModule(
   /**
    * `"live"` runs the module against the database as it stands, whatever its
    * own sides say: a data module a fast-forward reaches, whose schema the
-   * database is already past (`fastForward`). Every check before it runs is
-   * the same; only the reconcile is told the module starts where the
+   * database is already past (`fastForward`). A data module whose own result
+   * the database holds is run this way too, unasked. Every check before it
+   * runs is the same; only the reconcile is told the module starts where the
    * database is, so it runs rather than refusing the difference as drift.
    */
   against?: "live"
@@ -748,19 +792,26 @@ async function applyModule(
   await assertModuleRunnable(set, migration, earlier, deps);
 
   const own = await moduleSides(set, migration, earlier, deps);
-  const sides =
-    against === "live"
-      ? { before: own.live, target: own.live, live: own.live }
-      : own;
+  // A module whose result the database already holds would be recorded
+  // without running, which proves only what a snapshot shows: it is judged
+  // as a fast-forward judges a module the database stands past, whether it
+  // is the plugin's last module or the reconcile alone decides it.
+  const live =
+    against === "live" ||
+    (!snapshotsEquivalent(own.live, own.before) &&
+      snapshotsEquivalent(own.live, own.target) &&
+      (await pastModuleRuns(set, migration, deps)));
+  const sides = live
+    ? { before: own.live, target: own.live, live: own.live }
+    : own;
 
-  const { state } = await reconcileFile({
+  const reconcile = reconcileFile({
     file: {
-      filename,
+      ...ledgerUnit(set, migration),
       // Split by the executor, like an app file; see `moduleSql`.
       sql: moduleSql(migration, deps.dialect, "up"),
       path: `plugin:${set.pluginName}/${migration.name}`,
       sha256: migration.checksum,
-      transaction: migration.transaction !== false,
     },
     before: sides.before,
     target: sides.target,
@@ -770,6 +821,13 @@ async function applyModule(
     executeSql: deps.executeSql,
     pluginName: set.pluginName,
   });
+  // A data module run past its own schema fails against a later shape of the
+  // plugin's tables than it was written for; the refusal names the way out.
+  const { state } = live
+    ? await reconcile.catch((error: unknown) => {
+        throw dataModuleFailure(set, migration, error);
+      })
+    : await reconcile;
 
   await deps.recordOwner({
     pluginName: set.pluginName,

@@ -59,10 +59,18 @@ export interface ReconcileRepo {
     supersededEventIds: string[];
     byEventId: string;
   }): Promise<void>;
-  /** Every `file_apply` row for one filename: applied, failed, rolled back. */
+  /**
+   * Every `file_apply` row for one filename: applied, failed, rolled back,
+   * with what each row retired, which tells a rollback from a cleared
+   * attempt (`attemptCleared`).
+   */
   findFileApplies(
     filename: string
-  ): Promise<ReadonlyArray<Pick<SchemaEventRow, "status" | "startedAt">>>;
+  ): Promise<
+    ReadonlyArray<
+      Pick<SchemaEventRow, "status" | "startedAt" | "supersededEventIds">
+    >
+  >;
 }
 
 export interface ReconcileFileArgs {
@@ -152,7 +160,7 @@ export async function recordAlreadyApplied(
  */
 const PARTIAL_REFUSALS = {
   record:
-    "The database stands where it ends, but a statement that changes no schema may not have run, so it is not recorded as applied without running.",
+    "The database stands where it ends, or past it, but a statement that changes no schema may not have run, so it is not recorded as applied without running.",
   rerun:
     "Running it again would repeat what of it ran and stayed: a statement that changes no schema may have run even where the schema shows nothing of the attempt, so it is not run again.",
 } as const;
@@ -187,6 +195,24 @@ export function attemptUnfinished(
   row: Pick<SchemaEventRow, "status"> | undefined
 ): boolean {
   return row?.status === "failed" || row?.status === "in_progress";
+}
+
+/**
+ * Whether a ledger row is an attempt `migrate:resolve --failed-cleanup`
+ * cleared: flipped to `rolled_back` in place, retiring nothing. A rollback
+ * (`migrate:down`, `migrate:resolve --rolled-back`) is a row of its own that
+ * retires the applied row it undoes, and dev push writes no row at all.
+ *
+ * The operator clears an attempt once they have finished its statements by
+ * hand or reversed them, and where the database stands then says which: at
+ * the unit's start it runs again, past it the operator has finished it.
+ */
+export function attemptCleared(
+  row: Pick<SchemaEventRow, "status" | "supersededEventIds"> | undefined
+): boolean {
+  return (
+    row?.status === "rolled_back" && (row.supersededEventIds ?? []).length === 0
+  );
 }
 
 /**

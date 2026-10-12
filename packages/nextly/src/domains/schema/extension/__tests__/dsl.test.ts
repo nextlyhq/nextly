@@ -255,6 +255,44 @@ describe("defineTable", () => {
     ).toEqual(["t.checks[0]"]);
   });
 
+  it("refuses a decimal default wider than the column's precision leaves room for", () => {
+    // DECIMAL(3,1) holds two digits before the point: PostgreSQL and MySQL
+    // refuse 123.4 as its default, and SQLite, ignoring both, accepts it.
+    const declare = (value: number) =>
+      defineTable("t", {
+        id: col.id(),
+        price: col.decimal(3, 1, { default: value }),
+      });
+    expect(validationPaths(() => declare(123.4))).toEqual(["t.price"]);
+    expect(validationPaths(() => declare(-123))).toEqual(["t.price"]);
+    // The boundary is precision minus scale, signs aside.
+    expect(() => declare(99.9)).not.toThrow();
+    expect(() => declare(-99.9)).not.toThrow();
+    expect(() => declare(0.5)).not.toThrow();
+  });
+
+  it("refuses a numeric default that is not a finite number", () => {
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        validationPaths(() =>
+          defineTable("t", {
+            id: col.id(),
+            price: col.decimal(10, 2, { default: value }),
+            count: col.integer(),
+          })
+        )
+      ).toEqual(["t.price"]);
+      expect(
+        validationPaths(() =>
+          defineTable("t", {
+            id: col.id(),
+            count: col.integer({ default: value }),
+          })
+        )
+      ).toEqual(["t.count"]);
+    }
+  });
+
   it("refuses a decimal default finer than the column's scale, naming the column", () => {
     // MySQL 8.0.46 stores `DECIMAL(10,2) DEFAULT 1.555` as 1.56, so the live
     // default would never match the declaration.

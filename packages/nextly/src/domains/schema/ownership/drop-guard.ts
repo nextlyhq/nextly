@@ -55,8 +55,10 @@
  * anything but a table also removes whatever depends on the object — the
  * columns of a dropped type or domain, a generated column calling a dropped
  * function, a table typed by a dropped type — none of which the text names,
- * so it is refused. Without `CASCADE` PostgreSQL itself refuses the drop
- * while anything depends on the object.
+ * so it is refused, and so is `CASCADE` on an ALTER TABLE's drop of a column
+ * or constraint, which takes another table's foreign key or a view with it.
+ * Without `CASCADE` PostgreSQL itself refuses the drop while anything depends
+ * on the object.
  *
  * **Known limit.** Only text is read. SQL passed as a string to a function
  * that runs it is data to this reader, not code. And on PostgreSQL a
@@ -1041,19 +1043,49 @@ class StatementWalk {
    * depends on the object, so an object only this module used drops without
    * it, after the module drops what it added that uses it.
    *
-   * The DROP clauses of an ALTER TABLE are not drops of this kind: what they
-   * drop is part of the table, judged as such (`readAlterTableColumns`).
-   * CASCADE may end only the statement, so the word before its end is read.
-   * MySQL accepts `CASCADE` and ignores it; SQLite has none.
+   * A DROP clause of an ALTER TABLE drops part of the table, judged as such
+   * (`readAlterTableColumns`, `readElementClause`), and its `CASCADE` is
+   * refused for the same reason: dropping a column or a constraint with it
+   * also drops what depends on it — another table's foreign key on a unique
+   * constraint or key, a view over the column — none of which the clause
+   * names, and which may be another owner's. CASCADE ends the clause, or the
+   * statement, so the word before that end is read. MySQL accepts `CASCADE`
+   * and ignores it; SQLite has none.
    */
   private assertNoDependentsDropped(at: number): void {
-    if (!this.reader.isPostgres || this.inAlterTable) return;
-    let end = at + 1;
-    while (!this.atStatementEnd(end)) end += 1;
+    if (!this.reader.isPostgres) return;
+    const end = this.inAlterTable ? this.clauseEnd(at) : this.statementEnd(at);
     if (this.word(end - 1) !== "CASCADE") return;
     this.refuse(
-      "CASCADE on a DROP of anything but a table also drops whatever depends on the object, which may be another owner's columns or tables; drop those dependents explicitly, then drop the object without CASCADE"
+      this.inAlterTable
+        ? "CASCADE on an ALTER TABLE drop also drops whatever depends on the column or constraint, such as another table's foreign key or a view, which may be another owner's; drop those dependents explicitly, then drop without CASCADE"
+        : "CASCADE on a DROP of anything but a table also drops whatever depends on the object, which may be another owner's columns or tables; drop those dependents explicitly, then drop the object without CASCADE"
     );
+  }
+
+  /** Where the statement holding the token at `at` ends. */
+  private statementEnd(at: number): number {
+    let end = at + 1;
+    while (!this.atStatementEnd(end)) end += 1;
+    return end;
+  }
+
+  /**
+   * Where the ALTER TABLE clause holding the token at `at` ends: its
+   * statement's end, or the first comma outside parentheses, since a clause's
+   * own expressions (a default, a check) may hold commas of their own.
+   */
+  private clauseEnd(at: number): number {
+    let depth = 0;
+    let end = at + 1;
+    while (!this.atStatementEnd(end)) {
+      const char = this.punct(end);
+      if (char === "(") depth += 1;
+      else if (char === ")") depth -= 1;
+      else if (char === "," && depth === 0) break;
+      end += 1;
+    }
+    return end;
   }
 
   /**
@@ -1538,55 +1570,26 @@ export function tablesDroppedBy(
 }
 
 /**
- * The tables one statement drops or renames away, by the unqualified names it
- * writes them with, lower-cased — a rebuild's `__new_` copy under its own
- * name, as `tableNamedByCreate` gives it, not the table it stands in for.
- * Empty for a statement that is neither or cannot be read, and for a name
- * written qualified: a caller asking whether a table is gone by some point
- * then hears that it is not.
+ * The tables one statement drops, by the unqualified names it writes them
+ * with, lower-cased — a rebuild's `__new_` copy under its own name, as
+ * `tableNamedByCreate` gives it, not the table it stands in for. Empty for a
+ * statement that drops none or cannot be read, and for a name written
+ * qualified: a caller asking whether a table is gone by some point then
+ * hears that it is not. A rename is not a drop: the table, and what was
+ * written into it, lives on under its new name.
  */
-export function tablesRemovedBy(
+export function tablesDroppedIn(
   statement: string,
   dialect: SupportedDialect
 ): string[] {
   const tokens = soleStatementTokens(statement, dialect);
   if (tokens === undefined) return [];
   const cursor = new TokenCursor(tokens);
-  if (cursor.word("DROP")) return tablesDroppedAt(cursor);
-  if (cursor.word("ALTER")) return tableRenamedByAlterAt(cursor);
-  if (cursor.word("RENAME")) return tablesRenamedAt(cursor);
-  return [];
-}
-
-/** `[TEMPORARY] TABLE [IF EXISTS] a, b`, from past the DROP. */
-function tablesDroppedAt(cursor: TokenCursor): string[] {
+  if (!cursor.word("DROP")) return [];
   cursor.word("TEMPORARY");
   if (!cursor.word("TABLE")) return [];
   cursor.ifExists();
   return cursor.bareNameList() ?? [];
-}
-
-/** `TABLE [IF EXISTS] [ONLY] a RENAME TO|AS b`, from past the ALTER. */
-function tableRenamedByAlterAt(cursor: TokenCursor): string[] {
-  if (!cursor.word("TABLE")) return [];
-  cursor.ifExists();
-  cursor.word("ONLY");
-  const table = cursor.name();
-  if (table === undefined || !cursor.word("RENAME")) return [];
-  return cursor.word("TO") || cursor.word("AS") ? [table] : [];
-}
-
-/** MySQL's `TABLE a TO b, c TO d`, from past the RENAME. */
-function tablesRenamedAt(cursor: TokenCursor): string[] {
-  if (!cursor.word("TABLE")) return [];
-  const renamed: string[] = [];
-  do {
-    const from = cursor.name();
-    if (from === undefined || !cursor.word("TO")) return [];
-    if (cursor.name() === undefined) return [];
-    renamed.push(from);
-  } while (cursor.punct(","));
-  return renamed;
 }
 
 /**
@@ -1631,9 +1634,134 @@ export function tableNamedByCreate(
   statement: string,
   dialect: SupportedDialect
 ): string | undefined {
+  const head = createTableHead(statement, dialect);
+  return head && lastNamePart(head.tokens, head.nameAt);
+}
+
+/**
+ * Whether a statement is a `CREATE TABLE` read as creating its table EMPTY:
+ * a body of columns and constraints followed by table options alone, a copy
+ * of another table's definition (`LIKE`), a partition or a typed table
+ * (`PARTITION OF`, `OF`), or PostgreSQL's query closed by `WITH NO DATA`.
+ *
+ * False for anything else, a statement it cannot read included, so a create
+ * that fills its table is never taken for one that does not: a table built
+ * from a query copies the query's rows, which no schema snapshot shows, and
+ * the spellings are many — `AS SELECT`, `AS TABLE`, `AS VALUES` and `AS
+ * EXECUTE` on PostgreSQL, `SELECT`, `TABLE` or `VALUES` after MySQL's body or
+ * a parenthesised query in its place. An `AS` or `SELECT` inside the body is
+ * a column's own clause (`GENERATED ALWAYS AS`), not a query.
+ */
+export function createsEmptyTable(
+  statement: string,
+  dialect: SupportedDialect
+): boolean {
+  const head = createTableHead(statement, dialect);
+  if (head === undefined) return false;
+  const { tokens, word } = head;
+  const last = tokens.length - 1;
+  if (
+    word(last - 2) === "WITH" &&
+    word(last - 1) === "NO" &&
+    word(last) === "DATA"
+  ) {
+    return true;
+  }
+  const at = nameEnd(tokens, head.nameAt) + 1;
+  // A copy of another table's definition, a typed table or a partition.
+  const first = word(at);
+  if (first === "LIKE" || first === "OF") return true;
+  if (first === "PARTITION" && word(at + 1) === "OF") return true;
+  return (
+    isPunct(tokens[at], "(") &&
+    !opensQuery(tokens, at + 1, word) &&
+    !queryAfterBody(tokens, at, word)
+  );
+}
+
+/**
+ * Whether a query follows the body opening at `open`: past the body, rows can
+ * only come from one — a word that starts it, or a parenthesised one.
+ */
+function queryAfterBody(
+  tokens: readonly Token[],
+  open: number,
+  word: (at: number) => string | undefined
+): boolean {
+  for (const k of topLevelAfter(tokens, open)) {
+    if (isPunct(tokens[k], "(") && opensQuery(tokens, k + 1, word)) {
+      return true;
+    }
+    if (ROW_SOURCES.has(word(k) ?? "")) return true;
+  }
+  return false;
+}
+
+/**
+ * The positions of the tokens after the parenthesised group opening at
+ * `open` that stand outside every parenthesis, an opening one included.
+ */
+function* topLevelAfter(
+  tokens: readonly Token[],
+  open: number
+): Generator<number> {
+  let depth = 0;
+  for (let k = open; k < tokens.length; k += 1) {
+    if (depth === 0 && k > open) yield k;
+    if (isPunct(tokens[k], "(")) depth += 1;
+    else if (isPunct(tokens[k], ")")) depth -= 1;
+  }
+}
+
+/**
+ * The words after a `CREATE TABLE`'s body that bring rows with them: the
+ * query it is created from, however it is introduced.
+ */
+const ROW_SOURCES = new Set(["AS", "SELECT", "TABLE", "VALUES"]);
+
+/**
+ * Whether the tokens from `at` open a query, parenthesised or not. A
+ * parenthesis opens one only if what it holds does: a parenthesised
+ * expression, as an expression partition key is written, is no query.
+ */
+function opensQuery(
+  tokens: readonly Token[],
+  at: number,
+  word: (at: number) => string | undefined
+): boolean {
+  if (isPunct(tokens[at], "(")) return opensQuery(tokens, at + 1, word);
+  const first = word(at);
+  return (
+    first === "SELECT" ||
+    first === "WITH" ||
+    first === "VALUES" ||
+    first === "TABLE"
+  );
+}
+
+/** Whether a token is the punctuation `char`. */
+function isPunct(token: Token | undefined, char: string): boolean {
+  return token?.kind === "punct" && token.char === char;
+}
+
+/**
+ * A `CREATE [TEMPORARY] TABLE [IF NOT EXISTS]` statement's tokens and where
+ * its table's name starts, or undefined when the statement creates no table
+ * or cannot be read.
+ */
+function createTableHead(
+  statement: string,
+  dialect: SupportedDialect
+):
+  | {
+      tokens: Token[];
+      word: (at: number) => string | undefined;
+      nameAt: number;
+    }
+  | undefined {
   const read = soleStatementWords(statement, dialect);
   if (read === undefined || read.word(0) !== "CREATE") return undefined;
-  const { tokens, word } = read;
+  const { word } = read;
   let k = 1;
   while (CREATE_TABLE_MODIFIERS.has(word(k) ?? "")) k += 1;
   if (word(k) !== "TABLE") return undefined;
@@ -1641,7 +1769,7 @@ export function tableNamedByCreate(
   if (word(k) === "IF" && word(k + 1) === "NOT" && word(k + 2) === "EXISTS") {
     k += 3;
   }
-  return lastNamePart(tokens, k);
+  return { ...read, nameAt: k };
 }
 
 /**
@@ -1668,13 +1796,14 @@ function lastNamePart(
   tokens: readonly Token[],
   at: number
 ): string | undefined {
+  return writtenName(tokens[nameEnd(tokens, at)])?.toLowerCase();
+}
+
+/** Where a possibly qualified name starting at `at` ends: its last part. */
+function nameEnd(tokens: readonly Token[], at: number): number {
   let k = at;
-  for (;;) {
-    const next = tokens[k + 1];
-    if (next?.kind !== "punct" || next.char !== ".") break;
-    k += 2;
-  }
-  return writtenName(tokens[k])?.toLowerCase();
+  while (isPunct(tokens[k + 1], ".")) k += 2;
+  return k;
 }
 
 /**
@@ -2211,6 +2340,22 @@ export function rebuiltTables(
     if (block) tables.add(block.table);
   }
   return [...tables];
+}
+
+/**
+ * The indexes of the statements, within a statement list, that copy a table's
+ * rows into its rebuild twin in a block of that shape: rows that were the
+ * table's before the block and are its again after it.
+ */
+export function rebuildCopyStatements(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): ReadonlySet<number> {
+  const copies = new Set<number>();
+  for (let i = 0; i + 3 < statements.length; i += 1) {
+    if (rebuildBlockAt(statements, i, dialect)) copies.add(i + 1);
+  }
+  return copies;
 }
 
 /** A table's live columns, lower-cased, by lower-cased table name. */

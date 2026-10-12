@@ -265,12 +265,31 @@ describe("CASCADE on a PostgreSQL DROP of something other than a table", () => {
       "DROP TABLE fx__notes CASCADE",
     ],
     [
-      "an ALTER TABLE dropping its own column or constraint with CASCADE",
-      "ALTER TABLE fx__notes DROP COLUMN label CASCADE, DROP CONSTRAINT fx__notes_pk CASCADE",
+      "a drop clause before a foreign key whose ON DELETE CASCADE ends the statement",
+      "ALTER TABLE fx__notes DROP COLUMN label, ADD CONSTRAINT fx__notes_owner_fk FOREIGN KEY (owner_id) REFERENCES fx__owners (id) ON DELETE CASCADE",
+    ],
+    [
+      "an ALTER TABLE dropping its own column or constraint without CASCADE",
+      "ALTER TABLE fx__notes DROP COLUMN label, DROP CONSTRAINT fx__notes_pk RESTRICT",
     ],
   ])("allows %s", (_shape, sql) => {
     expect(() => guard(sql, "postgresql")).not.toThrow();
   });
+
+  it.each([
+    "ALTER TABLE fx__notes DROP COLUMN label CASCADE",
+    "ALTER TABLE fx__notes DROP CONSTRAINT fx__notes_pk CASCADE",
+    "ALTER TABLE fx__notes DROP COLUMN IF EXISTS label CASCADE, ADD COLUMN extra int",
+    // A comma inside a clause's own expression does not end the clause.
+    "ALTER TABLE fx__notes ADD COLUMN extra numeric DEFAULT round(1.5, 0), DROP COLUMN label CASCADE",
+  ])(
+    "refuses an ALTER TABLE drop with CASCADE, which takes another table's foreign key or a view with it: %s",
+    statement => {
+      expect(unreadableReason(statement, "postgresql")).toMatch(
+        /CASCADE on an ALTER TABLE drop/
+      );
+    }
+  );
 
   it("leaves MySQL's CASCADE, which it ignores, as before", () => {
     expect(() => guard("DROP VIEW fx_summary CASCADE", "mysql")).not.toThrow();

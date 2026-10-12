@@ -10,13 +10,14 @@
  * carrying one adopted on the strength of its tables would never do that work
  * anywhere it was adopted, while its ledger row said it had.
  *
- * - `schema`: every statement is table or index DDL, or writes into
- *   scaffolding — a table an earlier statement of the module created and a
- *   later one drops or renames away, absent from the module's target: the
- *   copy and the guard of a generated SQLite table rebuild, whose effect is
- *   the rebuilt table. The snapshot describes all of it, so adopting it loses
- *   nothing. Rows written into a table that outlives the module — a seed —
- *   are an effect like any other.
+ * - `schema`: every statement is table or index DDL that creates no rows,
+ *   or writes into scaffolding — a table the module created and a later
+ *   statement drops, absent from the module's target, such as the guard of a
+ *   generated SQLite table rebuild — or is that rebuild's copy of a table's
+ *   own rows into the twin renamed back to it. The snapshot describes all of
+ *   it, so adopting it loses nothing. Rows written into a table that
+ *   outlives the module — a seed, a `CREATE TABLE ... AS SELECT`, or rows
+ *   put into a new table renamed into place — are an effect like any other.
  * - `data`: no statement is table or index DDL, and at least one does
  *   something else. Nothing it does is in the snapshot, so it must run. So is
  *   a module that runs anything at all while its snapshot equals its start —
@@ -36,9 +37,11 @@
  */
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import {
+  createsEmptyTable,
+  rebuildCopyStatements,
   tableInsertedInto,
   tableNamedByCreate,
-  tablesRemovedBy,
+  tablesDroppedIn,
 } from "../../ownership/drop-guard";
 import { snapshotsEquivalent } from "../drift-reconcile";
 import { leadingWords } from "../split-sql";
@@ -51,7 +54,7 @@ import {
 export type ModuleEffects = "schema" | "data" | "mixed";
 
 /** What one statement contributes to its module's effects. */
-type StatementEffect = "schema" | "other" | "none";
+type StatementEffect = "schema" | "other" | "both" | "none";
 
 /** Table and index DDL: what a schema snapshot describes. */
 function isSchemaStatement(words: readonly string[]): boolean {
@@ -85,12 +88,36 @@ function statementEffect(
   isScaffolding: (table: string) => boolean
 ): StatementEffect {
   const words = leadingWords(statement, dialect, 3);
-  if (isSchemaStatement(words)) return "schema";
-  const [first, second] = words;
-  if (first !== undefined && NEUTRAL_FIRST_WORDS.has(first)) return "none";
-  if (first === "ROLLBACK" && second === "TO") return "none";
+  if (isSchemaStatement(words)) {
+    return words[0] === "CREATE" && words[1] === "TABLE"
+      ? createEffect(statement, dialect, isScaffolding)
+      : "schema";
+  }
+  if (isNeutral(words)) return "none";
   const target = tableInsertedInto(statement, dialect);
   return target !== undefined && isScaffolding(target) ? "schema" : "other";
+}
+
+/**
+ * A `CREATE TABLE`'s effect. One not read as creating its table empty holds
+ * rows — a query's, an effect no snapshot shows — unless it is scaffolding,
+ * gone by the module's end.
+ */
+function createEffect(
+  statement: string,
+  dialect: SupportedDialect,
+  isScaffolding: (table: string) => boolean
+): StatementEffect {
+  if (createsEmptyTable(statement, dialect)) return "schema";
+  const made = tableNamedByCreate(statement, dialect);
+  return made !== undefined && isScaffolding(made) ? "schema" : "both";
+}
+
+/** A transaction-scoped setting or a savepoint, by its leading words. */
+function isNeutral(words: readonly string[]): boolean {
+  const [first, second] = words;
+  if (first === "ROLLBACK") return second === "TO";
+  return first !== undefined && NEUTRAL_FIRST_WORDS.has(first);
 }
 
 /** What a module's UP does on `dialect`; see the module comment. */
@@ -121,35 +148,44 @@ export function moduleEffects(
   const outlives = new Set(
     target.tables.map(table => table.name.toLowerCase())
   );
-  // The tables a statement AFTER each one drops or renames away, so that a
-  // table written into counts as scaffolding only when it is gone by the end.
-  const removedAfter: ReadonlySet<string>[] = [];
-  let removed = new Set<string>();
+  // The tables a statement AFTER each one drops, so that a table written
+  // into counts as scaffolding only when it is gone by the end. Renamed away
+  // is not gone: its rows live on under the new name.
+  const droppedAfter: ReadonlySet<string>[] = [];
+  let dropped = new Set<string>();
   for (let at = statements.length - 1; at >= 0; at -= 1) {
-    removedAfter[at] = removed;
-    removed = new Set([
-      ...removed,
-      ...tablesRemovedBy(statements[at], dialect),
+    droppedAfter[at] = dropped;
+    dropped = new Set([
+      ...dropped,
+      ...tablesDroppedIn(statements[at], dialect),
     ]);
   }
+  // The one write whose rows outlive the module under another name and are
+  // still schema: a rebuild's copy of a table's own rows into its twin,
+  // which is renamed back to the table.
+  const rebuildCopies = rebuildCopyStatements(statements, dialect);
   // Every table an earlier statement created, under the name it was created
   // by, as the walk reaches each statement.
   const created = new Set<string>();
   let schema = false;
   let other = false;
   statements.forEach((statement, at) => {
-    const effect = statementEffect(
-      statement,
-      dialect,
-      table =>
-        !outlives.has(table) &&
-        created.has(table) &&
-        removedAfter[at].has(table)
-    );
+    // Recorded first, so a table this statement creates with rows is judged
+    // as scaffolding by the same rule as one an earlier statement created.
     const made = tableNamedByCreate(statement, dialect);
     if (made !== undefined) created.add(made);
-    if (effect === "schema") schema = true;
-    else if (effect === "other") other = true;
+    const effect = rebuildCopies.has(at)
+      ? "schema"
+      : statementEffect(
+          statement,
+          dialect,
+          table =>
+            !outlives.has(table) &&
+            created.has(table) &&
+            droppedAfter[at].has(table)
+        );
+    if (effect === "schema" || effect === "both") schema = true;
+    if (effect === "other" || effect === "both") other = true;
   });
   if (!other && !schema) return "schema";
   // Nothing in the snapshot moves, so the database standing past the module

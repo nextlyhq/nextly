@@ -10,7 +10,9 @@
 import type { Table } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { buildExtensionSchema } from "../build-extension-schema";
-import { col, defineTable } from "../dsl";
+import { col, defineTable, type ColumnBuilder } from "../dsl";
+import { entitySeedColumns } from "../entity-seed";
+import { foreignKeyColumnProblem } from "../naming";
 
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -463,6 +465,205 @@ describe("a foreign key's referenced columns", () => {
     expect(() => toDrizzleTable(table, "sqlite", () => ({}))).toThrow(
       NextlyError
     );
+  });
+});
+
+describe("a foreign key's column types", () => {
+  /** The refusal's first message when `local` references `referenced`. */
+  const refusal = async (local: ColumnBuilder, referenced: ColumnBuilder) => {
+    const parent = defineTable(
+      "parent",
+      { id: col.id(), ref: referenced },
+      { indexes: [{ columns: ["ref"], unique: true }] }
+    );
+    const child = defineTable(
+      "child",
+      { id: col.id(), parentRef: local },
+      {
+        foreignKeys: [
+          {
+            columns: ["parentRef"],
+            references: { table: "fx__parent", columns: ["ref"] },
+          },
+        ],
+      }
+    );
+    try {
+      await buildExtensionSchema({
+        dialect: "sqlite",
+        coreTableNames: [],
+        entities: [],
+        pluginPrefixes: new Map([["fx", "fx"]]),
+        plugins: [
+          {
+            owner: { kind: "plugin" as const, id: "fx" },
+            tables: [parent, child],
+          },
+        ],
+      });
+      return undefined;
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as { errors: { message: string }[] };
+      return data.errors[0]?.message;
+    }
+  };
+
+  // Each refusal names the rule that fired, so a case refused by another
+  // rule than the one it is about does not pass.
+  const FAMILY = /do not compare as keys on every dialect/;
+  const UNKEYABLE = /can index only by a prefix/;
+  const DECIMAL = /precision and scale of the decimal it references/;
+
+  it.each([
+    // No equality between them on PostgreSQL.
+    ["an integer on a string", col.integer(), col.shortText(), FAMILY],
+    ["a uuid on a string", col.uuid(), col.varchar(36), FAMILY],
+    // MySQL requires numeric key columns of one type.
+    ["a bigint on an integer", col.bigint(), col.integer(), FAMILY],
+    ["a double on a real", col.double(), col.real(), FAMILY],
+    // MySQL requires a decimal key's precision and scale to match.
+    [
+      "a decimal of another scale",
+      col.decimal(10, 2),
+      col.decimal(10, 3),
+      DECIMAL,
+    ],
+    // MySQL indexes TEXT, JSON and BLOB only by a prefix, which a foreign key
+    // may not use.
+    ["a long text key", col.longText(), col.varchar(36), UNKEYABLE],
+    ["a json key", col.json(), col.varchar(36), UNKEYABLE],
+    ["a bytes key", col.bytes(), col.varchar(36), UNKEYABLE],
+  ] as const)(
+    "refuses %s, which SQLite would accept",
+    async (_shape, local, referenced, rule) => {
+      expect(await refusal(local, referenced)).toMatch(rule);
+    }
+  );
+
+  it.each([
+    ["two integers", col.integer(), col.integer()],
+    ["two doubles", col.double(), col.double()],
+    ["strings of different lengths", col.varchar(36), col.shortText()],
+    ["equal decimals", col.decimal(10, 2), col.decimal(10, 2)],
+  ] as const)("accepts %s", async (_shape, local, referenced) => {
+    expect(await refusal(local, referenced)).toBeUndefined();
+  });
+
+  it("compares a decimal that states no size at the size it renders with", () => {
+    // Every declared decimal states both; a seed or a caller that does not
+    // still describes a DECIMAL(10, 2).
+    const rendered = { kind: "decimal", precision: 10, scale: 2 } as const;
+    expect(foreignKeyColumnProblem({ kind: "decimal" }, rendered)).toBe(
+      undefined
+    );
+    expect(
+      foreignKeyColumnProblem({ kind: "decimal" }, { ...rendered, scale: 3 })
+    ).toMatch(DECIMAL);
+  });
+
+  /** A plugin key of `local` on `column` of the collection seeded from `fields`. */
+  const onCollection = async (
+    fields: Record<string, unknown>[],
+    column: string,
+    local: ColumnBuilder
+  ) => {
+    const child = defineTable(
+      "child",
+      { id: col.id(), parentRef: local },
+      {
+        foreignKeys: [
+          {
+            columns: ["parentRef"],
+            references: { table: "dc_orders", columns: [column] },
+          },
+        ],
+      }
+    );
+    const entity = {
+      entityKind: "collection" as const,
+      tableName: "dc_orders",
+      fields: fields as { name: string; type: string }[],
+    };
+    try {
+      await buildExtensionSchema({
+        dialect: "sqlite",
+        coreTableNames: [],
+        entities: [
+          {
+            ...entity,
+            name: "dc_orders",
+            slug: "orders",
+            columns: entitySeedColumns(entity, "sqlite"),
+          },
+        ],
+        pluginPrefixes: new Map([["fx", "fx"]]),
+        plugins: [
+          { owner: { kind: "plugin" as const, id: "fx" }, tables: [child] },
+        ],
+      });
+      return undefined;
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as { errors: { message: string }[] };
+      return data.errors[0]?.message;
+    }
+  };
+
+  it("judges a collection's decimal column at the size the seed gives it", async () => {
+    const total = [
+      {
+        name: "total",
+        type: "number",
+        dbType: "decimal",
+        precision: 12,
+        scale: 4,
+      },
+    ];
+    expect(
+      await onCollection(total, "total", col.decimal(12, 4))
+    ).toBeUndefined();
+    expect(await onCollection(total, "total", col.decimal(12, 2))).toMatch(
+      DECIMAL
+    );
+  });
+
+  it("reads a collection's relationship column as the string id it holds", async () => {
+    const customer = [
+      { name: "customer", type: "relationship", relationTo: "customers" },
+    ];
+    expect(
+      await onCollection(customer, "customer", col.varchar(36))
+    ).toBeUndefined();
+    expect(await onCollection(customer, "customer", col.integer())).toMatch(
+      FAMILY
+    );
+  });
+
+  it("leaves a core table's column, whose seeded kind is a stand-in, to the database", async () => {
+    const child = defineTable(
+      "child",
+      { id: col.id(), ownerId: col.integer() },
+      {
+        foreignKeys: [
+          {
+            columns: ["ownerId"],
+            references: { table: "users", columns: ["id"] },
+          },
+        ],
+      }
+    );
+    await expect(
+      buildExtensionSchema({
+        dialect: "sqlite",
+        coreTableNames: ["users"],
+        entities: [],
+        pluginPrefixes: new Map([["fx", "fx"]]),
+        plugins: [
+          { owner: { kind: "plugin" as const, id: "fx" }, tables: [child] },
+        ],
+      })
+    ).resolves.toBeDefined();
   });
 });
 

@@ -26,6 +26,7 @@ import {
 import {
   getColumnDescriptor,
   getSystemColumnDescriptors,
+  kindAndSizes,
 } from "../services/field-column-descriptor";
 
 import type { SeedEntityTable } from "./draft";
@@ -70,8 +71,12 @@ export function entitySeedColumns(
         });
 
   // Every kind a column of this table can have, by name: the fields', and
-  // every system column the entity kind could carry.
-  const typed = new Map<string, { kind: string; length?: number }>();
+  // every system column the entity kind could carry. A decimal's precision
+  // and scale ride along: a foreign key referencing it is compared to them.
+  const typed = new Map<
+    string,
+    Omit<SeedEntityTable["columns"][number], "name" | "nullable">
+  >();
   if (entity.entityKind !== "component") {
     for (const system of getSystemColumnDescriptors(dialect, {
       hasTitleField: false,
@@ -79,10 +84,7 @@ export function entitySeedColumns(
       hasStatus: true,
       isSingle: entity.entityKind === "single",
     })) {
-      typed.set(system.name, {
-        kind: system.kind,
-        ...(system.length !== undefined ? { length: system.length } : {}),
-      });
+      typed.set(system.name, kindAndSizes(system));
     }
   }
   for (const field of entity.fields) {
@@ -92,10 +94,7 @@ export function entitySeedColumns(
       builtBy
     );
     if (descriptor === null) continue;
-    typed.set(descriptor.name, {
-      kind: descriptor.kind,
-      ...(descriptor.length !== undefined ? { length: descriptor.length } : {}),
-    });
+    typed.set(descriptor.name, kindAndSizes(descriptor));
   }
 
   return spec.columns.map(column => ({

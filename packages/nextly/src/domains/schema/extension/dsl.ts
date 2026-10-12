@@ -21,6 +21,7 @@ import {
 } from "../../../shared/decimal-bounds";
 import { orderedOrClassedKey } from "../pipeline/sql-templates/create-index";
 import {
+  DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
   ENUM_STORAGE_LENGTH,
   toSnakeCase,
@@ -678,30 +679,58 @@ function toResolvedColumn(
 }
 
 /**
- * Refuse a decimal default finer than the column's scale.
+ * Refuse a numeric default the column cannot hold as written.
  *
- * Not a value the column can hold. MySQL rounds it when the table is created
- * (1.555 in DECIMAL(10,2) is stored as 1.56), so the live default never equals
- * the declared one and every diff proposes changing it back; PostgreSQL keeps
- * the declared text but rounds each row it fills. Refused on every dialect
- * alike, so the declaration means the same wherever it is deployed. Checked
- * here rather than in `col.decimal()` so the refusal can name the column.
+ * A default that is not a finite number renders as text no dialect takes as
+ * a number. A decimal's default must also fit its column: no more fractional
+ * digits than its scale, and no more digits before the point than its
+ * precision leaves room for. MySQL rounds a finer default when the table is
+ * created (1.555 in DECIMAL(10,2) is stored as 1.56), so the live default
+ * never equals the declared one and every diff proposes changing it back,
+ * and PostgreSQL and MySQL refuse a wider one outright (123.4 in
+ * DECIMAL(3,1)), while SQLite, which ignores both, accepts either. Refused
+ * on every dialect alike, so the declaration means the same wherever it is
+ * deployed. Checked here rather than in `col.decimal()` so the refusal can
+ * name the column.
  */
-function assertDefaultFitsScale(
+function assertNumericDefaultFits(
   tableName: string,
   key: string,
   builder: ColumnBuilder
 ): void {
-  if (builder.kind !== "decimal" || typeof builder.default !== "number") {
-    return;
+  if (typeof builder.default !== "number") return;
+  const path = `${tableName}.${key}`;
+  if (!Number.isFinite(builder.default)) {
+    invalid(
+      path,
+      `The default of "${key}" must be a finite number; received ${String(builder.default)}.`
+    );
   }
+  if (builder.kind !== "decimal") return;
   const scale = builder.scale ?? DEFAULT_DECIMAL_SCALE;
   if (fractionalDigits(builder.default) > scale) {
     invalid(
-      `${tableName}.${key}`,
+      path,
       `The default of "${key}" has more fractional digits than its scale of ${String(scale)} allows; received ${String(builder.default)}.`
     );
   }
+  const room = (builder.precision ?? DEFAULT_DECIMAL_PRECISION) - scale;
+  if (integerDigits(builder.default) > room) {
+    invalid(
+      path,
+      `The default of "${key}" has more digits before the decimal point than its precision leaves room for (${String(room)}); received ${String(builder.default)}.`
+    );
+  }
+}
+
+/**
+ * How many digits a finite number has before the decimal point, counted on
+ * its integer part exactly rather than through a logarithm, which rounds at
+ * powers of ten.
+ */
+function integerDigits(value: number): number {
+  const whole = Math.trunc(Math.abs(value));
+  return whole === 0 ? 0 : BigInt(whole).toString().length;
 }
 
 /** The resolved columns, and the key each SQL name came from. */
@@ -725,7 +754,7 @@ function resolveColumns(
     }
     byName.set(sqlName, key);
     assertQuotableIdentifier(sqlName, `${tableName}.${key}`, "A column name");
-    assertDefaultFitsScale(tableName, key, builder);
+    assertNumericDefaultFits(tableName, key, builder);
     resolved.push(toResolvedColumn(key, sqlName, builder));
   }
 

@@ -820,8 +820,11 @@ extension, function, procedure, view, sequence or index, or an
 the object, such as every column of a dropped type or domain in whoever's
 table, and the text does not say which tables those are. Drop the columns or
 tables that use the object first, then the object without `CASCADE`:
-PostgreSQL refuses that drop while anything still depends on it. A
-`DROP SCHEMA` is refused with or without `CASCADE`.
+PostgreSQL refuses that drop while anything still depends on it. `CASCADE` on
+an `ALTER TABLE`'s drop of a column or constraint is refused for the same
+reason: it also drops another table's foreign key on that column or key, or a
+view over it, which may be another owner's. A `DROP SCHEMA` is refused with or
+without `CASCADE`.
 
 Development push never drops a plugin-migrated table at all, whatever your
 config says. A plugin removed from config is exactly when its data is most at

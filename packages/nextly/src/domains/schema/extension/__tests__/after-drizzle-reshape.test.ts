@@ -13,8 +13,10 @@
  * declaration with one change applied, so every column but the changed one is
  * restated exactly — the faithful version of what an app author does.
  */
+import { index, pgTable, varchar } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../../errors/nextly-error";
 import { buildExtensionSchema } from "../build-extension-schema";
 import { toDrizzleTable } from "../compile";
 import { col, defineTable } from "../dsl";
@@ -333,5 +335,48 @@ describe("an expression index on a column a hook removed", () => {
     expect((await without("code")).indexes?.map(i => i.name)).toEqual([
       "idx_searched_email",
     ]);
+  });
+});
+
+describe("an index an afterDrizzle hook adds", () => {
+  /** A hook giving `app_customers` an index named `name`. */
+  const indexing = (name: string) => () => ({
+    app_customers: pgTable(
+      "app_customers",
+      { id: varchar("id", { length: 36 }).primaryKey() },
+      t => [index(name).on(t.id)]
+    ),
+  });
+
+  /** The paths the build refuses with, or [] when it succeeds. */
+  const refusedAt = async (
+    afterDrizzle: Parameters<typeof build>[1]
+  ): Promise<string[]> => {
+    try {
+      await build("postgresql", afterDrizzle);
+      return [];
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as { errors?: { path: string }[] };
+      return (data.errors ?? []).map(issue => issue.path);
+    }
+  };
+
+  it("is refused under another table's index name, as a declared one is", async () => {
+    // PostgreSQL and SQLite hold index names per schema, so the second
+    // `CREATE INDEX` of one name would leave a table without its index.
+    const first = await build("postgresql", []);
+    const taken = first.specs.find(spec => spec.name === "app_orders")
+      ?.indexes?.[0]?.name;
+    expect(taken).toBeDefined();
+    // Named at the second table to claim it, in the order the tables build.
+    expect(await refusedAt([indexing(taken ?? "")])).toEqual([
+      "app_orders.indexes",
+    ]);
+  });
+
+  it("is kept under a name of its own", async () => {
+    // The control: the same hook, an unused name.
+    expect(await refusedAt([indexing("idx_app_customers_lookup")])).toEqual([]);
   });
 });

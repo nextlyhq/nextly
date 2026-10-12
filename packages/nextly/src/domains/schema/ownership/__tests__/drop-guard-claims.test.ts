@@ -195,10 +195,7 @@ describe.each(DIALECTS)("a core table, on %s", dialect => {
 describe("a column another stream's element row records", () => {
   it.each<[SupportedDialect, string]>([
     ["postgresql", "ALTER TABLE app_notes DROP COLUMN status"],
-    [
-      "postgresql",
-      "ALTER TABLE app_notes DROP COLUMN IF EXISTS status CASCADE",
-    ],
+    ["postgresql", "ALTER TABLE app_notes DROP COLUMN IF EXISTS status"],
     ["postgresql", 'ALTER TABLE ONLY "app_notes" DROP "status"'],
     ["mysql", "ALTER TABLE `app_notes` DROP `status`"],
     ["mysql", "ALTER TABLE app_notes DROP COLUMN status"],

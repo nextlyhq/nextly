@@ -205,9 +205,15 @@ migration file the run refuses (see below). Applied files are never re-read.
   per database, two different indexes that do, since PostgreSQL and SQLite
   require an index's name to be unique per schema (the same index contributed
   to one table twice is one index), one name given to two indexes a table
-  declares, alike or not, since each is its own `CREATE INDEX`, and a foreign
-  key referencing a
-  column its target does not have (`references.columns` are SQL names).
+  declares, alike or not, since each is its own `CREATE INDEX`, a foreign
+  key referencing a column its target does not have (`references.columns`
+  are SQL names), and a key column whose type cannot reference its target's
+  on every dialect (an integer or a `uuid` on text, integers or floats of
+  different widths, decimals of a different precision or scale, or a long
+  text, JSON or bytes column). `defineTable` refuses a numeric default that is
+  not a finite number, and a decimal default with more digits before the point
+  than its precision leaves room for. An index name an `afterDrizzle` hook gives is
+  held to the same uniqueness rule as a declared one.
 - **A declared collection index is checked on every dialect** when the
   schema is built from the config (development push, `db:sync`,
   `migrate:create`). A JSON field or an unbounded text field (a textarea, say)
@@ -249,8 +255,10 @@ table `t` existed before the module ran, and then as its creation. On
 PostgreSQL, a `CREATE FUNCTION` or `CREATE PROCEDURE` whose body is a quoted
 string rather than `$$`-quoted is refused, as a `DO` with one is, and so is
 `CASCADE` on a `DROP` of anything but a table (a type, domain, extension,
-function, view, sequence or index), which also drops whatever depends on it:
-drop the dependents first, then the object without `CASCADE`. On SQLite, a
+function, view, sequence or index), or on an `ALTER TABLE`'s drop of a column
+or constraint, which also drops whatever depends on it, such as another
+table's foreign key: drop the dependents first, then the object without
+`CASCADE`. On SQLite, a
 table rebuild that removes a column (how a column carrying a check, such as an
 enum, is removed) is judged as that column's drop, so the app may remove an
 enum it added to `users`. Dev push never drops a table no record claims. A
@@ -287,11 +295,16 @@ no longer plans to drop a contributed column it finds in the database.
 `nextly migrate` counts the plugin migrations it applied in its summary,
 applies a plugin's migrations on a database the app already migrated, and
 adopts a multi-module history that development push already created. In that
-adoption, a module that only changes data, such as a seed or a backfill, runs
-rather than being recorded unrun, and so does a module whose schema snapshot
-does not change, whatever its SQL; one that changes the schema and data both is
-refused with its recovery, since it can be neither, and a data module that
-fails against the later tables it runs on is refused with its recovery too.
+adoption, and wherever the database already holds a module's result, a module
+that only changes data, such as a seed or a backfill, runs rather than being
+recorded unrun, and so does a module whose schema snapshot does not change,
+whatever its SQL; one that changes the schema and data both, a table created
+from a query (`CREATE TABLE ... AS SELECT`), or rows put into a new table
+renamed into place, among them, is refused with its recovery, since it can be
+neither, and a data module that fails against the later tables it runs on is
+refused with its recovery too. A module whose attempt stopped part-way and was
+finished by hand and cleared (`migrate:resolve --failed-cleanup`) is still
+recorded where the database stands past its start.
 `migrate:create --plugin` accepts a plugin exported by name, and reports no
 changes (exit 2) when the plugin's schema matches its last migration.
 `migrate:create --plugin --blank` now writes a blank module; before, `--blank`

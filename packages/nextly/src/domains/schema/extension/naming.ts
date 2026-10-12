@@ -582,3 +582,72 @@ export function assertIndexBuildable(
     }
   }
 }
+
+/**
+ * What a column's kind compares as when it is half of a foreign key: two
+ * columns of different families have no equality on some dialect, so the
+ * constraint cannot be added there. PostgreSQL has none between an integer
+ * and text, or a uuid and text. MySQL requires numeric key columns of one
+ * type, so each integer width and each float width is its own family; a
+ * `serial` is an `integer`. String lengths may differ, as MySQL allows.
+ *
+ * Keyed on every kind a referenced column can have, so a collection's single
+ * relationship — the id it holds, a string — is a family too.
+ */
+const KEY_FAMILY: Record<WeighedColumn["kind"], string> = {
+  text: "string",
+  longText: "string",
+  shortText: "string",
+  varchar: "string",
+  char: "string",
+  enum: "string",
+  fkSingle: "string",
+  integer: "integer",
+  serial: "integer",
+  smallint: "smallint",
+  bigint: "bigint",
+  uuid: "uuid",
+  decimal: "decimal",
+  double: "double",
+  real: "real",
+  boolean: "boolean",
+  timestamp: "timestamp",
+  json: "json",
+  bytes: "bytes",
+};
+
+/**
+ * Why a foreign key's column cannot reference `referenced` on every dialect,
+ * or undefined when it can. Declarations are checked for all three
+ * dialects, so a pair SQLite accepts and MySQL or PostgreSQL refuses is
+ * refused when the schema compiles, not when a deployment adds the
+ * constraint.
+ */
+export function foreignKeyColumnProblem(
+  local: Pick<WeighedColumn, "kind" | "length" | "precision" | "scale">,
+  referenced: Pick<WeighedColumn, "kind" | "length" | "precision" | "scale">
+): string | undefined {
+  // A key column is indexed, and MySQL can index these kinds only by a
+  // prefix, which a foreign key may not use: the index rules' own answer.
+  const unkeyable = [local, referenced].find(
+    column => mysqlKeyBytes(column) === null
+  );
+  if (unkeyable !== undefined) {
+    return `a ${unkeyable.kind} column cannot be part of a foreign key: MySQL stores it as a type it can index only by a prefix, which a foreign key may not use`;
+  }
+  if (KEY_FAMILY[local.kind] !== KEY_FAMILY[referenced.kind]) {
+    return `a ${local.kind} column cannot reference a ${referenced.kind} one: they do not compare as keys on every dialect, and the constraint would be refused where they do not`;
+  }
+  // Compared as rendered: an unstated precision or scale is the default the
+  // column renders with, as `mysqlKeyBytes` reads it.
+  if (
+    local.kind === "decimal" &&
+    ((local.precision ?? DEFAULT_DECIMAL_PRECISION) !==
+      (referenced.precision ?? DEFAULT_DECIMAL_PRECISION) ||
+      (local.scale ?? DEFAULT_DECIMAL_SCALE) !==
+        (referenced.scale ?? DEFAULT_DECIMAL_SCALE))
+  ) {
+    return "a decimal column must have the precision and scale of the decimal it references, as MySQL requires";
+  }
+  return undefined;
+}
