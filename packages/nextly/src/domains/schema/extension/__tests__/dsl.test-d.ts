@@ -8,6 +8,10 @@
  */
 import { describe, expectTypeOf, it } from "vitest";
 
+import type {
+  PluginDatabase,
+  PluginInsert,
+} from "../../../../plugins/database/plugin-database";
 import {
   col,
   defineTable,
@@ -82,6 +86,16 @@ describe("DSL types", () => {
       expectTypeOf<IsOptional<Insert, "createdAt">>().toEqualTypeOf<true>();
       expectTypeOf<IsOptional<Insert, "updatedAt">>().toEqualTypeOf<true>();
     });
+
+    // `ctx.db.insert` fills a missing `col.id()` key, so its insert type
+    // leaves it optional; everything else it requires is what `InferInsert`
+    // requires.
+    it("leaves col.id() optional on a ctx.db insert, which fills it", () => {
+      type ViaDb = PluginInsert<typeof identities>;
+      expectTypeOf<IsOptional<ViaDb, "id">>().toEqualTypeOf<true>();
+      expectTypeOf<IsOptional<ViaDb, "provider">>().toEqualTypeOf<false>();
+      expectTypeOf<ViaDb["id"]>().toEqualTypeOf<string | undefined>();
+    });
   });
 
   describe("a col.serial() key", () => {
@@ -111,6 +125,26 @@ describe("DSL types", () => {
         seq: 1,
       };
       void written;
+    });
+
+    it("cannot be given a value through ctx.db, on insert or update", () => {
+      // Never called: the assertions are the type checker's, on the real
+      // method signatures rather than on a restatement of them.
+      function writes(db: PluginDatabase) {
+        void db.insert(counters, {
+          label: "a",
+          // @ts-expect-error -- a database-assigned key cannot be inserted
+          seq: 1,
+        });
+        void db.update(counters, {
+          // @ts-expect-error -- a database-assigned key cannot be updated
+          seq: 2,
+        });
+        // The controls: the same calls without the key compile.
+        void db.insert(counters, { label: "a" });
+        void db.update(counters, { label: "b" });
+      }
+      void writes;
     });
 
     it("leaves every other column's insert type as it was", () => {

@@ -696,3 +696,60 @@ describeEachDialect("a plugin table's columns changed together", dialect => {
     ).rejects.toThrow();
   });
 });
+
+const txNotes = defineTable("notes", {
+  id: col.id(),
+  title: col.shortText(),
+});
+let txContext: PluginContext | undefined;
+const txFixture = definePlugin({
+  name: "schema-e2e-tx-fixture",
+  version: "0.0.0",
+  nextly: "*",
+  contributes: { schema: { prefix: "txq", tables: [txNotes] } },
+  init: ctx => {
+    txContext = ctx;
+  },
+});
+
+// Every dialect, because the defect this pins is invisible on one: SQLite has
+// a single connection, so a relational read that escaped the transaction
+// still saw its writes there. On PostgreSQL and MySQL it ran on a pooled
+// connection and could not — and the transaction's own handle had no
+// relations config, so `tx.query.<table>` did not exist at all.
+describeEachDialect("ctx.db.transaction's relational reads", dialect => {
+  it("see the transaction's uncommitted writes, and roll back with it", async () => {
+    txContext = undefined;
+    current = await createTestNextly({ dialect, plugins: [txFixture] });
+    // Read through a function: the assignment happens inside `init`, which
+    // control-flow analysis cannot see, so it would narrow to `undefined`.
+    const captured = (): PluginContext | undefined => txContext;
+    const db = captured()?.db;
+    if (!db) throw new Error("the plugin's init never ran");
+
+    const seen = await db
+      .transaction(async tx => {
+        await tx.insert(txNotes, { title: "inside" });
+        const rows = await tx.query["txq__notes"].findMany();
+        throw Object.assign(new Error("roll back"), { rows });
+      })
+      .catch(
+        (error: {
+          rows?: Array<Record<string, unknown>>;
+          cause?: { rows?: Array<Record<string, unknown>> };
+        }) => {
+          // The adapter wraps what the callback threw, keeping it as the
+          // cause. Only the deliberate rollback carries `rows`; anything
+          // else is a real failure and must surface as one.
+          const rows = error.rows ?? error.cause?.rows;
+          if (rows === undefined) throw error;
+          return rows;
+        }
+      );
+
+    // Population first: an empty read would satisfy the rollback check below
+    // for the wrong reason.
+    expect(seen?.map(row => row.title)).toEqual(["inside"]);
+    expect(await db.query["txq__notes"].findMany()).toEqual([]);
+  });
+});

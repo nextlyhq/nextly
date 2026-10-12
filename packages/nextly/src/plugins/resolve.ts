@@ -13,6 +13,17 @@ import { isReservedEventName } from "../events/event-bus";
 
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
+import {
+  assertConsentDeclaredBeforeSetup,
+  assertPluginConsent,
+  copyPluginDefinitions,
+  decidePluginGrants,
+  NO_PLUGIN_CONSENT,
+  type PluginConsent,
+  type PluginGrants,
+  type PreSetupPlugin,
+  recordPreSetupPlugins,
+} from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
 import { resolutionError } from "./resolution-error";
@@ -29,6 +40,24 @@ export interface ResolvePluginsOptions {
    * P1 wires the runtime source (CLI + register).
    */
   coreVersion: string;
+  /**
+   * What the app lists plugins for (`pluginConsentFromConfig`). Read from the
+   * config as the app wrote it, never from one a `setup` transformer
+   * returned. Absent, nothing is listed, so a plugin declaring a capability
+   * that needs the app's consent is refused.
+   */
+  consent?: PluginConsent;
+}
+
+export interface ResolveTransformedPluginsOptions
+  extends ResolvePluginsOptions {
+  /**
+   * The plugin list as configured, recorded before any `setup` transformer
+   * ran (`resolveDeclaredPlugins`). A capability that needs the app's consent
+   * is held on the transformed list only by a plugin that declared it here
+   * under the same name.
+   */
+  declared: readonly PreSetupPlugin[];
 }
 
 /**
@@ -198,10 +227,32 @@ export function resolvePlugins(
 ): PluginDefinition[] {
   validatePluginVersions(plugins, opts.coreVersion);
   assertPluginManifests(plugins);
+  // After the manifests' shape is known good, so a capability is read from a
+  // declaration that parsed. Here rather than in `assertPluginManifests`
+  // because it judges the manifest against the app's config, which that
+  // check never sees.
+  assertPluginConsent(plugins, opts.consent ?? NO_PLUGIN_CONSENT);
   // Last, because it reads what the earlier validators already accepted: a
   // declared schemaVersion must be one the plugin's own migrations reach.
   validatePluginMigrations(plugins);
   return topoSortPlugins(plugins);
+}
+
+/**
+ * The configured plugins, resolved, and the record of them the checks after
+ * the `setup` transformers judge against.
+ *
+ * Resolved from copies (`copyPluginDefinitions`), so the list the boot or CLI
+ * goes on to use shares no object with the app's config, and recorded
+ * (`recordPreSetupPlugins`) before any transformer can run. The boot and the
+ * CLI both start from this.
+ */
+export function resolveDeclaredPlugins(
+  plugins: readonly PluginDefinition[],
+  opts: ResolvePluginsOptions
+): { plugins: PluginDefinition[]; preSetup: readonly PreSetupPlugin[] } {
+  const resolved = resolvePlugins(copyPluginDefinitions(plugins), opts);
+  return { plugins: resolved, preSetup: recordPreSetupPlugins(resolved) };
 }
 
 /**
@@ -213,12 +264,30 @@ export function resolvePlugins(
  * list again — versions, dependencies, cycles, every manifest assertion and
  * the topological sort — makes a transformer-added plugin as checked as a
  * declared one. The boot and the CLI both call this, so a configuration one
- * of them accepts is one the other accepts too.
+ * of them accepts is one the other accepts too. The grants the resolved list
+ * holds (`decidePluginGrants`) are returned beside it.
  */
 export function resolveTransformedPlugins<
   C extends { plugins?: PluginDefinition[] },
->(config: C, opts: ResolvePluginsOptions): C & { plugins: PluginDefinition[] } {
-  return { ...config, plugins: resolvePlugins(config.plugins ?? [], opts) };
+>(
+  config: C,
+  opts: ResolveTransformedPluginsOptions
+): { config: C & { plugins: PluginDefinition[] }; grants: PluginGrants } {
+  // Copied first, so every check below and everything after it reads one
+  // snapshot of what the transformers returned, and an accessor on a
+  // transformer-built definition is read once rather than at each check.
+  const plugins = resolvePlugins(
+    copyPluginDefinitions(config.plugins ?? []),
+    opts
+  );
+  assertConsentDeclaredBeforeSetup(opts.declared, plugins);
+  // Decided here, once, from the copies every check above read: the grants
+  // travel beside the config to whatever builds a plugin context, and a
+  // manifest changed after this point grants nothing.
+  return {
+    config: { ...config, plugins },
+    grants: decidePluginGrants(plugins),
+  };
 }
 
 /**

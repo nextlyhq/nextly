@@ -27,6 +27,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
+import type { AnyRelations } from "drizzle-orm";
 
 import { authUiProblems } from "../auth/handlers/auth-ui";
 import {
@@ -40,6 +41,7 @@ import type {
 } from "../collections/config/define-config";
 import type { FieldConfig } from "../collections/fields/types";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
+import { resolveRelations } from "../database/resolve-relations";
 import type { SchemaRegistry } from "../database/schema-registry";
 import { requireNextly } from "../direct-api/nextly";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
@@ -137,6 +139,15 @@ import {
   finalizePermissionTargets,
 } from "../plugins/permissions/collect-permissions";
 import { setPluginAuthDepsResolver } from "../plugins/plugin-auth-provider";
+import { withWithheldConfig } from "../plugins/plugin-config-view";
+import {
+  NO_PLUGIN_CONSENT,
+  type PluginConsent,
+  type PluginGrants,
+  setupTransformerInput,
+  snapshotPluginConsent,
+  unmatchedConsentWarnings,
+} from "../plugins/plugin-consent";
 import type {
   AdapterTransactions,
   PluginContext,
@@ -144,7 +155,10 @@ import type {
   PluginServiceName,
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
-import { resolvePlugins, resolveTransformedPlugins } from "../plugins/resolve";
+import {
+  resolveDeclaredPlugins,
+  resolveTransformedPlugins,
+} from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import {
   collectPluginRoutes,
@@ -332,6 +346,14 @@ export interface NextlyServiceConfig {
 
   /** Plugins to initialize with Nextly. */
   plugins?: PluginDefinition[];
+
+  /**
+   * @experimental What the app lists plugins for, beyond their own manifests
+   * (`db.rawSqlPlugins`). Filled by `buildServiceConfig` from the app's
+   * config. Absent, nothing is listed: a plugin that declares such a
+   * capability refuses the boot.
+   */
+  pluginConsent?: PluginConsent;
 
   /**
    * @experimental Fail fast (throw) when a plugin `extend`/relation targets an
@@ -654,8 +676,12 @@ async function runRegistrationAttempt(
 async function registerServicesOnce(
   config: NextlyServiceConfig
 ): Promise<void> {
-  const { transformedConfig, transformedPlugins, deferredExtends } =
-    await resolveBootConfig(config);
+  const {
+    transformedConfig,
+    transformedPlugins,
+    deferredExtends,
+    pluginGrants,
+  } = await resolveBootConfig(config);
   const {
     unresolvedRelations,
     unresolvedPermissions,
@@ -791,6 +817,10 @@ async function registerServicesOnce(
     "config",
     () => transformedConfig
   );
+  // Beside the config rather than in it: what the boot granted, decided once
+  // when the plugin list was resolved. The auth router builds its plugin
+  // contexts from this entry, as `initializePlugins` does from the same value.
+  container.registerSingleton<PluginGrants>("pluginGrants", () => pluginGrants);
 
   const { mediaStorage, storage } = registerBootMediaStorage(
     storagePlugins,
@@ -848,6 +878,7 @@ async function registerServicesOnce(
   // previous registration's names in place for a reload to believe.
   globalForReg.__nextly_pluginTeardown = await initializePlugins(
     transformedConfig,
+    pluginGrants,
     pluginBootContributions,
     adapterDrizzleDb,
     adapter.getCapabilities().dialect,
@@ -927,6 +958,8 @@ interface ResolvedBootConfig {
   transformedConfig: NextlyServiceConfig;
   transformedPlugins: PluginDefinition[];
   deferredExtends: DeferredExtends;
+  /** What `resolveBootPlugins` granted the plugins of `transformedConfig`. */
+  pluginGrants: PluginGrants;
 }
 
 /**
@@ -942,7 +975,8 @@ async function resolveBootConfig(
   // ----------------------------------------
   // Layers 0a/0b: resolve, transform and re-resolve the plugin list
   // ----------------------------------------
-  const transformedSetupConfig = await resolveBootPlugins(config);
+  const { config: transformedSetupConfig, grants: pluginGrants } =
+    await resolveBootPlugins(config);
   const transformedPlugins = transformedSetupConfig.plugins ?? [];
 
   // ----------------------------------------
@@ -969,6 +1003,7 @@ async function resolveBootConfig(
     ),
     transformedPlugins,
     deferredExtends,
+    pluginGrants,
   };
 }
 
@@ -2116,12 +2151,17 @@ export function bootMigrationsArgs(
  * transformers run in resolved order, and the transformed list resolved again
  * in full. Fail-fast; nothing has connected to the database yet.
  *
- * Exported for the boot's tests, which judge the resolved list on exactly the
+ * Returns the transformed config and, beside it, the grants the resolved
+ * list holds (`decidePluginGrants`). Every plugin context the boot builds
+ * reads those grants, never a manifest.
+ *
+ * Exported for the boot's tests, which judge the consent rules on exactly the
  * config the boot hands its plugins without opening a database.
  */
-export async function resolveBootPlugins(
-  config: NextlyServiceConfig
-): Promise<NextlyServiceConfig & { plugins: PluginDefinition[] }> {
+export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
+  config: NextlyServiceConfig & { plugins: PluginDefinition[] };
+  grants: PluginGrants;
+}> {
   // ----------------------------------------
   // Layer 0a: Resolve Plugins (validate + order)
   // ----------------------------------------
@@ -2129,18 +2169,39 @@ export async function resolveBootPlugins(
   // dependencies, failing fast with a clear error. The resolved order drives
   // BOTH setup here and init later in the boot. Runs over all plugins
   // (including disabled ones) so the schema stays deterministic.
-  const resolvedPlugins = resolvePlugins(config.plugins ?? [], {
-    coreVersion: getCoreVersion(),
-  });
-  const resolvedConfig: NextlyServiceConfig = {
-    ...config,
-    plugins: resolvedPlugins,
-  };
+  //
+  // The consent is read once, here, from the config as the app passed it,
+  // and held as a frozen copy: the re-resolution below runs against the SAME
+  // grants, and a `setup` transformer, which is plugin code, neither receives
+  // them nor can reach a list it could add its own name to.
+  const pluginConsent = snapshotPluginConsent(
+    config.pluginConsent ?? NO_PLUGIN_CONSENT
+  );
+  // Resolved from copies and recorded before any transformer runs: the
+  // transformers receive further copies, so nothing they edit in place
+  // reaches the record the transformed list is judged against, or the app's
+  // own definitions.
+  const { plugins: resolvedPlugins, preSetup } = resolveDeclaredPlugins(
+    config.plugins ?? [],
+    { coreVersion: getCoreVersion(), consent: pluginConsent }
+  );
+  for (const warning of unmatchedConsentWarnings(
+    resolvedPlugins,
+    pluginConsent
+  )) {
+    (config.logger ?? consoleLogger).warn(warning);
+  }
+  const resolvedConfig = setupTransformerInput(config, resolvedPlugins);
 
   // ----------------------------------------
   // Layer 0b: Process Plugin Config Transformers (resolved order)
   // ----------------------------------------
-  const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
+  // The app's own live handles and consent go back in after the
+  // transformers, which were handed neither (`setupTransformerInput`).
+  const setupConfig = withWithheldConfig(
+    config,
+    await applyPluginConfigTransformers(resolvedConfig)
+  );
 
   // RE-RESOLVED in full, not merely re-checked. A `setup` transformer may
   // add, rename or replace entries in `plugins`, and the rest of the boot
@@ -2158,6 +2219,8 @@ export async function resolveBootPlugins(
   // collections and singles fold exactly like a declared plugin's.
   return resolveTransformedPlugins(setupConfig, {
     coreVersion: getCoreVersion(),
+    consent: pluginConsent,
+    declared: preSetup,
   });
 }
 
@@ -3710,6 +3773,8 @@ async function createMissingCodeFirstTables(
  */
 async function initializePlugins(
   transformedConfig: NextlyServiceConfig,
+  /** What `resolveBootPlugins` granted the plugins of `transformedConfig`. */
+  pluginGrants: PluginGrants,
   /**
    * The routes and widget sources of `transformedConfig.plugins`, collected
    * and validated by `registerServicesOnce` before the adapter connected,
@@ -3763,6 +3828,7 @@ async function initializePlugins(
       | VersionsService
       | SingleRegistryService
       | DatabaseInstance
+      | AnyRelations
       | SupportedDialect
       | Logger
       | NextlyServiceConfig
@@ -3782,6 +3848,11 @@ async function initializePlugins(
     // database handle a plugin receives is a restricted wrapper that carries
     // no dialect of its own to infer one from.
     dialect: () => dialect,
+    // The relations config behind ctx.db.query. The context asks for it on
+    // every relational access, like BaseService.db, so a registry
+    // invalidation propagates immediately; it builds the handle itself, from
+    // the pool or from a transaction's client as the call requires.
+    relations: () => resolveRelations(dialect),
     logger: () => logger,
     config: () => transformedConfig,
     // The transaction-capable adapter, for core-owned stores that must run on
@@ -3888,7 +3959,8 @@ async function initializePlugins(
     const pluginContext = createPluginContext(
       getServiceForPlugin as Parameters<typeof createPluginContext>[0],
       pluginHookRegistry,
-      plugin
+      plugin,
+      pluginGrants
     );
     teardown.push({ plugin, context: pluginContext });
     contexts.set(plugin.name, pluginContext);

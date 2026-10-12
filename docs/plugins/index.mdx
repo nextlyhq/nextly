@@ -61,7 +61,7 @@ Every plugin implements the `PluginDefinition` interface from `@nextlyhq/plugin-
 
 ### 1. Declarative + setup phase
 
-Plugins declare schema, permissions, routes, and admin UI in `contributes` (read by the host without running the plugin). Before services start, Nextly also runs each plugin's optional `setup(config)` escape hatch — all `setup`s run before any `init`. Don't mutate the config; spread and return a new object.
+Plugins declare schema, permissions, routes, and admin UI in `contributes` (read by the host without running the plugin). Before services start, Nextly also runs each plugin's optional `setup(config)` escape hatch — all `setup`s run before any `init`. It receives copies of the plain settings and the plugin definitions, without the database adapter, logger or any other live handle, and returns the config the boot continues with.
 
 ```typescript
 import { definePlugin } from "@nextlyhq/plugin-sdk";

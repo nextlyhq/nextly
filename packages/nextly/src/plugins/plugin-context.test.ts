@@ -4,10 +4,26 @@ import { publishHookPoints } from "./hook-points";
 import { EventBus } from "../events/event-bus";
 
 import { getCoreVersion } from "./core-version";
+import type { PluginGrants } from "./plugin-consent";
 import { createPluginContext } from "./plugin-context";
 
-function makeCtx(plugin?: unknown) {
+/** Marks which handle a relational namespace came from, past the owner check. */
+const ORIGIN = Symbol("origin");
+
+function makeCtx(
+  plugin?: unknown,
+  relations: () => object = () => ({ __relations: true }),
+  grants?: PluginGrants
+) {
   const db = { __db: true };
+  // What the context asked each handle factory for, in order.
+  const built: string[] = [];
+  // A Drizzle handle shaped like the real thing: a bare one has an EMPTY
+  // query namespace, and only a relations-enabled one populates it.
+  const relationalHandle = (origin: string, rel: unknown) => {
+    built.push(`${origin}:${(rel as { id?: string }).id ?? "?"}`);
+    return { query: { [ORIGIN]: `${origin}:${(rel as { id?: string }).id}` } };
+  };
   const logger = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -20,25 +36,40 @@ function makeCtx(plugin?: unknown) {
   const email = { __email: true };
   const config = { plugins: [] };
 
+  // `ctx.db.transaction` routes through the adapter, so a double that omits
+  // it certifies a context production would reject. It hands back a
+  // transaction context like the real adapters do: the surface must use ITS
+  // handles, not the pooled ones.
+  const adapter = {
+    transaction: <T>(
+      work: (tx: {
+        getDrizzle: () => unknown;
+        drizzleWithRelations: (rel: unknown) => unknown;
+      }) => Promise<T>
+    ) =>
+      work({
+        getDrizzle: () => ({ ...db, query: {} }),
+        drizzleWithRelations: (rel: unknown) => relationalHandle("tx", rel),
+      }),
+    getDrizzle: (rel?: unknown) =>
+      rel === undefined ? db : relationalHandle("pool", rel),
+  };
+  const services: Record<string, () => unknown> = {
+    collectionService: () => collections,
+    userService: () => users,
+    mediaService: () => media,
+    emailService: () => email,
+    db: () => db,
+    relations,
+    dialect: () => "postgresql",
+    adapter: () => adapter,
+    logger: () => logger,
+    config: () => config,
+  };
   const getServiceFn = ((name: string) => {
-    switch (name) {
-      case "collectionService":
-        return collections;
-      case "userService":
-        return users;
-      case "mediaService":
-        return media;
-      case "emailService":
-        return email;
-      case "db":
-        return db;
-      case "logger":
-        return logger;
-      case "config":
-        return config;
-      default:
-        throw new Error(`unknown service: ${name}`);
-    }
+    const resolve = services[name];
+    if (resolve === undefined) throw new Error(`unknown service: ${name}`);
+    return resolve();
   }) as unknown as Parameters<typeof createPluginContext>[0];
 
   // Mirrors the registry interface rather than a subset of it: a double that
@@ -50,18 +81,39 @@ function makeCtx(plugin?: unknown) {
     registerBeforeOperation: vi.fn(),
     unregisterBeforeOperation: vi.fn(),
   };
-  const ctx = createPluginContext(getServiceFn, hookRegistry, plugin as never);
-  return { ctx, db, logger, collections, email };
+  const ctx = createPluginContext(
+    getServiceFn,
+    hookRegistry,
+    plugin as never,
+    grants
+  );
+  return { ctx, db, logger, collections, email, built };
 }
 
 describe("createPluginContext (P1 reshape)", () => {
   it("exposes db and logger at the top level", () => {
     const { ctx, logger } = makeCtx();
-    // Not the live instance: a plugin that did not declare `db.rawSql` gets a
-    // surface carrying only the fluent methods, so `execute` and `run` are not
-    // reachable however the plugin is written.
-    expect(ctx.db).toBeDefined();
-    expect(Object.keys(ctx.db as object).sort()).toEqual([
+    // `ctx.db` is the typed, owner-checked surface; the raw handle it used
+    // to BE is preserved at `.raw` as a RESTRICTED wrapper — a plugin that
+    // did not declare `db.rawSql` gets only the fluent methods there, so
+    // `execute` and `run` are not reachable however the plugin is written.
+    expect(ctx.db.raw).toBeDefined();
+    expect(typeof ctx.db.table).toBe("function");
+    expect(
+      (Object.keys(ctx.db) as string[]).filter(k => k !== "raw").sort()
+    ).toEqual([
+      "delete",
+      "insert",
+      "insertReturning",
+      "query",
+      "select",
+      "table",
+      "transaction",
+      "update",
+    ]);
+    // The restriction applies to the escape hatch too: the raw handle a
+    // plugin without rawSql receives carries only the fluent four.
+    expect(Object.keys(ctx.db.raw as object).sort()).toEqual([
       "delete",
       "insert",
       "select",
@@ -71,17 +123,50 @@ describe("createPluginContext (P1 reshape)", () => {
     expect(ctx.logger).toBe(logger);
   });
 
-  it("hands the live instance to a plugin that declared rawSql", () => {
-    // The control: a wrapper applied unconditionally would make the declared
-    // capability buy nothing.
-    const { ctx, db } = makeCtx({
+  it("hands the live instance to a plugin the boot granted rawSql", () => {
+    // The control: a wrapper applied unconditionally would make the granted
+    // capability buy nothing. With rawSql granted, the raw escape hatch IS
+    // the live instance the resolver handed over.
+    const { ctx, db } = makeCtx(
+      {
+        name: "@test/raw",
+        version: "1.0.0",
+        nextly: "*",
+        capabilities: { db: { rawSql: true } },
+      },
+      undefined,
+      { rawSql: ["@test/raw"] }
+    );
+    // The live instance's own members, raw SQL included, are reachable.
+    expect((ctx.db.raw as unknown as typeof db).__db).toBe(true);
+  });
+
+  it("restricts a plugin whose manifest declares rawSql without a grant", () => {
+    // The grant is the boot's verdict, not the manifest. A manifest read
+    // again here, after resolution, would let one that changed since, or an
+    // accessor that answers `true` only when read from here, grant itself.
+    let reads = 0;
+    const { ctx } = makeCtx({
       name: "@test/raw",
       version: "1.0.0",
       nextly: "*",
-      capabilities: { db: { rawSql: true } },
+      capabilities: {
+        db: {
+          get rawSql() {
+            reads += 1;
+            return true;
+          },
+        },
+      },
     });
-    // The live instance's own members, raw SQL included, are reachable.
-    expect((ctx.db as unknown as typeof db).__db).toBe(true);
+    expect(Object.keys(ctx.db.raw as object).sort()).toEqual([
+      "delete",
+      "insert",
+      "select",
+      "transaction",
+      "update",
+    ]);
+    expect(reads).toBe(0);
   });
 
   it("checks a filter payload against the schema its point declared", async () => {
@@ -231,11 +316,11 @@ describe("createPluginContext (P1 reshape)", () => {
 
   it("keeps the services shape; collections is ServiceOpts-wrapped", () => {
     const { ctx, collections, email } = makeCtx();
-    // D35: collections is wrapped for ServiceOpts elevation — a distinct Proxy
-    // that delegates to the raw service, no longer the raw instance itself.
+    // collections is wrapped for ServiceOpts elevation, and every core
+    // service reaches the plugin as a facade of its plugin methods rather
+    // than the instance, which carries the adapter its methods run on.
     expect(ctx.services.collections).not.toBe(collections);
-    // The shape and the non-collection services are unchanged.
-    expect(ctx.services.email).toBe(email);
+    expect(ctx.services.email).not.toBe(email);
     // Pinned as an exact list rather than a set of `toHaveProperty` checks:
     // this surface is public API, so a member ARRIVING is as much a change as
     // one going, and only an exhaustive comparison catches the first.
@@ -253,10 +338,10 @@ describe("createPluginContext (P1 reshape)", () => {
 });
 
 /**
- * `ctx.db.transaction` on the restricted handle: without it a plugin had no
- * way to make several writes atomic.
+ * `ctx.db.raw.transaction` on the restricted handle: without it a plugin had
+ * no way to make several writes atomic through it.
  */
-describe("ctx.db.transaction", () => {
+describe("ctx.db.raw.transaction", () => {
   function contextOn(
     dialect: "postgresql" | "sqlite",
     capabilities: Record<string, unknown> = {}
@@ -297,14 +382,20 @@ describe("ctx.db.transaction", () => {
         registerBeforeOperation: vi.fn(),
         unregisterBeforeOperation: vi.fn(),
       },
-      { name: "@test/tx", version: "1.0.0", nextly: "*", capabilities } as never
+      {
+        name: "@test/tx",
+        version: "1.0.0",
+        nextly: "*",
+        capabilities,
+      } as never,
+      { rawSql: capabilities.db === undefined ? [] : ["@test/tx"] }
     );
     return { ctx, calls };
   }
 
   it("runs the work in the database's transaction, on its handle", async () => {
     const { ctx, calls } = contextOn("postgresql");
-    const result = await ctx.db.transaction(async tx => {
+    const result = await ctx.db.raw.transaction(async tx => {
       tx.insert({});
       return "done";
     });
@@ -314,7 +405,7 @@ describe("ctx.db.transaction", () => {
 
   it("hands the work a restricted handle, without execute", async () => {
     const { ctx } = contextOn("postgresql");
-    await ctx.db.transaction(async tx => {
+    await ctx.db.raw.transaction(async tx => {
       expect(Object.keys(tx).sort()).toEqual([
         "delete",
         "insert",
@@ -327,12 +418,12 @@ describe("ctx.db.transaction", () => {
   it("runs through the adapter's transaction on SQLite with rawSql too", async () => {
     // The live instance's own SQLite transaction refuses an async callback.
     const { ctx, calls } = contextOn("sqlite", { db: { rawSql: true } });
-    await ctx.db.transaction(async tx => {
+    await ctx.db.raw.transaction(async tx => {
       tx.update({});
     });
     expect(calls).toEqual(["adapter.transaction", "db.update"]);
     // And the raw surface is still there.
-    expect(typeof (ctx.db as unknown as { execute: unknown }).execute).toBe(
+    expect(typeof (ctx.db.raw as unknown as { execute: unknown }).execute).toBe(
       "function"
     );
   });
@@ -340,7 +431,7 @@ describe("ctx.db.transaction", () => {
   it("runs through the adapter's transaction on SQLite", async () => {
     // Drizzle's better-sqlite3 transaction refuses an async callback.
     const { ctx, calls } = contextOn("sqlite");
-    await ctx.db.transaction(async tx => {
+    await ctx.db.raw.transaction(async tx => {
       tx.update({});
     });
     expect(calls).toEqual(["adapter.transaction", "db.update"]);
@@ -366,5 +457,51 @@ describe("ctx.auth in a plugin's context", () => {
         reason: "plugin-login-undeclared",
       }),
     });
+  });
+});
+
+describe("ctx.db relational queries", () => {
+  const originOf = (namespace: unknown) =>
+    (namespace as Record<symbol, unknown>)[ORIGIN];
+
+  it("reads through the TRANSACTION's relations-enabled handle inside a transaction", async () => {
+    // The transaction context's `getDrizzle()` has an empty `query`
+    // namespace, and the pooled relational handle runs on a different
+    // connection on PostgreSQL and MySQL. Inside `ctx.db.transaction`, `query`
+    // must come from `tx.drizzleWithRelations(relations)`: the leased client, with the
+    // relations config that populates the namespace.
+    const { ctx, built } = makeCtx(undefined, () => ({ id: "r1" }));
+
+    const origin = await ctx.db.transaction(async tx => originOf(tx.query));
+
+    expect(origin).toBe("tx:r1");
+    expect(built).toEqual(["tx:r1"]);
+  });
+
+  it("resolves the relations per access rather than once per context", async () => {
+    // The registry replaces its relations object when a table is
+    // re-registered, and a context outlives that. A config captured at
+    // construction would keep querying through edges over dropped tables.
+    let current = { id: "r1" };
+    const { ctx } = makeCtx(undefined, () => current);
+
+    expect(originOf(ctx.db.query)).toBe("pool:r1");
+    current = { id: "r2" };
+    expect(originOf(ctx.db.query)).toBe("pool:r2");
+
+    const inside = await ctx.db.transaction(async tx => {
+      const first = originOf(tx.query);
+      current = { id: "r3" };
+      return [first, originOf(tx.query)];
+    });
+    expect(inside).toEqual(["tx:r2", "tx:r3"]);
+  });
+
+  it("builds no relational handle for a transaction that never reads one", async () => {
+    // A relations-enabled Drizzle instance builds a query builder per table,
+    // so a transaction doing only builder writes should not pay for it.
+    const { ctx, built } = makeCtx(undefined, () => ({ id: "r1" }));
+    await ctx.db.transaction(async () => undefined);
+    expect(built).toEqual([]);
   });
 });

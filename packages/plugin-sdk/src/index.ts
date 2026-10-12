@@ -170,12 +170,23 @@ export type {
 } from "nextly";
 
 /**
- * The raw database handle `ctx.db` is typed as.
- * @experimental `PluginDatabase` — kept experimental on purpose (D56): a
- *   plugin reads and writes through `ctx.services`, and the raw handle is for
- *   aggregations beyond `count` (see STABILITY.md).
+ * The database handles a plugin receives: `ctx.db` is a `PluginDatabase`
+ * with a `raw` member that is a `PluginRawDatabase`.
+ * @experimental `PluginDatabase` — typed, owner-checked access to the tables
+ *   the plugin declared (`contributes.schema`) and its dependencies' tables;
+ *   `PluginTransaction` — the handle `ctx.db.transaction` passes its work;
+ *   `PluginInsert` — what `ctx.db.insert` takes for a table;
+ *   `PluginRawDatabase` — `ctx.db.raw`, the Drizzle fluent builder and a
+ *   transaction, with no ownership check, or the live instance for a plugin
+ *   that declares `capabilities.db.rawSql` and that the app lists in
+ *   `db.rawSqlPlugins` (see STABILITY.md).
  */
-export type { PluginDatabase } from "nextly";
+export type {
+  PluginDatabase,
+  PluginInsert,
+  PluginRawDatabase,
+  PluginTransaction,
+} from "nextly";
 
 /**
  * Field authoring — the factories and `FieldConfig` type a plugin uses to build
@@ -288,6 +299,28 @@ export type {
   PaginatedResult,
   BatchOperationResult,
   BulkUpdateEntry,
+} from "nextly";
+
+/**
+ * What the rest of `ctx.services` and `ctx.config` expose, by name, so a
+ * plugin can type a helper that takes one of them.
+ * @experimental `PluginConfig` (`ctx.config`), `PluginSummary` (an entry of
+ *   `ctx.config.plugins`), `PluginEmailSettings` (`ctx.config.email`),
+ *   `PluginUserService`, `PluginMediaService`, `PluginEmailService`,
+ *   `PluginVersionsService` (the methods `ctx.services.users`, `media`,
+ *   `email` and `versions` expose) and `PluginCollectionTransaction` (what
+ *   `ctx.services.collections.withTransaction` hands its work). See
+ *   STABILITY.md.
+ */
+export type {
+  PluginConfig,
+  PluginSummary,
+  PluginEmailSettings,
+  PluginUserService,
+  PluginMediaService,
+  PluginEmailService,
+  PluginVersionsService,
+  PluginCollectionTransaction,
 } from "nextly";
 
 /**

@@ -4,6 +4,8 @@
  * Comprehensive tests for MySQL adapter functionality.
  */
 
+import { defineRelations } from "drizzle-orm";
+import { int, mysqlTable } from "drizzle-orm/mysql-core";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import {
@@ -751,19 +753,33 @@ describe("@nextly/adapter-mysql", () => {
       });
     });
 
-    // A migration records its ledger rows through this handle, so they commit
-    // or roll back with the statements they record. The adapter's own
-    // `getDrizzle()` wraps the pool and would write on a different connection.
-    it("getDrizzle() is an instance on the transaction's connection, built once", async () => {
+    // `ctx.db.transaction` hands a plugin's `query` reads this handle. The
+    // transaction's `getDrizzle()` has no relations, so its `query` namespace is
+    // empty; the adapter's pooled `getDrizzle(relations)` would read outside the
+    // transaction.
+    it("getDrizzle and drizzleWithRelations run on the transaction's connection, each memoized", async () => {
       const adapter = createMySqlAdapter({
         url: "mysql://localhost:3306/test",
       });
       await adapter.connect();
-      type Handle = { $client: unknown };
+      const notes = mysqlTable("notes", { id: int("id").primaryKey() });
+      const first = defineRelations({ notes });
+      const second = defineRelations({ notes });
+      type Handle = { query: Record<string, unknown>; $client: unknown };
 
       await adapter.transaction(async tx => {
         const bare = tx.getDrizzle<Handle>();
-        expect(bare.$client).toBe(mockConnection.connection);
+        const relational = tx.drizzleWithRelations<Handle>(first);
+
+        expect(relational.query.notes).toBeDefined();
+        expect(bare.query?.notes).toBeUndefined();
+        // The transaction's own connection, which the bare instance is bound to too.
+        expect(relational.$client).toBe(mockConnection.connection);
+        expect(relational.$client).toBe(bare.$client);
+
+        expect(tx.drizzleWithRelations(first)).toBe(relational);
+        expect(tx.drizzleWithRelations(second)).not.toBe(relational);
+        // The bare instance the delegated CRUD uses is unchanged.
         expect(tx.getDrizzle()).toBe(bare);
       });
     });
