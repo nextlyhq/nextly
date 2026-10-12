@@ -67,6 +67,12 @@ export interface CaptureInTxArgs {
    * so history reads it as that state rather than an ordinary save.
    */
   label?: string | null;
+  /**
+   * Version numbers this capture's retention pass keeps regardless of the cap:
+   * the versions the same write captured before this one, which a small cap
+   * would otherwise remove as soon as the next one lands.
+   */
+  protectVersionNos?: readonly number[];
 }
 
 /**
@@ -91,5 +97,6 @@ export async function captureInTx(
     sourceVersionNo: args.sourceVersionNo ?? null,
     label: args.label ?? null,
     maxPerDoc: args.maxPerDoc,
+    protectVersionNos: args.protectVersionNos,
   });
 }

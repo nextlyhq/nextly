@@ -32,6 +32,8 @@ export interface CaptureInput {
    * insert, so the cap holds without a background worker.
    */
   maxPerDoc?: number | false;
+  /** Version numbers the retention pass keeps regardless of the cap. */
+  protectVersionNos?: readonly number[];
 }
 
 /** The allocated number of a captured version. */
@@ -97,10 +99,13 @@ export class VersionCaptureService {
       // so the previous one was the head when the restore began. And the
       // version restored FROM, which this row names as its source: pruning it
       // in the same transaction would leave that lineage pointing at nothing.
+      // And every version the caller names, so a write that captures several
+      // versions keeps each of them.
       const isRestore = typeof input.sourceVersionNo === "number";
       const staleIds = selectVersionsToPrune(durable, input.maxPerDoc, [
         isRestore ? versionNo - 1 : null,
         input.sourceVersionNo,
+        ...(input.protectVersionNos ?? []),
       ]);
       if (staleIds.length > 0) {
         await repo.deleteByIds(staleIds);

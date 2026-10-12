@@ -190,6 +190,7 @@ import type { WebhookResource } from "../../webhooks/types";
 import {
   PUBLISH_ALL_LOCALES,
   WITHDRAW_ALL_LOCALES,
+  directionCommitted,
   type AllLocalesLifecycleParams,
   type LifecycleDirection,
 } from "./all-locales-lifecycle";
@@ -584,6 +585,56 @@ interface EveryLanguagePromotion {
   grants: Parameters<typeof applyFieldWriteAccess>[0]["grants"];
   /** Validation inputs per language, resolved before the transaction opened. */
   localeContexts: ReadonlyMap<string, LocaleValidationContext>;
+}
+
+/** The pieces one language's document is assembled from. */
+interface LanguageParts {
+  parentRow: Record<string, unknown>;
+  components: Record<string, unknown>;
+  manyToMany: Record<string, string[]>;
+}
+
+/** One language's document parts, and whether it holds translated values. */
+interface LanguageRead {
+  parts: LanguageParts;
+  translated: boolean;
+}
+
+/** A language whose pending change a whole-document write applied. */
+interface PromotedLanguage {
+  locale: string;
+  /** The document this language read before the write, as an event reports it. */
+  previous: Record<string, unknown>;
+}
+
+/** One language's document before and after a whole-document write. */
+interface LanguageTransition {
+  previous: Record<string, unknown>;
+  data: Record<string, unknown>;
+}
+
+/** A language's document carrying that language's own lifecycle status, when it has one. */
+function withLanguageStatus(
+  document: Record<string, unknown>,
+  status: string | null | undefined
+): Record<string, unknown> {
+  return typeof status === "string" ? { ...document, status } : document;
+}
+
+/**
+ * Whether a language's read holds state of its own: translated values, its own
+ * status, or components read in that language. A version is labelled with the
+ * language only then, as the ordinary capture labels one.
+ */
+function holdsLanguageState(
+  read: LanguageRead,
+  status: string | null | undefined
+): boolean {
+  return (
+    read.translated ||
+    typeof status === "string" ||
+    Object.keys(read.parts.components).length > 0
+  );
 }
 
 /**
@@ -4121,18 +4172,11 @@ export class CollectionMutationService extends BaseService {
       status: string;
     }
   ): Promise<Map<string, string | null>> {
-    const companion = await this.fileManager.loadCompanionSchema(
+    const priorStatuses = await this.companionStatusesInTx(
+      tx,
       args.collectionName,
-      tx.getDrizzle()
+      args.entryId
     );
-    const priorStatuses = companion
-      ? await readCompanionLocaleStatusAll(
-          tx.getDrizzle<Parameters<typeof readCompanionLocaleStatusAll>[0]>(),
-          companion.table,
-          args.entryId,
-          cachedCompanionReadiness(this.adapter, args.companionTableName)
-        )
-      : new Map<string, string | null>();
 
     await this.writeCompanionStatus(tx, {
       companionTableName: args.companionTableName,
@@ -4146,6 +4190,28 @@ export class CollectionMutationService extends BaseService {
       if (prior !== args.status) moved.set(locale, prior);
     }
     return moved;
+  }
+
+  /**
+   * Every stored translation's lifecycle status, by language, read inside the
+   * caller's transaction. For a collection whose translations carry a status.
+   */
+  private async companionStatusesInTx(
+    tx: TransactionContext,
+    collectionName: string,
+    entryId: string
+  ): Promise<Map<string, string | null>> {
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      tx.getDrizzle()
+    );
+    if (!companion) return new Map<string, string | null>();
+    return readCompanionLocaleStatusAll(
+      tx.getDrizzle<Parameters<typeof readCompanionLocaleStatusAll>[0]>(),
+      companion.table,
+      entryId,
+      cachedCompanionReadiness(this.adapter, companion.companionTableName)
+    );
   }
 
   /**
@@ -4174,6 +4240,8 @@ export class CollectionMutationService extends BaseService {
       status: string;
       skipLocale: string | undefined;
       document: Record<string, unknown>;
+      /** Before and after documents of each language whose pending change this write applied. */
+      promoted: ReadonlyMap<string, LanguageTransition> | undefined;
       fields: readonly SensitiveFieldSource[];
       actor: RequestActor | null;
     }
@@ -4200,27 +4268,30 @@ export class CollectionMutationService extends BaseService {
     for (const [locale, prior] of args.moved) {
       if (locale === args.skipLocale) continue;
       if (configured.size > 0 && !configured.has(locale)) continue;
-      const localeValues = await this.readCompanionLocalizedValues(
-        tx,
-        args.collectionName,
-        args.entryId,
-        locale
-      );
-      const localeDocument = {
-        ...args.document,
-        ...localeValues,
-        status: args.status,
-      };
+      const promoted = args.promoted?.get(locale);
+      const localeDocument = promoted
+        ? { ...promoted.data, status: args.status }
+        : {
+            ...args.document,
+            ...(await this.readCompanionLocalizedValues(
+              tx,
+              args.collectionName,
+              args.entryId,
+              locale
+            )),
+            status: args.status,
+          };
       // BOTH sides built from this language, with the prior status overlaid.
       //
       // Passing the write locale's pre-image would describe a German transition
       // with English fields and the English prior status: the envelope would say
       // `from: draft` while `previous.status` read `published`, so a consumer
-      // diffing the two computes changed fields that never changed. A sweep
-      // moves status only, so this language's values are the same on both sides
-      // and the status is the whole of the difference.
+      // diffing the two computes changed fields that never changed. A language
+      // whose pending change this write applied reports the document it read
+      // before; any other language's values are the same on both sides, so the
+      // status is the whole of the difference.
       const localePrevious = {
-        ...localeDocument,
+        ...(promoted?.previous ?? localeDocument),
         status: prior,
       };
       const did = await this.recordStatusEvents(tx, {
@@ -4239,6 +4310,82 @@ export class CollectionMutationService extends BaseService {
       // Carried out so the post-commit replay reaches in-process workflow
       // subscribers with THIS language's document, without reading it twice.
       transitions.push({ locale, from: prior, data: localeDocument });
+    }
+    return { recorded, transitions };
+  }
+
+  /**
+   * What each language a whole-document write promoted released: a version of
+   * that language and an `entry.updated` tagged with it, both built from the
+   * document the language reads once the write lands. The write locale is left
+   * to the ordinary capture and event, which already describe it.
+   */
+  private async recordPromotedLanguagesInTx(
+    tx: TransactionContext,
+    ctx: EveryLanguagePromotion,
+    args: {
+      promoted: readonly PromotedLanguage[];
+      writeLocale: string | undefined;
+      /** Absent when the collection keeps no versions. */
+      versions:
+        | { maxPerDoc: number | false; protectVersionNos: readonly number[] }
+        | undefined;
+      fields: readonly SensitiveFieldSource[];
+      actor: RequestActor | null;
+      createdBy: string | null;
+    }
+  ): Promise<{
+    recorded: boolean;
+    transitions: Map<string, LanguageTransition>;
+  }> {
+    const statuses = await this.companionStatusesInTx(
+      tx,
+      ctx.collectionName,
+      ctx.entryId
+    );
+    const protectVersionNos = [...(args.versions?.protectVersionNos ?? [])];
+    const transitions = new Map<string, LanguageTransition>();
+    let recorded = false;
+    for (const language of args.promoted) {
+      if (language.locale === args.writeLocale) continue;
+      const status = statuses.get(language.locale);
+      const read = await this.languageReadInTx(tx, ctx, language.locale);
+      const parts = {
+        ...read.parts,
+        parentRow: withLanguageStatus(read.parts.parentRow, status),
+      };
+      const data = assembleDocument(parts);
+      transitions.set(language.locale, { previous: language.previous, data });
+      if (args.versions) {
+        const captured = await captureInTx(tx, this.versionCapture, {
+          ref: {
+            scopeKind: "collection",
+            scopeSlug: ctx.collectionName,
+            entryId: ctx.entryId,
+          },
+          contentStatus: data.status,
+          parts: await this.snapshotPartsFor(parts, ctx.fields, tx),
+          createdBy: args.createdBy,
+          locale: holdsLanguageState(read, status) ? language.locale : null,
+          maxPerDoc: args.versions.maxPerDoc,
+          protectVersionNos,
+        });
+        protectVersionNos.push(captured.versionNo);
+      }
+      const did = await recordMutationEvent(tx, {
+        type: "entry.updated",
+        resource: {
+          kind: "entry",
+          collection: ctx.collectionName,
+          id: ctx.entryId,
+          locale: language.locale,
+        },
+        data,
+        previous: language.previous,
+        fields: args.fields,
+        actor: args.actor,
+      });
+      recorded = recorded || did;
     }
     return { recorded, transitions };
   }
@@ -4360,6 +4507,9 @@ export class CollectionMutationService extends BaseService {
    * A status patch under the wildcard locale is an ordinary update: hooks,
    * field rules, validation, the lifecycle permission, every language's pending
    * change, the version and the events all come from `updateEntry`.
+   *
+   * The report follows the status the write committed: a hook may replace the
+   * requested one, and the write then takes every language there.
    */
   private async moveEveryLanguage(
     direction: LifecycleDirection,
@@ -4398,10 +4548,18 @@ export class CollectionMutationService extends BaseService {
       { status: direction.nextStatus }
     );
     if (!result.success) return result;
+    const committed = directionCommitted(
+      typeof result.data === "object" &&
+        result.data !== null &&
+        "status" in result.data
+        ? result.data.status
+        : undefined,
+      direction
+    );
     return {
       ...result,
-      message: direction.successMessage,
-      data: { id: params.entryId, status: direction.nextStatus },
+      message: committed.successMessage,
+      data: { id: params.entryId, status: committed.nextStatus },
     };
   }
 
@@ -5003,12 +5161,13 @@ export class CollectionMutationService extends BaseService {
    * that is what each pending change is measured against. Each language is then
    * judged on the document it will read once the write lands, validated, and
    * written, oldest save first; a refusal rolls the transaction back with every
-   * pending change kept.
+   * pending change kept. Returns each language whose document the write
+   * changed, with the document it read before.
    */
   private async promoteEveryLanguageInTx(
     tx: TransactionContext,
     ctx: EveryLanguagePromotion
-  ): Promise<string[]> {
+  ): Promise<PromotedLanguage[]> {
     const repo = new VersionsRepository(tx);
     const ref = {
       scopeKind: "collection" as const,
@@ -5019,31 +5178,48 @@ export class CollectionMutationService extends BaseService {
       await repo.findAllWorkingDrafts(ref),
       new Set(this.localization?.locales.map(locale => locale.code) ?? [])
     );
-    const liveByLocale = new Map<string, Record<string, unknown>>();
+    const statuses = await this.companionStatusesInTx(
+      tx,
+      ctx.collectionName,
+      ctx.entryId
+    );
+    const before = new Map<
+      string,
+      { restored: Record<string, unknown>; read: Record<string, unknown> }
+    >();
     for (const change of changes) {
-      liveByLocale.set(
-        change.locale,
-        await this.restoreShapedInTx(tx, ctx, change.locale)
-      );
+      const { parts } = await this.languageReadInTx(tx, ctx, change.locale);
+      before.set(change.locale, {
+        restored: await this.restoreShaped(tx, ctx, parts),
+        read: withLanguageStatus(
+          assembleDocument(parts),
+          statuses.get(change.locale)
+        ),
+      });
     }
+    const promoted: PromotedLanguage[] = [];
     for (const change of changes) {
-      await this.applyLanguageChangeInTx(
+      const live = before.get(change.locale);
+      const wrote = await this.applyLanguageChangeInTx(
         tx,
         ctx,
         change,
-        liveByLocale.get(change.locale) ?? {}
+        live?.restored ?? {}
       );
       await repo.deleteWorkingDraft(ref, change.locale);
+      if (wrote && live) {
+        promoted.push({ locale: change.locale, previous: live.read });
+      }
     }
-    return changes.map(change => change.locale);
+    return promoted;
   }
 
-  /** One language's document, in the shape a pending change is stored in. */
-  private async restoreShapedInTx(
+  /** One language's document parts, read the way a version or an event reads them. */
+  private async languageReadInTx(
     tx: TransactionContext,
     ctx: EveryLanguagePromotion,
     locale: string
-  ): Promise<Record<string, unknown>> {
+  ): Promise<LanguageRead> {
     const [row] = (await tx
       .getDrizzle<typeof this.db>()
       .select()
@@ -5071,12 +5247,20 @@ export class CollectionMutationService extends BaseService {
       ctx.manyToManyFields,
       locale
     );
+    return {
+      parts: { parentRow, components, manyToMany },
+      translated: Object.keys(translations).length > 0,
+    };
+  }
+
+  /** A language's document parts in the shape a pending change is stored in. */
+  private async restoreShaped(
+    tx: TransactionContext,
+    ctx: EveryLanguagePromotion,
+    parts: LanguageParts
+  ): Promise<Record<string, unknown>> {
     const document = assembleDocument(
-      await this.snapshotPartsFor(
-        { parentRow, components, manyToMany },
-        ctx.fields,
-        tx
-      )
+      await this.snapshotPartsFor(parts, ctx.fields, tx)
     );
     return buildRestorePayload(
       document,
@@ -5085,13 +5269,23 @@ export class CollectionMutationService extends BaseService {
     ).payload;
   }
 
-  /** Build, judge and write one language's pending change. */
+  /** One language's document, in the shape a pending change is stored in. */
+  private async restoreShapedInTx(
+    tx: TransactionContext,
+    ctx: EveryLanguagePromotion,
+    locale: string
+  ): Promise<Record<string, unknown>> {
+    const { parts } = await this.languageReadInTx(tx, ctx, locale);
+    return this.restoreShaped(tx, ctx, parts);
+  }
+
+  /** Build, judge and write one language's pending change, reporting whether it wrote anything. */
   private async applyLanguageChangeInTx(
     tx: TransactionContext,
     ctx: EveryLanguagePromotion,
     change: PendingLanguageChange,
     live: Record<string, unknown>
-  ): Promise<void> {
+  ): Promise<boolean> {
     const pending = buildRestorePayload(
       change.snapshot,
       ctx.fields as unknown as FieldConfig[],
@@ -5120,7 +5314,7 @@ export class CollectionMutationService extends BaseService {
       liveContent
     );
     const changed = changedKeys(judged, current);
-    if (changed.size === 0) return;
+    if (changed.size === 0) return false;
     // Judged whole, written narrow: a component carries only the translations
     // this language's pending change holds.
     const writable = Object.fromEntries(
@@ -5139,6 +5333,7 @@ export class CollectionMutationService extends BaseService {
       })
     );
     await this.writeLanguageChangeInTx(tx, ctx, change.locale, writable);
+    return true;
   }
 
   /** The document one language may write, or a refusal. */
@@ -6057,6 +6252,25 @@ export class CollectionMutationService extends BaseService {
             localeUnknown: false,
           }
         : null;
+      const everyLanguagePromotion: EveryLanguagePromotion | null =
+        promoteEveryLanguage && promoteRestoreCtx
+          ? {
+              collectionName: params.collectionName,
+              entryId: params.entryId,
+              user: params.user,
+              authenticatedScope: params.authenticatedScope,
+              overrideAccess: params.overrideAccess,
+              collection,
+              schema,
+              tableName,
+              fields,
+              manyToManyFields,
+              componentSchemas: splitComponentSchemas,
+              restoreCtx: promoteRestoreCtx,
+              grants: promoteGrants,
+              localeContexts: everyLanguageContexts,
+            }
+          : null;
 
       // Revalidate the promoted draft against the CURRENT schema before the
       // transaction opens. The caller validation above ran on the caller's
@@ -6477,25 +6691,14 @@ export class CollectionMutationService extends BaseService {
           // draft is deleted in the same transaction below, so promote is atomic:
           // any failure rolls back the live write and leaves the draft intact.
           let promotedDraft = false;
-          if (promoteEveryLanguage && promoteRestoreCtx) {
+          let promotedLanguages: PromotedLanguage[] = [];
+          if (everyLanguagePromotion) {
             // Every configured language's pending change is applied here, and
             // the write below moves only the lifecycle.
-            await this.promoteEveryLanguageInTx(tx, {
-              collectionName: params.collectionName,
-              entryId: params.entryId,
-              user: params.user,
-              authenticatedScope: params.authenticatedScope,
-              overrideAccess: params.overrideAccess,
-              collection,
-              schema,
-              tableName,
-              fields,
-              manyToManyFields,
-              componentSchemas: splitComponentSchemas,
-              restoreCtx: promoteRestoreCtx,
-              grants: promoteGrants,
-              localeContexts: everyLanguageContexts,
-            });
+            promotedLanguages = await this.promoteEveryLanguageInTx(
+              tx,
+              everyLanguagePromotion
+            );
           } else if (promotePossible && promoteRestoreCtx) {
             const workingDraft = await new VersionsRepository(
               tx
@@ -7061,8 +7264,11 @@ export class CollectionMutationService extends BaseService {
                 // locale-specific too — the singles path counts it the same way.
                 Object.keys(snapshotComponents ?? {}).length > 0;
 
+              // Every version this write captures, so a later capture in the
+              // same write does not prune an earlier one.
+              const capturedVersionNos: number[] = [];
               if (versionsConfig?.enabled && !storeAsWorkingDraft) {
-                await captureInTx(tx, this.versionCapture, {
+                const captured = await captureInTx(tx, this.versionCapture, {
                   ref: {
                     scopeKind: "collection",
                     scopeSlug: params.collectionName,
@@ -7101,6 +7307,7 @@ export class CollectionMutationService extends BaseService {
                   sourceVersionNo: params.sourceVersionNo ?? null,
                   maxPerDoc: versionsConfig.maxPerDoc,
                 });
+                capturedVersionNos.push(captured.versionNo);
               }
 
               // A status-less update to a published document is stored
@@ -7205,6 +7412,9 @@ export class CollectionMutationService extends BaseService {
               // draft edit records no public event: the live document did not
               // change.
               const updatedDocument = assembleDocument(documentParts);
+              let promotedTransitions:
+                | ReadonlyMap<string, LanguageTransition>
+                | undefined;
               if (!storeAsWorkingDraft) {
                 recorded = await recordMutationEvent(tx, {
                   type: "entry.updated",
@@ -7222,6 +7432,27 @@ export class CollectionMutationService extends BaseService {
                   fields: webhookFields,
                   actor: actorForWrite(params.actor, params.user),
                 });
+                if (everyLanguagePromotion && promotedLanguages.length > 0) {
+                  const languages = await this.recordPromotedLanguagesInTx(
+                    tx,
+                    everyLanguagePromotion,
+                    {
+                      promoted: promotedLanguages,
+                      writeLocale: localizedUpdate?.writeLocale,
+                      versions: versionsConfig?.enabled
+                        ? {
+                            maxPerDoc: versionsConfig.maxPerDoc,
+                            protectVersionNos: capturedVersionNos,
+                          }
+                        : undefined,
+                      fields: webhookFields,
+                      actor: actorForWrite(params.actor, params.user),
+                      createdBy: params.user?.id ?? null,
+                    }
+                  );
+                  recorded = recorded || languages.recorded;
+                  promotedTransitions = languages.transitions;
+                }
               } else {
                 // A working-draft save changes no live document, so there is no
                 // public event for a subscriber to receive — but a person did
@@ -7373,6 +7604,7 @@ export class CollectionMutationService extends BaseService {
                   status: companionNext,
                   skipLocale: localizedUpdate?.writeLocale,
                   document: updatedDocument,
+                  promoted: promotedTransitions,
                   fields: webhookFields,
                   actor,
                 });
