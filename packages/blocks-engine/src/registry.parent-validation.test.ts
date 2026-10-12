@@ -258,3 +258,64 @@ describe("slot allow-list validation at registration", () => {
     ).not.toThrow();
   });
 });
+
+describe("slot lock validation at registration", () => {
+  const withLock = (lock: unknown) => ({
+    ...base,
+    name: "acme/box",
+    slots: { default: { lock } },
+  });
+
+  it("accepts every lock a slot may declare", () => {
+    // The positive control on each value: a gate refusing any one of them would
+    // pass the rejections below while making that lock impossible to declare.
+    for (const lock of ["all", "insert", "contentOnly", false]) {
+      expect(() =>
+        registerBlocks([withLock(lock)] as never, { source: "acme" })
+      ).not.toThrow();
+      clearBlocks();
+    }
+  });
+
+  it("accepts a slot that declares no lock", () => {
+    expect(() =>
+      registerBlocks(
+        [{ ...base, name: "acme/box", slots: { default: {} } }] as never,
+        { source: "acme" }
+      )
+    ).not.toThrow();
+  });
+
+  it("refuses a value that is not a lock, naming the block and the slot", () => {
+    // A value the validator does not recognise reads as no lock, so each of
+    // these would otherwise register a region that protects nothing.
+    for (const lock of [true, "readonly", "ALL", null, 0]) {
+      expect(() =>
+        registerBlocks([withLock(lock)] as never, { source: "acme" })
+      ).toThrow(
+        /block "acme\/box" slot "default" lock must be "all", "insert", "contentOnly" or false/
+      );
+      clearBlocks();
+    }
+  });
+
+  it("refuses a bad lock on a slot that also declares its starting children", () => {
+    expect(() =>
+      registerBlocks(
+        [
+          {
+            ...base,
+            name: "acme/box",
+            slots: {
+              default: {
+                defaultBlock: [{ type: "core/heading" }],
+                lock: "frozen",
+              },
+            },
+          },
+        ] as never,
+        { source: "acme" }
+      )
+    ).toThrow(/lock must be/);
+  });
+});

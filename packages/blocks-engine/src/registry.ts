@@ -15,7 +15,9 @@ import type { MigrationSource } from "./migration";
 import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
+import { isSlotLock } from "./slot-lock";
 import { styleSupportDefinitions } from "./style/supports-map";
+import type { SlotDefaultSource } from "./tree";
 import type { BlockTypeLookup } from "./validation";
 
 /**
@@ -347,6 +349,18 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
           );
         }
       }
+      // A lock is read on every save of a document holding this block, and a
+      // value the reader does not recognise reads as no lock at all. A typo in
+      // a declaration written to protect a region would quietly protect
+      // nothing, and the block's author would learn that only when a locked
+      // slot accepted a change. Refused here instead, where the block is named.
+      const lock = (spec as { lock?: unknown }).lock;
+      if (lock !== undefined && !isSlotLock(lock)) {
+        fail(
+          "NEXTLY_BLOCK_INVALID",
+          `block "${def.name}" slot "${slotName}" lock must be "all", "insert", "contentOnly" or false.`
+        );
+      }
       // `defaultBlock` is read when an author INSERTS this block, which is the
       // worst place for a definition error to surface: a non-array is iterated
       // by the expansion and throws `TypeError: declared is not iterable` at
@@ -610,6 +624,24 @@ export function registryNestingSource(): NestingSource {
     slotAllowOf: (parentType, slot) =>
       getBlock(parentType)?.slots?.[slot]?.allow,
   };
+}
+
+/**
+ * The registry as a block-definition source: each block's version, declared
+ * slots, prop defaults and parents.
+ *
+ * What `expandSlotDefaults` reads to build the children a block starts with,
+ * and what validation reads to check that a locked slot still holds them. One
+ * source for both, so the children a save requires cannot drift from the
+ * children an insert creates.
+ *
+ * Reads the DEFINITION rather than any node, because a container inserted from
+ * the palette has no `slots` key until something is put in it, which is
+ * precisely the container that needs filling. Reads through to the live
+ * registry on every call, as the nesting source does.
+ */
+export function registryBlockSource(): SlotDefaultSource {
+  return { get: type => getBlock(type) };
 }
 
 /**

@@ -35,7 +35,9 @@ import type { DocumentSurvey } from "./measure-bytes";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import { definitelyNotARecord, isPlainRecord } from "./plain-record";
-import { boundedOwnKeys } from "./safe-record";
+import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
+import { effectiveSlotLock, holdsStartingChildren } from "./slot-lock";
+import type { ActiveSlotLock } from "./slot-lock";
 import type { TokenKind } from "./style/catalog-types";
 import { breakpointContexts } from "./style/compile-page";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./style/named-class";
@@ -51,7 +53,8 @@ import {
   validateStyleValues,
 } from "./style/validate-style-value";
 import type { ReadyStyleIssueBudget } from "./style/validate-style-value";
-import { walkNodes } from "./tree";
+import { expandSlotDefaults, walkNodes } from "./tree";
+import type { SlotDefaultSource } from "./tree";
 import { isConditionGated } from "./visibility";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
@@ -174,6 +177,20 @@ export interface ValidationContext {
    * placement issues rather than an error saying it could not look.
    */
   nesting?: NestingSource;
+  /**
+   * How to resolve a block's declared slots, for checking that a locked slot
+   * holds exactly the children it starts with.
+   *
+   * The source `expandSlotDefaults` reads, so the children a save requires are
+   * the children an insert of the block creates. Separate from
+   * {@link nesting} because a slot's starting children and its lock are
+   * declarations that one-method source does not carry.
+   *
+   * Absent means locks are not checked, on the same terms as nesting: a caller
+   * that omits this gets no lock issues rather than an error saying it could
+   * not look.
+   */
+  definitions?: SlotDefaultSource;
 }
 
 /**
@@ -282,6 +299,8 @@ export const ISSUE_CODES = {
     "A container's slot declares the block types it holds, and this node is not one of them.",
   "restricted-at-root":
     "A node declares the block types it may sit under, and it sits at the top level, which is inside none of them.",
+  "locked-slot-altered":
+    "A container's slot is locked, and it does not hold exactly the blocks it starts with.",
 } as const;
 
 /** A stable validation issue code. */
@@ -639,6 +658,7 @@ function nodeCheckState(
     unknownSeverity,
     seenIds: new Map<string, string>(),
     seenDomIds: new Map<string, string>(),
+    startingTypes: new Map<string, Record<string, readonly string[]>>(),
 
     skipValueParsing: bounds.overLimits,
     styleBudget,
@@ -667,6 +687,13 @@ interface QueuedNode {
    * document would be traversed in full by the check meant to be capped.
    */
   hidden: boolean;
+  /**
+   * The lock of the slot this node sits in, or undefined when that slot fixes
+   * nothing. Carried down the queue for the reason `hidden` is: a lock passes
+   * to every slot beneath it that declares none, and reading each ancestor's
+   * declaration again per node would walk outside the bounded loop.
+   */
+  lock: ActiveSlotLock | undefined;
 }
 
 /**
@@ -694,10 +721,12 @@ function validateNodeForest(
       path: pointer("/nodes", i),
       placement: { at: "root" },
       hidden: false,
+      // A top-level node sits in no slot, so no lock reaches it.
+      lock: undefined,
     });
   }
   for (let i = 0; i < queue.length && i < maxNodes; i++) {
-    const { node, path, placement, hidden } = queue[i];
+    const { node, path, placement, hidden, lock } = queue[i];
     // Asked HERE rather than in a pass of its own, so the read is inside the
     // budget and happens on a node this loop has reached. Gating is inherited,
     // because the renderer prunes a gated node's whole subtree.
@@ -708,7 +737,13 @@ function validateNodeForest(
     const gated = hidden || (isPlainRecord(node) && isConditionGated(node));
     validateNode(node, path, state, gated);
     checkNesting(node, path, placement, state);
-    enqueueChildren({ node, path, gated }, queue, maxNodes);
+    checkLockedSlots(node, path, lock, state);
+    enqueueChildren(
+      { node, path, gated, lock },
+      queue,
+      maxNodes,
+      state.ctx.definitions
+    );
   }
 }
 
@@ -721,9 +756,15 @@ function validateNodeForest(
  * past two levels of nesting.
  */
 function enqueueChildren(
-  parent: { node: BlockNode; path: string; gated: boolean },
+  parent: {
+    node: BlockNode;
+    path: string;
+    gated: boolean;
+    lock: ActiveSlotLock | undefined;
+  },
   queue: QueuedNode[],
-  maxNodes: number
+  maxNodes: number,
+  definitions: SlotDefaultSource | undefined
 ): void {
   const { node, path, gated } = parent;
   if (!isPlainRecord(node) || !isPlainRecord(node.slots)) return;
@@ -751,12 +792,14 @@ function enqueueChildren(
         : { at: "container", type: containerType, slot };
     if (!Array.isArray(children)) continue;
     const slotPath = pointer(pointer(path, "slots"), slot);
+    const lock = slotLockOf(definitions, containerType, slot, parent.lock);
     for (let c = 0; c < children.length && queue.length <= maxNodes; c++) {
       queue.push({
         node: children[c],
         path: pointer(slotPath, c),
         placement: childPlacement,
         hidden: gated,
+        lock,
       });
     }
   }
@@ -859,6 +902,207 @@ function messageForRefusal(
   return placement.at === "container"
     ? `A "${describeValue(childType)}" may only sit inside ${where}, not inside "${describeValue(placement.type)}".`
     : `A "${describeValue(childType)}" may only sit inside ${where}, and a top-level node sits inside nothing.`;
+}
+
+/**
+ * The lock a container's slot passes to the children queued beneath it.
+ *
+ * Only a slot the container's type DECLARES has a lock to pass. Children stored
+ * under a slot the block never declares are not drawn, so there is no
+ * arrangement of theirs for a lock to protect.
+ */
+function slotLockOf(
+  definitions: SlotDefaultSource | undefined,
+  containerType: string | undefined,
+  slot: string,
+  inherited: ActiveSlotLock | undefined
+): ActiveSlotLock | undefined {
+  if (definitions === undefined || containerType === undefined) {
+    return undefined;
+  }
+  const declared = declaredSlotsOf(definitions, containerType);
+  const spec = declared === undefined ? undefined : ownEntry(declared, slot);
+  if (spec === undefined) return undefined;
+  return effectiveSlotLock(lockDeclaredBy(spec), inherited);
+}
+
+/** A type's declared slots, when the source holds a usable declaration. */
+function declaredSlotsOf(
+  definitions: SlotDefaultSource,
+  type: string
+): Record<string, unknown> | undefined {
+  const slots: unknown = definitions.get(type)?.slots;
+  return isPlainRecord(slots) ? slots : undefined;
+}
+
+/** The lock one slot declaration states, read without trusting its shape. */
+function lockDeclaredBy(spec: unknown): unknown {
+  return isPlainRecord(spec) ? spec.lock : undefined;
+}
+
+/**
+ * Report a locked slot that does not hold the blocks it starts with.
+ *
+ * Asked of every slot the container's type DECLARES rather than only the ones
+ * the node stores. Removing a slot's last child can leave no slot stored at
+ * all, and that is exactly the arrangement a lock refuses when the slot starts
+ * with something.
+ *
+ * An ERROR in both modes, as a nesting violation is. The lock is the block
+ * author stating which children this slot holds, so a document holding others
+ * is not a forward-compatible value to preserve.
+ */
+function checkLockedSlots(
+  node: BlockNode,
+  path: string,
+  inherited: ActiveSlotLock | undefined,
+  state: NodeCheckState
+): void {
+  const definitions = state.ctx.definitions;
+  if (definitions === undefined) return;
+  const raw: unknown = node;
+  if (!isPlainRecord(raw) || !isNodeType(raw.type)) return;
+  const type = raw.type;
+  const declared = declaredSlotsOf(definitions, type);
+  if (declared === undefined) return;
+  const stored = isPlainRecord(raw.slots) ? raw.slots : undefined;
+  for (const [slot, spec] of Object.entries(declared)) {
+    const lock = effectiveSlotLock(lockDeclaredBy(spec), inherited);
+    if (lock === undefined) continue;
+    const children = stored === undefined ? undefined : ownEntry(stored, slot);
+    // A slot value that is not an array is `invalid-slots`, which the node
+    // check reports, and there are no children in it to compare.
+    if (children !== undefined && !Array.isArray(children)) continue;
+    const held: readonly unknown[] = children ?? [];
+    const starting = startingTypesOf(type, slot, definitions, state);
+    // The lengths first, so a slot holding far more children than it starts
+    // with is refused without reading every one of them.
+    if (
+      held.length === starting.length &&
+      holdsStartingChildren(lock, held.map(typeOfChild), starting)
+    ) {
+      continue;
+    }
+    state.issues.push(
+      lockedSlotIssue(
+        { type, slot, lock, starting, held },
+        // The slot when it is stored; the node when it is not, because a
+        // pointer has to resolve against the document it reports on.
+        children === undefined ? path : pointer(pointer(path, "slots"), slot)
+      )
+    );
+  }
+}
+
+/**
+ * The block types a freshly placed `type` starts `slot` with.
+ *
+ * Asked of `expandSlotDefaults` itself rather than read off the declaration,
+ * so the children a save requires are the children an insert creates. An
+ * entry the expander drops (an unregistered type, one the nesting rules
+ * refuse, one that would seed itself) is not required either: a second reading
+ * of the declaration would require children no insert could ever have made.
+ */
+function startingTypesOf(
+  type: string,
+  slot: string,
+  definitions: SlotDefaultSource,
+  state: NodeCheckState
+): readonly string[] {
+  let bySlot = state.startingTypes.get(type);
+  if (bySlot === undefined) {
+    bySlot = typesBySlot(
+      expandSlotDefaults(type, definitions, state.ctx.nesting)
+    );
+    state.startingTypes.set(type, bySlot);
+  }
+  return ownEntry(bySlot, slot) ?? [];
+}
+
+/** Each expanded slot's children, reduced to their types. */
+function typesBySlot(
+  expanded: Record<string, BlockNode[]> | undefined
+): Record<string, readonly string[]> {
+  const bySlot: Record<string, readonly string[]> = {};
+  for (const [slot, children] of Object.entries(expanded ?? {})) {
+    defineEntry(
+      bySlot,
+      slot,
+      children.map(child => child.type)
+    );
+  }
+  return bySlot;
+}
+
+/** A stored child's type, or undefined when it has none to read. */
+function typeOfChild(child: unknown): string | undefined {
+  return isPlainRecord(child) && typeof child.type === "string"
+    ? child.type
+    : undefined;
+}
+
+/** At most this many block types are named in one message; the rest are counted. */
+const MOST_TYPES_NAMED = 8;
+
+/** A list of block types, as an issue message names them. */
+function namedTypes(
+  types: readonly (string | undefined)[],
+  total: number
+): string {
+  const named = types
+    .slice(0, MOST_TYPES_NAMED)
+    .map(type =>
+      type === undefined ? "a malformed node" : `"${describeValue(type)}"`
+    );
+  const unnamed = total - named.length;
+  return unnamed > 0
+    ? `${named.join(", ")} and ${unnamed} more`
+    : named.join(", ");
+}
+
+/** Whether the order of a slot's blocks is part of what its lock fixes. */
+function orderClause(lock: ActiveSlotLock, starting: number): string {
+  if (starting < 2) return "";
+  return lock === "insert" ? ", in any order" : ", in that order";
+}
+
+/**
+ * The issue for a locked slot holding other blocks than it starts with.
+ *
+ * Names what the slot must hold as well as what it does, because the repair is
+ * to put the starting blocks back, and an author told only that the slot is
+ * wrong has to find out which blocks it started with.
+ */
+function lockedSlotIssue(
+  found: {
+    type: string;
+    slot: string;
+    lock: ActiveSlotLock;
+    starting: readonly string[];
+    held: readonly unknown[];
+  },
+  path: string
+): ValidationIssue {
+  const { type, slot, lock, starting, held } = found;
+  const requires =
+    starting.length === 0 ? "no blocks" : namedTypes(starting, starting.length);
+  const holds =
+    held.length === 0
+      ? "none"
+      : namedTypes(
+          held.slice(0, MOST_TYPES_NAMED).map(typeOfChild),
+          held.length
+        );
+  return {
+    path,
+    code: "locked-slot-altered",
+    severity: "error",
+    message: `The "${describeValue(slot)}" slot of a "${describeValue(type)}" is locked, so it holds ${requires}${orderClause(lock, starting.length)}. It holds ${holds}.`,
+    suggestion:
+      lock === "insert"
+        ? "Put back the blocks this slot starts with. They can be reordered, but not added or removed."
+        : "Put back the blocks this slot starts with, in their order. They cannot be added, removed or reordered.",
+  };
 }
 
 /**
@@ -1079,6 +1323,12 @@ interface NodeCheckState {
   seenIds: Map<string, string>;
   /** Non-empty DOM ids seen so far (from `cssId` or `attributes.id`) → pointer. */
   seenDomIds: Map<string, string>;
+  /**
+   * The block types each container type starts each of its slots with,
+   * expanded once per type for the whole document: the answer depends on the
+   * type alone, and a page may hold the same locked block many times.
+   */
+  startingTypes: Map<string, Record<string, readonly string[]>>;
 
   /** Shared across the whole document, so the limit is not per node. */
   styleBudget: ReadyStyleIssueBudget;
