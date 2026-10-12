@@ -106,14 +106,26 @@ export async function runPromote(
   }
 
   // 6. Delete the UI record so there is no collision on next wrapper start.
-  // `deleteCollection` removes the registry row ONLY — it deliberately leaves the data
-  // table (and its `_locales` companion) in place, because promotion hands the same table
-  // over to the code-first definition. Dropping here would destroy the collection's content.
-  await registry.deleteCollection(slug);
+  await handToCodeFirst(registry, slug);
 
   logger.info(
     `Collection '${slug}' removed from UI source. Move the snippet into your collections array, then restart dev server.`
   );
+}
+
+/**
+ * Remove a Builder collection's registry row so its code-first definition can take the slug.
+ *
+ * Only the row goes. The data table (and its `_locales` companion) stays, because promotion hands
+ * that table to the code-first definition, and dropping it would destroy the collection's content.
+ * For the same reason the table and slug live on, so the fields that point at the collection still
+ * point at a collection, and the delete is not refused for them.
+ */
+export async function handToCodeFirst(
+  registry: Pick<CollectionRegistryService, "deleteCollection">,
+  slug: string
+): Promise<void> {
+  await registry.deleteCollection(slug, { handedToCodeFirst: true });
 }
 
 // Minimal config file locator. Matches the loader's search order but we

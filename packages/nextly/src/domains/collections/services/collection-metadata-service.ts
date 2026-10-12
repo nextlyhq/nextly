@@ -20,6 +20,8 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 
+import { assertNothingPointsAt } from "./inbound-references";
+
 /** Result shape returned by metadata service methods. */
 export interface MetadataServiceResult {
   success: boolean;
@@ -913,6 +915,9 @@ export class CollectionMetadataService extends BaseService {
       const collection = await this.collectionService.getCollection(
         params.collectionName
       );
+
+      // Before anything is torn down, so that a refusal leaves the collection exactly as it was.
+      await assertNothingPointsAt(this.adapter, params.collectionName);
 
       // Embedded component instances live in `comp_<slug>` tables keyed by a plain
       // `_parent_table` string with no FK, so dropping this collection's table cascades

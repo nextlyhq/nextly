@@ -46,6 +46,7 @@ import {
 import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 import { resolveDescription } from "./collection-sync-service";
+import { assertNothingPointsAt } from "./inbound-references";
 
 /** Options for updating a collection. */
 export interface UpdateCollectionOptions {
@@ -480,7 +481,16 @@ export class CollectionRegistryService extends BaseRegistryService<
 
   async deleteCollection(
     slug: string,
-    options?: { force?: boolean }
+    options?: {
+      force?: boolean;
+      /** Collections deleted in the same operation, whose fields do not keep this one from going. */
+      deletedTogether?: readonly string[];
+      /**
+       * The collection's table and slug pass to a code-first definition, so every field that points
+       * at it still points at a collection afterwards.
+       */
+      handedToCodeFirst?: boolean;
+    }
   ): Promise<void> {
     this.logger.debug("Deleting collection", { slug });
 
@@ -491,6 +501,15 @@ export class CollectionRegistryService extends BaseRegistryService<
       // `force` is the explicit, authorized drop path (e.g. `nextly prune`).
       throw NextlyError.forbidden({
         logContext: { reason: "collection-locked-delete", slug },
+      });
+    }
+
+    // Every path that goes on to drop the table passes through here: the schema route's delete is
+    // followed by a migration that drops it, and prune has just dropped it. A field left pointing at
+    // it would point at nothing.
+    if (!options?.handedToCodeFirst) {
+      await assertNothingPointsAt(this.adapter, slug, {
+        deletedTogether: options?.deletedTogether,
       });
     }
 

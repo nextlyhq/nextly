@@ -21,6 +21,13 @@ import type { Command } from "commander";
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
+import {
+  describeReference,
+  findReferencesIntoSet,
+  referencedCollectionsConflict,
+  type InboundReference,
+  type InboundReferenceAdapter,
+} from "../../domains/collections/services/inbound-references";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
@@ -49,6 +56,11 @@ export interface PruneResult {
   orphanedCompanions: string[];
   /** Companion tables actually dropped (empty unless `force`). */
   droppedCompanions: string[];
+  /**
+   * Orphans a field outside the orphans still points at, with those fields. A forced prune refuses
+   * before its first drop while any are listed, so it is empty on every prune that dropped anything.
+   */
+  blocked: Record<string, InboundReference[]>;
 }
 
 interface RunPruneArgs {
@@ -56,10 +68,11 @@ interface RunPruneArgs {
     CollectionRegistryService,
     "findOrphanedCollections" | "deleteCollection"
   >;
-  adapter: TeardownI18nAdapter & {
-    getCapabilities(): { dialect: string };
-    listTables(): Promise<string[]>;
-  };
+  adapter: TeardownI18nAdapter &
+    InboundReferenceAdapter & {
+      getCapabilities(): { dialect: string };
+      listTables(): Promise<string[]>;
+    };
   currentSlugs: string[];
   force: boolean;
 }
@@ -71,8 +84,10 @@ function companionMainTable(companionTable: string): string {
 
 /**
  * Core prune logic (D14): detect orphaned pipeline collections, then either
- * list them (dry-run) or drop their physical table + metadata (`force`). Kept
- * free of CLI/IO concerns for unit/integration testing.
+ * list them (dry-run) or drop their physical table + metadata (`force`). A
+ * forced prune refuses, before its first drop, while a field outside the
+ * orphans points at one of them. Kept free of CLI/IO concerns for
+ * unit/integration testing.
  */
 export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
   const orphans = await args.registry.findOrphanedCollections(
@@ -89,14 +104,23 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
     .filter(isCompanionTable)
     .filter(t => !liveTables.has(t.replace(/_locales$/, "")));
 
+  // Read before the dry run returns, so its listing names what a forced prune would refuse. Orphans
+  // that point only at each other go together and block nothing.
+  const blocked = await findReferencesIntoSet(args.adapter, slugs);
+
   if (!args.force) {
     return {
       orphans: slugs,
       dropped: [],
       orphanedCompanions,
       droppedCompanions: [],
+      blocked: Object.fromEntries(blocked),
     };
   }
+
+  // Before the first drop and for the whole set: a refusal part way through would leave some
+  // orphans dropped and the rest not.
+  if (blocked.size > 0) throw referencedCollectionsConflict(blocked);
 
   // Dialect-safe identifier quoting + FK-safe drop, mirroring the sibling drop
   // sites (collection-sync-service.ts): MySQL uses backticks; Postgres needs
@@ -121,7 +145,10 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
     await args.adapter.executeQuery(
       `DROP TABLE IF EXISTS ${q}${orphan.tableName}${q}${cascade}`
     );
-    await args.registry.deleteCollection(orphan.slug, { force: true });
+    await args.registry.deleteCollection(orphan.slug, {
+      force: true,
+      deletedTogether: slugs,
+    });
     dropped.push(orphan.slug);
   }
 
@@ -140,7 +167,13 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
     droppedCompanions.push(companion);
   }
 
-  return { orphans: slugs, dropped, orphanedCompanions, droppedCompanions };
+  return {
+    orphans: slugs,
+    dropped,
+    orphanedCompanions,
+    droppedCompanions,
+    blocked: {},
+  };
 }
 
 interface PruneCommandOptions {
@@ -218,6 +251,19 @@ export async function runPruneCommand(
       logger.info(
         `Orphaned (retained — re-run with --force to drop): ${result.orphans.join(", ")}`
       );
+      const blocked = Object.entries(result.blocked);
+      if (blocked.length > 0) {
+        logger.warn(
+          `--force will refuse while other fields still point at ${blocked
+            .map(
+              ([slug, references]) =>
+                `${slug} (${references.map(describeReference).join(", ")})`
+            )
+            .join(
+              "; "
+            )}. Remove those fields, or point them at another collection, first.`
+        );
+      }
     } else {
       logger.info(
         `Dropped ${result.dropped.length} orphaned collection(s): ${result.dropped.join(", ")}`
