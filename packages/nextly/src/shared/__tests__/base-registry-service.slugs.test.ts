@@ -65,6 +65,39 @@ describe("BaseRegistryService.getAllSlugs", () => {
     expect(options.where).toBeUndefined();
   });
 
+  it("asks for the slug column alone when testing ONE name", async () => {
+    // 🔴 The projection is the property here too, and this time it is a
+    // security one rather than a cost one. An authorization decision asks
+    // whether a slug is registered BEFORE it knows the caller may see the
+    // entity, so a lookup that read the record would load the declaration of
+    // something the caller is about to be refused. Both spellings return the
+    // same boolean, which is exactly why the assertion is on the QUERY.
+    const select = vi.fn().mockResolvedValue([{ slug: "posts" }]);
+
+    expect(await registryOver(select).hasSlug("posts")).toBe(true);
+
+    expect(select).toHaveBeenCalledTimes(1);
+    const [table, options] = select.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(table).toBe("probe_registry");
+    expect(options.columns).toEqual(["slug"]);
+    // One row settles an EXISTENCE claim, so the limit is sound here in a way
+    // it is not for `getAllSlugs`, whose caller needs every candidate.
+    expect(options.limit).toBe(1);
+    expect(options.where).toBeDefined();
+  });
+
+  it("reports a name the registry does not hold as absent", async () => {
+    // The control for the case above. Without it a lookup that answered
+    // `true` unconditionally would satisfy every assertion there, since that
+    // case asserts the query rather than the verdict.
+    const select = vi.fn().mockResolvedValue([]);
+
+    expect(await registryOver(select).hasSlug("ghost")).toBe(false);
+  });
+
   it("reports a driver failure as the registry failing, not as an empty registry", async () => {
     // An empty answer from a failed read is the direction that widens an
     // access decision built on it; the caller distinguishes a throw from a

@@ -135,9 +135,23 @@ export function registerInitialContext(
         : { entities: [], complete: false };
 
       return {
-        // The prose and the data are separate fields on purpose; see the module
-        // comment. Nothing from `structuredContent` is interpolated.
-        content: [{ type: "text" as const, text: HOW_THIS_CMS_WORKS }],
+        // TWO blocks, and their order is the contract. The first is the
+        // instructions and is a constant: nothing from `structuredContent` is
+        // interpolated into it, which is what keeps a hostile entity name out
+        // of the sentence telling the agent how to behave.
+        //
+        // The second is the same data serialized, and it is here for clients
+        // that negotiated a 2025 revision. Those read `content` alone, and the
+        // protocol library appends a rendering only when `structuredContent` is
+        // a NON-object value, so without this they receive the instruction to
+        // read `entities` and no `entities` to read.
+        content: [
+          { type: "text" as const, text: HOW_THIS_CMS_WORKS },
+          {
+            type: "text" as const,
+            text: JSON.stringify(structuredContent, null, 2),
+          },
+        ],
         structuredContent,
       };
     }
