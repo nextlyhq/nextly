@@ -52,6 +52,25 @@ export const WITHDRAW_ALL_LOCALES: LifecycleDirection = {
   successMessage: "All languages unpublished.",
 };
 
+/**
+ * The direction a successful move took.
+ *
+ * A hook may replace the requested status with the other lifecycle status, and
+ * the write then takes every language there, so the report follows the status
+ * the write committed. A document that carries no lifecycle status reports the
+ * request.
+ */
+export function directionCommitted(
+  committedStatus: unknown,
+  requested: LifecycleDirection
+): LifecycleDirection {
+  return (
+    [PUBLISH_ALL_LOCALES, WITHDRAW_ALL_LOCALES].find(
+      direction => direction.nextStatus === committedStatus
+    ) ?? requested
+  );
+}
+
 /** The document a lifecycle transition targets, and who is asking. */
 export interface AllLocalesLifecycleParams {
   collectionName: string;

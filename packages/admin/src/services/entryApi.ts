@@ -820,12 +820,14 @@ export const entryApi = {
   publishAllLocales: async (
     collectionSlug: string,
     id: string
-  ): Promise<{ id: string; status?: string }> => {
+  ): Promise<{ id: string; status?: string; message: string }> => {
     const result = await protectedApi.post<{
       message: string;
       item: { id: string; status?: string };
     }>(`/collections/${collectionSlug}/entries/${id}/publish-all`, {});
-    return result.item;
+    // The message names the way every language went: a hook can keep a
+    // requested publish as a draft.
+    return { ...result.item, message: result.message };
   },
 
   // ===========================================================================

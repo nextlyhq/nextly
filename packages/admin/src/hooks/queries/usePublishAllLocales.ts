@@ -1,9 +1,9 @@
 /**
  * usePublishAllLocales — publish every language of an entry at once (i18n M7, spec §10).
  *
- * Calls `POST /entries/{id}/publish-all` (atomic server-side: main status + every companion
- * `_status` → published) and invalidates the entry's detail + the collection list so the pills,
- * badges, and status reflect the new state.
+ * Calls `POST /entries/{id}/publish-all`, which applies every language's pending change and moves
+ * every language's status in one write, and invalidates the entry's detail + the collection list so
+ * the pills, badges, and status reflect the new state.
  *
  * @module hooks/queries/usePublishAllLocales
  */
@@ -28,7 +28,7 @@ export function usePublishAllLocales({
   return useMutation({
     mutationFn: (entryId: string) =>
       entryApi.publishAllLocales(collectionSlug, entryId),
-    onSuccess: (_data, entryId) => {
+    onSuccess: (result, entryId) => {
       // Refresh the entry detail (all locale-keyed variants) and the collection list.
       void queryClient.invalidateQueries({
         queryKey: entryKeys.detail(collectionSlug, entryId),
@@ -36,7 +36,9 @@ export function usePublishAllLocales({
       void queryClient.invalidateQueries({
         queryKey: entryKeys.lists(),
       });
-      if (!silent) toast.success("All languages published.");
+      // The server's message, which names the direction the write took: a hook
+      // can keep a requested publish as a draft.
+      if (!silent) toast.success(result.message);
     },
     onError: (error: unknown) => {
       // The server's own message, which is the only thing that says WHY. This
