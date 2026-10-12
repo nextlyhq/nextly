@@ -127,10 +127,21 @@ export class SchemaEventsRepository {
   private readonly table: ReturnType<
     typeof schemaEventsTables
   >["nextlySchemaEvents"];
+  private readonly dialect: Dialect;
 
   constructor(db: unknown, dialect: Dialect) {
     this.db = asRepositoryDb(db);
     this.table = schemaEventsTables(dialect).nextlySchemaEvents;
+    this.dialect = dialect;
+  }
+
+  /**
+   * The same ledger, written through another Drizzle handle: a migration
+   * transaction's own, so a row recorded through it commits or rolls back
+   * with the statements that transaction ran.
+   */
+  boundTo(db: unknown): SchemaEventsRepository {
+    return new SchemaEventsRepository(db, this.dialect);
   }
 
   /**

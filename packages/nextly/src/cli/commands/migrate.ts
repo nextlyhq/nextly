@@ -719,19 +719,26 @@ export function installRegistryResolver(
  *
  * Shared by the app files and the plugin modules so the two paths cannot
  * drift about what "executed as one unit" means. A unit that runs outside a
- * transaction is named in the run's output before it starts.
+ * transaction is named in the run's output before it starts. `after` records
+ * the unit through the handle its statements ran on, inside the transaction
+ * when there is one, so its ledger row commits or rolls back with them.
  */
 function buildSqlExecutor(
   dz: DrizzleAdapter,
   dialect: SupportedDialect,
   logger: CommandContext["logger"]
-): (sqlText: string, unit: MigrationUnit) => Promise<number> {
-  return async (sqlText, unit) => {
+): (
+  sqlText: string,
+  unit: MigrationUnit,
+  after: (db: unknown, statementsExecuted: number) => Promise<void>
+) => Promise<number> {
+  return async (sqlText, unit, after) => {
     if (!unit.transaction) logger.warn(outsideTransactionNotice(unit.source));
     return runMigrationStatements(
       dz,
       splitSqlStatements(sqlText, dialect, unit),
-      unit
+      unit,
+      after
     );
   };
 }
@@ -986,7 +993,12 @@ export async function runPluginPhase(
       pluginVersion,
       schemaVersion,
       tables,
+      db,
     }) => {
+      // Through the handle the module's statements ran on, when it ran in a
+      // transaction, so these rows commit or roll back with them.
+      const store =
+        db === undefined ? owners : new OwnersRepo(db, deps.dialect);
       // A module that leaves this plugin owning NOTHING still moved its
       // schema version, so the rows it already has carry the new one rather
       // than keep the old. They are carried forward rather than deleted:
@@ -996,11 +1008,11 @@ export async function runPluginPhase(
       // here, and needs nothing: the boot gate reads the applied version
       // from the ledger.
       if (tables.length === 0) {
-        const existing = (await owners.read()).filter(
+        const existing = (await store.read()).filter(
           row => row.ownerId === pluginName
         );
         if (existing.length > 0) {
-          await owners.upsert(
+          await store.upsert(
             existing.map(row => ({
               ...row,
               ownerVersion: pluginVersion,
@@ -1023,7 +1035,7 @@ export async function runPluginPhase(
       // Through the registry's policy, which refuses a row naming a table
       // another owner holds. The runner refused such a module before it ran;
       // this decides again on the rows as they stand when the write happens.
-      await createOwnerRegistry(owners).record(recorded);
+      await createOwnerRegistry(store).record(recorded);
       // The drop guard reads `ownerRows` before every module, so it has to
       // learn what each module created as the run goes. Read once before the
       // phase, it did not know a table a dependency's module had just made,
@@ -1608,12 +1620,15 @@ export async function runFileMigrations(args: {
         filename,
         sha256: m.checksum,
       });
-      let didApply: boolean;
+      let didApply = false;
       try {
-        const n = await executeSql(m.upSql, unit);
-        didApply = await repo.markApplied(id, {
-          statementsExecuted: n,
-          uniqueFilename: filename,
+        // Recorded applied inside the file's transaction when it has one, so
+        // the row commits or rolls back with its statements.
+        await executeSql(m.upSql, unit, async (handle, n) => {
+          didApply = await repo.boundTo(handle).markApplied(id, {
+            statementsExecuted: n,
+            uniqueFilename: filename,
+          });
         });
       } catch (err) {
         await repo.markFailed(id, {

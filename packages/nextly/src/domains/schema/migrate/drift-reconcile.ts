@@ -4,6 +4,7 @@
  * For a pending migration file, compares the live managed schema against the
  * file's pre-baseline and target snapshots:
  *   - live ≡ before        → IN_SYNC: run the .sql verbatim, record file_apply
+ *                            in the transaction the statements ran in
  *                            — unless its last attempt failed and may have
  *                            stopped part-way (`assertNotPartiallyApplied`).
  *   - live ≡ target        → ALREADY_APPLIED: skip SQL, record file_apply
@@ -60,6 +61,12 @@ export interface ReconcileRepo {
     byEventId: string;
   }): Promise<void>;
   /**
+   * The same ledger written through another Drizzle handle: the one a
+   * file's statements ran on, so its applied row commits or rolls back with
+   * them.
+   */
+  boundTo(db: unknown): Pick<ReconcileRepo, "markApplied">;
+  /**
    * Every `file_apply` row for one filename: applied, failed, rolled back,
    * with what each row retired, which tells a rollback from a cleared
    * attempt (`attemptCleared`).
@@ -96,9 +103,21 @@ export interface ReconcileFileArgs {
   repo: ReconcileRepo;
   /**
    * Execute the file's SQL as `unit` says — in one transaction unless it is
-   * marked to run outside one; returns statements executed.
+   * marked to run outside one — then `after` with the handle the statements
+   * ran on, inside that transaction when there is one
+   * (`runMigrationStatements`); returns statements executed.
    */
-  executeSql: (sql: string, unit: MigrationUnit) => Promise<number>;
+  executeSql: (
+    sql: string,
+    unit: MigrationUnit,
+    after: (db: unknown, statementsExecuted: number) => Promise<void>
+  ) => Promise<number>;
+  /**
+   * What else is recorded once the file has run, through the handle its
+   * statements ran on, after its applied row: written in the same
+   * transaction, it commits or rolls back with them.
+   */
+  recordApplied?: (db: unknown) => Promise<void>;
   /** Dev/ui/db_sync event ids this file_apply supersedes (ALREADY_APPLIED). */
   supersedableEventIds?: () => Promise<string[]>;
   /**
@@ -301,10 +320,38 @@ function toDriftItem(op: Operation): DriftItem {
   }
 }
 
+/**
+ * Run a file's statements and record it applied through the handle they ran
+ * on, with whatever else the caller records (`recordApplied`).
+ *
+ * In a transaction the applied row is written inside it: a failure of that
+ * write rolls the statements back, and a process stopping before COMMIT
+ * leaves neither, so the row never stays `in_progress` over statements that
+ * committed. Outside one, each statement has already committed by the time
+ * the row is written, as it always has.
+ */
+async function runAndRecord(
+  args: ReconcileFileArgs,
+  id: string
+): Promise<void> {
+  const { file, repo } = args;
+  await args.executeSql(
+    file.sql,
+    { source: file.filename, transaction: file.transaction ?? true },
+    async (db, statementsExecuted) => {
+      await repo.boundTo(db).markApplied(id, {
+        statementsExecuted,
+        uniqueFilename: file.filename,
+      });
+      await args.recordApplied?.(db);
+    }
+  );
+}
+
 export async function reconcileFile(
   args: ReconcileFileArgs
 ): Promise<{ state: ReconcileState }> {
-  const { file, before, target, live, repo, executeSql } = args;
+  const { file, before, target, live, repo } = args;
   const migration = file.filename.replace(/\.sql$/, "");
 
   // IN_SYNC — live matches the pre-migration baseline → run the file, unless
@@ -318,14 +365,7 @@ export async function reconcileFile(
       sha256: file.sha256 ?? null,
     });
     try {
-      const statementsExecuted = await executeSql(file.sql, {
-        source: file.filename,
-        transaction: file.transaction ?? true,
-      });
-      await repo.markApplied(id, {
-        statementsExecuted,
-        uniqueFilename: file.filename,
-      });
+      await runAndRecord(args, id);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await repo.markFailed(id, {

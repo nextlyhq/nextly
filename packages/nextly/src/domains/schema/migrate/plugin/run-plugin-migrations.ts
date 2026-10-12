@@ -40,9 +40,9 @@ import {
   reconcileFile,
   recordAlreadyApplied,
   snapshotsEquivalent,
+  type ReconcileFileArgs,
   type ReconcileRepo,
 } from "../drift-reconcile";
-import type { MigrationUnit } from "../migration-transaction";
 import { assertRunnableStatements, statementRefusals } from "../split-sql";
 import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
 
@@ -97,9 +97,10 @@ export interface RunPluginMigrationsDeps {
   ) => Promise<NextlySchemaSnapshot>;
   /**
    * Execute one module's UP — in one transaction unless the module is marked
-   * `transaction: false`; returns statements run.
+   * `transaction: false` — then `after` with the handle it ran on, inside
+   * that transaction when there is one; returns statements run.
    */
-  executeSql: (sql: string, unit: MigrationUnit) => Promise<number>;
+  executeSql: ReconcileFileArgs["executeSql"];
   /** Ledger rows are recorded through this — `reconcileFile`'s own repo. */
   repo: ReconcileRepo;
   /**
@@ -158,6 +159,12 @@ export interface RunPluginMigrationsDeps {
     schemaVersion: number;
     tables: readonly string[];
     adopted: boolean;
+    /**
+     * The handle to write through: the one the module's statements ran on,
+     * so in a transaction its owner rows commit or roll back with them.
+     * Absent, the run's own.
+     */
+    db?: unknown;
   }) => Promise<void>;
 }
 
@@ -500,15 +507,16 @@ async function runSet(
  * Record a plugin's ownership again when its last module is recorded applied
  * but the owner rows do not stand where that module leaves them.
  *
- * A module's ledger row and its owner rows are written one after the other,
- * not together, so a run that stops between the two leaves the module
- * recorded applied and its tables unclaimed, or claimed at the previous
- * module's schema version. Every later run skips the module, so nothing else
- * writes those rows again: the drop guard would protect none of the plugin's
- * tables, and the production boot gate would read a schema version the plugin
- * is no longer at, for good. The last module's tables are the plugin's whole
- * owned shape, so recording them is exactly what that module's run would
- * have recorded.
+ * A module that runs in a transaction writes its ledger row and its owner
+ * rows inside it, together. One run outside a transaction, or recorded as
+ * applied without running, writes them one after the other, so a run that
+ * stops between the two leaves the module recorded applied and its tables
+ * unclaimed, or claimed at the previous module's schema version. Every later
+ * run skips the module, so nothing else writes those rows again: the drop
+ * guard would protect none of the plugin's tables, and the production boot
+ * gate would read a schema version the plugin is no longer at, for good. The
+ * last module's tables are the plugin's whole owned shape, so recording them
+ * is exactly what that module's run would have recorded.
  *
  * Only a row that is missing, or is this plugin's at another schema version,
  * is repaired. A table another owner's row names is left as it is: who owns a
@@ -990,6 +998,20 @@ async function applyModule(
     against
   );
 
+  // The tables this plugin OWNS, never the foreign ones it only contributed
+  // an element to. `recordOwner` upserts ownership, so a dependency's table
+  // listed here would hand this plugin the row naming its real owner — and
+  // the drop guard would then let this plugin's DOWN drop it.
+  const recordOwned = (adopted: boolean, db?: unknown): Promise<void> =>
+    deps.recordOwner({
+      pluginName: set.pluginName,
+      pluginVersion: set.pluginVersion,
+      schemaVersion: migration.schemaVersion,
+      tables: ownedTables(migration, deps.dialect),
+      adopted,
+      db,
+    });
+
   const reconcile = reconcileFile({
     file: {
       ...ledgerUnit(set, migration),
@@ -1004,6 +1026,10 @@ async function applyModule(
     dialect: deps.dialect,
     repo: deps.repo,
     executeSql: deps.executeSql,
+    // A module that runs records its owner rows through the handle its
+    // statements ran on, after its applied row, so in a transaction both
+    // commit with the statements or neither does.
+    recordApplied: db => recordOwned(false, db),
     pluginName: set.pluginName,
   });
   // A data module run past its own schema fails against a later shape of the
@@ -1014,18 +1040,11 @@ async function applyModule(
       })
     : await reconcile;
 
-  await deps.recordOwner({
-    pluginName: set.pluginName,
-    pluginVersion: set.pluginVersion,
-    schemaVersion: migration.schemaVersion,
-    // The tables this plugin OWNS, never the foreign ones it only contributed
-    // an element to. `recordOwner` upserts ownership, so a dependency's table
-    // listed here would hand this plugin the row naming its real owner — and
-    // the drop guard would then let this plugin's DOWN drop it.
-    tables: ownedTables(migration, deps.dialect),
-    adopted: state === "already_applied",
-  });
-  return state === "already_applied" ? "adopted" : "applied";
+  if (state !== "already_applied") return "applied";
+  // Recorded without running: nothing ran, so no transaction holds the
+  // ledger row, and the owner rows follow it.
+  await recordOwned(true);
+  return "adopted";
 }
 
 /**

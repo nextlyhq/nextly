@@ -27,6 +27,9 @@ const snap = (...names: string[]): NextlySchemaSnapshot => ({
 type FakeRepo = ReconcileRepo & {
   starts: number;
   applied: Array<{ statementsExecuted?: number | null }>;
+  /** The handles the applied row was written through (`boundTo`). */
+  bound: unknown[];
+  failed: number;
   superseded: Array<{ supersededEventIds: string[]; byEventId: string }>;
 };
 
@@ -42,13 +45,15 @@ function fakeRepo(
 ): FakeRepo {
   const state = {
     starts: 0,
+    failed: 0,
+    bound: [] as unknown[],
     applied: [] as Array<{ statementsExecuted?: number | null }>,
     superseded: [] as Array<{
       supersededEventIds: string[];
       byEventId: string;
     }>,
   };
-  return {
+  const repo: FakeRepo = {
     ...state,
     recordStart: () => {
       state.starts++;
@@ -58,13 +63,41 @@ function fakeRepo(
       state.applied.push(args);
       return Promise.resolve(true);
     },
-    markFailed: () => Promise.resolve(),
+    markFailed: () => {
+      repo.failed++;
+      return Promise.resolve();
+    },
     supersede: args => {
       state.superseded.push(args);
       return Promise.resolve();
     },
     findFileApplies: () => Promise.resolve(priorAttempts),
+    boundTo: handle => {
+      state.bound.push(handle);
+      return repo;
+    },
   };
+  return repo;
+}
+
+/** The handle a fake executor's transaction hands the work it runs after. */
+const TX_HANDLE = { connection: "the unit's transaction" };
+
+/**
+ * An executor that runs the file's statements and then `after` with its
+ * transaction's handle, as `runMigrationStatements` does.
+ */
+function executor(handle: unknown = TX_HANDLE) {
+  return vi.fn(
+    async (
+      _sql: string,
+      _unit: unknown,
+      after: (db: unknown, statementsExecuted: number) => Promise<void>
+    ) => {
+      await after(handle, 1);
+      return 1;
+    }
+  );
 }
 
 const file = {
@@ -84,7 +117,16 @@ async function clearedLedger(
   failures = 1,
   status: "failed" | "in_progress" = "failed"
 ): Promise<SchemaEventsRepository> {
-  const repo = new SchemaEventsRepository((await createTestDb()).db, "sqlite");
+  return (await clearedLedgerWithHandle(failures, status)).repo;
+}
+
+/** `clearedLedger`, with the Drizzle handle its ledger is written through. */
+async function clearedLedgerWithHandle(
+  failures = 1,
+  status: "failed" | "in_progress" = "failed"
+): Promise<{ repo: SchemaEventsRepository; db: unknown }> {
+  const { db } = await createTestDb();
+  const repo = new SchemaEventsRepository(db, "sqlite");
   for (let t = 1; t <= failures; t++) {
     await repo.insertEvent({
       eventType: "file_apply",
@@ -104,7 +146,7 @@ async function clearedLedger(
     marksNoTransaction: () => Promise.resolve(false),
     introspectLive: () => Promise.resolve({ tables: [] }),
   });
-  return repo;
+  return { repo, db };
 }
 
 /** The file's ledger statuses, oldest attempt first. */
@@ -290,7 +332,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
 
   it("IN_SYNC: live ≡ before → runs the SQL and records file_apply", async () => {
     const repo = fakeRepo();
-    const executeSql = vi.fn().mockResolvedValue(1);
+    const executeSql = executor();
     const r = await reconcileFile({
       file,
       before: snap("a"),
@@ -302,6 +344,71 @@ describe("reconcileFile (Phase 2 three-state)", () => {
     expect(r.state).toBe("in_sync");
     expect(executeSql).toHaveBeenCalledOnce();
     expect(repo.applied[0].statementsExecuted).toBe(1);
+  });
+
+  it("IN_SYNC: records the applied row, then what the caller records, through the handle the statements ran on", async () => {
+    const repo = fakeRepo();
+    const order: string[] = [];
+    const recordApplied = vi.fn(async (db: unknown) => {
+      order.push(`recordApplied:${String(repo.applied.length)}`);
+      expect(db).toBe(TX_HANDLE);
+    });
+    const executeSql = vi.fn(
+      async (
+        _sql: string,
+        _unit: unknown,
+        after: (db: unknown, statementsExecuted: number) => Promise<void>
+      ) => {
+        order.push("statements");
+        await after(TX_HANDLE, 2);
+        // Still inside the executor: its transaction has not committed.
+        order.push("commit");
+        return 2;
+      }
+    );
+    await reconcileFile({
+      file,
+      before: snap("a"),
+      target: snap("a", "b"),
+      live: snap("a"),
+      repo,
+      executeSql,
+      recordApplied,
+    });
+    expect(repo.bound).toEqual([TX_HANDLE]);
+    expect(repo.applied).toEqual([
+      { statementsExecuted: 2, uniqueFilename: "0006_x.sql" },
+    ]);
+    expect(order).toEqual(["statements", "recordApplied:1", "commit"]);
+  });
+
+  it("IN_SYNC: an applied-row write that fails fails the executor's work, so its transaction rolls back, and the attempt is recorded failed", async () => {
+    const repo = fakeRepo();
+    repo.markApplied = () => Promise.reject(new Error("ledger write failed"));
+    let committed = false;
+    const executeSql = vi.fn(
+      async (
+        _sql: string,
+        _unit: unknown,
+        after: (db: unknown, statementsExecuted: number) => Promise<void>
+      ) => {
+        await after(TX_HANDLE, 1);
+        committed = true;
+        return 1;
+      }
+    );
+    await expect(
+      reconcileFile({
+        file,
+        before: snap("a"),
+        target: snap("a", "b"),
+        live: snap("a"),
+        repo,
+        executeSql,
+      })
+    ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
+    expect(committed).toBe(false);
+    expect(repo.failed).toBe(1);
   });
 
   it("records a failure's cause in the ledger and keeps it on the error it rethrows", async () => {
@@ -484,14 +591,15 @@ describe("a file whose last attempt failed, with the database at its start", () 
   // starts; a data statement before it may still have run and stayed.
   const args = (
     dialect: "postgresql" | "mysql" | "sqlite",
-    transaction?: boolean
+    transaction?: boolean,
+    handle?: unknown
   ) => ({
     file: { ...file, transaction },
     before: snap("a"),
     target: snap("a", "b"),
     live: snap("a"),
     dialect,
-    executeSql: vi.fn(() => Promise.resolve(1)),
+    executeSql: executor(handle),
   });
 
   it("refuses to run it again on MySQL, which committed what ran before the schema statement", async () => {
@@ -534,8 +642,8 @@ describe("a file whose last attempt failed, with the database at its start", () 
   );
 
   it("runs it on MySQL once the failed attempt is cleared", async () => {
-    const repo = await clearedLedger();
-    const run = args("mysql");
+    const { repo, db } = await clearedLedgerWithHandle();
+    const run = args("mysql", undefined, db);
     await expect(reconcileFile({ ...run, repo })).resolves.toEqual({
       state: "in_sync",
     });
@@ -546,8 +654,8 @@ describe("a file whose last attempt failed, with the database at its start", () 
   it("runs it on MySQL after one cleanup of two failed attempts in a row", async () => {
     // One `--failed-cleanup` clears both: clearing only one would leave the
     // other as the newest attempt, and the file refused again.
-    const repo = await clearedLedger(2);
-    const run = args("mysql");
+    const { repo, db } = await clearedLedgerWithHandle(2);
+    const run = args("mysql", undefined, db);
     await expect(reconcileFile({ ...run, repo })).resolves.toEqual({
       state: "in_sync",
     });

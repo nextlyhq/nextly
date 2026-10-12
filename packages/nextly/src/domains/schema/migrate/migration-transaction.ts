@@ -156,8 +156,9 @@ export function outsideTransactionNotice(source: string): string {
  *
  * In a transaction, the default: `executeTransaction`, so where the dialect
  * can undo schema changes a failure leaves none of the unit applied. `after`
- * runs inside that transaction, with its Drizzle handle, for a ledger row
- * that must commit or roll back with the statements it records.
+ * runs inside that transaction, with its Drizzle handle and the number of
+ * statements run, for a ledger row that must commit or roll back with the
+ * statements it records; if it throws, the transaction rolls back.
  *
  * Outside one: each statement runs on its own through the adapter and commits
  * as it runs, which is what lets PostgreSQL's `CREATE INDEX CONCURRENTLY`
@@ -180,14 +181,14 @@ export async function runMigrationStatements(
   adapter: DrizzleAdapter,
   statements: readonly string[],
   unit: MigrationUnit,
-  after?: (db: unknown) => Promise<void>
+  after?: (db: unknown, statementsExecuted: number) => Promise<void>
 ): Promise<number> {
   if (unit.transaction) {
     await executeTransaction(adapter, async tx => {
       for (const statement of statements) {
         await tx.execute(statement);
       }
-      await after?.(tx.db);
+      await after?.(tx.db, statements.length);
     });
     return statements.length;
   }
@@ -219,7 +220,7 @@ export async function runMigrationStatements(
   } else {
     await runEach();
   }
-  await after?.(adapter.getDrizzle());
+  await after?.(adapter.getDrizzle(), statements.length);
   return statements.length;
 }
 

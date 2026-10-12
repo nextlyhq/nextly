@@ -108,9 +108,23 @@ function fakeRepo() {
       },
       supersede: async () => {},
       findFileApplies: async () => [],
+      // The applied row is written through the handle the module ran on;
+      // the fake ledger has one store, so every handle reaches it.
+      boundTo: () => ({
+        markApplied: async (id: string) => {
+          applied.push(id);
+          return true;
+        },
+      }),
     } satisfies ReconcileRepo,
   };
 }
+
+/** The handle a fake executor's transaction hands the work it runs after. */
+const TX_HANDLE = { connection: "the module's transaction" };
+
+/** What runs inside a fake executor's transaction once its statements have. */
+type After = (db: unknown, statementsExecuted: number) => Promise<void>;
 
 function deps(
   overrides: Partial<Parameters<typeof runPluginMigrations>[1]> = {}
@@ -118,10 +132,12 @@ function deps(
   const repo = fakeRepo();
   const executed: string[] = [];
   const owners: Array<Record<string, unknown>> = [];
+  const ownerHandles: unknown[] = [];
   const live = new Map<string, TableSpec[]>();
   return {
     executed,
     owners,
+    ownerHandles,
     ...repo,
     deps: {
       dialect: "postgresql" as const,
@@ -130,17 +146,23 @@ function deps(
         ({
           tables: names.flatMap(n => live.get(n) ?? []),
         }) as NextlySchemaSnapshot,
-      executeSql: async (sql: string) => {
+      executeSql: async (sql: string, _unit: unknown, after: After) => {
         executed.push(sql);
+        await after(TX_HANDLE, 1);
         return 1;
       },
       repo: repo.repo,
-      recordOwner: async (args: {
+      recordOwner: async ({
+        db,
+        ...args
+      }: {
         pluginName: string;
         tables: readonly string[];
         adopted: boolean;
+        db?: unknown;
       }) => {
         owners.push({ ...args });
+        ownerHandles.push(db);
       },
       ...overrides,
     } as Parameters<typeof runPluginMigrations>[1],
@@ -213,6 +235,42 @@ describe("runPluginMigrations", () => {
     expect(h.executed).toEqual([]);
     expect(h.applied.length).toBe(1);
     expect(h.owners[0]).toMatchObject({ pluginName: "a", adopted: true });
+    // Nothing ran, so no transaction holds the rows: the run's own handle.
+    expect(h.ownerHandles).toEqual([undefined]);
+  });
+
+  it("records a module's owner rows through the handle its statements ran on, inside the executor", async () => {
+    const m = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [empty],
+    });
+    const order: string[] = [];
+    const h = deps({
+      executeSql: async (_sql: string, _unit: unknown, after: After) => {
+        await after(TX_HANDLE, 1);
+        // Still inside the executor: its transaction has not committed.
+        order.push(`commit after ${String(h.owners.length)} owner write(s)`);
+        return 1;
+      },
+    });
+    await runPluginMigrations(
+      [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+      h.deps
+    );
+    expect(h.applied).toEqual(["id-plugin:a/001"]);
+    expect(h.owners).toEqual([
+      {
+        pluginName: "a",
+        pluginVersion: "1.0.0",
+        schemaVersion: 1,
+        tables: ["fx__a"],
+        adopted: false,
+      },
+    ]);
+    expect(h.ownerHandles).toEqual([TX_HANDLE]);
+    expect(order).toEqual(["commit after 1 owner write(s)"]);
   });
 
   it("refuses drift: live matches neither side", async () => {
@@ -1399,7 +1457,7 @@ describe("a database already past some of a plugin's modules", () => {
     // as a real one would, so the second module finds the first's result.
     const executed: string[] = [];
     const d = deps({
-      executeSql: async (sql: string) => {
+      executeSql: async (sql: string, _unit: unknown, after: After) => {
         executed.push(sql);
         if (
           sql.includes(
@@ -1409,6 +1467,7 @@ describe("a database already past some of a plugin's modules", () => {
           d.live.set(T, [tableSpec(T, false)]);
         }
         if (sql.includes("ADD score")) d.live.set(T, [tableSpec(T, true)]);
+        await after(TX_HANDLE, 1);
         return 1;
       },
     });
@@ -1549,7 +1608,7 @@ describe("a limit on how many modules one run records", () => {
   /** Deps whose database follows the SQL it is handed, as a real one does. */
   function following(limit: number) {
     const d = deps({ limit });
-    d.deps.executeSql = async (sql: string) => {
+    d.deps.executeSql = async (sql: string, _unit: unknown, after: After) => {
       d.executed.push(sql);
       if (
         sql.includes(
@@ -1562,6 +1621,7 @@ describe("a limit on how many modules one run records", () => {
       if (sql.includes("CREATE TABLE q__other (id text PRIMARY KEY)")) {
         d.live.set("q__other", [tableSpec("q__other", false)]);
       }
+      await after(TX_HANDLE, 1);
       return 1;
     };
     return d;

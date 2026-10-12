@@ -422,6 +422,71 @@ describe("plugin migrations against a real database (sqlite)", () => {
       },
     ]);
   });
+
+  it("rolls a data module back with its applied row when that row cannot be written, so a retry runs it once", async () => {
+    // A data module's statements leave no schema trace, so a retry decides
+    // from the ledger alone whether they ran. Committed ahead of its applied
+    // row, a seed whose row then fails to write would stay in the table while
+    // the ledger says it never finished, and a retry would insert it again.
+    const rows = defineTable("rows", { id: col.id(), label: col.shortText() });
+    const v1 = await generate("seedtx", 1, [rows]);
+    await runPluginPhase(
+      phaseArgs([{ pluginName: "seedtx", migrations: [v1] }]) as never
+    );
+    // No primary key on the seeded column, so a second run of the seed adds a
+    // second row rather than failing on the first.
+    sqlite.exec("CREATE TABLE seedtx_log (label TEXT NOT NULL)");
+    const seedContent = {
+      name: `${v1.name}_seed`,
+      schemaVersion: 1,
+      dialects: {
+        postgresql: { up: [], down: [] },
+        mysql: { up: [], down: [] },
+        sqlite: {
+          up: [`INSERT INTO "seedtx_log" ("label") VALUES ('seeded')`],
+          down: [`DELETE FROM "seedtx_log"`],
+        },
+      },
+      snapshot: v1.snapshot,
+      before: v1.snapshot,
+    };
+    const seed: PluginMigration = {
+      ...seedContent,
+      checksum: migrationChecksum(seedContent),
+    };
+    const key = `plugin:seedtx/${seed.name}`;
+    // The applied-row write fails, as a lost connection or a full disk would
+    // fail it, after the seed's statement has run.
+    sqlite.exec(`CREATE TRIGGER seedtx_ledger_fails
+      BEFORE UPDATE OF status ON nextly_schema_events
+      WHEN NEW.status = 'applied' AND NEW.filename = '${key}'
+      BEGIN SELECT RAISE(ABORT, 'ledger write failed'); END`);
+
+    await expect(
+      runPluginPhase(
+        phaseArgs([{ pluginName: "seedtx", migrations: [v1, seed] }]) as never
+      )
+    ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
+
+    const seeded = () =>
+      sqlite.prepare('SELECT "label" FROM "seedtx_log"').all();
+    const ledger = () =>
+      sqlite
+        .prepare(
+          "SELECT status FROM nextly_schema_events WHERE filename = ? ORDER BY started_at"
+        )
+        .all(key);
+    expect(seeded()).toEqual([]);
+    expect(ledger()).toEqual([{ status: "failed" }]);
+
+    sqlite.exec("DROP TRIGGER seedtx_ledger_fails");
+    await runPluginPhase(
+      phaseArgs([{ pluginName: "seedtx", migrations: [v1, seed] }]) as never
+    );
+
+    expect(seeded()).toEqual([{ label: "seeded" }]);
+    expect(ledger()).toEqual([{ status: "failed" }, { status: "applied" }]);
+  });
 });
 
 describe("foreign elements never block a plugin's reconcile", () => {
