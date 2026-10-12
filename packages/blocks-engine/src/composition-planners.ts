@@ -3826,8 +3826,9 @@ function liveEntries(
  * namesake can carry one id, and a reference the run's record governs can sit
  * beside an unrelated author's reference to the same id — in each, the right
  * outcome differs by node. The copier decides which question a node is asked:
- * what the id it renders was, or, for an id it references that the copy does not
- * settle by its target, what that reference was.
+ * what the id it renders was, or what an id it references was. A reference takes
+ * its node's answer where there is one, and follows its target only where there
+ * is none.
  *
  * INVERTED from the record, which reads source → copy because that is the
  * direction an insert renames in.
@@ -3904,7 +3905,8 @@ function restoredFor(
  * the scope lists the nodes it renamed and this is not one of them.
  *
  * Only for the node carrying the id itself. A reference is answered by the
- * scope alone; whether it follows its target instead is the copier's question.
+ * scope alone, and that answer decides it; the copier falls back to the target
+ * only where the scope has none.
  */
 function renderedAnswer(
   scope: RenameScope | undefined,

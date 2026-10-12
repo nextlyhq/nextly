@@ -1110,12 +1110,11 @@ export type DomIdPolicy =
        * asks with the ORIGINAL node:
        *
        * - for the id a node RENDERS, and moves that id to the answer;
-       * - for an id a node REFERENCES, only when the copy does not settle it. A
-       *   reference follows its target: where the copied forest renders the id
-       *   and every node rendering it ends up with one id, the reference takes
-       *   that id, so a link and its target are never stored apart. Where
-       *   nothing renders it, or its renderers end up with different ids, the
-       *   node holding the reference decides.
+       * - for an id a node REFERENCES, and a reference takes that answer when
+       *   there is one. The node holding it knows where it pointed. Only a
+       *   reference its holder has no answer for follows its target: where the
+       *   copied forest renders the id and the nodes settling it end up with one
+       *   id, the reference takes that id; otherwise it keeps what it carries.
        *
        * Gating is not consulted, for the reason `restore` gives: putting an id
        * back asks nothing about the page.
@@ -1506,8 +1505,12 @@ type RestoreEach = (node: BlockNode, value: string) => string | undefined;
 /** What the per-node copier carries from node to node. */
 interface EachCopy {
   readonly nodeIds: Map<string, string>;
-  /** Each rendered id → every id the nodes rendering it ended up with. */
+  /** Each id a VISIBLE node renders → every id those nodes ended up with. */
   readonly outcomes: Map<string, Set<string>>;
+  /** The same, for nodes inside a subtree the renderer prunes. */
+  readonly gatedOutcomes: Map<string, Set<string>>;
+  /** Every node the renderer would prune, by identity. */
+  readonly hidden: ReadonlySet<BlockNode>;
   /** Each copy's id → the original it was made from, for the reference pass. */
   readonly holders: Map<string, BlockNode>;
   readonly restoreEach: RestoreEach;
@@ -1518,18 +1521,32 @@ interface EachCopy {
  *
  * Two passes, as every policy takes. The first moves the id each node renders
  * to that node's own answer and notes, per id, every id its renderers ended up
- * with. The second rewrites references: a reference to an id those notes
- * settle takes the settled id, so it follows its target; any other reference is
- * decided by the node holding it.
+ * with. The second rewrites references: a reference its holder has an answer
+ * for takes that answer, and only one it has none for follows the id those notes
+ * settle.
  *
- * No hidden-subtree set, and no shared memo of replacements. Putting an id back
- * asks nothing about the page, so gating is irrelevant; and two nodes spelling
- * one id may now answer differently, which a memo keyed by the id alone would
- * collapse into one answer for both.
+ * The holder first, because it knows where its reference pointed. Settling a
+ * reference by its target instead means deciding which elements render
+ * together, and that question has no end: gated namesakes, nested gates, a node
+ * placed under two gates, sibling gates whose conditions agree, and conditions
+ * equal in meaning but written differently, which nothing can decide from the
+ * document. Following the target is kept for the reference nobody recorded.
  *
- * `domIds` reports a rendered id only where every node rendering it moved to
- * the same id — the one reading of "what this copy moved" that stays true when
- * renderers disagree.
+ * Gating decides only which nodes a reference follows, never which ids move.
+ * Putting an id back asks nothing about the page, so a gated node still has its
+ * own id restored. But a reference resolves to the element the page RENDERS,
+ * and a gated namesake renders nothing — so the nodes the renderer keeps settle
+ * a reference first, and gated ones only when no visible node carries the id.
+ * Treating both alike made a visible target and its gated namesake look
+ * contested, and left an unrelated link on an id nothing renders.
+ *
+ * No shared memo of replacements: two nodes spelling one id may answer
+ * differently, which a memo keyed by the id alone would collapse into one
+ * answer for both.
+ *
+ * `domIds` reports a rendered id only where the nodes that settle it all moved
+ * to the same id — the one reading of "what this copy moved" that stays true
+ * when renderers disagree.
  */
 function reidForestRestoringEach(
   nodes: BlockNode[],
@@ -1538,6 +1555,12 @@ function reidForestRestoringEach(
   const each: EachCopy = {
     nodeIds: new Map(),
     outcomes: new Map(),
+    gatedOutcomes: new Map(),
+    // Gated where no placement of the node is open. The pruning rule's own walk,
+    // read the other way: `hiddenSubtreeNodes` asks whether ANY placement is
+    // pruned, and a node an unrelated reference follows renders wherever any
+    // placement is not.
+    hidden: prunedInEveryPlacement(nodes),
     holders: new Map(),
     restoreEach,
   };
@@ -1553,7 +1576,7 @@ function reidForestRestoringEach(
   return {
     nodes: linked,
     nodeIds: each.nodeIds,
-    domIds: settledMoves(each.outcomes),
+    domIds: settledMoves(each),
   };
 }
 
@@ -1566,7 +1589,11 @@ function reidOneRestoringEach(node: BlockNode, each: EachCopy): BlockNode {
   const rendered = renderedDomId(node);
   if (rendered !== undefined) {
     const answer = each.restoreEach(node, rendered);
-    noteOutcome(each.outcomes, rendered, answer ?? rendered);
+    noteOutcome(
+      each.hidden.has(node) ? each.gatedOutcomes : each.outcomes,
+      rendered,
+      answer ?? rendered
+    );
     if (answer !== undefined) {
       moveOwnIds(
         copy,
@@ -1598,13 +1625,29 @@ function soleOutcome(
   return only;
 }
 
-/** Each rendered id that moved, to the one id all of its renderers became. */
-function settledMoves(
-  outcomes: ReadonlyMap<string, ReadonlySet<string>>
-): Map<string, string> {
+/**
+ * The one id a reference to `value` follows, or nothing when the copy does not
+ * settle it.
+ *
+ * The nodes the page renders decide whenever any of them carries the id; gated
+ * nodes decide only where none does, so a link to a target that is gated today
+ * still follows it and is not split from it when the gate opens.
+ */
+function settledTarget(each: EachCopy, value: string): string | undefined {
+  const visible = each.outcomes.get(value);
+  if (visible !== undefined) return soleOutcome(visible);
+  return soleOutcome(each.gatedOutcomes.get(value));
+}
+
+/** Each rendered id that moved, to the one id the nodes settling it became. */
+function settledMoves(each: EachCopy): Map<string, string> {
   const moved = new Map<string, string>();
-  for (const [value, became] of outcomes) {
-    const only = soleOutcome(became);
+  const values = new Set([
+    ...each.outcomes.keys(),
+    ...each.gatedOutcomes.keys(),
+  ]);
+  for (const value of values) {
+    const only = settledTarget(each, value);
     if (only !== undefined && only !== value) moved.set(value, only);
   }
   return moved;
@@ -1613,9 +1656,9 @@ function settledMoves(
 /**
  * What each id one node references should now be.
  *
- * Settled by the copy where it can be: an id the forest renders, whose
- * renderers all ended up with one id, is that id — kept or moved — whatever the
- * holder would have said. Otherwise the holder decides.
+ * The holder's own answer where it has one. Otherwise settled by the copy where
+ * it can be: an id the forest renders, whose settling renderers all ended up
+ * with one id, is that id — kept or moved. Otherwise the reference is kept.
  *
  * A lookup rather than a map, because the answer depends on the holder and
  * building a whole map per node would put every id the records name into the
@@ -1629,12 +1672,11 @@ function referenceAnswers(
   return {
     size: 1,
     get(value: string): string | undefined {
-      const became = each.outcomes.get(value);
-      if (became !== undefined && became.size === 1) {
-        const settled = soleOutcome(became);
-        return settled === value ? undefined : settled;
-      }
-      return holder === undefined ? undefined : each.restoreEach(holder, value);
+      const own =
+        holder === undefined ? undefined : each.restoreEach(holder, value);
+      if (own !== undefined) return own;
+      const settled = settledTarget(each, value);
+      return settled === value ? undefined : settled;
     },
   };
 }
@@ -1757,15 +1799,48 @@ export function remapIdReferences(
 export function hiddenSubtreeNodes(
   nodes: readonly BlockNode[]
 ): ReadonlySet<BlockNode> {
-  const hidden = new Set<BlockNode>();
-  const seen = new Map<BlockNode, boolean>();
+  return placementGating(nodes).gated;
+}
+
+/**
+ * Every node no placement of which is open, by identity.
+ *
+ * The walk reaches a node object placed in two slots once per placement. A
+ * placement under a gate is pruned and one under none renders, so such a node
+ * renders wherever any placement is open — the question an unrelated reference
+ * following its target needs answered, where {@link hiddenSubtreeNodes} answers
+ * whether any placement is pruned.
+ */
+function prunedInEveryPlacement(
+  nodes: readonly BlockNode[]
+): ReadonlySet<BlockNode> {
+  const { gated, open } = placementGating(nodes);
+  return new Set([...gated].filter(node => !open.has(node)));
+}
+
+/**
+ * Which nodes are reached under a gate on some placement, and which are reached
+ * under none on some placement.
+ *
+ * One walk for both readings, so the pruning rule and its converse cannot come
+ * to disagree about inheritance. A placement inherits from its parent's CURRENT
+ * visit, because the gate over a placement is the one on the path it was
+ * reached by.
+ */
+function placementGating(nodes: readonly BlockNode[]): {
+  gated: Set<BlockNode>;
+  open: Set<BlockNode>;
+} {
+  const gated = new Set<BlockNode>();
+  const open = new Set<BlockNode>();
+  const current = new Map<BlockNode, boolean>();
   walkNodes([...nodes], (node, parent) => {
-    const inherited = parent !== undefined && seen.get(parent) === true;
-    const gated = inherited || isConditionGated(node);
-    seen.set(node, gated);
-    if (gated) hidden.add(node);
+    const inherited = parent !== undefined && current.get(parent) === true;
+    const isGated = inherited || isConditionGated(node);
+    current.set(node, isGated);
+    (isGated ? gated : open).add(node);
   });
-  return hidden;
+  return { gated, open };
 }
 
 /**

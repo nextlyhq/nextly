@@ -1,5 +1,5 @@
 /**
- * useLocalization — admin-side access to the app's content-localization config (i18n M7).
+ * useLocalization — admin-side access to the app's content-localization config.
  *
  * Reads the localization block from admin-meta (surfaced on branding). Returns a small, stable
  * surface the entry editor uses to render the language switcher and resolve per-locale metadata
