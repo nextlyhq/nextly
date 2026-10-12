@@ -72,25 +72,29 @@ import {
 } from "./snapshot-io";
 
 /**
- * Minimal field shape we read from `nextly.config.ts`. Mirrors the
- * MinimalFieldDef in build-from-fields.ts.
+ * A field as its entity declares it.
+ *
+ * Carried whole, never projected. The column descriptor, the index rules and
+ * the localization classifier read keys beyond the ones named here — `virtual`
+ * and `options` (a virtual group, a short or long text, a float number, a
+ * many-to-many), `dbType`/`precision`/`scale`, `validation` — and dev push
+ * hands them the declared field. A projection built here had to be extended
+ * every time one of those readers learned a new key, and each key it missed
+ * became a column `migrate:create` wrote and dev push did not, which
+ * `migrate:check` then could not see because it read the same projection.
  */
 export interface MinimalConfigField {
   name: string;
   type: string;
   required?: boolean;
-  // Forwarded so the column-type classifier (field-column-descriptor.ts)
-  // emits `json` for hasMany / polymorphic relationships instead of a single
-  // `text` id column. Stripping these previously mis-typed those columns.
   hasMany?: boolean;
   relationTo?: string | string[];
-  // Forwarded so the desired-index builder (build-from-fields.ts) emits the
-  // unique/plain index for this field (Stage C1).
   unique?: boolean;
   index?: boolean;
-  // Forwarded so localized fields are omitted from the main table's desired
-  // state and relocated to the companion `_locales` table (i18n M3b-2).
   localized?: boolean;
+  virtual?: boolean;
+  options?: unknown;
+  [key: string]: unknown;
 }
 
 /**

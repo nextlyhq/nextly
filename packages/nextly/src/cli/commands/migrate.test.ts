@@ -4,6 +4,7 @@
 // domains/schema/migrate/{core-reconcile,drift-reconcile}.test.ts. This file
 // now pins the command registration surface.
 
+import Database from "better-sqlite3";
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 
@@ -521,6 +522,83 @@ describe("routine and trigger bodies", () => {
     ]);
   });
 
+  // A quoted value right before BEGIN is one token, so BEGIN does not read as
+  // a name after `=` or `.`.
+  it.each([
+    ["a string", "WHEN NEW.status = 'published'"],
+    ["a quoted name", `WHEN OLD."title" IS NOT NEW."title"`],
+    // The control: an unquoted value there.
+    ["an unquoted value", "WHEN NEW.id = 1"],
+  ])(
+    "keeps a SQLite trigger whole when %s comes right before BEGIN, and SQLite runs it",
+    (_, when) => {
+      const trigger = [
+        `CREATE TRIGGER fx_log AFTER UPDATE ON fx__posts ${when}`,
+        "BEGIN",
+        "  INSERT INTO fx__log (v) VALUES ('published');",
+        "  INSERT INTO fx__log (v) VALUES ('again');",
+        "END",
+      ].join("\n");
+      const statements = splitSqlStatements(
+        [
+          "CREATE TABLE fx__posts (id INTEGER, status TEXT, title TEXT);",
+          "CREATE TABLE fx__log (v TEXT);",
+          "INSERT INTO fx__posts VALUES (1, 'draft', 'a');",
+          `${trigger};`,
+          "SELECT 1;",
+        ].join("\n"),
+        "sqlite"
+      );
+      expect(statements.slice(3)).toEqual([trigger, "SELECT 1"]);
+
+      const db = new Database(":memory:");
+      try {
+        for (const statement of statements) db.exec(statement);
+        db.exec(
+          "UPDATE fx__posts SET status = 'published', title = 'b' WHERE id = 1"
+        );
+        expect(db.prepare("SELECT v FROM fx__log").all()).toEqual([
+          { v: "published" },
+          { v: "again" },
+        ]);
+      } finally {
+        db.close();
+      }
+    }
+  );
+
+  it("never reads a quoted begin as a block keyword", () => {
+    // Each quoted begin stands where a bare BEGIN would open a block: after
+    // LIKE, IS or WHERE, none of which makes it a name. Read as BEGIN, one
+    // would leave the body open past its END and swallow the SELECT.
+    const trigger = [
+      "CREATE TRIGGER fx_span AFTER UPDATE ON fx__spans FOR EACH ROW",
+      "BEGIN",
+      `  DELETE FROM fx__log WHERE v LIKE 'begin' OR v IS "begin";`,
+      "  DELETE FROM fx__log WHERE [begin];",
+      "END",
+    ].join("\n");
+    expect(splitSqlStatements(`${trigger};\nSELECT 1;`, "sqlite")).toEqual([
+      trigger,
+      "SELECT 1",
+    ]);
+  });
+
+  it("keeps a PostgreSQL BEGIN ATOMIC body whole after a quoted setting value", () => {
+    const routine = [
+      "CREATE FUNCTION fx_count() RETURNS bigint LANGUAGE sql",
+      "SET search_path = 'public'",
+      "BEGIN ATOMIC",
+      "  SELECT count(*) FROM fx__notes;",
+      "  SELECT 1;",
+      "END",
+    ].join("\n");
+    expect(splitSqlStatements(`${routine};\nSELECT 1;`, "postgresql")).toEqual([
+      routine,
+      "SELECT 1",
+    ]);
+  });
+
   it("still splits a MySQL trigger whose body is one statement, with no BEGIN", () => {
     const trigger =
       "CREATE TRIGGER fx_bi BEFORE INSERT ON fx__notes FOR EACH ROW SET NEW.a = 1";
@@ -640,6 +718,56 @@ describe("statementRefusals", () => {
     expect(rollback?.message).toContain('"ROLLBACK"');
     // Points at the form that is allowed, rather than only at removing it.
     expect(rollback?.message).toContain("ROLLBACK TO SAVEPOINT name");
+  });
+
+  // MySQL's SET takes a list, and a system variable anywhere in it is a
+  // session setting, whatever the targets before it.
+  it.each([
+    [
+      "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */",
+      "FOREIGN_KEY_CHECKS",
+    ],
+    [
+      "/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */",
+      "UNIQUE_CHECKS",
+    ],
+    [
+      "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */",
+      "SQL_MODE",
+    ],
+    ["SET @x = 1, FOREIGN_KEY_CHECKS = 0", "FOREIGN_KEY_CHECKS"],
+    ["SET @x = IF(1, 2, 3), @y = 'a,b', sql_mode = ''", "SQL_MODE"],
+    ["SET @x = 1, @@foreign_key_checks = 0", "FOREIGN_KEY_CHECKS"],
+    ["SET @x = 1, @@session.time_zone = '+00:00'", "TIME_ZONE"],
+    ["SET @x = 1, @@global.max_connections = 10", "MAX_CONNECTIONS"],
+    ["SET @x = 1, @@local.sql_mode = ''", "SQL_MODE"],
+    ["SET @x = 1, @@persist.max_connections = 10", "MAX_CONNECTIONS"],
+    ["SET @x = 1, @@persist_only.back_log = 10", "BACK_LOG"],
+    ["SET @x = 1, SESSION sql_mode = ''", "SQL_MODE"],
+    ["SET @x = 1, GLOBAL max_connections = 10", "MAX_CONNECTIONS"],
+    ["SET @x = 1, LOCAL sql_mode = ''", "SQL_MODE"],
+    ["SET @x = 1, PERSIST max_connections = 10", "MAX_CONNECTIONS"],
+    ["SET @x = 1, PERSIST_ONLY back_log = 10", "BACK_LOG"],
+    ["SET @x = 1, `foreign_key_checks` = 0", "FOREIGN_KEY_CHECKS"],
+    ["SET NAMES utf8mb4", "NAMES"],
+    ["SET CHARACTER SET utf8mb4", "CHARACTER"],
+  ])("refuses the MySQL session setting in: %s", (statement, setting) => {
+    const refusals = statementRefusals([statement], "mysql");
+    expect(refusals.map(r => r.code)).toEqual(["SESSION_SETTING_IN_MIGRATION"]);
+    expect(refusals[0]?.message).toContain(`(${setting})`);
+  });
+
+  it.each([
+    "SET @a = 1, @b = 2",
+    "SET @a = CONCAT('x', ',', 'y'), @b = IF(1, 2, (SELECT 3))",
+    "SET @a = 'a, sql_mode = 1', @b = 2",
+    "SET @`odd name` = 1, @'q' = 2, @\"r\" := 3",
+    "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */",
+    // An executable comment's strings are strings: this comma separates
+    // nothing.
+    "/*!40101 SET @a = 'x, sql_mode = 1' */",
+  ])("allows a MySQL SET of user variables only: %s", statement => {
+    expect(statementRefusals([statement], "mysql")).toEqual([]);
   });
 
   it.each([
@@ -911,7 +1039,7 @@ describe("executeTransaction", () => {
       transaction: async <T>(
         work: (ctx: {
           execute: (statement: string) => Promise<unknown[]>;
-          drizzle: () => unknown;
+          getDrizzle: () => unknown;
         }) => Promise<T>
       ): Promise<T> => {
         calls.push("reserved: BEGIN");
@@ -921,7 +1049,7 @@ describe("executeTransaction", () => {
               calls.push(`reserved: ${statement}`);
               return [];
             },
-            drizzle: () => "reserved-handle",
+            getDrizzle: () => "reserved-handle",
           });
           calls.push("reserved: COMMIT");
           return result;

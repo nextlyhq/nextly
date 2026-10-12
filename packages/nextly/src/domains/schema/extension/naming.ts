@@ -186,13 +186,7 @@ export function assertQuotableIdentifier(
 
 /** Refuse a table name that something else already owns, whoever declared it. */
 export function assertUsableTableName(name: string, path: string): void {
-  assertQuotableIdentifier(name, path, "A table name");
-  if (name.length > MAX_IDENTIFIER_LENGTH) {
-    refuse(
-      path,
-      `A table name may be at most ${String(MAX_IDENTIFIER_LENGTH)} characters; "${name}" is ${String(name.length)}.`
-    );
-  }
+  assertVerbatimIdentifier(name, path, "A table name");
   if (MANAGED_TABLE_PREFIXES_REGEX.test(name)) {
     refuse(
       path,
@@ -223,11 +217,40 @@ export function assertUsableTableName(name: string, path: string): void {
  * dropping and re-adding it. Refused here, at declaration, on every dialect.
  */
 export function assertExplicitIdentifier(name: string, path: string): void {
-  assertQuotableIdentifier(name, path, "An explicit name");
+  assertVerbatimIdentifier(name, path, "An explicit name");
+}
+
+/**
+ * Refuse a column name no dialect can store as written.
+ *
+ * A column's name is its authored key snake-cased, and reaches the DDL
+ * verbatim: nothing derives or shortens it. Past the bound MySQL refuses
+ * the table and PostgreSQL silently truncates the name, after which the
+ * live column no longer matches the declared one and every diff proposes
+ * dropping it, while SQLite accepts it whole. Held to the bound a table name
+ * is, here, on every dialect.
+ */
+export function assertColumnName(name: string, path: string): void {
+  assertVerbatimIdentifier(name, path, "A column name");
+}
+
+/**
+ * The one rule every name used verbatim is held to: quotable on every
+ * dialect, and no longer than every dialect stores unchanged.
+ *
+ * Shared by table, column and explicit object names, so the three can never
+ * come to be checked against different bounds.
+ */
+function assertVerbatimIdentifier(
+  name: string,
+  path: string,
+  what: string
+): void {
+  assertQuotableIdentifier(name, path, what);
   if (name.length > MAX_IDENTIFIER_LENGTH) {
     refuse(
       path,
-      `An explicit name may be at most ${String(MAX_IDENTIFIER_LENGTH)} characters, the longest every dialect stores unchanged; "${name}" is ${String(name.length)}.`
+      `${what} may be at most ${String(MAX_IDENTIFIER_LENGTH)} characters, the longest every dialect stores unchanged; "${name}" is ${String(name.length)}.`
     );
   }
 }

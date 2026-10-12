@@ -12,6 +12,9 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { describeError } from "../../../../errors/describe-error";
+import { NextlyError } from "../../../../errors/nextly-error";
+
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import {
@@ -29,6 +32,7 @@ import {
   buildPluginMigration,
   formatHandSealedPluginMigrationModule,
   formatPluginMigrationsIndex,
+  generateBlankPluginMigration,
   generatePluginMigration,
 } from "../generate-plugin";
 
@@ -235,7 +239,7 @@ describe("buildPluginMigration", () => {
       expect.objectContaining({
         code: "PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA",
         message: expect.stringMatching(
-          /would drop fx__notes, .*write the rename as a migration by hand/
+          /would drop fx__notes, .*write the rename by hand.*--blank/
         ),
       })
     );
@@ -312,6 +316,34 @@ describe("formatPluginMigrationsIndex", () => {
     expect(aPos).toBeLessThan(bPos);
     expect(index).toContain("export const migrations = [");
   });
+
+  it("imports modules whose names fold alike under bindings of their own", () => {
+    // Names that differ only in characters an identifier cannot hold: read
+    // into a binding character by character, both would become `m001_a_b`.
+    const base = buildPluginMigration(FIRST)!.module;
+    const names = ["001_a-b", "001_a_b", "001_a.b", "1 class"];
+    const index = formatPluginMigrationsIndex(
+      names.map(name => ({ ...base, name }))
+    );
+
+    const imports = [...index.matchAll(/^import (\S+) from (".*");$/gm)].map(
+      ([, binding, path]) => ({ binding, path: JSON.parse(path) as string })
+    );
+    const bindings = imports.map(entry => entry.binding);
+    // Every module imported once, from its own file, under its own binding.
+    expect(imports.map(entry => entry.path).sort()).toEqual(
+      names.map(name => `./${name}`).sort()
+    );
+    expect(new Set(bindings).size).toBe(names.length);
+    for (const binding of bindings) {
+      expect(binding).toMatch(/^[A-Za-z_$][\w$]*$/);
+      expect(binding).not.toBe("migrations");
+    }
+    // And the exported list is those bindings, in import order.
+    expect(index).toContain(
+      `export const migrations = [\n  ${bindings.join(",\n  ")},\n];`
+    );
+  });
 });
 
 describe("generatePluginMigration (file writes)", () => {
@@ -378,6 +410,33 @@ describe("generatePluginMigration (file writes)", () => {
 
       expect(await readFile(first!.modulePath, "utf-8")).toBe(moduleBefore);
       expect(await readFile(first!.indexPath, "utf-8")).toBe(indexBefore);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a module whose ledger key is too long, writing nothing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "nextly-plugin-migrations-"));
+    try {
+      // `plugin:<name>/<timestamp>_backfill` with a 240-character plugin
+      // name runs past the 255 characters MySQL's ledger column holds.
+      const refusal = await generateBlankPluginMigration({
+        pluginName: "p".repeat(240),
+        schemaVersion: 1,
+        name: "backfill",
+        now: FIRST.now,
+        existing: [],
+        tablesByDialect: FIRST.tablesByDialect,
+        migrationsDir: dir,
+      }).catch((error: unknown) => error);
+
+      expect(NextlyError.isValidation(refusal)).toBe(true);
+      expect(JSON.stringify((refusal as NextlyError).publicData)).toContain(
+        "the ledger holds at most 255"
+      );
+      // What the CLI prints: the lengths, not only "Validation failed."
+      expect(describeError(refusal)).toContain('"limit":255');
+      expect(await readdir(dir)).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -712,6 +771,7 @@ describe("buildBlankPluginMigration", () => {
       schemaVersion: 1,
       name: "backfill",
       now: new Date("2026-09-24T10:00:00Z"),
+      tablesByDialect: FIRST.tablesByDialect,
       existing: [first],
       transaction: false,
     });
@@ -732,6 +792,7 @@ describe("buildBlankPluginMigration", () => {
       schemaVersion: 1,
       name: "backfill",
       now: new Date("2026-09-24T10:00:00Z"),
+      tablesByDialect: FIRST.tablesByDialect,
       existing: [first],
     });
     const next = buildPluginMigration({
@@ -763,6 +824,7 @@ describe("buildBlankPluginMigration", () => {
         pluginName: "fixture",
         schemaVersion: 1,
         name: "backfill",
+        tablesByDialect: tablesByDialect(tableSpec(true)),
         existing: [first, second],
       })
     ).toThrow(/behind 2 on its last migration/);
@@ -775,6 +837,7 @@ describe("formatHandSealedPluginMigrationModule", () => {
       pluginName: "fixture",
       schemaVersion: 1,
       name: "backfill",
+      tablesByDialect: { postgresql: [], mysql: [], sqlite: [] },
       existing: [],
       transaction: false,
     });

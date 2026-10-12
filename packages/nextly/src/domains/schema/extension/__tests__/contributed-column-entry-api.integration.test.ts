@@ -596,3 +596,68 @@ describe("a column a schema hook contributed to a table an earlier boot made wit
     await expectFieldGroupColumnHidden(handle);
   });
 });
+
+// SQLite only: the refresh is applied by the Drizzle table Nextly writes the
+// entry through, the same way on every dialect, and no DDL carries it.
+(getConfiguredTestDialects().includes("sqlite") ? describe : describe.skip)(
+  "an updatedAt contributed to a collection (sqlite)",
+  () => {
+    it("is refreshed by an entry update that does not mention it", async () => {
+      const contributor = definePlugin({
+        name: "@test/edit-stamp",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          schema: {
+            extend: [
+              ({ schema }) => {
+                schema.extendTable(POSTS_TABLE, {
+                  columns: { editedAt: col.timestamps().updatedAt },
+                });
+              },
+            ],
+          },
+        },
+      });
+      current = await createTestNextly({
+        dialect: "sqlite",
+        collections: [
+          defineCollection({
+            slug: "posts",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+        plugins: [contributor],
+      });
+      const created = await current.nextly.create({
+        collection: "posts",
+        data: { title: "first" },
+        overrideAccess: true,
+      });
+      const id = (created.item as { id: string }).id;
+
+      // Pinned to the past by the contributor's own write, which sets the
+      // column and so must keep the value; the refresh is then visible without
+      // waiting out SQLite's one-second resolution.
+      const past = Date.parse("2001-01-01T00:00:00Z") / 1000;
+      await current.adapter.update(
+        POSTS_TABLE,
+        { edited_at: new Date(past * 1000) },
+        { and: [{ column: "id", op: "=", value: id }] }
+      );
+      const seconds = async (): Promise<number> => {
+        const value = (await storedRow(current!, POSTS_TABLE)).edited_at;
+        return value instanceof Date ? value.getTime() / 1000 : Number(value);
+      };
+      expect(await seconds()).toBe(past);
+
+      await current.nextly.update({
+        collection: "posts",
+        id,
+        data: { title: "second" },
+        overrideAccess: true,
+      });
+      expect(await seconds()).toBeGreaterThan(Date.now() / 1000 - 60);
+    });
+  }
+);

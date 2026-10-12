@@ -53,6 +53,12 @@ export default defineConfig({
 App tables carry no prefix, and they go into your migrations like any other
 table.
 
+`col.id()` has no database default: the code that inserts a row supplies the
+`id` (any UUID fits; a UUIDv7 keeps new rows in key order), and `InferInsert`
+requires it. `col.timestamps()` defaults both columns to the current time on
+insert, but nothing refreshes `updated_at` afterwards, so set it in every
+update.
+
 A table can also declare **checks, foreign keys, and expression indexes**. They
 ride the same declaration, the same migrations, and (for checks and
 bundle-internal foreign keys) the same table rebuild on SQLite:
@@ -81,7 +87,9 @@ const orders = defineTable(
 ```
 
 A foreign key's target must exist when the migration runs; within your own
-bundle, creation order follows declaration.
+bundle, creation order follows declaration. `onDelete` and `onUpdate` take
+`"cascade"`, `"set null"`, `"restrict"` or `"no action"` (the default).
+`"set default"` is refused, because MySQL cannot create a key that uses it.
 
 Partial indexes (an index with a `where` predicate) are **refused**, on every
 dialect. Every declaration is checked against PostgreSQL, MySQL and SQLite
@@ -91,7 +99,9 @@ predicate would enforce it over rows you did not intend, so an index carrying
 `where` fails when the table is registered.
 
 An explicit index or foreign key `name` is used exactly as written, so it may
-be at most 63 characters. Derived names (and every check name, which is
+be at most 63 characters, and so may a column's SQL name (the snake-cased key:
+`ownerAccountId` is `owner_account_id`): PostgreSQL cuts a longer name short
+and MySQL refuses one past 64. Derived names (and every check name, which is
 `ck_<table>_<name>`) are shortened with a hash when they would be longer. A
 foreign key's name, written or derived, must also be unique across the
 tables plugins and the app declare, as MySQL requires of a database, and so
@@ -108,13 +118,29 @@ between them), integers or floats of different widths (`bigint` on `integer`,
 requires both to match), and a long text, JSON or
 bytes column in a key at all (MySQL cannot index one). Text columns of
 different lengths may reference each other, and a collection's relationship
-column is the text id it holds. A core table's columns are left to the
-database to judge.
+column is the text id it holds. When the target is a table a plugin or the
+app declares, the referenced columns must be its primary key or a unique
+index over exactly those columns, in the index's order: PostgreSQL refuses
+any other target, and MySQL matches the columns in order. A core table's
+columns, a collection's, and an adopted table's are left to the database to
+judge, since their keys are not all in a declaration.
 
-A numeric default must be a finite number, and a decimal's default must fit
-its column: no more fractional digits than its scale, and no more digits
-before the point than its precision leaves room for (`col.decimal(3, 1)` holds
-up to `99.9`).
+A default must be one every dialect stores as written. Its type must be the
+column's: a string for a text or `uuid` column, a number for a numeric one, a
+boolean for `col.boolean()`, and only the current-timestamp token (what
+`col.timestamps()` sets) for a timestamp. A `uuid` default must be a UUID in
+lower-case hex, `0190c4c2-7f3a-7b9e-8d1a-3c5e7f9a1b2c`. A text default may be
+no wider than its column on MySQL: 255 characters for `col.text()` and
+`col.shortText()`, `n` for `col.varchar(n)` and `col.char(n)`, unbounded for
+`col.longText()`; and no string default may hold a NUL character. A numeric
+default must be a finite number. An integer column's must be a whole number
+within the column's range (`smallint` up to 32,767, `integer` up to
+2,147,483,647, `bigint` within ±2^53 − 1, the integers a JavaScript number
+holds exactly); a `real` default must be within a 4-byte float's range; and
+a decimal's default must fit its column: no more fractional digits than its
+scale, and no more digits before the point than its precision leaves room for
+(`col.decimal(3, 1)` holds up to `99.9`). JSON, bytes, enum and serial
+columns take no default.
 
 A table's columns must fit in one MySQL row: 65,535 bytes, where a
 `varchar(n)` counts up to 4 bytes a character plus its length, and a

@@ -47,7 +47,6 @@ import {
   type LocalizationMigrationIntent,
 } from "../../domains/i18n/migration/migration-intent";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
-import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
 import {
   SchemaEventsRepository,
@@ -67,7 +66,9 @@ import {
 } from "../../domains/schema/migrate/migration-transaction";
 import { pluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import {
+  appliedPluginShas,
   pluginMigrationArgs,
+  previewPluginMigrations,
   runPluginMigrations,
   type PluginMigrationRunResult,
   type PluginMigrationSet,
@@ -96,6 +97,7 @@ import {
 import {
   assertNoForeignDrops,
   readLiveColumns,
+  readLiveElements,
   readLiveIndexTables,
   readLiveTables,
 } from "../../domains/schema/ownership/drop-guard";
@@ -325,16 +327,15 @@ export async function runMigrate(
     );
 
     if (options.dryRun) {
-      const pending = await findPendingFiles(
+      await previewMigrate({
         adapter,
         db,
         dialect,
-        appMigrationsDir,
-        logger
-      );
-      logger.newline();
-      logger.keyValue("Pending", formatCount(pending.length, "migration"));
-      for (const m of pending) previewPendingFile(m, dialect, logger);
+        migrationsDir: appMigrationsDir,
+        plugins: configResult.config.plugins ?? [],
+        step: options.step,
+        logger,
+      });
       logger.success("Dry run complete (no changes made).");
       return;
     }
@@ -583,6 +584,71 @@ export interface MigrateCoreResult {
 }
 
 /**
+ * What `migrate --dry-run` lists: the plugin modules a real run would reach,
+ * then the app's pending files, under the one `--step` budget the run spends
+ * (`appStepAfter`), in the order the run takes them.
+ *
+ * The plugin modules come from `pluginMigrationArgs` and
+ * `previewPluginMigrations`, which walks them as the plugin phase does, so a
+ * pending plugin module is never left out of a preview that a real run then
+ * executes. Read-only: an absent ledger reads as nothing applied, rather than
+ * being created.
+ */
+export async function previewMigrate(args: {
+  adapter: CLIDatabaseAdapter;
+  db: unknown;
+  dialect: SupportedDialect;
+  migrationsDir: string;
+  plugins: Parameters<typeof pluginMigrationArgs>[0];
+  step?: number;
+  logger: CommandContext["logger"];
+}): Promise<void> {
+  const { adapter, db, dialect, logger } = args;
+  const hasLedger = await (
+    adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
+  ).tableExists("nextly_schema_events");
+  const rows = hasLedger
+    ? await new SchemaEventsRepository(db, dialect).listFileApplies()
+    : [];
+  const { pluginMigrationSets } = await pluginMigrationArgs(args.plugins);
+  const modules = await previewPluginMigrations(pluginMigrationSets, {
+    dialect,
+    rows,
+    limit: args.step,
+  });
+  const pendingModules = modules.filter(module => !module.recorded);
+
+  const appStep = appStepAfter(args.step, pendingModules.length);
+  const pendingFiles =
+    appStep === 0
+      ? []
+      : (
+          await findPendingFiles(
+            adapter,
+            db,
+            dialect,
+            args.migrationsDir,
+            logger
+          )
+        ).slice(0, appStep);
+
+  logger.newline();
+  logger.keyValue(
+    "Pending",
+    formatCount(pendingModules.length + pendingFiles.length, "migration")
+  );
+  for (const module of modules) {
+    logger.info(
+      `  • ${module.filename}${module.recorded ? " (applied)" : ""}${module.transaction ? "" : " (runs outside a transaction)"}`
+    );
+    for (const refusal of module.refusals) {
+      logger.info(`    ✖ a real run would refuse it: ${refusal}`);
+    }
+  }
+  for (const m of pendingFiles) previewPendingFile(m, dialect, logger);
+}
+
+/**
  * One pending file as `migrate --dry-run` lists it: its name, whether it runs
  * outside a transaction, and each refusal a real run would make, from the
  * same check, so the preview and the run cannot disagree.
@@ -825,20 +891,9 @@ export async function runPluginPhase(
   deps.logger.info("Phase 1.5: applying plugin migrations...");
   const dz = deps.adapter as unknown as DrizzleAdapter;
   const eventsRepo = new SchemaEventsRepository(deps.db, deps.dialect);
-  // Applied plugin modules, keyed by qualified filename, with the sha256 that
-  // ran. The NEWEST event per filename decides it — a rolled_back event
-  // INSERTED after an applied one (the shape `migrate:down` records) means the
-  // module is not applied, however many older applied rows exist — through
-  // the one helper every ledger reader shares, so this phase cannot disagree
-  // with `migrate:down` about the same row set.
-  const appliedShas = new Map<string, string | null>();
-  for (const [filename, newest] of newestEventsByFilename(
-    await eventsRepo.listFileApplies()
-  )) {
-    if (filename.startsWith("plugin:") && newest.status === "applied") {
-      appliedShas.set(filename, newest.sha256);
-    }
-  }
+  // Applied plugin modules, read as `migrate --dry-run` reads them, so the
+  // preview and the run cannot disagree about which modules are pending.
+  const appliedShas = appliedPluginShas(await eventsRepo.listFileApplies());
 
   // Loaded here rather than imported at the top: both modules sit on cycles
   // that close through this command, and the file's existing convention for
@@ -877,6 +932,8 @@ export async function runPluginPhase(
     elementOwners: allRows,
     liveColumns: statements =>
       readLiveColumns(deps.db, deps.dialect, [statements]),
+    liveElements: statements =>
+      readLiveElements(deps.db, deps.dialect, [statements]),
     liveTables: statements =>
       readLiveTables(deps.db, deps.dialect, [statements]),
     liveIndexTables: statements =>
@@ -1517,6 +1574,7 @@ export async function runFileMigrations(args: {
       dialect,
       source: filename,
       liveColumns: await readLiveColumns(db, dialect, [upStatements]),
+      liveElements: await readLiveElements(db, dialect, [upStatements]),
       // Read before each file, after the files before it have run.
       liveTables: await readLiveTables(db, dialect, [upStatements]),
       liveIndexTables: await readLiveIndexTables(db, dialect, [upStatements]),

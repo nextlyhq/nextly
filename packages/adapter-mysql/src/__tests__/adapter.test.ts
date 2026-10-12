@@ -752,9 +752,9 @@ describe("@nextly/adapter-mysql", () => {
     });
 
     // A migration records its ledger rows through this handle, so they commit
-    // or roll back with the statements they record. The pooled `getDrizzle()`
-    // would write on a different connection.
-    it("drizzle() is an instance on the transaction's connection, built once", async () => {
+    // or roll back with the statements they record. The adapter's own
+    // `getDrizzle()` wraps the pool and would write on a different connection.
+    it("getDrizzle() is an instance on the transaction's connection, built once", async () => {
       const adapter = createMySqlAdapter({
         url: "mysql://localhost:3306/test",
       });
@@ -762,9 +762,9 @@ describe("@nextly/adapter-mysql", () => {
       type Handle = { $client: unknown };
 
       await adapter.transaction(async tx => {
-        const bare = tx.drizzle<Handle>();
+        const bare = tx.getDrizzle<Handle>();
         expect(bare.$client).toBe(mockConnection.connection);
-        expect(tx.drizzle()).toBe(bare);
+        expect(tx.getDrizzle()).toBe(bare);
       });
     });
 

@@ -13,7 +13,7 @@
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 
-import { scanSql, type SqlSegment } from "./sql-scan";
+import { scanSql } from "./sql-scan";
 
 /** The marker drizzle-kit writes between the statements of a generated file. */
 const BREAKPOINT = "--> statement-breakpoint";
@@ -157,43 +157,63 @@ export function leadingWords(
   count: number
 ): string[] {
   const words: string[] = [];
-  for (const segment of scanSql(statement, dialect)) {
-    const code = serverCode(statement, segment);
-    if (code === null) break;
-    if (code === undefined) continue;
-    for (const token of code.match(/@{0,2}[A-Za-z_][\w$.]*|\S/g) ?? []) {
-      words.push(token.toUpperCase());
-      if (words.length === count) return words;
-    }
+  for (const token of serverTokens(statement, dialect)) {
+    if (typeof token !== "string") break;
+    words.push(token);
+    if (words.length === count) break;
   }
   return words;
 }
 
 /**
- * The code a segment holds as the server reads it: a code segment's text,
- * and on MySQL an executable comment's body. `undefined` for a segment the
- * server skips, a comment; `null` for a quoted segment, where reading the
- * leading words stops.
+ * A string, a quoted name or a PostgreSQL dollar-quoted body among a
+ * statement's tokens: one unit, never a keyword. `name` is a quoted name's
+ * text, upper-cased; a string or a body has none.
  */
-function serverCode(
-  statement: string,
-  segment: SqlSegment
-): string | null | undefined {
-  switch (segment.kind) {
-    case "code":
-      return statement.slice(segment.start, segment.end);
-    case "line-comment":
-      return undefined;
-    case "block-comment":
-      // `/*!40014 SET ... */`: the version number is not part of the code.
-      return segment.executable
-        ? statement
+interface QuotedToken {
+  name: string | undefined;
+}
+
+/**
+ * The tokens of a statement as the server reads them, in order: each word,
+ * upper-cased with any `@`/`@@` prefix and `.` qualifiers it carries, each
+ * other non-space character on its own, and each quoted segment as one
+ * `QuotedToken`. Comments are skipped, and on MySQL an executable comment's
+ * body (`/*!40014 SET ... *\/`, version number left out) is read as the
+ * code it is, its own strings and quoted names included. MySQL does not nest
+ * comments, so a body is read one level deep and no further.
+ */
+function* serverTokens(
+  text: string,
+  dialect: SupportedDialect | undefined,
+  readExecutable = true
+): Generator<string | QuotedToken> {
+  for (const segment of scanSql(text, dialect)) {
+    switch (segment.kind) {
+      case "code":
+        for (const token of text
+          .slice(segment.start, segment.end)
+          .match(/@{0,2}[A-Za-z_][\w$.]*|\S/g) ?? []) {
+          yield token.toUpperCase();
+        }
+        break;
+      case "line-comment":
+        break;
+      case "block-comment":
+        if (segment.executable && readExecutable) {
+          const body = text
             .slice(segment.start, segment.end)
             .replace(/^\/\*M?!\d*/i, "")
-            .replace(/\*\/$/, "")
-        : undefined;
-    default:
-      return null;
+            .replace(/\*\/$/, "");
+          yield* serverTokens(body, dialect, false);
+        }
+        break;
+      case "quoted-name":
+        yield { name: segment.content.toUpperCase() };
+        break;
+      default:
+        yield { name: undefined };
+    }
   }
 }
 
@@ -280,8 +300,10 @@ function rollbackControl(
  * `SET FOREIGN_KEY_CHECKS = 0` leaves foreign keys unchecked for unrelated
  * requests. Transaction-scoped forms are not session settings: PostgreSQL's
  * `SET LOCAL`, `SET CONSTRAINTS` and `SET TRANSACTION`, which a unit run
- * outside a transaction may not hold (`needsTransactionReason`), and MySQL
- * user variables (`SET @x = ...`), which only code that reads them sees. MySQL's
+ * outside a transaction may not hold (`needsTransactionReason`), and a MySQL
+ * SET of user variables only (`SET @x = ...`), which only code that reads
+ * them sees; a system variable anywhere in a SET's list is a session
+ * setting (`mysqlSessionSetting`). MySQL's
  * `SET TRANSACTION` configures the connection's NEXT transaction, so it is
  * refused with the rest.
  *
@@ -295,11 +317,10 @@ function sessionSettingOf(
   statement: string,
   dialect: SupportedDialect | undefined
 ): string | undefined {
-  if (dialect !== "postgresql" && dialect !== "mysql") return undefined;
+  if (dialect === "mysql") return mysqlSessionSetting(statement);
+  if (dialect !== "postgresql") return undefined;
   const [first, second, third] = leadingWords(statement, dialect, 3);
-  return dialect === "postgresql"
-    ? postgresSessionSetting(first, second, third)
-    : mysqlSessionSetting(first, second, third);
+  return postgresSessionSetting(first, second, third);
 }
 
 /**
@@ -315,33 +336,88 @@ function postgresSessionSetting(
   if (first !== "SET" || TRANSACTION_SCOPED_SETS.has(second ?? "")) {
     return undefined;
   }
-  return setSettingName(second, third) ?? first;
-}
-
-/** MySQL's `SET` of a system variable; not of a user variable (`@x`). */
-function mysqlSessionSetting(
-  first: string | undefined,
-  second: string | undefined,
-  third: string | undefined
-): string | undefined {
-  if (first !== "SET") return undefined;
-  if (second?.startsWith("@") === true && !second.startsWith("@@")) {
-    return undefined;
-  }
-  return setSettingName(second, third) ?? first;
+  // The setting named past the SESSION scope word: what the refusal tells
+  // the operator they changed.
+  return (second === "SESSION" ? third : second) ?? first;
 }
 
 /**
- * The setting a SET names, past a SESSION/GLOBAL scope word and MySQL's
- * `@@session.` prefix: what the refusal tells the operator they changed.
+ * MySQL's `SET` of anything but user variables: the first system variable
+ * among its targets, or undefined when every target is a user variable.
+ *
+ * SET takes a list — `SET @x = 1, FOREIGN_KEY_CHECKS = 0` — so every target
+ * in it is read, not only the first: mysqldump's header
+ * `SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0`
+ * saves the setting in a user variable and then switches it off. A target is
+ * a user variable when it starts with a single `@` (`@x`, `@'x'`, `` @`x` ``);
+ * anything else — a bare or quoted name, `@@x`, a scope word or `@@scope.`
+ * prefix, `NAMES`, `CHARACTER SET` — changes the session.
  */
-function setSettingName(
-  second: string | undefined,
-  third: string | undefined
-): string | undefined {
-  return (
-    second === "SESSION" || second === "GLOBAL" ? third : second
-  )?.replace(/^@@(?:SESSION\.|GLOBAL\.)?/, "");
+function mysqlSessionSetting(statement: string): string | undefined {
+  const tokens = serverTokens(statement, "mysql");
+  if (tokens.next().value !== "SET") return undefined;
+  for (const [target, next] of setTargets(tokens)) {
+    const userVariable =
+      typeof target === "string" &&
+      target.startsWith("@") &&
+      !target.startsWith("@@");
+    if (!userVariable) return mysqlSettingName(target, next);
+  }
+  return undefined;
+}
+
+/**
+ * The first two tokens of each assignment in a SET's list, read from the
+ * tokens after SET. Assignments are separated by the commas outside any
+ * parenthesis; a comma inside a string is part of a quoted token already.
+ */
+function* setTargets(
+  tokens: Iterable<string | QuotedToken>
+): Generator<(string | QuotedToken)[]> {
+  let depth = 0;
+  let target: (string | QuotedToken)[] = [];
+  for (const token of tokens) {
+    if (token === "," && depth === 0) {
+      yield target;
+      target = [];
+      continue;
+    }
+    if (token === "(") depth += 1;
+    else if (token === ")") depth = Math.max(0, depth - 1);
+    if (target.length < 2) target.push(token);
+  }
+  yield target;
+}
+
+/** The scope words MySQL's SET takes before a system variable. */
+const MYSQL_SCOPES = new Set([
+  "SESSION",
+  "GLOBAL",
+  "LOCAL",
+  "PERSIST",
+  "PERSIST_ONLY",
+]);
+
+/** A system variable's `@@` prefix, with the scope it may name. */
+const MYSQL_SCOPE_PREFIX =
+  /^@@(?:(?:SESSION|GLOBAL|LOCAL|PERSIST|PERSIST_ONLY)\.)?/;
+
+/**
+ * The system variable a MySQL SET target names, past a scope word or an
+ * `@@scope.` prefix: what the refusal tells the operator they changed.
+ * SET is named when the target names nothing readable.
+ */
+function mysqlSettingName(
+  target: string | QuotedToken | undefined,
+  next: string | QuotedToken | undefined
+): string {
+  const named =
+    typeof target === "string" && MYSQL_SCOPES.has(target) ? next : target;
+  const name =
+    typeof named === "string"
+      ? named.replace(MYSQL_SCOPE_PREFIX, "")
+      : named?.name;
+  return name === undefined || name === "" ? "SET" : name;
 }
 
 /**
@@ -758,8 +834,19 @@ const ROUTINE_KINDS = new Set(["TRIGGER", "PROCEDURE", "FUNCTION", "EVENT"]);
 const NON_BLOCK_ENDS = new Set(["IF", "LOOP", "WHILE", "REPEAT", "FOR"]);
 
 /**
- * The code tokens of a text: its words, upper-cased, and every other
- * non-space character on its own. Quoted segments and comments produce none.
+ * What `codeTokens` reads a string, a quoted name or a dollar-quoted body as.
+ * No code token can equal it, so a quoted `"begin"` never reads as BEGIN.
+ */
+const QUOTED_TOKEN = "<quoted>";
+
+/**
+ * The code tokens of a text: its words, upper-cased, every other non-space
+ * character on its own, and each quoted segment as one `QUOTED_TOKEN`.
+ * Comments produce none.
+ *
+ * A quoted segment stays a token so the token before a keyword is the one
+ * the server reads there: in `WHEN NEW.status = 'published' BEGIN` it is the
+ * string, not the `=`, which would make BEGIN read as a name.
  */
 function codeTokens(
   text: string,
@@ -767,7 +854,13 @@ function codeTokens(
 ): string[] {
   const tokens: string[] = [];
   for (const segment of scanSql(text, dialect)) {
-    if (segment.kind !== "code") continue;
+    if (segment.kind === "line-comment" || segment.kind === "block-comment") {
+      continue;
+    }
+    if (segment.kind !== "code") {
+      tokens.push(QUOTED_TOKEN);
+      continue;
+    }
     const code = text.slice(segment.start, segment.end);
     for (const token of code.match(/[A-Za-z_][\w$]*|\S/g) ?? []) {
       tokens.push(token.toUpperCase());

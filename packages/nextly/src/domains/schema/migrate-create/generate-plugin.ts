@@ -22,7 +22,9 @@ import { resolve } from "node:path";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { leavesExistingRowsEmpty } from "../extension/extension-columns";
 import {
+  assertModuleKeysFit,
   migrationChecksum,
   orderedMigrations,
   type ContributionsByDialect,
@@ -38,7 +40,11 @@ import type {
   TableSpec,
 } from "../pipeline/diff/types";
 import { withForeignKeysLiftedForTypeChanges } from "../pipeline/foreign-key-lift";
-import { generateStatements } from "../pipeline/sql-templates/index";
+import {
+  generateStatements,
+  MysqlUnsupportedOperationError,
+  SqliteUnsupportedOperationError,
+} from "../pipeline/sql-templates/index";
 
 import { foreignTableSides, NO_ELEMENTS } from "./app-stream";
 import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
@@ -94,6 +100,13 @@ export interface BuildPluginMigrationArgs {
 export interface BuiltPluginMigration {
   module: PluginMigration;
   operationCounts: Record<SupportedDialect, number>;
+  /**
+   * The dialects whose change has no generated SQL, because the dialect
+   * cannot make it in place (`renderDialect`). Their `up` and `down` are
+   * empty for the author to write; the module carries both snapshot sides
+   * either way. Empty when every dialect rendered.
+   */
+  handWritten: SupportedDialect[];
 }
 
 /**
@@ -101,12 +114,25 @@ export interface BuiltPluginMigration {
  * the shared diff-and-render core — the same call sequence
  * `generateMigration` makes for the app, so the two paths cannot disagree
  * about what a `TableSpec` renders to.
+ *
+ * A change the dialect cannot make in place — a column's type or
+ * nullability on SQLite, its nullability on MySQL — comes back with no
+ * statements and `handWritten` set, rather than failing the whole module. The
+ * module still records the change's two sides, so once the author writes its
+ * SQL the next generation diffs from the changed shape and the stream moves
+ * on. Failing instead wrote nothing, and a module written by `--blank`
+ * carries the previous shape on both sides, so every later generation met
+ * the same change and failed the same way.
  */
 function renderDialect(
   previousTables: readonly TableSpec[],
   desiredTables: readonly TableSpec[],
   dialect: SupportedDialect
-): { statements: DialectStatements; operations: Operation[] } {
+): {
+  statements: DialectStatements;
+  operations: Operation[];
+  handWritten: boolean;
+} {
   const previous: NextlySchemaSnapshot = { tables: [...previousTables] };
   const desired: NextlySchemaSnapshot = { tables: [...desiredTables] };
   // On MySQL, every existing foreign key a type change covers is lifted
@@ -124,19 +150,84 @@ function renderDialect(
   // SQLite a check or foreign-key change is a rebuild of its table to the
   // schema each direction leads to, so a direction is not one statement per
   // operation there.
-  const up = generateStatements(operations, dialect, desired.tables);
-  // Inverting the ops — not re-diffing — keeps a forward rename-shaped change
-  // reversible in principle and always emits the exact inverse of what ran.
-  const down = generateStatements(
-    withCyclicForeignKeysSplit(
-      buildInverseOperations(operations, previous),
+  try {
+    const up = generateStatements(operations, dialect, desired.tables);
+    // Inverting the ops — not re-diffing — keeps a forward rename-shaped
+    // change reversible in principle and always emits the exact inverse of
+    // what ran.
+    const down = generateStatements(
+      withCyclicForeignKeysSplit(
+        buildInverseOperations(operations, previous),
+        dialect,
+        desired.tables
+      ),
       dialect,
-      desired.tables
-    ),
-    dialect,
-    previous.tables
+      previous.tables
+    );
+    return { statements: { up, down }, operations, handWritten: false };
+  } catch (error) {
+    if (
+      !(error instanceof SqliteUnsupportedOperationError) &&
+      !(error instanceof MysqlUnsupportedOperationError)
+    ) {
+      throw error;
+    }
+    // Both directions are left to the author: half a generated pair would
+    // read as a whole one.
+    return {
+      statements: { up: [], down: [] },
+      operations,
+      handWritten: true,
+    };
+  }
+}
+
+/**
+ * The columns a list of operations adds that the rows already in their table
+ * would have no value for: NOT NULL with no default
+ * (`leavesExistingRowsEmpty`, the rule a contributed column is held to when
+ * it is declared). As `table.column`.
+ *
+ * Every `add_column` here is on a table this plugin's earlier modules
+ * created, or on a foreign table it contributes to, so the table may hold
+ * rows wherever the module runs. A column the database assigns
+ * (`autoIncrement`) gives each row its value.
+ */
+function columnsExistingRowsCannotHold(
+  operations: readonly Operation[]
+): string[] {
+  return operations.flatMap(operation =>
+    operation.type === "add_column" &&
+    operation.column.autoIncrement !== true &&
+    leavesExistingRowsEmpty(operation.column)
+      ? [`${operation.tableName}.${operation.column.name}`]
+      : []
   );
-  return { statements: { up, down }, operations };
+}
+
+/**
+ * Refuse a module that adds a NOT NULL column with no default to a table
+ * that already exists.
+ *
+ * The dialects disagree about such a column: SQLite refuses it, PostgreSQL
+ * refuses it once the table has rows, and MySQL fills the rows with 0 or ''
+ * without saying so. Refused on every dialect at generation, so one module
+ * means the same thing everywhere and the answer does not depend on whether
+ * the database it was tried on was empty.
+ */
+function assertAddedColumnsFillExistingRows(
+  pluginName: string,
+  columns: ReadonlySet<string>
+): void {
+  if (columns.size === 0) return;
+  const named = [...columns].sort();
+  throw new NextlyError({
+    code: "PLUGIN_MIGRATION_ADDS_UNFILLABLE_COLUMN",
+    publicMessage:
+      `This migration would add ${named.join(", ")} as NOT NULL with no default to a table plugin "${pluginName}" created earlier, and the rows already in it would have no value for ${named.length === 1 ? "it" : "them"}. ` +
+      `Give ${named.length === 1 ? "the column" : "each column"} a default, or write the addition by hand — add the column nullable, fill the existing rows, then make it NOT NULL — in a module from \`nextly migrate:create --plugin <entry> --blank\`, which records this change for the SQL you write.`,
+    logContext: { plugin: pluginName, columns: named },
+  });
 }
 
 /** The tables and columns a list of operations drops, by name. */
@@ -171,7 +262,7 @@ function assertNothingCreatedIsDropped(
     code: "PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA",
     publicMessage:
       `This migration would drop ${named.join(", ")}, which an earlier migration of plugin "${pluginName}" created, and lose ${one ? "its" : "their"} rows. ` +
-      `If ${one ? "it was" : "they were"} renamed, write the rename as a migration by hand; if the drop is deliberate, write the drop by hand.`,
+      `If ${one ? "it was" : "they were"} renamed, write the rename by hand; if the drop is deliberate, write the drop by hand — in a module from \`nextly migrate:create --plugin <entry> --blank\`, which records this change for the SQL you write.`,
     logContext: { plugin: pluginName, drops: named },
   });
 }
@@ -198,20 +289,29 @@ function assertSchemaVersionAdvanced(
   });
 }
 
+/** The change from the previous module to the declared schema, per dialect. */
+interface PluginMigrationPlan {
+  previous: PluginMigration | undefined;
+  /** Every part of the module's content but its name, version and run mode. */
+  body: Omit<MigrationContent, "name" | "schemaVersion" | "transaction">;
+  operationCounts: Record<SupportedDialect, number>;
+  totalOperations: number;
+  /** Tables and columns the change drops, across every dialect, by name. */
+  drops: ReadonlySet<string>;
+  /** Columns it adds that existing rows would hold no value for, likewise. */
+  unfillable: ReadonlySet<string>;
+  handWritten: SupportedDialect[];
+}
+
 /**
- * Build the next migration module for a plugin. Returns null when no dialect
- * has operations (the CLI's "no changes detected" exit-2 contract), whatever
- * the declared schemaVersion.
- *
- * Throws `PLUGIN_SCHEMA_VERSION_NOT_ADVANCED` when there are changes and
- * `schemaVersion` does not
- * move past the previous module's: module order is name-sorted and the runner
- * takes the version from the LAST module, so an un-bumped regeneration would
- * silently describe a schema the plugin's manifest no longer claims.
+ * Diff the declared schema against the previous module's on every dialect
+ * and render the change: the one derivation both a generated module and one
+ * whose SQL the author writes (`buildBlankPluginMigration`) are built from,
+ * so the two record the same sides for the same change.
  */
-export function buildPluginMigration(
+function planPluginMigration(
   args: BuildPluginMigrationArgs
-): BuiltPluginMigration | null {
+): PluginMigrationPlan {
   const previous = lastModule(args.existing);
 
   const dialects = {} as Record<SupportedDialect, DialectStatements>;
@@ -226,6 +326,9 @@ export function buildPluginMigration(
   let totalOperations = 0;
   // Tables and columns the diff would drop, across every dialect, by name.
   const drops = new Set<string>();
+  // Columns added that existing rows would hold no value for, likewise.
+  const unfillable = new Set<string>();
+  const handWritten: SupportedDialect[] = [];
   const contributions: ContributionsByDialect = {};
 
   for (const dialect of ALL_DIALECTS) {
@@ -269,12 +372,14 @@ export function buildPluginMigration(
     // ONE diff over the union. A foreign table appears on both sides, so only
     // the elements this plugin added to it come out as operations; its own
     // columns are identical either side and produce nothing.
-    const { statements, operations } = renderDialect(
+    const rendered = renderDialect(
       [...previousTables, ...previousContributed],
       [...desiredTables, ...desiredContributed],
       dialect
     );
-    dialects[dialect] = statements;
+    const { operations } = rendered;
+    dialects[dialect] = rendered.statements;
+    if (rendered.handWritten) handWritten.push(dialect);
     snapshot[dialect] = { tables: desiredTables };
     before[dialect] = { tables: previousTables };
     contributed[dialect] = { tables: desiredContributed };
@@ -284,30 +389,61 @@ export function buildPluginMigration(
     for (const dropped of droppedTablesAndColumns(operations)) {
       drops.add(dropped);
     }
+    for (const column of columnsExistingRowsCannotHold(operations)) {
+      unfillable.add(column);
+    }
   }
 
-  assertNothingCreatedIsDropped(args.pluginName, drops);
-  if (totalOperations === 0) return null;
+  return {
+    previous,
+    body: {
+      dialects,
+      snapshot,
+      before,
+      contributed,
+      contributedBefore,
+      // Present only when there are some, so a module that contributes
+      // nothing stays byte-identical to one generated before contributions
+      // were recorded.
+      ...(Object.keys(contributions).length > 0 ? { contributions } : {}),
+    },
+    operationCounts,
+    totalOperations,
+    drops,
+    unfillable,
+    handWritten,
+  };
+}
+
+/**
+ * Build the next migration module for a plugin. Returns null when no dialect
+ * has operations (the CLI's "no changes detected" exit-2 contract), whatever
+ * the declared schemaVersion.
+ *
+ * Throws `PLUGIN_SCHEMA_VERSION_NOT_ADVANCED` when there are changes and
+ * `schemaVersion` does not
+ * move past the previous module's: module order is name-sorted and the runner
+ * takes the version from the LAST module, so an un-bumped regeneration would
+ * silently describe a schema the plugin's manifest no longer claims.
+ */
+export function buildPluginMigration(
+  args: BuildPluginMigrationArgs
+): BuiltPluginMigration | null {
+  const plan = planPluginMigration(args);
+  assertNothingCreatedIsDropped(args.pluginName, plan.drops);
+  assertAddedColumnsFillExistingRows(args.pluginName, plan.unfillable);
+  if (plan.totalOperations === 0) return null;
   // After the diff, so a plugin whose schema matches its last module reports
   // "no changes" whatever its schemaVersion: the version only has to move
   // when there is a module to give it to.
-  assertSchemaVersionAdvanced(args, previous);
+  assertSchemaVersionAdvanced(args, plan.previous);
 
   const now = args.now ?? new Date();
-  // Present only when there are some, so a module that contributes nothing
-  // stays byte-identical to one generated before contributions were recorded.
-  const recorded =
-    Object.keys(contributions).length > 0 ? { contributions } : {};
   const content: MigrationContent = {
     name: `${formatTimestamp(now)}_${slugify(args.name)}`,
     schemaVersion: args.schemaVersion,
     ...runMode(args.transaction),
-    dialects,
-    snapshot,
-    before,
-    contributed,
-    contributedBefore,
-    ...recorded,
+    ...plan.body,
   };
   // Sealed over the whole content — name, schema version, SQL and every
   // snapshot side — because the runner acts on all of them: the name is the
@@ -321,7 +457,11 @@ export function buildPluginMigration(
     checksum: migrationChecksum(content),
     ...body,
   };
-  return { module, operationCounts };
+  return {
+    module,
+    operationCounts: plan.operationCounts,
+    handWritten: plan.handWritten,
+  };
 }
 
 function lastModule(
@@ -341,27 +481,36 @@ function runMode(
   return transaction === false ? { transaction: false } : {};
 }
 
-export type BuildBlankPluginMigrationArgs = Pick<
-  BuildPluginMigrationArgs,
-  "pluginName" | "schemaVersion" | "name" | "now" | "existing" | "transaction"
->;
+export type BuildBlankPluginMigrationArgs = BuildPluginMigrationArgs;
 
 /**
  * A module with no statements, for SQL the author writes by hand: a data
- * backfill, PostgreSQL's `VACUUM` or `REINDEX ... CONCURRENTLY`.
+ * backfill, PostgreSQL's `VACUUM` or `REINDEX ... CONCURRENTLY`, or a schema
+ * change the generator will not write — a rename, a deliberate drop, a NOT
+ * NULL column filled in steps.
  *
- * It changes no table the plugin declares, so every snapshot side is the
- * previous module's result on both sides: the reconcile runs it wherever the
- * database stands at that result, and the next generated module diffs from
- * the same shape as if this one were not there. Its schema version is the
- * plugin's declared one, which may equal the previous module's — it moves no
- * schema — but not fall behind it.
+ * Its sides are the generated module's (`planPluginMigration`): the previous
+ * module's result before, the declared schema after. With nothing declared
+ * changed the two are the same, so the reconcile runs it wherever the
+ * database stands at that result and the next generated module diffs from
+ * the same shape as if this one were not there. With a change declared it
+ * records that change, so once its SQL makes it the next generation starts
+ * from the changed shape. Carrying the previous result on both sides instead
+ * left the change undone in the record, and every later generation met it
+ * again.
+ *
+ * Its schema version is the plugin's declared one. With no change it may
+ * equal the previous module's, but not fall behind it; with one it must move
+ * past it, as a generated module's must.
  */
 export function buildBlankPluginMigration(
   args: BuildBlankPluginMigrationArgs
 ): PluginMigration {
-  const previous = lastModule(args.existing);
-  if (previous && args.schemaVersion < previous.schemaVersion) {
+  const plan = planPluginMigration(args);
+  const previous = plan.previous;
+  if (plan.totalOperations > 0) {
+    assertSchemaVersionAdvanced(args, previous);
+  } else if (previous && args.schemaVersion < previous.schemaVersion) {
     throw new NextlyError({
       code: "PLUGIN_SCHEMA_VERSION_NOT_ADVANCED",
       publicMessage: `The plugin's schemaVersion is ${args.schemaVersion}, behind ${previous.schemaVersion} on its last migration. A new migration cannot claim an older schema.`,
@@ -372,41 +521,18 @@ export function buildBlankPluginMigration(
       },
     });
   }
-  const carried = (
-    side: "snapshot" | "contributed"
-  ): Record<SupportedDialect, { tables: TableSpec[] }> => {
-    const tables = (dialect: SupportedDialect) => ({
-      tables: previous?.[side]?.[dialect]?.tables ?? [],
-    });
-    return {
-      postgresql: tables("postgresql"),
-      mysql: tables("mysql"),
-      sqlite: tables("sqlite"),
-    };
-  };
-  const contributed = carried("contributed");
   const content: MigrationContent = {
     name: `${formatTimestamp(args.now ?? new Date())}_${slugify(args.name)}`,
     schemaVersion: args.schemaVersion,
     ...runMode(args.transaction),
+    ...plan.body,
     dialects: {
       postgresql: { up: [], down: [] },
       mysql: { up: [], down: [] },
       sqlite: { up: [], down: [] },
     },
-    snapshot: carried("snapshot"),
-    before: carried("snapshot"),
-    contributed,
-    contributedBefore: contributed,
-    ...(previous?.contributions === undefined
-      ? {}
-      : { contributions: previous.contributions }),
   };
   return { ...content, checksum: migrationChecksum(content) };
-}
-
-function moduleVariable(name: string): string {
-  return `m${name.replace(/[^a-zA-Z0-9]/g, "_")}`;
 }
 
 /**
@@ -470,15 +596,28 @@ export function formatPluginMigrationModule(module: PluginMigration): string {
   ].join("\n");
 }
 
+/** The identifier the barrel imports the module at `index` under. */
+function moduleBinding(index: number): string {
+  return `migration${String(index)}`;
+}
+
 /** The `index.ts` barrel, rewritten whole on every generation. */
 export function formatPluginMigrationsIndex(
   modules: readonly PluginMigration[]
 ): string {
   const ordered = orderedMigrations(modules);
+  // Each binding is named by its module's position, not its name: a name
+  // maps onto an identifier only by folding characters together, and two
+  // names folded alike (`001_a-b`, `001_a_b`) would import under one binding
+  // and leave the plugin uncompiled. The path is a string literal, so any
+  // name the file system holds is quoted as written.
   const imports = ordered
-    .map(m => `import ${moduleVariable(m.name)} from "./${m.name}";`)
+    .map(
+      (m, index) =>
+        `import ${moduleBinding(index)} from ${JSON.stringify(`./${m.name}`)};`
+    )
     .join("\n");
-  const list = ordered.map(m => moduleVariable(m.name)).join(",\n  ");
+  const list = ordered.map((_, index) => moduleBinding(index)).join(",\n  ");
   return [
     "/**",
     " * Generated by `nextly migrate:create --plugin`. Rewritten on every",
@@ -511,12 +650,15 @@ export interface GeneratePluginMigrationResult {
   indexPath: string;
   moduleName: string;
   operationCounts: Record<SupportedDialect, number>;
+  /** See `BuiltPluginMigration.handWritten`. */
+  handWritten: SupportedDialect[];
 }
 
 /**
  * Build and write the module plus the rewritten barrel. Returns null when
  * there is nothing to migrate (the CLI exits 2 for that, as the app path
- * does).
+ * does). A module with a dialect left to the author (`handWritten`) is
+ * written hand-sealed, so the SQL added to it keeps it intact.
  */
 export async function generatePluginMigration(
   args: GeneratePluginMigrationArgs
@@ -524,12 +666,17 @@ export async function generatePluginMigration(
   const built = buildPluginMigration(args);
   if (!built) return null;
   const written = await writePluginMigration(
+    args.pluginName,
     args.migrationsDir,
     built.module,
     args.existing,
-    args.handSealed === true
+    args.handSealed === true || built.handWritten.length > 0
   );
-  return { ...written, operationCounts: built.operationCounts };
+  return {
+    ...written,
+    operationCounts: built.operationCounts,
+    handWritten: built.handWritten,
+  };
 }
 
 /**
@@ -538,8 +685,11 @@ export async function generatePluginMigration(
  */
 export async function generateBlankPluginMigration(
   args: BuildBlankPluginMigrationArgs & { migrationsDir: string }
-): Promise<Omit<GeneratePluginMigrationResult, "operationCounts">> {
+): Promise<
+  Omit<GeneratePluginMigrationResult, "operationCounts" | "handWritten">
+> {
   return writePluginMigration(
+    args.pluginName,
     args.migrationsDir,
     buildBlankPluginMigration(args),
     args.existing,
@@ -574,11 +724,18 @@ async function writeModuleExclusively(
 
 /** Write one module and the barrel listing it beside the existing ones. */
 async function writePluginMigration(
+  pluginName: string,
   migrationsDir: string,
   module: PluginMigration,
   existing: readonly PluginMigration[],
   handSealed: boolean
-): Promise<Omit<GeneratePluginMigrationResult, "operationCounts">> {
+): Promise<
+  Omit<GeneratePluginMigrationResult, "operationCounts" | "handWritten">
+> {
+  // Before anything is written: a module whose ledger key is too long would
+  // be refused the next time the plugin loads, leaving it unloadable until
+  // the file was removed by hand.
+  assertModuleKeysFit(pluginName, [module]);
   await mkdir(migrationsDir, { recursive: true });
   const modulePath = resolve(migrationsDir, `${module.name}.ts`);
   await writeModuleExclusively(

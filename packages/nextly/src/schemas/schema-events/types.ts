@@ -38,6 +38,16 @@ export type SchemaEventSource =
   | "cli-sync"
   | "legacy-prebackfill"; // synthesized core_apply row during `nextly upgrade`
 
+/**
+ * The longest `filename` the ledger stores, in characters.
+ *
+ * MySQL's column is `VARCHAR(255)`; PostgreSQL and SQLite store `TEXT`. The
+ * narrowest one bounds every key, because a key one dialect records and
+ * another refuses — or, in MySQL's non-strict mode, truncates into another
+ * key — is a migration that applies on one and not the other.
+ */
+export const SCHEMA_EVENTS_FILENAME_MAX_LENGTH = 255;
+
 /** Scope the event touched. */
 export type SchemaEventScopeKind =
   | "plugin"

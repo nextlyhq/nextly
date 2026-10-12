@@ -91,7 +91,9 @@ export function generateSQL(op: Operation, dialect: SupportedDialect): string {
  * every check and foreign-key change on a table becomes ONE rebuild of that
  * table to its definition in `tablesAfter` (see `sqlite-rebuild.ts`). The
  * rebuild is a run of statements, so the result is not one entry per
- * operation on that dialect.
+ * operation on that dialect. A column whose default SQLite can only add to a
+ * table with rows by rebuilding it — a current-timestamp default — is added
+ * by the same rebuild.
  *
  * `tablesAfter` is the schema the list leads TO: the desired snapshot's
  * tables for an up migration, the previous snapshot's for the down that

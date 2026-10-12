@@ -20,11 +20,12 @@ import {
   index,
 } from "drizzle-orm/mysql-core";
 
-import type {
-  SchemaEventScopeKind,
-  SchemaEventSource,
-  SchemaEventStatus,
-  SchemaEventType,
+import {
+  SCHEMA_EVENTS_FILENAME_MAX_LENGTH,
+  type SchemaEventScopeKind,
+  type SchemaEventSource,
+  type SchemaEventStatus,
+  type SchemaEventType,
 } from "./types";
 
 export const nextlySchemaEventsMysql = mysqlTable(
@@ -44,18 +45,15 @@ export const nextlySchemaEventsMysql = mysqlTable(
       .$type<SchemaEventSource>()
       .notNull(),
 
-    filename: varchar("filename", { length: 255 }),
+    filename: varchar("filename", {
+      length: SCHEMA_EVENTS_FILENAME_MAX_LENGTH,
+    }),
     sha256: varchar("sha256", { length: 64 }),
 
     scopeKind: varchar("scope_kind", {
       length: 32,
     }).$type<SchemaEventScopeKind>(),
     scopeSlug: varchar("scope_slug", { length: 255 }),
-    // Nullable and additive; an existing row reads as core or app, which is
-    // what every row written before plugins could own a migration was.
-    ownerKind: varchar("owner_kind", { length: 32 }),
-    ownerId: varchar("owner_id", { length: 255 }),
-    ownerVersion: varchar("owner_version", { length: 64 }),
 
     startedAt: datetime("started_at", { fsp: 3 })
       .$defaultFn(() => new Date())

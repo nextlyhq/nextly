@@ -887,6 +887,36 @@ function isPresent(
 }
 
 /**
+ * The system columns a table of these fields carries.
+ *
+ * A user field replaces the system `title` or `slug` column only when it
+ * produces that column itself: matched on the column the field becomes, not
+ * its declared name (`Title` is the same column), and never by a column-less
+ * field such as a component, or the table would have neither. The runtime
+ * schema and the diff input both ask this, so it is answered once.
+ */
+export function systemColumnsForFields(
+  fields: readonly FieldDefinition[],
+  dialect: SupportedDialect,
+  opts: Omit<SystemColumnSet, "hasTitleField" | "hasSlugField"> & {
+    builtBy: ColumnOrigin;
+  }
+): SystemColumnDescriptor[] {
+  const { builtBy, ...set } = opts;
+  const declaresColumn = (column: string): boolean =>
+    fields.some(
+      f =>
+        toSnakeCase(f.name) === column &&
+        getColumnDescriptor(f, dialect, builtBy) !== null
+    );
+  return getSystemColumnDescriptors(dialect, {
+    ...set,
+    hasTitleField: declaresColumn("title"),
+    hasSlugField: declaresColumn("slug"),
+  });
+}
+
+/**
  * The system columns of one table, in declaration order.
  *
  * A projection of `SYSTEM_COLUMNS` rather than a per-dialect listing of its own: the three dialect

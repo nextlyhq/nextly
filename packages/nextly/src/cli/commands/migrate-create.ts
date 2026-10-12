@@ -356,10 +356,9 @@ export async function runMigrateCreate(
   }
   const { collections, singles, components } = merged;
 
-  // Checked on the FULL field objects, not the minimal projection below: that
-  // keeps only what DDL needs (name, type, required) and drops the very options
-  // a plugin type's rules read, so validating it would accept an invalid option
-  // because it looks absent, or reject a valid field whose option it cannot see.
+  // Checked on the config's and the manifest's own entries rather than the
+  // merged ones: the merge has already dropped shadowed Builder entities by
+  // slug, and those are filtered per kind below instead.
   //
   // A migration is the one artifact that outlives the process that wrote it, so
   // a declaration its own field type rejects would become a deployment that
@@ -921,14 +920,17 @@ interface PluginGeneration {
 }
 
 /**
- * A blank module changes no declared table, so nothing is compiled: it
- * carries the last module's schema on both sides, for SQL the author adds.
+ * A blank module, for SQL the author adds. Compiled like a generated one, so
+ * it records the change the declared schema makes, if any, for that SQL to
+ * carry out (`buildBlankPluginMigration`).
  */
 async function writeBlankPluginMigration(
-  generation: PluginGeneration
+  generation: PluginGeneration,
+  compiled: Awaited<ReturnType<typeof compilePluginDialects>>
 ): Promise<void> {
   const { definition, cwd, logger } = generation;
   const blank = await generateBlankPluginMigration({
+    ...compiled,
     pluginName: definition.name,
     schemaVersion: definition.schemaVersion,
     name: generation.name ?? "migration",
@@ -1124,6 +1126,14 @@ function reportPluginMigration(
     );
   }
   logger.info(`Rewrote ${relative(cwd, result.indexPath)}`);
+  if (result.handWritten.length > 0) {
+    logger.warn(
+      `${result.handWritten.map(getDialectDisplayName).join(", ")} cannot make this change in place, so the module has no SQL for ${result.handWritten.length === 1 ? "it" : "them"}. ` +
+        "Write each one's `up` and `down` in the module (on SQLite, a rebuild of the table: create it anew, copy the rows, drop the old one, rename the new one into place). " +
+        "The module already records the schema before and after the change, so the next generation starts from the changed shape. " +
+        "`nextly migrate` refuses to run it on a dialect whose `up` is still empty."
+    );
+  }
 }
 
 /**
@@ -1144,19 +1154,6 @@ async function runMigrateCreatePlugin(
   const definition = await loadPluginEntry(entryPath, cwd);
   const { tables, extend } = pluginSchemaOf(definition);
   const existing = await loadShippedMigrations(migrationsDir, cwd);
-
-  if (options.blank) {
-    await writeBlankPluginMigration({
-      definition,
-      name,
-      cwd,
-      migrationsDir,
-      existing,
-      options,
-      logger,
-    });
-    return;
-  }
 
   // Declared dependencies, compiled ALONGSIDE this plugin.
   //
@@ -1200,6 +1197,27 @@ async function runMigrateCreatePlugin(
     // hook cannot extend a table the draft has not been told about yet.
     dependencyPlugins,
   });
+
+  if (options.blank) {
+    await writeBlankPluginMigration(
+      {
+        definition,
+        name,
+        cwd,
+        migrationsDir,
+        existing,
+        options,
+        logger,
+      },
+      {
+        tablesByDialect,
+        contributedByDialect,
+        contributedBaselineByDialect,
+        contributions,
+      }
+    );
+    return;
+  }
 
   const result = await generatePluginMigration({
     contributedByDialect,

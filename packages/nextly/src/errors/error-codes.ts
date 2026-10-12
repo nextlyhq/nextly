@@ -121,6 +121,13 @@ export const NEXTLY_ERROR_STATUS = {
   // A generated plugin migration that would drop a table or column the
   // plugin's earlier modules created: a rename comes out as a drop and an add.
   PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA: 409,
+  // A generated plugin migration that would add a NOT NULL column with no
+  // default to a table its earlier modules created: existing rows have no
+  // value for it.
+  PLUGIN_MIGRATION_ADDS_UNFILLABLE_COLUMN: 409,
+  // A plugin migration that changes the schema on a dialect with no
+  // statements for it: its author's SQL was never written.
+  PLUGIN_MIGRATION_SQL_MISSING: 409,
   PLUGIN_MIGRATIONS_UNAVAILABLE: 409,
   // A migration would drop or rename a table or column another owner holds
   // (or, for a plugin, a table no owner row claims), or names a drop target

@@ -8,7 +8,13 @@
  */
 import { describe, expectTypeOf, it } from "vitest";
 
-import { col, defineTable, type InferInsert, type InferRow } from "../dsl";
+import {
+  col,
+  defineTable,
+  type InferInsert,
+  type InferRow,
+  type TableForeignKeyInput,
+} from "../dsl";
 
 const identities = defineTable(
   "identities",
@@ -54,10 +60,28 @@ describe("DSL types", () => {
       provider: string;
       providerAccountId: string;
       userId: string;
-      id?: string;
+      id: string;
       verified?: boolean;
       emailAtLink?: string | null;
     }>();
+  });
+
+  describe("what the database cannot fill", () => {
+    // Evaluated by the checker rather than through `@ts-expect-error`, which
+    // would stay green for any error on the line. `{} extends Pick<T, K>` is
+    // true exactly when K is optional in T.
+    type Insert = InferInsert<typeof identities>;
+    type IsOptional<T, K extends keyof T> =
+      {} extends Pick<T, K> ? true : false;
+
+    it("requires col.id(), which has no database default", () => {
+      expectTypeOf<IsOptional<Insert, "id">>().toEqualTypeOf<false>();
+    });
+
+    it("leaves col.timestamps() optional, which the database defaults", () => {
+      expectTypeOf<IsOptional<Insert, "createdAt">>().toEqualTypeOf<true>();
+      expectTypeOf<IsOptional<Insert, "updatedAt">>().toEqualTypeOf<true>();
+    });
   });
 
   describe("a col.serial() key", () => {
@@ -97,8 +121,18 @@ describe("DSL types", () => {
       // A defaulted column stays writable: only `kind: "serial"` closes a key.
       const written: InferInsert<typeof withId> = { id: "x", attempts: 1 };
       void written;
-      expectTypeOf<InferInsert<typeof withId>["id"]>().toEqualTypeOf<
-        string | undefined
+      expectTypeOf<InferInsert<typeof withId>["id"]>().toEqualTypeOf<string>();
+    });
+  });
+
+  describe("foreign key actions", () => {
+    it("offers every action MySQL can create, and not set default", () => {
+      // InnoDB refuses SET DEFAULT, so a declaration may not name it.
+      expectTypeOf<TableForeignKeyInput["onDelete"]>().toEqualTypeOf<
+        "cascade" | "set null" | "restrict" | "no action" | undefined
+      >();
+      expectTypeOf<TableForeignKeyInput["onUpdate"]>().toEqualTypeOf<
+        "cascade" | "set null" | "restrict" | "no action" | undefined
       >();
     });
   });

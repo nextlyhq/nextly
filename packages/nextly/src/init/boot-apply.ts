@@ -37,8 +37,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { LoadConfigResult } from "../cli/utils/config-loader";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
-import type { PluginMigrationSet } from "../domains/schema/migrate/plugin/run-plugin-migrations";
-import type { PluginDefinition } from "../plugins/plugin-context";
+import type {
+  PluginMigrationSet,
+  pluginMigrationArgs,
+} from "../domains/schema/migrate/plugin/run-plugin-migrations";
 
 import { reloadDynamicTables } from "./reload-dynamic-tables";
 
@@ -120,14 +122,14 @@ export async function runBootTimeApplyIfDev(opts?: {
 }
 
 /**
- * The app's configuration and its migrations directory, read as `nextly
- * migrate` reads them, or undefined when the directory does not exist: a
- * project without one has nothing for the boot to apply or register.
+ * The app's configuration and the path of its migrations directory, read as
+ * `nextly migrate` reads them. The directory need not exist: what its absence
+ * means differs by caller, so each asks about it on its own.
  */
-async function bootMigrationsDir(): Promise<
-  { configResult: LoadConfigResult; migrationsDir: string } | undefined
-> {
-  const fs = await import("fs");
+async function bootMigrateConfig(): Promise<{
+  configResult: LoadConfigResult;
+  migrationsDir: string;
+}> {
   const path = await import("path");
   const { loadConfig } = await import("../cli/utils/config-loader");
   const configResult = await loadConfig({ cwd: process.cwd() });
@@ -135,9 +137,7 @@ async function bootMigrationsDir(): Promise<
     process.cwd(),
     configResult.config.db.migrationsDir
   );
-  return fs.existsSync(migrationsDir)
-    ? { configResult, migrationsDir }
-    : undefined;
+  return { configResult, migrationsDir };
 }
 
 /**
@@ -158,16 +158,15 @@ async function bootMigrationsDir(): Promise<
  */
 async function registerMigrationMetadata(label: string): Promise<number> {
   try {
-    const dir = await bootMigrationsDir();
-    if (!dir) return 0;
-    const { migrationsDir } = dir;
+    const { migrationsDir } = await bootMigrateConfig();
     const fs = await import("fs");
     const path = await import("path");
 
-    // Check if meta directory exists
+    // The snapshots live in `meta` inside the migrations directory; a project
+    // without that directory, or without its `meta`, has none to register.
     const metaDir = path.join(migrationsDir, "meta");
     if (!fs.existsSync(metaDir)) {
-      return 0; // No metadata, skip
+      return 0;
     }
 
     // Import the registration function
@@ -294,9 +293,28 @@ async function seedPermissionsForMigrationCollections(
  */
 async function applyPendingMigrations(label: string): Promise<number> {
   try {
-    const dir = await bootMigrationsDir();
-    if (!dir) return 0;
-    const { configResult, migrationsDir } = dir;
+    const { configResult, migrationsDir } = await bootMigrateConfig();
+
+    // A configured plugin's modules run whether or not the app has a
+    // migrations directory: they ship with the plugin, and every reader
+    // `migrateCore` uses takes an absent directory as no app files. They are
+    // read through `pluginMigrationArgs`, as the CLI and the production boot
+    // read them, and the run is skipped only when there is no directory and
+    // that same source names no module, so a project with neither still
+    // returns before `migrateCore` and the schema it compiles are loaded.
+    const fs = await import("fs");
+    const { pluginMigrationArgs } = await import(
+      "../domains/schema/migrate/plugin/run-plugin-migrations"
+    );
+    const pluginMigrations = await pluginMigrationArgs(
+      configResult.config.plugins ?? []
+    );
+    if (
+      !fs.existsSync(migrationsDir) &&
+      pluginMigrations.pluginMigrationSets.length === 0
+    ) {
+      return 0;
+    }
 
     console.log(`${label} Checking for pending migrations...`);
 
@@ -371,7 +389,7 @@ async function applyPendingMigrations(label: string): Promise<number> {
       migrateCore,
       adapter: drizzleAdapter,
       extensionSchema,
-      plugins: configResult.config.plugins ?? [],
+      pluginMigrations,
       migrationsDir,
       logger,
       ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
@@ -439,10 +457,12 @@ export interface DevBootMigrateDeps<TLogger> {
  * `migrateCore` reads it as the full `DrizzleAdapter` — listing tables,
  * opening the single-connection transaction a file runs in — so a stand-in
  * exposing part of that surface would fail on the first app file. The plugin
- * modules come from `pluginMigrationArgs`, the helper the CLI and the
- * production boot read them from: `migrateCore` refuses every plugin table
- * whose plugin it is not told ships migrations, so a boot passing none would
- * stop applying the app's own files the moment a plugin declared a table.
+ * modules are what `pluginMigrationArgs` returns, the helper the CLI and the
+ * production boot read them from, taken whole: `migrateCore` refuses every
+ * plugin table whose plugin it is not told ships migrations, so a boot passing
+ * none would stop applying the app's own files the moment a plugin declared a
+ * table. The caller reads them, because it also decides from them whether a
+ * project without a migrations directory has anything to run.
  */
 export async function migrateAtDevBoot<
   TLogger,
@@ -455,7 +475,7 @@ export async function migrateAtDevBoot<
   migrateCore: (deps: DevBootMigrateDeps<TLogger>) => Promise<TResult>;
   adapter: DrizzleAdapter;
   extensionSchema: ExtensionSchema | undefined;
-  plugins: readonly PluginDefinition[];
+  pluginMigrations: Awaited<ReturnType<typeof pluginMigrationArgs>>;
   migrationsDir: string;
   logger: TLogger;
   ttlSeconds?: number;
@@ -465,15 +485,12 @@ export async function migrateAtDevBoot<
   const { adapter, label } = args;
   // Loaded here, as every heavy dependency of this file is, so importing the
   // boot does not load the migration engine.
-  const { pluginMigrationArgs } = await import(
-    "../domains/schema/migrate/plugin/run-plugin-migrations"
-  );
   const { ensureSchemaEventsTable } = await import(
     "../domains/schema/events/schema-events-ddl"
   );
   return args.migrateCore({
     extensionSchema: args.extensionSchema,
-    ...(await pluginMigrationArgs(args.plugins)),
+    ...args.pluginMigrations,
     dialect: adapter.dialect,
     db: adapter.getDrizzle(),
     adapter,

@@ -5,7 +5,7 @@
  * CLI and production boot do, or a configured plugin with tables stops the
  * app's own files applying.
  */
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -34,18 +34,22 @@ const appAdapter = {
   disconnect: async () => {},
 };
 let migrationsRoot = "";
+/** A plugin that ships one migration module. */
+const pluginWithModules = {
+  name: "fx",
+  version: "1.0.0",
+  contributes: { schema: { migrations: [migrationModule] } },
+};
+/** A plugin that ships none. */
+const pluginWithoutModules = { name: "plain", version: "1.0.0" };
+/** The plugins the loaded config lists. */
+let configuredPlugins: readonly object[] = [];
 
 vi.mock("../../cli/utils/config-loader", () => ({
   loadConfig: async () => ({
     config: {
       db: { migrationsDir: "migrations" },
-      plugins: [
-        {
-          name: "fx",
-          version: "1.0.0",
-          contributes: { schema: { migrations: [migrationModule] } },
-        },
-      ],
+      plugins: configuredPlugins,
     },
     deferredExtends: [],
   }),
@@ -75,7 +79,7 @@ import { runBootTimeApplyIfDev } from "../boot-apply";
 describe("development boot migrations", () => {
   beforeEach(() => {
     migrationsRoot = mkdtempSync(join(tmpdir(), "nextly-boot-apply-"));
-    // The boot applies only when the migrations directory exists.
+    // A project with a migrations directory.
     mkdirSync(join(migrationsRoot, "migrations"));
     vi.spyOn(process, "cwd").mockReturnValue(migrationsRoot);
     vi.stubEnv("NODE_ENV", "development");
@@ -83,6 +87,7 @@ describe("development boot migrations", () => {
     permissionSeedService.seedAllCollectionPermissions.mockClear();
     registered = { collectionsRegistered: 0, singlesRegistered: 0 };
     applied = { applied: 0, pluginModulesApplied: 0 };
+    configuredPlugins = [pluginWithModules];
   });
 
   afterEach(() => {
@@ -144,5 +149,63 @@ describe("development boot migrations", () => {
     expect(lines.some(line => line.endsWith("No pending migrations"))).toBe(
       false
     );
+  });
+});
+
+describe("development boot migrations without a migrations directory", () => {
+  beforeEach(() => {
+    // No `migrations` directory inside the project root.
+    migrationsRoot = mkdtempSync(join(tmpdir(), "nextly-boot-apply-nodir-"));
+    vi.spyOn(process, "cwd").mockReturnValue(migrationsRoot);
+    vi.stubEnv("NODE_ENV", "development");
+    migrateCore.mockClear();
+    registered = { collectionsRegistered: 0, singlesRegistered: 0 };
+    applied = { applied: 0, pluginModulesApplied: 0 };
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    rmSync(migrationsRoot, { recursive: true, force: true });
+  });
+
+  it("still runs a configured plugin's modules, without creating the directory", async () => {
+    configuredPlugins = [pluginWithModules];
+    await runBootTimeApplyIfDev();
+
+    expect(migrateCore).toHaveBeenCalledTimes(1);
+    const passed = migrateCore.mock.calls[0][0] as {
+      pluginMigrationSets?: readonly { pluginName: string }[];
+      pluginsWithMigrations?: ReadonlySet<string>;
+      migrationsDir?: string;
+    };
+    expect(passed.pluginMigrationSets?.map(set => set.pluginName)).toEqual([
+      "fx",
+    ]);
+    expect([...(passed.pluginsWithMigrations ?? [])]).toEqual(["fx"]);
+    // The configured path, absent: the run reads it as no app files.
+    expect(passed.migrationsDir).toBe(join(migrationsRoot, "migrations"));
+    expect(existsSync(join(migrationsRoot, "migrations"))).toBe(false);
+  });
+
+  it("does not run when no configured plugin ships a module", async () => {
+    configuredPlugins = [pluginWithoutModules];
+    await runBootTimeApplyIfDev();
+    expect(migrateCore).not.toHaveBeenCalled();
+  });
+
+  it("does not run when no plugin is configured", async () => {
+    configuredPlugins = [];
+    await runBootTimeApplyIfDev();
+    expect(migrateCore).not.toHaveBeenCalled();
+  });
+
+  it("runs for the directory alone when no plugin ships a module", async () => {
+    // The control for the two cases above: they hold only because the
+    // directory is absent, not because a plugin without modules stops the run.
+    mkdirSync(join(migrationsRoot, "migrations"));
+    configuredPlugins = [pluginWithoutModules];
+    await runBootTimeApplyIfDev();
+    expect(migrateCore).toHaveBeenCalledTimes(1);
   });
 });

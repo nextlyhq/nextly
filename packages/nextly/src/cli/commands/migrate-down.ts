@@ -48,11 +48,13 @@ import {
   assertNoForeignDrops,
   columnsAfter,
   readLiveColumns,
+  readLiveElements,
   readLiveIndexTables,
   readLiveTables,
   rebuildBlockStatements,
   tablesCreatedBy,
   type LiveColumns,
+  type LiveElements,
 } from "../../domains/schema/ownership/drop-guard";
 import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
 import { findUnexpectedDestructiveStatements } from "../../domains/schema/pipeline/filter-unsafe-statements";
@@ -214,6 +216,14 @@ export interface MigrateDownCoreDeps {
     statementLists: ReadonlyArray<readonly string[]>
   ) => Promise<LiveColumns>;
   /**
+   * The live indexes, foreign keys and checks of the tables the targets'
+   * DOWNs rebuild (`readLiveElements`), read once before any runs. Absent, a
+   * rebuild is read as the drop it would otherwise be.
+   */
+  readLiveElements?: (
+    statementLists: ReadonlyArray<readonly string[]>
+  ) => Promise<LiveElements>;
+  /**
    * The tables the targets' DOWNs create that exist already
    * (`readLiveTables`). Absent, the guard credits a DOWN with no table it
    * creates.
@@ -258,6 +268,8 @@ interface PlannedDown {
    * for the first target, then as the targets before it leave them.
    */
   liveColumns?: LiveColumns;
+  /** The live elements of the tables it rebuilds; see `readLiveState`. */
+  liveElements?: LiveElements;
   /** The tables it creates that exist before it runs (`readLiveState`). */
   liveTables?: ReadonlySet<string>;
   /** The table each index its DOWN names without one is on; see `readLiveState`. */
@@ -296,6 +308,7 @@ function refusalOf(
     // statement runs, so the ledger records nothing.
     assertNoForeignDrops({
       liveColumns: p.liveColumns,
+      liveElements: p.liveElements,
       liveTables: p.liveTables,
       liveIndexTables: p.liveIndexTables,
       statements: p.statements,
@@ -323,7 +336,11 @@ async function readLiveState(
   planned: PlannedDown[],
   deps: Pick<
     MigrateDownCoreDeps,
-    "dialect" | "readLiveColumns" | "readLiveTables" | "readLiveIndexTables"
+    | "dialect"
+    | "readLiveColumns"
+    | "readLiveElements"
+    | "readLiveTables"
+    | "readLiveIndexTables"
   >
 ): Promise<void> {
   const lists = planned.map(p => p.statements);
@@ -334,8 +351,14 @@ async function readLiveState(
   // taking nothing — the only way it can exist by that target's turn is that
   // an earlier target of this same rollback, this stream's, recreated it.
   const indexTables = await deps.readLiveIndexTables?.(lists);
+  // Read once too. Every target of a rollback is one stream's, so an
+  // element an earlier target put on a table is this stream's to leave out
+  // of a later rebuild, and one an earlier target took is judged again by a
+  // later rebuild that leaves it out, as the earlier target's drop was.
+  const elements = await deps.readLiveElements?.(lists);
   for (const p of planned) {
     p.liveColumns = columns;
+    p.liveElements = elements;
     p.liveTables = tables;
     p.liveIndexTables = indexTables;
     columns = columnsAfter(p.statements, deps.dialect, columns);
@@ -692,6 +715,7 @@ export async function runMigrateDown(
       owners,
       elementOwners: ownerRows,
       readLiveColumns: lists => readLiveColumns(db, dialect, lists),
+      readLiveElements: lists => readLiveElements(db, dialect, lists),
       readLiveTables: lists => readLiveTables(db, dialect, lists),
       readLiveIndexTables: lists => readLiveIndexTables(db, dialect, lists),
 

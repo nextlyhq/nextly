@@ -38,23 +38,22 @@ export interface MergeUiEntitiesResult {
   droppedUiSlugs: string[];
 }
 
-function uiToMinimal(
+/**
+ * A UI-built entity in the shape the diff engine reads.
+ *
+ * Its fields are handed over whole, as they are for a code-first entity: the
+ * column descriptor reads keys a chosen list would have to be kept in step
+ * with (`virtual`, `options`, `dbType`, `validation`), and a key left out is a
+ * column described differently from the one dev push builds.
+ */
+export function uiToMinimal(
   entity: UiSchemaEntity,
   prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
 ): MinimalConfigEntity {
   return {
     slug: entity.slug,
     tableName: `${prefix}${entity.slug.replace(/-/g, "_")}`,
-    fields: entity.fields.map(f => ({
-      name: f.name,
-      type: f.type,
-      required: f.required,
-      hasMany: f.hasMany,
-      relationTo: f.relationTo,
-      unique: f.unique,
-      index: f.index,
-      localized: f.localized,
-    })),
+    fields: [...entity.fields],
     status: entity.status === true,
     localized: entity.localized === true,
   };

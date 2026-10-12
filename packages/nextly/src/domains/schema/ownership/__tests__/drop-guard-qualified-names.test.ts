@@ -51,6 +51,13 @@ function guard(
     dialect,
     source: "0009_under_test",
     liveColumns,
+    // Each rebuilt table has no index, foreign key or check in the database.
+    liveElements: new Map(
+      [...(liveColumns?.keys() ?? [])].map(table => [
+        table,
+        { index: new Set(), fk: new Set(), check: new Set() },
+      ])
+    ),
     liveTables: LIVE_TABLES,
   });
 }
@@ -290,7 +297,9 @@ describe("a list that may change what an unqualified name reaches", () => {
 
   it("does not trust a rebuild block either", () => {
     // After the SET the twin and the rename back land in `scratch`, while
-    // the DROP still reaches the table the plugin is rebuilding.
+    // the DROP still reaches the table the plugin is rebuilding. On
+    // PostgreSQL the block is not trusted even without the SET: only
+    // SQLite's is read as keeping its table.
     const rebuild = [
       'CREATE TABLE "__new_auth__identities" ("id" INT, "provider" TEXT)',
       'INSERT INTO "__new_auth__identities" ("id", "provider") SELECT "id", "provider" FROM "auth__identities"',
@@ -298,17 +307,15 @@ describe("a list that may change what an unqualified name reaches", () => {
       'ALTER TABLE "__new_auth__identities" RENAME TO "auth__identities"',
     ];
     const live = new Map([["auth__identities", new Set(["id", "provider"])]]);
-    expect(() => guard(rebuild, "plugin:fx", "postgresql", live)).not.toThrow();
-    expect(
-      refusal(() =>
-        guard(
-          ["SET search_path = scratch, public", ...rebuild],
-          "plugin:fx",
-          "postgresql",
-          live
-        )
-      )
-    ).toMatchObject({ table: "auth__identities", belongsTo: "plugin:auth" });
+    expect(() => guard(rebuild, "plugin:fx", "sqlite", live)).not.toThrow();
+    for (const statements of [
+      rebuild,
+      ["SET search_path = scratch, public", ...rebuild],
+    ]) {
+      expect(
+        refusal(() => guard(statements, "plugin:fx", "postgresql", live))
+      ).toMatchObject({ table: "auth__identities", belongsTo: "plugin:auth" });
+    }
   });
 
   it("does not trust a rebuild block spelled with qualified names", () => {
@@ -322,7 +329,7 @@ describe("a list that may change what an unqualified name reaches", () => {
             'ALTER TABLE scratch."__new_auth__identities" RENAME TO "auth__identities"',
           ],
           "plugin:fx",
-          "postgresql",
+          "sqlite",
           new Map([["auth__identities", new Set(["id"])]])
         )
       )

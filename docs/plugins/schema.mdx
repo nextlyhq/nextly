@@ -5,7 +5,7 @@ description: Contribute collections, extend existing entities (including Builder
 
 A plugin's schema contributions flow through the **same unified merge pipeline** as your
 app's own code-first schema and the Visual Schema Builder's schema (D3). The host can read them
-*without running your plugin*, so the admin and codegen can reason about them.
+_without running your plugin_, so the admin and codegen can reason about them.
 
 ## Contribute new entities
 
@@ -199,8 +199,18 @@ expressed cannot drift between them.
 The declaration creates and migrates the table under its SQL name
 (`auth__identities` above). Plugin code queries it through `ctx.db`, the
 Drizzle builder, with a Drizzle table object that names the same table and
-columns. `col.id()` has no database default, so the code that inserts a row
-supplies its `id`.
+columns.
+
+`col.id()` has no database default, so the code that inserts a row supplies
+its `id`, and `InferInsert` requires it. Any UUID fits the `varchar(36)`
+column; a UUIDv7 (the `uuid` package's `v7()`, for example) keeps new rows in
+key order. `col.timestamps()` gives `created_at` and `updated_at` a database
+default of the current time, so an insert may leave both out, but nothing
+refreshes `updated_at` afterwards: set it in every update your code makes.
+
+A column you contribute to a Nextly collection's table is different, because
+Nextly writes those rows: an `updatedAt` from `col.timestamps()` contributed
+there is refreshed on each update Nextly makes to the entry.
 
 ## Hooks, when a declaration is not enough
 
@@ -226,14 +236,14 @@ produce identical output.
 
 ## What you may change
 
-| Target | Columns | Indexes |
-| --- | --- | --- |
-| Your own tables | yes | yes |
-| A plugin you name in `dependsOn` / `optionalDependsOn` | yes, hidden | yes |
-| Any other plugin's tables | no | no |
-| Entity tables (`dc_*`, `single_*`, `comp_*`) | yes, hidden | yes |
-| Extendable core tables (`users`, `media`, `nextly_jobs`, `audit_log`, `activity_log`) | yes, hidden | yes |
-| Every other core table | no | no |
+| Target                                                                                | Columns     | Indexes |
+| ------------------------------------------------------------------------------------- | ----------- | ------- |
+| Your own tables                                                                       | yes         | yes     |
+| A plugin you name in `dependsOn` / `optionalDependsOn`                                | yes, hidden | yes     |
+| Any other plugin's tables                                                             | no          | no      |
+| Entity tables (`dc_*`, `single_*`, `comp_*`)                                          | yes, hidden | yes     |
+| Extendable core tables (`users`, `media`, `nextly_jobs`, `audit_log`, `activity_log`) | yes, hidden | yes     |
+| Every other core table                                                                | no          | no      |
 
 The app may add columns and indexes to any plugin's table, under the same
 rules.
@@ -270,7 +280,8 @@ value: `DESC`, `ASC`, `NULLS FIRST/LAST`, `COLLATE` and operator classes such as
 `text_pattern_ops` are refused at `defineTable`, because no dialect reports them
 back and the index would be planned again on every push. `col.ref()` alone records a reference
 for documentation and validation; a constraint comes from the `foreignKeys`
-option.
+option. A foreign key may not use `onDelete` or `onUpdate: "set default"`,
+which MySQL cannot create.
 
 ## Production
 
@@ -286,9 +297,29 @@ boot refuses a plugin whose declared version the database has not applied
 Generation never drops a table or column an earlier module created. The
 generator cannot tell a rename from a drop and an add, and either loses the
 rows, so it refuses (`PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA`) and names what
-it would have dropped; write the rename, or the deliberate drop, by hand. With
-no schema changes it writes nothing and exits with code 2, whatever
-`schemaVersion` says.
+it would have dropped; write the rename, or the deliberate drop, by hand in a
+module from `--blank` (below). With no schema changes it writes nothing and
+exits with code 2, whatever `schemaVersion` says.
+
+A column added to a table an earlier module created has to give the rows
+already in it a value, so generation refuses one that is `NOT NULL` with no
+default (`PLUGIN_MIGRATION_ADDS_UNFILLABLE_COLUMN`) on every dialect: SQLite
+and PostgreSQL would refuse it on a table with rows, and MySQL would fill the
+rows with `0` or `''` without saying so. Give it a default, or add it nullable,
+fill the rows and make it `NOT NULL` yourself in a module from `--blank`. A
+column with a current-time default, such as `col.timestamps()`, is added on
+SQLite by rebuilding the table, because SQLite's `ADD COLUMN` refuses that
+default once the table has rows; each existing row takes the time of the
+migration.
+
+Some changes a dialect cannot make in place: a column's type or nullability on
+SQLite, and its nullability on MySQL. Generation still writes the module, with
+that dialect's `up` and `down` empty for you to fill and the change recorded
+on both sides, so once you write the SQL (on SQLite, a rebuild of the table)
+the next generation starts from the changed shape. The command names the
+dialects left to you, and `nextly migrate` refuses to run a module that
+changes the schema on a dialect whose `up` is still empty
+(`PLUGIN_MIGRATION_SQL_MISSING`).
 
 Each module runs in one transaction. A module that needs a statement a
 transaction refuses, such as PostgreSQL's `CREATE INDEX CONCURRENTLY`, sets
@@ -318,7 +349,9 @@ const content = {
   transaction: false,
   dialects: {
     postgresql: {
-      up: ["CREATE INDEX CONCURRENTLY IF NOT EXISTS notes_label_idx ON acme__notes (label)"],
+      up: [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS notes_label_idx ON acme__notes (label)",
+      ],
       down: ["DROP INDEX CONCURRENTLY IF EXISTS notes_label_idx"],
     },
     mysql: { up: [], down: [] },
@@ -348,10 +381,14 @@ You rarely write one from nothing. `nextly migrate:create` writes it in this
 form:
 
 - `nextly migrate:create --plugin ./src/index.ts --blank` writes a module with
-  no statements for SQL you add, such as a backfill or a `VACUUM`. It carries
-  the previous module's schema on both sides, so its SQL must not change the
-  tables the plugin declares; its `schemaVersion` is the plugin's, which may
-  equal the previous module's. Add `--no-transaction` for a module with
+  no statements for SQL you add. It records the change from the previous
+  module's schema to the plugin's declared one, so it serves both kinds of
+  hand-written work. With the declared schema unchanged, both sides are the
+  previous module's, for SQL that changes no declared table, such as a
+  backfill or a `VACUUM`, and its `schemaVersion` may equal the previous
+  module's. With a change declared, such as a renamed column, it records that
+  change for your SQL to make, and its `schemaVersion` must move past the
+  previous module's. Add `--no-transaction` for a module with
   `transaction: false`.
 - `nextly migrate:create --plugin ./src/index.ts --no-transaction` generates the
   next module from the plugin's schema, as usual, with `transaction: false`, so

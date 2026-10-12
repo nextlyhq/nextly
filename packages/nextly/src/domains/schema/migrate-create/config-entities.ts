@@ -14,24 +14,12 @@
  *
  * @module domains/schema/migrate-create/config-entities
  */
-import type { MinimalConfigEntity } from "./generate";
+import type { MinimalConfigEntity, MinimalConfigField } from "./generate";
 
 /** The shape of a config entry before it is reduced. */
 interface RawConfigEntity {
   slug: string;
-  fields?: {
-    name: string;
-    type: string;
-    required?: boolean;
-    hasMany?: boolean;
-    relationTo?: string | string[];
-    unique?: boolean;
-    index?: boolean;
-    localized?: boolean;
-    dbType?: "integer" | "decimal";
-    precision?: number;
-    scale?: number;
-  }[];
+  fields?: MinimalConfigField[];
   dbName?: string;
   status?: boolean;
   localized?: boolean;
@@ -41,11 +29,16 @@ interface RawConfigEntity {
 /**
  * Reduce config entries to the shape the diff engine reads.
  *
- * Every forwarded attribute changes a column: `dbType`/`precision`/`scale`
- * decide whether a number is stored as a decimal, `unique`/`index` decide
- * which indexes are desired, `localized` moves a column to the companion
- * table, and `status` adds the lifecycle column. Dropping one here does not
- * fail — it produces a desired state that quietly disagrees with the live one.
+ * The entity is reduced; its fields are not. Every key a field carries can
+ * change a column — `virtual` removes it, `options` sizes it, `dbType` makes
+ * it a decimal, `unique`/`index` key it — and dev push reads the field as
+ * declared. Forwarding a chosen list instead made each key the list missed a
+ * column these commands wrote and dev push did not, with nothing failing: the
+ * desired state just quietly disagreed with the live one.
+ *
+ * The entity-level attributes are the ones that change a table: `status` adds
+ * the lifecycle column, `localized` moves columns to the companion table and
+ * `indexes` declares compound indexes.
  */
 export function toMinimalEntities(
   entities: unknown[],
@@ -54,19 +47,7 @@ export function toMinimalEntities(
   return entities.map(raw => {
     const e = raw as RawConfigEntity;
     const slug = e.slug;
-    const fields = (e.fields ?? []).map(f => ({
-      name: f.name,
-      type: f.type,
-      required: f.required,
-      hasMany: f.hasMany,
-      relationTo: f.relationTo,
-      unique: f.unique,
-      index: f.index,
-      localized: f.localized,
-      dbType: f.dbType,
-      precision: f.precision,
-      scale: f.scale,
-    }));
+    const fields = [...(e.fields ?? [])];
     return {
       slug,
       // Resolved through the same per-kind helper the runtime uses, so a

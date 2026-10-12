@@ -417,8 +417,9 @@ function foreignTableContributions(store: SchemaDraftStore): {
 
 /**
  * Refuse a foreign key naming a referenced column its target does not have,
- * or one whose key columns cannot reference their target's on every dialect
- * (`assertKeyColumnsComparable`).
+ * one whose key columns cannot reference their target's on every dialect
+ * (`assertKeyColumnsComparable`), or one whose referenced columns are not a
+ * key of a target this compile creates (`assertReferencesAKey`).
  *
  * Asked of every table whose columns this compile knows — declared, adopted,
  * core, and an entity seeded with its columns — by SQL name, which is what
@@ -437,6 +438,7 @@ function assertForeignKeyTargetsExist(
       .filter(table => table.columns.length > 0)
       .map(table => [table.name, table])
   );
+  const declared = new Map(tables.map(table => [table.name, table]));
   for (const table of tables) {
     for (const [position, fk] of (table.foreignKeys ?? []).entries()) {
       const target = known.get(fk.referencesTable);
@@ -444,8 +446,63 @@ function assertForeignKeyTargetsExist(
       const path = `${table.name}.foreignKeys[${String(position)}]`;
       assertReferencedColumnsExist(fk, target, path);
       assertKeyColumnsComparable(table, fk, target, path);
+      const declaredTarget = declared.get(fk.referencesTable);
+      if (declaredTarget !== undefined) {
+        assertReferencesAKey(fk, declaredTarget, path);
+      }
     }
   }
+}
+
+/**
+ * Refuse a foreign key whose referenced columns are not the target's primary
+ * key or a unique index over exactly those columns, in that order.
+ *
+ * Every dialect requires the referenced columns to be a key, and each fails
+ * differently when they are not: PostgreSQL refuses the constraint, MySQL
+ * accepts it over any index whose leading columns match (or refuses it, from
+ * 8.4, unless the key is unique), and SQLite accepts the table and reports a
+ * mismatch on every later write to the child. In the declared order because
+ * MySQL matches the referenced columns against an index's in order, where
+ * PostgreSQL and SQLite accept any. A partial unique index does not count —
+ * PostgreSQL never takes one as a key's target — nor does an expression
+ * index, which keys no column.
+ *
+ * Asked only of a table this compile creates, whose primary key and every
+ * index are in its declaration. An adopted, core or entity table may carry
+ * keys no declaration here records, so a key referencing one stays the
+ * database's to judge.
+ */
+function assertReferencesAKey(
+  fk: DeclaredForeignKey,
+  target: ExtensionTable,
+  path: string
+): void {
+  const sameColumns = (columns: readonly string[]): boolean =>
+    columns.length === fk.referencesColumns.length &&
+    columns.every((column, at) => column === fk.referencesColumns[at]);
+  const primaryKey = target.columns
+    .filter(column => column.primaryKey === true)
+    .map(column => column.name);
+  const isKey =
+    sameColumns(primaryKey) ||
+    target.indexes.some(
+      index =>
+        index.unique &&
+        index.where === undefined &&
+        index.expression === undefined &&
+        sameColumns(index.columns)
+    );
+  if (isKey) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path,
+        code: "INVALID",
+        message: `The foreign key references ${fk.referencesColumns.map(column => `"${column}"`).join(", ")} on "${fk.referencesTable}", which is neither its primary key nor a unique index over exactly those columns in that order. Every dialect requires a foreign key to reference a key; declare a unique index over the referenced columns.`,
+      },
+    ],
+  });
 }
 
 /** A table the draft store holds, declared or seeded. */

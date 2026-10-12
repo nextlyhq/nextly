@@ -73,7 +73,7 @@ function adapterFor(sqlite: Database.Database) {
     transaction: async <T>(
       work: (ctx: {
         execute: (statement: string) => Promise<unknown[]>;
-        drizzle: () => unknown;
+        getDrizzle: () => unknown;
         queryStatement: (statement: SQL) => Promise<unknown[]>;
       }) => Promise<T>
     ): Promise<T> => {
@@ -84,7 +84,7 @@ function adapterFor(sqlite: Database.Database) {
             sqlite.exec(statement);
             return [];
           },
-          drizzle: () => drizzle({ client: sqlite }),
+          getDrizzle: () => drizzle({ client: sqlite }),
           queryStatement: async statement =>
             drizzle({ client: sqlite }).all(statement),
         });

@@ -7,7 +7,8 @@
  * plugin table is diffed against a live table it does not describe, and the
  * pipeline proposes changes forever.
  */
-import type { Table } from "drizzle-orm";
+import { getColumns, SQL, type Table } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 import { buildExtensionSchema } from "../build-extension-schema";
 import { col, defineTable, type ColumnBuilder } from "../dsl";
@@ -230,6 +231,66 @@ describe("defaults", () => {
   });
 });
 
+describe("generated values and on-update refreshes", () => {
+  const stamped = defineTable("stamped", {
+    id: col.id(),
+    title: col.shortText(),
+    ...col.timestamps(),
+  });
+  const stampedTable: ExtensionTable = {
+    name: "fx__stamped",
+    authored: "stamped",
+    owner: { kind: "plugin", id: "fx" },
+    columns: stamped.columns.map(c => ({ ...c })),
+    indexes: [],
+  };
+
+  it("fills col.id() and refreshes updatedAt on the compiled table, on every dialect", () => {
+    for (const dialect of DIALECTS) {
+      const columns = getColumns(
+        toDrizzleTable(stampedTable, dialect) as Table
+      ) as Record<
+        string,
+        { defaultFn?: () => unknown; onUpdateFn?: () => unknown }
+      >;
+      expect(columns.id.defaultFn?.()).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+      );
+      // The refresh is the dialect's own current-timestamp expression — the
+      // same one the column's default renders — not a client clock.
+      const refresh = columns.updatedAt.onUpdateFn?.();
+      expect(refresh).toBeInstanceOf(SQL);
+      // Rendered by any one dialect: a raw chunk passes through verbatim.
+      expect(new PgDialect().sqlToQuery(refresh as SQL).sql).toBe(
+        toTableSpec(stampedTable, dialect).columns.find(
+          c => c.name === "updated_at"
+        )?.default
+      );
+      expect(columns.createdAt.onUpdateFn).toBeUndefined();
+      expect(columns.title.defaultFn).toBeUndefined();
+    }
+  });
+
+  it("changes neither the spec nor what the Drizzle table reads back as", () => {
+    // Client-side only: drizzle-kit and the diff never see them, so `id`
+    // still has no database default and nothing proposes adding one.
+    for (const dialect of DIALECTS) {
+      const shape = (c: { name: string; default?: string }) => [
+        c.name,
+        c.default === undefined ? undefined : normalizeDefault(c.default),
+      ];
+      const spec = toTableSpec(stampedTable, dialect).columns;
+      expect(spec.find(c => c.name === "id")?.default).toBeUndefined();
+      expect(
+        drizzleTableToTableSpec(
+          toDrizzleTable(stampedTable, dialect) as Table,
+          dialect
+        ).columns.map(shape)
+      ).toEqual(spec.map(shape));
+    }
+  });
+});
+
 describe("explicit index names", () => {
   it("refuses a name the diff engine would never reconcile", () => {
     // `diffIndexes` only drops or re-creates `idx_`/`uq_` names, so anything
@@ -392,10 +453,13 @@ describe("kit-table foreign keys on sqlite (bundle pass two)", () => {
 });
 
 describe("a foreign key's referenced columns", () => {
-  const notes = defineTable("notes", {
-    id: col.id(),
-    noteKey: col.shortText(),
-  });
+  // `note_key` is unique so the control below references a key, as every
+  // dialect requires of a foreign key's target.
+  const notes = defineTable(
+    "notes",
+    { id: col.id(), noteKey: col.shortText() },
+    { indexes: [{ columns: ["noteKey"], unique: true }] }
+  );
   const linking = (referenced: string) =>
     defineTable(
       "linked",
@@ -465,6 +529,153 @@ describe("a foreign key's referenced columns", () => {
     expect(() => toDrizzleTable(table, "sqlite", () => ({}))).toThrow(
       NextlyError
     );
+  });
+});
+
+describe("a foreign key's referenced key", () => {
+  /** The refusal's first message for a plugin key on `parent`, or undefined. */
+  const refusal = async (
+    dialect: SupportedDialect,
+    parentIndexes: { columns: string[]; unique?: boolean }[],
+    referenced: string[]
+  ) => {
+    const parent = defineTable(
+      "parent",
+      { id: col.id(), code: col.varchar(20), region: col.varchar(20) },
+      { indexes: parentIndexes }
+    );
+    const child = defineTable(
+      "child",
+      {
+        id: col.id(),
+        parentCode: col.varchar(20),
+        parentRegion: col.varchar(20),
+      },
+      {
+        foreignKeys: [
+          {
+            columns: ["parentCode", "parentRegion"].slice(0, referenced.length),
+            references: { table: "fx__parent", columns: referenced },
+          },
+        ],
+      }
+    );
+    try {
+      await buildExtensionSchema({
+        dialect,
+        coreTableNames: [],
+        entities: [],
+        pluginPrefixes: new Map([["fx", "fx"]]),
+        plugins: [
+          {
+            owner: { kind: "plugin" as const, id: "fx" },
+            tables: [parent, child],
+          },
+        ],
+      });
+      return undefined;
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as {
+        errors: { path: string; message: string }[];
+      };
+      return data.errors[0];
+    }
+  };
+  const NOT_A_KEY = /neither its primary key nor a unique index/;
+
+  it.each<SupportedDialect>(["postgresql", "mysql", "sqlite"])(
+    "refuses a column that is neither the primary key nor unique, on %s",
+    async dialect => {
+      expect(await refusal(dialect, [], ["code"])).toMatchObject({
+        path: "fx__child.foreignKeys[0]",
+        message: expect.stringMatching(NOT_A_KEY),
+      });
+    }
+  );
+
+  it("refuses a column covered only by a non-unique index", async () => {
+    // MySQL before 8.4 would accept this one: any index leading with the
+    // column satisfies it there, which PostgreSQL never accepts.
+    expect(
+      (await refusal("sqlite", [{ columns: ["code"] }], ["code"]))?.message
+    ).toMatch(NOT_A_KEY);
+  });
+
+  it("refuses a column that only leads a wider unique index", async () => {
+    expect(
+      (
+        await refusal(
+          "sqlite",
+          [{ columns: ["code", "region"], unique: true }],
+          ["code"]
+        )
+      )?.message
+    ).toMatch(NOT_A_KEY);
+  });
+
+  it("accepts the primary key and a unique index over exactly the columns", async () => {
+    expect(await refusal("sqlite", [], ["id"])).toBeUndefined();
+    expect(
+      await refusal("sqlite", [{ columns: ["code"], unique: true }], ["code"])
+    ).toBeUndefined();
+    expect(
+      await refusal(
+        "sqlite",
+        [{ columns: ["code", "region"], unique: true }],
+        ["code", "region"]
+      )
+    ).toBeUndefined();
+  });
+
+  it("refuses a composite key listed out of the unique index's order", async () => {
+    // MySQL matches the referenced columns to an index's in order.
+    expect(
+      (
+        await refusal(
+          "sqlite",
+          [{ columns: ["code", "region"], unique: true }],
+          ["region", "code"]
+        )
+      )?.message
+    ).toMatch(NOT_A_KEY);
+  });
+
+  it("leaves an adopted table's columns, whose keys no declaration records, to the database", async () => {
+    const legacy = defineTable("legacy_orders", {
+      id: col.id(),
+      code: col.varchar(20),
+    });
+    const child = defineTable(
+      "child",
+      { id: col.id(), orderCode: col.varchar(20) },
+      {
+        foreignKeys: [
+          {
+            columns: ["orderCode"],
+            references: { table: "legacy_orders", columns: ["code"] },
+          },
+        ],
+      }
+    );
+    await expect(
+      buildExtensionSchema({
+        dialect: "sqlite",
+        coreTableNames: [],
+        entities: [],
+        pluginPrefixes: new Map(),
+        plugins: [],
+        app: {
+          owner: { kind: "app" as const },
+          extend: [
+            ({ schema }) => {
+              schema.adoptTable(legacy);
+              schema.addTable(child);
+            },
+          ],
+        },
+      })
+    ).resolves.toBeDefined();
   });
 });
 

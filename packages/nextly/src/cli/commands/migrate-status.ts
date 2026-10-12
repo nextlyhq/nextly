@@ -305,11 +305,12 @@ export async function runMigrateStatus(
     });
     logger.debug(`Found ${migrationFiles.length} migration file(s)`);
 
-    const appliedMigrations = await getAppliedMigrations(
+    const ledger = await readStatusLedger(
       adapter as unknown as DrizzleAdapter,
       dialect,
       options.plugin
     );
+    const appliedMigrations = ledger.applied;
     logger.debug(`${appliedMigrations.length} migration(s) in database`);
 
     const migrationStatuses = buildMigrationStatuses(
@@ -319,12 +320,7 @@ export async function runMigrateStatus(
 
     const failedRollbacks = failedRollbacksSinceApply(
       appliedMigrations,
-      await new SchemaEventsRepository(
-        (adapter as unknown as DrizzleAdapter).getDrizzle(),
-        dialect
-      )
-        .listFailedRollbacks()
-        .catch(() => [])
+      ledger.rollbacks
     );
 
     const pendingCollections = await getCollectionsWithPendingChanges(
@@ -441,19 +437,28 @@ function parseMigrationFile(
   };
 }
 
-// Plan C2: applied/failed state now lives in `nextly_schema_events`
-// (`file_apply` rows), not the legacy `nextly_migrations` ledger.
-async function getAppliedMigrations(
-  adapter: DrizzleAdapter,
+/**
+ * What a status run reads from the ledger (`nextly_schema_events`): each
+ * migration's recorded state (`ledgerRecords`), and the rollbacks that failed.
+ *
+ * A ledger that is not there yet belongs to an install no migrate has run on,
+ * so nothing is recorded. A ledger that is there and cannot be read is a
+ * fault, and is raised: turning it into an empty ledger listed every applied
+ * migration as pending, which is the report most likely to be acted on.
+ */
+export async function readStatusLedger(
+  adapter: Pick<DrizzleAdapter, "getDrizzle" | "tableExists">,
   dialect: SupportedDialect,
   plugin?: string
-): Promise<MigrationRecord[]> {
-  try {
-    const repo = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
-    return ledgerRecords(await repo.listFileApplies(), plugin);
-  } catch {
-    return [];
+): Promise<{ applied: MigrationRecord[]; rollbacks: SchemaEventRow[] }> {
+  if (!(await adapter.tableExists("nextly_schema_events"))) {
+    return { applied: [], rollbacks: [] };
   }
+  const repo = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+  return {
+    applied: ledgerRecords(await repo.listFileApplies(), plugin),
+    rollbacks: await repo.listFailedRollbacks(),
+  };
 }
 
 /** An applied migration whose latest rollback attempt failed. */

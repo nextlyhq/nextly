@@ -237,7 +237,9 @@ When enabled, the global sanitization hook strips HTML tags from plain-text fiel
 | **Type** | `IndexConfig[]` |
 | **Default** | `undefined` |
 
-Compound database indexes. For single-field indexes, use `index: true` directly on the field. The `id`, `createdAt`, and `updatedAt` columns are indexed automatically.
+Compound database indexes. For single-field indexes, use `index: true` directly on the field. `id` is the primary key and `createdAt` is indexed on its own automatically.
+
+An index names top-level fields, and may also name `id`, `createdAt` and `updatedAt`. A field nested in a group or repeater cannot be indexed: its parent stores all its children in one JSON column, so the child has no column of its own, and naming one (`"seo.title"`) is refused when the collection is defined.
 
 ```typescript
 indexes: [

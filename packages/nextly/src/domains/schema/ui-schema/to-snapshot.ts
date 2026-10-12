@@ -12,43 +12,21 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import type {
-  UiSchemaEntity,
-  UiSchemaManifest,
-} from "../../../schemas/_zod/ui-schema";
+import type { UiSchemaManifest } from "../../../schemas/_zod/ui-schema";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import {
-  buildDesiredSnapshotFromConfig,
-  type MinimalConfigEntity,
-} from "../migrate-create/generate";
+import { buildDesiredSnapshotFromConfig } from "../migrate-create/generate";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
-function toMinimal(
-  entities: UiSchemaEntity[],
-  prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
-): MinimalConfigEntity[] {
-  return entities.map(e => ({
-    slug: e.slug,
-    tableName: `${prefix}${e.slug.replace(/-/g, "_")}`,
-    fields: e.fields.map(f => ({
-      name: f.name,
-      type: f.type,
-      required: f.required,
-      localized: f.localized,
-    })),
-    status: e.status === true,
-    localized: e.localized === true,
-  }));
-}
+import { uiToMinimal } from "./merge";
 
 export function uiSchemaToSnapshot(
   manifest: UiSchemaManifest,
   dialect: SupportedDialect
 ): NextlySchemaSnapshot {
   return buildDesiredSnapshotFromConfig(
-    toMinimal(manifest.collections, "dc_"),
-    toMinimal(manifest.singles, "single_"),
-    toMinimal(manifest.components, STORAGE_FORMAT.tablePrefix),
+    manifest.collections.map(e => uiToMinimal(e, "dc_")),
+    manifest.singles.map(e => uiToMinimal(e, "single_")),
+    manifest.components.map(e => uiToMinimal(e, STORAGE_FORMAT.tablePrefix)),
     dialect
   );
 }

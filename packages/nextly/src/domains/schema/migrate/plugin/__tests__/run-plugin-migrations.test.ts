@@ -11,11 +11,15 @@ import { describe, expect, it } from "vitest";
 
 import type { NextlySchemaSnapshot } from "../../../pipeline/diff/types";
 import type { ColumnSpec, TableSpec } from "../../../pipeline/diff/types";
+import type { SchemaEventRow } from "../../../events/schema-events-repository";
 import type { OwnerRecord } from "../../../ownership/owner-registry";
 import type { ReconcileRepo } from "../../drift-reconcile";
 
 import { migrationChecksum, type PluginMigration } from "../plugin-migration";
-import { runPluginMigrations } from "../run-plugin-migrations";
+import {
+  previewPluginMigrations,
+  runPluginMigrations,
+} from "../run-plugin-migrations";
 
 function tableSpec(name: string, withScore: boolean): TableSpec {
   const columns: ColumnSpec[] = [
@@ -35,10 +39,13 @@ function module(args: {
   /** `false` for a module run outside a transaction. */
   transaction?: false;
 }): PluginMigration {
+  // A schema statement by default: a module whose sides differ must carry
+  // one to run at all (`assertSchemaChangeWritten`).
+  const up = args.up ?? ['CREATE TABLE "fx__fixture" ("id" int)'];
   const dialects = {
-    postgresql: { up: args.up ?? ["-- up"], down: [] },
-    mysql: { up: args.up ?? ["-- up"], down: [] },
-    sqlite: { up: args.up ?? ["-- up"], down: [] },
+    postgresql: { up, down: [] },
+    mysql: { up, down: [] },
+    sqlite: { up, down: [] },
   };
   const sides = {
     snapshot: {
@@ -456,6 +463,79 @@ describe("runPluginMigrations", () => {
     expect(h.started).toEqual(["plugin:a/001"]);
   });
 
+  describe("a module whose SQL its author has not written", () => {
+    // What `migrate:create --plugin` writes for a change it cannot render:
+    // the change's two sides, and no statements until the author adds them.
+    const unwritten = (up: string[]) =>
+      module({
+        name: "002",
+        schemaVersion: 2,
+        before: [empty],
+        target: [created],
+        up,
+      });
+
+    it.each([
+      ["no statements", []],
+      ["only a comment", ["-- write the rebuild here"]],
+    ])(
+      "is refused, not recorded, when it would run (%s)",
+      async (_label, up) => {
+        const h = deps();
+        h.live.set("fx__a", [empty]);
+        await expect(
+          runPluginMigrations(
+            [
+              {
+                pluginName: "a",
+                pluginVersion: "1.0.0",
+                migrations: [unwritten(up)],
+              },
+            ],
+            h.deps
+          )
+        ).rejects.toMatchObject({ code: "PLUGIN_MIGRATION_SQL_MISSING" });
+        expect(h.started).toEqual([]);
+        expect(h.owners).toEqual([]);
+      }
+    );
+
+    it("is adopted where the database already holds its result", async () => {
+      const h = deps();
+      h.live.set("fx__a", [created]);
+      const result = await runPluginMigrations(
+        [
+          {
+            pluginName: "a",
+            pluginVersion: "1.0.0",
+            migrations: [unwritten([])],
+          },
+        ],
+        h.deps
+      );
+      expect(result).toEqual({ applied: 0, adopted: 1, skipped: 0 });
+      expect(h.executed).toEqual([]);
+    });
+
+    it("runs once its statements are written", async () => {
+      const h = deps();
+      h.live.set("fx__a", [empty]);
+      const result = await runPluginMigrations(
+        [
+          {
+            pluginName: "a",
+            pluginVersion: "1.0.0",
+            migrations: [
+              unwritten(['ALTER TABLE "fx__a" ADD COLUMN "score" int']),
+            ],
+          },
+        ],
+        h.deps
+      );
+      expect(result).toEqual({ applied: 1, adopted: 0, skipped: 0 });
+    });
+  });
+
   describe("modules sharing one ledger key", () => {
     const valid = module({
       name: "001",
@@ -716,8 +796,16 @@ describe("drop guard in the runner", () => {
     });
     const run = (columns: string[]) => {
       const h = deps({
+        dialect: "sqlite",
         owners: appOwnsLegacyCache(),
         liveColumns: async () => new Map([["legacy_cache", new Set(columns)]]),
+        liveElements: async () =>
+          new Map([
+            [
+              "legacy_cache",
+              { index: new Set(), fk: new Set(), check: new Set() },
+            ],
+          ]),
       });
       return runPluginMigrations(
         [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
@@ -1607,6 +1695,121 @@ describe("a limit on how many modules one run records", () => {
       expect(result).toEqual({ applied: 2, adopted: 0, skipped: 0 });
     }
   );
+
+  /** A `file_apply` ledger row, as the repository reads it back. */
+  function ledgerRow(
+    filename: string,
+    status: SchemaEventRow["status"],
+    at: number,
+    sha256: string | null
+  ): SchemaEventRow {
+    return {
+      id: `${filename}@${at}`,
+      eventType: "file_apply",
+      status,
+      source: "cli-migrate",
+      filename,
+      sha256,
+      scopeKind: null,
+      scopeSlug: null,
+      startedAt: new Date(at),
+      endedAt: null,
+      durationMs: null,
+      note: null,
+      statementsExecuted: null,
+      supersededEventIds: null,
+      supersededBy: null,
+    };
+  }
+
+  const sets = [
+    {
+      pluginName: "@acme/p",
+      pluginVersion: "1.0.0",
+      migrations: [addExtras, create, addScore],
+    },
+    { pluginName: "q", pluginVersion: "1.0.0", migrations: [other] },
+  ];
+
+  it.each([1, 2, 3, 4, undefined])(
+    "previews the modules a run with a limit of %s records, in its order",
+    async limit => {
+      const run = following(1);
+      run.deps.limit = limit;
+      await runPluginMigrations(sets, run.deps);
+
+      const preview = await previewPluginMigrations(sets, {
+        dialect: "postgresql",
+        rows: [],
+        limit,
+      });
+
+      expect(preview.map(entry => entry.filename)).toEqual(run.started);
+      expect(preview.every(entry => entry.refusals.length === 0)).toBe(true);
+    }
+  );
+
+  it("leaves out an applied module, and previews one rolled back since", async () => {
+    const preview = await previewPluginMigrations(sets, {
+      dialect: "postgresql",
+      rows: [
+        ledgerRow("plugin:@acme/p/20260101_000000_create", "applied", 1, create.checksum), // prettier-ignore
+        ledgerRow("plugin:@acme/p/20260201_000000_add_score", "applied", 1, addScore.checksum), // prettier-ignore
+        ledgerRow("plugin:@acme/p/20260201_000000_add_score", "rolled_back", 2, null), // prettier-ignore
+      ],
+      limit: 2,
+    });
+
+    expect(preview.map(entry => entry.filename)).toEqual([
+      "plugin:@acme/p/20260201_000000_add_score",
+      "plugin:@acme/p/20260301_000000_add_extras",
+    ]);
+  });
+
+  it("lists an applied module a run would refuse as changed since it ran", async () => {
+    const preview = await previewPluginMigrations(sets, {
+      dialect: "postgresql",
+      rows: [
+        ledgerRow("plugin:@acme/p/20260101_000000_create", "applied", 1, "f".repeat(64)), // prettier-ignore
+      ],
+      limit: 1,
+    });
+
+    expect(preview[0]).toMatchObject({
+      filename: "plugin:@acme/p/20260101_000000_create",
+      recorded: true,
+    });
+    expect(preview[0].refusals.join(" ")).toContain(
+      "MIGRATION_CHECKSUM_MISMATCH"
+    );
+    // The applied module spends none of the budget.
+    expect(preview.slice(1).map(entry => entry.filename)).toEqual([
+      "plugin:@acme/p/20260201_000000_add_score",
+    ]);
+  });
+
+  it("reports an unfinished attempt a run would refuse to repeat", async () => {
+    const outside = module({
+      name: "001_backfill",
+      schemaVersion: 1,
+      before: [],
+      target: [],
+      up: ["UPDATE p__things SET label = 'x'"],
+      transaction: false,
+    });
+    const preview = await previewPluginMigrations(
+      [{ pluginName: "r", pluginVersion: "1.0.0", migrations: [outside] }],
+      {
+        dialect: "postgresql",
+        rows: [ledgerRow("plugin:r/001_backfill", "failed", 1, outside.checksum)], // prettier-ignore
+      }
+    );
+
+    expect(preview).toHaveLength(1);
+    expect(preview[0].refusals.join(" ")).toContain(
+      "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
+    );
+  });
 });
 
 describe("ownership of a plugin whose modules are all recorded", () => {

@@ -40,7 +40,7 @@ import { buildUserDrizzleColumn } from "../services/runtime-schema-generator";
 import {
   defaultSql,
   toColumnDescriptor,
-  withDeclaredKeyAndDefault,
+  withDeclaredModifiers,
 } from "./column-descriptor";
 import { enumChecks } from "./enum-check";
 import { assertExplicitIdentifier } from "./naming";
@@ -421,7 +421,7 @@ export function toDrizzleTable(
   // was wrong for every table whose columns are not already snake_case.
   const columns: Record<string, unknown> = {};
   for (const column of table.columns) {
-    columns[column.key] = withDeclaredKeyAndDefault(
+    columns[column.key] = withDeclaredModifiers(
       buildUserDrizzleColumn(toColumnDescriptor(column, dialect), dialect),
       column,
       dialect

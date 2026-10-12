@@ -245,7 +245,7 @@ describe("SQLite nested transaction()", () => {
     expect(seen).toEqual([false, true, true, false]);
   });
 
-  // The handle a savepoint's context hands out (`drizzle()`) runs on the
+  // The handle a savepoint's context hands out (`getDrizzle()`) runs on the
   // connection the savepoint is open on: what it writes rolls back with the
   // savepoint and nothing else, and a read through it sees the savepoint's
   // own writes.
@@ -256,7 +256,7 @@ describe("SQLite nested transaction()", () => {
       await insert("outer");
       await adapter
         .transaction(async tx => {
-          const db = tx.drizzle<BetterSQLite3Database>();
+          const db = tx.getDrizzle<BetterSQLite3Database>();
           await db.insert(rows).values({ id: "inner" });
           seen = (await db.select().from(rows)).map(row => row.id).sort();
           throw new Error("inner failed");

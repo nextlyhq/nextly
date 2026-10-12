@@ -24,20 +24,24 @@ import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
   ENUM_STORAGE_LENGTH,
+  renderDialectType,
   toSnakeCase,
 } from "../services/field-column-descriptor";
 
 import {
+  assertColumnName,
   assertExplicitIdentifier,
   assertQuotableIdentifier,
   MAX_VARCHAR_LENGTH,
 } from "./naming";
-import type {
-  DeclaredCheck,
-  DeclaredForeignKey,
-  DefaultToken,
-  ExtensionColumnKind,
-  ExtensionIndex,
+import {
+  DECLARED_REFERENTIAL_ACTIONS,
+  type DeclaredCheck,
+  type DeclaredForeignKey,
+  type DeclaredReferentialAction,
+  type DefaultToken,
+  type ExtensionColumnKind,
+  type ExtensionIndex,
 } from "./types";
 
 /** The current-timestamp token, as one value so it compares by identity too. */
@@ -53,9 +57,16 @@ function invalid(path: string, message: string): never {
  * One column, as data plus a phantom type.
  *
  * `TValue` is the value the column reads back as, `TNullable` whether it may be
- * null, and `THasDefault` whether an insert may omit it. The last two are
- * separate because they answer different questions: a nullable column widens
- * the READ type, a defaulted one narrows what a WRITE must supply.
+ * null, and `THasDefault` whether the DATABASE has a default, so an insert may
+ * omit it. The last two are separate because they answer different questions:
+ * a nullable column widens the READ type, a defaulted one narrows what a WRITE
+ * must supply.
+ *
+ * `generated` and `onUpdate` do not count as defaults. Neither reaches the
+ * database: they are applied only by writes Nextly makes through the table it
+ * compiles, and a plugin writing its own table does not write through that
+ * one, so a type that let it omit the value would describe a row the database
+ * then refuses.
  */
 export interface ColumnBuilder<
   TValue = unknown,
@@ -463,17 +474,20 @@ export const col = {
   },
 
   /**
-   * The conventional primary key: a `varchar(36)` filled with a UUIDv7.
+   * The conventional primary key: a `varchar(36)` holding a UUIDv7.
+   *
+   * The database has no portable UUIDv7 default, so the column has none and
+   * the code inserting a row supplies the id; `InferInsert` requires it.
    *
    * Bounded rather than `text` so it stays indexable and usable in a unique key
    * on MySQL, where an unbounded text column is neither.
    */
-  id(): ColumnBuilder<string, false, true> {
+  id(): ColumnBuilder<string, false, false> {
     return {
       kind: "varchar",
       length: 36,
       nullable: false,
-      hasDefault: true,
+      hasDefault: false,
       primaryKey: true,
       generated: "uuidv7",
     };
@@ -497,7 +511,11 @@ export const col = {
     }) as ColumnBuilder<string, NullableOf<O>, HasDefaultOf<O>>;
   },
 
-  /** `created_at` and `updated_at`, both maintained by `ctx.db`. */
+  /**
+   * `created_at` and `updated_at`, both with a database default of now, so an
+   * insert may omit them. Nothing in the database refreshes `updated_at`: the
+   * code updating a row sets it.
+   */
   timestamps(): {
     createdAt: ColumnBuilder<Date, false, true>;
     updatedAt: ColumnBuilder<Date, false, true>;
@@ -547,8 +565,13 @@ export interface TableForeignKeyInput {
    * the referenced table does not have is refused when the schema compiles.
    */
   references: { table: string; columns: string[] };
-  onDelete?: "cascade" | "set null" | "restrict" | "no action" | "set default";
-  onUpdate?: "cascade" | "set null" | "restrict" | "no action" | "set default";
+  /**
+   * `no action` when omitted. `set default` is not offered: MySQL's InnoDB
+   * refuses it, so a key declaring it could not be created there.
+   */
+  onDelete?: DeclaredReferentialAction;
+  /** As `onDelete`. */
+  onUpdate?: DeclaredReferentialAction;
   /**
    * Used verbatim, so at most 63 characters. Defaults to `fk_<table>_<cols>`,
    * shortened with a hash when that is longer. Unique across every table,
@@ -679,10 +702,172 @@ function toResolvedColumn(
 }
 
 /**
+ * What a column of each kind may take as its default.
+ *
+ * `string`, `number` and `boolean` are the literal a default must be;
+ * `now` is the current-timestamp token alone; `none` refuses every default.
+ * A table because it IS one, and a `Record` over every kind so a kind added
+ * later cannot reach the DDL without an answer here.
+ *
+ * The literal's type has to match because the dialects disagree about a
+ * mismatch rather than all refusing it: `DEFAULT 'abc'` on an integer column
+ * or `DEFAULT true` on a text one is refused by PostgreSQL, coerced by MySQL
+ * and stored as written by SQLite, so the same declaration would mean three
+ * things. The typed builders already say this; a plugin written in
+ * JavaScript reaches `defineTable` with whatever it holds.
+ */
+const DEFAULT_TAKEN_BY_KIND: Record<
+  ExtensionColumnKind,
+  "string" | "number" | "boolean" | "now" | "none"
+> = {
+  text: "string",
+  shortText: "string",
+  longText: "string",
+  varchar: "string",
+  char: "string",
+  uuid: "string",
+  integer: "number",
+  smallint: "number",
+  bigint: "number",
+  double: "number",
+  real: "number",
+  decimal: "number",
+  boolean: "boolean",
+  timestamp: "now",
+  // The database assigns a serial key, and the builders offer no default
+  // for a JSON document, an enum or raw bytes.
+  serial: "none",
+  json: "none",
+  enum: "none",
+  bytes: "none",
+};
+
+/**
+ * The inclusive range an integer kind's default must fall in: the column's
+ * own range for `smallint` and `integer`, which PostgreSQL and MySQL refuse a
+ * default outside and SQLite stores anyway, and for `bigint` the integers a
+ * JavaScript number holds exactly, past which the default as written is not
+ * the value rendered.
+ */
+const INTEGER_DEFAULT_RANGE: Partial<
+  Record<ExtensionColumnKind, readonly [number, number]>
+> = {
+  smallint: [-32_768, 32_767],
+  integer: [-2_147_483_648, 2_147_483_647],
+  bigint: [Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
+};
+
+/** A UUID as PostgreSQL writes one back: hyphenated, lower-case hex. */
+const CANONICAL_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Refuse a default the column cannot hold as written on every dialect.
+ *
+ * Checked for all three dialects whichever one is live, because each case
+ * here is one where they part: one refuses the table, another stores the
+ * default, and SQLite, which enforces no column type, stores anything. The
+ * declaration would then install on some deployments and not others, or
+ * install with a default the diff never sees as equal to the declared one.
+ * Checked here rather than in each builder so the refusal can name the
+ * column.
+ */
+function assertDefaultFits(
+  tableName: string,
+  key: string,
+  builder: ColumnBuilder
+): void {
+  const value = builder.default;
+  if (value === undefined) return;
+  const path = `${tableName}.${key}`;
+  const taken = DEFAULT_TAKEN_BY_KIND[builder.kind];
+  const received =
+    typeof value === "object"
+      ? JSON.stringify(value)
+      : `the ${typeof value} ${JSON.stringify(value)}`;
+  const fits =
+    taken === "now"
+      ? typeof value === "object" && value.token === NOW.token
+      : taken !== "none" && typeof value === taken;
+  if (!fits) {
+    invalid(
+      path,
+      taken === "none"
+        ? `A ${builder.kind} column takes no default; "${key}" declares ${received}.`
+        : `The default of a ${builder.kind} column must be ${taken === "now" ? "the current-timestamp token" : `a ${taken}`}; "${key}" declares ${received}.`
+    );
+  }
+  if (typeof value === "string") assertStringDefaultFits(path, key, builder);
+  if (typeof value === "number") assertNumericDefaultFits(path, key, builder);
+}
+
+/**
+ * Refuse a string default the column cannot hold as written.
+ *
+ * A UUID default must be one: PostgreSQL's native `uuid` refuses anything
+ * else, while MySQL's `char(36)` and SQLite's text store it. It must also be
+ * in the form PostgreSQL writes it back in — hyphenated, lower-case — since
+ * PostgreSQL normalises the stored default and the diff would otherwise see
+ * it change on every comparison. A bounded column's default may not be
+ * wider than the column: MySQL refuses one past the width every text kind
+ * declares there, PostgreSQL one past a `char(n)` or `shortText`, and SQLite
+ * neither. And no string default may hold NUL, which PostgreSQL refuses
+ * anywhere in a text value.
+ */
+function assertStringDefaultFits(
+  path: string,
+  key: string,
+  builder: ColumnBuilder
+): void {
+  const value = builder.default as string;
+  if (value.includes("\u0000")) {
+    invalid(
+      path,
+      `The default of "${key}" holds a NUL character, which PostgreSQL cannot store in text.`
+    );
+  }
+  if (builder.kind === "uuid" && !CANONICAL_UUID.test(value)) {
+    invalid(
+      path,
+      `The default of the uuid column "${key}" must be a UUID written as 8-4-4-4-12 lower-case hex digits; received ${JSON.stringify(value)}.`
+    );
+  }
+  const width = boundedTextWidth(builder);
+  // Counted in characters, as `varchar(n)` and `char(n)` count them on both
+  // dialects that enforce a width, not in UTF-16 units.
+  const length = [...value].length;
+  if (width !== undefined && length > width) {
+    invalid(
+      path,
+      `The default of "${key}" is ${String(length)} characters, wider than the ${String(width)} its column holds on MySQL; received ${JSON.stringify(value)}.`
+    );
+  }
+}
+
+/**
+ * The width a text kind declares on MySQL, the dialect that bounds every one
+ * of them, or undefined for one bounded nowhere (`longText`, MySQL's `text`).
+ *
+ * Read from the type the renderer gives the column rather than restated per
+ * kind, so a kind whose rendering changes moves its bound with it.
+ */
+function boundedTextWidth(builder: ColumnBuilder): number | undefined {
+  const rendered = renderDialectType(builder.kind, "mysql", {
+    ...(builder.length !== undefined ? { length: builder.length } : {}),
+  });
+  const width = /^(?:var)?char\((\d+)\)$/i.exec(rendered)?.[1];
+  return width === undefined ? undefined : Number(width);
+}
+
+/**
  * Refuse a numeric default the column cannot hold as written.
  *
  * A default that is not a finite number renders as text no dialect takes as
- * a number. A decimal's default must also fit its column: no more fractional
+ * a number. An integer kind's default must be an integer within the column's
+ * range (`INTEGER_DEFAULT_RANGE`): PostgreSQL and MySQL round a fractional
+ * one and refuse an out-of-range one, and SQLite stores both as written. A
+ * `real` default must be within a 4-byte float's range, which PostgreSQL
+ * and MySQL refuse outside. A decimal's default must also fit its column: no more fractional
  * digits than its scale, and no more digits before the point than its
  * precision leaves room for. MySQL rounds a finer default when the table is
  * created (1.555 in DECIMAL(10,2) is stored as 1.56), so the live default
@@ -690,38 +875,115 @@ function toResolvedColumn(
  * and PostgreSQL and MySQL refuse a wider one outright (123.4 in
  * DECIMAL(3,1)), while SQLite, which ignores both, accepts either. Refused
  * on every dialect alike, so the declaration means the same wherever it is
- * deployed. Checked here rather than in `col.decimal()` so the refusal can
- * name the column.
+ * deployed.
  */
 function assertNumericDefaultFits(
-  tableName: string,
+  path: string,
   key: string,
   builder: ColumnBuilder
 ): void {
-  if (typeof builder.default !== "number") return;
-  const path = `${tableName}.${key}`;
-  if (!Number.isFinite(builder.default)) {
+  const value = builder.default as number;
+  if (!Number.isFinite(value)) {
     invalid(
       path,
-      `The default of "${key}" must be a finite number; received ${String(builder.default)}.`
+      `The default of "${key}" must be a finite number; received ${String(value)}.`
+    );
+  }
+  const range = INTEGER_DEFAULT_RANGE[builder.kind];
+  if (
+    range !== undefined &&
+    (!Number.isInteger(value) || value < range[0] || value > range[1])
+  ) {
+    invalid(
+      path,
+      `The default of the ${builder.kind} column "${key}" must be an integer between ${String(range[0])} and ${String(range[1])}; received ${String(value)}.`
+    );
+  }
+  // Rounded to a 4-byte float as the column stores it: one that overflows
+  // to infinity, or a nonzero one that underflows to zero, is out of range.
+  const asReal = Math.fround(value);
+  if (
+    builder.kind === "real" &&
+    (!Number.isFinite(asReal) || (asReal === 0 && value !== 0))
+  ) {
+    invalid(
+      path,
+      `The default of the real column "${key}" is outside the range a 4-byte float holds; received ${String(value)}.`
     );
   }
   if (builder.kind !== "decimal") return;
   const scale = builder.scale ?? DEFAULT_DECIMAL_SCALE;
-  if (fractionalDigits(builder.default) > scale) {
+  if (fractionalDigits(value) > scale) {
     invalid(
       path,
-      `The default of "${key}" has more fractional digits than its scale of ${String(scale)} allows; received ${String(builder.default)}.`
+      `The default of "${key}" has more fractional digits than its scale of ${String(scale)} allows; received ${String(value)}.`
     );
   }
   const room = (builder.precision ?? DEFAULT_DECIMAL_PRECISION) - scale;
-  if (integerDigits(builder.default) > room) {
+  if (integerDigits(value) > room) {
     invalid(
       path,
-      `The default of "${key}" has more digits before the decimal point than its precision leaves room for (${String(room)}); received ${String(builder.default)}.`
+      `The default of "${key}" has more digits before the decimal point than its precision leaves room for (${String(room)}); received ${String(value)}.`
     );
   }
 }
+
+/**
+ * Refuse a write behaviour the compiler would not apply.
+ *
+ * `generated` and `onUpdate` are honoured by the compiled table, not by the
+ * database, and only for the values it knows. A builder is plain data, so one
+ * written by hand can carry any value, and an unknown one would compile to
+ * nothing at all. Each value must also fit its column: a UUIDv7 is 36
+ * characters of text, and the refresh writes the current timestamp.
+ */
+function assertWriteBehaviourFits(
+  tableName: string,
+  key: string,
+  builder: ColumnBuilder
+): void {
+  const path = `${tableName}.${key}`;
+  const generated: unknown = builder.generated;
+  if (generated !== undefined) {
+    if (generated !== "uuidv7") {
+      invalid(
+        path,
+        `"${key}" declares generated: ${JSON.stringify(generated)}; the only generated value is "uuidv7".`
+      );
+    }
+    const holdsUuid =
+      UUID_TEXT_KINDS.has(builder.kind) ||
+      (builder.kind === "varchar" && (builder.length ?? 0) >= 36);
+    if (!holdsUuid) {
+      invalid(
+        path,
+        `"${key}" is generated as a UUIDv7, which needs a text column of at least 36 characters.`
+      );
+    }
+  }
+  const onUpdate: unknown = builder.onUpdate;
+  if (onUpdate !== undefined) {
+    if (onUpdate !== "now") {
+      invalid(
+        path,
+        `"${key}" declares onUpdate: ${JSON.stringify(onUpdate)}; the only onUpdate value is "now".`
+      );
+    }
+    if (builder.kind !== "timestamp") {
+      invalid(
+        path,
+        `"${key}" refreshes to now on update, so it must be a timestamp.`
+      );
+    }
+  }
+}
+
+/** The unbounded or wide-enough text kinds a generated UUIDv7 fits in. */
+const UUID_TEXT_KINDS: ReadonlySet<ExtensionColumnKind> = new Set([
+  "text",
+  "shortText",
+  "longText",
+]);
 
 /**
  * How many digits a finite number has before the decimal point, counted on
@@ -753,8 +1015,9 @@ function resolveColumns(
       );
     }
     byName.set(sqlName, key);
-    assertQuotableIdentifier(sqlName, `${tableName}.${key}`, "A column name");
-    assertNumericDefaultFits(tableName, key, builder);
+    assertColumnName(sqlName, `${tableName}.${key}`);
+    assertDefaultFits(tableName, key, builder);
+    assertWriteBehaviourFits(tableName, key, builder);
     resolved.push(toResolvedColumn(key, sqlName, builder));
   }
 
@@ -900,10 +1163,41 @@ function resolveForeignKeys(
       columns,
       referencesTable: input.references.table,
       referencesColumns: [...input.references.columns],
-      onDelete: input.onDelete ?? "no action",
-      onUpdate: input.onUpdate ?? "no action",
+      onDelete: declaredAction(path, "onDelete", input.onDelete),
+      onUpdate: declaredAction(path, "onUpdate", input.onUpdate),
     };
   });
+}
+
+/**
+ * A foreign key's action, `no action` when omitted, refused when it is one
+ * no dialect-neutral declaration may name.
+ *
+ * The type already narrows it, but a plugin written in JavaScript, or one
+ * reading its actions from configuration, arrives with any string. An
+ * unknown action renders into the DDL as written and fails there; `set
+ * default` is accepted by PostgreSQL and SQLite and refused by MySQL, so a
+ * table declaring it would install on two dialects of three.
+ */
+function declaredAction(
+  path: string,
+  field: "onDelete" | "onUpdate",
+  action: string | undefined
+): DeclaredReferentialAction {
+  if (action === undefined) return "no action";
+  const known = DECLARED_REFERENTIAL_ACTIONS.find(
+    candidate => candidate === action
+  );
+  if (known === undefined) {
+    invalid(
+      path,
+      `A foreign key's ${field} must be one of ${DECLARED_REFERENTIAL_ACTIONS.map(name => `"${name}"`).join(", ")}; received ${JSON.stringify(action)}.` +
+        (action === "set default"
+          ? " MySQL refuses SET DEFAULT in a foreign key, so a key declaring it could not be created there."
+          : "")
+    );
+  }
+  return known;
 }
 
 /**
@@ -1170,9 +1464,10 @@ export type InferRow<TDefinition> =
 /**
  * What an insert must supply.
  *
- * Nullable and defaulted columns become optional, because both have an answer
- * when the caller says nothing — which is exactly the distinction
- * `THasDefault` exists to carry.
+ * Nullable and database-defaulted columns become optional, because both have
+ * an answer when the caller says nothing — which is exactly the distinction
+ * `THasDefault` exists to carry. A `col.id()` key has no such answer, so it
+ * is required.
  *
  * A `col.serial()` key is `?: never`: present so the key is known, and typed so
  * no value can be given. The database assigns it, and `ctx.db` refuses one at

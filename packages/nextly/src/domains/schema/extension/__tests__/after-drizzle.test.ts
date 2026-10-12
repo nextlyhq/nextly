@@ -215,6 +215,27 @@ describe("refused: constructs migrations cannot carry", () => {
     ).toMatch(/at most 63 characters/);
   });
 
+  it("refuses a column name past 63 characters, and accepts 63", async () => {
+    // PostgreSQL truncates a longer name and MySQL refuses one past 64, so
+    // only 63 is stored as written everywhere.
+    expect(
+      await refusal(() => ({
+        app_notes: pgTable("app_notes", {
+          id: pgText("id"),
+          long: pgText("c".repeat(64)),
+        }),
+      }))
+    ).toMatch(/A column name may be at most 63 characters/);
+    await expect(
+      run(() => ({
+        app_notes: pgTable("app_notes", {
+          id: pgText("id"),
+          long: pgText("c".repeat(63)),
+        }),
+      }))
+    ).resolves.toBeDefined();
+  });
+
   it("refuses a column-level unique constraint", async () => {
     expect(
       await refusal(() => ({

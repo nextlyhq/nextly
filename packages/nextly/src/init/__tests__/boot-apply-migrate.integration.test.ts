@@ -10,7 +10,7 @@
  * the whole surface `migrateCore` reads (listing tables, the transaction a
  * file runs in).
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,6 +26,7 @@ import {
   pluginModuleStatements,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import { pluginMigrationArgs } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import {
   createTestNextly,
@@ -109,7 +110,7 @@ describe.each(getConfiguredTestDialects())(
         migrateCore,
         adapter: handle.adapter,
         extensionSchema: await schemaFor(dialect),
-        plugins: [plugin],
+        pluginMigrations: await pluginMigrationArgs([plugin]),
         migrationsDir,
         logger: createLogger({ quiet: true }),
         label: "[test]",
@@ -128,6 +129,41 @@ describe.each(getConfiguredTestDialects())(
       expect(
         pluginRows.map(row => [row.status, row.statementsExecuted ?? 0])
       ).toEqual([["applied", 0]]);
+    });
+
+    it("runs a plugin's pending module when the app has no migrations directory", async () => {
+      const module = await pluginModule();
+      const plugin = {
+        name: PLUGIN,
+        version: "1.0.0",
+        contributes: { schema: { migrations: [module] } },
+      } as PluginDefinition;
+      const absentDir = join(migrationsDir, "migrations");
+
+      const result = await migrateAtDevBoot({
+        migrateCore,
+        adapter: handle.adapter,
+        extensionSchema: await schemaFor(dialect),
+        pluginMigrations: await pluginMigrationArgs([plugin]),
+        migrationsDir: absentDir,
+        logger: createLogger({ quiet: true }),
+        label: "[test]",
+      });
+
+      // The absent directory is no app files, and is not created.
+      expect([result.applied, result.pluginModulesApplied]).toEqual([0, 1]);
+      expect(existsSync(absentDir)).toBe(false);
+      expect(await handle.adapter.tableExists(`${PLUGIN}__notes`)).toBe(true);
+      // The module ran its statements, and the ledger says so.
+      const rows = await new SchemaEventsRepository(
+        handle.adapter.getDrizzle(),
+        dialect
+      ).listFileApplies();
+      const pluginRows = rows.filter(row =>
+        (row.filename ?? "").startsWith(`plugin:${PLUGIN}/`)
+      );
+      expect(pluginRows.map(row => row.status)).toEqual(["applied"]);
+      expect(pluginRows[0]?.statementsExecuted ?? 0).toBeGreaterThan(0);
     });
   }
 );

@@ -1032,11 +1032,10 @@ export class PostgresAdapter extends DrizzleAdapter {
     // rows. getDrizzle() wraps the pool, which would use a different connection.
     // Built lazily and memoized: transactions that use only raw execute/insert
     // never construct it.
-    const txHandles = this.transactionDrizzleHandles(() => drizzle({ client }));
-    const txDb = txHandles.bare;
+    const buildTxExecutor = () => drizzle({ client });
+    let txExecutor: ReturnType<typeof buildTxExecutor> | undefined;
+    const txDb = () => (txExecutor ??= buildTxExecutor());
     return {
-      ...txHandles.context,
-
       execute: async <T = unknown>(
         sql: string,
         params: SqlParam[] = []

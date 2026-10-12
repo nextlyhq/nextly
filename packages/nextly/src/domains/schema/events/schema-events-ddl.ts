@@ -10,6 +10,8 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
+import { SCHEMA_EVENTS_FILENAME_MAX_LENGTH } from "../../../schemas/schema-events/types";
+
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
 /**
@@ -42,12 +44,6 @@ export function getSchemaEventsDdl(dialect: Dialect): string[] {
           sha256 TEXT,
           scope_kind TEXT,
           scope_slug TEXT,
-          -- Nullable and additive: an existing row has no owner, which reads
-          -- as core or app — what every row written before plugins could own
-          -- a migration actually was.
-          owner_kind TEXT,
-          owner_id TEXT,
-          owner_version TEXT,
           started_at TIMESTAMPTZ NOT NULL,
           ended_at TIMESTAMPTZ,
           duration_ms INTEGER,
@@ -78,14 +74,10 @@ export function getSchemaEventsDdl(dialect: Dialect): string[] {
           event_type VARCHAR(32) NOT NULL,
           status VARCHAR(32) NOT NULL,
           source VARCHAR(32) NOT NULL,
-          filename VARCHAR(255),
+          filename VARCHAR(${SCHEMA_EVENTS_FILENAME_MAX_LENGTH}),
           sha256 VARCHAR(64),
           scope_kind VARCHAR(32),
           scope_slug VARCHAR(255),
-          -- Nullable and additive; see the PostgreSQL block.
-          owner_kind VARCHAR(32),
-          owner_id VARCHAR(255),
-          owner_version VARCHAR(64),
           started_at DATETIME(3) NOT NULL,
           ended_at DATETIME(3),
           duration_ms INT,
@@ -118,12 +110,6 @@ export function getSchemaEventsDdl(dialect: Dialect): string[] {
           sha256 TEXT,
           scope_kind TEXT,
           scope_slug TEXT,
-          -- Nullable and additive: an existing row has no owner, which reads
-          -- as core or app — what every row written before plugins could own
-          -- a migration actually was.
-          owner_kind TEXT,
-          owner_id TEXT,
-          owner_version TEXT,
           started_at INTEGER NOT NULL,
           ended_at INTEGER,
           duration_ms INTEGER,

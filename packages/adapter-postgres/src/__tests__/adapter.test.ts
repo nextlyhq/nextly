@@ -670,15 +670,15 @@ describe("PostgresAdapter", () => {
     });
 
     // A migration records its ledger rows through this handle, so they commit
-    // or roll back with the statements they record. The pooled `getDrizzle()`
-    // would write on a different connection.
-    it("drizzle() is an instance on the transaction's connection, built once", async () => {
+    // or roll back with the statements they record. The adapter's own
+    // `getDrizzle()` wraps the pool and would write on a different connection.
+    it("getDrizzle() is an instance on the transaction's connection, built once", async () => {
       type Handle = { $client: unknown };
 
       await adapter.transaction(async ctx => {
-        const bare = ctx.drizzle<Handle>();
+        const bare = ctx.getDrizzle<Handle>();
         expect(bare.$client).toBe(mockClient);
-        expect(ctx.drizzle()).toBe(bare);
+        expect(ctx.getDrizzle()).toBe(bare);
       });
     });
 

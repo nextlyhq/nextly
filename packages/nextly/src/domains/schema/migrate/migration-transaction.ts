@@ -70,7 +70,7 @@ export async function executeTransaction<T>(
         execute: async statement => {
           await ctx.execute(statement);
         },
-        db: ctx.drizzle(),
+        db: ctx.getDrizzle(),
       })
     );
   }
@@ -98,7 +98,7 @@ export async function executeTransaction<T>(
             execute: async statement => {
               await ctx.execute(statement);
             },
-            db: ctx.drizzle(),
+            db: ctx.getDrizzle(),
           }),
         (count, pairs) =>
           `This migration would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`

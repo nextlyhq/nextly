@@ -27,6 +27,7 @@ import { createHash } from "node:crypto";
 
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import { NextlyError } from "../../../../errors/nextly-error";
+import { SCHEMA_EVENTS_FILENAME_MAX_LENGTH } from "../../../../schemas/schema-events/types";
 import { normalizeContributions } from "../../pipeline/diff/contributions";
 import type { ContributedElements, TableSpec } from "../../pipeline/diff/types";
 import { splitSqlStatements } from "../split-sql";
@@ -274,6 +275,45 @@ export function assertModuleNames(
       },
     ],
   });
+}
+
+/**
+ * Refuse a module whose ledger key is longer than the ledger stores.
+ *
+ * The key (`qualifiedFilename`) joins the plugin's name to the module's, and
+ * neither is bounded on its own. MySQL keeps it in a `VARCHAR`: strict mode
+ * refuses the module's first ledger write, and non-strict mode truncates it,
+ * where two long keys can become one. Counted in code points, as MySQL counts
+ * a `VARCHAR`'s characters, and checked where the manifest is read and
+ * before `migrate:create --plugin` writes a module, so no dialect records a
+ * key another cannot.
+ */
+export function assertModuleKeysFit(
+  pluginName: string,
+  migrations: readonly Pick<PluginMigration, "name">[]
+): void {
+  for (const migration of migrations) {
+    const length = [...qualifiedFilename(pluginName, migration.name)].length;
+    if (length <= SCHEMA_EVENTS_FILENAME_MAX_LENGTH) continue;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `plugin.${pluginName}.contributes.schema.migrations`,
+          code: "INVALID",
+          message: `Plugin "${pluginName}" has a migration named "${migration.name}", recorded in the ledger as a key of ${String(length)} characters; the ledger holds at most ${String(SCHEMA_EVENTS_FILENAME_MAX_LENGTH)}. Shorten the migration's name or the plugin's.`,
+        },
+      ],
+      // A validation error's public message is generic, and the CLI prints
+      // the context: without it `migrate:create` would say only that
+      // validation failed.
+      logContext: {
+        plugin: pluginName,
+        migration: migration.name,
+        keyLength: length,
+        limit: SCHEMA_EVENTS_FILENAME_MAX_LENGTH,
+      },
+    });
+  }
 }
 
 /**

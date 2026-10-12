@@ -8,6 +8,11 @@
  * table should look like afterwards, so this works from the table's target
  * spec rather than from the operation.
  *
+ * The same rebuild adds a column whose default SQLite's ALTER TABLE cannot
+ * add to a table with rows (`needsRowsFilledByDefault`): the column is
+ * declared in the new table and left out of the copy, so every existing row
+ * takes its default.
+ *
  * The form is SQLite's own: create `__new_<t>` with the target definition,
  * copy the rows, drop `<t>`, rename `__new_<t>` into its place, recreate the
  * indexes the drop took with it. It relies on the migration runner's SQLite
@@ -46,7 +51,12 @@
  * @module domains/schema/pipeline/sql-templates/sqlite-rebuild
  */
 import { NextlyError } from "../../../../errors/nextly-error";
-import type { Operation, TableSpec } from "../diff/types";
+import type {
+  AddColumnOp,
+  ColumnSpec,
+  Operation,
+  TableSpec,
+} from "../diff/types";
 
 import { createIndexSql } from "./create-index";
 import { createTableBody, resolvePrimaryKey } from "./create-table-body";
@@ -65,6 +75,66 @@ const REBUILD_OPERATIONS = new Set<Operation["type"]>([
   "drop_foreign_key",
   "change_foreign_key_action",
 ]);
+
+/**
+ * Whether SQLite's ALTER TABLE ... ADD COLUMN refuses this default on a table
+ * that has rows.
+ *
+ * SQLite takes only a constant default there: an expression in parentheses —
+ * `(strftime('%s', 'now'))`, what a current-timestamp default renders to — or
+ * CURRENT_TIME, CURRENT_DATE or CURRENT_TIMESTAMP fails with "Cannot add a
+ * column with non-constant default". It fails only when the table has rows,
+ * so the statement passes on an empty development database and fails on the
+ * production one. Such a column is added by a rebuild instead, whose
+ * INSERT ... SELECT leaves it to the default, evaluated for every copied row.
+ */
+function needsRowsFilledByDefault(column: ColumnSpec): boolean {
+  const value = column.default?.trim();
+  if (value === undefined) return false;
+  return (
+    value.startsWith("(") || /^current_(?:time|date|timestamp)$/i.test(value)
+  );
+}
+
+/** An `add_column` SQLite performs by rebuilding its table. */
+function addedByRebuild(op: Operation): op is AddColumnOp {
+  return op.type === "add_column" && needsRowsFilledByDefault(op.column);
+}
+
+/**
+ * The columns, lower-cased, that a list of operations adds to `table` by
+ * rebuilding it. The rebuild declares them from the target and does not copy
+ * them, since the live table does not have them.
+ */
+function columnsAddedByRebuild(
+  ops: readonly Operation[],
+  table: string
+): Set<string> {
+  return new Set(
+    ops
+      .filter(addedByRebuild)
+      .filter(op => op.tableName.toLowerCase() === table.toLowerCase())
+      .map(op => op.column.name.toLowerCase())
+  );
+}
+
+/**
+ * Whether the rebuild of its table performs this operation, so it is not
+ * rendered on its own: a check or foreign-key change, a column added by the
+ * rebuild, and an index on a table that gains such a column — the rebuild
+ * recreates every index of its target, and one created first could name the
+ * column before it exists.
+ */
+function performedByRebuild(
+  op: Operation,
+  addsByRebuild: ReadonlySet<string>
+): boolean {
+  if (REBUILD_OPERATIONS.has(op.type)) return true;
+  if (op.type === "add_column") return addedByRebuild(op);
+  return (
+    op.type === "add_index" && addsByRebuild.has(op.tableName.toLowerCase())
+  );
+}
 
 /**
  * The tables, lower-cased, whose checks or foreign keys a list of operations
@@ -102,9 +172,10 @@ export function withoutDropsLeftToRebuild(
 
 /**
  * The statements that rebuild one table to `table`'s definition, preserving
- * its rows. The live table must have every one of `table`'s columns; any it
- * has beyond them are not copied, which is how a column drop on a rebuilt
- * table takes effect.
+ * its rows. The live table must have every one of `table`'s columns but the
+ * ones `ops` add by this rebuild, which take their default for each copied
+ * row; any it has beyond them are not copied, which is how a column drop on a
+ * rebuilt table takes effect.
  */
 export function sqliteTableRebuildStatements(
   spec: TableSpec,
@@ -126,7 +197,11 @@ export function sqliteTableRebuildStatements(
   const literal = literalOf(name);
   const rebuilt = `__new_${name}`;
   const guard = `__nextly_rebuild_${name}_guard`;
-  const columns = table.columns.map(column => q(column.name)).join(", ");
+  const added = columnsAddedByRebuild(ops, name);
+  const columns = table.columns
+    .filter(column => !added.has(column.name.toLowerCase()))
+    .map(column => q(column.name))
+    .join(", ");
   const needsForeignKeysOff = `rebuilding ${name} needs foreign keys off: apply it with nextly migrate`;
   const wouldDropTriggers = `rebuilding ${name} would drop the triggers on it`;
   const untracked = untrackedConstraintCounts(table, ops);
@@ -268,7 +343,8 @@ function tablesOf(op: Operation): string[] {
 
 /**
  * SQLite statements for a list of operations, with every check and
- * foreign-key change folded into one rebuild per table.
+ * foreign-key change, and every column SQLite cannot add to a table that has
+ * rows (`needsRowsFilledByDefault`), folded into one rebuild per table.
  *
  * The rebuild takes the place of the LAST operation that touches its table,
  * so every column, index and rename change to that table has already run and
@@ -283,7 +359,10 @@ export function sqliteStatements(
   tablesAfter: readonly TableSpec[],
   render: (op: Operation) => string
 ): string[] {
-  const rebuilt = sqliteRebuiltTables(ops);
+  const addsByRebuild = new Set(
+    ops.filter(addedByRebuild).map(op => op.tableName.toLowerCase())
+  );
+  const rebuilt = new Set([...sqliteRebuiltTables(ops), ...addsByRebuild]);
   const planned = withoutDropsLeftToRebuild(ops, rebuilt);
   const lastTouch = new Map<string, number>();
   planned.forEach((op, position) => {
@@ -294,7 +373,7 @@ export function sqliteStatements(
   });
   const statements: string[] = [];
   planned.forEach((op, position) => {
-    if (!REBUILD_OPERATIONS.has(op.type)) statements.push(render(op));
+    if (!performedByRebuild(op, addsByRebuild)) statements.push(render(op));
     for (const [table, last] of lastTouch) {
       if (last !== position) continue;
       const target = tablesAfter.find(

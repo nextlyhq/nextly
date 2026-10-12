@@ -15,7 +15,7 @@
  * @module domains/schema/extension/types
  * @since 1.0.0
  */
-import type { ForeignKeySpec } from "../pipeline/diff/types";
+import type { ForeignKeySpec, ReferentialAction } from "../pipeline/diff/types";
 import type { ColumnKind } from "../services/field-column-descriptor";
 
 import type { TableRelationInput } from "./dsl";
@@ -117,9 +117,36 @@ export interface ExtensionColumn {
   references?: string;
 }
 
+/**
+ * The referential actions a declared foreign key may take.
+ *
+ * Every action but `set default`, which MySQL's InnoDB refuses in a foreign
+ * key definition while PostgreSQL and SQLite accept it. The diff's
+ * `ReferentialAction` keeps it, because introspection reports what a live
+ * database holds, whoever created it; a declaration is checked for every
+ * dialect, so it may name only what all three create.
+ *
+ * A value as well as a type, and the type read from it, so the list
+ * `defineTable` refuses by and the union an author is held to are one list:
+ * a plugin written in JavaScript reaches `defineTable` with whatever string
+ * it holds.
+ */
+export const DECLARED_REFERENTIAL_ACTIONS = [
+  "cascade",
+  "set null",
+  "restrict",
+  "no action",
+] as const satisfies readonly ReferentialAction[];
+
+export type DeclaredReferentialAction =
+  (typeof DECLARED_REFERENTIAL_ACTIONS)[number];
+
 /** A foreign key as DECLARED: its name is derived at compile time from the final table name unless given. */
-export interface DeclaredForeignKey extends Omit<ForeignKeySpec, "name"> {
+export interface DeclaredForeignKey
+  extends Omit<ForeignKeySpec, "name" | "onDelete" | "onUpdate"> {
   name?: string;
+  onDelete: DeclaredReferentialAction;
+  onUpdate: DeclaredReferentialAction;
 }
 
 /** A check as DECLARED: the compile step derives the ck_<table>_<name> form. */

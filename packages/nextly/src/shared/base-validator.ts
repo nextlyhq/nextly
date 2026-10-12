@@ -770,3 +770,39 @@ export function validateContainerFieldsShared(
     validateChildren(childFields, `${path}.fields`);
   }
 }
+
+/**
+ * Validate an entity's `access` object: optional, an object when present,
+ * and each of the access keys the entity supports a function when set.
+ *
+ * Collections and Singles support different keys (Singles have no create or
+ * delete), so the caller names them; the rule applied to each is the same.
+ */
+export function validateAccessShared(
+  access: unknown,
+  accessKeys: readonly string[],
+  errors: BaseValidationError[]
+): void {
+  if (!access) return;
+
+  if (typeof access !== "object" || Array.isArray(access)) {
+    errors.push({
+      path: "access",
+      message: "Access control must be an object",
+      code: "ACCESS_INVALID_TYPE",
+    });
+    return;
+  }
+
+  const accessObj = access as Record<string, unknown>;
+  for (const key of accessKeys) {
+    const fn = accessObj[key];
+    if (fn !== undefined && typeof fn !== "function") {
+      errors.push({
+        path: `access.${key}`,
+        message: `Access control '${key}' must be a function`,
+        code: "ACCESS_FUNCTION_INVALID",
+      });
+    }
+  }
+}

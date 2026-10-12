@@ -643,7 +643,7 @@ describe("typed access to added tables", () => {
       title: "t",
       body: null,
     };
-    const insert: InferInsert<typeof notes> = { title: "t" };
+    const insert: InferInsert<typeof notes> = { id: "x", title: "t" };
     expect(row.title).toBe("t");
     expect(insert.title).toBe("t");
   });

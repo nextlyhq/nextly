@@ -73,14 +73,30 @@ export function assertAddableToExistingRows(
   column: ResolvedColumn,
   tableName: string
 ): void {
-  if (column.nullable) return;
-  if (column.default !== undefined) return;
+  if (!leavesExistingRowsEmpty(column)) return;
   if (column.generated !== undefined) return;
 
   refuse(
     `${tableName}.${column.key}`,
     `Column "${column.key}" is NOT NULL with no default, so it cannot be added to a table that already has rows. Make it nullable, or give it a default.`
   );
+}
+
+/**
+ * Whether a column added to a table that has rows leaves those rows without
+ * the value it requires: NOT NULL, and nothing to fill them with.
+ *
+ * The one statement of the rule, read by `assertAddableToExistingRows` for a
+ * column contributed to somebody else's table, and by `migrate:create
+ * --plugin` for a column added to any table the plugin's earlier migrations
+ * created — where whether the column is new is known only from the previous
+ * module. Asked of the column, never of the row count, for the reason above.
+ */
+export function leavesExistingRowsEmpty(column: {
+  nullable: boolean;
+  default?: unknown;
+}): boolean {
+  return !column.nullable && column.default === undefined;
 }
 
 /**

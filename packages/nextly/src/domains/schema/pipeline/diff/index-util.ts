@@ -1,4 +1,9 @@
 import {
+  fieldProducesColumn,
+  toSnakeCase,
+} from "../../services/field-column-descriptor";
+
+import {
   type ColumnCastContext,
   normalizeCheckExpression,
   normalizeExpressionList,
@@ -79,4 +84,73 @@ const TEXT_LIKE =
 export function isManagedIndexName(name: string): boolean {
   if (name.endsWith("_pkey")) return false;
   return name.startsWith("idx_") || name.startsWith("uq_");
+}
+
+/**
+ * Names a declared index may use that are not fields: the system columns
+ * every collection table carries, spelled as the API spells them.
+ */
+const SYSTEM_INDEX_NAMES: ReadonlySet<string> = new Set([
+  "id",
+  "createdAt",
+  "updatedAt",
+]);
+
+/** What one name in a declared index's `fields` resolves to. */
+export type DeclaredIndexTarget<F> =
+  | { kind: "field"; field: F }
+  | { kind: "system"; column: string }
+  | { kind: "refused"; message: string };
+
+/**
+ * Which column, if any, a name in a declared index's `fields` stands for.
+ *
+ * The one answer to "which names may an index use": collection validation
+ * asks it when the collection is defined and the schema build asks it when
+ * the table is built, so a name the first accepts is never one the second
+ * refuses. Kept as two lists they had already drifted — the validator
+ * accepted the system timestamps and nested group children, and the build
+ * refused both on every push and every migration.
+ *
+ * A nested name is refused rather than mapped: a group or repeater keeps its
+ * children together in one JSON column, so a child has no column of its own.
+ */
+export function resolveDeclaredIndexName<
+  F extends { name: string; type?: unknown; options?: unknown },
+>(
+  fieldName: string,
+  fields: readonly F[],
+  localizedNames: ReadonlySet<string>
+): DeclaredIndexTarget<F> {
+  const field = fields.find(f => f.name === fieldName);
+  if (field !== undefined) {
+    // A localized field's column lives in the migration-owned `_locales`
+    // table, so an index on it here would name a column this table lacks.
+    if (localizedNames.has(fieldName)) {
+      return {
+        kind: "refused",
+        message: `Index names the localized field "${fieldName}", whose column lives in the companion "_locales" table.`,
+      };
+    }
+    if (!fieldProducesColumn(field)) {
+      return {
+        kind: "refused",
+        message: `Index names the field "${fieldName}", which materialises no column on this table.`,
+      };
+    }
+    return { kind: "field", field };
+  }
+  if (SYSTEM_INDEX_NAMES.has(fieldName)) {
+    return { kind: "system", column: toSnakeCase(fieldName) };
+  }
+  if (fieldName.includes(".")) {
+    return {
+      kind: "refused",
+      message: `Index names "${fieldName}", a field nested inside another. A group or repeater stores its children in one JSON column, so a nested field has no column of its own to index.`,
+    };
+  }
+  return {
+    kind: "refused",
+    message: `Index names the field "${fieldName}", which this entity does not declare. An index may name a top-level field or ${[...SYSTEM_INDEX_NAMES].join(", ")}.`,
+  };
 }

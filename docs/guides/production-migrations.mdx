@@ -34,13 +34,13 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 
 ### Per-command flags
 
-- `nextly migrate` -- `--dry-run` (preview without executing), `--step <n>` (apply only N pending migrations, counting a plugin's migration modules, which run first, together with the app's files), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
+- `nextly migrate` -- `--dry-run` (list what a run would apply, without executing: each plugin's pending migration modules by `plugin:<name>/<module>`, then the app's pending files, in run order and within `--step`, with anything a run would refuse), `--step <n>` (apply only N pending migrations, counting a plugin's migration modules, which run first, together with the app's files), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
 - `nextly migrate:baseline` -- `--name <name>` (the migration's name; defaults to `baseline`), `--force-unlock`.
 - `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--no-transaction` (with `--blank`, a file whose first line is the [no-transaction marker](#running-a-file-outside-a-transaction); with `--plugin`, a module with `transaction: false`), `--non-interactive`, `--accept-renames`.
-- `nextly migrate:status` -- `--json` (machine-readable output for CI scripting).
+- `nextly migrate:status` -- `--json` (machine-readable output for CI scripting), `--plugin <name>` (list that plugin's migration modules instead of the app's files).
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished).
 - `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
-- `nextly migrate:down` -- `--step <n>` (roll back the last N migrations), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--force-unlock`.
+- `nextly migrate:down` -- `--step <n>` (roll back the last N migrations), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--plugin <name>` (roll back that plugin's modules instead of the app's files), `--force-unlock`.
 
 ---
 
@@ -881,8 +881,15 @@ the edit loop impossible.
 
 ### Ledger commands and plugin rows
 
-`migrate:down`, `migrate:status`, `migrate:check` and `migrate:resolve` ignore
-plugin rows by default, and take `--plugin <name>` to select one plugin's.
+`migrate:down` and `migrate:status` ignore plugin rows by default, and take
+`--plugin <name>` to select one plugin's. `migrate:resolve` takes no such flag:
+it acts on the one migration it is given, and a plugin module is named by its
+ledger key, `plugin:<name>/<module>` (for example
+`nextly migrate:resolve --failed-cleanup plugin:@acme/auth/20260101_000000_init`).
+`--applied` refuses a plugin module, because `nextly migrate` records a module
+together with the tables it owns: clear its failed attempt with
+`--failed-cleanup` and run `nextly migrate`. `migrate:check` does not read the
+ledger at all; it checks the app's migration files and snapshots.
 
 `migrate:status --plugin <name>` lists the modules the configured plugin ships
 beside its ledger rows, as the app's listing does with its files: a module no

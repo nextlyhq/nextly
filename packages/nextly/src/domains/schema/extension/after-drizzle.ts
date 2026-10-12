@@ -32,8 +32,8 @@ import type { ColumnSpec, IndexSpec, TableSpec } from "../pipeline/diff/types";
 
 import { enumChecks } from "./enum-check";
 import {
+  assertColumnName,
   assertExplicitIdentifier,
-  assertQuotableIdentifier,
   assertUsableAppTableName,
 } from "./naming";
 import type { ExtensionTable, SchemaOwner } from "./types";
@@ -131,11 +131,7 @@ function unconvertibleIndex(
 function assertColumnsConvertible(table: Table, name: string): void {
   for (const column of Object.values(getColumns(table))) {
     // A name the hook wrote reaches the DDL as written, as a declared one does.
-    assertQuotableIdentifier(
-      column.name,
-      `db.schema.afterDrizzle.${name}`,
-      "A column name"
-    );
+    assertColumnName(column.name, `db.schema.afterDrizzle.${name}`);
     const shape = column as unknown as {
       isUnique?: unknown;
       generated?: unknown;

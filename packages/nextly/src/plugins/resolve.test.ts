@@ -486,6 +486,37 @@ describe("resolvePlugins: schemaVersion declarations", () => {
     ).toHaveLength(1);
   });
 
+  it("refuses a migration whose ledger key is longer than MySQL stores", () => {
+    // `plugin:stub/` is 12 characters, so a 243-character name makes a key
+    // of exactly 255, the width of MySQL's `filename` column.
+    const refusalFor = (name: string): unknown => {
+      try {
+        resolvePlugins([shipping(1, [[name, 1]])], opts);
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    };
+    const refusal = refusalFor("a".repeat(244));
+    expect(NextlyError.isValidation(refusal)).toBe(true);
+    expect((refusal as NextlyError).publicData).toMatchObject({
+      errors: [
+        expect.objectContaining({
+          path: "plugin.stub.contributes.schema.migrations",
+          message: expect.stringContaining(
+            "a key of 256 characters; the ledger holds at most 255"
+          ),
+        }),
+      ],
+    });
+    // The control: one character shorter fits exactly.
+    expect(refusalFor("a".repeat(243))).toBeUndefined();
+    // Counted in characters, as MySQL counts a VARCHAR's, not UTF-16 units:
+    // 243 astral characters are 486 units and still fit.
+    expect(refusalFor("\u{1F600}".repeat(243))).toBeUndefined();
+    expect(refusalFor("\u{1F600}".repeat(244))).toBeDefined();
+  });
+
   it("refuses modules that share a name, ignoring case", () => {
     // The name is the module's ledger key, so two alike are one migration to
     // the ledger; refused when the configuration loads, as the slash is.

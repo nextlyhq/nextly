@@ -307,6 +307,7 @@ describe.each(getConfiguredTestDialects())(
         schemaVersion: 1,
         name: "backfill",
         now: new Date(Date.UTC(2026, 9, 8, 11, 0, 0)),
+        tablesByDialect: { postgresql: [], mysql: [], sqlite: [] },
         existing: [],
       });
       await runPhase("datab", [blank]);

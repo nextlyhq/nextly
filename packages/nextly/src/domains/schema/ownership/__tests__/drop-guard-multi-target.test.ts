@@ -869,6 +869,10 @@ describe("a complete SQLite rebuild of another owner's table", () => {
       dialect,
       source: "plugin:fx/001",
       liveColumns,
+      // `app_notes` has no index, foreign key or check in the database.
+      liveElements: new Map([
+        ["app_notes", { index: new Set(), fk: new Set(), check: new Set() }],
+      ]),
       liveTables: new Set(owners.keys()),
     });
   }
@@ -941,7 +945,7 @@ describe("a complete SQLite rebuild of another owner's table", () => {
           rename,
         ],
         live("id", "body"),
-        "postgresql"
+        "sqlite"
       )
     ).toThrow(/different owner/i);
   });
@@ -960,7 +964,7 @@ describe("a complete SQLite rebuild of another owner's table", () => {
       guardLive(
         [statement, create, copy, drop, rename],
         live("id", "body"),
-        "postgresql"
+        "sqlite"
       )
     ).toThrow(/different owner/i);
   });

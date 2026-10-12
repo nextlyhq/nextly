@@ -65,13 +65,21 @@ const owners = new Map<string, OwnerRecord>([
   ["fx__notes", record({ tableName: "fx__notes" })],
 ]);
 
-/** Element rows: `blog_posts.mood` is the plugin's, `fx__notes.flag` another plugin's. */
+/**
+ * Element rows: `blog_posts.mood` and its check are the plugin's,
+ * `fx__notes.flag` another plugin's.
+ */
 const elementOwners: OwnerRecord[] = [
   ...owners.values(),
   record({
     tableName: "blog_posts",
     elementKind: "column",
     elementName: "mood",
+  }),
+  record({
+    tableName: "blog_posts",
+    elementKind: "check",
+    elementName: "blog_posts_mood_check",
   }),
   record({
     tableName: "fx__notes",
@@ -100,6 +108,17 @@ function guard(
     dialect: "sqlite",
     source: "0009_under_test",
     liveColumns: new Map([[name, new Set(live)]]),
+    // The table's one live element is the check on the removed column.
+    liveElements: new Map([
+      [
+        name,
+        {
+          index: new Set<string>(),
+          fk: new Set<string>(),
+          check: new Set([`${name}_${column}_check`]),
+        },
+      ],
+    ]),
     // The rebuilt table exists; the pipeline's guard table is made fresh.
     liveTables: new Set([name, ...owners.keys()]),
   });

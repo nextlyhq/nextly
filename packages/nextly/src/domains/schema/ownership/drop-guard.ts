@@ -560,6 +560,12 @@ class DropReader {
    */
   readonly elements: TakenElement[] = [];
   /**
+   * Tables this list rebuilds in complete blocks that keep them, with the
+   * table named by the name it had before the list renamed it, and the
+   * indexes and constraints each block puts back on it.
+   */
+  readonly rebuilt: RebuiltTable[] = [];
+  /**
    * Tables this list itself created, by their current name, while it has not
    * dropped them again. A drop or rename of one of these takes nothing from
    * anybody: the table did not exist before the list ran.
@@ -700,6 +706,18 @@ class DropReader {
           : (this.renamedFrom.get(table.name) ?? table.name),
       name,
       kind,
+    });
+  }
+
+  /**
+   * Records a table a complete rebuild block keeps, and what the block puts
+   * back on it. A table this list created is its own, and is not recorded.
+   */
+  keepTable(table: string, recreated: TableElements): void {
+    if (this.created.has(table)) return;
+    this.rebuilt.push({
+      table: this.renamedFrom.get(table) ?? table,
+      recreated,
     });
   }
 
@@ -1291,10 +1309,22 @@ class StatementWalk {
     const tableAt = this.alteredTableAt(at);
     if (tableAt === undefined) return;
     const table = this.qualifiedName(tableAt);
-    for (const clause of this.clauseStarts(table?.next ?? tableAt + 1)) {
+    const clausesAt = this.pastDescendants(table?.next ?? tableAt + 1);
+    for (const clause of this.clauseStarts(clausesAt)) {
       this.readColumnClause(table, clause);
       this.readElementClause(table, clause);
     }
+  }
+
+  /**
+   * Past PostgreSQL's `*` after an ALTER TABLE's table name, which alters the
+   * tables inheriting from it too: `ALTER TABLE users * DROP COLUMN email`
+   * drops `email` from `users` itself. Read as the first clause, the `*` hid
+   * the DROP after it. Other dialects reject the `*`, so stepping past it
+   * there reads nothing they run.
+   */
+  private pastDescendants(at: number): number {
+    return this.punct(at) === "*" ? at + 1 : at;
   }
 
   /**
@@ -1480,7 +1510,8 @@ class StatementWalk {
 
   /**
    * Where an ALTER TABLE's table name starts, or undefined when the ALTER
-   * alters something other than a table.
+   * alters something other than a table. A `*` after the name is stepped
+   * past by the clause reader (`pastDescendants`).
    */
   private alteredTableAt(at: number): number | undefined {
     const k = this.skipMysqlAlterModifiers(at + 1);
@@ -1836,9 +1867,20 @@ function readStatements(
   statements: readonly string[],
   dialect: SupportedDialect,
   liveColumns: LiveColumns | undefined,
-  liveTables: ReadonlySet<string> | undefined
-): Pick<DropReader, "dropped" | "renamed" | "columns" | "elements"> {
-  const kept = keptTables(followColumns(statements, dialect, liveColumns));
+  liveTables: ReadonlySet<string> | undefined,
+  liveElements?: LiveElements
+): Pick<
+  DropReader,
+  "dropped" | "renamed" | "columns" | "elements" | "rebuilt"
+> {
+  // A block keeps its table only where the table's live indexes and
+  // constraints were read too: what the block leaves out of them is judged
+  // (`elementsLeftOut`), and without them it is read as the drop it then is.
+  const kept = keptTables(
+    followColumns(statements, dialect, liveColumns).blocks.filter(
+      block => liveElements?.has(block.table) ?? false
+    )
+  );
   const reading = readWith(
     statements,
     new DropReader(dialect, liveTables),
@@ -1872,11 +1914,14 @@ function readWith(
       return;
     }
     // A rebuild's DROP and rename keep the table; what it does take are the
-    // live columns its twin leaves out, judged as the column drops they are.
+    // live columns its twin leaves out, judged as the column drops they are,
+    // and the indexes and constraints it does not put back
+    // (`elementsLeftOut`).
     if (block.dropAt !== index) return;
     for (const column of block.droppedColumns) {
       reader.takeColumn({ name: block.table, local: true }, column);
     }
+    reader.keepTable(block.table, block.recreated);
   });
   return reader;
 }
@@ -1885,11 +1930,11 @@ function readWith(
  * The rebuild blocks that keep their table, by the index of each of their
  * DROP and rename statements.
  */
-function keptTables(follow: {
-  blocks: readonly KeptTable[];
-}): ReadonlyMap<number, KeptTable> {
+function keptTables(
+  blocks: readonly KeptTable[]
+): ReadonlyMap<number, KeptTable> {
   return new Map(
-    follow.blocks.flatMap(block => [
+    blocks.flatMap(block => [
       [block.dropAt, block],
       [block.dropAt + 1, block],
     ])
@@ -2087,7 +2132,8 @@ const REBUILD_PREFIX = "__new_";
  * rows `t` held are the rows it holds afterwards, under its own name. A DROP
  * or a rename outside such a block, a block out of order, a copy that
  * filters or reorders, or a twin renamed to another name is not one, and is
- * read as the drop or rename it is.
+ * read as the drop or rename it is. So is the block on any dialect but
+ * SQLite, the only one the pipeline writes it for (`rebuildBlockAt`).
  *
  * The text alone cannot say whether the twin keeps every column `t` has, so
  * the block counts only against `t`'s LIVE columns: every one of them has to
@@ -2146,7 +2192,11 @@ function followColumns(
   for (let i = 0; i < statements.length; i += 1) {
     const block = rebuildBlockAt(statements, i, dialect);
     if (block) {
-      const kept = keptBy(block, columns.get(block.table), i + 2);
+      const kept = keptBy(
+        { ...block, recreated: recreatedBy(block, statements, i + 4, dialect) },
+        columns.get(block.table),
+        i + 2
+      );
       if (kept) blocks.push(kept);
       if (columns.has(block.table)) {
         columns.set(block.table, new Set(block.columns));
@@ -2170,6 +2220,24 @@ interface KeptTable {
   dropAt: number;
   table: string;
   droppedColumns: string[];
+  recreated: TableElements;
+}
+
+/**
+ * A table's indexes, foreign keys and checks — those it has in the
+ * database, or those a rebuild block puts back on it — by the element row
+ * kind each is recorded under, lower-cased.
+ */
+export interface TableElements {
+  index: ReadonlySet<string>;
+  fk: ReadonlySet<string>;
+  check: ReadonlySet<string>;
+}
+
+/** A table a complete rebuild block keeps, and what the block puts back. */
+interface RebuiltTable {
+  table: string;
+  recreated: TableElements;
 }
 
 /**
@@ -2186,7 +2254,11 @@ interface KeptTable {
  * it then is.
  */
 function keptBy(
-  block: { table: string; columns: readonly string[] },
+  block: {
+    table: string;
+    columns: readonly string[];
+    recreated: TableElements;
+  },
   live: ReadonlySet<string> | undefined,
   dropAt: number
 ): KeptTable | undefined {
@@ -2197,7 +2269,64 @@ function keptBy(
     dropAt,
     table: block.table,
     droppedColumns: [...live].filter(column => !declared.has(column)),
+    recreated: block.recreated,
   };
+}
+
+/**
+ * What a rebuild block puts back on its table: the foreign keys and checks
+ * its twin declares under a name, and the indexes the `CREATE INDEX`
+ * statements directly after the rename create on the table, as the pipeline
+ * writes them (`sqliteTableRebuildStatements`). Dropping the old table took
+ * every index and constraint it had, so anything else is gone afterwards.
+ *
+ * Only a name counts, matched against the element rows' names. An unnamed
+ * constraint and an inline `UNIQUE`, which SQLite backs with an index it
+ * names itself, put back no element any row records; an index created
+ * anywhere later in the list is not counted, so a block that relies on one
+ * is judged as taking it.
+ */
+function recreatedBy(
+  block: { table: string; constraints: ReadonlyMap<string, "fk" | "check"> },
+  statements: readonly string[],
+  from: number,
+  dialect: SupportedDialect
+): TableElements {
+  const index = new Set<string>();
+  for (let k = from; k < statements.length; k += 1) {
+    const tokens = soleStatementTokens(statements[k], dialect);
+    const created = tokens && indexCreatedOn(tokens);
+    if (created === undefined || created.table !== block.table) break;
+    index.add(created.index);
+  }
+  const named = (kind: "fk" | "check") =>
+    new Set(
+      [...block.constraints]
+        .filter(([, constraint]) => constraint === kind)
+        .map(([name]) => name)
+    );
+  return { index, fk: named("fk"), check: named("check") };
+}
+
+/**
+ * The index and table of `CREATE [UNIQUE] INDEX [IF NOT EXISTS] i ON t (`,
+ * both unqualified, or undefined when the statement is not one. `IF NOT
+ * EXISTS` still creates the index after a rebuild: index names are unique
+ * in the schema, and the drop took the one of that name with its table.
+ */
+function indexCreatedOn(
+  tokens: readonly Token[]
+): { index: string; table: string } | undefined {
+  const creating = new TokenCursor(tokens);
+  if (!creating.word("CREATE")) return undefined;
+  creating.word("UNIQUE");
+  if (!creating.word("INDEX")) return undefined;
+  creating.ifExists();
+  const index = creating.name();
+  if (index === undefined || !creating.word("ON")) return undefined;
+  const table = creating.name();
+  if (table === undefined || !creating.punct("(")) return undefined;
+  return { index, table };
 }
 
 /** Words after ADD or DROP that name something other than a column. */
@@ -2271,6 +2400,8 @@ function followAlterTable(
     columns.clear();
     return;
   }
+  // PostgreSQL's `*` after the name alters the table itself as well.
+  cursor.punct("*");
   const set = columns.get(table);
   if (set !== undefined && !applyColumnClause(cursor, set)) {
     columns.delete(table);
@@ -2378,6 +2509,46 @@ export function readLiveColumns(
   );
 }
 
+/** Each table's live indexes, foreign keys and checks, by lower-cased name. */
+export type LiveElements = ReadonlyMap<string, TableElements>;
+
+/**
+ * The live indexes, foreign keys and checks of every table the statement
+ * lists rebuild, read from the database they are about to run on — what
+ * `assertNoForeignDrops` judges a rebuild that keeps its table against: the
+ * block drops the old table with all of them, and puts back only its own.
+ * Read through the introspection the schema diff uses, so on SQLite an
+ * index SQLite made for an inline `UNIQUE` and a check declared without a
+ * name are not among them, and a foreign key declared without a name is
+ * named by the rule the diff names it by.
+ */
+export async function readLiveElements(
+  db: unknown,
+  dialect: SupportedDialect,
+  statementLists: ReadonlyArray<readonly string[]>
+): Promise<LiveElements> {
+  const tables = [
+    ...new Set(statementLists.flatMap(list => rebuiltTables(list, dialect))),
+  ];
+  if (tables.length === 0) return new Map();
+  const { introspectLiveSnapshot } = await import(
+    "../pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(db, dialect, tables);
+  const names = (elements: ReadonlyArray<{ name: string }> | undefined) =>
+    new Set((elements ?? []).map(element => element.name.toLowerCase()));
+  return new Map(
+    snapshot.tables.map(table => [
+      table.name.toLowerCase(),
+      {
+        index: names(table.indexes),
+        fk: names(table.foreignKeys),
+        check: names(table.checks),
+      },
+    ])
+  );
+}
+
 /**
  * Which of the tables the statement lists create exist already, read from the
  * database the statements are about to run on — the tables
@@ -2464,7 +2635,19 @@ function rebuildBlockAt(
   statements: readonly string[],
   i: number,
   dialect: SupportedDialect
-): { table: string; columns: string[] } | undefined {
+):
+  | {
+      table: string;
+      columns: string[];
+      constraints: ReadonlyMap<string, "fk" | "check">;
+    }
+  | undefined {
+  // Only SQLite's. It is the one dialect that changes a constraint by
+  // rebuilding, and the only one the pipeline writes the block for. On
+  // PostgreSQL and MySQL dropping the table also takes what no twin can
+  // declare — its triggers, grants, policies, comments and owned sequences
+  // — so there the block is read as the drop it is.
+  if (dialect !== "sqlite") return undefined;
   const [create, copy, drop, rename] = statements
     .slice(i, i + 4)
     .map(statement => soleStatementTokens(statement, dialect));
@@ -2478,7 +2661,47 @@ function rebuildBlockAt(
   ) {
     return undefined;
   }
-  return { table: twin.table, columns: twin.columns };
+  return {
+    table: twin.table,
+    columns: twin.columns,
+    constraints: namedConstraints(create),
+  };
+}
+
+/**
+ * The foreign keys and checks a `CREATE TABLE` body declares under a name,
+ * lower-cased: each `CONSTRAINT <name>` directly inside the body, a table
+ * constraint or one on a column, followed by `CHECK`, `FOREIGN KEY` or
+ * `REFERENCES`. A named `UNIQUE` or `PRIMARY KEY` is neither.
+ */
+function namedConstraints(
+  tokens: readonly Token[]
+): ReadonlyMap<string, "fk" | "check"> {
+  const named = new Map<string, "fk" | "check">();
+  const open = tokens.findIndex(token => isPunct(token, "("));
+  if (open === -1) return named;
+  let depth = 0;
+  for (let k = open; k < tokens.length; k += 1) {
+    if (isPunct(tokens[k], "(")) depth += 1;
+    else if (isPunct(tokens[k], ")")) depth -= 1;
+    const token = tokens[k];
+    if (depth !== 1 || token.kind !== "word" || token.upper !== "CONSTRAINT") {
+      continue;
+    }
+    const name = writtenName(tokens[k + 1])?.toLowerCase();
+    const kind = constraintKind(tokens[k + 2]);
+    if (name !== undefined && kind !== undefined) named.set(name, kind);
+  }
+  return named;
+}
+
+/** The element row kind a constraint clause opening with `token` makes. */
+function constraintKind(token: Token | undefined): "fk" | "check" | undefined {
+  if (token?.kind !== "word") return undefined;
+  if (token.upper === "CHECK") return "check";
+  return token.upper === "FOREIGN" || token.upper === "REFERENCES"
+    ? "fk"
+    : undefined;
 }
 
 /** A rebuild's twin: its name, the table it rebuilds, the columns it declares. */
@@ -2648,7 +2871,9 @@ function columnKey(table: string, column: string): string {
  * as well, because what is contributed to a core table rides the app's
  * migrations. A complete SQLite rebuild whose twin leaves out live columns
  * keeps the table and drops those columns, and is judged as those column
- * drops: it is how SQLite removes a column a check constraint names.
+ * drops: it is how SQLite removes a column a check constraint names. The
+ * indexes, foreign keys and checks on the table, live or recorded, that such
+ * a block does not put back are judged as drops of them (`elementsLeftOut`).
  *
  * Renaming or moving a table or column is refused the same way as dropping
  * it. After the rename no owner row names it, so a later drop of the new
@@ -2679,6 +2904,12 @@ export function assertNoForeignDrops(args: {
    */
   liveColumns?: LiveColumns;
   /**
+   * The live indexes, foreign keys and checks of the tables the statements
+   * rebuild (`readLiveElements`). A rebuild of a table missing here is read
+   * as the drop it would otherwise be.
+   */
+  liveElements?: LiveElements;
+  /**
    * The tables that exist before the statements run, among those they create
    * (`readLiveTables`). Absent, no creation is credited: every drop is judged
    * by who holds the table.
@@ -2693,13 +2924,17 @@ export function assertNoForeignDrops(args: {
    */
   liveIndexTables?: ReadonlyMap<string, string>;
 }): void {
-  let read: Pick<DropReader, "dropped" | "renamed" | "columns" | "elements">;
+  let read: Pick<
+    DropReader,
+    "dropped" | "renamed" | "columns" | "elements" | "rebuilt"
+  >;
   try {
     read = readStatements(
       args.statements,
       args.dialect,
       args.liveColumns,
-      args.liveTables
+      args.liveTables,
+      args.liveElements
     );
   } catch (error) {
     // Re-raised with the file it came from, which the reader never sees and
@@ -2728,7 +2963,10 @@ export function assertNoForeignDrops(args: {
       act: "drop or rename",
     });
   }
-  for (const element of read.elements) {
+  for (const element of [
+    ...read.elements,
+    ...elementsLeftOut(read.rebuilt, args.liveElements, args.elementOwners),
+  ]) {
     const table = element.table ?? args.liveIndexTables?.get(element.name);
     refuseUnlessHeld(holders.element(element, table, args.liveIndexTables), {
       ...args,
@@ -2737,6 +2975,49 @@ export function assertNoForeignDrops(args: {
       act: "drop or rename",
     });
   }
+}
+
+/**
+ * The indexes, foreign keys and checks on each table a rebuild keeps that
+ * the block does not put back: the table's live ones, and those an element
+ * row records on it. Dropping the old table took them all, so each is judged
+ * as a drop of it by name would be — SQLite has no other way to remove a
+ * check or a foreign key, and a twin that leaves out another owner's is that
+ * owner's element gone. A table's live elements are read for every block
+ * that keeps it (`readStatements`); the rows count as well, so an element
+ * the reading missed is still judged when a row names it.
+ */
+function elementsLeftOut(
+  rebuilt: readonly RebuiltTable[],
+  liveElements: LiveElements | undefined,
+  elementOwners: readonly OwnerRecord[]
+): TakenElement[] {
+  return rebuilt.flatMap(({ table, recreated }) => {
+    const live = liveElements?.get(table);
+    const had = ELEMENT_ROW_KIND_LIST.flatMap(kind => [
+      ...[...(live?.[kind] ?? [])].map(name => ({ name, kind })),
+      ...elementOwners
+        .filter(
+          record =>
+            record.elementKind === kind &&
+            record.tableName.toLowerCase() === table
+        )
+        .map(record => ({
+          name: (record.elementName ?? "").toLowerCase(),
+          kind,
+        })),
+    ]);
+    const leftOut = new Map(
+      had
+        .filter(({ name, kind }) => !recreated[kind].has(name))
+        .map(({ name, kind }) => [`${kind}\u0000${name}`, { name, kind }])
+    );
+    return [...leftOut.values()].map(({ name, kind }) => ({
+      table,
+      name,
+      kind,
+    }));
+  });
 }
 
 /** Who holds each table and column, for one stream. */
@@ -2882,7 +3163,8 @@ class OwnershipView {
 }
 
 /** The element row kinds an index or constraint is recorded under. */
-const ELEMENT_ROW_KINDS = new Set(["index", "fk", "check"]);
+const ELEMENT_ROW_KIND_LIST = ["index", "fk", "check"] as const;
+const ELEMENT_ROW_KINDS: ReadonlySet<string> = new Set(ELEMENT_ROW_KIND_LIST);
 
 /** The element row kinds each word that takes an element can mean. */
 const ELEMENT_KINDS_BY_WORD: Record<TakenElementKind, ReadonlySet<string>> = {

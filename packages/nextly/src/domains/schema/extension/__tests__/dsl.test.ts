@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
-import { col, defineTable } from "../dsl";
+import { col, defineTable, type ColumnBuilder } from "../dsl";
 
 /** The error a caller can act on: a validation failure carrying a path. */
 function validationPaths(run: () => unknown): string[] {
@@ -194,6 +194,62 @@ describe("defineTable", () => {
     ]);
   });
 
+  it("refuses a resolved column name past 63 characters, and accepts 63", () => {
+    // PostgreSQL truncates past 63 and MySQL refuses past 64, so only 63 is
+    // stored as written everywhere.
+    expect(() =>
+      defineTable("t", { id: col.id(), ["c".repeat(63)]: col.text() })
+    ).not.toThrow();
+    expect(
+      validationPaths(() =>
+        defineTable("t", { id: col.id(), ["c".repeat(64)]: col.text() })
+      )
+    ).toEqual([`t.${"c".repeat(64)}`]);
+    // The SQL name is what is bounded: a 44-character camelCase key
+    // snake-cases to 66.
+    const key = "aB".repeat(22);
+    expect(
+      validationPaths(() =>
+        defineTable("t", { id: col.id(), [key]: col.text() })
+      )
+    ).toEqual([`t.${key}`]);
+  });
+
+  it("refuses a foreign key action MySQL cannot create, or one no dialect names, on either side", () => {
+    const declare = (actions: { onDelete?: string; onUpdate?: string }) =>
+      defineTable(
+        "t",
+        { id: col.id(), ownerId: col.shortText() },
+        {
+          foreignKeys: [
+            {
+              columns: ["ownerId"],
+              references: { table: "users", columns: ["id"] },
+              // A plugin in JavaScript passes whatever string it holds.
+              ...(actions as object),
+            },
+          ],
+        }
+      );
+    for (const action of ["set default", "SET NULL", "delete"]) {
+      expect(validationPaths(() => declare({ onDelete: action }))).toEqual([
+        "t.foreignKeys[0]",
+      ]);
+      expect(validationPaths(() => declare({ onUpdate: action }))).toEqual([
+        "t.foreignKeys[0]",
+      ]);
+    }
+    for (const action of ["cascade", "set null", "restrict", "no action"]) {
+      const [fk] = declare({ onDelete: action, onUpdate: action }).foreignKeys;
+      expect([fk?.onDelete, fk?.onUpdate]).toEqual([action, action]);
+    }
+    const [omitted] = declare({}).foreignKeys;
+    expect([omitted?.onDelete, omitted?.onUpdate]).toEqual([
+      "no action",
+      "no action",
+    ]);
+  });
+
   it("refuses a referenced table or column the DDL cannot render, and accepts a plain one", () => {
     // `REFERENCES "" ("id")` would compile and fail only when it ran; a quote
     // in a name would fail when the DDL was rendered, mid-`migrate:create`.
@@ -293,6 +349,44 @@ describe("defineTable", () => {
     }
   });
 
+  it("refuses a generated or on-update value the compiler would not apply", () => {
+    // A builder is plain data, so a hand-written one can carry anything; an
+    // unknown value compiled to a column nothing ever filled.
+    const hand = (extra: Record<string, unknown>) =>
+      ({ ...col.shortText(), ...extra }) as ReturnType<typeof col.shortText>;
+    expect(
+      validationPaths(() =>
+        defineTable("t", { id: col.id(), ref: hand({ generated: "uuidv4" }) })
+      )
+    ).toEqual(["t.ref"]);
+    expect(
+      validationPaths(() =>
+        defineTable("t", { id: col.id(), ref: hand({ onUpdate: "later" }) })
+      )
+    ).toEqual(["t.ref"]);
+    // Known values on a column that cannot hold them.
+    expect(
+      validationPaths(() =>
+        defineTable("t", {
+          id: { ...col.varchar(20), generated: "uuidv7" },
+        })
+      )
+    ).toEqual(["t.id"]);
+    expect(
+      validationPaths(() =>
+        defineTable("t", { id: col.id(), at: hand({ onUpdate: "now" }) })
+      )
+    ).toEqual(["t.at"]);
+    // And the shapes the DSL itself produces.
+    expect(() =>
+      defineTable("t", {
+        id: col.id(),
+        ref: hand({ generated: "uuidv7" }),
+        ...col.timestamps(),
+      })
+    ).not.toThrow();
+  });
+
   it("refuses a decimal default finer than the column's scale, naming the column", () => {
     // MySQL 8.0.46 stores `DECIMAL(10,2) DEFAULT 1.555` as 1.56, so the live
     // default would never match the declaration.
@@ -326,6 +420,115 @@ describe("defineTable", () => {
         rate: col.decimal(10, 7, { default: 1e-7 }),
       })
     ).not.toThrow();
+  });
+
+  describe("a default the column cannot hold on every dialect", () => {
+    /** A table `t` declaring the one column `c`, as a thunk to judge. */
+    const declare = (column: ColumnBuilder) => () =>
+      defineTable("t", { id: col.id(), c: column });
+
+    it("refuses a uuid default that is not a canonical UUID, and accepts one", () => {
+      // PostgreSQL's native uuid refuses the first two outright; MySQL's
+      // char(36) and SQLite's text store them. The upper-case form PostgreSQL
+      // accepts and writes back lower-cased, so the diff never sees it equal.
+      for (const value of [
+        "not-a-uuid",
+        "0190c4c2-7f3a-7b9e-8d1a-3c5e7f9a1b2",
+        "0190C4C2-7F3A-7B9E-8D1A-3C5E7F9A1B2C",
+      ]) {
+        expect(validationPaths(declare(col.uuid({ default: value })))).toEqual([
+          "t.c",
+        ]);
+      }
+      expect(
+        declare(col.uuid({ default: "0190c4c2-7f3a-7b9e-8d1a-3c5e7f9a1b2c" }))
+      ).not.toThrow();
+    });
+
+    it("refuses a text default wider than its column declares on MySQL, at the boundary", () => {
+      // Each is refused by MySQL and stored by SQLite; a char(n) and a
+      // shortText are refused by PostgreSQL too. `text` is varchar(255) on
+      // MySQL.
+      const cases: [(value: string) => ColumnBuilder, number][] = [
+        [value => col.text({ default: value }), 255],
+        [value => col.shortText({ default: value }), 255],
+        [value => col.varchar(8, { default: value }), 8],
+        [value => col.char(2, { default: value }), 2],
+      ];
+      for (const [make, width] of cases) {
+        expect(declare(make("x".repeat(width)))).not.toThrow();
+        expect(validationPaths(declare(make("x".repeat(width + 1))))).toEqual([
+          "t.c",
+        ]);
+      }
+      // Counted in characters, as the column counts them, not UTF-16 units.
+      expect(declare(col.varchar(2, { default: "😀😀" }))).not.toThrow();
+      // Unbounded on every dialect.
+      expect(
+        declare(col.longText({ default: "x".repeat(70_000) }))
+      ).not.toThrow();
+    });
+
+    it("refuses a NUL character in a string default", () => {
+      expect(
+        validationPaths(declare(col.longText({ default: "a\u0000b" })))
+      ).toEqual(["t.c"]);
+    });
+
+    it("refuses an integer default that is fractional or out of the column's range, at the boundary", () => {
+      const cases: [(value: number) => ColumnBuilder, number, number][] = [
+        [value => col.smallint({ default: value }), -32_768, 32_767],
+        [
+          value => col.integer({ default: value }),
+          -2_147_483_648,
+          2_147_483_647,
+        ],
+        [
+          value => col.bigint({ default: value }),
+          Number.MIN_SAFE_INTEGER,
+          Number.MAX_SAFE_INTEGER,
+        ],
+      ];
+      for (const [make, min, max] of cases) {
+        expect(declare(make(min))).not.toThrow();
+        expect(declare(make(max))).not.toThrow();
+        expect(validationPaths(declare(make(min - 1)))).toEqual(["t.c"]);
+        expect(validationPaths(declare(make(max + 1)))).toEqual(["t.c"]);
+        expect(validationPaths(declare(make(1.5)))).toEqual(["t.c"]);
+      }
+    });
+
+    it("refuses a real default outside a 4-byte float's range", () => {
+      expect(declare(col.real({ default: 3.4e38 }))).not.toThrow();
+      // Past the largest value, and so small it underflows to zero.
+      for (const value of [1e39, -1e39, 1e-50]) {
+        expect(validationPaths(declare(col.real({ default: value })))).toEqual([
+          "t.c",
+        ]);
+      }
+      expect(declare(col.real({ default: 0 }))).not.toThrow();
+      // A double holds it.
+      expect(declare(col.double({ default: 1e39 }))).not.toThrow();
+    });
+
+    it("refuses a default whose type is not the column's, which each dialect reads differently", () => {
+      // A plugin in JavaScript passes whatever it holds; the types below are
+      // what the typed builders already refuse.
+      const mismatched: ColumnBuilder[] = [
+        col.integer({ default: "1" as never }),
+        col.text({ default: 1 as never }),
+        col.shortText({ default: true as never }),
+        col.boolean({ default: "true" as never }),
+        col.timestamp({ default: "2024-01-01" as never }),
+        col.bytes({ default: "00" as never }),
+        col.text({ default: { token: "now" } as never }),
+      ];
+      for (const column of mismatched) {
+        expect(validationPaths(declare(column))).toEqual(["t.c"]);
+      }
+      // The current-timestamp token is a timestamp's default.
+      expect(declare(col.timestamps().createdAt)).not.toThrow();
+    });
   });
 
   it("refuses a table with no columns", () => {

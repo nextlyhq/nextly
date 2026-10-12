@@ -37,9 +37,8 @@ import {
 import {
   getColumnDescriptor,
   type ColumnOrigin,
-  getSystemColumnDescriptors,
   kindAndSizes,
-  toSnakeCase,
+  systemColumnsForFields,
 } from "../../services/field-column-descriptor";
 import {
   columnTypeIsIndexable,
@@ -49,7 +48,11 @@ import {
   uniquenessCanBeAnIndex,
 } from "../../services/index-name";
 
-import { indexKey, isManagedIndexName } from "./index-util";
+import {
+  indexKey,
+  isManagedIndexName,
+  resolveDeclaredIndexName,
+} from "./index-util";
 import type { ColumnSpec, IndexSpec, TableSpec } from "./types";
 
 /**
@@ -165,6 +168,12 @@ interface CollectionIndexContext<F> {
    * text fields can each be keyable and their index still not be.
    */
   columnFor?: (field: F) => Omit<WeighedColumn, "name"> | null;
+  /**
+   * The system columns this table carries, by column name, weighed as the
+   * index rules weigh a column. A declared index may name `id`, `createdAt`
+   * or `updatedAt`, and resolves them here rather than among the fields.
+   */
+  systemColumns?: ReadonlyMap<string, Omit<WeighedColumn, "name">>;
   /**
    * Whether an index on this column can exist at all, asked per column.
    *
@@ -369,26 +378,33 @@ function declaredIndexColumn<F extends MinimalFieldDef>(
     });
   };
 
-  const field = fields.find(f => f.name === fieldName);
-  if (!field) {
-    return refuse(
-      `Index names the field "${fieldName}", which this entity does not declare.`
-    );
+  const target = resolveDeclaredIndexName(
+    fieldName,
+    fields,
+    context.localizedNames
+  );
+  if (target.kind === "refused") return refuse(target.message);
+
+  if (target.kind === "system") {
+    // A system column is weighed from its own descriptor, the same way a
+    // field's is, so the MySQL key-width check counts it rather than skipping
+    // it. Absent from the map means this table does not carry the column.
+    const system = context.systemColumns?.get(target.column);
+    if (system === undefined) {
+      return refuse(
+        `Index names "${fieldName}", whose system column "${target.column}" this table does not carry.`
+      );
+    }
+    return { name: target.column, weighed: { ...system, name: target.column } };
   }
-  // A localized field's column lives in the migration-owned `_locales` table,
-  // so an index on it here would name a column this table does not have.
-  if (context.localizedNames.has(fieldName)) {
-    return refuse(
-      `Index names the localized field "${fieldName}", whose column lives in the companion "_locales" table.`
-    );
-  }
-  const column = context.columnNameFor(field);
+
+  const column = context.columnNameFor(target.field);
   if (column === null) {
     return refuse(
       `Index names the field "${fieldName}", which materialises no column on this table.`
     );
   }
-  const described = context.columnFor?.(field) ?? null;
+  const described = context.columnFor?.(target.field) ?? null;
   return {
     name: column,
     weighed: described === null ? null : { ...described, name: column },
@@ -411,34 +427,21 @@ export function buildDesiredTableFromFields(
     ? new Set(resolveLocalizedFieldNames(fields, true))
     : new Set<string>();
 
-  // A field materializes a parent column unless the descriptor skips it (a
-  // component field stores its data in its own table). Column-less fields must
-  // not suppress the system title/slug column nor receive an index.
-  const producesColumn = (f: (typeof fields)[number]): boolean =>
-    getColumnDescriptor(
-      f as unknown as Parameters<typeof getColumnDescriptor>[0],
-      dialect,
-      options.builtBy
-    ) !== null;
-
-  // Inject reserved system columns first - mirrors runtime-schema-generator's
-  // behavior. title/slug only when a column-producing user field replaces them
-  // (user wins). status only when Draft/Published is enabled.
-  // Matched on the COLUMN the field becomes, so this agrees with the runtime schema and the DDL
-  // generator. Comparing declared names makes `Title` suppress the column in one place and not
-  // the others, and the diff then reconciles a column the table does not have.
-  const declaresColumn = (column: string): boolean =>
-    fields.some(f => toSnakeCase(f.name) === column && producesColumn(f));
-  const hasTitleField = declaresColumn("title");
-  const hasSlugField = declaresColumn("slug");
-  for (const reserved of getSystemColumnDescriptors(dialect, {
-    hasTitleField,
-    hasSlugField,
-    hasStatus: options.hasStatus,
-    // Singles (`single_` prefix) get no owner column; collections (`dc_`) do.
-    // Keeps the diff input in lockstep with the runtime schema and DDL.
-    isSingle: tableName.startsWith("single_"),
-  })) {
+  // Reserved system columns first, as the runtime schema injects them: the
+  // same helper decides which a user field replaces, so the diff input stays in
+  // lockstep with the runtime schema and DDL. status only when Draft/Published
+  // is enabled.
+  const systemColumns = systemColumnsForFields(
+    fields as unknown as Parameters<typeof systemColumnsForFields>[0],
+    dialect,
+    {
+      builtBy: options.builtBy,
+      hasStatus: options.hasStatus,
+      // Singles (`single_` prefix) get no owner column; collections (`dc_`) do.
+      isSingle: tableName.startsWith("single_"),
+    }
+  );
+  for (const reserved of systemColumns) {
     columns.push({
       name: reserved.name,
       type: reserved.dialectType,
@@ -508,6 +511,9 @@ export function buildDesiredTableFromFields(
       // The kind narrowed past `skip`, which the object itself is not.
       return kindAndSizes({ ...descriptor, kind: descriptor.kind });
     },
+    systemColumns: new Map(
+      systemColumns.map(column => [column.name, kindAndSizes(column)])
+    ),
     ...(options.indexes !== undefined
       ? { declaredIndexes: options.indexes }
       : {}),

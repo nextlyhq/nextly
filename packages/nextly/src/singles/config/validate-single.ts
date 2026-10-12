@@ -50,6 +50,7 @@ import {
   validatePluginFieldOptionsShared,
   validateSelectOptionsShared,
   validateSlugShared,
+  validateAccessShared,
 } from "../../shared/base-validator";
 
 import type { SingleConfig } from "./types";
@@ -415,40 +416,14 @@ function validateFields(
 }
 
 /**
- * Validate access control functions.
- *
- * Singles only support `read` and `update` access (no create/delete).
+ * Validates access control functions through the shared rule, with the keys
+ * this entity supports.
  */
 function validateAccess(
   access: unknown,
   errors: SingleValidationError[]
 ): void {
-  if (!access) {
-    return; // Access is optional
-  }
-
-  if (typeof access !== "object" || Array.isArray(access)) {
-    errors.push({
-      path: "access",
-      message: "Access control must be an object",
-      code: "ACCESS_INVALID_TYPE",
-    });
-    return;
-  }
-
-  const accessObj = access as Record<string, unknown>;
-  const validAccessKeys = ["read", "update"] as const;
-
-  for (const key of validAccessKeys) {
-    const fn = accessObj[key];
-    if (fn !== undefined && typeof fn !== "function") {
-      errors.push({
-        path: `access.${key}`,
-        message: `Access control '${key}' must be a function`,
-        code: "ACCESS_FUNCTION_INVALID",
-      });
-    }
-  }
+  validateAccessShared(access, ["read", "update"], errors);
 }
 
 // ============================================================

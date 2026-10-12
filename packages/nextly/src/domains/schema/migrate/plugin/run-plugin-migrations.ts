@@ -30,8 +30,10 @@
  * @since 1.0.0
  */
 import type { SupportedDialect } from "../../../../database/schema-registry";
+import { describeError } from "../../../../errors/describe-error";
 import { NextlyError } from "../../../../errors/nextly-error";
-import { newestEvent } from "../../events/newest-event";
+import { newestEvent, newestEventsByFilename } from "../../events/newest-event";
+import type { SchemaEventRow } from "../../events/schema-events-repository";
 import {
   assertNotPartiallyApplied,
   attemptCleared,
@@ -41,7 +43,7 @@ import {
   type ReconcileRepo,
 } from "../drift-reconcile";
 import type { MigrationUnit } from "../migration-transaction";
-import { assertRunnableStatements } from "../split-sql";
+import { assertRunnableStatements, statementRefusals } from "../split-sql";
 import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
 
 import {
@@ -58,6 +60,7 @@ import type { PluginDefinition } from "../../../../plugins/plugin-context";
 import {
   assertNoForeignDrops,
   type LiveColumns,
+  type LiveElements,
 } from "../../ownership/drop-guard";
 import {
   assertNoOwnerChange,
@@ -116,6 +119,13 @@ export interface RunPluginMigrationsDeps {
    * read as the drop it would otherwise be.
    */
   liveColumns?: (statements: readonly string[]) => Promise<LiveColumns>;
+  /**
+   * The live indexes, foreign keys and checks of the tables a module's
+   * statements rebuild, read just before that module is judged
+   * (`readLiveElements`). Absent, a rebuild is read as the drop it would
+   * otherwise be.
+   */
+  liveElements?: (statements: readonly string[]) => Promise<LiveElements>;
   /**
    * The tables a module's statements create that exist already, read just
    * before that module is judged (`readLiveTables`), so a table an earlier
@@ -236,12 +246,7 @@ export async function runPluginMigrations(
     adopted: 0,
     skipped: 0,
   };
-  const budget = {
-    remaining:
-      deps.limit !== undefined && deps.limit > 0
-        ? deps.limit
-        : Number.POSITIVE_INFINITY,
-  };
+  const budget = { remaining: moduleBudget(deps.limit) };
   for (const set of sets) {
     // A plugin after the budget ran out is left for the next run whole,
     // rather than having its recorded modules re-judged now.
@@ -249,6 +254,144 @@ export async function runPluginMigrations(
     await runSet(set, deps, result, budget);
   }
   return result;
+}
+
+/**
+ * How many modules a run may apply or adopt under `limit`
+ * (`RunPluginMigrationsDeps.limit`): all of them unless it is positive.
+ */
+function moduleBudget(limit: number | undefined): number {
+  return limit !== undefined && limit > 0 ? limit : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * The applied plugin modules among the ledger's `file_apply` rows, keyed by
+ * qualified filename, with the sha256 that ran: the `appliedShas` a run is
+ * handed.
+ *
+ * The NEWEST event per filename decides it. A rolled_back event INSERTED
+ * after an applied one (the shape `migrate:down` records) means the module is
+ * not applied, however many older applied rows exist. It is read through
+ * `newestEventsByFilename`, the one helper every ledger reader shares, so a
+ * run, its preview and `migrate:down` cannot disagree about the same rows.
+ */
+export function appliedPluginShas(
+  rows: readonly SchemaEventRow[]
+): Map<string, string | null> {
+  const applied = new Map<string, string | null>();
+  for (const [filename, newest] of newestEventsByFilename([...rows])) {
+    if (filename.startsWith("plugin:") && newest.status === "applied") {
+      applied.set(filename, newest.sha256);
+    }
+  }
+  return applied;
+}
+
+/** One plugin module as `nextly migrate --dry-run` lists it. */
+export interface PluginModulePreview {
+  /** The module's ledger key (`qualifiedFilename`). */
+  filename: string;
+  /** False when the module runs outside a transaction. */
+  transaction: boolean;
+  /**
+   * Already recorded as applied. Such a module is listed only when a run
+   * would refuse it, since the run checks it again before going past it.
+   */
+  recorded: boolean;
+  /** What a real run would refuse the module for; empty when nothing. */
+  refusals: string[];
+}
+
+/**
+ * The modules a run over this ledger would reach, in the order it reaches
+ * them: each one it would apply or adopt within `limit`, and each recorded
+ * one it would refuse on the way. Reads nothing beyond `rows` and writes
+ * nothing.
+ *
+ * Walks the sets as `runPluginMigrations` and `runSet` do: the same
+ * duplicate-name check over every plugin first, the same order
+ * (`orderedMigrations`), the same pending test (`isPending` over
+ * `appliedPluginShas`) and the same budget (`moduleBudget`). A pending module
+ * is judged by the checks a run makes before it reads the live schema: its
+ * checksum (`assertModuleIntact`), its statements (`statementRefusals`, which
+ * `assertRunnableStatements` throws from) and an unfinished attempt that may
+ * have stopped part-way (`assertNotPartiallyApplied`). What a run decides
+ * from the live schema (adoption, drift, the drop guard) is not previewed.
+ */
+export async function previewPluginMigrations(
+  sets: readonly PluginMigrationSet[],
+  args: {
+    dialect: SupportedDialect;
+    /** The ledger's `file_apply` rows; none when the ledger is not there. */
+    rows: readonly SchemaEventRow[];
+    limit?: number;
+  }
+): Promise<PluginModulePreview[]> {
+  for (const set of sets) {
+    assertUniqueModuleNames(set.pluginName, set.migrations);
+  }
+  const deps = { appliedShas: appliedPluginShas(args.rows) };
+  const history = {
+    findFileApplies: (filename: string) =>
+      Promise.resolve(args.rows.filter(row => row.filename === filename)),
+  };
+  const preview: PluginModulePreview[] = [];
+  let remaining = moduleBudget(args.limit);
+  for (const set of sets) {
+    if (remaining <= 0) break;
+    for (const migration of orderedMigrations(set.migrations)) {
+      const pending = isPending(set, migration, deps);
+      if (remaining <= 0 && pending) break;
+      const filename = qualifiedFilename(set.pluginName, migration.name);
+      const transaction = migration.transaction !== false;
+      const refusals: string[] = [];
+      const refused = async (check: () => unknown): Promise<void> => {
+        try {
+          await check();
+        } catch (error) {
+          // A refusal is reported as the run would print it; anything else
+          // is a fault of the preview itself, and is raised.
+          if (!NextlyError.is(error)) throw error;
+          refusals.push(describeError(error));
+        }
+      };
+      await refused(() => assertModuleIntact(set.pluginName, migration));
+      if (!pending) {
+        await refused(() =>
+          assertAppliedUnchanged(
+            set.pluginName,
+            migration,
+            deps.appliedShas.get(filename) ?? null
+          )
+        );
+        if (refusals.length > 0) {
+          preview.push({ filename, transaction, recorded: true, refusals });
+        }
+        continue;
+      }
+      for (const refusal of statementRefusals(
+        pluginModuleStatements(migration, args.dialect, "up"),
+        args.dialect,
+        { transaction, unit: "module" }
+      )) {
+        refusals.push(refusal.message);
+      }
+      // Worded as the refusal to run it again: a pending module the run
+      // reaches is run where the database stands at its start, and whichever
+      // side the live schema shows, an unfinished attempt is refused.
+      await refused(() =>
+        assertNotPartiallyApplied(
+          { filename, transaction },
+          args.dialect,
+          history,
+          "rerun"
+        )
+      );
+      preview.push({ filename, transaction, recorded: false, refusals });
+      remaining -= 1;
+    }
+  }
+  return preview;
 }
 
 /** Apply one plugin's pending modules, counting each outcome into `result`. */
@@ -566,7 +709,7 @@ function dataModuleFailure(
 function isPending(
   set: PluginMigrationSet,
   migration: PluginMigration,
-  deps: RunPluginMigrationsDeps
+  deps: Pick<RunPluginMigrationsDeps, "appliedShas">
 ): boolean {
   return !deps.appliedShas.has(
     qualifiedFilename(set.pluginName, migration.name)
@@ -804,6 +947,9 @@ async function applyModule(
   const sides = live
     ? { before: own.live, target: own.live, live: own.live }
     : own;
+  if (!live && snapshotsEquivalent(own.live, own.before)) {
+    assertSchemaChangeWritten(set, migration, own, deps.dialect);
+  }
 
   const reconcile = reconcileFile({
     file: {
@@ -841,6 +987,39 @@ async function applyModule(
     adopted: state === "already_applied",
   });
   return state === "already_applied" ? "adopted" : "applied";
+}
+
+/**
+ * Refuse to run a module that changes the schema on this dialect with no
+ * statements for it: one written for its author's SQL (`migrate:create
+ * --plugin --blank`, or a change the dialect cannot make in place) whose SQL
+ * was never added. Run, it would execute nothing and be recorded as having
+ * reached a schema the database never reached, and the plugin's next module
+ * would then meet a database matching neither of its sides.
+ *
+ * Asked only of a module about to run from its start: one whose result the
+ * database already holds is recorded without running, which is right for it
+ * whatever its statements are.
+ */
+function assertSchemaChangeWritten(
+  set: PluginMigrationSet,
+  migration: PluginMigration,
+  sides: { before: NextlySchemaSnapshot; target: NextlySchemaSnapshot },
+  dialect: SupportedDialect
+): void {
+  if (snapshotsEquivalent(sides.before, sides.target)) return;
+  if (pluginModuleStatements(migration, dialect, "up").length > 0) return;
+  throw new NextlyError({
+    code: "PLUGIN_MIGRATION_SQL_MISSING",
+    publicMessage:
+      `Plugin "${set.pluginName}" migration ${migration.name} changes the schema on ${dialect} but has no ${dialect} statements, so running it would record a change it never made. Nothing was applied. ` +
+      `Write the module's ${dialect} \`up\` and \`down\` in the plugin, then run \`nextly migrate\` again.`,
+    logContext: {
+      plugin: set.pluginName,
+      migration: migration.name,
+      dialect,
+    },
+  });
 }
 
 /**
@@ -882,6 +1061,7 @@ async function assertModuleRunnable(
     dialect: deps.dialect,
     source: filename,
     liveColumns: await deps.liveColumns?.(statements),
+    liveElements: await deps.liveElements?.(statements),
     liveTables: await deps.liveTables?.(statements),
     liveIndexTables: await deps.liveIndexTables?.(statements),
   });

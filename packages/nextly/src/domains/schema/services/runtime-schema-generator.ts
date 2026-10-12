@@ -65,12 +65,13 @@ import type { LocalizedColumnSpec } from "../../i18n/migration/types";
 import { getActiveExtensionSchema } from "../extension/active-schema";
 import {
   toColumnDescriptor,
-  withDeclaredKeyAndDefault,
+  withDeclaredModifiers,
 } from "../extension/column-descriptor";
 import { enumChecks } from "../extension/enum-check";
 import type { ExtensionColumn } from "../extension/types";
 
 import {
+  type getSystemColumnDescriptors,
   type ColumnDescriptor,
   type ColumnKind,
   type ColumnOrigin,
@@ -79,8 +80,7 @@ import {
   DEFAULT_DECIMAL_SCALE,
   ENUM_STORAGE_LENGTH,
   getColumnDescriptor,
-  getSystemColumnDescriptors,
-  toSnakeCase,
+  systemColumnsForFields,
 } from "./field-column-descriptor";
 
 export type SupportedDialect = DescriptorDialect;
@@ -338,7 +338,7 @@ export function addContributedDrizzleColumns(
     // drizzle-kit route a NOT NULL contribution was added with no default —
     // refused on a table that already has rows — or had its default removed,
     // and an entry write omitting the hidden column then failed NOT NULL.
-    columns[column.name] = withDeclaredKeyAndDefault(
+    columns[column.name] = withDeclaredModifiers(
       buildUserDrizzleColumn(toColumnDescriptor(column, dialect), dialect),
       column,
       dialect
@@ -411,18 +411,6 @@ function buildDrizzleColumnRecord(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- as above
   const out: Record<string, any> = {};
 
-  // A column-less field (e.g. a component, stored in its own table) must not
-  // suppress the system title/slug column, or the table would have neither.
-  const producesColumn = (f: FieldDefinition): boolean =>
-    getColumnDescriptor(f, dialect, options.builtBy ?? "codeFirst") !== null;
-  // Matched on the COLUMN the field becomes, not its declared name: an author writing `Title`
-  // means the same column, and the three places that make this decision have to agree or one
-  // injects a system column the others do not have.
-  const declaresColumn = (column: string): boolean =>
-    fields.some(f => toSnakeCase(f.name) === column && producesColumn(f));
-  const hasTitleField = declaresColumn("title");
-  const hasSlugField = declaresColumn("slug");
-
   // Localized fields live in the companion `_locales` table; omit them from the main table.
   const localizedNames = options.localized
     ? new Set(resolveLocalizedFieldNames(fields, true))
@@ -431,9 +419,8 @@ function buildDrizzleColumnRecord(
   // System columns first (id, created_at, updated_at; conditionally title,
   // slug, and status). Source-of-truth descriptor list lives in
   // field-column-descriptor.ts and stays in lockstep with the diff input.
-  for (const sys of getSystemColumnDescriptors(dialect, {
-    hasTitleField,
-    hasSlugField,
+  for (const sys of systemColumnsForFields(fields, dialect, {
+    builtBy: options.builtBy ?? "codeFirst",
     hasStatus: options.status === true,
     // Single tables get no owner column (a Single is one global row). Set by
     // generateRuntimeSchema from the `single_` table prefix so the runtime
