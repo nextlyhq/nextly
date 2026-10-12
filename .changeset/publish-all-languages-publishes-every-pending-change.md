@@ -29,6 +29,8 @@
 
 "Publish all languages" and "Unpublish all languages" on a collection entry now run through the same update path as any other edit, so update hooks, field rules and validation apply to them.
 
-Moving every language at once, from the button or from a scheduled release, now applies every language's pending change instead of refusing when another language holds one. A shared field keeps the edit of the language that changed it, and when two languages changed the same shared field the later save wins. Each language's translations, including those inside components, come from its own pending change. A pending change held for a language the app no longer configures is left in place.
+Moving every language at once, from the button or from a scheduled release, now applies every language's pending change instead of refusing when another language holds one. A shared field keeps the edit of the language that changed it, and when two languages changed the same shared field the later save wins, including two saves stored within the same second. Each language's translations, including those inside components, come from its own pending change. A pending change held for a language the app no longer configures is left in place.
 
-When publishing every language fails, the admin now shows the server's reason instead of one fixed message.
+Each language whose pending change goes live is recorded as its own version in that language's history and sends its own `entry.updated` event tagged with the language, and a status event for such a language reports the content it replaced. A history limit (`maxPerDoc`) never removes a version recorded by the same write.
+
+When a hook changes the status a move asked for, the response and the admin report the status every language ended up in. When publishing every language fails, the admin shows the server's reason instead of one fixed message.
