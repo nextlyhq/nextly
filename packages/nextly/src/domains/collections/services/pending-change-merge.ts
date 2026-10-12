@@ -23,6 +23,8 @@ export interface PendingLanguageChange {
   locale: string;
   snapshot: unknown;
   updatedAt: Date;
+  /** The document's save number this change was stored under. */
+  revision: number;
 }
 
 /**
@@ -58,14 +60,17 @@ export interface LanguageTargetInput {
  *
  * Only languages the app still configures: a change held for a removed language
  * cannot be read or written through the API, so it stays where it is rather
- * than being published or deleted as a side effect. Ties break on the language
- * code, so the order never depends on what the database happens to return.
+ * than being published or deleted as a side effect. Saves are ordered by the
+ * document's save number, which tells apart two saves the stored time cannot,
+ * then by time where the numbers tie, then by language code, so the order never
+ * depends on what the database happens to return.
  */
 export function pendingChangesToApply(
   drafts: ReadonlyArray<{
     locale: string | null;
     snapshot: unknown;
     updatedAt: Date | string;
+    revision: number;
   }>,
   configuredLocales: ReadonlySet<string>
 ): PendingLanguageChange[] {
@@ -76,10 +81,12 @@ export function pendingChangesToApply(
       locale: draft.locale,
       snapshot: draft.snapshot,
       updatedAt: new Date(draft.updatedAt),
+      revision: draft.revision,
     });
   }
   return out.sort(
     (a, b) =>
+      a.revision - b.revision ||
       a.updatedAt.getTime() - b.updatedAt.getTime() ||
       a.locale.localeCompare(b.locale)
   );

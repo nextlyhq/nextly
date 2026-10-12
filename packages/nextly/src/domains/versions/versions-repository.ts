@@ -252,6 +252,18 @@ export interface VersionRow {
 export type VersionMeta = Omit<VersionRow, "snapshot">;
 
 /**
+ * A working draft with its place among the document's saves.
+ *
+ * `revision` on a working draft is the document's save number across its
+ * languages: each save takes one more than the highest any of the document's
+ * working drafts holds, so of two languages' pending changes the later save
+ * holds the larger number even when both land in one stored second.
+ */
+export interface WorkingDraftRow extends VersionRow {
+  revision: number;
+}
+
+/**
  * What an autosave write reports back.
  *
  * Taken from the values the write itself used rather than re-read afterwards:
@@ -500,6 +512,10 @@ export class VersionsRepository {
    * latest pending edit. The live content row is never touched here — this is
    * the sidecar that lets a published document be edited without changing what
    * the public sees until publish promotes it.
+   *
+   * Each save takes the document's next save number ({@link WorkingDraftRow}).
+   * Every caller saves under a lock on the document's row, so two saves cannot
+   * take the same one.
    */
   async upsertWorkingDraft(input: {
     ref: VersionRef;
@@ -510,6 +526,7 @@ export class VersionsRepository {
     const now = new Date();
     const serializedSnapshot = this.serializeSnapshot(input.snapshot);
     const where = this.workingDraftWhere(input.ref, input.locale);
+    const revision = (await this.highestWorkingDraftRevision(input.ref)) + 1;
     // Project only the id: the existence check must not transfer the (possibly
     // large) snapshot of the row it is about to overwrite.
     const existing = await this.db.select<{ id: string }>(TABLE, {
@@ -524,6 +541,7 @@ export class VersionsRepository {
           snapshot: serializedSnapshot,
           createdBy: input.createdBy ?? null,
           updatedAt: now,
+          revision,
         },
         where
       );
@@ -552,6 +570,7 @@ export class VersionsRepository {
       createdBy: input.createdBy ?? null,
       createdAt: now,
       updatedAt: now,
+      revision,
     };
     // A concurrent writer that committed its own draft between the read above
     // and this insert makes the unique index refuse this row. That refusal is
@@ -624,17 +643,31 @@ export class VersionsRepository {
    * For the operations that act on the whole document at once — publishing all
    * of its languages — rather than on the language in front of the author.
    */
-  async findAllWorkingDrafts(ref: VersionRef): Promise<VersionRow[]> {
-    return this.db.select<VersionRow>(TABLE, {
-      where: {
-        and: [
-          ...this.docWhere(ref),
-          { column: "isAutosave", op: "=", value: false },
-          { column: "versionNo", op: "IS NULL" },
-          { column: "status", op: "=", value: "draft" },
-        ],
-      },
+  async findAllWorkingDrafts(ref: VersionRef): Promise<WorkingDraftRow[]> {
+    return this.db.select<WorkingDraftRow>(TABLE, {
+      where: { and: this.workingDraftsOf(ref) },
     });
+  }
+
+  /** The highest save number among one document's working drafts, or 0. */
+  private async highestWorkingDraftRevision(ref: VersionRef): Promise<number> {
+    const rows = await this.db.select<{ revision: number }>(TABLE, {
+      columns: ["revision"],
+      where: { and: this.workingDraftsOf(ref) },
+      orderBy: [{ column: "revision", direction: "desc" }],
+      limit: 1,
+    });
+    return Number(rows[0]?.revision ?? 0);
+  }
+
+  /** The conditions that select every working draft of one document. */
+  private workingDraftsOf(ref: VersionRef): VersionsWhereCondition[] {
+    return [
+      ...this.docWhere(ref),
+      { column: "isAutosave", op: "=", value: false },
+      { column: "versionNo", op: "IS NULL" },
+      { column: "status", op: "=", value: "draft" },
+    ];
   }
 
   /**
@@ -648,14 +681,7 @@ export class VersionsRepository {
    * throws away pending work in languages the author never touched.
    */
   async deleteAllWorkingDrafts(ref: VersionRef): Promise<number> {
-    return this.db.delete(TABLE, {
-      and: [
-        ...this.docWhere(ref),
-        { column: "isAutosave", op: "=", value: false },
-        { column: "versionNo", op: "IS NULL" },
-        { column: "status", op: "=", value: "draft" },
-      ],
-    });
+    return this.db.delete(TABLE, { and: this.workingDraftsOf(ref) });
   }
 
   /**

@@ -25,13 +25,29 @@ describe("pendingChangesToApply", () => {
   it("applies the oldest save first and skips languages the app does not configure", () => {
     const out = pendingChangesToApply(
       [
-        { locale: "de", snapshot: {}, updatedAt: "2026-01-02T00:00:00.000Z" },
-        { locale: "fr", snapshot: {}, updatedAt: "2026-01-01T00:00:00.000Z" },
-        { locale: null, snapshot: {}, updatedAt: "2026-01-01T00:00:00.000Z" },
+        {
+          locale: "de",
+          snapshot: {},
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          revision: 4,
+        },
+        {
+          locale: "fr",
+          snapshot: {},
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          revision: 2,
+        },
+        {
+          locale: null,
+          snapshot: {},
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          revision: 1,
+        },
         {
           locale: "en",
           snapshot: {},
           updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          revision: 3,
         },
       ],
       new Set(["en", "de"])
@@ -39,16 +55,44 @@ describe("pendingChangesToApply", () => {
     expect(out.map(change => change.locale)).toEqual(["en", "de"]);
   });
 
-  it("orders two saves at the same instant by language, so the result never depends on the database", () => {
+  it("orders two saves stored in the same second by their save number", () => {
+    // SQLite stores whole seconds, so back-to-back saves tie on time.
     const at = "2026-01-01T00:00:00.000Z";
     const out = pendingChangesToApply(
       [
-        { locale: "en", snapshot: {}, updatedAt: at },
-        { locale: "de", snapshot: {}, updatedAt: at },
+        { locale: "de", snapshot: {}, updatedAt: at, revision: 2 },
+        { locale: "en", snapshot: {}, updatedAt: at, revision: 1 },
       ],
       new Set(["en", "de"])
     );
-    expect(out.map(change => change.locale)).toEqual(["de", "en"]);
+    expect(out.map(change => change.locale)).toEqual(["en", "de"]);
+  });
+
+  it("orders saves with no number to tell them apart by time, then by language", () => {
+    const out = pendingChangesToApply(
+      [
+        {
+          locale: "en",
+          snapshot: {},
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          revision: 0,
+        },
+        {
+          locale: "fr",
+          snapshot: {},
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          revision: 0,
+        },
+        {
+          locale: "de",
+          snapshot: {},
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          revision: 0,
+        },
+      ],
+      new Set(["en", "de", "fr"])
+    );
+    expect(out.map(change => change.locale)).toEqual(["de", "en", "fr"]);
   });
 });
 
