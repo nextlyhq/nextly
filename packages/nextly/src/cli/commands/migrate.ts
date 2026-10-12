@@ -48,16 +48,16 @@ import {
 } from "../../domains/i18n/migration/migration-intent";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
-import {
-  SchemaEventsRepository,
-  truncateErrorMessage,
-} from "../../domains/schema/events/schema-events-repository";
+import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
 import type { ExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import { compileExtensionSchema } from "../../domains/schema/extension/publish";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import {
   assertNotPartiallyApplied,
+  failedAttemptMayBePartial,
+  markAppliedOrRefuse,
   reconcileFile,
+  recordAttemptFailed,
 } from "../../domains/schema/migrate/drift-reconcile";
 import {
   outsideTransactionNotice,
@@ -116,7 +116,6 @@ import {
 } from "../../domains/schema/pipeline/locks";
 import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
 import { NextlyError, describeError } from "../../errors";
-import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners/table-name";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -1537,13 +1536,14 @@ export async function runFileMigrations(args: {
   // no row to be core's; any other table is the app's. Absent only when the
   // listing says so: a listing that fails stops the run rather than
   // disabling the guard.
-  const { SchemaOwnersRepository: OwnersRepoForFiles, tableOwnersByName } =
-    await import("../../domains/schema/ownership/schema-owners-repository");
-  const registryExists = (
-    await (
-      adapter as unknown as { listTables: () => Promise<string[]> }
-    ).listTables()
-  ).includes(SCHEMA_OWNERS_TABLE);
+  const {
+    SchemaOwnersRepository: OwnersRepoForFiles,
+    schemaOwnersTableExists,
+    tableOwnersByName,
+  } = await import("../../domains/schema/ownership/schema-owners-repository");
+  const registryExists = await schemaOwnersTableExists(
+    adapter as unknown as { listTables: () => Promise<string[]> }
+  );
   const fileOwnerRows = registryExists
     ? await new OwnersRepoForFiles(db, dialect).read()
     : [];
@@ -1620,40 +1620,28 @@ export async function runFileMigrations(args: {
         filename,
         sha256: m.checksum,
       });
-      let didApply = false;
+      const partial = failedAttemptMayBePartial(m, dialect);
       try {
         // Recorded applied inside the file's transaction when it has one, so
-        // the row commits or rolls back with its statements.
+        // the row commits or rolls back with its statements; another run
+        // having recorded the file first rolls them back too.
         await executeSql(m.upSql, unit, async (handle, n) => {
-          didApply = await repo.boundTo(handle).markApplied(id, {
+          await markAppliedOrRefuse(repo.boundTo(handle), id, {
+            filename,
             statementsExecuted: n,
-            uniqueFilename: filename,
+            partial,
           });
         });
       } catch (err) {
-        await repo.markFailed(id, {
-          // Bounded, and without logContext: this row is persisted and is
-          // served back by the schema-journal endpoint, so it keeps the code,
-          // message and cause chain but not the arbitrary identifiers a log
-          // context can carry. An unbounded write could also fail here and
-          // leave the migration with no recorded failure at all.
-          errorMessage: truncateErrorMessage(
-            describeError(err, { context: false })
-          ),
-        });
+        // Recorded as the reconcile records it, bounded and without
+        // logContext: a lost race rolled back whole leaves no row, anything
+        // else a failed one.
+        await recordAttemptFailed(repo, id, err, partial);
         throw err;
       }
-      if (didApply) {
-        applied++;
-        remaining--;
-        logger.success(`Applied ${filename}`);
-      } else {
-        // Another run applied this file first (concurrent-apply race); our row
-        // was recorded as superseded. Don't double-count or report a false apply.
-        logger.warn(
-          `${filename} was already applied by a concurrent run; skipping.`
-        );
-      }
+      applied++;
+      remaining--;
+      logger.success(`Applied ${filename}`);
       continue;
     }
 

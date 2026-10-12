@@ -106,15 +106,21 @@ function fakeRepo() {
       markFailed: async (id: string) => {
         failed.push(id);
       },
+      discardAttempt: async () => {},
       supersede: async () => {},
       findFileApplies: async () => [],
       // The applied row is written through the handle the module ran on;
       // the fake ledger has one store, so every handle reaches it.
       boundTo: () => ({
+        recordStart: async (args: { filename: string }) => {
+          started.push(args.filename);
+          return `id-${args.filename}`;
+        },
         markApplied: async (id: string) => {
           applied.push(id);
           return true;
         },
+        supersede: async () => {},
       }),
     } satisfies ReconcileRepo,
   };
@@ -147,7 +153,9 @@ function deps(
           tables: names.flatMap(n => live.get(n) ?? []),
         }) as NextlySchemaSnapshot,
       executeSql: async (sql: string, _unit: unknown, after: After) => {
-        executed.push(sql);
+        // An adoption runs as a unit with no statements, for its ledger
+        // writes' transaction; only statements are recorded as executed.
+        if (sql !== "") executed.push(sql);
         await after(TX_HANDLE, 1);
         return 1;
       },
@@ -235,8 +243,9 @@ describe("runPluginMigrations", () => {
     expect(h.executed).toEqual([]);
     expect(h.applied.length).toBe(1);
     expect(h.owners[0]).toMatchObject({ pluginName: "a", adopted: true });
-    // Nothing ran, so no transaction holds the rows: the run's own handle.
-    expect(h.ownerHandles).toEqual([undefined]);
+    // Nothing ran, but the ledger row and the owner rows are written in one
+    // transaction with no statements, through its handle.
+    expect(h.ownerHandles).toEqual([TX_HANDLE]);
   });
 
   it("records a module's owner rows through the handle its statements ran on, inside the executor", async () => {
@@ -1217,8 +1226,12 @@ describe("a database already past some of a plugin's modules", () => {
 
   it("names the way out when a data module fails against the later shape of the tables", async () => {
     const d = deps({
-      executeSql: async () => {
-        throw new Error('column "label" does not exist');
+      // The data module's statements fail; an adoption's unit with none
+      // records as a real executor does.
+      executeSql: async (sql: string, _unit: unknown, after: After) => {
+        if (sql !== "") throw new Error('column "label" does not exist');
+        await after(TX_HANDLE, 0);
+        return 0;
       },
     });
     d.live.set(T, [tableSpec(T, true)]);
@@ -1626,7 +1639,7 @@ describe("a limit on how many modules one run records", () => {
   function following(limit: number) {
     const d = deps({ limit });
     d.deps.executeSql = async (sql: string, _unit: unknown, after: After) => {
-      d.executed.push(sql);
+      if (sql !== "") d.executed.push(sql);
       if (
         sql.includes(
           "CREATE TABLE p__things (id text PRIMARY KEY, label text NOT NULL)"

@@ -13,7 +13,10 @@
 import { and, eq, inArray } from "drizzle-orm";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
-import { schemaOwnersTables } from "../../../schemas/schema-owners";
+import {
+  SCHEMA_OWNERS_TABLE,
+  schemaOwnersTables,
+} from "../../../schemas/schema-owners";
 import { asRepositoryDb, type RepositoryDb } from "../events/repository-db";
 
 import {
@@ -67,6 +70,19 @@ export function tableOwnersByName(
       .filter(record => (record.elementKind ?? "table") === "table")
       .map(record => [record.tableName, record])
   );
+}
+
+/**
+ * Whether the owner registry's table exists yet.
+ *
+ * `nextly migrate` creates it, so a database upgraded from a release before
+ * it has none until that first run. A reader finding none reads the registry
+ * as empty — nothing claimed — and a writer leaves it to `nextly migrate`.
+ */
+export async function schemaOwnersTableExists(adapter: {
+  listTables(): Promise<string[]>;
+}): Promise<boolean> {
+  return (await adapter.listTables()).includes(SCHEMA_OWNERS_TABLE);
 }
 
 export class SchemaOwnersRepository {

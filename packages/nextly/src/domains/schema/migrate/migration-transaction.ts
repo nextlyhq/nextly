@@ -27,6 +27,46 @@ import {
 export interface MigrationTransaction {
   execute(statement: string): Promise<void>;
   db: unknown;
+  /**
+   * Puts back the connection's own settings that a unit's statements may
+   * have changed for the rest of the transaction, before the runner writes
+   * through `db` (`restoreSessionDefaults`).
+   */
+  restoreSession(): Promise<void>;
+}
+
+/**
+ * What PostgreSQL resets before the runner's own writes in a unit's
+ * transaction: the settings a unit may change with SET LOCAL that decide
+ * which table an unqualified name reaches, and with what rights. Fixed
+ * keywords, never built from input.
+ */
+const POSTGRES_SESSION_RESETS = [
+  "RESET SESSION AUTHORIZATION",
+  "RESET ROLE",
+  "RESET search_path",
+] as const;
+
+/**
+ * Restores, inside the transaction, the settings a PostgreSQL unit may have
+ * changed with `SET LOCAL search_path`, `SET LOCAL ROLE` or
+ * `SET LOCAL SESSION AUTHORIZATION`, so the ledger and owner tables the
+ * runner writes after the statements, by their unqualified names, are the
+ * ones the connection was opened on, written with its own rights.
+ *
+ * RESET returns a setting to its session default: the value the connection
+ * started with, which includes a `search_path` the adapter sets in its
+ * startup options for a configured schema. Inside a transaction it undoes a
+ * SET LOCAL, and like one ends with the transaction. A plain SET, which
+ * would outlive the unit, is refused before anything runs
+ * (`statementRefusals`).
+ */
+async function restoreSessionDefaults(ctx: {
+  runStatement(statement: ReturnType<typeof sql.raw>): Promise<void>;
+}): Promise<void> {
+  for (const reset of POSTGRES_SESSION_RESETS) {
+    await ctx.runStatement(sql.raw(reset));
+  }
 }
 
 /**
@@ -64,13 +104,20 @@ export async function executeTransaction<T>(
   adapter: DrizzleAdapter,
   work: (tx: MigrationTransaction) => Promise<T>
 ): Promise<T> {
-  if (adapter.getCapabilities().dialect !== "sqlite") {
+  const dialect = adapter.getCapabilities().dialect;
+  if (dialect !== "sqlite") {
     return adapter.transaction(ctx =>
       work({
         execute: async statement => {
           await ctx.execute(statement);
         },
         db: ctx.getDrizzle(),
+        // MySQL has no transaction-scoped setting a unit can change that
+        // reroutes a table name: `USE` is refused before anything runs.
+        restoreSession: () =>
+          dialect === "postgresql"
+            ? restoreSessionDefaults(ctx)
+            : Promise.resolve(),
       })
     );
   }
@@ -99,6 +146,9 @@ export async function executeTransaction<T>(
               await ctx.execute(statement);
             },
             db: ctx.getDrizzle(),
+            // SQLite has no setting a statement can change that reroutes a
+            // table name: ATTACH and DETACH are refused before anything runs.
+            restoreSession: () => Promise.resolve(),
           }),
         (count, pairs) =>
           `This migration would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`
@@ -158,7 +208,9 @@ export function outsideTransactionNotice(source: string): string {
  * can undo schema changes a failure leaves none of the unit applied. `after`
  * runs inside that transaction, with its Drizzle handle and the number of
  * statements run, for a ledger row that must commit or roll back with the
- * statements it records; if it throws, the transaction rolls back.
+ * statements it records; if it throws, the transaction rolls back. Before
+ * it runs, the connection's own settings are put back
+ * (`restoreSessionDefaults`), so a unit's SET LOCAL does not reroute it.
  *
  * Outside one: each statement runs on its own through the adapter and commits
  * as it runs, which is what lets PostgreSQL's `CREATE INDEX CONCURRENTLY`
@@ -188,7 +240,9 @@ export async function runMigrationStatements(
       for (const statement of statements) {
         await tx.execute(statement);
       }
-      await after?.(tx.db, statements.length);
+      if (after === undefined) return;
+      await tx.restoreSession();
+      await after(tx.db, statements.length);
     });
     return statements.length;
   }

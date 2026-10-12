@@ -17,6 +17,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { executeTransaction } from "../../domains/schema/migrate/migration-transaction";
 import {
   resolveMigration,
   type ResolveMode,
@@ -186,6 +187,13 @@ export async function runMigrateResolve(
         skipVerify: options.skipVerify,
         dialect,
         repo,
+        // A mode's ledger writes commit together: a stop between a
+        // rolled-back row and its retiring the applied one would leave the
+        // file pending with an applied row the next apply's guard trips on.
+        atomically: work =>
+          executeTransaction(adapter as unknown as DrizzleAdapter, tx =>
+            work(repo.boundTo(tx.db))
+          ),
         fileExists: name => fileExistsIn(migrationsDir, name),
         loadTargetSnapshot: () => loadSnapshot(metaDir, filename),
         marksNoTransaction: () =>

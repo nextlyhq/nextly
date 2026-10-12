@@ -11,7 +11,7 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
 import { schemaEventsTables } from "../../../schemas/schema-events";
@@ -271,6 +271,21 @@ export class SchemaEventsRepository {
       })
       .where(sql`id = ${id}`);
     return false;
+  }
+
+  /**
+   * Delete an attempt that is still `in_progress`, for one whose work was
+   * rolled back whole after another run recorded the same migration first.
+   *
+   * Nothing of the attempt reached the database, and a row left behind it,
+   * whatever its status, would be the file's newest event over the other
+   * run's applied one, so readers would take the file for pending. A row
+   * that has reached any other status is left as it is.
+   */
+  async discardAttempt(id: string): Promise<void> {
+    await this.db
+      .delete(this.table)
+      .where(and(eq(this.table.id, id), eq(this.table.status, "in_progress")));
   }
 
   /** Transition a row to failed. */

@@ -8,7 +8,8 @@
  *                            — unless its last attempt failed and may have
  *                            stopped part-way (`assertNotPartiallyApplied`).
  *   - live ≡ target        → ALREADY_APPLIED: skip SQL, record file_apply
- *                            (statements_executed=0), supersede prior dev events
+ *                            (statements_executed=0), supersede prior dev events,
+ *                            all in one transaction
  *                            — unless its last attempt failed and may have
  *                            stopped part-way: it ran outside a transaction,
  *                            or on MySQL (`assertNotPartiallyApplied`).
@@ -56,6 +57,11 @@ export interface ReconcileRepo {
     id: string,
     args: { errorMessage?: string | null; errorJson?: unknown }
   ): Promise<void>;
+  /**
+   * Delete an attempt still `in_progress`: one whose work was rolled back
+   * whole because another run recorded the same file first.
+   */
+  discardAttempt(id: string): Promise<void>;
   supersede(args: {
     supersededEventIds: string[];
     byEventId: string;
@@ -65,7 +71,9 @@ export interface ReconcileRepo {
    * file's statements ran on, so its applied row commits or rolls back with
    * them.
    */
-  boundTo(db: unknown): Pick<ReconcileRepo, "markApplied">;
+  boundTo(
+    db: unknown
+  ): Pick<ReconcileRepo, "recordStart" | "markApplied" | "supersede">;
   /**
    * Every `file_apply` row for one filename: applied, failed, rolled back,
    * with what each row retired, which tells a rollback from a cleared
@@ -113,11 +121,12 @@ export interface ReconcileFileArgs {
     after: (db: unknown, statementsExecuted: number) => Promise<void>
   ) => Promise<number>;
   /**
-   * What else is recorded once the file has run, through the handle its
-   * statements ran on, after its applied row: written in the same
-   * transaction, it commits or rolls back with them.
+   * What else is recorded once the file has run, or has been recorded
+   * without running (`adopted`), through the handle its applied row was
+   * written on, after that row: written in the same transaction, it commits
+   * or rolls back with it.
    */
-  recordApplied?: (db: unknown) => Promise<void>;
+  recordApplied?: (db: unknown, adopted: boolean) => Promise<void>;
   /** Dev/ui/db_sync event ids this file_apply supersedes (ALREADY_APPLIED). */
   supersedableEventIds?: () => Promise<string[]>;
   /**
@@ -149,12 +158,16 @@ const equiv = snapshotsEquivalent;
  * what it would produce.
  *
  * The one place an adoption is written, whether the reconcile finds the
- * database at this file's target or a caller finds it further along.
+ * database at this file's target or a caller finds it further along. The
+ * caller hands it a repository bound to a transaction, so its rows commit
+ * together with whatever else the adoption records. Another run having
+ * recorded the file first is thrown (`concurrentRunError`), which rolls
+ * that transaction back and leaves the other run's row as the only record.
  */
 export async function recordAlreadyApplied(
   file: { filename: string; sha256?: string },
-  repo: ReconcileRepo,
-  supersedableEventIds?: () => Promise<string[]>
+  repo: Pick<ReconcileRepo, "recordStart" | "markApplied" | "supersede">,
+  supersedable: readonly string[] = []
 ): Promise<void> {
   const id = await repo.recordStart({
     eventType: "file_apply",
@@ -162,14 +175,111 @@ export async function recordAlreadyApplied(
     filename: file.filename,
     sha256: file.sha256 ?? null,
   });
-  await repo.markApplied(id, {
+  await markAppliedOrRefuse(repo, id, {
+    filename: file.filename,
     statementsExecuted: 0,
-    uniqueFilename: file.filename,
+    partial: false,
   });
-  const supersedable = (await supersedableEventIds?.()) ?? [];
   if (supersedable.length > 0) {
-    await repo.supersede({ supersededEventIds: supersedable, byEventId: id });
+    await repo.supersede({
+      supersededEventIds: [...supersedable],
+      byEventId: id,
+    });
   }
+}
+
+/**
+ * The refusal for a run whose ledger write lost to another run's: the other
+ * run recorded the same migration applied (`direction` "up") or rolled back
+ * ("down") while this one was running it.
+ *
+ * `partial` says this run's statements may have stayed: it ran outside a
+ * transaction, or on MySQL, which commits each schema statement as it runs
+ * (`failedAttemptMayBePartial`). Otherwise they were rolled back with the
+ * transaction the losing write was made in, and the ledger holds only the
+ * other run's record.
+ */
+export function concurrentRunError(args: {
+  filename: string;
+  direction: "up" | "down";
+  partial: boolean;
+}): NextlyError {
+  const what = args.direction === "up" ? "applied" : "rolled back";
+  const outcome = args.partial
+    ? `This run's statements ran outside a transaction, or on MySQL, which commits each schema statement as it runs, so they may have stayed applied and repeated what the other run did: check what ${args.filename} changes before going on.`
+    : "This run's statements were rolled back, and the ledger keeps the other run's record.";
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_CONCURRENT_RUN",
+    publicMessage: `Another run recorded ${args.filename} ${what} while this one was running it. ${outcome}`,
+    logContext: {
+      source: args.filename,
+      direction: args.direction,
+      reason: "concurrent-run",
+    },
+  });
+}
+
+/** Whether `error` is the refusal `concurrentRunError` builds. */
+export function isConcurrentRun(error: unknown): boolean {
+  return NextlyError.isCode(error, "NEXTLY_MIGRATION_CONCURRENT_RUN");
+}
+
+/**
+ * Mark an attempt applied under the one-applied-row-per-file guard, and
+ * throw `concurrentRunError` when the guard finds another run's applied row:
+ * inside a transaction the throw rolls back the work the row records instead
+ * of committing it beside the other run's.
+ */
+export async function markAppliedOrRefuse(
+  repo: Pick<ReconcileRepo, "markApplied">,
+  id: string,
+  args: { filename: string; statementsExecuted: number; partial: boolean }
+): Promise<void> {
+  const applied = await repo.markApplied(id, {
+    statementsExecuted: args.statementsExecuted,
+    uniqueFilename: args.filename,
+  });
+  if (applied) return;
+  throw concurrentRunError({
+    filename: args.filename,
+    direction: "up",
+    partial: args.partial,
+  });
+}
+
+/**
+ * Record how an attempt that ran a file's statements ended, once it threw.
+ *
+ * A lost race whose statements were rolled back whole leaves nothing of the
+ * attempt, so its row is deleted (`discardAttempt`): left as failed or
+ * superseded, it would be the file's newest event over the other run's
+ * applied row. Any other failure, and a lost race whose statements may have
+ * stayed, is recorded failed, so `nextly migrate` stops on it
+ * (`assertNotPartiallyApplied`) until the operator has looked.
+ */
+export async function recordAttemptFailed(
+  repo: Pick<ReconcileRepo, "markFailed" | "discardAttempt">,
+  id: string,
+  error: unknown,
+  partial: boolean
+): Promise<void> {
+  if (isConcurrentRun(error) && !partial) {
+    await repo.discardAttempt(id);
+    return;
+  }
+  await repo.markFailed(id, {
+    // The cause chain as well as the message, bounded and without
+    // logContext: an error that keeps the database's reason out of its
+    // public message carries it in its cause, and the ledger row is where
+    // the operator reads it back.
+    errorMessage: truncateErrorMessage(
+      describeError(error, { context: false })
+    ),
+    errorJson:
+      error instanceof Error
+        ? { name: error.name, message: error.message }
+        : error,
+  });
 }
 
 /**
@@ -327,8 +437,10 @@ function toDriftItem(op: Operation): DriftItem {
  * In a transaction the applied row is written inside it: a failure of that
  * write rolls the statements back, and a process stopping before COMMIT
  * leaves neither, so the row never stays `in_progress` over statements that
- * committed. Outside one, each statement has already committed by the time
- * the row is written, as it always has.
+ * committed. Another run having recorded the file first fails the write
+ * (`markAppliedOrRefuse`) and rolls the statements back with it. Outside
+ * one, each statement has already committed by the time the row is written,
+ * as it always has.
  */
 async function runAndRecord(
   args: ReconcileFileArgs,
@@ -339,11 +451,64 @@ async function runAndRecord(
     file.sql,
     { source: file.filename, transaction: file.transaction ?? true },
     async (db, statementsExecuted) => {
-      await repo.boundTo(db).markApplied(id, {
+      await markAppliedOrRefuse(repo.boundTo(db), id, {
+        filename: file.filename,
         statementsExecuted,
-        uniqueFilename: file.filename,
+        partial: failedAttemptMayBePartial(file, args.dialect),
       });
-      await args.recordApplied?.(db);
+      await args.recordApplied?.(db, false);
+    }
+  );
+}
+
+/**
+ * Run a file whose database stands at its start, and record how it ended.
+ * A lost race is thrown as it is, so the caller can tell it from a failure
+ * of the file's own statements.
+ */
+async function runInSync(args: ReconcileFileArgs): Promise<void> {
+  const { file, repo } = args;
+  const id = await repo.recordStart({
+    eventType: "file_apply",
+    source: "cli-migrate",
+    filename: file.filename,
+    sha256: file.sha256 ?? null,
+  });
+  try {
+    await runAndRecord(args, id);
+  } catch (err) {
+    await recordAttemptFailed(
+      repo,
+      id,
+      err,
+      failedAttemptMayBePartial(file, args.dialect)
+    );
+    if (isConcurrentRun(err)) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    throw new NextlyError({
+      code: "NEXTLY_MIGRATION_APPLY_FAILED",
+      publicMessage: `Migration ${file.filename.replace(/\.sql$/, "")} failed: ${message}`,
+      ...(err instanceof Error ? { cause: err } : {}),
+    });
+  }
+}
+
+/**
+ * Record a file the database already stands past as applied, without running
+ * it, with whatever else the caller records (`recordApplied`): in one
+ * transaction with no statements, so the ledger row and the caller's rows
+ * commit together or not at all.
+ */
+async function adoptFile(args: ReconcileFileArgs): Promise<void> {
+  const { file, repo } = args;
+  // Read before the transaction opens, through the caller's own handle.
+  const supersedable = (await args.supersedableEventIds?.()) ?? [];
+  await args.executeSql(
+    "",
+    { source: file.filename, transaction: true },
+    async db => {
+      await recordAlreadyApplied(file, repo.boundTo(db), supersedable);
+      await args.recordApplied?.(db, true);
     }
   );
 }
@@ -358,40 +523,14 @@ export async function reconcileFile(
   // a failed attempt may have left a data statement of it applied.
   if (equiv(live, before)) {
     await assertNotPartiallyApplied(file, args.dialect, repo, "rerun");
-    const id = await repo.recordStart({
-      eventType: "file_apply",
-      source: "cli-migrate",
-      filename: file.filename,
-      sha256: file.sha256 ?? null,
-    });
-    try {
-      await runAndRecord(args, id);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      await repo.markFailed(id, {
-        // The cause chain as well as the message, bounded and without
-        // logContext, as the verbatim path records it: an error that keeps
-        // the database's reason out of its public message carries it in its
-        // cause, and the ledger row is where the operator reads it back.
-        errorMessage: truncateErrorMessage(
-          describeError(err, { context: false })
-        ),
-        errorJson:
-          err instanceof Error ? { name: err.name, message: err.message } : err,
-      });
-      throw new NextlyError({
-        code: "NEXTLY_MIGRATION_APPLY_FAILED",
-        publicMessage: `Migration ${migration} failed: ${message}`,
-        ...(err instanceof Error ? { cause: err } : {}),
-      });
-    }
+    await runInSync(args);
     return { state: "in_sync" };
   }
 
   // ALREADY_APPLIED — live already matches the target → record without running.
   if (equiv(live, target)) {
     await assertNotPartiallyApplied(file, args.dialect, repo);
-    await recordAlreadyApplied(file, repo, args.supersedableEventIds);
+    await adoptFile(args);
     return { state: "already_applied" };
   }
 

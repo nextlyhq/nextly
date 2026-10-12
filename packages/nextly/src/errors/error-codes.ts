@@ -88,6 +88,10 @@ export const NEXTLY_ERROR_STATUS = {
   // A migration unit marked to run outside a transaction failed part-way;
   // the statements before the failing one stayed applied.
   NEXTLY_MIGRATION_PARTIALLY_APPLIED: 500,
+  // Another run recorded the same migration applied, or rolled back, while
+  // this one was running it: this run's ledger write lost, and its work is
+  // rolled back wherever the transaction can undo it.
+  NEXTLY_MIGRATION_CONCURRENT_RUN: 409,
   // `nextly migrate:resolve`, the recovery command.
   NEXTLY_MIGRATION_FILE_MISSING: 404,
   NEXTLY_MIGRATION_SNAPSHOT_MISSING: 404,

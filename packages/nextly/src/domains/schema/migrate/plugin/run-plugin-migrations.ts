@@ -848,28 +848,43 @@ async function assertAdoptable(
 /**
  * Record each module as applied without running it, and its ownership.
  * Judged by `assertAdoptable` first.
+ *
+ * Written in one transaction with no statements, so every module's ledger
+ * row and owner rows commit together or not at all: a run stopping part-way
+ * leaves no module recorded applied without the tables it owns.
  */
 async function recordAdopted(
   set: PluginMigrationSet,
   modules: readonly PluginMigration[],
   deps: RunPluginMigrationsDeps
 ): Promise<void> {
-  for (const migration of modules) {
-    await recordAlreadyApplied(
-      {
-        filename: qualifiedFilename(set.pluginName, migration.name),
-        sha256: migration.checksum,
-      },
-      deps.repo
-    );
-    await deps.recordOwner({
-      pluginName: set.pluginName,
-      pluginVersion: set.pluginVersion,
-      schemaVersion: migration.schemaVersion,
-      tables: ownedTables(migration, deps.dialect),
-      adopted: true,
-    });
-  }
+  if (modules.length === 0) return;
+  await deps.executeSql(
+    "",
+    {
+      source: qualifiedFilename(set.pluginName, modules[0].name),
+      transaction: true,
+    },
+    async db => {
+      for (const migration of modules) {
+        await recordAlreadyApplied(
+          {
+            filename: qualifiedFilename(set.pluginName, migration.name),
+            sha256: migration.checksum,
+          },
+          deps.repo.boundTo(db)
+        );
+        await deps.recordOwner({
+          pluginName: set.pluginName,
+          pluginVersion: set.pluginVersion,
+          schemaVersion: migration.schemaVersion,
+          tables: ownedTables(migration, deps.dialect),
+          adopted: true,
+          db,
+        });
+      }
+    }
+  );
 }
 
 /**
@@ -1026,10 +1041,10 @@ async function applyModule(
     dialect: deps.dialect,
     repo: deps.repo,
     executeSql: deps.executeSql,
-    // A module that runs records its owner rows through the handle its
-    // statements ran on, after its applied row, so in a transaction both
-    // commit with the statements or neither does.
-    recordApplied: db => recordOwned(false, db),
+    // A module records its owner rows through the handle its applied row
+    // was written on, after that row, so in a transaction both commit with
+    // the statements, or with the adoption, or neither does.
+    recordApplied: (db, adopted) => recordOwned(adopted, db),
     pluginName: set.pluginName,
   });
   // A data module run past its own schema fails against a later shape of the
@@ -1040,11 +1055,7 @@ async function applyModule(
       })
     : await reconcile;
 
-  if (state !== "already_applied") return "applied";
-  // Recorded without running: nothing ran, so no transaction holds the
-  // ledger row, and the owner rows follow it.
-  await recordOwned(true);
-  return "adopted";
+  return state === "already_applied" ? "adopted" : "applied";
 }
 
 /**

@@ -30,6 +30,8 @@ type FakeRepo = ReconcileRepo & {
   /** The handles the applied row was written through (`boundTo`). */
   bound: unknown[];
   failed: number;
+  /** Attempts deleted after a lost race rolled back whole. */
+  discarded: number;
   superseded: Array<{ supersededEventIds: string[]; byEventId: string }>;
 };
 
@@ -46,6 +48,7 @@ function fakeRepo(
   const state = {
     starts: 0,
     failed: 0,
+    discarded: 0,
     bound: [] as unknown[],
     applied: [] as Array<{ statementsExecuted?: number | null }>,
     superseded: [] as Array<{
@@ -65,6 +68,10 @@ function fakeRepo(
     },
     markFailed: () => {
       repo.failed++;
+      return Promise.resolve();
+    },
+    discardAttempt: () => {
+      repo.discarded++;
       return Promise.resolve();
     },
     supersede: args => {
@@ -98,6 +105,15 @@ function executor(handle: unknown = TX_HANDLE) {
       return 1;
     }
   );
+}
+
+/**
+ * Asserts an executor ran no statement: a file recorded without running
+ * goes through it only as a unit with none, for its ledger writes'
+ * transaction.
+ */
+function expectNoStatements(executeSql: ReturnType<typeof executor>): void {
+  for (const [sql] of executeSql.mock.calls) expect(sql).toBe("");
 }
 
 const file = {
@@ -167,7 +183,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
         { status: "rolled_back", startedAt: new Date(1) },
         { status: "failed", startedAt: new Date(2) },
       ]);
-      const executeSql = vi.fn();
+      const executeSql = executor();
       await expect(
         reconcileFile({
           file: outside,
@@ -184,7 +200,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
           "mark it applied with `nextly migrate:resolve --applied 0006_x.sql` rather than running it again"
         ) as unknown,
       });
-      expect(executeSql).not.toHaveBeenCalled();
+      expectNoStatements(executeSql);
       expect(repo.starts).toBe(0);
       expect(repo.applied).toEqual([]);
     });
@@ -197,7 +213,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
           target: snap("a", "b"),
           live: snap("a", "b"),
           repo: fakeRepo([{ status: "failed", startedAt: new Date(1) }]),
-          executeSql: vi.fn(),
+          executeSql: executor(),
           pluginName: "@acme/fx",
         })
       ).rejects.toThrow(
@@ -206,8 +222,8 @@ describe("reconcileFile (Phase 2 three-state)", () => {
     });
 
     it("records it applied once the failed attempt is cleared", async () => {
-      const repo = await clearedLedger();
-      const executeSql = vi.fn();
+      const { repo, db } = await clearedLedgerWithHandle();
+      const executeSql = executor(db);
       const r = await reconcileFile({
         file: outside,
         before: snap("a"),
@@ -217,7 +233,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
         executeSql,
       });
       expect(r.state).toBe("already_applied");
-      expect(executeSql).not.toHaveBeenCalled();
+      expectNoStatements(executeSql);
       expect(await ledgerStatuses(repo)).toEqual(["rolled_back", "applied"]);
     });
 
@@ -229,7 +245,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
         target: snap("a", "b"),
         live: snap("a", "b"),
         repo,
-        executeSql: vi.fn(),
+        executeSql: executor(),
       });
       expect(r.state).toBe("already_applied");
     });
@@ -244,7 +260,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
 
     it("refuses to record it applied without running it when live ≡ target", async () => {
       const repo = crashed();
-      const executeSql = vi.fn();
+      const executeSql = executor();
       await expect(
         reconcileFile({
           file: outside,
@@ -260,13 +276,13 @@ describe("reconcileFile (Phase 2 three-state)", () => {
           "its last attempt recorded no outcome"
         ) as unknown,
       });
-      expect(executeSql).not.toHaveBeenCalled();
+      expectNoStatements(executeSql);
       expect(repo.starts).toBe(0);
     });
 
     it("refuses to run it again when live ≡ before", async () => {
       const repo = crashed();
-      const executeSql = vi.fn();
+      const executeSql = executor();
       await expect(
         reconcileFile({
           file: outside,
@@ -277,18 +293,18 @@ describe("reconcileFile (Phase 2 three-state)", () => {
           executeSql,
         })
       ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED" });
-      expect(executeSql).not.toHaveBeenCalled();
+      expectNoStatements(executeSql);
     });
 
     it("records it applied once `--failed-cleanup` clears the attempt", async () => {
-      const repo = await clearedLedger(1, "in_progress");
+      const { repo, db } = await clearedLedgerWithHandle(1, "in_progress");
       const r = await reconcileFile({
         file: outside,
         before: snap("a"),
         target: snap("a", "b"),
         live: snap("a", "b"),
         repo,
-        executeSql: vi.fn(),
+        executeSql: executor(db),
       });
       expect(r.state).toBe("already_applied");
       expect(await ledgerStatuses(repo)).toEqual(["rolled_back", "applied"]);
@@ -303,7 +319,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
           target: snap("a", "b"),
           live: snap("a", "b"),
           repo: crashed(),
-          executeSql: vi.fn(),
+          executeSql: executor(),
           dialect,
         });
         expect(r.state).toBe("already_applied");
@@ -318,7 +334,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
           target: snap("a", "b"),
           live: snap("a", "b"),
           repo: crashed(),
-          executeSql: vi.fn(),
+          executeSql: executor(),
           dialect: "mysql",
         })
       ).rejects.toMatchObject({
@@ -453,7 +469,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
 
   it("ALREADY_APPLIED: live ≡ target → skips SQL, records statements=0, supersedes", async () => {
     const repo = fakeRepo();
-    const executeSql = vi.fn();
+    const executeSql = executor();
     const r = await reconcileFile({
       file,
       before: snap("a"),
@@ -464,7 +480,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
       supersedableEventIds: () => Promise.resolve(["dev-1", "dev-2"]),
     });
     expect(r.state).toBe("already_applied");
-    expect(executeSql).not.toHaveBeenCalled();
+    expectNoStatements(executeSql);
     expect(repo.applied[0].statementsExecuted).toBe(0);
     expect(repo.superseded[0].supersededEventIds).toEqual(["dev-1", "dev-2"]);
   });
@@ -478,7 +494,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
         target: snap("a", "b"),
         live: snap("c"), // matches neither
         repo,
-        executeSql: vi.fn(),
+        executeSql: executor(),
       })
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
   });
@@ -500,7 +516,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
         target: snap("a", "b"),
         live: snap("a"), // matches neither: every difference is a `+`
         repo: withAttempt,
-        executeSql: vi.fn(),
+        executeSql: executor(),
       })
     ).rejects.toMatchObject({
       publicMessage: expect.not.stringContaining("migrate:baseline"),
@@ -515,7 +531,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
         target: snap("a", "b"),
         live: snap("a"),
         repo: fresh,
-        executeSql: vi.fn(),
+        executeSql: executor(),
       })
     ).rejects.toMatchObject({
       publicMessage: expect.stringContaining("migrate:baseline"),
@@ -545,7 +561,7 @@ describe("a file run in a transaction whose last attempt failed", () => {
     target: snap("a", "b"),
     live: snap("a", "b"),
     dialect,
-    executeSql: vi.fn(),
+    executeSql: executor(),
   });
 
   it("refuses to record it applied without running it on MySQL, which committed its schema statements", async () => {
@@ -577,8 +593,10 @@ describe("a file run in a transaction whose last attempt failed", () => {
   );
 
   it("records it applied on MySQL once the failed attempt is cleared", async () => {
-    const repo = await clearedLedger();
-    await expect(reconcileFile({ ...args("mysql"), repo })).resolves.toEqual({
+    const { repo, db } = await clearedLedgerWithHandle();
+    await expect(
+      reconcileFile({ ...args("mysql"), executeSql: executor(db), repo })
+    ).resolves.toEqual({
       state: "already_applied",
     });
     expect(await ledgerStatuses(repo)).toEqual(["rolled_back", "applied"]);
@@ -665,5 +683,53 @@ describe("a file whose last attempt failed, with the database at its start", () 
       "rolled_back",
       "applied",
     ]);
+  });
+});
+
+describe("a file whose applied row loses to another run's", () => {
+  /** A ledger in which another run has recorded the file applied. */
+  function lostRace(): FakeRepo {
+    const repo = fakeRepo();
+    repo.markApplied = () => Promise.resolve(false);
+    return repo;
+  }
+  const args = (transaction?: boolean) => ({
+    file: { ...file, transaction },
+    before: snap("a"),
+    target: snap("a", "b"),
+    live: snap("a"),
+    dialect: "sqlite" as const,
+    executeSql: executor(),
+  });
+
+  it("throws inside the transaction and discards the attempt, which nothing of reached the database", async () => {
+    const repo = lostRace();
+    await expect(reconcileFile({ ...args(), repo })).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_CONCURRENT_RUN",
+      logContext: { source: "0006_x.sql", reason: "concurrent-run" },
+    });
+    expect(repo.discarded).toBe(1);
+    expect(repo.failed).toBe(0);
+  });
+
+  it("records the attempt failed when its statements ran outside a transaction and stayed", async () => {
+    const repo = lostRace();
+    await expect(reconcileFile({ ...args(false), repo })).rejects.toMatchObject(
+      {
+        code: "NEXTLY_MIGRATION_CONCURRENT_RUN",
+        publicMessage: expect.stringContaining(
+          "may have stayed applied"
+        ) as unknown,
+      }
+    );
+    expect(repo.discarded).toBe(0);
+    expect(repo.failed).toBe(1);
+  });
+
+  it("refuses an adoption the other run recorded first, inside its transaction", async () => {
+    const repo = lostRace();
+    await expect(
+      reconcileFile({ ...args(), live: snap("a", "b"), repo })
+    ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_CONCURRENT_RUN" });
   });
 });

@@ -70,6 +70,21 @@ export interface ResolveMigrationArgs {
   marksNoTransaction: () => Promise<boolean>;
   /** Live managed-user-table snapshot. */
   introspectLive: () => Promise<NextlySchemaSnapshot>;
+  /**
+   * Runs a mode's ledger writes in one transaction, handing them `repo`
+   * bound to it, so a process stopping between them leaves none written.
+   * Absent, they are written through `repo` as they come: the caller is
+   * already inside a transaction, or has none to give.
+   */
+  atomically?: <T>(work: (repo: ResolveRepo) => Promise<T>) => Promise<T>;
+}
+
+/** A mode's ledger writes, run as `atomically` says. */
+function writeLedger<T>(
+  args: ResolveMigrationArgs,
+  work: (repo: ResolveRepo) => Promise<T>
+): Promise<T> {
+  return args.atomically ? args.atomically(work) : work(args.repo);
 }
 
 export type ResolveResult =
@@ -151,23 +166,26 @@ async function resolveApplied(
     ? false
     : await verifyTarget(args, filename, rows);
 
-  const eventId = await args.repo.insertEvent({
-    eventType: "file_apply",
-    status: "applied",
-    source: "cli-migrate",
-    filename,
-    endedAt: new Date(),
-    statementsExecuted: 0,
-    note: NOTE,
-  });
-
+  // The applied row and the failures it supersedes, written together.
   const failed = unclearedFailures(rows);
-  if (failed.length > 0) {
-    await args.repo.supersede({
-      supersededEventIds: failed.map(row => row.id),
-      byEventId: eventId,
+  const eventId = await writeLedger(args, async repo => {
+    const id = await repo.insertEvent({
+      eventType: "file_apply",
+      status: "applied",
+      source: "cli-migrate",
+      filename,
+      endedAt: new Date(),
+      statementsExecuted: 0,
+      note: NOTE,
     });
-  }
+    if (failed.length > 0) {
+      await repo.supersede({
+        supersededEventIds: failed.map(row => row.id),
+        byEventId: id,
+      });
+    }
+    return id;
+  });
 
   return {
     kind: "applied",
@@ -281,21 +299,24 @@ async function resolveRolledBack(
     });
   }
 
-  const eventId = await args.repo.insertEvent({
-    eventType: "file_apply",
-    status: "rolled_back",
-    source: "cli-migrate",
-    filename,
-    endedAt: new Date(),
-    note: NOTE,
-  });
   // Retire the prior applied row(s) by superseding them with this rolled_back
-  // event. Without this, the partial unique index
+  // event, in the same transaction. Without this, the partial unique index
   // (filename WHERE status='applied') still sees a live applied row and the
   // next `migrate` re-apply fails with a UNIQUE constraint violation.
-  await args.repo.supersede({
-    supersededEventIds: appliedRows.map(r => r.id),
-    byEventId: eventId,
+  const eventId = await writeLedger(args, async repo => {
+    const id = await repo.insertEvent({
+      eventType: "file_apply",
+      status: "rolled_back",
+      source: "cli-migrate",
+      filename,
+      endedAt: new Date(),
+      note: NOTE,
+    });
+    await repo.supersede({
+      supersededEventIds: appliedRows.map(r => r.id),
+      byEventId: id,
+    });
+    return id;
   });
   return { kind: "rolled-back", eventId };
 }
@@ -318,9 +339,11 @@ async function resolveFailedCleanup(
   // Flipped in place rather than answered with a new row, so each attempt
   // keeps its own start and end times and its error, and the history still
   // reads in order.
-  for (const row of failed) {
-    await args.repo.markRolledBack(row.id, { note: NOTE });
-  }
+  await writeLedger(args, async repo => {
+    for (const row of failed) {
+      await repo.markRolledBack(row.id, { note: NOTE });
+    }
+  });
   return {
     kind: "failed-cleanup",
     updatedIds: failed.map(row => row.id),

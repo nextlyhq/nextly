@@ -728,9 +728,11 @@ describe("the all-constructs round trip", () => {
       )[0]?.n
     ).toBe(0);
 
-    // 2. Roll back: the DOWN statements drop what the UP created, and the
-    //    uninstall path supersedes the ledger row — without that, a re-run
-    //    would rightly treat the module as still applied and skip it.
+    // 2. Roll back: the DOWN statements drop what the UP created, and a
+    //    rolled_back row retires the applied one, as `migrate:down` records
+    //    it — without that, a re-run would rightly treat the module as still
+    //    applied and skip it, and an applied row left beside the rolled_back
+    //    one would refuse the re-apply as another run's.
     for (const stmt of [...g.dialects.sqlite.down].reverse()) {
       sqlite.exec(stmt);
     }
@@ -744,6 +746,10 @@ describe("the all-constructs round trip", () => {
       `INSERT INTO nextly_schema_events
          (id, event_type, status, source, filename, started_at, ended_at)
        VALUES ('rb1', 'file_apply', 'rolled_back', 'cli-migrate', 'plugin:rtx/${g.name}', 9999999999999, 9999999999999)`
+    );
+    sqlite.exec(
+      `UPDATE nextly_schema_events SET status = 'superseded', superseded_by = 'rb1'
+        WHERE filename = 'plugin:rtx/${g.name}' AND status = 'applied'`
     );
 
     // 3. Re-apply: the ledger's newest state is rolled_back, so the runner

@@ -793,12 +793,24 @@ function sqliteOutsideTransactionReason(
 /** What MySQL's `LOCK` and `UNLOCK` lock, as a statement this refuses. */
 const MYSQL_LOCK_TARGETS = new Set(["TABLES", "TABLE", "INSTANCE"]);
 
-/** MySQL's `LOCK`/`UNLOCK TABLES` and the INSTANCE forms. */
+/**
+ * MySQL's `LOCK`/`UNLOCK TABLES` and the INSTANCE forms, and `USE`, which
+ * switches the connection's default database: it stays on the pooled
+ * connection, and the runner's own writes after the unit, which name their
+ * tables unqualified, would reach that database instead of the app's.
+ */
 function mysqlOutsideTransactionReason(
   words: readonly string[],
   inTransaction: boolean
 ): OutsideTransactionReason | undefined {
   const [first, second = ""] = words;
+  if (first === "USE") {
+    return {
+      reason:
+        "switches the connection's default database, which stays on the pooled connection after the migration and sends the runner's own ledger writes to that database.",
+      markable: false,
+    };
+  }
   if (first !== "LOCK" && first !== "UNLOCK") return undefined;
   if (!MYSQL_LOCK_TARGETS.has(second)) return undefined;
   return {

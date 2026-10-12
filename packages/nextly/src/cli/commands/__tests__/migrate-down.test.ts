@@ -122,6 +122,9 @@ const authOwnsT = new Map<string, OwnerRecord>([
   ],
 ]);
 
+/** The handle a fake DOWN's transaction hands what it records. */
+const TX_HANDLE = { connection: "the DOWN's transaction" };
+
 function baseDeps(overrides: Record<string, unknown> = {}) {
   const recorded: string[] = [];
   const executed: string[] = [];
@@ -139,12 +142,18 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
       listFileApplies: async () => [row("a.sql", "applied", 1000)],
       fileExists: async () => true,
       readDownSql: async () => down('ALTER TABLE "t" DROP COLUMN "c";'),
-      execDown: async (statements: readonly string[]) => {
+      execDown: async (
+        statements: readonly string[],
+        _unit: unknown,
+        after: (db: unknown) => Promise<void>
+      ) => {
         executed.push(statements.join(";\n"));
+        await after(TX_HANDLE);
         return statements.length;
       },
       recordRolledBack: async (filename: string) => {
         recorded.push(filename);
+        return true;
       },
       recordFailed: async (filename: string) => {
         failures.push(filename);
@@ -363,6 +372,42 @@ describe("migrateDownCore", () => {
     expect(executed).toEqual([]);
   });
 
+  describe("another run having rolled the migration back first", () => {
+    /** A DOWN whose rolled_back row finds the migration no longer applied. */
+    function lostRace(transaction: boolean) {
+      return baseDeps({
+        options: { step: 1, allowDataLoss: true, yes: false, dryRun: false },
+        readDownSql: async () => ({
+          sql: 'ALTER TABLE "t" DROP COLUMN "c";',
+          transaction,
+        }),
+        recordRolledBack: async () => false,
+      });
+    }
+
+    it("is refused inside the DOWN's transaction, recording no failure", async () => {
+      const { deps, failures } = lostRace(true);
+      await expect(migrateDownCore(deps)).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_CONCURRENT_RUN",
+        publicMessage: expect.stringContaining(
+          "This run's statements were rolled back"
+        ) as unknown,
+      });
+      expect(failures).toEqual([]);
+    });
+
+    it("is recorded as a failed rollback when the DOWN ran outside a transaction", async () => {
+      const { deps, failures } = lostRace(false);
+      await expect(migrateDownCore(deps)).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_CONCURRENT_RUN",
+        publicMessage: expect.stringContaining(
+          "may have stayed applied"
+        ) as unknown,
+      });
+      expect(failures).toEqual(["a.sql"]);
+    });
+  });
+
   it("records a failed event and rethrows when a DOWN statement fails", async () => {
     const { deps, failures } = baseDeps({
       options: { step: 1, allowDataLoss: true, yes: false, dryRun: false },
@@ -387,8 +432,13 @@ describe("migrateDownCore", () => {
           warn: (m: string) => warnings.push(m),
         },
         readDownSql: async () => ({ sql: concurrently, transaction: false }),
-        execDown: async (statements: readonly string[], unit: unknown) => {
+        execDown: async (
+          statements: readonly string[],
+          unit: unknown,
+          after: (db: unknown) => Promise<void>
+        ) => {
           units.push(unit);
+          await after(TX_HANDLE);
           return statements.length;
         },
       });
@@ -573,6 +623,7 @@ describe("plugin schema version after a rollback", () => {
       listFileApplies: async () => [...ledger],
       recordRolledBack: async (filename: string) => {
         ledger.push(row(filename, "rolled_back", clock++));
+        return true;
       },
       recordPluginSchemaVersion: () =>
         recordPluginSchemaVersionFromLedger({
@@ -618,13 +669,19 @@ describe("plugin schema version after a rollback", () => {
         plugin: "auth",
       },
       listFileApplies: async () => [...ledger],
-      execDown: async () => {
+      execDown: async (
+        _statements: readonly string[],
+        _unit: unknown,
+        after: (db: unknown) => Promise<void>
+      ) => {
         calls += 1;
         if (calls === 2) throw new Error("DOWN of 002 failed");
+        await after(TX_HANDLE);
         return 1;
       },
       recordRolledBack: async (filename: string) => {
         ledger.push(row(filename, "rolled_back", clock++));
+        return true;
       },
       recordPluginSchemaVersion: () =>
         recordPluginSchemaVersionFromLedger({

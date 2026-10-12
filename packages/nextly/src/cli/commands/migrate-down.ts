@@ -4,8 +4,10 @@
  * SP-2 rollback. Reads the newest applied `file_apply` event(s) from
  * `nextly_schema_events`, runs each file's parsed `-- DOWN` section under the
  * migrate lock inside a transaction — outside one for a file marked
- * `-- nextly:no-transaction` — then records a `rolled_back` event so the
- * file becomes re-runnable. Schema shape is restored; data is NOT recovered.
+ * `-- nextly:no-transaction` — and records a `rolled_back` event, and a
+ * plugin's schema version, in that same transaction, so the file becomes
+ * re-runnable exactly when its DOWN commits. Schema shape is restored; data
+ * is NOT recovered.
  *
  * **Runtime restriction (F11):** CLI-only; never import from runtime code.
  *
@@ -27,6 +29,11 @@ import {
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
 import { truncateErrorMessage } from "../../domains/schema/events/schema-events-repository";
+import {
+  concurrentRunError,
+  failedAttemptMayBePartial,
+  isConcurrentRun,
+} from "../../domains/schema/migrate/drift-reconcile";
 import {
   outsideTransactionNotice,
   runMigrationStatements,
@@ -174,23 +181,31 @@ export interface MigrateDownCoreDeps {
   readDownSql: (filename: string) => Promise<MigrationDown>;
   /**
    * Executes a target's DOWN statements — the ones the guards judged — as
-   * `unit` says: in one transaction unless it is marked to run outside one;
-   * returns how many ran.
+   * `unit` says: in one transaction unless it is marked to run outside one —
+   * then `after` with the handle they ran on, inside that transaction when
+   * there is one (`runMigrationStatements`); returns how many ran.
    */
   execDown: (
     statements: readonly string[],
-    unit: MigrationUnit
+    unit: MigrationUnit,
+    after: (db: unknown) => Promise<void>
   ) => Promise<number>;
-  /** Records a `rolled_back` event (retires the applied row). */
-  recordRolledBack: (filename: string) => Promise<void>;
+  /**
+   * Records a `rolled_back` event (retires the applied row) through `db`,
+   * the handle the DOWN ran on. False, and nothing written, when the
+   * migration's newest row is no longer `applied`: another run rolled it
+   * back while this one was running its DOWN.
+   */
+  recordRolledBack: (filename: string, db: unknown) => Promise<boolean>;
   /**
    * Re-derive the plugin's applied schema version from the ledger rows that
-   * survive the rollback, and write it onto its owner rows.
+   * survive the rollback, and write it onto its owner rows, through `db`,
+   * the handle the DOWN and its `rolled_back` row were written on.
    *
    * Optional so the app path, which has no plugin owner rows to maintain,
    * supplies nothing.
    */
-  recordPluginSchemaVersion?: () => Promise<void>;
+  recordPluginSchemaVersion?: (db: unknown) => Promise<void>;
   /**
    * Records a `failed` event for an errored DOWN; `transaction` false says it
    * ran outside a transaction, so part of it may have applied.
@@ -375,6 +390,58 @@ function asError(thrown: unknown): Error {
     : NextlyError.internal({ logContext: { thrown: String(thrown) } });
 }
 
+/**
+ * Run one target's DOWN and record it, in the transaction the DOWN runs in.
+ *
+ * The `rolled_back` row is written through the DOWN's own handle, and so is
+ * a plugin's schema version: read from the modules that REMAIN applied
+ * rather than computed by subtraction, because modules can be rolled back out
+ * of order, and written onto its owner rows so the boot gate stops accepting
+ * code that expects what the DOWN removed. A DOWN that commits commits all
+ * three, and one that fails, or a process stopping before COMMIT, leaves the
+ * migration applied with its statements in place. Outside a transaction each
+ * statement has committed by the time they are written, as for an UP.
+ *
+ * Another run having rolled the migration back first is a lost race
+ * (`concurrentRunError`): thrown inside the transaction, it rolls this DOWN
+ * back. A failure is recorded as a failed rollback, except a lost race
+ * rolled back whole, which leaves nothing of this run to record.
+ */
+async function rollBackOne(
+  p: PlannedDown,
+  deps: MigrateDownCoreDeps
+): Promise<void> {
+  if (!p.transaction) {
+    deps.logger.warn(outsideTransactionNotice(p.filename));
+  }
+  const partial = failedAttemptMayBePartial(p, deps.dialect);
+  try {
+    await deps.execDown(
+      p.statements,
+      { source: p.filename, transaction: p.transaction, direction: "down" },
+      async db => {
+        if (!(await deps.recordRolledBack(p.filename, db))) {
+          throw concurrentRunError({
+            filename: p.filename,
+            direction: "down",
+            partial,
+          });
+        }
+        if (deps.options.plugin) await deps.recordPluginSchemaVersion?.(db);
+      }
+    );
+  } catch (err) {
+    if (!isConcurrentRun(err) || partial) {
+      await deps.recordFailed(
+        p.filename,
+        truncateErrorMessage(describeError(err, { context: false })),
+        p.transaction
+      );
+    }
+    throw err;
+  }
+}
+
 export async function migrateDownCore(
   deps: MigrateDownCoreDeps
 ): Promise<MigrateDownResult> {
@@ -485,63 +552,11 @@ export async function migrateDownCore(
     deps.db,
     deps.dialect,
     async () => {
-      // A plugin rollback moves that plugin's APPLIED schema version back.
-      //
-      // Only the ledger was being rewritten, so rolling a plugin from schema
-      // version 2 to 1 left its owner rows still claiming 2 — and the
-      // production boot gate then accepted plugin code declaring version 2
-      // whose v2 tables and columns had just been removed.
-      //
-      // The new version is read from what REMAINS applied rather than
-      // computed by subtraction: modules can be rolled back out of order and
-      // a step count would drift from the ledger it is meant to describe.
-      //
-      // Run whenever any module rolled back, INCLUDING when a later one then
-      // failed: the earlier DOWNs and their ledger events are committed, and
-      // leaving the version where it was let boot accept code expecting the
-      // columns they removed. A failure here must not hide the DOWN failure
-      // that is the operator's real problem: after a failure it is logged beside
-      // that failure, which is what the command throws.
-      const syncVersion = async (afterFailure: boolean): Promise<void> => {
-        if (!deps.options.plugin || rolledBack.length === 0) return;
-        try {
-          await deps.recordPluginSchemaVersion?.();
-        } catch (versionError) {
-          if (!afterFailure) throw versionError;
-          deps.logger.error(
-            `The plugin's recorded schema version could not be updated after the partial rollback: ${describeError(versionError, { context: false })}`
-          );
-        }
-      };
-
-      try {
-        for (const p of planned) {
-          if (!p.transaction) {
-            deps.logger.warn(outsideTransactionNotice(p.filename));
-          }
-          try {
-            await deps.execDown(p.statements, {
-              source: p.filename,
-              transaction: p.transaction,
-              direction: "down",
-            });
-          } catch (err) {
-            await deps.recordFailed(
-              p.filename,
-              truncateErrorMessage(describeError(err, { context: false })),
-              p.transaction
-            );
-            throw err;
-          }
-          await deps.recordRolledBack(p.filename);
-          rolledBack.push(p.filename);
-          deps.logger.success(`Rolled back ${p.filename}`);
-        }
-      } catch (err) {
-        await syncVersion(true);
-        throw err;
+      for (const p of planned) {
+        await rollBackOne(p, deps);
+        rolledBack.push(p.filename);
+        deps.logger.success(`Rolled back ${p.filename}`);
       }
-      await syncVersion(false);
     },
     {
       mode: "fail-fast",
@@ -575,6 +590,137 @@ interface ResolvedDownOptions extends MigrateDownCommandOptions {
   cwd?: string;
 }
 
+/**
+ * Everything `migrateDownCore` reads from and writes to the database, built
+ * on one adapter: the ledger, the owner registry, the live schema the guards
+ * judge, and how a DOWN runs and is recorded.
+ *
+ * A DOWN runs through `runMigrationStatements`, and its `rolled_back` row —
+ * both the row and its retiring the applied one (`resolveMigration`) — and a
+ * plugin's schema version are written through the handle it ran on, so in
+ * a transaction they commit with its statements or not at all. The newest
+ * row is read through that handle too: one no longer `applied` is another
+ * run's rollback, which `migrateDownCore` refuses as a lost race.
+ *
+ * A database `nextly migrate` has not yet given the owner registry reads as
+ * no owner rows, as it does for `nextly migrate`'s own guard, and has no
+ * owner rows for a schema version to be written onto.
+ */
+export async function downDatabaseDeps(args: {
+  adapter: DrizzleAdapter;
+  dialect: SupportedDialect;
+  /** The plugin whose modules are rolled back, and the modules it ships. */
+  plugin?: {
+    name: string;
+    migrations: ReadonlyArray<{ name: string; schemaVersion: number }>;
+  };
+}): Promise<
+  Pick<
+    MigrateDownCoreDeps,
+    | "dialect"
+    | "db"
+    | "owners"
+    | "elementOwners"
+    | "readLiveColumns"
+    | "readLiveElements"
+    | "readLiveTables"
+    | "readLiveIndexTables"
+    | "listFileApplies"
+    | "execDown"
+    | "recordRolledBack"
+    | "recordPluginSchemaVersion"
+    | "recordFailed"
+  >
+> {
+  const { adapter, dialect, plugin } = args;
+  const db = adapter.getDrizzle();
+  const repo = new SchemaEventsRepository(db, dialect);
+  const {
+    SchemaOwnersRepository: OwnersRepo,
+    schemaOwnersTableExists,
+    tableOwnersByName,
+  } = await import("../../domains/schema/ownership/schema-owners-repository");
+  const registryExists = await schemaOwnersTableExists(adapter);
+  const ownerRows = registryExists
+    ? await new OwnersRepo(db, dialect).read()
+    : [];
+  return {
+    dialect,
+    db,
+    owners: tableOwnersByName(ownerRows),
+    elementOwners: ownerRows,
+    readLiveColumns: lists => readLiveColumns(db, dialect, lists),
+    readLiveElements: lists => readLiveElements(db, dialect, lists),
+    readLiveTables: lists => readLiveTables(db, dialect, lists),
+    readLiveIndexTables: lists => readLiveIndexTables(db, dialect, lists),
+    listFileApplies: () => repo.listFileApplies(),
+    execDown: (statements, unit, after) =>
+      runMigrationStatements(adapter, statements, unit, handle =>
+        after(handle)
+      ),
+    recordRolledBack: async (filename, handle) => {
+      const bound = repo.boundTo(handle);
+      if (!(await bound.isFileApplied(filename))) return false;
+      await resolveMigration({
+        mode: "rolled-back",
+        filename,
+        dialect,
+        repo: bound,
+        // rolled-back mode does not read these; provide inert resolvers.
+        fileExists: () => Promise.resolve(true),
+        loadTargetSnapshot: () => Promise.resolve(null),
+        marksNoTransaction: () => Promise.resolve(false),
+        introspectLive: () => Promise.resolve({ tables: [] }),
+      });
+      return true;
+    },
+    recordPluginSchemaVersion: async handle => {
+      if (plugin === undefined || !registryExists) return;
+      await recordPluginSchemaVersionFromLedger({
+        plugin: plugin.name,
+        migrations: plugin.migrations,
+        listFileApplies: () => repo.boundTo(handle).listFileApplies(),
+        owners: new OwnersRepo(handle, dialect),
+      });
+    },
+    recordFailed: (filename, message, transaction) =>
+      recordRollbackFailed({
+        repo,
+        filename,
+        dialect,
+        transaction,
+        note: `migrate:down failed: ${message}`,
+      }),
+  };
+}
+
+/** The named plugin and the modules its definition ships, if one is named. */
+function pluginModules(
+  plugins:
+    | ReadonlyArray<{
+        name: string;
+        contributes?: {
+          schema?: {
+            migrations?: ReadonlyArray<{ name: string; schemaVersion: number }>;
+          };
+        };
+      }>
+    | undefined,
+  name: string | undefined
+):
+  | {
+      name: string;
+      migrations: ReadonlyArray<{ name: string; schemaVersion: number }>;
+    }
+  | undefined {
+  if (name === undefined) return undefined;
+  const definition = (plugins ?? []).find(p => p.name === name);
+  return {
+    name,
+    migrations: definition?.contributes?.schema?.migrations ?? [],
+  };
+}
+
 export async function runMigrateDown(
   options: ResolvedDownOptions,
   context: CommandContext
@@ -605,7 +751,6 @@ export async function runMigrateDown(
 
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
-    const dz = adapter as unknown as DrizzleAdapter;
     const repo = new SchemaEventsRepository(db, dialect);
 
     if (options.forceUnlock) {
@@ -669,56 +814,13 @@ export async function runMigrateDown(
       };
     };
 
-    const execDown = (
-      statements: readonly string[],
-      unit: MigrationUnit
-    ): Promise<number> => runMigrationStatements(dz, statements, unit);
-
-    const recordRolledBack = async (filename: string): Promise<void> => {
-      await resolveMigration({
-        mode: "rolled-back",
-        filename,
-        dialect,
-        repo,
-        // rolled-back mode does not read these; provide inert resolvers.
-        fileExists: () => Promise.resolve(true),
-        loadTargetSnapshot: () => Promise.resolve(null),
-        marksNoTransaction: () => Promise.resolve(false),
-        introspectLive: () => Promise.resolve({ tables: [] }),
-      });
-    };
-
-    const recordFailed = async (
-      filename: string,
-      message: string,
-      transaction: boolean
-    ): Promise<void> => {
-      await recordRollbackFailed({
-        repo,
-        filename,
-        dialect,
-        transaction,
-        note: `migrate:down failed: ${message}`,
-      });
-    };
-
-    // Owner rows for the drop guard, read before the run so a foreign drop
-    // is refused before any statement executes.
-    const { SchemaOwnersRepository: OwnersRepo, tableOwnersByName } =
-      await import("../../domains/schema/ownership/schema-owners-repository");
-    const ownerRows = await new OwnersRepo(db, dialect).read();
-    const owners = tableOwnersByName(ownerRows);
-
+    const plugin = options.plugin;
     const result = await migrateDownCore({
-      dialect,
-      db,
-      owners,
-      elementOwners: ownerRows,
-      readLiveColumns: lists => readLiveColumns(db, dialect, lists),
-      readLiveElements: lists => readLiveElements(db, dialect, lists),
-      readLiveTables: lists => readLiveTables(db, dialect, lists),
-      readLiveIndexTables: lists => readLiveIndexTables(db, dialect, lists),
-
+      ...(await downDatabaseDeps({
+        adapter: adapter as unknown as DrizzleAdapter,
+        dialect,
+        plugin: pluginModules(configResult.config.plugins, plugin),
+      })),
       nodeEnv: process.env.NODE_ENV,
       logger,
       options: {
@@ -726,30 +828,10 @@ export async function runMigrateDown(
         allowDataLoss: options.allowDataLoss,
         yes: options.yes,
         dryRun: options.dryRun,
-        plugin: options.plugin,
+        plugin,
       },
-      listFileApplies: () => repo.listFileApplies(),
       fileExists: () => Promise.resolve(true),
       readDownSql,
-      execDown,
-      recordRolledBack,
-      recordPluginSchemaVersion: async () => {
-        const plugin = options.plugin;
-        if (!plugin) return;
-        const { SchemaOwnersRepository } = await import(
-          "../../domains/schema/ownership/schema-owners-repository"
-        );
-        const definition = (configResult.config.plugins ?? []).find(
-          p => p.name === plugin
-        );
-        await recordPluginSchemaVersionFromLedger({
-          plugin,
-          migrations: definition?.contributes?.schema?.migrations ?? [],
-          listFileApplies: () => repo.listFileApplies(),
-          owners: new SchemaOwnersRepository(db, dialect),
-        });
-      },
-      recordFailed,
       withLock: withMigrateLock,
     });
 

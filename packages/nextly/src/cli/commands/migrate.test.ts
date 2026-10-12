@@ -689,6 +689,9 @@ describe("statementRefusals", () => {
     ["sqlite", "ATTACH DATABASE 'x.db' AS x", "NOT_TRANSACTIONAL_IN_MIGRATION"],
     ["mysql", "LOCK TABLES t WRITE", "NOT_TRANSACTIONAL_IN_MIGRATION"],
     ["mysql", "UNLOCK TABLES", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+    // Switches the pooled connection's default database, and the runner's
+    // ledger writes after the unit with it.
+    ["mysql", "USE otherdb", "NOT_TRANSACTIONAL_IN_MIGRATION"],
   ] as const)("refuses on %s: %s", (dialect, statement, code) => {
     expect(statementRefusals([statement], dialect).map(r => r.code)).toEqual([
       code,
@@ -874,6 +877,7 @@ describe("a migration marked to run outside a transaction", () => {
     // State that outlives the file on its connection, marked or not.
     ["mysql", "LOCK TABLES t WRITE", "NOT_TRANSACTIONAL_IN_MIGRATION"],
     ["mysql", "UNLOCK TABLES", "NOT_TRANSACTIONAL_IN_MIGRATION"],
+    ["mysql", "USE otherdb", "NOT_TRANSACTIONAL_IN_MIGRATION"],
     ["sqlite", "ATTACH DATABASE 'x.db' AS x", "NOT_TRANSACTIONAL_IN_MIGRATION"],
     ["sqlite", "DETACH DATABASE x", "NOT_TRANSACTIONAL_IN_MIGRATION"],
     ["mysql", "SET FOREIGN_KEY_CHECKS = 0", "SESSION_SETTING_IN_MIGRATION"],

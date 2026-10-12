@@ -4,8 +4,11 @@
  * enforcement off, is checked for dangling references before it commits, and
  * leaves the connection's setting as it found it.
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import type Database from "better-sqlite3";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -212,5 +215,67 @@ describe("a unit run outside a transaction that fails part-way", () => {
     expect(error.publicMessage).toBe(
       "0001_x.sql ran outside a transaction, and its statement 1 of 1 failed. No statement before it had run, so it can run again once the cause is fixed."
     );
+  });
+});
+
+describe("the runner's own writes after a unit's statements", () => {
+  /**
+   * An adapter that logs what its transaction runs, in order: the unit's
+   * statements, the Drizzle statements run for their effect (rendered as
+   * PostgreSQL renders them), and `after`.
+   */
+  function loggingAdapter(dialect: "postgresql" | "mysql") {
+    const log: string[] = [];
+    const pg = new PgDialect();
+    const fake = {
+      getCapabilities: () => ({ dialect }),
+      transaction: async <T>(
+        work: (ctx: {
+          execute: (statement: string) => Promise<unknown[]>;
+          runStatement: (statement: SQL) => Promise<void>;
+          getDrizzle: () => unknown;
+        }) => Promise<T>
+      ): Promise<T> =>
+        work({
+          execute: async statement => {
+            log.push(statement);
+            return [];
+          },
+          runStatement: async statement => {
+            log.push(pg.sqlToQuery(statement).sql);
+          },
+          getDrizzle: () => ({}),
+        }),
+    };
+    return { log, adapter: fake as unknown as DrizzleAdapter };
+  }
+
+  const statements = [
+    "SET LOCAL search_path TO reporting",
+    "SET LOCAL ROLE reporter",
+    'INSERT INTO "r" VALUES (1)',
+  ];
+  const unit = { source: "0001_x.sql", transaction: true };
+
+  it("restores PostgreSQL's session settings before the ledger is written", async () => {
+    const { log, adapter: pgAdapter } = loggingAdapter("postgresql");
+    await runMigrationStatements(pgAdapter, statements, unit, async () => {
+      log.push("after");
+    });
+    expect(log).toEqual([
+      ...statements,
+      "RESET SESSION AUTHORIZATION",
+      "RESET ROLE",
+      "RESET search_path",
+      "after",
+    ]);
+  });
+
+  it("adds nothing on MySQL, whose rerouting statement is refused before the unit runs", async () => {
+    const { log, adapter: mysqlAdapter } = loggingAdapter("mysql");
+    await runMigrationStatements(mysqlAdapter, statements, unit, async () => {
+      log.push("after");
+    });
+    expect(log).toEqual([...statements, "after"]);
   });
 });
