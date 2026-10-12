@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (86feca68d5e17237). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (1bd289d86ef883f0). Edit that file, never this one. -->
 
 # packages/nextly: Agent Guide
 
@@ -47,7 +47,11 @@ inside `packages/nextly`.
   a hand-assembled literal is how two doors came to answer one key differently.
 - A collection whose code-defined `access` says nothing about an operation
   falls through to DB permissions; a caller with no matching grant is refused.
-  A rule that throws denies.
+  A rule that throws denies. Relationship expansion (`judgeTarget`) puts the
+  same question to a populated TARGET: a session caller reading a target with
+  no read rule needs a grant on it, and a scoped key needs `read-<target>` in
+  its own scope before the target's rule is read. A row refused by name is
+  withheld from a relationship too, not merely hidden from the direct read.
 - FIELD-level rules are different: they run whenever `overrideAccess` is
   false, user or not. "Which fields may this writer set" has a perfectly good
   answer for nobody, and treating absence of a user as trust let an anonymous

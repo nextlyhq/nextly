@@ -3,7 +3,10 @@ import { inArray, sql } from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
-import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import {
+  apiKeyScopeAllows,
+  type AuthenticatedScope,
+} from "../../../auth/authenticated-scope";
 import {
   codeAccessAllows,
   readAccessCaller,
@@ -1691,14 +1694,20 @@ export class CollectionRelationshipService extends BaseService {
    * rule that reaches out to another service is asked once, not five hundred
    * times concurrently for a five-hundred-row relationship.
    *
-   * The target's own code-defined `access.read` decides, and ONLY that. The
-   * RBAC permission gate is deliberately not consulted, for the reason it never
-   * was: the route authorized this caller for the PARENT collection, and
-   * requiring a `read-<target>` grant naming a collection they never asked for
-   * by name would empty the relationship for every caller whose grants do not
-   * list it — which, on a site that leans on code-defined access rather than
-   * per-collection permissions, is every caller. Whether expansion should also
-   * require a read permission on the target is left open, as before.
+   * The question is the one a permission-checked direct read of the target
+   * asks, so a row refused by name is withheld from a relationship too. The
+   * route authorized this caller for the PARENT collection only, and says
+   * nothing about a target they never asked for.
+   *
+   * - A scoped API key must hold `read-<target>` in its OWN scope, and then
+   *   answers to the target's rule when one is declared. The grant is asked
+   *   first, so a key its scope never admitted to the target is refused
+   *   whatever the rule would say, and never on its owner's authority.
+   * - A session caller answers to the target's rule when one is declared,
+   *   without a per-collection grant, so a site that leans on code-defined
+   *   access keeps its relationships. Where the target declares no read rule,
+   *   the caller falls through to their database grants, as the direct read
+   *   does.
    *
    * The rule is shown the SAME context a direct read shows it. A session
    * caller's rule reads real roles and effective permissions, built by the RBAC
@@ -1741,14 +1750,23 @@ export class CollectionRelationshipService extends BaseService {
       return verdict !== false;
     }
 
-    const codeAccess = rbac?.getRegisteredAccess(targetCollection);
-    // Nothing declared for this operation on this target: admit, as a direct
-    // read would. Judged on the operation rather than the object, because a
-    // collection that declares `access.create` alone has still said nothing
-    // about reading.
-    if (!rbac || codeAccess?.read === undefined) return true;
+    // A key's own scope is authoritative on the target, before any rule: the
+    // same grant a direct read of the target requires of it.
+    if (
+      apiKeyScopeAllows(authenticatedScope, "read", targetCollection) === false
+    ) {
+      return false;
+    }
+
+    if (!rbac) return true;
+    const codeAccess = rbac.getRegisteredAccess(targetCollection);
 
     if (authenticatedScope?.actorType === "apiKey") {
+      // Judged on the operation rather than the object, because a collection
+      // that declares `access.create` alone has still said nothing about
+      // reading. With no read rule, the grant above is the whole answer, as it
+      // is on the direct read's key branch.
+      if (codeAccess?.read === undefined) return true;
       return codeAccessAllows(
         codeAccess,
         "read",
@@ -1757,10 +1775,9 @@ export class CollectionRelationshipService extends BaseService {
       );
     }
 
-    // With `codeAccess` supplied and the operation's rule defined, `checkAccess`
-    // answers from that rule alone — it never reaches the permission lookup
-    // that the paragraph above rules out — and builds the rule's context the
-    // canonical way.
+    // A declared read rule answers alone, with its context built the canonical
+    // way. Without one, `checkAccess` falls through to the caller's database
+    // grants, which is the answer a permission-checked direct read gives.
     return rbac.checkAccess({
       userId: user.id,
       operation: "read",
