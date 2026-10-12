@@ -879,6 +879,47 @@ export async function introspectIndexTables(
   return found;
 }
 
+/**
+ * What a SQLite rebuild of each named table could lose that the snapshot
+ * leaves out, for the drop guard: the columns of each unique constraint the
+ * table's CREATE statement declares — backed by an index SQLite names
+ * `sqlite_autoindex_*`, which the snapshot skips as no index of the schema's
+ * — and how many triggers are on the table. Keyed by lower-cased table name;
+ * a table the database does not have is absent.
+ */
+export async function introspectSqliteRebuildLosses(
+  db: unknown,
+  tableNames: readonly string[]
+): Promise<Map<string, { unique: string[][]; triggers: number }>> {
+  const dbAny = db as { all(query: unknown): unknown };
+  const all = async <Row>(query: unknown): Promise<Row[]> => {
+    const rows: unknown = await Promise.resolve(dbAny.all(query));
+    return Array.isArray(rows) ? (rows as Row[]) : [];
+  };
+  const found = new Map<string, { unique: string[][]; triggers: number }>();
+  for (const table of tableNames) {
+    const indexes = await all<SqliteIndexListRow>(
+      sql`PRAGMA index_list(${sql.identifier(table)})`
+    );
+    const unique: string[][] = [];
+    for (const index of indexes.filter(ix => ix.origin === "u")) {
+      const keys = await all<SqliteIndexInfoRow>(
+        sql`PRAGMA index_info(${sql.identifier(index.name)})`
+      );
+      unique.push(keys.map(key => (key.name ?? "").toLowerCase()));
+    }
+    const [count] = await all<{ triggers: number }>(
+      sql`SELECT COUNT(*) AS "triggers" FROM sqlite_master
+          WHERE type = 'trigger' AND lower(tbl_name) = ${table.toLowerCase()}`
+    );
+    found.set(table.toLowerCase(), {
+      unique,
+      triggers: Number(count?.triggers ?? 0),
+    });
+  }
+  return found;
+}
+
 export async function introspectLiveSnapshot(
   db: unknown,
   dialect: SupportedDialect,

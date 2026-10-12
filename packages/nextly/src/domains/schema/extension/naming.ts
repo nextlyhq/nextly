@@ -674,3 +674,28 @@ export function foreignKeyColumnProblem(
   }
   return undefined;
 }
+
+/**
+ * Why a foreign key's `set null` action cannot be created on every dialect,
+ * or undefined when it can.
+ *
+ * `set null` writes null into every local column, so each must be nullable.
+ * MySQL refuses the key when the table is created if one is not; PostgreSQL
+ * and SQLite accept it and fail only when the action fires, refusing the
+ * delete or update that triggered it. `columns` are named as the caller
+ * reports them.
+ */
+export function setNullActionProblem(
+  actions: { onDelete: string; onUpdate: string },
+  columns: readonly { name: string; nullable: boolean }[]
+): string | undefined {
+  const field =
+    actions.onDelete === "set null"
+      ? "onDelete"
+      : actions.onUpdate === "set null"
+        ? "onUpdate"
+        : undefined;
+  const required = columns.find(column => !column.nullable);
+  if (field === undefined || required === undefined) return undefined;
+  return `A foreign key's ${field} is "set null", and its column "${required.name}" is not nullable. MySQL refuses SET NULL on a column that is NOT NULL, so a key declaring it could not be created there; make the column nullable or choose another action.`;
+}

@@ -13,6 +13,8 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import { assertNoForeignDrops } from "../drop-guard";
 import type { OwnerRecord } from "../owner-registry";
 
+import { liveShape } from "./live-shape";
+
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
 /** `fx__notes` is the plugin's; `auth__identities` another plugin's. */
@@ -51,11 +53,18 @@ function guard(
     dialect,
     source: "0009_under_test",
     liveColumns,
-    // Each rebuilt table has no index, foreign key or check in the database.
+    // Each rebuilt table has no index, foreign key or check in the
+    // database, and no primary key; its columns are declared as the twin
+    // declares them.
     liveElements: new Map(
       [...(liveColumns?.keys() ?? [])].map(table => [
         table,
-        { index: new Set(), fk: new Set(), check: new Set() },
+        {
+          index: new Set(),
+          fk: new Set(),
+          check: new Set(),
+          shape: liveShape({ id: "INT", provider: "TEXT" }, { primaryKey: [] }),
+        },
       ])
     ),
     liveTables: LIVE_TABLES,

@@ -1171,3 +1171,113 @@ describe("an index declaration", () => {
     );
   });
 });
+
+describe("check constraint names across tables", () => {
+  /** The issues of the validation failure `run` rejects with. */
+  async function refusal(
+    run: () => Promise<unknown>
+  ): Promise<{ path: string; message: string }[]> {
+    const error = await run().then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    if (!(error instanceof NextlyError)) {
+      throw new Error("expected a validation failure");
+    }
+    return (error.publicData as { errors: { path: string; message: string }[] })
+      .errors;
+  }
+
+  const build = (tables: ReturnType<typeof defineTable>[]) =>
+    buildExtensionSchema({
+      dialect: "postgresql" as const,
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [{ owner: { kind: "plugin" as const, id: "fx" }, tables }],
+    });
+
+  it("refuses declared checks on two tables that resolve to one name, and accepts distinct ones", async () => {
+    // `ck_fx__t_` + `a_ok`, and `ck_fx__t_a_` + `ok`.
+    const pair = (second: string) => [
+      defineTable(
+        "t",
+        { id: col.id(), qty: col.integer() },
+        { checks: [{ name: "a_ok", sql: "qty > 0" }] }
+      ),
+      defineTable(
+        "t_a",
+        { id: col.id(), qty: col.integer() },
+        { checks: [{ name: second, sql: "qty > 0" }] }
+      ),
+    ];
+    const issues = await refusal(() => build(pair("ok")));
+    expect(issues.map(issue => issue.path)).toEqual(["fx__t_a.checks"]);
+    expect(issues[0]?.message).toContain(
+      'The check constraint "ck_fx__t_a_ok" on "fx__t_a" has the name of one on "fx__t"'
+    );
+    const built = await build(pair("positive"));
+    expect(built.specs.flatMap(spec => spec.checks?.map(c => c.name))).toEqual([
+      "ck_fx__t_a_ok",
+      "ck_fx__t_a_positive",
+    ]);
+  });
+
+  it("refuses enum checks on two tables that resolve to one name, compared without case", async () => {
+    // `aB` on `t` and `b` on `t_a` both derive `ck_fx__t_a_b_enum`.
+    const pair = (enumName?: string) => [
+      defineTable("t", { id: col.id(), aB: col.enum(["x", "y"]) }),
+      defineTable("t_a", {
+        id: col.id(),
+        b: col.enum(
+          ["x", "y"],
+          enumName !== undefined ? { name: enumName } : {}
+        ),
+      }),
+    ];
+    expect(
+      (await refusal(() => build(pair()))).map(issue => issue.path)
+    ).toEqual(["fx__t_a.checks"]);
+    expect(
+      (await refusal(() => build(pair("B_ENUM")))).map(issue => issue.path)
+    ).toEqual(["fx__t_a.checks"]);
+    const built = await build(pair("b_state"));
+    expect(built.specs.flatMap(spec => spec.checks?.map(c => c.name))).toEqual([
+      "ck_fx__t_a_b_enum",
+      "ck_fx__t_a_b_state",
+    ]);
+  });
+
+  it("refuses enum checks contributed to two entity tables that resolve to one name", async () => {
+    const contribute = (second: string) =>
+      buildExtensionSchema({
+        dialect: "mysql" as const,
+        coreTableNames: [],
+        entities: ["dc_t", "dc_t_a"].map(name => ({
+          name,
+          slug: name,
+          entityKind: "collection" as const,
+          columns: [{ name: "id", kind: "varchar" as const, nullable: false }],
+        })),
+        pluginPrefixes: new Map(),
+        plugins: [],
+        app: {
+          owner: { kind: "app" as const },
+          extend: [
+            ({ schema }) => {
+              schema.extendTable("dc_t", {
+                columns: { aB: col.enum(["x"], { nullable: true }) },
+              });
+              schema.extendTable("dc_t_a", {
+                columns: { [second]: col.enum(["x"], { nullable: true }) },
+              });
+            },
+          ],
+        },
+      });
+    expect(
+      (await refusal(() => contribute("b"))).map(issue => issue.path)
+    ).toEqual(["dc_t_a.checks"]);
+    await expect(contribute("c")).resolves.toBeDefined();
+  });
+});

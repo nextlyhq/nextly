@@ -22,6 +22,8 @@ import { splitSqlStatements } from "../../migrate/split-sql";
 import { sqliteTableRebuildStatements } from "../../pipeline/sql-templates/sqlite-rebuild";
 import type { OwnerRecord } from "../owner-registry";
 
+import { liveShape } from "./live-shape";
+
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
 /** A table `plugin:fx` owns, as the plugin phase records one. */
@@ -869,9 +871,18 @@ describe("a complete SQLite rebuild of another owner's table", () => {
       dialect,
       source: "plugin:fx/001",
       liveColumns,
-      // `app_notes` has no index, foreign key or check in the database.
+      // `app_notes` has no index, foreign key or check in the database, and
+      // its columns are declared as the twins below declare them.
       liveElements: new Map([
-        ["app_notes", { index: new Set(), fk: new Set(), check: new Set() }],
+        [
+          "app_notes",
+          {
+            index: new Set(),
+            fk: new Set(),
+            check: new Set(),
+            shape: liveShape({ id: "TEXT", body: "TEXT", status: "TEXT" }),
+          },
+        ],
       ]),
       liveTables: new Set(owners.keys()),
     });

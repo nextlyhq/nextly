@@ -35,8 +35,10 @@ import {
   specAfterHook,
 } from "./after-drizzle";
 import {
+  assertDistinctCheckNamesAcrossTables,
   assertDistinctForeignKeyNames,
   assertDistinctIndexNames,
+  assertSetNullColumnsNullable,
   authoredKeyOf,
   referenceTableStub,
   resolveIndexName,
@@ -741,12 +743,17 @@ export async function buildExtensionSchema(
   const { entityIndexes, entityColumns } = foreignTableContributions(store);
 
   const compiledSpecs = tables.map(table => toTableSpec(table, input.dialect));
-  // Every declared key's and index's resolved name, before any
+  // Every declared key's, index's and check's resolved name, before any
   // `afterDrizzle` hook sees the tables, so a clash is reported against the
   // declaration rather than by the database; the foreign keys of specs a
   // hook reshapes are judged again below.
   assertDistinctForeignKeyNames(compiledSpecs);
   assertDistinctIndexNames(compiledSpecs, entityIndexes);
+  assertDistinctCheckNamesAcrossTables(
+    compiledSpecs,
+    entityColumns,
+    input.dialect
+  );
   assertForeignKeyTargetsExist(tables, store);
   // Each table whole, its own columns and every one a hook added, so a row
   // only MySQL cannot hold is refused on every dialect alike.
@@ -814,10 +821,14 @@ export async function buildExtensionSchema(
         );
   // What reaches the migration model when a hook changed it: a key or an
   // index the hook added or renamed is held to the same rule as a declared
-  // one, by the same checks.
+  // one, by the same checks. Check names are asked again of these specs, the
+  // ones the migrations carry, and a column the hook made NOT NULL under a
+  // declared key's `set null` is refused as the declaration would have been.
   if (hooks.length > 0) {
     assertDistinctForeignKeyNames(specs);
     assertDistinctIndexNames(specs, entityIndexes);
+    assertDistinctCheckNamesAcrossTables(specs, entityColumns, input.dialect);
+    assertSetNullColumnsNullable(specs);
   }
 
   const { adopted, adoptedRelations } = compileAdoptedTables(

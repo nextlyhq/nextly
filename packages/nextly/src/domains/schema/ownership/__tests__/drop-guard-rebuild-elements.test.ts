@@ -19,6 +19,8 @@ import { sqliteTableRebuildStatements } from "../../pipeline/sql-templates/sqlit
 import { assertNoForeignDrops, type TableElements } from "../drop-guard";
 import type { OwnerRecord } from "../owner-registry";
 
+import { liveShape } from "./live-shape";
+
 function record(over: Partial<OwnerRecord>): OwnerRecord {
   return {
     tableName: "unused",
@@ -71,15 +73,26 @@ const liveColumns = new Map([
   ["users", new Set(["id", "email"])],
   ["fx__notes", new Set(["id", "label", "user_id"])],
 ]);
+/** `fx__notes`'s columns, key and the rest of its shape in the database. */
+const notesShape = liveShape({ id: "TEXT", label: "TEXT", user_id: "TEXT" });
 const liveElements = new Map([
-  ["users", elements({ index: ["users_email_unique"] })],
+  [
+    "users",
+    {
+      ...elements({ index: ["users_email_unique"] }),
+      shape: liveShape({ id: "TEXT", email: "TEXT" }),
+    },
+  ],
   [
     "fx__notes",
-    elements({
-      index: ["fx__notes_other_idx"],
-      fk: ["fx__notes_other_fk"],
-      check: ["fx__notes_other_ck"],
-    }),
+    {
+      ...elements({
+        index: ["fx__notes_other_idx"],
+        fk: ["fx__notes_other_fk"],
+        check: ["fx__notes_other_ck"],
+      }),
+      shape: notesShape,
+    },
   ],
 ]);
 
@@ -364,10 +377,22 @@ describe("a rebuild-shaped block on PostgreSQL", () => {
   it("keeps the table on SQLite, where the pipeline writes it", () => {
     // Plugin `other`, whose elements on the table the block leaves out:
     // on SQLite it keeps fx's table and takes only what is its own, while
-    // on PostgreSQL the same block is the drop of fx's table.
+    // on PostgreSQL the same block is the drop of fx's table. The live
+    // table here has no primary key, as the twin declares none.
     expect(() =>
       guard(block, "plugin:other", "sqlite", {
-        liveElements: new Map([["fx__notes", elements()]]),
+        liveElements: new Map([
+          [
+            "fx__notes",
+            {
+              ...elements(),
+              shape: liveShape(
+                { id: "TEXT", label: "TEXT", user_id: "TEXT" },
+                { primaryKey: [] }
+              ),
+            },
+          ],
+        ]),
       })
     ).not.toThrow();
     expect(

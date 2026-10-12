@@ -11,20 +11,27 @@ import { describe, expect, it } from "vitest";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { col, defineTable, type ColumnBuilder } from "../dsl";
 
-/** The error a caller can act on: a validation failure carrying a path. */
-function validationPaths(run: () => unknown): string[] {
+/** The issues of the validation failure `run` throws. */
+function validationIssues(
+  run: () => unknown
+): { path: string; message: string }[] {
   try {
     run();
   } catch (error) {
     if (error instanceof NextlyError) {
       const data = error.publicData as
-        | { errors?: { path: string }[] }
+        | { errors?: { path: string; message: string }[] }
         | undefined;
-      return (data?.errors ?? []).map(issue => issue.path);
+      return data?.errors ?? [];
     }
     throw error;
   }
   throw new Error("expected the call to throw, and it returned");
+}
+
+/** The error a caller can act on: a validation failure carrying a path. */
+function validationPaths(run: () => unknown): string[] {
+  return validationIssues(run).map(issue => issue.path);
 }
 
 describe("defineTable", () => {
@@ -219,7 +226,7 @@ describe("defineTable", () => {
     const declare = (actions: { onDelete?: string; onUpdate?: string }) =>
       defineTable(
         "t",
-        { id: col.id(), ownerId: col.shortText() },
+        { id: col.id(), ownerId: col.shortText({ nullable: true }) },
         {
           foreignKeys: [
             {
@@ -248,6 +255,101 @@ describe("defineTable", () => {
       "no action",
       "no action",
     ]);
+  });
+
+  it("refuses set null on either side when a key column is not nullable, and accepts it when every one is", () => {
+    // MySQL refuses the key when the table is created (ERROR 1830);
+    // PostgreSQL and SQLite accept it and fail when the action fires.
+    const declare = (
+      actions: { onDelete?: "set null"; onUpdate?: "set null" },
+      orgNullable: boolean
+    ) =>
+      defineTable(
+        "t",
+        {
+          id: col.id(),
+          ownerId: col.shortText({ nullable: true }),
+          orgId: col.shortText({ nullable: orgNullable }),
+        },
+        {
+          foreignKeys: [
+            {
+              columns: ["ownerId", "orgId"],
+              references: { table: "memberships", columns: ["user", "org"] },
+              ...actions,
+            },
+          ],
+        }
+      );
+    for (const actions of [
+      { onDelete: "set null" as const },
+      { onUpdate: "set null" as const },
+    ]) {
+      expect(validationPaths(() => declare(actions, false))).toEqual([
+        "t.foreignKeys[0]",
+      ]);
+      const [fk] = declare(actions, true).foreignKeys;
+      expect(fk?.columns).toEqual(["owner_id", "org_id"]);
+    }
+    expect(
+      validationIssues(() => declare({ onDelete: "set null" }, false))[0]
+        ?.message
+    ).toMatch(/onDelete is "set null", and its column "orgId" is not nullable/);
+  });
+
+  it("refuses check SQL that quotes an identifier, outside a string literal", () => {
+    const declare = (sql: string) =>
+      defineTable(
+        "t",
+        { id: col.id(), qty: col.integer(), label: col.shortText() },
+        { checks: [{ name: "ok", sql }] }
+      );
+    // MySQL reads "qty" as a string; PostgreSQL refuses a backtick.
+    for (const sql of [
+      '"qty" > 0',
+      "`qty` > 0",
+      "qty > 0 AND label <> 'it''s' AND \"label\" <> ''",
+      "label <> 'open \"",
+    ]) {
+      expect(validationPaths(() => declare(sql))).toEqual(["t.checks[0]"]);
+    }
+    // Quotes inside a literal are text, `''` included.
+    for (const sql of [
+      "qty > 0",
+      "label <> 'say \"hi\"'",
+      "label <> 'it''s \"q\" and `b`'",
+    ]) {
+      expect(declare(sql).checks).toEqual([{ name: "ok", sql }]);
+    }
+  });
+
+  it("refuses an index expression or predicate that quotes an identifier, and accepts a bare one", () => {
+    const declare = (index: { expression?: string; where?: string }) =>
+      defineTable(
+        "t",
+        { id: col.id(), email: col.shortText() },
+        {
+          indexes: [
+            {
+              columns: index.expression === undefined ? ["email"] : [],
+              ...index,
+            },
+          ],
+        }
+      );
+    for (const index of [
+      { expression: 'lower("email")' },
+      { expression: "lower(`email`)" },
+      { where: '"email" IS NOT NULL' },
+    ]) {
+      expect(validationPaths(() => declare(index))).toEqual(["t.indexes[0]"]);
+    }
+    expect(declare({ expression: "lower(email)" }).indexes[0]?.expression).toBe(
+      "lower(email)"
+    );
+    expect(declare({ where: "email <> 'a\"b'" }).indexes[0]?.where).toBe(
+      "email <> 'a\"b'"
+    );
   });
 
   it("refuses a referenced table or column the DDL cannot render, and accepts a plain one", () => {

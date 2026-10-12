@@ -90,6 +90,17 @@ A foreign key's target must exist when the migration runs; within your own
 bundle, creation order follows declaration. `onDelete` and `onUpdate` take
 `"cascade"`, `"set null"`, `"restrict"` or `"no action"` (the default).
 `"set default"` is refused, because MySQL cannot create a key that uses it.
+`"set null"`, on either side, requires every one of the key's columns to be
+nullable: MySQL refuses to create the key otherwise, and PostgreSQL and SQLite
+would fail the delete or update that fires it, so a key declaring it over a
+column that is not nullable is refused.
+
+A check's `sql` and an index's `expression` reach every dialect as written, so
+name columns bare (`qty > 0`, `lower(email)`), which all three read as the
+column. An identifier quoted with `"` or a backtick is refused: MySQL reads
+`"qty"` as a string, so `"qty" > 0` would compare a constant, and PostgreSQL
+refuses a backtick. Quotes inside a single-quoted string literal are text and
+are accepted.
 
 Partial indexes (an index with a `where` predicate) are **refused**, on every
 dialect. Every declaration is checked against PostgreSQL, MySQL and SQLite
@@ -105,8 +116,11 @@ and MySQL refuses one past 64. Derived names (and every check name, which is
 `ck_<table>_<name>`) are shortened with a hash when they would be longer. A
 foreign key's name, written or derived, must also be unique across the
 tables plugins and the app declare, as MySQL requires of a database, and so
-must an index's, as PostgreSQL and SQLite require of a schema; two that
-resolve to one name are refused when the schema compiles. The same index
+must a check's, including the one an enum column implies. An index's must be
+too, as PostgreSQL and SQLite require of a schema. Two that resolve to one
+name are refused when the schema compiles. Table and check names can meet in
+the middle: a check `a_ok` on `t` and a check `ok` on `t_a` both resolve to
+`ck_t_a_ok`, so rename one of them. The same index
 contributed to one table twice, by two plugins or a plugin and the app, is one
 index and is kept once. A foreign key's
 `references.columns` are the target's SQL column names (`owner_id`, not the

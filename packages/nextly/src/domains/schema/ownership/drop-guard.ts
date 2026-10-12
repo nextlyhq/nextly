@@ -43,7 +43,29 @@
  * a drop of it. Following renames within one statement list is not enough:
  * the rename can ship in one module and the drop of the new name in a later
  * one, or in an uninstall's DOWN, and by then no owner row names the table
- * by what it is called.
+ * by what it is called. PostgreSQL also renames a table through
+ * `ALTER INDEX ... RENAME TO`, so a name such a rename names that no live
+ * index has is judged as a table rename; and it renames a plain table's
+ * column through `ALTER VIEW`, `ALTER MATERIALIZED VIEW` and
+ * `ALTER FOREIGN TABLE` (`RENAME [COLUMN]`) and `ALTER TYPE ... RENAME
+ * ATTRIBUTE`, each read as `ALTER TABLE ... RENAME COLUMN` is.
+ *
+ * **Emptying a table, or changing its partitions, counts too.** `TRUNCATE`
+ * of another owner's table is refused, and so is a partition change to one:
+ * PostgreSQL's `ATTACH|DETACH PARTITION` and `CREATE TABLE ... PARTITION
+ * OF`, MySQL's `DROP|TRUNCATE|EXCHANGE|DISCARD|IMPORT PARTITION`. A table
+ * attached as a partition, or exchanged with one, is judged too, since a
+ * later drop of the parent takes it or its rows.
+ *
+ * **A SQLite rebuild keeps more than rows.** A complete rebuild of another
+ * owner's table must keep its live primary key, its unique constraints, and
+ * each kept column's declared type, NOT NULL and default, and the table may
+ * have no triggers, which no twin can declare (`shapeKept`).
+ *
+ * **Names are compared as the database stores them.** PostgreSQL cuts a name
+ * longer than 63 bytes to its whole characters within them, so on
+ * PostgreSQL both the names a statement writes and those the owner rows
+ * record are cut the same way before they are compared.
  *
  * **Code written as a string is refused.** A string literal is data to this
  * reader, so a statement that runs one as code is refused: `EXECUTE` and
@@ -64,7 +86,13 @@
  * that runs it is data to this reader, not code. And on PostgreSQL a
  * `DROP TABLE ... CASCADE`, which generated migrations write, also removes
  * the views and foreign keys that depend on the table, and the tables that
- * inherit from it (`INHERITS`), which only the database knows.
+ * inherit from it (`INHERITS`), which only the database knows. What a
+ * statement does to rows it keeps the table for is not judged: `DELETE`,
+ * `UPDATE`, and a column's type changed in place (`ALTER COLUMN ... TYPE`).
+ * Nor are MySQL's partition changes that keep every row (`REORGANIZE`,
+ * `COALESCE`). A view, materialized view, foreign table or type is judged
+ * by the owner rows of its name as a table is, so a plugin renaming a column
+ * of a view no row records as its own is refused.
  *
  * @module domains/schema/ownership/drop-guard
  * @since 1.0.0
@@ -73,7 +101,7 @@ import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import { CORE_TABLE_NAMES } from "../../../schemas";
 import { scanSql, type SqlSegment } from "../migrate/sql-scan";
-import type { ContributedElements } from "../pipeline/diff/types";
+import type { ContributedElements, TableSpec } from "../pipeline/diff/types";
 
 import type { OwnerRecord } from "./owner-registry";
 import { SchemaOwnersRepository } from "./schema-owners-repository";
@@ -332,6 +360,34 @@ const NOT_COLUMN_DROPS = new Set([
   "PARTITION",
 ]);
 
+/**
+ * The words before `PARTITION` in an ALTER TABLE clause that empty the table,
+ * replace its rows or change which partitions it has: PostgreSQL's `ATTACH`
+ * and `DETACH`, MySQL's `DROP`, `TRUNCATE`, `EXCHANGE`, `DISCARD` and
+ * `IMPORT`. Those that reorganise rows without losing them are not here.
+ */
+const PARTITION_CHANGES = new Set([
+  "ATTACH",
+  "DETACH",
+  "DROP",
+  "TRUNCATE",
+  "EXCHANGE",
+  "DISCARD",
+  "IMPORT",
+]);
+
+/**
+ * PostgreSQL's ALTER forms whose `RENAME [COLUMN]` or `RENAME ATTRIBUTE`
+ * renames a plain table's column too, by their first word and the second
+ * word the form needs, if any.
+ */
+const RELATION_KIND_WORDS: ReadonlyMap<string, { next?: string }> = new Map([
+  ["VIEW", {}],
+  ["TYPE", {}],
+  ["MATERIALIZED", { next: "VIEW" }],
+  ["FOREIGN", { next: "TABLE" }],
+]);
+
 /** What may stand between CREATE and TABLE in a table's creation. */
 const CREATE_TABLE_MODIFIERS = new Set([
   "TEMPORARY",
@@ -439,6 +495,41 @@ function definesPostgresSchema(
     next === "SCHEMA" &&
     SCHEMA_DEFINITIONS.has(word)
   );
+}
+
+/**
+ * The longest name PostgreSQL stores, in bytes (`NAMEDATALEN - 1`). A longer
+ * name is cut to its whole characters within it, in every statement, so
+ * `DROP TABLE` of a name 70 bytes long drops the table its first 63 bytes
+ * name.
+ */
+const POSTGRES_NAME_BYTES = 63;
+
+const utf8 = new TextEncoder();
+
+/** `name` cut as PostgreSQL cuts an over-long name: to whole characters. */
+function truncatedAsPostgres(name: string): string {
+  if (utf8.encode(name).length <= POSTGRES_NAME_BYTES) return name;
+  let bytes = 0;
+  let kept = "";
+  for (const char of name) {
+    bytes += utf8.encode(char).length;
+    if (bytes > POSTGRES_NAME_BYTES) break;
+    kept += char;
+  }
+  return kept;
+}
+
+/**
+ * The key a name is compared under: lower-cased, and on PostgreSQL first cut
+ * to the length it stores, so a name written longer is matched to the table,
+ * column or element it reaches. Applied to the names a statement writes and
+ * to the names the owner rows record alike.
+ */
+function storedNameKey(name: string, dialect: SupportedDialect): string {
+  return (
+    dialect === "postgresql" ? truncatedAsPostgres(name) : name
+  ).toLowerCase();
 }
 
 /** PostgreSQL's folding of an unquoted name, which lowers ASCII only. */
@@ -565,6 +656,18 @@ class DropReader {
    * indexes and constraints each block puts back on it.
    */
   readonly rebuilt: RebuiltTable[] = [];
+  /**
+   * The names PostgreSQL's `ALTER INDEX ... RENAME TO` renames, by the name
+   * each had before the list renamed it. PostgreSQL renames a TABLE through
+   * `ALTER INDEX` too, so each is judged as a possible table rename where no
+   * live index has the name (`assertNoForeignDrops`).
+   */
+  readonly relationRenames: string[] = [];
+  /**
+   * Tables this list empties or whose partitions it changes, without dropping
+   * them, and what it does to each (`TableChange`).
+   */
+  readonly changed: ChangedTable[] = [];
   /**
    * Tables this list itself created, by their current name, while it has not
    * dropped them again. A drop or rename of one of these takes nothing from
@@ -710,10 +813,27 @@ class DropReader {
   }
 
   /**
+   * Records a table this list empties or changes the partitions of, by every
+   * name it is known by in the list, as `drop` records one. A table this
+   * list created is its own, and is not recorded; it stays its own.
+   */
+  changeTable(table: TableRef, act: TableChange): void {
+    if (table.local && this.created.has(table.name)) return;
+    const original = this.renamedFrom.get(table.name);
+    if (original !== undefined) this.changed.push({ table: original, act });
+    this.changed.push({ table: table.name, act });
+  }
+
+  /** Records a name an `ALTER INDEX ... RENAME` renames (`relationRenames`). */
+  renameRelation(name: string): void {
+    this.relationRenames.push(this.renamedFrom.get(name) ?? name);
+  }
+
+  /**
    * Records a table a complete rebuild block keeps, and what the block puts
    * back on it. A table this list created is its own, and is not recorded.
    */
-  keepTable(table: string, recreated: TableElements): void {
+  keepTable(table: string, recreated: Recreated): void {
     if (this.created.has(table)) return;
     this.rebuilt.push({
       table: this.renamedFrom.get(table) ?? table,
@@ -728,6 +848,24 @@ class DropReader {
   get isPostgres(): boolean {
     return this.dialect === "postgresql";
   }
+}
+
+/**
+ * What a statement does to a table it neither drops nor renames, as a refusal
+ * names it: empties it (`TRUNCATE`, a partition's `DROP` or `TRUNCATE`),
+ * changes which partitions it has, or makes it a partition of another table,
+ * which a later drop of that table takes with it.
+ */
+type TableChange =
+  | "truncate"
+  | "change the partitions of"
+  | "attach as a partition"
+  | "exchange a partition with";
+
+/** A table a statement list empties or changes the partitions of. */
+interface ChangedTable {
+  table: string;
+  act: TableChange;
 }
 
 /** One walk over one statement's tokens. */
@@ -851,8 +989,10 @@ class StatementWalk {
         return this.readDrop(at);
       case "RENAME":
         return this.readRenameStatement(at, first);
+      case "TRUNCATE":
+        return this.readTruncateStatement(at, first);
       case "DO":
-        if (first && this.reader.isPostgres) this.assertDollarQuotedDo(at);
+        this.readDo(at, first);
         break;
     }
     this.readDefinition(word, at);
@@ -869,10 +1009,71 @@ class StatementWalk {
       this.readAlterTableRenames(at);
       this.readAlterTableColumns(at);
       this.readAlterIndexRename(at);
+      this.readRelationColumnRename(at);
     } else if (word === "CREATE") {
       this.readCreateTable(at);
+      this.readPartitionOf(at);
       if (this.reader.isPostgres) this.assertDollarQuotedRoutine(at);
     }
+  }
+
+  /**
+   * A TRUNCATE word: the statement of that name where it is one
+   * (`opensTruncate`), otherwise nothing to read here. Returns where to
+   * resume.
+   */
+  private readTruncateStatement(at: number, first: boolean): number {
+    return this.opensTruncate(first) ? this.readTruncate(at) : at + 1;
+  }
+
+  /** A DO word: PostgreSQL's `DO` statement when it opens one. */
+  private readDo(at: number, first: boolean): void {
+    if (first && this.reader.isPostgres) this.assertDollarQuotedDo(at);
+  }
+
+  /**
+   * Whether a TRUNCATE at this point is the statement of that name: it opens
+   * its statement, or stands anywhere in a dollar-quoted body, where a
+   * PL/pgSQL statement may follow `BEGIN` or `THEN` rather than a `;` — but
+   * not as an ALTER TABLE's `TRUNCATE PARTITION` clause, a privilege in a
+   * GRANT or REVOKE, or a trigger's event.
+   */
+  private opensTruncate(first: boolean): boolean {
+    if (first) return true;
+    return (
+      this.bodyDepth > 0 &&
+      !this.inAlterTable &&
+      !this.inPrivileges &&
+      !this.sawTrigger
+    );
+  }
+
+  /**
+   * `TRUNCATE [TABLE] [ONLY] t [*] [, ...]`, from the TRUNCATE keyword: every
+   * table it empties, recorded as such. What may follow the list is read as
+   * a DROP's tail is: PostgreSQL's identity option, then CASCADE or RESTRICT,
+   * and nothing else. PostgreSQL's CASCADE also empties every table with a
+   * foreign key to one of these, which the text does not name, so it is
+   * refused. Returns where to resume.
+   */
+  private readTruncate(at: number): number {
+    let k = this.word(at + 1) === "TABLE" ? at + 2 : at + 1;
+    for (;;) {
+      const table = this.qualifiedName(this.word(k) === "ONLY" ? k + 1 : k);
+      if (table === undefined)
+        this.refuse("a TRUNCATE whose table names cannot be read");
+      this.reader.changeTable(table, "truncate");
+      k = this.pastDescendants(table.next);
+      if (this.punct(k) !== ",") break;
+      k += 1;
+    }
+    if (this.word(k + 1) === "IDENTITY") k += 2;
+    if (this.reader.isPostgres && this.word(k) === "CASCADE") {
+      this.refuse(
+        "TRUNCATE ... CASCADE also empties every table with a foreign key to these, which may be another owner's; truncate those explicitly, without CASCADE"
+      );
+    }
+    return this.dropTail(k);
   }
 
   /**
@@ -977,8 +1178,8 @@ class StatementWalk {
   }
 
   /**
-   * One name as the dialect spells it, lower-cased. Undefined when the
-   * token is not one.
+   * One name as the dialect stores it, lower-cased (`storedNameKey`).
+   * Undefined when the token is not one.
    */
   private nameAt(at: number): string | undefined {
     const token = this.tokens[at];
@@ -987,7 +1188,8 @@ class StatementWalk {
         'a unicode-escaped name (U&"...") cannot be read without decoding it'
       );
     }
-    return writtenName(token)?.toLowerCase();
+    const written = writtenName(token);
+    return written && storedNameKey(written, this.reader.dialect);
   }
 
   /**
@@ -1313,7 +1515,134 @@ class StatementWalk {
     for (const clause of this.clauseStarts(clausesAt)) {
       this.readColumnClause(table, clause);
       this.readElementClause(table, clause);
+      this.readPartitionClause(table, clause);
     }
+  }
+
+  /**
+   * One ALTER TABLE clause starting at `at`, for a partition change to the
+   * table (`PARTITION_CHANGES`), recorded as one. PostgreSQL's
+   * `ATTACH PARTITION y` also makes `y` a partition of the table, which a
+   * drop of the table then takes with it; MySQL's
+   * `EXCHANGE PARTITION p WITH TABLE y` swaps `y`'s rows with the
+   * partition's. Either way `y` is recorded as well.
+   */
+  private readPartitionClause(table: TableRef | undefined, at: number): void {
+    const change = this.word(at);
+    if (this.word(at + 1) !== "PARTITION") return;
+    if (!PARTITION_CHANGES.has(change ?? "")) return;
+    if (table === undefined) {
+      this.refuse("a partition change whose table name cannot be read");
+    }
+    this.reader.changeTable(table, "change the partitions of");
+    if (change === "ATTACH") {
+      this.recordPartitionTable(at + 2, "attach as a partition");
+    } else if (change === "EXCHANGE") {
+      this.recordPartitionTable(
+        this.exchangedTableAt(at + 2),
+        "exchange a partition with"
+      );
+    }
+  }
+
+  /** The table named at `at`, recorded as `act` changes it. */
+  private recordPartitionTable(at: number, act: TableChange): void {
+    const table = this.qualifiedName(at);
+    if (table === undefined) {
+      this.refuse("a partition change whose table name cannot be read");
+    }
+    this.reader.changeTable(table, act);
+  }
+
+  /**
+   * Where the table of MySQL's `EXCHANGE PARTITION p WITH TABLE t` is named,
+   * from the partition's name at `at`: past `WITH TABLE`. Where that is not
+   * there, the name read there fails to be one and the clause is refused.
+   */
+  private exchangedTableAt(at: number): number {
+    return this.word(at + 1) === "WITH" && this.word(at + 2) === "TABLE"
+      ? at + 3
+      : at + 1;
+  }
+
+  /**
+   * PostgreSQL's `CREATE TABLE p PARTITION OF t`, with or without `IF NOT
+   * EXISTS`: the new table becomes a partition of `t`, so rows written to
+   * `t` may land in it, and a later drop of `p` takes them. Recorded as a
+   * change to `t`'s partitions. Read wherever a CREATE stands, since one in
+   * a dollar-quoted body runs too.
+   */
+  private readPartitionOf(at: number): void {
+    const nameAt = this.createdTableNameAt(at + 1);
+    if (nameAt === undefined) return;
+    const created = this.qualifiedName(
+      this.word(nameAt) === "IF" ? nameAt + 3 : nameAt
+    );
+    if (created === undefined) return;
+    if (
+      this.word(created.next) !== "PARTITION" ||
+      this.word(created.next + 1) !== "OF"
+    ) {
+      return;
+    }
+    this.recordPartitionParent(created.next + 2);
+  }
+
+  /** The parent named at `at` of a new partition, recorded as changed. */
+  private recordPartitionParent(at: number): void {
+    const parent = this.qualifiedName(at);
+    if (parent === undefined) {
+      this.refuse("a PARTITION OF whose parent table cannot be read");
+    }
+    this.reader.changeTable(parent, "change the partitions of");
+  }
+
+  /**
+   * PostgreSQL's renames of a column through another kind of relation:
+   * `ALTER VIEW`, `ALTER MATERIALIZED VIEW` and `ALTER FOREIGN TABLE` with
+   * `RENAME [COLUMN] a TO b`, and `ALTER TYPE t RENAME ATTRIBUTE a TO b`.
+   * PostgreSQL runs each of them on a plain table too, renaming its column,
+   * so each is read as `ALTER TABLE t RENAME COLUMN a TO b` is. Their other
+   * forms PostgreSQL refuses on a table. The tokens are not consumed.
+   */
+  private readRelationColumnRename(at: number): void {
+    if (!this.reader.isPostgres) return;
+    const nameAt = this.renamedRelationAt(at + 1);
+    if (nameAt === undefined) return;
+    const relation = this.qualifiedName(nameAt);
+    if (relation === undefined) return;
+    const renameAt = this.pastDescendants(relation.next);
+    if (this.word(renameAt) !== "RENAME") return;
+    if (this.word(renameAt + 1) === "ATTRIBUTE") {
+      const attribute = this.nameAt(renameAt + 2);
+      if (attribute === undefined) {
+        this.refuse("a column drop or rename whose names cannot be read");
+      }
+      this.reader.takeColumn(relation, attribute);
+      return;
+    }
+    this.readColumnClause(relation, renameAt);
+  }
+
+  /**
+   * Where the relation's name starts after `ALTER` in PostgreSQL's
+   * `ALTER VIEW|MATERIALIZED VIEW|FOREIGN TABLE|TYPE`, from the word at
+   * `at`, past `IF EXISTS` and `ONLY`; undefined for any other ALTER.
+   */
+  private renamedRelationAt(at: number): number | undefined {
+    const kind = RELATION_KIND_WORDS.get(this.word(at) ?? "");
+    if (kind === undefined) return undefined;
+    let k = at + 1;
+    if (kind.next !== undefined) {
+      if (this.word(k) !== kind.next) return undefined;
+      k += 1;
+    }
+    return this.pastOnly(this.skipIfExists(k));
+  }
+
+  /** Past PostgreSQL's `ONLY` before a relation's name, if it is there. */
+  private pastOnly(at: number): number {
+    return this.word(at) === "ONLY" ? at + 1 : at;
   }
 
   /**
@@ -1343,6 +1672,8 @@ class StatementWalk {
       return;
     }
     this.reader.takeElement(undefined, index.name, "index");
+    // PostgreSQL renames a table through ALTER INDEX as well.
+    if (this.reader.isPostgres) this.reader.renameRelation(index.name);
   }
 
   /**
@@ -1874,10 +2205,7 @@ function readStatements(
   liveColumns: LiveColumns | undefined,
   liveTables: ReadonlySet<string> | undefined,
   liveElements?: LiveElements
-): Pick<
-  DropReader,
-  "dropped" | "renamed" | "columns" | "elements" | "rebuilt"
-> {
+): Reading {
   // A block keeps its table only where the table's live indexes and
   // constraints were read too: what the block leaves out of them is judged
   // (`elementsLeftOut`), and without them it is read as the drop it then is.
@@ -1902,6 +2230,18 @@ function readStatements(
     ? readWith(statements, new DropReader(dialect, undefined), new Map())
     : reading;
 }
+
+/** What `assertNoForeignDrops` judges of one reading of a statement list. */
+type Reading = Pick<
+  DropReader,
+  | "dropped"
+  | "renamed"
+  | "columns"
+  | "elements"
+  | "rebuilt"
+  | "relationRenames"
+  | "changed"
+>;
 
 /**
  * Reads every statement of a list with `reader`, a rebuild block that keeps
@@ -2225,7 +2565,7 @@ interface KeptTable {
   dropAt: number;
   table: string;
   droppedColumns: string[];
-  recreated: TableElements;
+  recreated: Recreated;
 }
 
 /**
@@ -2239,10 +2579,47 @@ export interface TableElements {
   check: ReadonlySet<string>;
 }
 
+/**
+ * What a rebuild block puts back on its table: the indexes, foreign keys and
+ * checks (`recreatedBy`), and the shape its twin declares (`twinShape`).
+ */
+interface Recreated extends TableElements {
+  shape: TableShape;
+}
+
 /** A table a complete rebuild block keeps, and what the block puts back. */
 interface RebuiltTable {
   table: string;
-  recreated: TableElements;
+  recreated: Recreated;
+}
+
+/**
+ * A column as a rebuild must keep it: its declared type, whether it is
+ * declared NOT NULL, and its default, the type and default as `fingerprint`
+ * spells them.
+ */
+interface ColumnShape {
+  type: string | undefined;
+  notNull: boolean;
+  default: string | undefined;
+}
+
+/**
+ * What a SQLite rebuild can take from a table while keeping its rows, its
+ * columns and its named elements: the primary key, the unique constraints,
+ * and each column's declared type, NOT NULL and default. Column names
+ * lower-cased; the key's columns sorted, and each unique constraint's columns
+ * sorted and joined by commas.
+ */
+export interface TableShape {
+  columns: ReadonlyMap<string, ColumnShape>;
+  primaryKey: readonly string[];
+  unique: ReadonlySet<string>;
+}
+
+/** A live table's shape, and how many triggers are on it. */
+export interface LiveTableShape extends TableShape {
+  triggers: number;
 }
 
 /**
@@ -2262,7 +2639,7 @@ function keptBy(
   block: {
     table: string;
     columns: readonly string[];
-    recreated: TableElements;
+    recreated: Recreated;
   },
   live: ReadonlySet<string> | undefined,
   dropAt: number
@@ -2292,11 +2669,15 @@ function keptBy(
  * is judged as taking it.
  */
 function recreatedBy(
-  block: { table: string; constraints: ReadonlyMap<string, "fk" | "check"> },
+  block: {
+    table: string;
+    constraints: ReadonlyMap<string, "fk" | "check">;
+    shape: TableShape;
+  },
   statements: readonly string[],
   from: number,
   dialect: SupportedDialect
-): TableElements {
+): Recreated {
   const index = new Set<string>();
   for (let k = from; k < statements.length; k += 1) {
     const tokens = soleStatementTokens(statements[k], dialect);
@@ -2310,7 +2691,12 @@ function recreatedBy(
         .filter(([, constraint]) => constraint === kind)
         .map(([name]) => name)
     );
-  return { index, fk: named("fk"), check: named("check") };
+  return {
+    index,
+    fk: named("fk"),
+    check: named("check"),
+    shape: block.shape,
+  };
 }
 
 /**
@@ -2514,8 +2900,15 @@ export function readLiveColumns(
   );
 }
 
-/** Each table's live indexes, foreign keys and checks, by lower-cased name. */
-export type LiveElements = ReadonlyMap<string, TableElements>;
+/**
+ * Each table's live indexes, foreign keys and checks, and its shape
+ * (`LiveTableShape`), by lower-cased name. Without a shape, a rebuild of the
+ * table that does not hold it is refused (`shapeKept`).
+ */
+export type LiveElements = ReadonlyMap<
+  string,
+  TableElements & { shape?: LiveTableShape }
+>;
 
 /**
  * The live indexes, foreign keys and checks of every table the statement
@@ -2536,30 +2929,69 @@ export async function readLiveElements(
     ...new Set(statementLists.flatMap(list => rebuiltTables(list, dialect))),
   ];
   if (tables.length === 0) return new Map();
-  const { introspectLiveSnapshot } = await import(
-    "../pipeline/diff/introspect-live"
-  );
+  const { introspectLiveSnapshot, introspectSqliteRebuildLosses } =
+    await import("../pipeline/diff/introspect-live");
   const snapshot = await introspectLiveSnapshot(db, dialect, tables);
+  const losses = await introspectSqliteRebuildLosses(db, tables);
   const names = (elements: ReadonlyArray<{ name: string }> | undefined) =>
     new Set((elements ?? []).map(element => element.name.toLowerCase()));
   return new Map(
-    snapshot.tables.map(table => [
-      table.name.toLowerCase(),
-      {
-        index: names(table.indexes),
-        fk: names(table.foreignKeys),
-        check: names(table.checks),
-      },
-    ])
+    snapshot.tables.map(table => {
+      const name = table.name.toLowerCase();
+      return [
+        name,
+        {
+          index: names(table.indexes),
+          fk: names(table.foreignKeys),
+          check: names(table.checks),
+          shape: liveShape(table, losses.get(name)),
+        },
+      ];
+    })
   );
 }
 
 /**
- * Which of the tables the statement lists create exist already, read from the
- * database the statements are about to run on — the tables
- * `assertNoForeignDrops` credits no creation of (`liveTables`). Read through
- * the introspection `readLiveColumns` uses, so on PostgreSQL a table counts
- * when an unqualified name reaches it, wherever the search path finds it.
+ * A live table's shape, from its introspected columns and what the snapshot
+ * leaves out (`introspectSqliteRebuildLosses`); undefined when that was not
+ * read, so a rebuild of the table is judged as losing it.
+ */
+function liveShape(
+  table: TableSpec,
+  losses: { unique: string[][]; triggers: number } | undefined
+): LiveTableShape | undefined {
+  if (losses === undefined) return undefined;
+  return {
+    columns: new Map(
+      table.columns.map(column => [
+        column.name.toLowerCase(),
+        {
+          type: fingerprintOf(column.type),
+          notNull: !column.nullable,
+          default:
+            column.default === undefined
+              ? undefined
+              : fingerprintOf(column.default),
+        },
+      ])
+    ),
+    primaryKey: table.columns
+      .filter(column => column.primaryKey === true)
+      .map(column => column.name.toLowerCase())
+      .sort(),
+    unique: new Set(losses.unique.map(columnSetKey)),
+    triggers: losses.triggers,
+  };
+}
+
+/**
+ * Which of the tables the statement lists create, and of the names
+ * PostgreSQL's `ALTER INDEX ... RENAME` renames in them, exist already as
+ * tables, read from the database the statements are about to run on — the
+ * tables `assertNoForeignDrops` credits no creation of, and the names it
+ * judges such a rename of as a table's (`liveTables`). Read through the
+ * introspection `readLiveColumns` uses, so on PostgreSQL a table counts when
+ * an unqualified name reaches it, wherever the search path finds it.
  */
 export async function readLiveTables(
   db: unknown,
@@ -2569,7 +3001,13 @@ export async function readLiveTables(
   const live = await liveColumnsOf(
     db,
     dialect,
-    statementLists.flatMap(list => tablesCreatedBy(list, dialect))
+    statementLists.flatMap(list => {
+      const reading = readAsIfNoTableExisted(list, dialect);
+      return [
+        ...(reading?.creating ?? []),
+        ...(reading?.relationRenames ?? []),
+      ];
+    })
   );
   return new Set(live.keys());
 }
@@ -2645,6 +3083,7 @@ function rebuildBlockAt(
       table: string;
       columns: string[];
       constraints: ReadonlyMap<string, "fk" | "check">;
+      shape: TableShape;
     }
   | undefined {
   // Only SQLite's. It is the one dialect that changes a constraint by
@@ -2663,6 +3102,7 @@ function rebuildBlockAt(
     table: twin.table,
     columns: twin.columns,
     constraints: namedConstraints(create),
+    shape: twinShape(create),
   };
 }
 
@@ -2707,6 +3147,272 @@ function namedConstraints(
     if (name !== undefined && kind !== undefined) named.set(name, kind);
   }
   return named;
+}
+
+/**
+ * The shape a rebuild's `CREATE TABLE __new_t (...)` declares
+ * (`TableShape`): each column's type, NOT NULL and default, the primary key
+ * declared on a column or as a table constraint, and the unique constraints
+ * declared either way.
+ */
+function twinShape(tokens: readonly Token[]): TableShape {
+  const shape = {
+    columns: new Map<string, ColumnShape>(),
+    primaryKey: [] as string[],
+    unique: new Set<string>(),
+  };
+  for (const item of bodyItems(tokens)) {
+    if (item[0]?.kind === "word" && TABLE_CONSTRAINT_WORDS.has(item[0].upper)) {
+      readTableConstraintShape(item, shape);
+    } else {
+      readColumnShape(item, shape);
+    }
+  }
+  shape.primaryKey.sort();
+  return shape;
+}
+
+/**
+ * The items of a `CREATE TABLE` body — each column definition or table
+ * constraint — split at the commas directly inside it.
+ */
+function bodyItems(tokens: readonly Token[]): Token[][] {
+  const open = tokens.findIndex(token => isPunct(token, "("));
+  const items: Token[][] = [[]];
+  let depth = 1;
+  for (const token of tokens.slice(open + 1)) {
+    depth = depthAfter(token, depth);
+    if (depth === 0) break;
+    if (depth === 1 && isPunct(token, ",")) items.push([]);
+    else items[items.length - 1].push(token);
+  }
+  return items;
+}
+
+/** A table constraint's `PRIMARY KEY (...)` or `UNIQUE (...)`, if it is one. */
+function readTableConstraintShape(
+  item: readonly Token[],
+  shape: { primaryKey: string[]; unique: Set<string> }
+): void {
+  const at = isWord(item[0], "CONSTRAINT") ? 2 : 0;
+  if (isWord(item[at], "PRIMARY") && isWord(item[at + 1], "KEY")) {
+    shape.primaryKey.push(...listedColumns(item, at + 2));
+  } else if (isWord(item[at], "UNIQUE")) {
+    shape.unique.add(columnSetKey(listedColumns(item, at + 1)));
+  }
+}
+
+/**
+ * The columns a parenthesised list starting at `at` names: the first name of
+ * each of its entries, lower-cased, past any `COLLATE` or ordering after it.
+ */
+function listedColumns(item: readonly Token[], at: number): string[] {
+  const columns: string[] = [];
+  let depth = 0;
+  let entryStart = true;
+  for (const token of item.slice(at)) {
+    depth = depthAfter(token, depth);
+    if (depth === 0) break;
+    if (depth === 1 && isPunct(token, ",")) entryStart = true;
+    else if (entryStart && depth === 1 && !isPunct(token, "(")) {
+      columns.push(writtenName(token)?.toLowerCase() ?? "");
+      entryStart = false;
+    }
+  }
+  return columns;
+}
+
+/**
+ * Words that end a column's declared type: the first of its constraints.
+ */
+const COLUMN_CONSTRAINT_WORDS = new Set([
+  "CONSTRAINT",
+  "PRIMARY",
+  "NOT",
+  "NULL",
+  "UNIQUE",
+  "CHECK",
+  "DEFAULT",
+  "COLLATE",
+  "REFERENCES",
+  "GENERATED",
+  "AS",
+]);
+
+/**
+ * One column definition's shape: the type is every token before its first
+ * constraint, and its constraints are read where they stand directly in the
+ * definition, not inside a CHECK's or a default's parentheses.
+ */
+function readColumnShape(
+  item: readonly Token[],
+  shape: {
+    columns: Map<string, ColumnShape>;
+    primaryKey: string[];
+    unique: Set<string>;
+  }
+): void {
+  const name = writtenName(item[0])?.toLowerCase();
+  if (name === undefined) return;
+  let typeEnd = 1;
+  while (typeEnd < item.length && !isColumnConstraintWord(item[typeEnd])) {
+    typeEnd += 1;
+  }
+  const column: ColumnShape = {
+    type: fingerprint(item.slice(1, typeEnd)),
+    notNull: false,
+    default: undefined,
+  };
+  let depth = 0;
+  for (let k = typeEnd; k < item.length; k += 1) {
+    if (depth === 0) readColumnConstraint(item, k, name, column, shape);
+    depth = depthAfter(item[k], depth);
+  }
+  shape.columns.set(name, column);
+}
+
+/** Whether `token` opens a column constraint (`COLUMN_CONSTRAINT_WORDS`). */
+function isColumnConstraintWord(token: Token): boolean {
+  return token.kind === "word" && COLUMN_CONSTRAINT_WORDS.has(token.upper);
+}
+
+/** The column constraint at `k`, if one starts there, recorded on `column`. */
+function readColumnConstraint(
+  item: readonly Token[],
+  k: number,
+  name: string,
+  column: ColumnShape,
+  shape: { primaryKey: string[]; unique: Set<string> }
+): void {
+  const token = item[k];
+  if (token.kind !== "word") return;
+  if (token.upper === "NOT" && isWord(item[k + 1], "NULL")) {
+    column.notNull = true;
+  } else if (token.upper === "PRIMARY" && isWord(item[k + 1], "KEY")) {
+    shape.primaryKey.push(name);
+  } else if (token.upper === "UNIQUE") {
+    shape.unique.add(name);
+  } else if (token.upper === "DEFAULT") {
+    column.default = fingerprint(item.slice(k + 1, defaultEnd(item, k + 1)));
+  }
+}
+
+/**
+ * Where a column default starting at `at` ends: past a parenthesised
+ * expression, a signed literal, or the one token it otherwise is.
+ */
+function defaultEnd(item: readonly Token[], at: number): number {
+  if (isPunct(item[at], "(")) {
+    let depth = 0;
+    for (let k = at; k < item.length; k += 1) {
+      depth = depthAfter(item[k], depth);
+      if (depth === 0) return k + 1;
+    }
+    return item.length;
+  }
+  return isPunct(item[at], "-") || isPunct(item[at], "+") ? at + 2 : at + 1;
+}
+
+/** The key a unique constraint's columns are compared under. */
+function columnSetKey(columns: readonly string[]): string {
+  return [...columns].sort().join(",");
+}
+
+/**
+ * Tokens spelled for comparison: keywords upper-cased, names lower-cased and
+ * quoted, strings as their text in single quotes, one space between tokens,
+ * and parentheses around the whole stripped — so the same type or default
+ * written with other spacing, case or bracketing compares equal. Undefined
+ * for no tokens.
+ */
+function fingerprint(tokens: readonly Token[]): string | undefined {
+  let inner = tokens;
+  while (
+    inner.length >= 2 &&
+    isPunct(inner[0], "(") &&
+    matchingParen(inner) === inner.length - 1
+  ) {
+    inner = inner.slice(1, -1);
+  }
+  return inner.length === 0 ? undefined : inner.map(tokenText).join(" ");
+}
+
+/** Where the parenthesis opening `tokens` closes. */
+function matchingParen(tokens: readonly Token[]): number {
+  let depth = 0;
+  for (let k = 0; k < tokens.length; k += 1) {
+    depth = depthAfter(tokens[k], depth);
+    if (depth === 0) return k;
+  }
+  return -1;
+}
+
+/** One token as `fingerprint` spells it. */
+function tokenText(token: Token): string {
+  switch (token.kind) {
+    case "word":
+      return token.upper;
+    case "name":
+      return `"${token.name.toLowerCase()}"`;
+    case "string":
+      return `'${token.asName ?? ""}'`;
+    case "punct":
+      return token.char;
+    default:
+      return token.kind;
+  }
+}
+
+/**
+ * A live type's or default's text, read by the lexer the twin is read by and
+ * spelled by `fingerprint`, so the two compare as the same SQL; a text the
+ * lexer cannot read gives a spelling no twin matches.
+ */
+function fingerprintOf(text: string): string | undefined {
+  const tokens = soleStatementTokens(text, "sqlite");
+  return tokens === undefined ? "\u0000unreadable" : fingerprint(tokens);
+}
+
+/**
+ * Whether a rebuild's twin keeps what the live table has besides its rows,
+ * columns and named elements (`TableShape`): the same primary key, each
+ * unique constraint over columns it keeps, and for every column it declares
+ * the live type, the live NOT NULL and the live default. A twin may add
+ * constraints, never take them. A table with triggers is never kept, since no
+ * twin can declare them; nor is one whose shape was not read.
+ */
+function shapeKept(
+  live: LiveTableShape | undefined,
+  twin: TableShape
+): boolean {
+  if (live === undefined || live.triggers > 0) return false;
+  if (
+    live.primaryKey.length > 0 &&
+    live.primaryKey.join(",") !== twin.primaryKey.join(",")
+  ) {
+    return false;
+  }
+  const keptUnique = [...live.unique].every(
+    set =>
+      twin.unique.has(set) ||
+      set.split(",").some(column => !twin.columns.has(column))
+  );
+  return (
+    keptUnique &&
+    [...twin.columns].every(([name, column]) =>
+      columnKept(live.columns.get(name), column)
+    )
+  );
+}
+
+/** Whether a twin's column keeps the live column's type, NOT NULL and default. */
+function columnKept(live: ColumnShape | undefined, twin: ColumnShape): boolean {
+  if (live === undefined) return false;
+  return (
+    live.type === twin.type &&
+    (!live.notNull || twin.notNull) &&
+    (live.default === undefined || live.default === twin.default)
+  );
 }
 
 /** The parenthesis depth after `token`, given the depth before it. */
@@ -2843,13 +3549,14 @@ function claimOf(
   return foreign ? { kind: "foreign", owner: foreign } : { kind: "own" };
 }
 
-/** Records grouped by a lower-cased key. */
-function groupLowerCased(
-  records: Iterable<readonly [string, OwnerRecord]>
+/** Records grouped by a key, folded by `fold`. */
+function groupFolded(
+  records: Iterable<readonly [string, OwnerRecord]>,
+  fold: (key: string) => string
 ): Map<string, OwnerRecord[]> {
   const grouped = new Map<string, OwnerRecord[]>();
   for (const [key, record] of records) {
-    const folded = key.toLowerCase();
+    const folded = fold(key);
     grouped.set(folded, [...(grouped.get(folded) ?? []), record]);
   }
   return grouped;
@@ -2931,8 +3638,10 @@ export function assertNoForeignDrops(args: {
   liveElements?: LiveElements;
   /**
    * The tables that exist before the statements run, among those they create
+   * and the names PostgreSQL's `ALTER INDEX ... RENAME` renames in them
    * (`readLiveTables`). Absent, no creation is credited: every drop is judged
-   * by who holds the table.
+   * by who holds the table, and every such rename that no live index explains
+   * as a rename of a table.
    */
   liveTables?: ReadonlySet<string>;
   /**
@@ -2944,36 +3653,10 @@ export function assertNoForeignDrops(args: {
    */
   liveIndexTables?: ReadonlyMap<string, string>;
 }): void {
-  let read: Pick<
-    DropReader,
-    "dropped" | "renamed" | "columns" | "elements" | "rebuilt"
-  >;
-  try {
-    read = readStatements(
-      args.statements,
-      args.dialect,
-      args.liveColumns,
-      args.liveTables,
-      args.liveElements
-    );
-  } catch (error) {
-    // Re-raised with the file it came from, which the reader never sees and
-    // the operator needs to find the statement.
-    if (error instanceof UnparsableDropTarget) {
-      throw new UnparsableDropTarget(
-        error.statement,
-        error.reason,
-        args.source
-      );
-    }
-    throw error;
-  }
+  const read = readOrRefuse(args);
   const holders = new OwnershipView(args);
-  for (const table of read.dropped) {
-    refuseUnlessHeld(holders.table(table), { ...args, table, act: "drop" });
-  }
-  for (const table of read.renamed) {
-    refuseUnlessHeld(holders.table(table), { ...args, table, act: "rename" });
+  for (const { table, act } of tablesTaken(read, holders, args)) {
+    refuseUnlessHeld(holders.table(table), { ...args, table, act });
   }
   for (const { table, column } of read.columns) {
     refuseUnlessHeld(holders.column(table, column), {
@@ -2995,6 +3678,99 @@ export function assertNoForeignDrops(args: {
       act: "drop or rename",
     });
   }
+  for (const { table, recreated } of read.rebuilt) {
+    const claim = holders.table(table);
+    if (shapeKept(args.liveElements?.get(table)?.shape, recreated.shape)) {
+      continue;
+    }
+    refuseUnlessHeld(claim, {
+      ...args,
+      table,
+      act: "strip the keys, column definitions or triggers of",
+    });
+  }
+}
+
+/**
+ * The statement list's reading, or the refusal of a list that cannot be
+ * read, re-raised with the file it came from, which the reader never sees
+ * and the operator needs to find the statement.
+ */
+function readOrRefuse(args: {
+  statements: readonly string[];
+  dialect: SupportedDialect;
+  source: string;
+  liveColumns?: LiveColumns;
+  liveElements?: LiveElements;
+  liveTables?: ReadonlySet<string>;
+}): Reading {
+  try {
+    return readStatements(
+      args.statements,
+      args.dialect,
+      args.liveColumns,
+      args.liveTables,
+      args.liveElements
+    );
+  } catch (error) {
+    if (error instanceof UnparsableDropTarget) {
+      throw new UnparsableDropTarget(
+        error.statement,
+        error.reason,
+        args.source
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Every table the list takes or changes, with what it does to it: the
+ * tables it drops, renames or moves, empties or changes the partitions of,
+ * and the names PostgreSQL's `ALTER INDEX ... RENAME` may rename a table by
+ * (`relationRenamesOfTables`).
+ */
+function tablesTaken(
+  read: Reading,
+  holders: OwnershipView,
+  args: {
+    liveIndexTables?: ReadonlyMap<string, string>;
+    liveTables?: ReadonlySet<string>;
+  }
+): Array<{ table: string; act: string }> {
+  return [
+    ...read.dropped.map(table => ({ table, act: "drop" })),
+    ...read.renamed.map(table => ({ table, act: "rename" })),
+    ...relationRenamesOfTables(read.relationRenames, holders, args).map(
+      table => ({ table, act: "rename" })
+    ),
+    ...read.changed,
+  ];
+}
+
+/**
+ * The names an `ALTER INDEX ... RENAME` renames that may be a table's,
+ * judged as a table rename. A name the live database has an index under is
+ * that index, judged as one. Otherwise the name is a table's — an owner row
+ * or a core table claims it, or the live database has a table of that name
+ * — or names nothing that existed before the list ran, and so nothing to
+ * take. Where the live tables were not read, every such name is judged.
+ */
+function relationRenamesOfTables(
+  names: readonly string[],
+  holders: OwnershipView,
+  args: {
+    liveIndexTables?: ReadonlyMap<string, string>;
+    liveTables?: ReadonlySet<string>;
+  }
+): string[] {
+  return names.filter(
+    name =>
+      args.liveIndexTables?.has(name) !== true &&
+      (holders.table(name).kind !== "unclaimed" ||
+        args.liveTables === undefined ||
+        args.liveTables.has(name))
+  );
 }
 
 /**
@@ -3053,41 +3829,52 @@ class OwnershipView {
    */
   private readonly contributedElements: Set<string>;
   private readonly stream: MigrationStream;
+  /** The key a recorded name is compared under (`storedNameKey`). */
+  private readonly fold: (name: string) => string;
 
   constructor(args: {
     stream: MigrationStream;
     owners: ReadonlyMap<string, OwnerRecord>;
     elementOwners: readonly OwnerRecord[];
     ownedElements?: Readonly<Record<string, ContributedElements>>;
+    dialect: SupportedDialect;
   }) {
     this.stream = args.stream;
     // Looked up case-insensitively. PostgreSQL folds an unquoted
     // `DROP TABLE APP_NOTES` to `app_notes`, and an exact lookup of the name
     // as written found no owner and approved it. Folding every name can only
-    // match MORE owner rows than the database's own rules would.
-    this.tables = groupLowerCased(args.owners);
-    this.columns = groupLowerCased(
+    // match MORE owner rows than the database's own rules would. On
+    // PostgreSQL a recorded name is also cut to the length the database
+    // stores, as the names a statement writes are (`nameAt`).
+    const fold = (name: string) => storedNameKey(name, args.dialect);
+    this.fold = fold;
+    const partKey = (table: string, name: string) =>
+      columnKey(fold(table), fold(name));
+    this.tables = groupFolded(args.owners, fold);
+    this.columns = groupFolded(
       args.elementOwners
         .filter(record => record.elementKind === "column")
         .map(record => [
-          columnKey(record.tableName, record.elementName ?? ""),
+          partKey(record.tableName, record.elementName ?? ""),
           record,
-        ])
+        ]),
+      key => key
     );
     this.contributed = new Set(
       Object.entries(args.ownedElements ?? {}).flatMap(([table, elements]) =>
-        elements.columns.map(column => columnKey(table, column).toLowerCase())
+        elements.columns.map(column => partKey(table, column))
       )
     );
-    this.elements = groupLowerCased(
+    this.elements = groupFolded(
       args.elementOwners
         .filter(record => ELEMENT_ROW_KINDS.has(record.elementKind ?? "table"))
-        .map(record => [record.elementName ?? "", record])
+        .map(record => [record.elementName ?? "", record]),
+      fold
     );
     this.contributedElements = new Set(
       Object.entries(args.ownedElements ?? {}).flatMap(([table, elements]) =>
         [...elements.indexes, ...elements.foreignKeys, ...elements.checks].map(
-          name => columnKey(table, name).toLowerCase()
+          name => partKey(table, name)
         )
       )
     );
@@ -3163,7 +3950,7 @@ class OwnershipView {
     const rows = (this.elements.get(taken.name) ?? []).filter(
       record =>
         kinds.has(record.elementKind ?? "table") &&
-        (table === undefined || record.tableName.toLowerCase() === table)
+        (table === undefined || this.fold(record.tableName) === table)
     );
     return claimOf(rows, this.stream);
   }

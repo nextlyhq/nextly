@@ -43,7 +43,7 @@ import {
   withDeclaredModifiers,
 } from "./column-descriptor";
 import { enumChecks } from "./enum-check";
-import { assertExplicitIdentifier } from "./naming";
+import { assertExplicitIdentifier, setNullActionProblem } from "./naming";
 import type { ExtensionColumn, ExtensionIndex, ExtensionTable } from "./types";
 
 function invalid(path: string, message: string): never {
@@ -279,6 +279,71 @@ export function assertDistinctIndexNames(
         ? `Two indexes on "${table}" resolve to the name "${name}"; name one of them differently.`
         : `The index "${name}" on "${table}" has the name of one on "${earlier}". PostgreSQL and SQLite require an index's name to be unique across the schema; name one of them differently.`
   );
+}
+
+/**
+ * Refuse two check constraints sharing a name anywhere in the compiled
+ * schema: the extension tables' own, and the enum checks of columns
+ * contributed to entity and core tables.
+ *
+ * MySQL holds a check's name to be unique across the whole database, where
+ * PostgreSQL and SQLite hold it per table. The derived `ck_<table>_<name>`
+ * does not keep two tables apart on its own: a check `a_ok` on `t` and a
+ * check `ok` on `t_a` both resolve to `ck_t_a_ok`, as do an enum column `a_b`
+ * on `t` and an enum column `b` on `t_a`. Such a pair creates on two dialects
+ * and fails on MySQL, so it is refused on every dialect alike.
+ */
+export function assertDistinctCheckNamesAcrossTables(
+  specs: readonly TableSpec[],
+  contributed: ReadonlyMap<string, readonly ExtensionColumn[]>,
+  dialect: SupportedDialect
+): void {
+  assertDistinctNames(
+    [
+      ...specs.flatMap(spec =>
+        (spec.checks ?? []).map(check => ({
+          table: spec.name,
+          name: check.name,
+        }))
+      ),
+      ...[...contributed].flatMap(([table, columns]) =>
+        enumChecks(table, columns, dialect).map(check => ({
+          table,
+          name: check.name,
+        }))
+      ),
+    ],
+    table => `${table}.checks`,
+    ({ table, name }, earlier) =>
+      earlier === table
+        ? `Two check constraints on "${table}" resolve to the name "${name}"; rename the check or the enum.`
+        : `The check constraint "${name}" on "${table}" has the name of one on "${earlier}". MySQL requires a check constraint's name to be unique across the database; rename the check or the enum.`
+  );
+}
+
+/**
+ * Refuse a foreign key whose `set null` action targets a column that is not
+ * nullable, judged on the compiled specs: `defineTable` refuses the
+ * declaration, and this holds the same rule over a column an `afterDrizzle`
+ * hook made NOT NULL under a declared key. See `setNullActionProblem`.
+ */
+export function assertSetNullColumnsNullable(
+  specs: readonly TableSpec[]
+): void {
+  for (const spec of specs) {
+    for (const fk of spec.foreignKeys ?? []) {
+      const problem = setNullActionProblem(
+        fk,
+        fk.columns.map(name => ({
+          name,
+          nullable: spec.columns.some(
+            column => column.name === name && column.nullable
+          ),
+        }))
+      );
+      if (problem !== undefined) invalid(`${spec.name}.foreignKeys`, problem);
+    }
+  }
 }
 
 /**

@@ -857,11 +857,28 @@ describe("drop guard in the runner", () => {
         dialect: "sqlite",
         owners: appOwnsLegacyCache(),
         liveColumns: async () => new Map([["legacy_cache", new Set(columns)]]),
+        // No index, foreign key, check, key or trigger, and the columns
+        // declared as the twin declares them.
         liveElements: async () =>
           new Map([
             [
               "legacy_cache",
-              { index: new Set(), fk: new Set(), check: new Set() },
+              {
+                index: new Set(),
+                fk: new Set(),
+                check: new Set(),
+                shape: {
+                  columns: new Map(
+                    ["id", "v"].map(column => [
+                      column,
+                      { type: "TEXT", notNull: false, default: undefined },
+                    ])
+                  ),
+                  primaryKey: [],
+                  unique: new Set(),
+                  triggers: 0,
+                },
+              },
             ],
           ]),
       });

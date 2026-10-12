@@ -17,6 +17,8 @@ import { generateStatements } from "../../pipeline/sql-templates";
 import { assertNoForeignDrops } from "../drop-guard";
 import type { OwnerRecord } from "../owner-registry";
 
+import { liveShape } from "./live-shape";
+
 function record(over: Partial<OwnerRecord>): OwnerRecord {
   return {
     tableName: "unused",
@@ -116,6 +118,9 @@ function guard(
           index: new Set<string>(),
           fk: new Set<string>(),
           check: new Set([`${name}_${column}_check`]),
+          shape: liveShape(
+            Object.fromEntries(live.map(declared => [declared, "TEXT"]))
+          ),
         },
       ],
     ]),

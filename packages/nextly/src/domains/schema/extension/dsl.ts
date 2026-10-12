@@ -33,6 +33,7 @@ import {
   assertExplicitIdentifier,
   assertQuotableIdentifier,
   MAX_VARCHAR_LENGTH,
+  setNullActionProblem,
 } from "./naming";
 import {
   DECLARED_REFERENTIAL_ACTIONS,
@@ -551,7 +552,11 @@ export interface TableIndexInput {
    * fails when the table is registered — on PostgreSQL and SQLite too.
    */
   where?: string;
-  /** Expression index, per-dialect SQL, in place of column names. */
+  /**
+   * Expression index, in place of column names. The same SQL reaches every
+   * dialect, so it names columns bare: an identifier quoted with `"` or a
+   * backtick is refused.
+   */
   expression?: string;
 }
 
@@ -567,7 +572,9 @@ export interface TableForeignKeyInput {
   references: { table: string; columns: string[] };
   /**
    * `no action` when omitted. `set default` is not offered: MySQL's InnoDB
-   * refuses it, so a key declaring it could not be created there.
+   * refuses it, so a key declaring it could not be created there. `set null`
+   * requires every one of the key's columns to be nullable, as MySQL does
+   * when it creates the key.
    */
   onDelete?: DeclaredReferentialAction;
   /** As `onDelete`. */
@@ -581,7 +588,11 @@ export interface TableForeignKeyInput {
   name?: string;
 }
 
-/** A check constraint; `sql` is the boolean expression over SQL column names. */
+/**
+ * A check constraint; `sql` is the boolean expression over SQL column names.
+ * The same SQL reaches every dialect, so it names columns bare: an identifier
+ * quoted with `"` or a backtick is refused.
+ */
 export interface TableCheckInput {
   /**
    * The check's own name. The constraint is named `ck_<table>_<name>`,
@@ -1154,6 +1165,33 @@ function indexColumnNames(
   });
 }
 
+/** A single-quoted SQL string literal, with `''` as its escaped quote. */
+const SQL_STRING_LITERAL = /'(?:[^']|'')*'/g;
+
+/**
+ * Refuse a declared SQL fragment that quotes an identifier.
+ *
+ * The fragment reaches every dialect as written, and no identifier quote
+ * reads the same on all three: under MySQL's default sql_mode a double-quoted
+ * `"qty"` is a string literal, so `"qty" > 0` compares a constant and the
+ * check refuses every row or enforces nothing, and PostgreSQL refuses a
+ * backtick as a syntax error. A bare identifier names the column on all
+ * three. Quotes inside a string literal are text, so literals are set aside
+ * first; an unterminated one is left in, and its quote refused.
+ */
+function assertPortableSqlFragment(
+  sql: string,
+  path: string,
+  what: string
+): void {
+  if (/["`]/.test(sql.replace(SQL_STRING_LITERAL, ""))) {
+    invalid(
+      path,
+      `${what} quotes an identifier with " or \`, which the three dialects do not read alike: MySQL reads "name" as a string, and PostgreSQL refuses \`name\`. Write the column's SQL name bare, which every dialect reads as the column.`
+    );
+  }
+}
+
 /** Index inputs with their column KEYS resolved to SQL names. */
 function resolveIndexes(
   tableName: string,
@@ -1163,6 +1201,14 @@ function resolveIndexes(
   return inputs.map((index, position) => {
     const path = `${tableName}.indexes[${String(position)}]`;
     assertIndexKeyDeclarable(path, tableName, index);
+    for (const [field, sql] of [
+      ["expression", index.expression],
+      ["where", index.where],
+    ] as const) {
+      if (sql !== undefined) {
+        assertPortableSqlFragment(sql, path, `An index's ${field}`);
+      }
+    }
     return {
       columns: indexColumnNames(path, byName, index.columns),
       unique: index.unique === true,
@@ -1178,6 +1224,7 @@ function resolveIndexes(
 /** Resolve the author's foreign keys to specs, deriving names and defaults. */
 function resolveForeignKeys(
   tableName: string,
+  resolved: readonly ResolvedColumn[],
   byName: ReadonlyMap<string, string>,
   inputs: readonly TableForeignKeyInput[]
 ): DeclaredForeignKey[] {
@@ -1222,6 +1269,21 @@ function resolveForeignKeys(
       );
     }
     if (input.name !== undefined) assertExplicitIdentifier(input.name, path);
+    const actions = {
+      onDelete: declaredAction(path, "onDelete", input.onDelete),
+      onUpdate: declaredAction(path, "onUpdate", input.onUpdate),
+    };
+    // Judged by the columns' own nullability, reported by their authored keys.
+    const nullProblem = setNullActionProblem(
+      actions,
+      columns.map(sqlName => ({
+        name: byName.get(sqlName) ?? sqlName,
+        nullable: resolved.some(
+          column => column.name === sqlName && column.nullable
+        ),
+      }))
+    );
+    if (nullProblem !== undefined) invalid(path, nullProblem);
     return {
       // Derived at COMPILE time from the FINAL table name, because that is
       // the name live introspection also derives from — a name derived here
@@ -1231,8 +1293,7 @@ function resolveForeignKeys(
       columns,
       referencesTable: input.references.table,
       referencesColumns: [...input.references.columns],
-      onDelete: declaredAction(path, "onDelete", input.onDelete),
-      onUpdate: declaredAction(path, "onUpdate", input.onUpdate),
+      ...actions,
     };
   });
 }
@@ -1385,6 +1446,7 @@ function resolveChecks(
     if (input.sql.trim() === "") {
       invalid(path, "A check must carry a SQL expression.");
     }
+    assertPortableSqlFragment(input.sql, path, `The check "${input.name}"`);
     // The name reaches the DDL inside the derived `ck_<table>_<name>`, which
     // bounds its length with a hash but keeps its characters.
     assertQuotableIdentifier(input.name, path, "A check name");
@@ -1431,7 +1493,12 @@ export function defineTable<
     );
   }
   const indexes = resolveIndexes(name, byName, opts?.indexes ?? []);
-  const foreignKeys = resolveForeignKeys(name, byName, opts?.foreignKeys ?? []);
+  const foreignKeys = resolveForeignKeys(
+    name,
+    resolved,
+    byName,
+    opts?.foreignKeys ?? []
+  );
   const checks = resolveChecks(name, opts?.checks ?? []);
   const declaredRelations = resolveRelations(
     name,

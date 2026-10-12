@@ -380,3 +380,78 @@ describe("an index an afterDrizzle hook adds", () => {
     expect(await refusedAt([indexing("idx_app_customers_lookup")])).toEqual([]);
   });
 });
+
+describe("a hook making a set-null key's column NOT NULL", () => {
+  const owners = defineTable("app_owners", { id: col.id() });
+  const pets = defineTable(
+    "app_pets",
+    { id: col.id(), ownerId: col.varchar(36, { nullable: true }) },
+    {
+      foreignKeys: [
+        {
+          columns: ["ownerId"],
+          references: { table: "app_owners", columns: ["id"] },
+          onDelete: "set null",
+        },
+      ],
+    }
+  );
+  const buildPets = (
+    afterDrizzle: Parameters<typeof buildExtensionSchema>[0]["afterDrizzle"]
+  ) =>
+    buildExtensionSchema({
+      dialect: "mysql",
+      coreTableNames: [],
+      entities: [],
+      pluginPrefixes: new Map(),
+      plugins: [],
+      app: {
+        owner: { kind: "app" },
+        extend: [
+          ({ schema }) => {
+            schema.addTable(owners);
+            schema.addTable(pets);
+          },
+        ],
+      },
+      afterDrizzle,
+    });
+  const rebuildPets = async (nullable: boolean) => {
+    const declared = (await buildPets([])).tables.find(
+      t => t.name === "app_pets"
+    )!;
+    return () => ({
+      app_pets: toDrizzleTable(
+        {
+          ...declared,
+          columns: declared.columns.map(c =>
+            c.name === "owner_id" ? { ...c, nullable } : c
+          ),
+        },
+        "mysql"
+      ),
+    });
+  };
+
+  it("is refused, as the declaration would be, and a hook keeping it nullable is not", async () => {
+    const error = await buildPets([await rebuildPets(false)]).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(error).toBeInstanceOf(NextlyError);
+    const issues = (error as NextlyError).publicData as {
+      errors: { path: string; message: string }[];
+    };
+    expect(issues.errors.map(issue => issue.path)).toEqual([
+      "app_pets.foreignKeys",
+    ]);
+    expect(issues.errors[0]?.message).toContain(
+      'onDelete is "set null", and its column "owner_id" is not nullable'
+    );
+
+    const kept = await buildPets([await rebuildPets(true)]);
+    expect(
+      kept.specs.find(s => s.name === "app_pets")?.foreignKeys?.[0]?.onDelete
+    ).toBe("set null");
+  });
+});

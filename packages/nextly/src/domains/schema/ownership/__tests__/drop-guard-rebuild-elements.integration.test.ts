@@ -112,7 +112,8 @@ describe("a SQLite rebuild judged against a live database", () => {
     const live = await readLiveElements(handle.adapter.getDrizzle(), "sqlite", [
       rebuild(true),
     ]);
-    expect(live.get(TABLE)).toEqual({
+    // Beside them, the table's shape (`drop-guard-rebuild-shape`).
+    expect(live.get(TABLE)).toMatchObject({
       index: new Set(["gr_people_name_idx"]),
       fk: new Set(["gr_people_team_fk"]),
       check: new Set(["gr_people_name_check"]),
