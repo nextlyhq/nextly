@@ -46,7 +46,11 @@ import {
   SqliteUnsupportedOperationError,
 } from "../pipeline/sql-templates/index";
 
-import { foreignTableSides, NO_ELEMENTS } from "./app-stream";
+import {
+  foreignTableSides,
+  NO_ELEMENTS,
+  type ForeignTableSides,
+} from "./app-stream";
 import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
 import { buildInverseOperations } from "./down-generator";
 import { formatTimestamp, slugify } from "./format-file";
@@ -304,6 +308,86 @@ interface PluginMigrationPlan {
 }
 
 /**
+ * The foreign tables, both sides built on each one's CURRENT declaration and
+ * differing only in this plugin's elements — so a column the dependency added
+ * or removed on its own produces nothing here, and one this plugin withdrew
+ * is dropped. The same derivation the app stream uses; see
+ * `foreignTableSides`.
+ */
+function pluginForeignTableSides(
+  args: BuildPluginMigrationArgs,
+  previous: PluginMigration | undefined,
+  dialect: SupportedDialect
+): ForeignTableSides {
+  return foreignTableSides({
+    previousCopies: new Map(
+      (previous?.contributed?.[dialect]?.tables ?? []).map(table => [
+        table.name,
+        table,
+      ])
+    ),
+    previousContributions: recordedContributions(args.existing, dialect),
+    contributed: new Map(
+      (args.contributedByDialect?.[dialect] ?? []).map(spec => [
+        spec.name,
+        {
+          spec,
+          elements: args.contributions?.[dialect]?.[spec.name] ?? NO_ELEMENTS,
+        },
+      ])
+    ),
+    baselines: new Map(
+      (args.contributedBaselineByDialect?.[dialect] ?? []).map(table => [
+        table.name,
+        table,
+      ])
+    ),
+  });
+}
+
+/** One dialect's change: its four snapshot sides and what renders between. */
+interface DialectPlan {
+  rendered: ReturnType<typeof renderDialect>;
+  previousTables: TableSpec[];
+  desiredTables: TableSpec[];
+  previousContributed: TableSpec[];
+  desiredContributed: TableSpec[];
+  contributions: ForeignTableSides["contributions"];
+}
+
+/**
+ * Diff the declared schema against the previous module's on one dialect, own
+ * tables and foreign ones together, and render the change.
+ */
+function planDialect(
+  args: BuildPluginMigrationArgs,
+  previous: PluginMigration | undefined,
+  dialect: SupportedDialect
+): DialectPlan {
+  const previousTables = previous?.snapshot[dialect]?.tables ?? [];
+  const desiredTables = args.tablesByDialect[dialect] ?? [];
+  const sides = pluginForeignTableSides(args, previous, dialect);
+  const previousContributed = [...sides.before.values()];
+  const desiredContributed = [...sides.after.values()];
+  // ONE diff over the union. A foreign table appears on both sides, so only
+  // the elements this plugin added to it come out as operations; its own
+  // columns are identical either side and produce nothing.
+  const rendered = renderDialect(
+    [...previousTables, ...previousContributed],
+    [...desiredTables, ...desiredContributed],
+    dialect
+  );
+  return {
+    rendered,
+    previousTables,
+    desiredTables,
+    previousContributed,
+    desiredContributed,
+    contributions: sides.contributions,
+  };
+}
+
+/**
  * Diff the declared schema against the previous module's on every dialect
  * and render the change: the one derivation both a generated module and one
  * whose SQL the author writes (`buildBlankPluginMigration`) are built from,
@@ -332,58 +416,17 @@ function planPluginMigration(
   const contributions: ContributionsByDialect = {};
 
   for (const dialect of ALL_DIALECTS) {
-    const previousTables = previous?.snapshot[dialect]?.tables ?? [];
-    const desiredTables = args.tablesByDialect[dialect] ?? [];
-    // The foreign tables, both sides built on each one's CURRENT declaration
-    // and differing only in this plugin's elements — so a column the
-    // dependency added or removed on its own produces nothing here, and one
-    // this plugin withdrew is dropped. The same derivation the app stream
-    // uses; see `foreignTableSides`.
-    const sides = foreignTableSides({
-      previousCopies: new Map(
-        (previous?.contributed?.[dialect]?.tables ?? []).map(table => [
-          table.name,
-          table,
-        ])
-      ),
-      previousContributions: recordedContributions(args.existing, dialect),
-      contributed: new Map(
-        (args.contributedByDialect?.[dialect] ?? []).map(spec => [
-          spec.name,
-          {
-            spec,
-            elements: args.contributions?.[dialect]?.[spec.name] ?? NO_ELEMENTS,
-          },
-        ])
-      ),
-      baselines: new Map(
-        (args.contributedBaselineByDialect?.[dialect] ?? []).map(table => [
-          table.name,
-          table,
-        ])
-      ),
-    });
-    const previousContributed = [...sides.before.values()];
-    const desiredContributed = [...sides.after.values()];
-    if (Object.keys(sides.contributions).length > 0) {
-      contributions[dialect] = sides.contributions;
+    const plan = planDialect(args, previous, dialect);
+    const { operations } = plan.rendered;
+    if (Object.keys(plan.contributions).length > 0) {
+      contributions[dialect] = plan.contributions;
     }
-
-    // ONE diff over the union. A foreign table appears on both sides, so only
-    // the elements this plugin added to it come out as operations; its own
-    // columns are identical either side and produce nothing.
-    const rendered = renderDialect(
-      [...previousTables, ...previousContributed],
-      [...desiredTables, ...desiredContributed],
-      dialect
-    );
-    const { operations } = rendered;
-    dialects[dialect] = rendered.statements;
-    if (rendered.handWritten) handWritten.push(dialect);
-    snapshot[dialect] = { tables: desiredTables };
-    before[dialect] = { tables: previousTables };
-    contributed[dialect] = { tables: desiredContributed };
-    contributedBefore[dialect] = { tables: previousContributed };
+    dialects[dialect] = plan.rendered.statements;
+    if (plan.rendered.handWritten) handWritten.push(dialect);
+    snapshot[dialect] = { tables: plan.desiredTables };
+    before[dialect] = { tables: plan.previousTables };
+    contributed[dialect] = { tables: plan.desiredContributed };
+    contributedBefore[dialect] = { tables: plan.previousContributed };
     operationCounts[dialect] = operations.length;
     totalOperations += operations.length;
     for (const dropped of droppedTablesAndColumns(operations)) {

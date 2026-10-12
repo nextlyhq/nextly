@@ -191,20 +191,13 @@ function* serverTokens(
   for (const segment of scanSql(text, dialect)) {
     switch (segment.kind) {
       case "code":
-        for (const token of text
-          .slice(segment.start, segment.end)
-          .match(/@{0,2}[A-Za-z_][\w$.]*|\S/g) ?? []) {
-          yield token.toUpperCase();
-        }
+        yield* wordTokens(text.slice(segment.start, segment.end));
         break;
       case "line-comment":
         break;
       case "block-comment":
         if (segment.executable && readExecutable) {
-          const body = text
-            .slice(segment.start, segment.end)
-            .replace(/^\/\*M?!\d*/i, "")
-            .replace(/\*\/$/, "");
+          const body = executableBody(text.slice(segment.start, segment.end));
           yield* serverTokens(body, dialect, false);
         }
         break;
@@ -215,6 +208,21 @@ function* serverTokens(
         yield { name: undefined };
     }
   }
+}
+
+/**
+ * The tokens of a stretch of code: each word, upper-cased with any `@`/`@@`
+ * prefix and `.` qualifiers it carries, and each other non-space character.
+ */
+function wordTokens(code: string): string[] {
+  return (code.match(/@{0,2}[A-Za-z_][\w$.]*|\S/g) ?? []).map(token =>
+    token.toUpperCase()
+  );
+}
+
+/** A MySQL executable comment's body: its `/*!NNNNN` opener and `*\/` dropped. */
+function executableBody(comment: string): string {
+  return comment.replace(/^\/\*M?!\d*/i, "").replace(/\*\/$/, "");
 }
 
 /**

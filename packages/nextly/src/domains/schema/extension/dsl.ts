@@ -781,24 +781,51 @@ function assertDefaultFits(
   if (value === undefined) return;
   const path = `${tableName}.${key}`;
   const taken = DEFAULT_TAKEN_BY_KIND[builder.kind];
+  if (!defaultMatchesTaken(value, taken)) {
+    invalid(path, defaultMismatchMessage(key, builder.kind, taken, value));
+  }
+  if (typeof value === "string") assertStringDefaultFits(path, key, builder);
+  if (typeof value === "number") assertNumericDefaultFits(path, key, builder);
+}
+
+/** A declared default, as a column builder carries one. */
+type DeclaredDefault = NonNullable<ColumnBuilder["default"]>;
+
+/** What kind of default a column kind takes, as `DEFAULT_TAKEN_BY_KIND` says. */
+type TakenDefault = (typeof DEFAULT_TAKEN_BY_KIND)[ExtensionColumnKind];
+
+/**
+ * Whether a default is of the type its column kind takes: the
+ * current-timestamp token for a timestamp, nothing at all for a kind that
+ * takes no default, and otherwise a value of the named primitive type.
+ */
+function defaultMatchesTaken(
+  value: DeclaredDefault,
+  taken: TakenDefault
+): boolean {
+  if (taken === "now") {
+    return typeof value === "object" && value.token === NOW.token;
+  }
+  return taken !== "none" && typeof value === taken;
+}
+
+/** The refusal for a default of the wrong type, naming what was declared. */
+function defaultMismatchMessage(
+  key: string,
+  kind: ExtensionColumnKind,
+  taken: TakenDefault,
+  value: DeclaredDefault
+): string {
   const received =
     typeof value === "object"
       ? JSON.stringify(value)
       : `the ${typeof value} ${JSON.stringify(value)}`;
-  const fits =
-    taken === "now"
-      ? typeof value === "object" && value.token === NOW.token
-      : taken !== "none" && typeof value === taken;
-  if (!fits) {
-    invalid(
-      path,
-      taken === "none"
-        ? `A ${builder.kind} column takes no default; "${key}" declares ${received}.`
-        : `The default of a ${builder.kind} column must be ${taken === "now" ? "the current-timestamp token" : `a ${taken}`}; "${key}" declares ${received}.`
-    );
+  if (taken === "none") {
+    return `A ${kind} column takes no default; "${key}" declares ${received}.`;
   }
-  if (typeof value === "string") assertStringDefaultFits(path, key, builder);
-  if (typeof value === "number") assertNumericDefaultFits(path, key, builder);
+  const expected =
+    taken === "now" ? "the current-timestamp token" : `a ${taken}`;
+  return `The default of a ${kind} column must be ${expected}; "${key}" declares ${received}.`;
 }
 
 /**
@@ -889,29 +916,56 @@ function assertNumericDefaultFits(
       `The default of "${key}" must be a finite number; received ${String(value)}.`
     );
   }
-  const range = INTEGER_DEFAULT_RANGE[builder.kind];
+  assertIntegerDefaultInRange(path, key, builder.kind, value);
+  if (builder.kind === "real") assertRealDefaultInRange(path, key, value);
+  if (builder.kind === "decimal") {
+    assertDecimalDefaultFits(path, key, builder, value);
+  }
+}
+
+/** Refuse an integer kind's default that is fractional or out of its range. */
+function assertIntegerDefaultInRange(
+  path: string,
+  key: string,
+  kind: ExtensionColumnKind,
+  value: number
+): void {
+  const range = INTEGER_DEFAULT_RANGE[kind];
   if (
     range !== undefined &&
     (!Number.isInteger(value) || value < range[0] || value > range[1])
   ) {
     invalid(
       path,
-      `The default of the ${builder.kind} column "${key}" must be an integer between ${String(range[0])} and ${String(range[1])}; received ${String(value)}.`
+      `The default of the ${kind} column "${key}" must be an integer between ${String(range[0])} and ${String(range[1])}; received ${String(value)}.`
     );
   }
+}
+
+/** Refuse a `real` default outside the range a 4-byte float holds. */
+function assertRealDefaultInRange(
+  path: string,
+  key: string,
+  value: number
+): void {
   // Rounded to a 4-byte float as the column stores it: one that overflows
   // to infinity, or a nonzero one that underflows to zero, is out of range.
   const asReal = Math.fround(value);
-  if (
-    builder.kind === "real" &&
-    (!Number.isFinite(asReal) || (asReal === 0 && value !== 0))
-  ) {
+  if (!Number.isFinite(asReal) || (asReal === 0 && value !== 0)) {
     invalid(
       path,
       `The default of the real column "${key}" is outside the range a 4-byte float holds; received ${String(value)}.`
     );
   }
-  if (builder.kind !== "decimal") return;
+}
+
+/** Refuse a decimal default finer than its scale or wider than its precision. */
+function assertDecimalDefaultFits(
+  path: string,
+  key: string,
+  builder: ColumnBuilder,
+  value: number
+): void {
   const scale = builder.scale ?? DEFAULT_DECIMAL_SCALE;
   if (fractionalDigits(value) > scale) {
     invalid(
@@ -943,38 +997,52 @@ function assertWriteBehaviourFits(
   builder: ColumnBuilder
 ): void {
   const path = `${tableName}.${key}`;
+  if (builder.generated !== undefined) assertGeneratedFits(path, key, builder);
+  if (builder.onUpdate !== undefined) assertOnUpdateFits(path, key, builder);
+}
+
+/** Refuse a `generated` value other than a UUIDv7 in a column that holds one. */
+function assertGeneratedFits(
+  path: string,
+  key: string,
+  builder: ColumnBuilder
+): void {
   const generated: unknown = builder.generated;
-  if (generated !== undefined) {
-    if (generated !== "uuidv7") {
-      invalid(
-        path,
-        `"${key}" declares generated: ${JSON.stringify(generated)}; the only generated value is "uuidv7".`
-      );
-    }
-    const holdsUuid =
-      UUID_TEXT_KINDS.has(builder.kind) ||
-      (builder.kind === "varchar" && (builder.length ?? 0) >= 36);
-    if (!holdsUuid) {
-      invalid(
-        path,
-        `"${key}" is generated as a UUIDv7, which needs a text column of at least 36 characters.`
-      );
-    }
+  if (generated !== "uuidv7") {
+    invalid(
+      path,
+      `"${key}" declares generated: ${JSON.stringify(generated)}; the only generated value is "uuidv7".`
+    );
   }
+  const holdsUuid =
+    UUID_TEXT_KINDS.has(builder.kind) ||
+    (builder.kind === "varchar" && (builder.length ?? 0) >= 36);
+  if (!holdsUuid) {
+    invalid(
+      path,
+      `"${key}" is generated as a UUIDv7, which needs a text column of at least 36 characters.`
+    );
+  }
+}
+
+/** Refuse an `onUpdate` value other than now, or one on a non-timestamp. */
+function assertOnUpdateFits(
+  path: string,
+  key: string,
+  builder: ColumnBuilder
+): void {
   const onUpdate: unknown = builder.onUpdate;
-  if (onUpdate !== undefined) {
-    if (onUpdate !== "now") {
-      invalid(
-        path,
-        `"${key}" declares onUpdate: ${JSON.stringify(onUpdate)}; the only onUpdate value is "now".`
-      );
-    }
-    if (builder.kind !== "timestamp") {
-      invalid(
-        path,
-        `"${key}" refreshes to now on update, so it must be a timestamp.`
-      );
-    }
+  if (onUpdate !== "now") {
+    invalid(
+      path,
+      `"${key}" declares onUpdate: ${JSON.stringify(onUpdate)}; the only onUpdate value is "now".`
+    );
+  }
+  if (builder.kind !== "timestamp") {
+    invalid(
+      path,
+      `"${key}" refreshes to now on update, so it must be a timestamp.`
+    );
   }
 }
 

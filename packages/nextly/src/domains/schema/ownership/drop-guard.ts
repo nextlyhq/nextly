@@ -1775,6 +1775,11 @@ function isPunct(token: Token | undefined, char: string): boolean {
   return token?.kind === "punct" && token.char === char;
 }
 
+/** Whether a token is the word `upper`, compared upper-cased. */
+function isWord(token: Token | undefined, upper: string): boolean {
+  return token?.kind === "word" && token.upper === upper;
+}
+
 /**
  * A `CREATE [TEMPORARY] TABLE [IF NOT EXISTS]` statement's tokens and where
  * its table's name starts, or undefined when the statement creates no table
@@ -2652,20 +2657,33 @@ function rebuildBlockAt(
     .slice(i, i + 4)
     .map(statement => soleStatementTokens(statement, dialect));
   if (!create || !copy || !drop || !rename) return undefined;
-  const twin = createdTwin(create);
-  if (
-    twin === undefined ||
-    !copiesIntoTwin(copy, twin) ||
-    !dropsTable(drop, twin.table) ||
-    !renamesTwinBack(rename, twin)
-  ) {
-    return undefined;
-  }
+  const twin = twinRebuiltBy(create, copy, drop, rename);
+  if (twin === undefined) return undefined;
   return {
     table: twin.table,
     columns: twin.columns,
     constraints: namedConstraints(create),
   };
+}
+
+/**
+ * The twin a block's four statements rebuild through, if they have rebuild
+ * shape: the twin's creation, the copy into it, the drop of the table and
+ * the rename back.
+ */
+function twinRebuiltBy(
+  create: readonly Token[],
+  copy: readonly Token[],
+  drop: readonly Token[],
+  rename: readonly Token[]
+): RebuildTwin | undefined {
+  const twin = createdTwin(create);
+  if (twin === undefined) return undefined;
+  return copiesIntoTwin(copy, twin) &&
+    dropsTable(drop, twin.table) &&
+    renamesTwinBack(rename, twin)
+    ? twin
+    : undefined;
 }
 
 /**
@@ -2682,17 +2700,19 @@ function namedConstraints(
   if (open === -1) return named;
   let depth = 0;
   for (let k = open; k < tokens.length; k += 1) {
-    if (isPunct(tokens[k], "(")) depth += 1;
-    else if (isPunct(tokens[k], ")")) depth -= 1;
-    const token = tokens[k];
-    if (depth !== 1 || token.kind !== "word" || token.upper !== "CONSTRAINT") {
-      continue;
-    }
+    depth = depthAfter(tokens[k], depth);
+    if (depth !== 1 || !isWord(tokens[k], "CONSTRAINT")) continue;
     const name = writtenName(tokens[k + 1])?.toLowerCase();
     const kind = constraintKind(tokens[k + 2]);
     if (name !== undefined && kind !== undefined) named.set(name, kind);
   }
   return named;
+}
+
+/** The parenthesis depth after `token`, given the depth before it. */
+function depthAfter(token: Token, depth: number): number {
+  if (isPunct(token, "(")) return depth + 1;
+  return isPunct(token, ")") ? depth - 1 : depth;
 }
 
 /** The element row kind a constraint clause opening with `token` makes. */

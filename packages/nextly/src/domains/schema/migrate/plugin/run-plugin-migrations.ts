@@ -330,68 +330,116 @@ export async function previewPluginMigrations(
   for (const set of sets) {
     assertUniqueModuleNames(set.pluginName, set.migrations);
   }
-  const deps = { appliedShas: appliedPluginShas(args.rows) };
-  const history = {
-    findFileApplies: (filename: string) =>
-      Promise.resolve(args.rows.filter(row => row.filename === filename)),
+  const context: PreviewContext = {
+    dialect: args.dialect,
+    appliedShas: appliedPluginShas(args.rows),
+    history: {
+      findFileApplies: (filename: string) =>
+        Promise.resolve(args.rows.filter(row => row.filename === filename)),
+    },
   };
   const preview: PluginModulePreview[] = [];
   let remaining = moduleBudget(args.limit);
   for (const set of sets) {
     if (remaining <= 0) break;
-    for (const migration of orderedMigrations(set.migrations)) {
-      const pending = isPending(set, migration, deps);
-      if (remaining <= 0 && pending) break;
-      const filename = qualifiedFilename(set.pluginName, migration.name);
-      const transaction = migration.transaction !== false;
-      const refusals: string[] = [];
-      const refused = async (check: () => unknown): Promise<void> => {
-        try {
-          await check();
-        } catch (error) {
-          // A refusal is reported as the run would print it; anything else
-          // is a fault of the preview itself, and is raised.
-          if (!NextlyError.is(error)) throw error;
-          refusals.push(describeError(error));
-        }
-      };
-      await refused(() => assertModuleIntact(set.pluginName, migration));
-      if (!pending) {
-        await refused(() =>
-          assertAppliedUnchanged(
-            set.pluginName,
-            migration,
-            deps.appliedShas.get(filename) ?? null
-          )
-        );
-        if (refusals.length > 0) {
-          preview.push({ filename, transaction, recorded: true, refusals });
-        }
-        continue;
-      }
-      for (const refusal of statementRefusals(
-        pluginModuleStatements(migration, args.dialect, "up"),
-        args.dialect,
-        { transaction, unit: "module" }
-      )) {
-        refusals.push(refusal.message);
-      }
-      // Worded as the refusal to run it again: a pending module the run
-      // reaches is run where the database stands at its start, and whichever
-      // side the live schema shows, an unfinished attempt is refused.
-      await refused(() =>
-        assertNotPartiallyApplied(
-          { filename, transaction },
-          args.dialect,
-          history,
-          "rerun"
-        )
-      );
-      preview.push({ filename, transaction, recorded: false, refusals });
-      remaining -= 1;
-    }
+    remaining = await previewSet(set, context, remaining, preview);
   }
   return preview;
+}
+
+/** What previewing a module reads: the dialect and the ledger's rows. */
+interface PreviewContext {
+  dialect: SupportedDialect;
+  /** The applied checksums `appliedPluginShas` reads from the rows. */
+  appliedShas: ReadonlyMap<string, string | null>;
+  /** The rows of one filename, as `assertNotPartiallyApplied` asks for them. */
+  history: Pick<ReconcileRepo, "findFileApplies">;
+}
+
+/**
+ * Preview one plugin's modules into `preview`, in run order, and return the
+ * budget left: a pending module spends one, and once none is left the walk
+ * stops at the next pending module.
+ */
+async function previewSet(
+  set: PluginMigrationSet,
+  context: PreviewContext,
+  budget: number,
+  preview: PluginModulePreview[]
+): Promise<number> {
+  let remaining = budget;
+  for (const migration of orderedMigrations(set.migrations)) {
+    const pending = isPending(set, migration, context);
+    if (remaining <= 0 && pending) break;
+    const entry = await previewModule(set, migration, pending, context);
+    if (entry !== undefined) preview.push(entry);
+    if (pending) remaining -= 1;
+  }
+  return remaining;
+}
+
+/**
+ * One module as a run would meet it, or undefined for a recorded module the
+ * run would go past without refusing.
+ */
+async function previewModule(
+  set: PluginMigrationSet,
+  migration: PluginMigration,
+  pending: boolean,
+  context: PreviewContext
+): Promise<PluginModulePreview | undefined> {
+  const filename = qualifiedFilename(set.pluginName, migration.name);
+  const transaction = migration.transaction !== false;
+  const refusals: string[] = [];
+  await collectRefusal(refusals, () =>
+    assertModuleIntact(set.pluginName, migration)
+  );
+  if (!pending) {
+    await collectRefusal(refusals, () =>
+      assertAppliedUnchanged(
+        set.pluginName,
+        migration,
+        context.appliedShas.get(filename) ?? null
+      )
+    );
+    return refusals.length > 0
+      ? { filename, transaction, recorded: true, refusals }
+      : undefined;
+  }
+  for (const refusal of statementRefusals(
+    pluginModuleStatements(migration, context.dialect, "up"),
+    context.dialect,
+    { transaction, unit: "module" }
+  )) {
+    refusals.push(refusal.message);
+  }
+  // Worded as the refusal to run it again: a pending module the run
+  // reaches is run where the database stands at its start, and whichever
+  // side the live schema shows, an unfinished attempt is refused.
+  await collectRefusal(refusals, () =>
+    assertNotPartiallyApplied(
+      { filename, transaction },
+      context.dialect,
+      context.history,
+      "rerun"
+    )
+  );
+  return { filename, transaction, recorded: false, refusals };
+}
+
+/** Run one check, adding what it refuses to `refusals`. */
+async function collectRefusal(
+  refusals: string[],
+  check: () => unknown
+): Promise<void> {
+  try {
+    await check();
+  } catch (error) {
+    // A refusal is reported as the run would print it; anything else
+    // is a fault of the preview itself, and is raised.
+    if (!NextlyError.is(error)) throw error;
+    refusals.push(describeError(error));
+  }
 }
 
 /** Apply one plugin's pending modules, counting each outcome into `result`. */
@@ -934,22 +982,13 @@ async function applyModule(
 
   await assertModuleRunnable(set, migration, earlier, deps);
 
-  const own = await moduleSides(set, migration, earlier, deps);
-  // A module whose result the database already holds would be recorded
-  // without running, which proves only what a snapshot shows: it is judged
-  // as a fast-forward judges a module the database stands past, whether it
-  // is the plugin's last module or the reconcile alone decides it.
-  const live =
-    against === "live" ||
-    (!snapshotsEquivalent(own.live, own.before) &&
-      snapshotsEquivalent(own.live, own.target) &&
-      (await pastModuleRuns(set, migration, deps)));
-  const sides = live
-    ? { before: own.live, target: own.live, live: own.live }
-    : own;
-  if (!live && snapshotsEquivalent(own.live, own.before)) {
-    assertSchemaChangeWritten(set, migration, own, deps.dialect);
-  }
+  const { live, sides } = await reconcileSides(
+    set,
+    migration,
+    earlier,
+    deps,
+    against
+  );
 
   const reconcile = reconcileFile({
     file: {
@@ -987,6 +1026,57 @@ async function applyModule(
     adopted: state === "already_applied",
   });
   return state === "already_applied" ? "adopted" : "applied";
+}
+
+/**
+ * The sides the reconcile judges a module by, and whether it runs against
+ * the live database. Reads the live schema but writes nothing, so a module
+ * missing its SQL is refused here with the ledger untouched.
+ */
+async function reconcileSides(
+  set: PluginMigrationSet,
+  migration: PluginMigration,
+  /** The plugin's modules ordered before this one, for its contributions. */
+  earlier: readonly PluginMigration[],
+  deps: RunPluginMigrationsDeps,
+  against: "live" | undefined
+): Promise<{
+  live: boolean;
+  sides: Awaited<ReturnType<typeof moduleSides>>;
+}> {
+  const own = await moduleSides(set, migration, earlier, deps);
+  const live = await runsAgainstLive(set, migration, own, deps, against);
+  const sides = live
+    ? { before: own.live, target: own.live, live: own.live }
+    : own;
+  if (!live && snapshotsEquivalent(own.live, own.before)) {
+    assertSchemaChangeWritten(set, migration, own, deps.dialect);
+  }
+  return { live, sides };
+}
+
+/**
+ * Whether a module runs against the database as it stands: asked for, or a
+ * data module whose own result the database already holds.
+ *
+ * A module whose result the database already holds would be recorded
+ * without running, which proves only what a snapshot shows: it is judged
+ * as a fast-forward judges a module the database stands past, whether it
+ * is the plugin's last module or the reconcile alone decides it.
+ */
+async function runsAgainstLive(
+  set: PluginMigrationSet,
+  migration: PluginMigration,
+  own: Awaited<ReturnType<typeof moduleSides>>,
+  deps: RunPluginMigrationsDeps,
+  against: "live" | undefined
+): Promise<boolean> {
+  return (
+    against === "live" ||
+    (!snapshotsEquivalent(own.live, own.before) &&
+      snapshotsEquivalent(own.live, own.target) &&
+      (await pastModuleRuns(set, migration, deps)))
+  );
 }
 
 /**

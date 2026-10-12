@@ -248,10 +248,6 @@
     "count": 1,
     "digests": ["b6f524f34e423244"]
   },
-  "packages/nextly/src/cli/commands/migrate-status.ts": {
-    "count": 1,
-    "digests": ["6635bac063cd6e8f"]
-  },
   "packages/nextly/src/cli/commands/migrate.test.ts": {
     "count": 1,
     "digests": ["0c437c660cd38450"]
@@ -585,12 +581,11 @@
     "digests": ["e8838f11906c806e"]
   },
   "packages/nextly/src/domains/schema/migrate-create/generate.ts": {
-    "count": 6,
+    "count": 5,
     "digests": [
       "17f0655986bf0777",
       "22bdeef8b108fa89",
       "40a73a66250cbdba",
-      "8d2acdfed739f0c7",
       "90205d6af96dc8ee",
       "9d1d040c27e42ac0"
     ]
