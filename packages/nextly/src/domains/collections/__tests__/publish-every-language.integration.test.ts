@@ -32,6 +32,7 @@ afterEach(async () => {
 const SLUG = "pages";
 const GUARDED_SLUG = "guardedpages";
 const BLOCKS_SLUG = "blockpages";
+const CAPPED_SLUG = "cappedpages";
 
 const OPEN_ACCESS = {
   read: () => true,
@@ -49,6 +50,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         fields: [
           text({ name: "heading", localized: true }),
+          text({ name: "tagline", localized: true }),
           text({ name: "variant", localized: false }),
         ],
       }),
@@ -91,6 +93,17 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           }),
         ],
       }),
+      defineCollection({
+        slug: CAPPED_SLUG,
+        localized: true,
+        status: true,
+        versions: { drafts: true, maxPerDoc: 1 },
+        access: OPEN_ACCESS,
+        fields: [
+          text({ name: "title", localized: true }),
+          text({ name: "note", localized: false }),
+        ],
+      }),
     ],
     localization: { locales: ["en", "de"], defaultLocale: "en" },
   });
@@ -131,8 +144,8 @@ async function holdEdit(
 }
 
 /**
- * Date a language's pending change, so which save is later does not depend on
- * two writes landing in different milliseconds, or seconds on MySQL.
+ * Put a language's pending change at one stored instant, the way two saves
+ * landing in the same second are stored.
  */
 async function dateChange(
   t: TestNextly,
@@ -184,7 +197,85 @@ async function pendingLocales(t: TestNextly, id: string): Promise<string[]> {
     .sort();
 }
 
-type Block = { id: string; heading?: unknown; variant?: unknown };
+/** One durable event recorded for a document. */
+interface RecordedEvent {
+  type: string;
+  locale: unknown;
+  data: Record<string, unknown> | null;
+  previous: Record<string, unknown> | null;
+}
+
+/** The durable events recorded for one document. */
+async function eventsFor(t: TestNextly, id: string): Promise<RecordedEvent[]> {
+  const rows = await t.adapter.select<{ type?: unknown; payload?: unknown }>(
+    "nextly_events",
+    {}
+  );
+  const events: RecordedEvent[] = [];
+  for (const row of rows) {
+    // The locale and the documents live on the envelope, not on a column.
+    const envelope = (
+      typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload
+    ) as {
+      resource?: { id?: unknown; locale?: unknown };
+      data?: Record<string, unknown> | null;
+      previous?: Record<string, unknown> | null;
+    } | null;
+    if (!envelope?.resource || envelope.resource.id !== id) continue;
+    events.push({
+      type: String(row.type),
+      locale: envelope.resource.locale,
+      data: envelope.data ?? null,
+      previous: envelope.previous ?? null,
+    });
+  }
+  return events;
+}
+
+/** One durable version of a document. */
+interface RecordedVersion {
+  versionNo: number;
+  locale: unknown;
+  status: unknown;
+  snapshot: Record<string, unknown>;
+}
+
+/** One document's durable versions, oldest first. */
+async function versionsFor(
+  t: TestNextly,
+  id: string
+): Promise<RecordedVersion[]> {
+  const rows = await t.adapter.select<{
+    entryId?: unknown;
+    versionNo?: unknown;
+    locale?: unknown;
+    status?: unknown;
+    snapshot?: unknown;
+  }>("nextly_versions", {});
+  return rows
+    .filter(
+      row =>
+        String(row.entryId) === id &&
+        row.versionNo !== null &&
+        row.versionNo !== undefined
+    )
+    .map(row => ({
+      versionNo: Number(row.versionNo),
+      locale: row.locale,
+      status: row.status,
+      snapshot: (typeof row.snapshot === "string"
+        ? JSON.parse(row.snapshot)
+        : row.snapshot) as Record<string, unknown>,
+    }))
+    .sort((a, b) => a.versionNo - b.versionNo);
+}
+
+type Block = {
+  id: string;
+  heading?: unknown;
+  tagline?: unknown;
+  variant?: unknown;
+};
 
 /** A document with one block, published and translated in both languages. */
 async function publishedWithOneBlock(
@@ -247,37 +338,36 @@ async function blockAddedBesideATranslation(
   germanLater: boolean
 ): Promise<string> {
   const { id, firstBlockId } = await publishedWithOneBlock(t);
-  await holdEdit(
-    t,
-    id,
-    "de",
-    { blocks: [{ id: firstBlockId, heading: "DE eins v2", variant: "wide" }] },
-    BLOCKS_SLUG
-  );
-  await holdEdit(
-    t,
-    id,
-    "en",
-    {
-      blocks: [
-        { id: firstBlockId, heading: "EN one", variant: "wide" },
-        { heading: "EN two", variant: "narrow" },
-      ],
-    },
-    BLOCKS_SLUG
-  );
-  await dateChange(
-    t,
-    id,
-    "de",
-    germanLater ? "2026-01-02T00:00:00.000Z" : "2026-01-01T00:00:00.000Z"
-  );
-  await dateChange(
-    t,
-    id,
-    "en",
-    germanLater ? "2026-01-01T00:00:00.000Z" : "2026-01-02T00:00:00.000Z"
-  );
+  const german = () =>
+    holdEdit(
+      t,
+      id,
+      "de",
+      {
+        blocks: [{ id: firstBlockId, heading: "DE eins v2", variant: "wide" }],
+      },
+      BLOCKS_SLUG
+    );
+  const english = () =>
+    holdEdit(
+      t,
+      id,
+      "en",
+      {
+        blocks: [
+          { id: firstBlockId, heading: "EN one", variant: "wide" },
+          { heading: "EN two", variant: "narrow" },
+        ],
+      },
+      BLOCKS_SLUG
+    );
+  if (germanLater) {
+    await english();
+    await german();
+  } else {
+    await german();
+    await english();
+  }
   return id;
 }
 
@@ -309,10 +399,8 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const id = await publishedInBoth(t);
       await holdEdit(t, id, "en", { note: "EN edited note" });
-      await holdEdit(t, id, "de", { title: "DE v2" });
       // German saved later, holding the note as it was live.
-      await dateChange(t, id, "en", "2026-01-01T00:00:00.000Z");
-      await dateChange(t, id, "de", "2026-01-02T00:00:00.000Z");
+      await holdEdit(t, id, "de", { title: "DE v2" });
 
       const res = await publishEveryLanguage(t, id);
 
@@ -324,15 +412,27 @@ describe.each(getConfiguredTestDialects())(
     it("lets the later save win when two languages edited the same shared value", async () => {
       const t = await boot(dialect);
       const id = await publishedInBoth(t);
-      await holdEdit(t, id, "en", { note: "EN note" });
       await holdEdit(t, id, "de", { note: "DE note" });
-      await dateChange(t, id, "de", "2026-01-01T00:00:00.000Z");
-      await dateChange(t, id, "en", "2026-01-02T00:00:00.000Z");
+      await holdEdit(t, id, "en", { note: "EN note" });
 
       const res = await publishEveryLanguage(t, id);
 
       expect(res.success, JSON.stringify(res)).toBe(true);
       expect((await live(t, id, "de")).note).toBe("EN note");
+    });
+
+    it("lets the later save win when both saves are stored in the same second", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInBoth(t);
+      await holdEdit(t, id, "en", { note: "EN note" });
+      await holdEdit(t, id, "de", { note: "DE note" });
+      await dateChange(t, id, "en", "2026-01-01T00:00:00.000Z");
+      await dateChange(t, id, "de", "2026-01-01T00:00:00.000Z");
+
+      const res = await publishEveryLanguage(t, id);
+
+      expect(res.success, JSON.stringify(res)).toBe(true);
+      expect((await live(t, id, "en")).note).toBe("DE note");
     });
 
     it.each([
@@ -423,8 +523,6 @@ describe.each(getConfiguredTestDialects())(
       const id = await publishedInBoth(t, GUARDED_SLUG);
       await holdEdit(t, id, "en", { title: "EN v2" }, GUARDED_SLUG);
       await holdEdit(t, id, "de", { note: "forbidden" }, GUARDED_SLUG);
-      await dateChange(t, id, "en", "2026-01-01T00:00:00.000Z");
-      await dateChange(t, id, "de", "2026-01-02T00:00:00.000Z");
 
       const res = await handlerOf(t).updateEntry(
         {
@@ -442,6 +540,160 @@ describe.each(getConfiguredTestDialects())(
       expect((await live(t, id, "en", GUARDED_SLUG)).title).toBe("EN v1");
       expect((await live(t, id, "en", GUARDED_SLUG)).note).toBe("live note");
       expect(await pendingLocales(t, id)).toEqual(["de", "en"]);
+    });
+
+    it("tells subscribers a language's content changed when its pending change goes live", async () => {
+      // German is already live, so its status does not move and no lifecycle
+      // event reports it: the update event is what a subscriber learns from.
+      const t = await boot(dialect);
+      const id = await publishedInBoth(t);
+      await holdEdit(t, id, "de", { title: "DE v2" });
+
+      const res = await publishEveryLanguage(t, id);
+
+      expect(res.success, JSON.stringify(res)).toBe(true);
+      const updates = (await eventsFor(t, id)).filter(
+        event => event.type === "entry.updated"
+      );
+      // Population control: the write's own event, for the default language.
+      expect(updates.some(event => event.locale === "en")).toBe(true);
+      const german = updates.filter(
+        event => event.locale === "de" && event.data?.title === "DE v2"
+      );
+      expect(german).toHaveLength(1);
+      expect(german[0].previous?.title).toBe("DE v1");
+      expect(german[0].data?.status).toBe("published");
+    });
+
+    it("reports a language's replaced content when taking it down applies its pending change", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInBoth(t);
+      await holdEdit(t, id, "de", { title: "DE v2" });
+
+      const res = await handlerOf(t).unpublishAllLocales({
+        collectionName: SLUG,
+        entryId: id,
+        overrideAccess: true,
+      });
+
+      expect(res.success, JSON.stringify(res)).toBe(true);
+      const withdrawn = (await eventsFor(t, id)).filter(
+        event => event.type === "entry.unpublished" && event.locale === "de"
+      );
+      expect(withdrawn).toHaveLength(1);
+      expect(withdrawn[0].data?.title).toBe("DE v2");
+      expect(withdrawn[0].previous?.title).toBe("DE v1");
+      expect(withdrawn[0].previous?.status).toBe("published");
+    });
+
+    it("records the content each language released as a version of that language", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInBoth(t);
+      await holdEdit(t, id, "de", { title: "DE v2" });
+
+      const res = await publishEveryLanguage(t, id);
+
+      expect(res.success, JSON.stringify(res)).toBe(true);
+      const german = (await versionsFor(t, id)).filter(
+        version => version.locale === "de"
+      );
+      // Population control: German's first publish recorded a version.
+      expect(german.length).toBeGreaterThan(0);
+      const newest = german[german.length - 1];
+      expect(newest.snapshot.title).toBe("DE v2");
+      expect(newest.status).toBe("published");
+    });
+
+    it("keeps every version one write records, even at a history cap of one", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInBoth(t, CAPPED_SLUG);
+      await holdEdit(t, id, "en", { title: "EN v2" }, CAPPED_SLUG);
+      await holdEdit(t, id, "de", { title: "DE v2" }, CAPPED_SLUG);
+
+      const res = await publishEveryLanguage(t, id, CAPPED_SLUG);
+
+      expect(res.success, JSON.stringify(res)).toBe(true);
+      const recorded = (await versionsFor(t, id)).map(
+        version =>
+          `${String(version.locale)}: ${String(version.snapshot.title)}`
+      );
+      expect(recorded).toEqual(
+        expect.arrayContaining(["en: EN v2", "de: DE v2"])
+      );
+    });
+
+    it("reports the status a hook committed when it replaces the one requested", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInBoth(t);
+      const keepDraft = (ctx: { data?: Record<string, unknown> }) => ({
+        ...ctx.data,
+        status: "draft",
+      });
+      // Registered after boot: creating the instance resets the hook registry.
+      registerHook("beforeUpdate", SLUG, keepDraft as never);
+      try {
+        const res = await handlerOf(t).publishAllLocales({
+          collectionName: SLUG,
+          entryId: id,
+          overrideAccess: true,
+        });
+
+        expect(res.success, JSON.stringify(res)).toBe(true);
+        // Population control: the hook's status is the one that landed.
+        const statuses = [
+          (await live(t, id, "en")).status,
+          (await live(t, id, "de")).status,
+        ];
+        expect(statuses).toEqual(["draft", "draft"]);
+        expect(res.data).toEqual({ id, status: "draft" });
+        expect(res.message).toBe("All languages unpublished.");
+      } finally {
+        unregisterHook("beforeUpdate", SLUG, keepDraft as never);
+      }
+    });
+
+    it("leaves a block translation no pending change held following the language it falls back to", async () => {
+      const t = await boot(dialect);
+      const { id, firstBlockId } = await publishedWithOneBlock(t);
+      const englishTagline = (tagline: string) =>
+        handlerOf(t).updateEntry(
+          {
+            collectionName: BLOCKS_SLUG,
+            entryId: id,
+            overrideAccess: true,
+            locale: "en",
+          },
+          {
+            blocks: [
+              { id: firstBlockId, heading: "EN one", tagline, variant: "wide" },
+            ],
+            status: "published",
+          }
+        );
+      // English gives the block a tagline German never translates, and German's
+      // pending change holds the block without one.
+      await englishTagline("EN tag");
+      await holdEdit(
+        t,
+        id,
+        "de",
+        {
+          blocks: [
+            { id: firstBlockId, heading: "DE eins v2", variant: "wide" },
+          ],
+        },
+        BLOCKS_SLUG
+      );
+
+      const res = await publishEveryLanguage(t, id, BLOCKS_SLUG);
+
+      expect(res.success, JSON.stringify(res)).toBe(true);
+      // Population control: German's own change went live.
+      const german = (await live(t, id, "de", BLOCKS_SLUG)).blocks as Block[];
+      expect(german[0].heading).toBe("DE eins v2");
+      await englishTagline("EN tag v2");
+      const followed = (await live(t, id, "de", BLOCKS_SLUG)).blocks as Block[];
+      expect(followed[0].tagline).toBe("EN tag v2");
     });
   }
 );
