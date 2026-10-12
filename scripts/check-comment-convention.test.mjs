@@ -255,15 +255,17 @@ describe("the allowlist", () => {
   // entries without removing or lowering any, one more when it learned the bracketed form, and one
   // more when patterns began reading normalised text and a label wrapped across lines became
   // visible. A raise for any other reason is the silencing this guards against.
-  const EXPECTED_ENTRIES = 222;
+  const EXPECTED_ENTRIES = 221;
   // 503 -> 498: recorded offences in `services/users.ts`, the Direct API auth
   // namespace and its test, and `auth-service.ts` no longer exist, so the list
   // shrank by five digests. Each entry itself remains, which is why the count
   // above does not move. 498 -> 491: the comments in the register, migrate
   // check, drift and resolve modules that named a plan or spec section were
   // rewritten to describe the code, and four of those entries emptied (226 ->
-  // 222).
-  const EXPECTED_TOTAL = 491;
+  // 222). 491 -> 489: the recorded offences in `migrate-status.ts` and one in
+  // `migrate-create/generate.ts` no longer exist, and the first entry emptied
+  // (222 -> 221).
+  const EXPECTED_TOTAL = 489;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
