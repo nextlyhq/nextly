@@ -47,6 +47,25 @@ export const Posts = defineCollection({
 `true` means anyone, including unauthenticated readers. A function receives the request
 context and decides.
 
+A collection whose `access` says nothing about an operation falls back to grants: a
+signed-in user needs `read-posts` to read `posts`.
+
+## Related rows
+
+A populated relationship is read with the same check as reading the related collection
+directly. Reading `posts` at a depth that populates `author` returns the author only to a
+caller who could read that `users` row by name:
+
+- **The related collection declares `access.read`:** that rule decides, for signed-in users
+  and visitors alike. No per-collection grant is needed.
+- **It declares no read rule:** a signed-in user needs `read-<collection>`, as they would to
+  read it directly.
+- **An API key** always needs `read-<collection>` in its own grants, and then the collection's
+  rule if it has one. A key granted only `read-posts` does not see populated authors.
+
+A relationship the caller may not read comes back unpopulated rather than refusing the whole
+response.
+
 ## Field-level access
 
 Any field takes its own `access`, with separate `create`, `read` and `update` rules:
