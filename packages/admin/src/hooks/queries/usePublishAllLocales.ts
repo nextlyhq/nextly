@@ -1,5 +1,5 @@
 /**
- * usePublishAllLocales — publish every language of an entry at once (i18n M7, spec §10).
+ * usePublishAllLocales: publish every language of an entry at once.
  *
  * Calls `POST /entries/{id}/publish-all`, which applies every language's pending change and moves
  * every language's status in one write, and invalidates the entry's detail + the collection list so
