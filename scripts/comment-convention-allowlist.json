@@ -147,10 +147,6 @@
     "count": 1,
     "digests": ["df5c00e784446f44"]
   },
-  "packages/admin/src/hooks/queries/usePublishAllLocales.ts": {
-    "count": 1,
-    "digests": ["0674b55cfffb8080"]
-  },
   "packages/admin/src/lib/builder/to-manifest-entity.test.ts": {
     "count": 1,
     "digests": ["84404c4f29f8bc78"]
