@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The merge queue tests each pull request again, combined with the latest
+  # `main` and anything ahead of it in the queue, and merges it only if the
+  # required checks pass there too. A required job that did not run on this
+  # event would leave the queue waiting for a result that never comes.
+  merge_group:
+    types: [checks_requested]
 
 # Every job only reads the repo; nothing here writes, comments, or tags.
 # Restricting the token caps what a compromised dependency or action
@@ -35,6 +41,10 @@ permissions:
 # runs therefore start, ask and stop within seconds, and only the newest
 # tests. The queue stays short without anything being cancelled, and
 # `cancelled` keeps meaning what it says.
+#
+# A merge-queue run is keyed by its commit as well. Each queued pull request
+# is tested on a commit of its own, and cancelling one entry's run because
+# another entry started would fail a pull request that did nothing wrong.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
@@ -81,6 +91,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
       # A push to `main` that a newer push has already overtaken can affect
       # nothing: the newer run's verdict includes this commit. Asked before the
       # diff, because a superseded run should not spend the diff either. The
@@ -94,78 +109,17 @@ jobs:
           substantive-job: Lint / Typecheck / Test / Build
           token: ${{ github.token }}
 
+      # Which commits a push, a pull request and the merge queue each compare,
+      # and why anything that cannot be read runs everything, live in
+      # `scripts/change-scope.mjs`, which the Integration workflow shares.
+      # What stays here is this workflow's own claim about which paths are
+      # inert.
       - name: Decide
         id: decide
         env:
-          # On a push to `main`, the diff base is the last commit this workflow
-          # actually TESTED, not merely the previous commit. A README-only push
-          # landing after a superseded code push would otherwise diff against
-          # that code push alone, read as inert, and leave the code untested.
-          # No fallback to `before` when no tested commit is known: that is
-          # the same hole with the history lookup failed, and an empty base
-          # below runs everything instead.
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || steps.newer.outputs.last-tested-sha }}
-          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           SUPERSEDED: ${{ steps.newer.outputs.superseded }}
-        run: |
-          set -uo pipefail
-
-          # Superseded reads as inert to every job gated on `inert`, since the
-          # effect is the same: nothing here needs to run. The gate is told the
-          # REASON separately, so it never describes a superseded run as one
-          # that touched only inert paths.
-          if [ "$SUPERSEDED" = "true" ]; then
-            echo "inert=true" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Superseded::a newer push to main already has a run; this one skips its jobs."
-            exit 0
-          fi
-
-          # Anything this job cannot read, it does not get to skip. Every early
-          # exit here sets `inert=false`, so a broken comparison costs a full
-          # run rather than silently certifying a commit nobody examined.
-          fail_open() {
-            echo "inert=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Full CI::$1"
-            exit 0
-          }
-
-          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
-            fail_open "no tested base or no head SHA for ${{ github.event_name }}; running everything."
-          fi
-          # A first push to a branch reports an all-zero `before`, and a force
-          # push can leave a base that is no longer fetchable.
-          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            fail_open "base $BASE_SHA is not present; running everything."
-          fi
-
-          # On a pull request, compare against the MERGE BASE rather than the
-          # base branch's current tip. `pull_request.base.sha` moves as `main`
-          # advances, so diffing from it reports every commit `main` gained
-          # since the branch point as though this pull request had made it.
-          # Measured here: a change touching one `.claude/` file read as six
-          # files and ran the full matrix. The error is in the safe direction —
-          # it can only ever run MORE — but in a repository with several
-          # branches active it fires on nearly every pull request, which is the
-          # whole cost this job exists to remove.
-          #
-          # A push already carries the right value in `before`: the previous tip
-          # of that branch, which is the merge base by construction.
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            MERGE_BASE=$(git merge-base "$BASE_SHA" "$HEAD_SHA" 2>/dev/null) || \
-              fail_open "no merge base for $BASE_SHA..$HEAD_SHA; running everything."
-            [ -n "$MERGE_BASE" ] || fail_open "empty merge base; running everything."
-            BASE_SHA="$MERGE_BASE"
-          fi
-
-          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null) || \
-            fail_open "could not diff $BASE_SHA..$HEAD_SHA; running everything."
-
-          # No files changed is not evidence of inertness — it is the shape of a
-          # comparison that asked the wrong question.
-          if [ -z "$CHANGED" ]; then
-            fail_open "diff listed no files; running everything."
-          fi
-
+          LAST_TESTED_SHA: ${{ steps.newer.outputs.last-tested-sha }}
+          SCOPE_TITLE: CI scope
           # Paths that cannot change what any job below builds, runs or packs.
           # Every entry is a CLAIM that nothing here reads it, checked rather
           # than assumed, and a wrong entry removes real coverage rather than
@@ -188,13 +142,14 @@ jobs:
           #                    rather than to this one.
           #
           # `.github/**` is absent on purpose: this workflow lives there.
-          INERT='^(docs/|\.claude/|[^/]*\.md$|LICENSE$|\.editorconfig$|\.vscode/)'
+          INERT_PATHS: '^(docs/|\.claude/|\.agents/|[^/]*\.md$|LICENSE$|\.editorconfig$|\.vscode/)'
 
           # AGENTS.md and AGENTS.measured.md are documents, but their guard
           # tests (scripts/agents-md-scopes-agree, scripts/measured-file-fresh)
           # run only inside the gated ci job — so an edit to either must not
-          # skip the very job that checks it. They are re-added after the
-          # inert filter rather than encoded in it, because ERE cannot negate.
+          # skip the very job that checks it. They are listed apart, as paths
+          # this workflow always runs for, rather than carved out of the inert
+          # pattern above.
           #
           # `docs/` is re-added for the same reason and it is a newer one: the
           # published pages carry TypeScript the `Doc samples compile` step
@@ -208,55 +163,8 @@ jobs:
           # nothing, which this repository learned the expensive way when a
           # change that could not compile reached production because no check
           # built the app.
-          NOT_INERT=$({ printf '%s\n' "$CHANGED" | grep -vE "$INERT" || true
-                        printf '%s\n' "$CHANGED" | grep -xE 'AGENTS(\.measured)?\.md' || true
-                        printf '%s\n' "$CHANGED" | grep -E '^docs/' || true; } | sort -u | grep . || true)
-
-          {
-            echo "### CI scope"
-            echo
-            echo "\`$BASE_SHA\` → \`$HEAD_SHA\`, $(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') file(s) changed."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ -z "$NOT_INERT" ]; then
-            # Named individually rather than counted. A summary saying "12 files
-            # skipped" is unreadable as evidence; the list is what lets someone
-            # notice a path that should never have been on it.
-            {
-              echo
-              echo "Every changed file is inert, so the build, test, e2e and"
-              echo "scaffold jobs were skipped. Files:"
-              echo
-              printf '%s\n' "$CHANGED" | sed 's/^/- `/;s/$/`/'
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "inert=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Counted before the list is trimmed, so the summary can say how much it
-          # is not showing. A bare "first files" told a reader neither how many
-          # there were nor that anything had been left out.
-          NOT_INERT_COUNT=$(printf '%s\n' "$NOT_INERT" | wc -l | tr -d ' ')
-          {
-            echo
-            echo "Running in full. $NOT_INERT_COUNT file(s) require it:"
-            echo
-            # `sed` reading the WHOLE stream rather than `head` stopping early.
-            # A reader that stops closes the pipe, `printf` then fails with EPIPE,
-            # and `pipefail` makes that failure the step's exit status — so this
-            # summary line failed the job that every other job depends on, as soon
-            # as the file list outgrew the pipe buffer. It is a race on the buffer
-            # rather than a fixed threshold, which is why it went unseen until a
-            # pull request touching a thousand files hit it.
-            printf '%s\n' "$NOT_INERT" | sed -n '1,20{s/^/- `/;s/$/`/;p;}'
-            # An `if`, not `[ ... ] && echo`: a false test as the last command in
-            # this group would be the group's exit status, which is the same shape
-            # of failure as the one above.
-            if [ "$NOT_INERT_COUNT" -gt 20 ]; then
-              echo "- …and $((NOT_INERT_COUNT - 20)) more"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "inert=false" >> "$GITHUB_OUTPUT"
+          ALWAYS_RUN_PATHS: '^(AGENTS(\.measured)?\.md$|docs/)'
+        run: node scripts/change-scope.mjs
 
   comments:
     name: Comment convention (describes code, not process)
@@ -286,7 +194,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node
         uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
@@ -317,6 +225,50 @@ jobs:
       - name: Docs and README claims
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:docs-claims
+
+      # Agent instructions name commands and files, and those rot silently as
+      # scripts are renamed and files move. Measured when this landed: the
+      # integration-test skill and rule both told the reader to start the test
+      # containers with `pnpm docker:test`, which AGENTS.md correctly documents
+      # as a probe of the DEV stack that starts nothing — and a skill pointed at
+      # a `pnpm generate:types` that is a CLI command, not a script. Advisory in
+      # polarity but blocking as a check: it reports only references it can
+      # resolve unambiguously, so a finding is a broken reference rather than a
+      # judgement call.
+      - name: Agent instructions resolve
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:agent-contract
+
+      # Codex reads one AGENTS.md per directory, from the root down to where it
+      # works, and joins them up to 32 KiB, cutting from the end: past the
+      # limit, the file for the directory being worked in is the first to go.
+      # Measured when this landed, the root file alone was past it, so no
+      # package's own AGENTS.md reached Codex at all.
+      - name: Agent instructions fit what Codex reads
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:instruction-size
+
+      # Claude Code reads a copy of the skills, and Git for Windows checks
+      # symbolic links out as small text files by default. The copy is real
+      # files for that reason, and this is where a link slipped in instead
+      # would show: the same check, on a clone made the way Windows makes one.
+      # It runs from this checkout, whose dependencies are installed, against
+      # the clone, which has none.
+      - name: Skills survive a checkout without symbolic links
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          git -c core.symlinks=false clone --quiet --no-local . "$RUNNER_TEMP/without-symlinks"
+          node scripts/check-agent-contract.mjs --root "$RUNNER_TEMP/without-symlinks"
+
+      # The local gates must say how much of a machine they may take.
+      # Unbounded, the pre-push hook meets turbo's default of 10 package tasks
+      # with Vitest's default of one worker per core in 23 uncapped packages,
+      # which exhausts the memory of an ordinary development machine. The bound
+      # is a comment in two files otherwise, and the next person to add a turbo
+      # invocation will not read it.
+      - name: Local gates declare their resource bound
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:local-gate-bounds
 
       # The pages under docs/ are compiled by nextlyhq.com, not here, so a page
       # that does not parse merges green and breaks the site's next deploy.
@@ -368,7 +320,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -547,10 +499,24 @@ jobs:
       # base. Diffing against the base branch TIP instead would report every
       # changeset the branch picked up by merging `main` as one this branch
       # wrote, which is how a guard starts failing PRs over other people's files.
+      #
+      # In the merge queue the comparison is with the queue's base instead. A
+      # group's head holds every member's changes, and `HEAD^1` would leave
+      # only the last member's, so an earlier member's changeset would never be
+      # read against the group it lands with.
       - name: Changeset covers the lockstep group
-        if: ${{ !cancelled() && steps.install.outcome == 'success' && github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+        env:
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
           set -euo pipefail
+          # Two commits are all a diff reads, so the queue's base is fetched
+          # alone rather than the history between it and the head.
+          base="HEAD^1"
+          if [ -n "$QUEUE_BASE" ]; then
+            git fetch --quiet --no-tags --depth=1 origin "$QUEUE_BASE"
+            base="$QUEUE_BASE"
+          fi
           # `git diff` runs on its own line so a failure — an unavailable `HEAD^1`
           # in some other checkout shape, a broken object store — aborts the step
           # under `set -e`. Inside a pipeline with a trailing `|| true` it would
@@ -572,7 +538,7 @@ jobs:
           # `/` while `@changesets/read` lists `.changeset` non-recursively — so
           # a file under `.changeset/archive/` is something the release never
           # reads, and checking it would fail a pull request over a note.
-          touched="$(git diff --name-only --diff-filter=ACMRT HEAD^1 HEAD -- '.changeset/*.md' ':(exclude).changeset/*/**')"
+          touched="$(git diff --name-only --diff-filter=ACMRT "$base" HEAD -- '.changeset/*.md' ':(exclude).changeset/*/**')"
           printf '%s\n' "$touched" | node scripts/release/check-changesets.mjs
 
       # Enforce the design-token theming contract in the admin + plugin packages
@@ -801,7 +767,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -863,7 +829,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -892,6 +858,322 @@ jobs:
           TURBO_CACHE_DIR: .turbo
 
       # Only a job that finished its work publishes what it learned.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # The gates `.husky/pre-push` runs, on Windows, so a change that breaks them
+  # there shows on its pull request rather than on a teammate's machine. The
+  # hook itself skips in CI, so its gates are listed here, and
+  # `scripts/windows-gates-match-hook.test.mjs` fails when the two lists differ.
+  #
+  # Every gate runs even when one before it failed, so one run reports all of
+  # them. Gated on the same `changes` decision as the Linux jobs: a change
+  # that can affect nothing skips it, and a skipped job is accepted by branch
+  # protection. `.gitattributes` and this workflow are never inert, so a change
+  # to how files are checked out, or to this job, runs it.
+  #
+  # Not among the jobs `gate` waits on, so its result informs a pull request
+  # without holding its merge.
+  #
+  # Three jobs, for the reason the Linux unit suites are three: on one runner
+  # the suites were 23 of the job's 33 minutes, and `nextly`'s and
+  # `@nextlyhq/admin`'s were nearly all of that. Each of those two runs on a
+  # runner of its own, in the two jobs below, and this one runs every other
+  # workspace's. The same test file checks that the three run each workspace's
+  # suite once: the two name one workspace each, and this one excludes exactly
+  # those two.
+  windows-gates:
+    name: Pre-push gates (windows-latest)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        id: install
+        run: pnpm install --frozen-lockfile
+
+      # The hook's own limits on concurrent package tasks and test workers, so
+      # a suite that only times out under unbounded contention does not fail
+      # here when it would pass in the hook.
+      - name: Size the gates as the hook does
+        id: limits
+        if: steps.install.outcome == 'success'
+        shell: bash
+        run: |
+          concurrency="$(node scripts/local-limits.mjs --concurrency)"
+          workers="$(node scripts/local-limits.mjs --max-workers)"
+          case "$concurrency$workers" in ''|*[!0-9]*) echo "could not derive the hook's limits" >&2; exit 1;; esac
+          echo "TURBO_CONCURRENCY=$concurrency" >> "$GITHUB_ENV"
+          echo "VITEST_WORKERS=$workers" >> "$GITHUB_ENV"
+
+      - name: Design lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm lint:design
+
+      - name: Workspace lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm lint:workspace
+
+      - name: Scripts lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm lint:scripts
+
+      - name: Build
+        id: build
+        if: ${{ !cancelled() && steps.limits.outcome == 'success' }}
+        run: pnpm run build
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # These read what the build wrote, so after a failed build they would
+      # report its missing output rather than failures of their own.
+      - name: Package lint
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: pnpm turbo lint --continue --filter=./packages/*
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      - name: Typecheck
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: pnpm turbo check-types --continue
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Every workspace's suite but the two the jobs below run. Together the
+      # three run what the hook runs when a push changes the workspace or task
+      # graph.
+      - name: Unit suites
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: pnpm turbo test --continue --filter='!nextly' --filter='!@nextlyhq/admin' -- --maxWorkers="$VITEST_WORKERS"
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Only a job whose gates all passed publishes what it learned.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # `nextly`'s unit suite on Windows, on a runner of its own: 957 files, and
+  # 18.7 minutes beside the admin's on one runner. `test` depends on `^build`,
+  # so turbo builds what the suite needs and nothing else.
+  windows-gates-nextly:
+    name: Pre-push gates (windows-latest, nextly tests)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The hook's own limits, as in the job above.
+      - name: Size the gates as the hook does
+        shell: bash
+        run: |
+          concurrency="$(node scripts/local-limits.mjs --concurrency)"
+          workers="$(node scripts/local-limits.mjs --max-workers)"
+          case "$concurrency$workers" in ''|*[!0-9]*) echo "could not derive the hook's limits" >&2; exit 1;; esac
+          echo "TURBO_CONCURRENCY=$concurrency" >> "$GITHUB_ENV"
+          echo "VITEST_WORKERS=$workers" >> "$GITHUB_ENV"
+
+      - name: Unit suites
+        shell: bash
+        run: pnpm turbo test --continue --filter=nextly -- --maxWorkers="$VITEST_WORKERS"
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Only a job whose suite passed publishes what it learned.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # `@nextlyhq/admin`'s unit suite on Windows, on a runner of its own: 436
+  # files, and 13.6 minutes beside nextly's on one runner.
+  windows-gates-admin:
+    name: Pre-push gates (windows-latest, admin tests)
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The hook's own limits, as in the first of these jobs.
+      - name: Size the gates as the hook does
+        shell: bash
+        run: |
+          concurrency="$(node scripts/local-limits.mjs --concurrency)"
+          workers="$(node scripts/local-limits.mjs --max-workers)"
+          case "$concurrency$workers" in ''|*[!0-9]*) echo "could not derive the hook's limits" >&2; exit 1;; esac
+          echo "TURBO_CONCURRENCY=$concurrency" >> "$GITHUB_ENV"
+          echo "VITEST_WORKERS=$workers" >> "$GITHUB_ENV"
+
+      - name: Unit suites
+        shell: bash
+        run: pnpm turbo test --continue --filter=@nextlyhq/admin -- --maxWorkers="$VITEST_WORKERS"
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Only a job whose suite passed publishes what it learned.
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # What `@nextlyhq/admin` would publish, read as a production application gets
+  # it. The package ships prebuilt, and its build settles what a production
+  # user sees: built in development mode it shows an error's message and stack
+  # trace and the query developer tools, and dials a development-only route.
+  # The unit suites import the admin's source and the playground loads its
+  # source, so nothing else here reads the built files.
+  #
+  # The last step turns the check on itself. It builds the admin in development
+  # mode and requires the check to refuse that build, so a check that stopped
+  # recognising the failure it exists for fails here, not in silence.
+  #
+  # `needs: changes`, not `needs: ci`: it runs beside the Linux jobs, and it is
+  # among the jobs `gate` waits on, so its failure holds a merge. It runs the
+  # same steps on a merge-queue run as on a pull request.
+  admin-published-build:
+    name: Published admin build
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing in this job pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # A release builds with `NODE_ENV` unset, and the admin's build reads it,
+      # so it is unset here whatever the runner carries.
+      - name: Build the admin as a release does
+        run: env -u NODE_ENV pnpm turbo build --filter=@nextlyhq/admin...
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # Packs the package as `pnpm publish` would, and reads the packed files.
+      - name: Check what the packed admin gives a production application
+        run: pnpm --filter @nextlyhq/admin check:published-build
+
+      # `tsup` alone, without the stylesheet step: the check is asked only for
+      # the two kinds a development-mode build must be refused for.
+      - name: The check refuses a build made in development mode
+        run: |
+          NODE_ENV=development pnpm --filter @nextlyhq/admin exec tsup
+          pnpm --filter @nextlyhq/admin check:published-build --packed . --must-fail-with error-detail,developer-tools
+
+      # Only a job whose checks passed publishes what it learned.
       - name: Save Turbo cache
         if: success()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -953,6 +1235,7 @@ jobs:
       - ci
       - unit-tests-nextly
       - unit-tests-admin
+      - admin-published-build
       - entry-guard-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1009,7 +1292,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1189,7 +1472,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1281,7 +1564,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1365,7 +1648,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1376,10 +1659,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The watchers compile this package's own sources, but its workspace
-      # dependencies still have to exist for the client entry to resolve them.
-      - name: Build the dependencies of the UI package
-        run: pnpm --filter @nextlyhq/ui^... build
+      # No step builds @nextlyhq/ui's workspace dependencies, deliberately.
+      # There is nothing to build: all four of them — admin-css,
+      # module-specifiers, tsconfig and eslint-config — publish SOURCE rather
+      # than a compiled artifact (`./src/index.mjs`, `./src/index.ts`, plain
+      # `.js` config files), and none declares a `build` script. The checkout
+      # is already the thing the client entry resolves against.
+      #
+      # A `pnpm --filter @nextlyhq/ui^... build` step stood here and was a
+      # no-op for exactly that reason. pnpm 9 exited 0 on a recursive run that
+      # matched no script, so it looked like it was doing the job its name
+      # claimed; pnpm 10+ reports ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT instead,
+      # which is what surfaced it. Restoring it under `--if-present` would have
+      # kept a step that builds nothing while reading as though it builds the
+      # dependencies, so it is gone rather than silenced. Should one of those
+      # packages ever gain a `dist`, add the build back — and note that the
+      # filter wanted is `@nextlyhq/ui^...` (dependencies WITHOUT ui itself),
+      # since the watcher under test is what compiles ui.
 
       # `shell: bash` on every leg, so one script covers all of them — Git Bash
       # ships on the Windows runners. The dev script is still launched through
@@ -1537,7 +1833,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

@@ -1,0 +1,1404 @@
+/**
+ * What the merge queue needs from the workflows behind its required checks,
+ * held on the workflow files themselves.
+ *
+ * The queue merges a pull request only when every required check passes on
+ * the queue's own commit. A workflow that does not run on that event, or that
+ * filters itself out by path, creates no check there, and the queue waits for
+ * a result that never comes. A job that runs but skips its work on that event
+ * reports a pass it did not earn. Neither shows up until the queue is switched
+ * on, so the shape is checked here, before it is.
+ */
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { posix } from "node:path";
+
+import { load } from "js-yaml";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
+
+import { describe, expect, it } from "vitest";
+
+const read = path => load(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
+/** js-yaml reads the bare key `on` as the boolean `true`, as YAML 1.1 does. */
+const triggersOf = workflow => workflow.on ?? workflow[true];
+
+/** The required checks each workflow carries, by the names the ruleset requires. */
+const QUEUE_CHECKS = {
+  ".github/workflows/ci.yml": ["CI gate", "Comment convention (describes code, not process)"],
+  ".github/workflows/integration.yml": ["Integration (postgres)", "Integration (mysql)", "Integration (sqlite)"],
+  ".github/workflows/pr-title.yml": ["Validate PR title follows Conventional Commits"],
+  ".github/workflows/independent-review.yml": ["Independent review of the revision being merged"],
+  ".github/workflows/secret-scan.yml": ["gitleaks"],
+  ".github/workflows/ai-credit.yml": ["No AI credit"],
+};
+
+describe("every workflow behind a required check, in the merge queue", () => {
+  for (const [path, checks] of Object.entries(QUEUE_CHECKS)) {
+    const workflow = read(path);
+    const triggers = triggersOf(workflow);
+
+    it(`${path} runs on the queue's event`, () => {
+      expect(triggers.merge_group).toEqual({ types: ["checks_requested"] });
+    });
+
+    it(`${path} never filters itself out by path, on any event`, () => {
+      for (const [event, filter] of Object.entries(triggers)) {
+        expect(Object.keys(filter ?? {}), event).not.toContain("paths");
+        expect(Object.keys(filter ?? {}), event).not.toContain("paths-ignore");
+      }
+    });
+
+    it(`${path} still names its required checks exactly`, () => {
+      const names = Object.values(workflow.jobs).map(job => job.name);
+      for (const check of checks) expect(names).toContain(check);
+    });
+  }
+});
+
+describe("the change scope, which decides whether required jobs run", () => {
+  for (const [path, job] of [
+    [".github/workflows/ci.yml", "changes"],
+    [".github/workflows/integration.yml", "changes"],
+  ]) {
+    it(`${path} takes its range from the event through the one shared script`, () => {
+      const steps = read(path).jobs[job].steps;
+      const decide = steps.find(step => step.id === "decide");
+      expect(decide.run).toBe("node scripts/change-scope.mjs");
+      expect(decide.env.INERT_PATHS).toBeTruthy();
+      // Both ends of every range have to be in the checkout.
+      expect(steps.find(step => String(step.uses).startsWith("actions/checkout@")).with["fetch-depth"]).toBe(0);
+    });
+  }
+});
+
+describe("the changeset check in the queue", () => {
+  /*
+   * A group's head holds every member's changes. Compared with `HEAD^1` it
+   * would read only the last member's changesets, so in the queue it is
+   * compared with the queue's base.
+   */
+  it("compares a queued group with the queue's base", () => {
+    const step = read(".github/workflows/ci.yml").jobs.ci.steps.find(candidate => candidate.name === "Changeset covers the lockstep group");
+    expect(step.env.QUEUE_BASE).toBe("${{ github.event.merge_group.base_sha }}");
+    expect(step.run).toMatch(/git diff --name-only --diff-filter=ACMRT "\$base" HEAD/);
+    expect(step.run).toMatch(/base="\$QUEUE_BASE"/);
+  });
+});
+
+describe("the last commit Integration tested", () => {
+  /*
+   * The change scope of a push compares with the last commit this workflow
+   * tested. A run where one leg judged the commit and another was cancelled
+   * did not test it on the second dialect, so every leg is named as the work.
+   */
+  it("counts a run as tested only when every leg reached a verdict", () => {
+    const workflow = read(".github/workflows/integration.yml");
+    const legs = Object.values(workflow.jobs).map(job => job.name).filter(name => name.startsWith("Integration ("));
+    const ask = workflow.jobs.changes.steps.find(step => step.id === "newer");
+    expect(legs.length).toBe(3);
+    expect(ask.with["substantive-job"].split("\n").map(name => name.trim()).filter(Boolean).sort()).toEqual(legs.sort());
+  });
+});
+
+describe("conditions that skip the queue's run", () => {
+  /*
+   * A step that runs on a pull request's own run but not in the queue is
+   * skipped there while its job still reports success, and a job like that
+   * reports `skipped`, which the gate accepts; either way the queue would merge
+   * on a check that did less there than it does for a pull request. So no
+   * condition in a job a required check stands on may run for a pull request's
+   * event and not for the queue's.
+   */
+  for (const [path, checks] of Object.entries(QUEUE_CHECKS)) {
+    it(`${path} does in the queue whatever it does on a pull request, in every job its required checks stand on`, () => {
+      const workflow = read(path);
+      expect(skippedInTheQueue(workflow, requiredJobs(workflow, checks))).toEqual([]);
+    });
+  }
+
+  it("decides a condition by evaluating it for each event, not by its spelling", () => {
+    const skips = [
+      "github.event_name == 'pull_request'",
+      "${{ always() && github.event_name == 'pull_request_target' }}",
+      "github.event_name != 'merge_group'",
+      "!(github.event_name == 'merge_group')",
+      "contains(fromJSON('[\"push\", \"pull_request\"]'), github.event_name)",
+      "startsWith(github.event_name, 'pull_request')",
+      "GITHUB.EVENT_NAME == 'Pull_Request'",
+      // False in the queue whatever the unknown side is.
+      "needs.changes.outputs.inert != 'true' && github.event_name == 'pull_request'",
+      // Runs for a pull request whatever the output is, and in the queue only for some of its values.
+      "needs.changes.outputs.inert != 'true' || github.event_name == 'pull_request'",
+      "!cancelled() || github.event_name == 'pull_request'",
+      // An output between two numbers, and two calls of one function that may differ.
+      "needs.x.outputs.n > 5 && needs.x.outputs.n < 10 && github.event_name == 'pull_request'",
+      "hashFiles('a') != hashFiles('b') && github.event_name == 'pull_request'",
+      // A call may return text, and what it returns for the event its arguments read; run on the values tried for an unknown, it skips where one of them does.
+      "format('{0}', needs.changes.outputs.flag) == 'ready' && github.event_name == 'pull_request'",
+      "format('{0}', github.event_name) == 'pull_request'",
+      // An output holding neither text, both at once, or the event's name.
+      "contains(needs.changes.outputs.flags, 'e') || github.event_name == 'pull_request'",
+      "contains(needs.changes.outputs.flags, 'a') && contains(needs.changes.outputs.flags, 'b') && github.event_name == 'pull_request'",
+      "needs.changes.outputs.target == github.event_name",
+      // An output read as JSON, where text that is not JSON decides nothing.
+      "fromJSON(needs.changes.outputs.run) && github.event_name == 'pull_request'",
+      // The queue's payload holds no pull request, so a condition on one can skip it without reading the event's name.
+      "github.event.pull_request.head.repo.full_name == github.repository",
+      // Any other name under `github` may differ between the runs.
+      "github.event.action == 'synchronize'",
+      // One output that must pass two text tests at once, of literals or of the event's name.
+      "startsWith(needs.x.outputs.value, 'a') && endsWith(needs.x.outputs.value, 'b') && github.event_name == 'pull_request'",
+      "startsWith(needs.x.outputs.v, github.event_name) && endsWith(needs.x.outputs.v, 'b') && github.event_name != 'merge_group'",
+      // `format` reads `{{` and `}}` as braces.
+      "format('{{{0}}}', github.event_name) == '{pull_request}'",
+      // A function GitHub runs is run here from its arguments, the event's name among them.
+      "toJSON(github.event_name) == '\"pull_request\"'",
+    ];
+    const runs = [
+      "",
+      "github.event_name == 'pull_request' || github.event_name == 'merge_group'",
+      "github.event_name == 'merge_group'",
+      // Runs on neither, so it does no less in the queue.
+      "github.event_name == 'push'",
+      // Turns on an output alone, which reads the same for both events.
+      "!cancelled()",
+      "needs.changes.outputs.inert != 'true'",
+      // Runs in the queue whenever it runs for a pull request, whatever the output is.
+      "needs.changes.outputs.inert != 'true' || github.event_name == 'merge_group'",
+      "needs.changes.outputs.inert == 'false' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')",
+      // Never reads the event's name, however many outputs it reads: nothing to try.
+      Array.from({ length: 12 }, (_, n) => `needs.job${n}.result == 'success'`).join(" && "),
+      // A pull request's fields are null in the queue; null equals false, and reads as empty text, not as the word null.
+      "github.event.pull_request.head.repo.fork == false",
+      "github.event.pull_request.head.repo.fork == false || startsWith(github.event_name, 'pull_request')",
+      "!contains(github.event.pull_request.title, 'null')",
+      // The queue group's fields are null in a pull request's run, so this runs in the queue alone.
+      "github.event.merge_group.base_sha != ''",
+      // The repository's own names read alike in both runs.
+      "github.repository == 'nextlyhq/nextly'",
+      // So do the names the workflow file fixes.
+      "github.workflow == 'CI'",
+      // `format` runs from its arguments: this runs in the queue alone, and this in both.
+      "format('{0}', github.event_name) == 'merge_group'",
+      "format('{0}', github.event_name) != ''",
+      // `join` and `toJSON` run from their arguments too, so these hold in both runs; an unknown result would not.
+      "join(fromJSON('[\"a\", \"b\"]'), '-') == 'a-b' || github.event_name == 'pull_request'",
+      "toJSON('a') == '\"a\"' || github.event_name == 'pull_request'",
+      // Whatever a function makes of an unknown, this runs in the queue.
+      "format('x{0}', needs.x.outputs.v) != 'xa' || github.event_name == 'merge_group'",
+    ];
+    for (const condition of skips) expect(skipsTheQueue(condition), condition).toBe(true);
+    for (const condition of runs) expect(skipsTheQueue(condition), condition).toBe(false);
+  });
+
+  it("refuses a condition it cannot read, rather than passing it", () => {
+    expect(() => skipsTheQueue("github.event_name == 'pull_request' &&")).toThrow(/cannot read the condition/);
+    expect(() => skipsTheQueue("github.event_name == ")).toThrow(/cannot read the condition/);
+    expect(() => skipsTheQueue("github.event_name 'pull_request'")).toThrow(/cannot read the condition/);
+    // Whatever it reads: one that reads nothing of the event is read too.
+    expect(() => skipsTheQueue("needs.changes.outputs.inert ==")).toThrow(/cannot read the condition/);
+  });
+
+  // Every assignment of twelve outputs is far too many to try; the condition is refused, not passed.
+  it("refuses a condition with too many unknowns to decide, rather than passing it", () => {
+    const many = [...Array.from({ length: 12 }, (_, n) => `needs.job${n}.result == 'success'`), "github.event_name == 'pull_request'"].join(" && ");
+    expect(() => skipsTheQueue(many)).toThrow(/cannot decide the condition/);
+    // A call this evaluator does not run, reading the event, could return anything in each run.
+    expect(() => skipsTheQueue("hashFiles(github.event_name) != ''")).toThrow(/cannot decide the condition.*reads the event/);
+    // So could a function run on a name that differs between the runs, whose value there is no value tried.
+    expect(() => skipsTheQueue("format('x{0}', github.event.action) == 'xopened'")).toThrow(/cannot decide the condition.*reads the event/);
+    // Run on an unknown, a function may make the literal it is compared with from a value no value tried is, as these do,
+    // or never make it, as the last does; which of the two cannot be told, so both are refused, neither passed nor failed.
+    const transformed = [
+      "format('x{0}', needs.x.outputs.v) != 'xa' || github.event_name == 'pull_request'",
+      "fromJSON(needs.x.outputs.v) != 'xa' || github.event_name == 'pull_request'",
+      "toJSON(needs.x.outputs.v) != '\"a\"' || github.event_name == 'pull_request'",
+      "join(fromJSON('[\"a\", \"b\"]'), needs.x.outputs.separator) != 'a+b' || github.event_name == 'pull_request'",
+      "format('x{0}', needs.x.outputs.v) == 'y' && github.event_name == 'pull_request'",
+      // Nor where the call's value is tied to its argument's, which the call read as a value of its own is not:
+      // both of these run in the queue whatever the output is, and neither is failed as a skip.
+      "format('{0}', needs.x.outputs.v) != 'a' || needs.x.outputs.v != 'b' || github.event_name == 'pull_request'",
+      "format('x{0}', needs.x.outputs.v) != 'xa' || needs.x.outputs.v == 'a' || github.event_name == 'pull_request'",
+    ];
+    for (const condition of transformed) expect(() => skipsTheQueue(condition), condition).toThrow(/cannot decide the condition.*makes a value no value tried/);
+    // Three text tests of one value may need a value no two literals make.
+    const threeTests = "startsWith(needs.x.outputs.v, 'a') && contains(needs.x.outputs.v, 'b') && endsWith(needs.x.outputs.v, 'c') && github.event_name == 'pull_request'";
+    expect(() => skipsTheQueue(threeTests)).toThrow(/cannot decide the condition.*3 text tests/);
+  });
+
+  it("reads a gate's dependencies as part of it, and leaves a job no required check stands on out", () => {
+    const ci = read(".github/workflows/ci.yml");
+    expect(requiredJobs(ci, QUEUE_CHECKS[".github/workflows/ci.yml"])).toEqual(expect.arrayContaining(["gate", "ci", "changes", "comments"]));
+    const title = read(".github/workflows/pr-title.yml");
+    expect(requiredJobs(title, QUEUE_CHECKS[".github/workflows/pr-title.yml"])).toEqual(["lint"]);
+  });
+});
+
+/**
+ * The jobs a workflow's required checks stand on: each check's own job, and
+ * every job it `needs`, however deep. A job outside that set, such as one that
+ * only comments on a pull request, may be limited to a pull request's events.
+ */
+function requiredJobs(workflow, checks) {
+  const seen = new Set();
+  const visit = id => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    [workflow.jobs[id]?.needs ?? []].flat().forEach(visit);
+  };
+  Object.entries(workflow.jobs).filter(([, job]) => checks.includes(job.name)).forEach(([id]) => visit(id));
+  return [...seen];
+}
+
+/** The given jobs, and the steps in them, whose condition skips the queue's run. */
+function skippedInTheQueue(workflow, ids) {
+  return ids.flatMap(id => [...skippingJob(id, workflow.jobs[id]), ...skippingSteps(id, workflow.jobs[id])]);
+}
+
+function skippingJob(id, job) {
+  return skipsTheQueue(String(job.if ?? "")) ? [id] : [];
+}
+
+function skippingSteps(id, job) {
+  return (job.steps ?? []).filter(step => skipsTheQueue(String(step.if ?? ""))).map(step => `${id}: ${step.name}`);
+}
+
+/**
+ * Whether a condition can run for a pull request's event, `pull_request` or
+ * `pull_request_target`, and not for the queue's. It is evaluated, not matched
+ * by its spelling. Each name and call it reads but does not know is given, in
+ * turn, each value that could change its outcome, and it skips the queue if
+ * any one assignment runs it for a pull request and not in the queue. Most
+ * names read alike in both runs, so a condition that turns on an output alone
+ * is no skip, while one that runs for a pull request whatever the output is,
+ * and in the queue only for some of its values, is. The event's own names do
+ * not (`readingOf`), and a condition that reads none of them, nor the event's
+ * name, reads alike in both runs under any one assignment, so it needs none
+ * tried. Every condition is read once first, so one that cannot be read is
+ * refused whatever it reads. A function this evaluator runs is run on the
+ * values tried for its arguments, so a skip found that way is one; where an
+ * argument is unknown, `skipsThroughATransform` decides what that search could
+ * not reach.
+ */
+function skipsTheQueue(condition) {
+  const tokens = conditionTokens(condition);
+  evaluate(tokens, condition, {});
+  if (!tokens.some(readsTheEvent)) return false;
+  textTestsDecidable(tokens, condition);
+  return skipFound(tokens, condition, readingsIn(tokens, condition, unknownName)) || skipsThroughATransform(tokens, condition);
+}
+
+/** Whether any assignment of the given readings runs the condition for a pull request and not in the queue. */
+function skipFound(tokens, condition, readings) {
+  for (const values of assignments(condition, readings, candidateValues(literalsIn(tokens)))) if (skipsUnder(tokens, condition, readings, values)) return true;
+  return false;
+}
+
+/**
+ * A condition that calls a function that `transforms` on an unknown, when no value
+ * tried for the unknown skips the queue. The call may still make a value no
+ * value tried makes it make, as `format('x{0}', v)` makes `xa` only from `a`,
+ * so it is tried again with each call's result as an unknown of its own, which
+ * over-reaches: every value the call can make is among those tried, and so are
+ * some it cannot, since `format('x{0}', v)` never makes `y`. No skip then is
+ * none; a skip then may need a value the call cannot make, so the condition
+ * is refused as undecidable rather than passed or failed on a guess.
+ */
+function skipsThroughATransform(tokens, condition) {
+  const calls = tokens.flatMap((token, at) => (transformsAnUnknown(tokens, at) ? [callKey(token.name, argumentsOf(tokens, at))] : []));
+  if (calls.length === 0 || !skipFound(tokens, condition, readingsIn(tokens, condition, readsAnUnknown))) return false;
+  throw new Error(`cannot decide the condition ${JSON.stringify(condition)}: it skips the queue only if ${calls.join(" or ")} makes a value no value tried for its arguments makes it make`);
+}
+
+const PULL_REQUEST_EVENTS = ["pull_request", "pull_request_target"];
+const QUEUE_EVENT = "merge_group";
+
+function skipsUnder(tokens, condition, readings, values) {
+  const outcome = (run, event) => truth(evaluate(tokens, condition, { ...knownIn(run, readings, values), "github.event_name": event }));
+  return PULL_REQUEST_EVENTS.some(event => outcome("pull request", event) !== false) && outcome("queue", QUEUE_EVENT) === false;
+}
+
+/** Whether a function tests text (`FUNCTIONS`), so that one value may have to pass several of its tests at once. */
+const testsText = name => Object.hasOwn(FUNCTIONS, name) && FUNCTIONS[name].tests === true;
+
+/**
+ * Refuses a condition that holds one unknown to more text tests than its
+ * values can pass together. A value is tried joined from two text literals at
+ * most, which passes any two tests at once where one value can, so a third
+ * test of the same value may need a value that is never tried.
+ */
+function textTestsDecidable(tokens, condition) {
+  const counts = new Map();
+  for (const name of textTestOperands(tokens)) counts.set(name, (counts.get(name) ?? 0) + 1);
+  const crowded = [...counts].find(([, count]) => count > 2);
+  if (crowded) throw new Error(`cannot decide the condition ${JSON.stringify(condition)}: it holds ${crowded[0]} to ${crowded[1]} text tests`);
+}
+
+/** Each unknown a text test reads, once for every test that reads it. */
+const textTestOperands = tokens => tokens.flatMap((token, at) => (isTextTest(tokens, at) ? [...new Set(argumentsOf(tokens, at).filter(isUnknownName).map(nameOf))] : []));
+
+const isTextTest = (tokens, at) => testsText(nameOf(tokens[at])) && tokens[at + 1] === "(";
+
+/** What one run reads under an assignment: each unknown's value there, fixed or the one its choice was given. */
+function knownIn(run, readings, values) {
+  return Object.fromEntries(readings.map(({ key, runs }) => [key, "value" in runs[run] ? runs[run].value : values[runs[run].choice]]));
+}
+
+/** The names the repository or the workflow file fixes, which read alike in both runs. */
+const FIXED_NAMES = new Set([
+  "github.repository",
+  "github.repository_id",
+  "github.repository_owner",
+  "github.repository_owner_id",
+  "github.workflow",
+  "github.job",
+  "github.server_url",
+  "github.api_url",
+  "github.graphql_url",
+]);
+
+/** Objects one run's payload lacks, so that every name under one reads as null in that run. */
+const ABSENT = [
+  ["github.event.pull_request", "queue"],
+  ["github.event.merge_group", "pull request"],
+];
+
+/**
+ * How the two runs read a name. Any name under `github` may differ between
+ * them, apart from those the repository or the workflow file fixes, so each
+ * run takes a value of its own; the queue's payload holds no pull request and
+ * a pull request's holds no queue group, so a name under either is null in the
+ * run without it. Every other name, such as an output, reads alike in both.
+ */
+function readingOf(name) {
+  const reading = differsBetweenRuns(name) ? ownInEach(name) : sharedBy(name);
+  for (const [object, run] of ABSENT) if (within(name, object)) reading[run] = { value: null };
+  return reading;
+}
+
+const differsBetweenRuns = name => within(name, "github") && !FIXED_NAMES.has(name);
+
+const within = (name, object) => name === object || name.startsWith(`${object}.`);
+
+const own = (run, key) => ({ choice: `${run}: ${key}` });
+
+const ownInEach = key => ({ "pull request": own("pull request", key), queue: own("queue", key) });
+
+const sharedBy = key => ({ "pull request": { choice: key }, queue: { choice: key } });
+
+/** Whether a token reads the event: its name, or a name the two runs read differently. */
+const readsTheEvent = token => nameOf(token) === "github.event_name" || (isUnknownName(token) && differs(readingOf(nameOf(token))));
+
+const differs = reading => reading.queue.choice !== reading["pull request"].choice;
+
+/** A value equal to no literal a condition could compare it with, as a number or as text. */
+const NONE_OF_THEM = "none of the condition's values";
+
+/** More assignments than this are not tried: the condition is refused as undecidable, not passed. */
+const MOST_ASSIGNMENTS = 20_000;
+
+/**
+ * Every assignment of candidate values to the choices the readings make, made
+ * one at a time so the first that skips the queue ends the search. A name both
+ * runs share is one choice, and a name each run reads for itself is one in
+ * each. A call read as an unknown is a choice too, and may return any of the
+ * values, text as well as `true` and `false`.
+ */
+function* assignments(condition, readings, values) {
+  const choices = [...new Set(readings.flatMap(({ runs }) => Object.values(runs).flatMap(run => ("choice" in run ? [run.choice] : []))))];
+  const count = values.length ** choices.length;
+  if (count > MOST_ASSIGNMENTS) throw new Error(`cannot decide the condition ${JSON.stringify(condition)}: ${count} assignments of what it reads but does not know`);
+  yield* assigned(choices, values, 0, {});
+}
+
+function* assigned(choices, values, index, assignment) {
+  if (index === choices.length) return yield assignment;
+  for (const value of values) yield* assigned(choices, values, index + 1, { ...assignment, [choices[index]]: value });
+}
+
+/**
+ * The values each choice is tried with: each literal the condition holds and
+ * each event's name, which a name may be compared with too; a number below,
+ * between and above its numeric ones; `true`, `false`, empty text, which every
+ * text starts with, ends with and contains, and a value equal to none of them;
+ * and each ordered pair of its texts run together, its literals and the
+ * events' names, so that any two tests of one value that one value can pass
+ * together are passed. Between them they give each comparison every outcome it
+ * can have.
+ */
+function candidateValues(literals) {
+  const numbers = [...new Set(literals.filter(value => value !== "").map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
+  const between = numbers.slice(1).map((number, at) => (numbers[at] + number) / 2);
+  const around = numbers.length > 0 ? [numbers[0] - 1, numbers.at(-1) + 1] : [];
+  const texts = [...new Set([...literals.filter(value => typeof value === "string"), ...PULL_REQUEST_EVENTS, QUEUE_EVENT])];
+  const pairs = texts.flatMap(first => texts.map(second => first + second));
+  return [...new Set([...literals, ...PULL_REQUEST_EVENTS, QUEUE_EVENT, ...between, ...around, true, false, "", NONE_OF_THEM, ...pairs])];
+}
+
+/** Each name and call a condition reads that `readsAsUnknown` reads as unknown, with how the two runs read it; a call is keyed by its arguments. */
+function readingsIn(tokens, condition, readsAsUnknown) {
+  const readings = new Map();
+  tokens.forEach((token, at) => {
+    if (!readsAsUnknown(tokens, at)) return;
+    const [key, runs] = tokens[at + 1] === "(" ? callReading(tokens, at, condition) : [nameOf(token), readingOf(nameOf(token))];
+    readings.set(key, runs);
+  });
+  return [...readings].map(([key, runs]) => ({ key, runs }));
+}
+
+/** Whether the token at `at` is a name or a call this evaluator does not know. */
+const unknownName = (tokens, at) => isUnknownName(tokens[at]);
+
+/** Whether the token at `at` is read as an unknown where a call's result may be any value: an unknown name, or a call that makes something of one. */
+const readsAnUnknown = (tokens, at) => unknownName(tokens, at) || transformsAnUnknown(tokens, at);
+
+/** Whether a function this evaluator runs makes text or a value of its arguments: every one of `FUNCTIONS` that does not test them. */
+const transforms = name => Object.hasOwn(FUNCTIONS, name) && FUNCTIONS[name].tests !== true;
+
+/**
+ * Whether the token at `at` calls a function that `transforms` on an argument that
+ * holds an unknown. The values an unknown is tried with give every comparison
+ * of that unknown each outcome it can have, but not every comparison of what a
+ * function makes of it: `format('x{0}', v) == 'xa'` holds only where `v` is
+ * `a`, and no value tried is (`skipsThroughATransform`). On arguments it
+ * knows, such as the event's name, the call is only ever run.
+ */
+const transformsAnUnknown = (tokens, at) => transforms(nameOf(tokens[at])) && tokens[at + 1] === "(" && argumentsOf(tokens, at).some(isUnknownName);
+
+/**
+ * A call's key and reading, for a call read as an unknown. Its result is read
+ * alike in both runs; one whose arguments read the event could return
+ * something different in each, which no value given here would stand for, so
+ * the condition is refused rather than decided on an invented result.
+ */
+function callReading(tokens, at, condition) {
+  const argumentTokens = argumentsOf(tokens, at);
+  const key = callKey(tokens[at].name, argumentTokens);
+  if (argumentTokens.some(readsTheEvent)) throw new Error(`cannot decide the condition ${JSON.stringify(condition)}: ${key} reads the event, and what it returns is not known`);
+  return [key, sharedBy(key)];
+}
+
+const literalsIn = tokens => tokens.filter(token => typeof token === "object" && "value" in token).map(token => token.value);
+
+function conditionTokens(condition) {
+  const text = condition.trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1").trim();
+  return text === "" ? [] : tokenize(text, condition);
+}
+
+const nameOf = token => (typeof token === "object" && "name" in token ? token.name.toLowerCase() : undefined);
+
+const isUnknownName = token => nameOf(token) !== undefined && !isKnown(nameOf(token));
+
+const isKnown = key => key === "github.event_name" || Object.hasOwn(LITERALS, key) || Object.hasOwn(FUNCTIONS, key);
+
+/** A call's key: its name and the tokens of its arguments, so two calls of one function with different arguments are two unknowns. */
+const callKey = (name, argumentTokens) => `${name.toLowerCase()}(${argumentTokens.map(tokenText).join(" ")})`;
+
+const tokenText = token => (typeof token === "string" ? token : (nameOf(token) ?? JSON.stringify(token.value)));
+
+/** The tokens between the parentheses of the call whose name is at `at`. */
+const argumentsOf = (tokens, at) => tokens.slice(at + 2, closingParen(tokens, at + 1));
+
+/** The index of the parenthesis that closes the one at `open`. */
+function closingParen(tokens, open) {
+  let depth = 0;
+  for (let at = open; at < tokens.length; at += 1) {
+    depth += depthStep(tokens[at]);
+    if (depth === 0) return at;
+  }
+  return tokens.length;
+}
+
+const depthStep = token => (token === "(" ? 1 : token === ")" ? -1 : 0);
+
+const UNKNOWN = Symbol("unknown");
+const TOKEN = /\s*(?:('(?:[^']|'')*')|(\d+(?:\.\d+)?)|(==|!=|<=|>=|&&|\|\||[!<>(),])|([A-Za-z_][\w-]*(?:\.[\w*-]+)*))/y;
+const LITERALS = { true: true, false: false, null: null };
+const RELATIONS = { "<": (a, b) => a < b, "<=": (a, b) => a <= b, ">": (a, b) => a > b, ">=": (a, b) => a >= b };
+
+/**
+ * The expression functions a condition can be decided by, each with how it
+ * runs and whether it tests text (`tests`); every other one makes a value of
+ * its arguments (`transforms`), which is also what one added without saying
+ * is taken to do, the reading that refuses rather than passes. Any function
+ * not here, such as `success()`, is unknown, and so is one that transforms an
+ * unknown.
+ */
+const FUNCTIONS = {
+  always: { run: () => true },
+  contains: { tests: true, run: (within, item) => (Array.isArray(within) ? within.some(entry => looseEqual(entry, item)) : lower(within).includes(lower(item))) },
+  startswith: { tests: true, run: (text, prefix) => lower(text).startsWith(lower(prefix)) },
+  endswith: { tests: true, run: (text, suffix) => lower(text).endsWith(lower(suffix)) },
+  fromjson: { run: text => parsed(textOf(text)) },
+  format: { run: (template, ...values) => formatted(textOf(template), values) },
+  join: { run: (array, separator = ",") => (Array.isArray(array) ? array.map(textOf).join(textOf(separator)) : textOf(array)) },
+  tojson: { run: value => JSON.stringify(value, null, 2) },
+};
+
+/**
+ * `format`'s text: each `{n}` replaced by the nth value as text, and `{{` and
+ * `}}` by a brace. A reference past the values fails GitHub's evaluation,
+ * which decides nothing here.
+ */
+function formatted(template, values) {
+  const references = [...template.matchAll(/\{\{|\}\}|\{(\d+)\}/g)].filter(match => match[1] !== undefined);
+  if (references.some(match => Number(match[1]) >= values.length)) return UNKNOWN;
+  return template.replace(/\{\{|\}\}|\{(\d+)\}/g, (match, index) => (index === undefined ? match[0] : textOf(values[Number(index)])));
+}
+
+/** A JSON document's value; text that is not one fails GitHub's evaluation, which decides nothing here. */
+function parsed(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return UNKNOWN;
+  }
+}
+
+/** A condition's value from its tokens (`conditionTokens`); no condition always runs. */
+function evaluate(tokens, condition, known) {
+  if (tokens.length === 0) return true;
+  const parser = { tokens, at: 0, known, condition };
+  const value = parseOr(parser);
+  if (parser.at !== parser.tokens.length) unreadable(parser.condition);
+  return value;
+}
+
+function tokenize(text, condition) {
+  const pattern = new RegExp(TOKEN.source, "y");
+  const tokens = [];
+  while (pattern.lastIndex < text.length) {
+    const match = pattern.exec(text) ?? unreadable(condition);
+    tokens.push(tokenOf(match));
+  }
+  return tokens;
+}
+
+function tokenOf([, string, number, operator, name]) {
+  if (string !== undefined) return { value: string.slice(1, -1).replaceAll("''", "'") };
+  if (number !== undefined) return { value: Number(number) };
+  return operator ?? { name };
+}
+
+function unreadable(condition) {
+  throw new Error(`cannot read the condition ${JSON.stringify(condition)}`);
+}
+
+function parseOr(parser) {
+  let left = parseAnd(parser);
+  while (take(parser, "||")) left = or3(left, parseAnd(parser));
+  return left;
+}
+
+function parseAnd(parser) {
+  let left = parseEquality(parser);
+  while (take(parser, "&&")) left = and3(left, parseEquality(parser));
+  return left;
+}
+
+function parseEquality(parser) {
+  let left = parseRelation(parser);
+  for (let operator = takeAny(parser, ["==", "!="]); operator; operator = takeAny(parser, ["==", "!="])) {
+    const equal = operator === "==";
+    left = known2(left, parseRelation(parser), (a, b) => looseEqual(a, b) === equal);
+  }
+  return left;
+}
+
+function parseRelation(parser) {
+  let left = parseUnary(parser);
+  for (let operator = takeAny(parser, Object.keys(RELATIONS)); operator; operator = takeAny(parser, Object.keys(RELATIONS))) {
+    const relation = RELATIONS[operator];
+    left = known2(left, parseUnary(parser), (a, b) => relation(Number(a), Number(b)));
+  }
+  return left;
+}
+
+function parseUnary(parser) {
+  if (!take(parser, "!")) return parsePrimary(parser);
+  const operand = parseUnary(parser);
+  return operand === UNKNOWN ? UNKNOWN : !operand;
+}
+
+function parsePrimary(parser) {
+  if (take(parser, "(")) return closed(parser, parseOr(parser));
+  const token = nextOperand(parser);
+  if ("value" in token) return token.value;
+  if (!take(parser, "(")) return lookUp(token.name, parser.known);
+  const from = parser.at;
+  const values = parseArguments(parser);
+  return call(token.name, values, parser.known, callKey(token.name, parser.tokens.slice(from, parser.at - 1)));
+}
+
+/** A literal or a name; an operator, or nothing, where one belongs cannot be read. */
+function nextOperand(parser) {
+  const token = parser.tokens[parser.at];
+  if (typeof token !== "object") unreadable(parser.condition);
+  parser.at += 1;
+  return token;
+}
+
+function parseArguments(parser) {
+  const values = [];
+  if (take(parser, ")")) return values;
+  do values.push(parseOr(parser));
+  while (take(parser, ","));
+  return closed(parser, values);
+}
+
+function closed(parser, value) {
+  if (!take(parser, ")")) unreadable(parser.condition);
+  return value;
+}
+
+function take(parser, operator) {
+  if (parser.tokens[parser.at] !== operator) return false;
+  parser.at += 1;
+  return true;
+}
+
+function takeAny(parser, operators) {
+  return operators.find(operator => take(parser, operator));
+}
+
+function lookUp(name, known) {
+  const key = name.toLowerCase();
+  if (Object.hasOwn(LITERALS, key)) return LITERALS[key];
+  return Object.hasOwn(known, key) ? known[key] : UNKNOWN;
+}
+
+/** A call's value: one an assignment gave that call (`readsAnUnknown`), one the evaluator can decide, or unknown. */
+function call(name, values, known, key) {
+  if (Object.hasOwn(known, key)) return known[key];
+  const fn = name.toLowerCase();
+  return Object.hasOwn(FUNCTIONS, fn) && !values.includes(UNKNOWN) ? FUNCTIONS[fn].run(...values) : UNKNOWN;
+}
+
+/** `&&` with an unknown side: false when the other side is, since either way the result is. */
+function and3(left, right) {
+  if (left === UNKNOWN) return truth(right) === false ? false : UNKNOWN;
+  return left ? right : left;
+}
+
+/** `||` with an unknown side: true when the other side is, since either way the result is. */
+function or3(left, right) {
+  if (left === UNKNOWN) return truth(right) === true ? true : UNKNOWN;
+  return left || right;
+}
+
+function known2(left, right, operation) {
+  return left === UNKNOWN || right === UNKNOWN ? UNKNOWN : operation(left, right);
+}
+
+/** GitHub's `==`: strings ignore case, and values of different types compare as numbers. */
+function looseEqual(a, b) {
+  if (typeof a === "string" && typeof b === "string") return lower(a) === lower(b);
+  return typeof a === typeof b ? a === b : Number(a) === Number(b);
+}
+
+/** A value as text, as GitHub reads one: null is empty. */
+const textOf = value => (value === null ? "" : String(value));
+
+function lower(value) {
+  return textOf(value).toLowerCase();
+}
+
+function truth(value) {
+  return value === UNKNOWN ? UNKNOWN : Boolean(value);
+}
+
+describe("the independent-review gate", () => {
+  const workflow = read(".github/workflows/independent-review.yml");
+  const job = workflow.jobs.review;
+
+  /*
+   * The queue is where the reviews a pull request will get have had time to
+   * arrive, and where the gate decides. It judges from the queue's base with
+   * read-only access, so no queued change can rewrite what counts as a review
+   * of itself.
+   */
+  it("decides in the queue, from the queue's base, with read access only", () => {
+    expect(job.if).toBe("github.event_name == 'merge_group'");
+    const checkout = job.steps.find(step => String(step.uses).startsWith("actions/checkout@"));
+    expect(checkout.with.ref).toBe("${{ github.event.merge_group.base_sha }}");
+    expect(checkout.with["fetch-depth"]).toBe(0);
+    expect(workflow.permissions).toEqual({});
+    expect(Object.values(job.permissions)).toEqual(["read", "read", "read"]);
+    expect(job.steps.at(-1).run).toBe("node scripts/independent-review.mjs");
+  });
+
+  // The job installs no packages, so the script must run with none; that is
+  // proven beside the script, by running it from a copy with none above it.
+  it("installs no packages for the script it runs", () => {
+    expect(job.steps.some(step => /\binstall\b/.test(String(step.run)))).toBe(false);
+  });
+});
+
+describe("the title check's permissions", () => {
+  const workflow = read(".github/workflows/pr-title.yml");
+  const writes = job => Object.values(job.permissions ?? {}).includes("write");
+
+  it("grants nothing at the workflow level, so each job holds only what it declares", () => {
+    expect(workflow.permissions).toEqual({});
+  });
+
+  it("checks the title with a read-only token", () => {
+    const lint = Object.values(workflow.jobs).find(job => job.name === "Validate PR title follows Conventional Commits");
+    expect(writes(lint)).toBe(false);
+  });
+
+  /*
+   * `pull_request_target` hands a write-capable token to a run a fork's pull
+   * request can start. A job holding one must run nothing a checkout could
+   * supply: no checkout, no local action, no shell step.
+   */
+  it("gives write access only to jobs that run no repository code", () => {
+    const writers = Object.entries(workflow.jobs).filter(([, job]) => writes(job));
+    expect(writers.length).toBeGreaterThan(0);
+    for (const [id, job] of writers) {
+      for (const step of job.steps) {
+        expect(String(step.uses ?? ""), `${id}: ${step.name}`).not.toMatch(/^(actions\/checkout@|\.\/)/);
+        expect(step.run, `${id}: ${step.name}`).toBeUndefined();
+      }
+    }
+  });
+
+  /*
+   * In the queue the checked-out tree holds the queued changes, so a queued
+   * change to the validator would judge its own title. The checkout is the
+   * queue's base instead, with the history the queued commits are read from.
+   */
+  it("runs the queue's check from the queue's base, with the queued commits in reach", () => {
+    const checkout = workflow.jobs.lint.steps.find(step => String(step.uses).startsWith("actions/checkout@"));
+    expect(checkout.with.ref).toBe("${{ github.event.merge_group.base_sha }}");
+    expect(checkout.with["fetch-depth"]).toBe("${{ github.event_name == 'merge_group' && '0' || '1' }}");
+  });
+
+  it("never checks out the pull request's own head", () => {
+    for (const job of Object.values(workflow.jobs)) {
+      for (const step of job.steps) expect(JSON.stringify(step.with ?? {})).not.toMatch(/pull_request\.head/);
+    }
+  });
+
+  it("hands the script every rule the workflow sets, through the environment", () => {
+    const action = read(".github/actions/pr-title/action.yml");
+    const env = action.runs.steps[0].env;
+    for (const name of ["TYPES", "SCOPES", "REQUIRE_SCOPE", "SUBJECT_PATTERN", "SUBJECT_PATTERN_ERROR"]) {
+      expect(Object.keys(env)).toContain(name);
+    }
+    const passed = workflow.jobs.lint.steps.find(step => step.id === "lint_pr_title").with;
+    for (const [input, spec] of Object.entries(action.inputs)) {
+      if (spec.required) expect(Object.keys(passed), input).toContain(input);
+    }
+  });
+});
+
+describe("who owns what the required checks run", () => {
+  /*
+   * A pull request runs its own copy of every workflow, action, script and
+   * configuration a required check uses, so a change to any of them can change
+   * what the check decides. `main`'s ruleset requires a code owner's review,
+   * and it applies only to a path CODEOWNERS names, so each of them has to
+   * have an owner there.
+   */
+  const rules = codeOwners(readFileSync(new URL("../.github/CODEOWNERS", import.meta.url), "utf8"));
+
+  // An owner GitHub cannot resolve, or none at all, leaves a path unowned
+  // however well the pattern matches, so each entry names an approved owner.
+  it("names only approved owners, on every entry", () => {
+    for (const rule of rules) expect(rule.owners.length > 0 && rule.owners.every(owner => APPROVED_OWNERS.includes(owner)), `${rule.pattern} ${rule.owners.join(" ")}`).toBe(true);
+  });
+
+  it("owns itself, the hooks, the package scripts and the configuration the checks read", () => {
+    for (const path of [".github/CODEOWNERS", ".husky/pre-commit", ".husky/commit-msg", ".husky/pre-push", "package.json", ...CHECK_CONFIGURATION]) {
+      expect(ownersOf(rules, path), path).not.toEqual([]);
+    }
+  });
+
+  for (const [path, checks] of Object.entries(QUEUE_CHECKS)) {
+    it(`owns ${path}, and every action and script its required jobs run`, () => {
+      const workflow = read(path);
+      for (const used of [path, ...pathsRunBy(workflow, requiredJobs(workflow, checks))]) expect(ownersOf(rules, used), used).not.toEqual([]);
+    });
+  }
+
+  // A lane runs the test script a manifest names, with the configuration
+  // beside it, over the task graph Turbo reads, so each of those is a check
+  // definition too, wherever it sits.
+  it("owns every manifest, task graph, and test, compiler, lint and build configuration in the repository", () => {
+    const definitions = trackedFiles().filter(path => LANE_DEFINITIONS.test(path));
+    // The control: the walk finds the repository's manifests and configurations, not nothing,
+    // and a Rollup configuration by its name alone, as `rollup -c` finds one without being told.
+    expect(definitions.length).toBeGreaterThan(50);
+    expect(definitions).toContain("packages/nextly/rollup.dts.config.ts");
+    // And every Next.js configuration, wherever it sits: the playground's,
+    // which the required build builds, and each template's.
+    expect(definitions).toEqual(expect.arrayContaining(["apps/playground/next.config.ts", "templates/base/next.config.ts", "templates/plugin/dev/next.config.ts"]));
+    for (const path of definitions) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // A configuration runs with whatever it extends or imports, so that is a
+  // check definition too; each is found from the configurations themselves.
+  it("owns every shared configuration a compiler or lint configuration extends or imports", () => {
+    const files = trackedFiles();
+    const packages = workspacePackages(files);
+    const shared = files.filter(path => SHARING_CONFIGURATION.test(path)).flatMap(path => sharedConfigurationOf(path, packages));
+    // The control: the walk reaches the shared packages, not nothing.
+    expect(shared.some(path => path.startsWith("packages/tsconfig/"))).toBe(true);
+    expect(shared.some(path => path.startsWith("packages/eslint-config/"))).toBe(true);
+    // And a relative import, as the nextly package's lint configuration makes of its own rule.
+    expect(shared.some(path => path.startsWith("packages/nextly/"))).toBe(true);
+    for (const path of new Set(shared)) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // A package's build can run a script or a configuration of its own, named
+  // only in its manifest, and what that file does is part of what the check
+  // decides.
+  it("owns every file a package's own scripts run for the tasks the required checks run", () => {
+    const tasks = tasksRequiredChecksRun();
+    // The control: the lanes' tasks, and what the task graph adds to them, but no task only a developer runs.
+    expect([...tasks]).toEqual(expect.arrayContaining(["build", "lint", "check-types", "test", "test:integration", "build:surface-declarations"]));
+    expect(tasks.has("dev")).toBe(false);
+    // Every task reached is one the task graph defines: a dependency on
+    // another package's task (`^build`) or a named package's (`nextly#build`)
+    // is that task, never a name of its own that no script answers to.
+    const graph = parsedJsonc(readRepositoryFile("turbo.jsonc")).tasks;
+    expect([...tasks].filter(task => !Object.hasOwn(graph, task))).toEqual([]);
+    const files = trackedFiles();
+    const tracked = new Set(files);
+    const run = files.filter(path => WORKSPACE_MANIFEST.test(path)).flatMap(manifest => filesTasksRun(manifest, tracked, tasks));
+    // The control: the build steps a package runs from its own directory, directly and through `pnpm run`.
+    expect(run).toEqual(expect.arrayContaining(["packages/nextly/scripts/postbuild.cjs", "packages/nextly/rollup.dts.config.ts", "packages/ui/scripts/check-server-safe-artifacts.ts"]));
+    for (const path of new Set(run)) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // An owned lint rule can import another module, or read a file beside it,
+  // and a change there changes what the rule reports as much as a change to
+  // the rule itself.
+  it("owns every file an owned lint configuration loads, however deep the chain goes", () => {
+    const files = trackedFiles();
+    const tracked = new Set(files);
+    const loaded = loadedThrough(files.filter(path => LINT_CONFIGURATION.test(path)), tracked);
+    // The control: the nextly package's rule, the rule it imports and the allowlist it reads.
+    expect(loaded).toEqual(expect.arrayContaining(["packages/nextly/eslint-bare-error-rule.js", "packages/nextly/eslint-api-key-scope-rule.js", "packages/nextly/eslint-bare-error-allowlist.json"]));
+    for (const path of loaded) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // A setup module runs before every test in its lane, so it can decide what
+  // the tests pass on.
+  it("owns every setup module a test configuration loads", () => {
+    const files = trackedFiles();
+    const tracked = new Set(files);
+    const setups = files.filter(path => TEST_CONFIGURATION.test(path)).flatMap(path => setupModulesOf(path, tracked));
+    // The control: a package's own setup module, the shared one at the root, a
+    // global setup, and the one the browser tests' Playwright configuration runs.
+    expect(setups).toEqual(expect.arrayContaining(["packages/nextly/src/__tests__/setup.ts", "scripts/vitest-dom-setup.ts", "packages/blocks-react/vitest.global-setup.ts", "e2e/global-setup.ts"]));
+    for (const path of new Set(setups)) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // A package script or a setup module can import a helper, and a change to
+  // that helper changes what the check decides as much as one to the file
+  // that imports it. Only test and tooling files are followed: a product
+  // module keeps the review its package gives it.
+  it("owns every test or tooling file a package script or setup module imports", () => {
+    const files = trackedFiles();
+    const tracked = new Set(files);
+    const tasks = tasksRequiredChecksRun();
+    const entries = [
+      ...files.filter(path => WORKSPACE_MANIFEST.test(path)).flatMap(manifest => filesTasksRun(manifest, tracked, tasks)),
+      ...files.filter(path => TEST_CONFIGURATION.test(path)).flatMap(path => setupModulesOf(path, tracked)),
+    ];
+    const imported = toolingImportedBy(entries, tracked);
+    // The control: the guard the UI surface check's build script imports from
+    // a test directory, as `.js` for its `.ts` source.
+    expect(imported).toContain("packages/ui/src/__tests__/ensure-declarations.ts");
+    // The boundary: the product module the nextly setup imports is not followed.
+    expect(imported).not.toContain("packages/nextly/src/plugins/aborted-transaction-sightings.ts");
+    for (const path of new Set(imported)) expect(ownersOf(rules, path), path).not.toEqual([]);
+  });
+
+  // The readers behind the tests above take forms this repository does not use
+  // today, so those tests cannot fail on them; each form is held here instead.
+  it("follows a root script through the root scripts it runs, to the Turbo tasks at the end", () => {
+    const scripts = { "ci:generate": "pnpm generate --force", generate: "turbo run generate", unrelated: "turbo run dev" };
+    expect([...commandsRunBy(["pnpm ci:generate"], scripts)].flatMap(turboTasksIn)).toEqual(["generate"]);
+  });
+
+  it("reads a task's package-scoped definitions as well as its shared one", () => {
+    const graph = { test: { dependsOn: ["^build"] }, "some-package#test": { dependsOn: ["generate"] }, "other#lint": { dependsOn: ["format"] } };
+    expect(dependenciesOf(graph, "test").sort()).toEqual(["build", "generate"]);
+  });
+
+  it("reads every form in which a module loads a file beside it", () => {
+    const text = [
+      'import rule from "./rule.js";',
+      'import "./side-effect.js";',
+      'export { other } from "./re-export.js";',
+      'const required = require("./required.cjs");',
+      'const dynamic = await import("./dynamic.mjs");',
+      'const list = readFileSync(new URL("./list.json", import.meta.url), "utf8");',
+      'import shared from "@scope/shared";',
+    ].join("\n");
+    const loads = loadsIn(text, "packages/a/eslint.config.mjs");
+    expect(loads.map(load => load.target).sort()).toEqual(["dynamic.mjs", "list.json", "re-export.js", "required.cjs", "rule.js", "side-effect.js"].map(file => `packages/a/${file}`));
+    // A file it reads is not an import, and is not held to resolving.
+    expect(loads.filter(load => !load.imported).map(load => load.specifier)).toEqual(["././list.json"]);
+  });
+
+  it("takes nothing for an import that sits in a comment or a string", () => {
+    // The shapes the repository held on 2026-09-26: a comment naming a file,
+    // and a child process's source in a string.
+    const text = [
+      '// a rollup plugin rewrites `from "./foo.js"` in the declarations',
+      "/* require(\"../bar.cjs\") */",
+      "execSync(`node -e \"import('./dist/index.mjs')\"`);",
+      "const example = 'import(\"./a\")';",
+      'import real from "./real.js";',
+    ].join("\n");
+    expect(loadsIn(text, "packages/a/scripts/x.ts").map(load => load.specifier)).toEqual(["./real.js"]);
+  });
+
+  it("fails on a relative import no tracked file answers, naming the import and the module", () => {
+    const files = { "packages/x/eslint.config.mjs": 'import rule from "./rule.js";\nimport gone from "./gone.js";', "packages/x/rule.ts": "" };
+    const walk = () => loadedThrough(["packages/x/eslint.config.mjs"], new Set(Object.keys(files)), path => files[path]);
+    expect(walk).toThrow('packages/x/eslint.config.mjs imports "./gone.js", which names no tracked file');
+    const tooling = { "packages/x/scripts/build.ts": 'import { helper } from "./helper.js";' };
+    expect(() => toolingImportedBy(["packages/x/scripts/build.ts"], new Set(Object.keys(tooling)), path => tooling[path])).toThrow('packages/x/scripts/build.ts imports "./helper.js"');
+  });
+
+  it("leaves out a file a module reads that is not tracked, since a build can write it", () => {
+    const files = { "packages/x/eslint.config.mjs": 'const list = readFileSync("generated.json", "utf8");' };
+    expect(loadedThrough(["packages/x/eslint.config.mjs"], new Set(Object.keys(files)), path => files[path])).toEqual([]);
+  });
+
+  it.each([
+    ["a JavaScript import of its TypeScript source", "d/x.js", "d/x.ts"],
+    ["a JavaScript import of its TSX source", "d/x.js", "d/x.tsx"],
+    ["a JSX import of its TSX source", "d/x.jsx", "d/x.tsx"],
+    ["an ES module import of its TypeScript source", "d/x.mjs", "d/x.mts"],
+    ["a CommonJS import of its TypeScript source", "d/x.cjs", "d/x.cts"],
+    ["an import with no extension, of a JSX file", "d/x", "d/x.jsx"],
+    ["an import with no extension, of a CommonJS TypeScript file", "d/x", "d/x.cts"],
+    ["a directory's TSX index", "d/x", "d/x/index.tsx"],
+    ["a directory's ES module index", "d/x", "d/x/index.mjs"],
+  ])("resolves %s", (_, imported, file) => {
+    expect(resolvedModules(imported, new Set([file]))).toEqual([file]);
+  });
+
+  it("resolves an import to every file it can name, whichever of them the tool that loads it picks", () => {
+    // TypeScript compiles `./x.jsx` from `x.tsx`, and a runtime that loads it
+    // as written gets `x.jsx`, so a change to either changes what runs.
+    expect(resolvedModules("d/x.jsx", new Set(["d/x.jsx", "d/x.tsx"])).sort()).toEqual(["d/x.jsx", "d/x.tsx"]);
+  });
+
+  it("reads the imports of every module a lint configuration's walk reaches, in any module extension", () => {
+    // The configuration imports a helper written in TSX, which alone imports the rule.
+    const files = {
+      "packages/x/eslint.config.mjs": 'import { helper } from "./helper.jsx";',
+      "packages/x/helper.tsx": 'import rule from "./rule.js";',
+      "packages/x/rule.ts": "",
+    };
+    expect(loadedThrough(["packages/x/eslint.config.mjs"], new Set(Object.keys(files)), path => files[path]).sort()).toEqual(["packages/x/helper.tsx", "packages/x/rule.ts"]);
+  });
+
+  it("follows a test or tooling file's imports into the ones it imports in turn, and never through a product module", () => {
+    // No such chain is in the repository today, so the files are given here:
+    // the entry imports a helper, which alone imports the guard, and a product
+    // module, which alone imports another test file.
+    const files = {
+      "packages/x/scripts/build.ts": 'import { helper } from "./helper.js";',
+      "packages/x/scripts/helper.ts": 'import { guard } from "../src/__tests__/guard.js";\nimport { product } from "../src/product.js";',
+      "packages/x/src/__tests__/guard.tsx": "",
+      "packages/x/src/product.ts": 'import { other } from "./__tests__/other.js";',
+      "packages/x/src/__tests__/other.ts": "",
+    };
+    const imported = toolingImportedBy(["packages/x/scripts/build.ts"], new Set(Object.keys(files)), path => files[path]);
+    expect(imported.sort()).toEqual(["packages/x/scripts/helper.ts", "packages/x/src/__tests__/guard.tsx"]);
+  });
+
+  it("reads a setup key given a string or strings, and refuses any other form rather than read it as naming nothing", () => {
+    const config = "packages/a/vitest.config.ts";
+    expect(setupModulesIn('test: { setupFiles: ["./setup.ts", "../shared.ts"], globalSetup: "./global.ts" }', config)).toEqual(["packages/a/setup.ts", "packages/shared.ts", "packages/a/global.ts"]);
+    expect(setupModulesIn('globalTeardown: "./teardown.ts",', "e2e/playwright.config.ts")).toEqual(["e2e/teardown.ts"]);
+    for (const unread of ["setupFiles: [setup]", 'globalSetup: require.resolve("./global.ts")', "test: { setupFiles }", "setupFiles: setups,"]) {
+      expect(() => setupModulesIn(unread, config), unread).toThrow(/cannot read/);
+    }
+  });
+
+  it("names a program a package script runs in any JavaScript or TypeScript form", () => {
+    const named = script => [...script.matchAll(LOCAL_FILE)].map(([, file]) => file);
+    expect(named("tsx scripts/generate.mts && node ./bin/run.cts && tsx src/cli.tsx --check scripts/x.js")).toEqual(["scripts/generate.mts", "./bin/run.cts", "src/cli.tsx", "scripts/x.js"]);
+  });
+
+  it("reads a step's shell and the inputs it hands an action, not its name or a whole-line comment", () => {
+    expect(stepTexts({ name: "turbo run dev", run: "# turbo run dev\npnpm test" })).toEqual(["\npnpm test"]);
+    expect(stepTexts({ uses: "actions/github-script@v7", with: { script: "require('./scripts/x.cjs')" } })).toEqual(["", "require('./scripts/x.cjs')"]);
+  });
+
+  it("reads what a local action's steps run, never the prose around them", () => {
+    const integration = read(".github/workflows/integration.yml");
+    const { actions, texts } = runBy(integration, requiredJobs(integration, QUEUE_CHECKS[".github/workflows/integration.yml"]));
+    const setup = ".github/actions/integration-setup/action.yml";
+    const action = load(readRepositoryFile(setup));
+    // The control: the jobs use the action, and what its steps run is read.
+    expect(actions).toContain(setup);
+    expect(texts).toEqual(expect.arrayContaining(action.runs.steps.filter(step => step.run).map(step => step.run)));
+    expect(texts.some(text => text.includes(action.description.slice(0, 40)))).toBe(false);
+  });
+
+  // The control: the walk reaches the scripts a required job runs, named
+  // directly and through a package script, so an owned list is not an empty one.
+  it("finds the scripts the CI gate's jobs run, directly and through a package script", () => {
+    const ci = read(".github/workflows/ci.yml");
+    const paths = pathsRunBy(ci, requiredJobs(ci, QUEUE_CHECKS[".github/workflows/ci.yml"]));
+    expect(paths).toEqual(expect.arrayContaining(["scripts/change-scope.mjs", "scripts/check-comment-convention.mjs", "package.json"]));
+  });
+
+  it("reads only the patterns it understands, and refuses any other rather than guess", () => {
+    for (const unread of ["**/x.mjs @a", "docs/x.md @a", "x?.md @a", "[ab].md @a", "!x.md @a"]) expect(() => codeOwners(unread), unread).toThrow(/reads only anchored paths and directories, and file names at any depth/);
+    expect(ownersOf(codeOwners("/scripts/ @a\n/scripts/x.mjs @b"), "scripts/x.mjs")).toEqual(["@b"]);
+    expect(ownersOf(codeOwners("/scripts/ @a\n/scripts/x.mjs"), "scripts/x.mjs")).toEqual([]);
+    // A file name matches at any depth; an anchored path only where it is; a star never crosses a slash.
+    expect(ownersOf(codeOwners("package.json @a"), "packages/nextly/package.json")).toEqual(["@a"]);
+    expect(ownersOf(codeOwners("/package.json @a"), "packages/nextly/package.json")).toEqual([]);
+    expect(ownersOf(codeOwners("vitest*.config.* @a"), "packages/ui/vitest.integration.config.ts")).toEqual(["@a"]);
+    expect(ownersOf(codeOwners("/packages/*.json @a"), "packages/nextly/package.json")).toEqual([]);
+  });
+});
+
+/** Who may approve a change to the checks. Adding an owner is a decision about that, made here and in CODEOWNERS together. */
+const APPROVED_OWNERS = ["@mobeenabdullah"];
+
+/** Configuration a required check reads, where a change alters what it decides. */
+const CHECK_CONFIGURATION = [
+  "pnpm-workspace.yaml",
+  "pnpm-lock.yaml",
+  ".nvmrc",
+  "turbo.jsonc",
+  ".changeset/config.json",
+  ".commitlintrc.json",
+  ".fallowrc.jsonc",
+  ".gitleaks.toml",
+  "eslint.config.mjs",
+  "eslint.scripts.config.mjs",
+  "fallow-health-baseline.json",
+  "lint-staged.config.mjs",
+  "tsconfig.base.json",
+  "vitest.config.ts",
+];
+
+/**
+ * CODEOWNERS rules, in order. Two forms are read: an anchored path or
+ * directory, whose segments may hold a `*` that stays within one segment, and
+ * a bare file name, which matches at any depth. Any other pattern is refused
+ * rather than guessed at, since a guess at what a glob matches is exactly the
+ * reading that would pass an unowned path.
+ */
+function codeOwners(text) {
+  return text
+    .split("\n")
+    .map(line => line.replace(/#.*$/, "").trim())
+    .filter(Boolean)
+    .map(line => {
+      const [pattern, ...owners] = line.split(/\s+/);
+      return { pattern, owners, matches: matcherFor(readablePattern(pattern)) };
+    });
+}
+
+const ANCHORED = /^\/[\w.*-]+(?:\/[\w.*-]+)*\/?$/;
+const FILE_NAME = /^[\w.*-]+$/;
+
+function readablePattern(pattern) {
+  if (pattern.includes("**") || !(ANCHORED.test(pattern) || FILE_NAME.test(pattern))) {
+    throw new Error(`this test reads only anchored paths and directories, and file names at any depth, not ${pattern}`);
+  }
+  return pattern;
+}
+
+function matcherFor(pattern) {
+  const glob = part => part.split("*").map(text => text.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*");
+  if (FILE_NAME.test(pattern)) return new RegExp(`(?:^|/)${glob(pattern)}$`);
+  return new RegExp(`^${glob(pattern.slice(1))}${pattern.endsWith("/") ? "" : "$"}`);
+}
+
+/** A path's owners: the last rule that matches it decides, and a rule with no owners leaves it unowned. */
+function ownersOf(rules, path) {
+  return rules.filter(rule => rule.matches.test(path)).at(-1)?.owners ?? [];
+}
+
+/** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|tsup|rollup)[^/]*\.config\.[^/]+)$/;
+
+/** A workspace package's manifest, whose scripts Turbo runs. */
+const WORKSPACE_MANIFEST = /^(?:packages|apps)\/[^/]+\/package\.json$|^e2e\/package\.json$/;
+const LINT_CONFIGURATION = /(?:^|\/)eslint[^/]*\.config\.[^/]+$/;
+const TEST_CONFIGURATION = /(?:^|\/)(?:vitest|playwright)[^/]*\.config\.[^/]+$/;
+/** A file a package script names from the package's own directory, as a program in any JavaScript or TypeScript form, a shell script or data. */
+const LOCAL_FILE = /(?:^|[\s="'])(\.{0,2}\/?[\w./-]+\.(?:[cm]?js|jsx|[cm]?ts|tsx|sh|json))(?=$|[\s"';&|)])/g;
+
+/** A JSONC text as data: comments outside strings removed, and trailing commas. */
+function parsedJsonc(text) {
+  const withoutComments = text.replace(/("(?:\\.|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (match, string) => string ?? "");
+  return JSON.parse(withoutComments.replace(/,(\s*[}\]])/g, "$1"));
+}
+
+/**
+ * The Turbo tasks the required checks run: each `turbo run <task>` in the
+ * required jobs, directly or through the root script a step names, with the
+ * tasks those depend on in the task graph. A task only a developer runs, such
+ * as `dev`, is left out, so what it names is not held to an owner.
+ */
+function tasksRequiredChecksRun() {
+  const texts = Object.entries(QUEUE_CHECKS).flatMap(([path, checks]) => {
+    const workflow = read(path);
+    return runBy(workflow, requiredJobs(workflow, checks)).texts;
+  });
+  const named = [...commandsRunBy(texts)].flatMap(turboTasksIn);
+  const graph = parsedJsonc(readRepositoryFile("turbo.jsonc")).tasks;
+  return reachable(named, task => dependenciesOf(graph, task));
+}
+
+/** The tasks a command runs through Turbo: `turbo build` and `turbo run build` alike, each task it lists before its first flag. */
+function turboTasksIn(text) {
+  return [...text.matchAll(/\bturbo (?:run )?((?:\w[\w:-]*[ \t]*)+)/g)].flatMap(match => match[1].trim().split(/\s+/));
+}
+
+/**
+ * The tasks one task depends on in the task graph: through its shared
+ * definition and through each package's own (`<package>#<task>`), which can add
+ * dependencies of its own. A dependency's `^` and `<package>#` prefixes are set
+ * aside, since what is reached is the task.
+ */
+function dependenciesOf(graph, task) {
+  const definitions = Object.entries(graph).filter(([name]) => name === task || name.endsWith(`#${task}`));
+  return definitions.flatMap(([, definition]) => definition.dependsOn ?? []).map(dependency => dependency.replace(/^\^/, "").replace(/^.*#/, ""));
+}
+
+/**
+ * Everything reachable from `starts` by following `next`, the starts
+ * included, each item visited once: the one walk the task graph, a package's
+ * scripts and a module's imports are each followed with.
+ */
+function reachable(starts, next) {
+  const seen = new Set();
+  const pending = [...starts];
+  while (pending.length > 0) {
+    const item = pending.pop();
+    if (seen.has(item)) continue;
+    seen.add(item);
+    pending.push(...next(item));
+  }
+  return seen;
+}
+
+/**
+ * The repository files a package's scripts name for the given tasks,
+ * following `pnpm run <script>` to the scripts those call in the same package.
+ */
+function filesTasksRun(manifest, tracked, tasks) {
+  const directory = posix.dirname(manifest);
+  const scripts = JSON.parse(readRepositoryFile(manifest)).scripts ?? {};
+  const run = reachable([...tasks].filter(task => task in scripts), name => scriptsCalledBy(scripts, name));
+  const named = [...run].flatMap(name => [...scripts[name].matchAll(LOCAL_FILE)].map(([, file]) => posix.normalize(posix.join(directory, file))));
+  return named.filter(path => tracked.has(path));
+}
+
+/** The scripts of the same package that one script runs with `pnpm run` or `npm run`. */
+function scriptsCalledBy(scripts, name) {
+  return [...scripts[name].matchAll(/\b(?:pnpm|npm)\s+(?:run\s+)?([\w:-]+)/g)].map(([, called]) => called).filter(called => called in scripts);
+}
+
+/**
+ * The repository files a set of modules loads, however deep: each relative
+ * import, resolved as a configuration's imports are, and each file a module
+ * reads with `readFileSync`, which is how a rule reads its allowlist. A file
+ * that is not a module, such as that allowlist, is reached but not read.
+ */
+function loadedThrough(roots, tracked, readFile = readRepositoryFile) {
+  const reached = reachable(roots, path => (isModule(path) ? loadedBy(path, tracked, readFile) : []));
+  return [...reached].filter(path => !roots.includes(path));
+}
+
+/**
+ * The files a module loads, as tracked paths; `readFile` reads its text, the
+ * repository's copy unless told otherwise. A relative import that names no
+ * tracked file fails the walk, naming the import and the module: left out, the
+ * file it was written for would go unowned. A file read with `readFileSync`
+ * that is not tracked, such as one a build writes, is left out.
+ */
+function loadedBy(path, tracked, readFile = readRepositoryFile) {
+  return loadsIn(readFile(path), path).flatMap(load => filesLoaded(load, path, tracked));
+}
+
+function filesLoaded({ specifier, target, imported }, from, tracked) {
+  const files = resolvedModules(target, tracked);
+  if (imported && files.length === 0) throw new Error(`${from} imports "${specifier}", which names no tracked file`);
+  return files;
+}
+
+/** The TypeScript sources a JavaScript extension compiles from: `./x.js` is written for `./x.ts` or `./x.tsx`. */
+const SOURCES_OF = { ".js": [".ts", ".tsx"], ".jsx": [".tsx"], ".mjs": [".mts"], ".cjs": [".cts"] };
+/** Every extension a module is written with here, and so every one an import can leave out. */
+const MODULE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+/** Whether the walks read a file's imports: a module in any of those extensions, never a file it only reads, such as an allowlist. */
+const isModule = path => MODULE_EXTENSIONS.some(extension => path.endsWith(extension));
+
+/**
+ * Every tracked file an import can name, resolved as TypeScript and Node
+ * resolve it: as written, from the TypeScript source a JavaScript extension
+ * names, or with an extension or an index file added, in any module
+ * extension. All of them, not the first: which one runs depends on what loads
+ * the module, since TypeScript compiles `./x.js` from `x.ts` where a runtime
+ * that loads it as written gets `x.js`, and a change to either changes what
+ * runs.
+ */
+function resolvedModules(path, tracked) {
+  const [, stem, written] = /^(.*?)(\.[cm]?jsx?)?$/.exec(path);
+  const typescript = (SOURCES_OF[written] ?? []).map(extension => `${stem}${extension}`);
+  const added = [...MODULE_EXTENSIONS, ...MODULE_EXTENSIONS.map(extension => `/index${extension}`)].map(extension => `${path}${extension}`);
+  return [path, ...typescript, ...added].filter(candidate => tracked.has(candidate));
+}
+
+/**
+ * A test or tooling file: one under a `scripts/` or `__tests__/` directory.
+ * What a check's own code imports from these is part of the check. A product
+ * module it imports keeps the review its package gives it, and is not walked
+ * through.
+ */
+const TOOLING = /(?:^|\/)(?:scripts|__tests__)\//;
+
+/** The test and tooling files a set of modules imports, however deep, the modules themselves left out. */
+function toolingImportedBy(roots, tracked, readFile = readRepositoryFile) {
+  const reached = reachable(roots, path => (isModule(path) ? loadedBy(path, tracked, readFile).filter(target => TOOLING.test(target)) : []));
+  return [...reached].filter(path => !roots.includes(path));
+}
+
+/**
+ * The files beside it a module's text loads: each relative import in any form,
+ * and each file it reads with `readFileSync`, with the repository path it
+ * names and whether it is an import.
+ */
+function loadsIn(text, path) {
+  const beside = imported => specifier => ({ specifier, target: repositoryPathOf(specifier, path, new Map()), imported });
+  const read = [...text.matchAll(/readFileSync\(([^;]*?)["']utf-?8["']/g)].flatMap(match => [...match[1].matchAll(/["']([^"']+)["']/g)].map(literal => `./${literal[1]}`));
+  return [...importsIn(text).filter(specifier => specifier.startsWith(".")).map(beside(true)), ...read.map(beside(false))];
+}
+
+/** The modules a test configuration's setup keys name, as repository paths. */
+function setupModulesOf(path, tracked) {
+  return setupModulesIn(readRepositoryFile(path), path).filter(module => tracked.has(module));
+}
+
+/**
+ * The modules `setupFiles`, `globalSetup` and `globalTeardown` name in a
+ * configuration's text. Only a string, or an array of strings, can be read
+ * from the text; a key given a variable, a call or anything else is refused
+ * rather than read as naming nothing, which would leave its module unowned.
+ */
+function setupModulesIn(text, path) {
+  const shorthand = SETUP_SHORTHAND.exec(text);
+  if (shorthand) throw new Error(`${path} gives ${shorthand[1]} a variable, which this test cannot read`);
+  return [...text.matchAll(SETUP_KEY)].flatMap(key => {
+    const value = SETUP_VALUE.exec(text.slice(key.index + key[0].length));
+    if (!value) throw new Error(`${path} declares ${key[1]} in a form this test cannot read: ${text.slice(key.index, key.index + 80)}`);
+    return [...value[0].matchAll(/["']([^"']+)["']/g)].map(match => posix.normalize(posix.join(posix.dirname(path), match[1])));
+  });
+}
+
+const SETUP_KEY = /\b(setupFiles|globalSetup|globalTeardown)\s*:\s*/g;
+const SETUP_SHORTHAND = /\b(setupFiles|globalSetup|globalTeardown)\s*[,}]/;
+const SETUP_VALUE = /^(?:\[\s*(?:["'][^"'\n]+["']\s*,?\s*)*\]|["'][^"'\n]+["'])/;
+
+/** Compiler and lint configuration, which may extend or import shared configuration. */
+const SHARING_CONFIGURATION = /(?:^|\/)(?:tsconfig[^/]*\.json|eslint[^/]*\.config\.[^/]+)$/;
+const EXTENDS = /"extends"\s*:\s*(\[[^\]]*\]|"[^"]*")/;
+/**
+ * The modules a module's text imports, as written: `import … from`,
+ * `export … from`, a bare `import` for its side effects, `require()` and
+ * `import()`. TypeScript's own scanner reads them, so text that only looks like
+ * an import, in a comment or in a string such as a child process's source, is
+ * never taken for one.
+ */
+function importsIn(text) {
+  return ts.preProcessFile(text, true, true).importedFiles.map(file => file.fileName);
+}
+
+function readRepositoryFile(path) {
+  return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+}
+
+/** The workspace's packages by name, so a specifier naming one resolves to its directory. */
+function workspacePackages(files) {
+  const manifests = files.filter(path => /^packages\/[^/]+\/package\.json$/.test(path));
+  return new Map(manifests.map(path => [JSON.parse(readRepositoryFile(path)).name, posix.dirname(path)]));
+}
+
+/** The repository files a configuration extends or imports: a relative path, or a workspace package by name. */
+function sharedConfigurationOf(path, packages) {
+  const text = readRepositoryFile(path);
+  const extended = EXTENDS.exec(text)?.[1] ?? "";
+  const specifiers = [...[...extended.matchAll(/"([^"]+)"/g)].map(match => match[1]), ...importsIn(text)];
+  return specifiers.map(specifier => repositoryPathOf(specifier, path, packages)).filter(Boolean);
+}
+
+function repositoryPathOf(specifier, from, packages) {
+  if (specifier.startsWith(".")) return posix.normalize(posix.join(posix.dirname(from), specifier));
+  const [scope, name, ...rest] = specifier.split("/");
+  const directory = packages.get(`${scope}/${name}`);
+  return directory ? `${directory}/${rest.join("/") || "package.json"}` : null;
+}
+
+function trackedFiles() {
+  return execFileSync("git", ["ls-files", "-z"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8" }).split("\0").filter(Boolean);
+}
+
+const PACKAGE_SCRIPTS = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts;
+const SCRIPT_PATH = /\bscripts\/[\w./-]+\.(?:mjs|cjs|js|sh)\b/g;
+
+/** What a set of jobs runs: the local actions it uses, however nested, and what each of its steps and theirs runs. */
+function runBy(workflow, ids) {
+  const steps = ids.flatMap(id => workflow.jobs[id].steps ?? []);
+  const actions = [...reachable(localActionsOf(steps), action => localActionsOf(actionSteps(action)))];
+  return { actions, texts: [...steps, ...actions.flatMap(actionSteps)].flatMap(stepTexts) };
+}
+
+/** The local actions a list of steps uses, as the paths of their definitions. */
+function localActionsOf(steps) {
+  return steps.map(step => String(step.uses ?? "")).filter(uses => uses.startsWith("./")).map(uses => `${uses.slice(2)}/action.yml`);
+}
+
+/** A composite action's steps, read from its definition, so its name and descriptions are never taken for commands. */
+function actionSteps(path) {
+  return load(readRepositoryFile(path))?.runs?.steps ?? [];
+}
+
+/**
+ * What one step runs: its shell, and the inputs it hands an action, which can
+ * be code, as the script `actions/github-script` runs is. A whole-line comment
+ * in either runs nothing, so prose there that mentions a command is dropped.
+ */
+function stepTexts(step) {
+  return [step.run ?? "", ...Object.values(step.with ?? {})].map(value => String(value).replace(/^[ \t]*#.*$/gm, ""));
+}
+
+/** The local actions a set of jobs uses, and the scripts their steps name, directly or through a package script. */
+function pathsRunBy(workflow, ids) {
+  const { actions, texts } = runBy(workflow, ids);
+  return [...new Set([...actions, ...[...commandsRunBy(texts)].flatMap(scriptsNamedIn)])];
+}
+
+/** Each command step texts run: the texts themselves, and every root script they name, followed through the root scripts it names in turn. */
+function commandsRunBy(texts, scripts = PACKAGE_SCRIPTS) {
+  return reachable(texts, text => rootScriptsNamedIn(text, scripts));
+}
+
+/** The root package scripts a command runs with `pnpm <script>`, as their commands. */
+function rootScriptsNamedIn(text, scripts = PACKAGE_SCRIPTS) {
+  return [...text.matchAll(/\bpnpm (?:run )?([\w:-]+)/g)].map(match => scripts[match[1]]).filter(Boolean);
+}
+
+function scriptsNamedIn(text) {
+  const viaPackage = rootScriptsNamedIn(text);
+  return [...[text, ...viaPackage].flatMap(source => [...source.matchAll(SCRIPT_PATH)].map(match => match[0])), ...(viaPackage.length > 0 ? ["package.json"] : [])];
+}

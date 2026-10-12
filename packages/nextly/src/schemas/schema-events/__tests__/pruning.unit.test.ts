@@ -22,7 +22,9 @@ describe("selectPrunableEventIds", () => {
       { ...baseRow, id: "a", eventType: "file_apply" as const },
       { ...baseRow, id: "b", eventType: "core_apply" as const },
     ];
-    expect(selectPrunableEventIds(rows, { retentionDays: 30, now })).toEqual([]);
+    expect(selectPrunableEventIds(rows, { retentionDays: 30, now })).toEqual(
+      []
+    );
   });
 
   it("prunes dev_push/ui_save/db_sync older than retentionDays", () => {
@@ -38,9 +40,9 @@ describe("selectPrunableEventIds", () => {
       id: "new",
       startedAt: new Date("2026-01-25T00:00:00Z"),
     };
-    expect(selectPrunableEventIds([recent], { retentionDays: 30, now })).toEqual(
-      []
-    );
+    expect(
+      selectPrunableEventIds([recent], { retentionDays: 30, now })
+    ).toEqual([]);
   });
 
   it("never prunes a row referenced by another row's superseded_event_ids (guard §4.3.2)", () => {

@@ -704,6 +704,28 @@ function usablePageSize(pageSize: number | undefined): number {
     : DEFAULT_PAGE_SIZE;
 }
 
+/**
+ * The name a class is heading for, read as the record's OWN entry.
+ *
+ * A class id is stored data, so this record can be asked about any string. An
+ * index answers an inherited property for some of them, `__proto__` among them,
+ * and the row would then compare an edit against that object rather than a
+ * name, sending a name typed away and back as a rename.
+ *
+ * `null` is taken as no record, as an omitted one is. The prop's type excludes
+ * it, but a host written in JavaScript can still pass it, and `Object.hasOwn`
+ * throws on it where an optional index would have answered nothing.
+ */
+function pendingSlugFor(
+  pendingSlugs: Readonly<Record<string, string>> | null | undefined,
+  classId: string
+): string | undefined {
+  if (pendingSlugs === undefined || pendingSlugs === null) return undefined;
+  return Object.hasOwn(pendingSlugs, classId)
+    ? pendingSlugs[classId]
+    : undefined;
+}
+
 function ClassList({
   rows,
   searching,
@@ -793,7 +815,7 @@ function ClassList({
           <li key={row.id} className="nx-classman__row">
             <ClassRowView
               row={row}
-              pendingSlug={pendingSlugs?.[row.id]}
+              pendingSlug={pendingSlugFor(pendingSlugs, row.id)}
               library={library}
               styles={stylesById.get(row.id)}
               styleContext={styleContext}

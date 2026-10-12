@@ -29,16 +29,22 @@ file by hand under `.changeset/` following an existing one.
    lockstep, and updates changelogs.
 3. **Merging the Version PR publishes**: the release workflow builds and
    publishes all packages to npm via trusted publishing (OIDC) in the
-   protected environment. There are no local publishes; never run
-   `changeset publish` or `npm publish` yourself.
+   protected environment. Every real version is published this way; never run
+   `changeset publish` or `npm publish` yourself. The one exception is the
+   `0.0.0` placeholder that claims a brand-new package name: a maintainer with
+   publish rights on npm runs `scripts/release/bootstrap-package.mjs` once,
+   locally, and the helper refuses to publish when `CI` is set. See
+   "Bootstrapping a brand-new package" below.
 4. Tags (`vX.Y.Z-alpha.N`) and a consolidated GitHub Release are created by
    the workflow.
 
 ## Known gotchas (learned the hard way)
 
-- The release workflow pins an exact npm version on purpose (a floating
-  `npm@latest` once broke every release via an engines bump). Do not
-  "simplify" it back to latest.
+- The release workflow no longer upgrades npm, on purpose. `pnpm publish`
+  performs the OIDC token exchange itself, so the version trusted publishing
+  depends on is the pnpm in `packageManager`, not the npm on `PATH`. Do not add
+  an npm upgrade step back; the comment on the Node setup step in
+  `.github/workflows/release.yml` says why the old pin is obsolete.
 - Old branches can restore already-published changeset files on merge; if
   the Version PR suddenly lists ancient entries, check for resurrected
   `.changeset/*.md` files and delete them in a cleanup PR.
@@ -116,7 +122,19 @@ For each new package name, in order:
    workflow `release.yml`, environment `Production`. The environment name must
    match the release workflow's `environment:` exactly, or publishing fails
    with the same 404.
-4. Re-run the release so the package rejoins the train.
+4. Add the package name to `packages` in
+   `scripts/release/first-publish-acknowledged.json`, in the same pull request
+   that adds the package (or, when that has already merged, in one of its
+   own), and only after step 3. Preflight reads that file. It refuses to start
+   a release while a package's only npm version is the `0.0.0` placeholder and
+   its name is not listed, because nothing on the registry shows whether step 3
+   was done. Once the package has published a real version, preflight says the
+   entry is no longer needed; remove it then.
+5. If a release was already blocked on this package, re-run it so the package
+   rejoins the train. Preflight reads the list from the commit being released,
+   so the entry has to be on `main` first. Re-running the blocked workflow run
+   reuses its old commit and is refused again; land the change on `main` with
+   no new changeset instead, as in "Recovering a partial release" above.
 
 There is no CI-only path for step 2, and no override for it: OIDC cannot perform
 a package's first publish, and giving CI a long-lived npm token just to claim a

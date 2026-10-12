@@ -32,6 +32,8 @@ import { ROUTES } from "@admin/constants/routes";
 import { useRoles } from "@admin/hooks/queries/useRoles";
 import { useUserFields } from "@admin/hooks/queries/useUserFields";
 import { useUser, useUpdateUser } from "@admin/hooks/queries/useUsers";
+import { useDashboardUser } from "@admin/hooks/useDashboardUser";
+import { useLogout } from "@admin/hooks/useLogout";
 import { useRouter } from "@admin/hooks/useRouter";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
@@ -41,6 +43,8 @@ import {
   editUserFormSchema,
   type EditUserFormValues,
 } from "@admin/types/userform";
+
+import { ownSessionEndingMessage } from "./own-session-ending";
 
 /**
  * EditUserPage Component
@@ -112,6 +116,10 @@ export default function EditUserPage(): ReactElement {
 
   // TanStack Query: Update user mutation
   const { mutate: updateUser, isPending: isUpdating } = useUpdateUser();
+
+  // The signed-in user, to tell an edit of your own account from another's.
+  const { user: signedInUser } = useDashboardUser();
+  const logout = useLogout();
 
   // React Hook Form
   const form = useForm<EditUserFormValues>({
@@ -224,22 +232,34 @@ export default function EditUserPage(): ReactElement {
       | Record<string, unknown>
       | undefined;
 
+    const updates = {
+      name: values.fullName,
+      email: values.email,
+      // Only send password if user explicitly entered a new one (trimmed to handle whitespace-only input)
+      password: values.password?.trim() || undefined,
+      roles, // filterStringArray always returns string[], no fallback needed
+      image: values.avatarUrl,
+      isActive: values.active,
+      ...customFields,
+    };
+    // Saving a new password or a deactivation for your OWN account ends
+    // your own sessions with everyone else's, this one included.
+    const signOutMessage = ownSessionEndingMessage({
+      editedUserId: userId,
+      signedInUserId: signedInUser?.id,
+      updates,
+    });
+
     updateUser(
-      {
-        userId,
-        updates: {
-          name: values.fullName,
-          email: values.email,
-          // Only send password if user explicitly entered a new one (trimmed to handle whitespace-only input)
-          password: values.password?.trim() || undefined,
-          roles, // filterStringArray always returns string[], no fallback needed
-          image: values.avatarUrl,
-          isActive: values.active,
-          ...customFields,
-        },
-      },
+      { userId, updates },
       {
         onSuccess: () => {
+          if (signOutMessage) {
+            // Signed out at once, with the reason, rather than left on a page
+            // whose session can no longer renew and fails a few minutes on.
+            void logout({ message: signOutMessage });
+            return;
+          }
           toast.success(USER_MESSAGES.UPDATE_SUCCESS_TITLE, {
             description: USER_MESSAGES.UPDATE_SUCCESS_DESC(values.fullName),
           });

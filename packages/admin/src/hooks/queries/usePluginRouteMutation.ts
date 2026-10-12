@@ -23,6 +23,7 @@ import {
 } from "nextly/config";
 import { useCallback, useRef, useState } from "react";
 
+import { csrfTokenForWrite } from "@admin/lib/api/csrf";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
 /**
@@ -269,22 +270,32 @@ interface PluginWrite<TBody> {
 }
 
 /**
- * One request, by verb.
+ * One request, by verb, carrying the CSRF token.
  *
  * A lookup rather than a chain of ifs, so a verb added to
  * {@link PluginRouteMethod} fails to compile here until it is given a sender.
+ *
+ * Every verb here changes something, and the session cookie authenticates it,
+ * so every one sends `x-csrf-token`. A route that declares `csrf: true`
+ * refuses a cookie write without it; a route that leaves `csrf` unset checks
+ * only the origin and ignores the header, so sending it always costs nothing
+ * and the author does not have to know which rule the route chose.
  */
-function sendTo<TResult>(
+async function sendTo<TResult>(
   method: PluginRouteMethod,
   route: string,
   body: unknown
 ): Promise<TResult | undefined> {
+  const token = await csrfTokenForWrite();
+  // Left off when no token could be had: an empty header reads as a token
+  // that was sent, and the server's refusal names a missing one.
+  const options = token === "" ? {} : { headers: { "x-csrf-token": token } };
   const senders: Record<PluginRouteMethod, () => Promise<TResult | undefined>> =
     {
-      POST: () => protectedApi.post<TResult>(route, body),
-      PUT: () => protectedApi.put<TResult>(route, body),
-      PATCH: () => protectedApi.patch<TResult>(route, body),
-      DELETE: () => protectedApi.delete<TResult>(route, body),
+      POST: () => protectedApi.post<TResult>(route, body, options),
+      PUT: () => protectedApi.put<TResult>(route, body, options),
+      PATCH: () => protectedApi.patch<TResult>(route, body, options),
+      DELETE: () => protectedApi.delete<TResult>(route, body, options),
     };
   return senders[method]();
 }

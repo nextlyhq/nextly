@@ -74,3 +74,13 @@ describe("validateOrigin", () => {
     expect(validateOrigin(request, [])).toBe(true);
   });
 });
+
+describe("validateOrigin with a malformed Referer", () => {
+  it("refuses rather than throwing", () => {
+    const request = new Request("http://localhost:3000/x", {
+      method: "POST",
+      headers: { referer: "not a url" },
+    });
+    expect(validateOrigin(request, [])).toBe(false);
+  });
+});

@@ -39,8 +39,6 @@ type MysqlTables = ExtractTablesFromSchema<typeof tables>;
 
 export const buildMysqlEdges = (r: RelationsBuilder<MysqlTables>) => ({
   users: {
-    accounts: r.many.accounts(),
-    sessions: r.many.sessions(),
     refreshTokens: r.many.refreshTokens(),
     userRoles: r.many.userRoles(),
     // No reverse one() exists on userPermissionCache — explicit columns.
@@ -50,12 +48,6 @@ export const buildMysqlEdges = (r: RelationsBuilder<MysqlTables>) => ({
     }),
     apiKeys: r.many.apiKeys(),
     activityLogs: r.many.activityLog(),
-  },
-  accounts: {
-    user: r.one.users({ from: r.accounts.userId, to: r.users.id }),
-  },
-  sessions: {
-    user: r.one.users({ from: r.sessions.userId, to: r.users.id }),
   },
   refreshTokens: {
     user: r.one.users({ from: r.refreshTokens.userId, to: r.users.id }),

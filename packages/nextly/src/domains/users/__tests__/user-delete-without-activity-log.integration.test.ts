@@ -33,10 +33,8 @@ import {
   roles as rolesSqlite,
   userRoles as userRolesSqlite,
 } from "../../../schemas/rbac/sqlite";
-import {
-  accounts as accountsSqlite,
-  users as usersSqlite,
-} from "../../../schemas/users/sqlite";
+import { nextlyPluginSettings as settingsSqlite } from "../../../schemas/plugin-settings/sqlite";
+import { users as usersSqlite } from "../../../schemas/users/sqlite";
 import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
 import { UserMutationService } from "../services/user-mutation-service";
 
@@ -57,10 +55,10 @@ async function ddl(): Promise<string[]> {
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
       users: usersSqlite,
-      accounts: accountsSqlite,
       roles: rolesSqlite,
       userRoles: userRolesSqlite,
       nextlyEvents: eventsSqlite,
+      nextlyPluginSettings: settingsSqlite,
     })
   );
   return splitStatements(statements);
@@ -162,5 +160,53 @@ describe("deleting a user on a database with no activity_log (real SQLite)", () 
       [String(doomed.id)]
     );
     expect(survivors).toHaveLength(0);
+  });
+
+  it("still clears settings attribution when there is no media table", async () => {
+    // The scrub used to sit INSIDE the media guard, so a database with no
+    // `media` table skipped it entirely — leaving the deleted account's id in
+    // `updated_by` on exactly the installations least likely to notice. The
+    // two are unrelated: plugin settings exist whether or not media does.
+    //
+    // The premise, asserted rather than assumed: this suite never creates
+    // `media`, and if a later change starts provisioning it here the case
+    // this test exists for would silently stop being exercised.
+    expect(await adapter.tableExists("media")).toBe(false);
+    expect(await adapter.tableExists("nextly_plugin_settings")).toBe(true);
+
+    const doomed = await users.createLocalUser({
+      email: "settings-actor@test.local",
+      name: "Settings Actor",
+      password: "TestPassword123!",
+      isActive: true,
+    });
+
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    await adapter.executeQuery(
+      `INSERT INTO nextly_plugin_settings
+         (owner, key, value, is_secret, updated_at, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      ["@acme/auth", "client_id", "abc", 0, nowEpoch, String(doomed.id)]
+    );
+
+    // The row is attributed BEFORE the deletion, so its clearing afterwards
+    // is a change this call made rather than a column that was always null.
+    const before = await adapter.executeQuery<{ updated_by: string | null }>(
+      "SELECT updated_by FROM nextly_plugin_settings WHERE owner = ?",
+      ["@acme/auth"]
+    );
+    expect(before).toHaveLength(1);
+    expect(before[0].updated_by).toBe(String(doomed.id));
+
+    await expect(users.deleteUser(doomed.id)).resolves.toBeUndefined();
+
+    const after = await adapter.executeQuery<{ updated_by: string | null }>(
+      "SELECT updated_by FROM nextly_plugin_settings WHERE owner = ?",
+      ["@acme/auth"]
+    );
+    // The row SURVIVES — a plugin's configuration is not the user's to take
+    // with them — and only the attribution goes.
+    expect(after).toHaveLength(1);
+    expect(after[0].updated_by).toBeNull();
   });
 });

@@ -92,7 +92,7 @@ describe("asPresentedText", () => {
 /**
  * The cell honours the ADMIN's configured timezone, not the browser's.
  *
- * 🔴 General Settings carries a timezone and `GeneralSettingsSyncProvider`
+ * 🔴 General Settings carries a timezone and `GeneralSettingsSync`
  * publishes it to `formatGlobalDateTime` at the root of the admin. A cell
  * formatting with a bare `toLocaleString` reads the browser's zone instead, so
  * these cards would disagree with every other date beside them the moment an

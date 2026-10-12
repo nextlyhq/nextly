@@ -239,3 +239,31 @@ describe("the store seam", () => {
     expect((await limiter.check("k", 1, WINDOW)).allowed).toBe(true);
   });
 });
+
+describe("peek", () => {
+  it("reports the window's count without recording an attempt", async () => {
+    const limiter = new RateLimiter(new SlidingWindowMemoryStore());
+    await limiter.check("k", 1, WINDOW);
+
+    expect(await limiter.peek("k", WINDOW)).toBe(1);
+    expect(await limiter.peek("fresh", WINDOW)).toBe(0);
+    // Peeking a fresh key left nothing behind: its one attempt is still
+    // allowed, and a second is not.
+    expect((await limiter.check("fresh", 1, WINDOW)).allowed).toBe(true);
+    expect((await limiter.check("fresh", 1, WINDOW)).allowed).toBe(false);
+  });
+
+  it("answers unknown for a store that can count only by recording", async () => {
+    const increment = vi.fn(
+      (): Promise<RateLimitRecord> =>
+        Promise.resolve({ count: 1, resetTime: Date.now() + WINDOW })
+    );
+    const notAtomic: RateLimitStore = {
+      increment,
+      reset: () => Promise.resolve(),
+    };
+
+    expect(await new RateLimiter(notAtomic).peek("k", WINDOW)).toBeUndefined();
+    expect(increment).not.toHaveBeenCalled();
+  });
+});

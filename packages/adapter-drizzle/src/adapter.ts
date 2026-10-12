@@ -382,6 +382,59 @@ export abstract class DrizzleAdapter {
   ): Promise<T>;
 
   /**
+   * Whether a `transaction()` call made from the current async context would
+   * join a transaction already open on this adapter, as a savepoint, rather
+   * than open one of its own.
+   *
+   * A caller about to do something no rollback can undo — removing a stored
+   * file, say — asks this first: work that joins an enclosing transaction is
+   * undone with it, while the effect it performs after its own savepoint
+   * releases is not.
+   *
+   * False here. Concrete rather than abstract so existing adapters keep
+   * working unchanged, and false is right for a pooled adapter: a call made
+   * inside another transaction's work opens its own transaction on its own
+   * connection, which commits independently.
+   *
+   * @returns True when the call would nest in an open transaction
+   */
+  inTransaction(): boolean {
+    return false;
+  }
+
+  /**
+   * Run `effect` once the write made from the current async context has
+   * committed: an event, a hook, a cache flush, anything outside the database
+   * that must not happen for a change that is rolled back.
+   *
+   * A caller invokes this after its own transaction has resolved. Where that
+   * transaction was nested in an enclosing one, as a savepoint, the change is
+   * not durable yet, and an adapter that nests (see {@link inTransaction})
+   * holds `effect` until the outermost transaction commits, and drops it when
+   * that transaction, or the savepoint it was registered in, rolls back. A
+   * held effect runs after the commit, before the outermost `transaction()`
+   * call resolves, in registration order; one that then throws or rejects is
+   * handed to `onDeferredFailure` rather than failing a transaction that has
+   * committed.
+   *
+   * Here `effect` runs now and the returned promise settles with it, its
+   * failure included. Concrete rather than abstract, as `inTransaction` is,
+   * and right for a pooled adapter: each transaction has its own connection
+   * and has committed by the time its caller continues.
+   *
+   * @experimental
+   * @param effect - What to run once the change is durable
+   * @param onDeferredFailure - Receives the error of a held effect that fails
+   * @returns Settles once `effect` has run, or once it has been held
+   */
+  async afterCommit(
+    effect: () => unknown,
+    _onDeferredFailure?: (error: unknown) => void
+  ): Promise<void> {
+    await effect();
+  }
+
+  /**
    * Get database capabilities.
    *
    * @remarks

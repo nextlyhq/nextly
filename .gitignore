@@ -122,6 +122,7 @@ e2e/.playwright/
 # and hands-on local testing playbooks. Kept on disk for reference, never
 # committed.
 docs/superpowers/
+docs/agent/
 docs/guides/manual-testing-migrations.md
 docs/guides/testing-migrations.md
 

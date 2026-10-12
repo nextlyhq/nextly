@@ -129,7 +129,13 @@ function buildStubBundle(
   };
 
   const service = new MediaService(
-    { uploadMedia: legacyUploadMedia } as never,
+    {
+      uploadMedia: legacyUploadMedia,
+      // Nothing encloses the write, so its effects run at once.
+      whenCommitted: async (effect: () => unknown) => {
+        await effect();
+      },
+    } as never,
     {} as never,
     () => storage as never,
     {} as never,

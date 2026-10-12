@@ -3778,51 +3778,64 @@ export class CollectionMutationService extends BaseService {
         }
       );
 
-      // Execute afterCreate hooks (code-registered)
-      // Hooks run after database insert completes (for side effects)
-      const afterContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "create" as const,
-        data: entry,
-        user: params.user,
-        context: sharedContext, // Pass shared context from beforeCreate
-        req: requestFacts,
-      });
-
-      await this.hookService.hookRegistry.execute("afterCreate", afterContext);
-
-      // Execute stored afterCreate hooks (UI-configured)
-      await this.hookService.storedHookExecutor.execute(
-        "afterCreate",
-        storedHooks,
-        this.hookService.buildPrebuiltHookContext({
+      // The after-hooks and events describe a durable row. Inside an enclosing
+      // SQLite transaction they wait for its commit and never run for a row it
+      // rolls back; see `afterCommitOver` for what they are handed.
+      await this.afterCommitOver(entry, async committed => {
+        // Execute afterCreate hooks (code-registered)
+        // Hooks run after database insert completes (for side effects)
+        const afterContext = this.hookService.buildHookContext({
           collection: params.collectionName,
-          operation: "create",
-          data: entry,
-          queryDatabase: this.queryDatabaseFn,
+          operation: "create" as const,
+          data: committed,
           user: params.user,
-          sharedContext,
+          context: sharedContext, // Pass shared context from beforeCreate
           req: requestFacts,
-        })
-      );
-
-      // Post-commit reaction event (D8/D51).
-      emitCollectionEvent("created", params.collectionName, entry, params.user);
-
-      // D69: a document created directly as `published` is a publish event too.
-      // (No statusChanged on create — there is no prior status to transition from.)
-      const createdStatus = (entry as { status?: unknown }).status;
-      if (createdStatus === "published") {
-        this.transitionStatus({
-          collection: params.collectionName,
-          id: (entry as { id?: unknown }).id,
-          data: { ...entry },
-          user: params.user,
-          previousStatus: null,
-          status: "published",
-          emitStatusChanged: false,
         });
-      }
+
+        await this.hookService.hookRegistry.execute(
+          "afterCreate",
+          afterContext
+        );
+
+        // Execute stored afterCreate hooks (UI-configured)
+        await this.hookService.storedHookExecutor.execute(
+          "afterCreate",
+          storedHooks,
+          this.hookService.buildPrebuiltHookContext({
+            collection: params.collectionName,
+            operation: "create",
+            data: committed,
+            queryDatabase: this.queryDatabaseFn,
+            user: params.user,
+            sharedContext,
+            req: requestFacts,
+          })
+        );
+
+        // Post-commit reaction event (D8/D51).
+        emitCollectionEvent(
+          "created",
+          params.collectionName,
+          committed,
+          params.user
+        );
+
+        // D69: a document created directly as `published` is a publish event too.
+        // (No statusChanged on create — there is no prior status to transition from.)
+        const createdStatus = (committed as { status?: unknown }).status;
+        if (createdStatus === "published") {
+          this.transitionStatus({
+            collection: params.collectionName,
+            id: (committed as { id?: unknown }).id,
+            data: { ...committed },
+            user: params.user,
+            previousStatus: null,
+            status: "published",
+            emitStatusChanged: false,
+          });
+        }
+      });
 
       // Deserialize JSON fields (richtext, blocks, array, group, json) for response
       fields.forEach(field => {
@@ -3842,14 +3855,16 @@ export class CollectionMutationService extends BaseService {
       // Field-level afterChange hooks observe the PERSISTED values — run
       // before response expansion so hooks see stored IDs, not the
       // populated relationship objects the response returns.
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "afterChange",
-        data: entry,
-        operation: "create",
-        user: params.user,
-      });
+      await this.afterCommitOver(entry, committed =>
+        runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "afterChange",
+          data: committed,
+          operation: "create",
+          user: params.user,
+        })
+      );
 
       // Expand relationships in response if depth is specified
       let responseEntry = entry;
@@ -4788,67 +4803,71 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // Post-commit status events: publishing is a real status transition, so
-      // workflow subscribers on statusTransition/published must see it (this
-      // path previously changed status without emitting anything). Skip when the
-      // main row was already published (no transition, judged on the status read
-      // under the lock), matching updateEntry. Prefer the fresh in-tx row; fall
-      // back to the pre-read only if the row vanished mid-publish.
-      if (
-        hasMainStatus &&
-        lockedPreviousStatus !== direction.nextStatus &&
-        !defaultCompanionTransitions
-      ) {
-        this.transitionStatus({
-          collection: params.collectionName,
-          id: params.entryId,
-          data: publishedParentRow ?? {
-            ...(existingEntry as Record<string, unknown>),
+      // Once the publish is durable: inside an enclosing SQLite transaction,
+      // once that commits, and never for a publish it rolls back.
+      await this.afterCommit(async () => {
+        // Post-commit status events: publishing is a real status transition, so
+        // workflow subscribers on statusTransition/published must see it (this
+        // path previously changed status without emitting anything). Skip when the
+        // main row was already published (no transition, judged on the status read
+        // under the lock), matching updateEntry. Prefer the fresh in-tx row; fall
+        // back to the pre-read only if the row vanished mid-publish.
+        if (
+          hasMainStatus &&
+          lockedPreviousStatus !== direction.nextStatus &&
+          !defaultCompanionTransitions
+        ) {
+          this.transitionStatus({
+            collection: params.collectionName,
+            id: params.entryId,
+            data: publishedParentRow ?? {
+              ...(existingEntry as Record<string, unknown>),
+              status: direction.nextStatus,
+            },
+            user: params.user,
+            previousStatus: lockedPreviousStatus,
             status: direction.nextStatus,
-          },
-          user: params.user,
-          previousStatus: lockedPreviousStatus,
-          status: direction.nextStatus,
-          emitStatusChanged: true,
-        });
-      }
-      // Each companion locale that went live, replayed to the in-process
-      // workflow subscribers with its own `locale` — mirroring the localized
-      // update path — so `statusTransition`/`statusChanged`/`published`
-      // listeners observe every published translation, not only the main row.
-      for (const transition of perLocaleTransitions) {
-        this.transitionStatus({
-          collection: params.collectionName,
-          id: params.entryId,
-          data: transition.data,
-          user: params.user,
-          previousStatus: transition.from,
-          status: direction.nextStatus,
-          emitStatusChanged: true,
-          locale: transition.locale,
-        });
-      }
-
-      // emit the post-commit "updated" reaction event so cache
-      // revalidation / webhooks fire, matching a single-locale publish. Best-effort: a
-      // reaction failure must not fail the already-committed publish.
-      try {
-        const [updated] = await this.db
-          .select()
-          .from(schema)
-          .where(eq(schema.id, params.entryId))
-          .limit(1);
-        if (updated) {
-          emitCollectionEvent(
-            "updated",
-            params.collectionName,
-            updated as Record<string, unknown>,
-            params.user
-          );
+            emitStatusChanged: true,
+          });
         }
-      } catch {
-        // Reaction/event emission is non-critical; the publish already committed.
-      }
+        // Each companion locale that went live, replayed to the in-process
+        // workflow subscribers with its own `locale` — mirroring the localized
+        // update path — so `statusTransition`/`statusChanged`/`published`
+        // listeners observe every published translation, not only the main row.
+        for (const transition of perLocaleTransitions) {
+          this.transitionStatus({
+            collection: params.collectionName,
+            id: params.entryId,
+            data: transition.data,
+            user: params.user,
+            previousStatus: transition.from,
+            status: direction.nextStatus,
+            emitStatusChanged: true,
+            locale: transition.locale,
+          });
+        }
+
+        // emit the post-commit "updated" reaction event so cache
+        // revalidation / webhooks fire, matching a single-locale publish. Best-effort: a
+        // reaction failure must not fail the already-committed publish.
+        try {
+          const [updated] = await this.db
+            .select()
+            .from(schema)
+            .where(eq(schema.id, params.entryId))
+            .limit(1);
+          if (updated) {
+            emitCollectionEvent(
+              "updated",
+              params.collectionName,
+              updated as Record<string, unknown>,
+              params.user
+            );
+          }
+        } catch {
+          // Reaction/event emission is non-critical; the publish already committed.
+        }
+      });
 
       // Publishing all locales makes every locale's slug public at once, so bust
       // each localized slug's tag (read post-commit on the pool — publish only
@@ -7753,118 +7772,128 @@ export class CollectionMutationService extends BaseService {
         );
       }
 
-      // Execute afterUpdate hooks (code-registered)
-      // Hooks run after database update completes (for side effects)
-      const afterContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "update" as const,
-        data: responseSource,
-        // On a repeat status-less save `responseSource` is the accumulated draft,
-        // so diff it against the prior draft rather than the unchanged published
-        // row; otherwise a hook reports an earlier save's fields as changing again.
-        originalData: priorWorkingDraftDocument ?? existingEntry,
-        user: params.user,
-        context: sharedContext, // Pass shared context from beforeUpdate
-        req: requestFacts,
-      });
-
-      await this.hookService.hookRegistry.execute("afterUpdate", afterContext);
-
-      // Execute stored afterUpdate hooks (UI-configured)
-      await this.hookService.storedHookExecutor.execute(
-        "afterUpdate",
-        storedHooks,
-        this.hookService.buildPrebuiltHookContext({
+      // The after-hooks and events describe a durable row. Inside an enclosing
+      // SQLite transaction they wait for its commit and never run for a row it
+      // rolls back; see `afterCommitOver` for what they are handed. The event
+      // payload is the stored row as committed, for the same reason.
+      const updatedAtCommit = { ...(updated as Record<string, unknown>) };
+      await this.afterCommitOver(responseSource, async committed => {
+        // Execute afterUpdate hooks (code-registered)
+        // Hooks run after database update completes (for side effects)
+        const afterContext = this.hookService.buildHookContext({
           collection: params.collectionName,
-          operation: "update",
-          data: responseSource,
-          queryDatabase: this.queryDatabaseFn,
+          operation: "update" as const,
+          data: committed,
+          // On a repeat status-less save `responseSource` is the accumulated draft,
+          // so diff it against the prior draft rather than the unchanged published
+          // row; otherwise a hook reports an earlier save's fields as changing again.
+          originalData: priorWorkingDraftDocument ?? existingEntry,
           user: params.user,
-          sharedContext,
+          context: sharedContext, // Pass shared context from beforeUpdate
           req: requestFacts,
-        })
-      );
+        });
 
-      // Post-commit reaction event (D8/D51). Skipped for a pure draft edit: the
-      // live document did not change, so no cache reaction is owed — mirroring
-      // the outbox `entry.updated` event, which is already suppressed above.
-      if (!workingDraftDocument) {
-        emitCollectionEvent(
-          "updated",
-          params.collectionName,
-          updated,
-          params.user
+        await this.hookService.hookRegistry.execute(
+          "afterUpdate",
+          afterContext
         );
-      }
 
-      // D69 document-level status events. Status is a user-defined field;
-      // emit only when a `status` field value actually changed on update.
-      // `data` is shallow-snapshotted so async subscribers aren't exposed to the
-      // in-place JSON-field deserialization that happens below for the response.
-      // Prefer the status re-read inside the transaction (fresh across retries)
-      // over the pre-transaction `existingEntry`, which a concurrent winner may
-      // have superseded.
-      const previousStatus =
-        committedPreviousStatus ??
-        ((existingEntry as Record<string, unknown>).status as
-          | string
-          | undefined) ??
-        null;
-      const nextStatus = (updated as { status?: unknown }).status;
-      if (typeof nextStatus === "string" && nextStatus !== previousStatus) {
-        this.transitionStatus({
-          collection: params.collectionName,
-          id: (updated as { id?: unknown }).id,
-          data: { ...(updated as Record<string, unknown>) },
-          user: params.user,
-          previousStatus,
-          status: nextStatus,
-          emitStatusChanged: true,
-        });
-      }
+        // Execute stored afterUpdate hooks (UI-configured)
+        await this.hookService.storedHookExecutor.execute(
+          "afterUpdate",
+          storedHooks,
+          this.hookService.buildPrebuiltHookContext({
+            collection: params.collectionName,
+            operation: "update",
+            data: committed,
+            queryDatabase: this.queryDatabaseFn,
+            user: params.user,
+            sharedContext,
+            req: requestFacts,
+          })
+        );
 
-      // Per-locale status transition (i18n M6). On a localized collection the
-      // status moves to the companion `_status` for the write locale, leaving
-      // the main row's status unchanged — so the document-level check above
-      // never fires. Emit the same lifecycle events tagged with `locale` when a
-      // write actually changes this locale's status (companion `_status` is set
-      // only when `status` was explicitly in the patch), so workflows see the
-      // German publish they would otherwise miss. Skipped when the value did not
-      // move (re-publishing already-published content fires nothing).
-      const localizedNextStatus = localizedUpdate?.companionData._status;
-      if (
-        localizedUpdate &&
-        typeof localizedNextStatus === "string" &&
-        localizedNextStatus !== localizedPreviousStatus
-      ) {
-        this.transitionStatus({
-          collection: params.collectionName,
-          id: (updated as { id?: unknown }).id,
-          data: { ...(updated as Record<string, unknown>) },
-          user: params.user,
-          previousStatus: localizedPreviousStatus,
-          status: localizedNextStatus,
-          emitStatusChanged: true,
-          locale: localizedUpdate.writeLocale,
-        });
-      }
+        // Post-commit reaction event (D8/D51). Skipped for a pure draft edit: the
+        // live document did not change, so no cache reaction is owed — mirroring
+        // the outbox `entry.updated` event, which is already suppressed above.
+        if (!workingDraftDocument) {
+          emitCollectionEvent(
+            "updated",
+            params.collectionName,
+            updatedAtCommit,
+            params.user
+          );
+        }
 
-      // {@link EVERY_LOCALE}: every other language the sweep moved, replayed
-      // with its own `locale` — mirroring the block above, so a workflow
-      // listening for a publish observes the German one too rather than only
-      // the language the write happened to name.
-      for (const replay of sweptLocaleReplays) {
-        this.transitionStatus({
-          collection: params.collectionName,
-          id: (updated as { id?: unknown }).id,
-          data: replay.data,
-          user: params.user,
-          previousStatus: replay.from,
-          status: replay.data.status as string,
-          emitStatusChanged: true,
-          locale: replay.locale,
-        });
-      }
+        // D69 document-level status events. Status is a user-defined field;
+        // emit only when a `status` field value actually changed on update.
+        // `data` is shallow-snapshotted so async subscribers aren't exposed to the
+        // in-place JSON-field deserialization that happens below for the response.
+        // Prefer the status re-read inside the transaction (fresh across retries)
+        // over the pre-transaction `existingEntry`, which a concurrent winner may
+        // have superseded.
+        const previousStatus =
+          committedPreviousStatus ??
+          ((existingEntry as Record<string, unknown>).status as
+            | string
+            | undefined) ??
+          null;
+        const nextStatus = (updatedAtCommit as { status?: unknown }).status;
+        if (typeof nextStatus === "string" && nextStatus !== previousStatus) {
+          this.transitionStatus({
+            collection: params.collectionName,
+            id: (updatedAtCommit as { id?: unknown }).id,
+            data: { ...updatedAtCommit },
+            user: params.user,
+            previousStatus,
+            status: nextStatus,
+            emitStatusChanged: true,
+          });
+        }
+
+        // Per-locale status transition (i18n M6). On a localized collection the
+        // status moves to the companion `_status` for the write locale, leaving
+        // the main row's status unchanged — so the document-level check above
+        // never fires. Emit the same lifecycle events tagged with `locale` when a
+        // write actually changes this locale's status (companion `_status` is set
+        // only when `status` was explicitly in the patch), so workflows see the
+        // German publish they would otherwise miss. Skipped when the value did not
+        // move (re-publishing already-published content fires nothing).
+        const localizedNextStatus = localizedUpdate?.companionData._status;
+        if (
+          localizedUpdate &&
+          typeof localizedNextStatus === "string" &&
+          localizedNextStatus !== localizedPreviousStatus
+        ) {
+          this.transitionStatus({
+            collection: params.collectionName,
+            id: (updatedAtCommit as { id?: unknown }).id,
+            data: { ...updatedAtCommit },
+            user: params.user,
+            previousStatus: localizedPreviousStatus,
+            status: localizedNextStatus,
+            emitStatusChanged: true,
+            locale: localizedUpdate.writeLocale,
+          });
+        }
+
+        // {@link EVERY_LOCALE}: every other language the sweep moved, replayed
+        // with its own `locale` — mirroring the block above, so a workflow
+        // listening for a publish observes the German one too rather than only
+        // the language the write happened to name.
+        for (const replay of sweptLocaleReplays) {
+          this.transitionStatus({
+            collection: params.collectionName,
+            id: (updatedAtCommit as { id?: unknown }).id,
+            data: replay.data,
+            user: params.user,
+            previousStatus: replay.from,
+            status: replay.data.status as string,
+            emitStatusChanged: true,
+            locale: replay.locale,
+          });
+        }
+      });
 
       // Deserialize JSON fields (richtext, blocks, array, group, json) for
       // response. A no-op on the draft document, whose JSON fields are already
@@ -7888,14 +7917,16 @@ export class CollectionMutationService extends BaseService {
       // Field-level afterChange hooks observe the PERSISTED values — run
       // before response expansion so hooks see stored IDs, not the
       // populated relationship objects the response returns.
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "afterChange",
-        data: responseSource,
-        operation: "update",
-        user: params.user,
-      });
+      await this.afterCommitOver(responseSource, committed =>
+        runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "afterChange",
+          data: committed,
+          operation: "update",
+          user: params.user,
+        })
+      );
 
       // Expand relationships in response if depth is specified. Runs on the
       // draft document too for a draft edit, so a trusted editor's save response
@@ -8345,41 +8376,48 @@ export class CollectionMutationService extends BaseService {
         }
       );
 
-      // Execute afterDelete hooks (code-registered)
-      // Hooks run after deletion completes (for cleanup)
-      const afterContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "delete" as const,
-        data: deleted,
-        user: params.user,
-        context: sharedContext, // Pass shared context from beforeDelete
-        req: requestFacts,
-      });
-
-      await this.hookService.hookRegistry.execute("afterDelete", afterContext);
-
-      // Execute stored afterDelete hooks (UI-configured)
-      await this.hookService.storedHookExecutor.execute(
-        "afterDelete",
-        storedHooks,
-        this.hookService.buildPrebuiltHookContext({
+      // After the removal is durable: inside an enclosing SQLite transaction,
+      // once it commits, and never for a deletion it rolls back.
+      await this.afterCommit(async () => {
+        // Execute afterDelete hooks (code-registered)
+        // Hooks run after deletion completes (for cleanup)
+        const afterContext = this.hookService.buildHookContext({
           collection: params.collectionName,
-          operation: "delete",
+          operation: "delete" as const,
           data: deleted,
-          queryDatabase: this.queryDatabaseFn,
           user: params.user,
-          sharedContext,
+          context: sharedContext, // Pass shared context from beforeDelete
           req: requestFacts,
-        })
-      );
+        });
 
-      // Post-commit reaction event (D8/D51).
-      emitCollectionEvent(
-        "deleted",
-        params.collectionName,
-        deleted,
-        params.user
-      );
+        await this.hookService.hookRegistry.execute(
+          "afterDelete",
+          afterContext
+        );
+
+        // Execute stored afterDelete hooks (UI-configured)
+        await this.hookService.storedHookExecutor.execute(
+          "afterDelete",
+          storedHooks,
+          this.hookService.buildPrebuiltHookContext({
+            collection: params.collectionName,
+            operation: "delete",
+            data: deleted,
+            queryDatabase: this.queryDatabaseFn,
+            user: params.user,
+            sharedContext,
+            req: requestFacts,
+          })
+        );
+
+        // Post-commit reaction event (D8/D51).
+        emitCollectionEvent(
+          "deleted",
+          params.collectionName,
+          deleted,
+          params.user
+        );
+      });
 
       return {
         success: true,

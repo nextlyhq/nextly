@@ -8,6 +8,7 @@
  * @packageDocumentation
  */
 
+import { verifyCredentials } from "../../auth/credentials/verify-credentials";
 import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
 import { NextlyError } from "../../errors/nextly-error";
@@ -30,19 +31,46 @@ import type { NextlyContext } from "./context";
 /**
  * Verify user credentials and return a signed JWT session token.
  *
- * PR 4 (unified-error-system): verifyCredentials returns the MinimalUser
- * directly and throws NextlyError on bad credentials. Thrown errors
- * propagate naturally (NextlyError instances re-throw as-is via the
- * branded class hierarchy; the caller sees the auth failure).
+ * The token is a session, so the credentials are checked by the login
+ * endpoint's own `verifyCredentials`, over the same dependencies: a wrong
+ * password counts toward the lockout, and a locked, deactivated or unverified
+ * account is refused as the endpoint refuses it. That is the
+ * `AUTH_INVALID_CREDENTIALS` error a wrong password gets, except an unverified
+ * address on an account no administrator deactivated, which is named
+ * `EMAIL_NOT_VERIFIED` once the password is proven.
+ *
+ * An account that must replace an admin-set password is refused with
+ * `AUTH_INVALID_CREDENTIALS` too. The endpoint answers it with the forced-change step, which a
+ * server-side call cannot complete, and a token issued here would skip it.
+ *
+ * Unlike the endpoint, this runs no plugin login hooks and no second-factor
+ * challenge: it is for trusted server code, not for signing a person in.
  */
 export async function login(
   ctx: NextlyContext,
   args: LoginArgs
 ): Promise<LoginResult> {
-  const user = await ctx.authService.verifyCredentials(
-    args.email,
-    args.password
+  const verified = await verifyCredentials(
+    { email: args.email, password: args.password },
+    ctx.passwordCredentialDeps
   );
+  if (verified.mustChangePassword) {
+    throw NextlyError.invalidCredentials({
+      // A plain reason, not the audit vocabulary: this call writes no
+      // audit row for the reason to be kept on.
+      logContext: { userId: verified.id, reason: "must-change-password" },
+    });
+  }
+  // The shape `login` has always returned, whatever else the sign-in read.
+  const user = {
+    id: verified.id,
+    email: verified.email,
+    name: verified.name,
+    image: verified.image,
+    emailVerified: verified.emailVerified,
+    passwordHash: null,
+  };
+  const userId = String(user.id);
 
   const secret = env.NEXTLY_SECRET;
   if (!secret) {
@@ -58,7 +86,7 @@ export async function login(
   const exp = Math.floor(Date.now() / 1000) + maxAge;
 
   const claims = buildClaims({
-    userId: String(user.id),
+    userId,
     email: user.email,
     name: user.name || "",
     image: user.image ?? null,

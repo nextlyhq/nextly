@@ -8,8 +8,11 @@
  * by that shape keeps the next instance next to its siblings instead of filed
  * under whichever function happened to grow it.
  */
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -17,6 +20,8 @@ import {
   ADVISORY_REVIEWERS,
   CODERABBIT,
   advisoryExemptions,
+  ghText,
+  ghVersionProblem,
   REVIEW_THREAD_NODE_FIELDS,
   assertCompleteFileList,
   flatPages,
@@ -52,6 +57,8 @@ import {
   workflowPathsIgnore,
 } from "./verify-merge.mjs";
 
+const POSIX = process.platform !== "win32";
+const SCRIPT = fileURLToPath(new URL("./verify-merge.mjs", import.meta.url));
 const forcePush = { event: "head_ref_force_pushed" };
 const commented = { event: "commented" };
 const green = name => ({ name, status: "completed", conclusion: "success" });
@@ -64,12 +71,31 @@ const FULL_TIP = "91fd9500285dcf264e3609a916b7518b591b51f3";
 const CODE_CHANGE = ["packages/nextly/src/index.ts"];
 /** A change set `integration.yml` ignores at the trigger, so it never runs. */
 const DOCS_CHANGE = ["docs/guide.md", "docs/api/reference.md"];
-/** The integration filter, read from the workflow exactly as the gate reads it. */
+/** The integration workflow as it is now, read exactly as the gate reads it. */
 const INTEGRATION_YML = readFileSync(
   fileURLToPath(new URL("../.github/workflows/integration.yml", import.meta.url)),
   "utf8"
 );
-const PR_IGNORE = workflowPathsIgnore(INTEGRATION_YML, "pull_request");
+/**
+ * A workflow that filters its integration legs at the trigger. The gate reads
+ * the workflow as it stood at the revision it judges, so it has to read this
+ * shape wherever a revision declares it, and the filter's semantics are
+ * exercised on it.
+ */
+const FILTERED_INTEGRATION_YML = [
+  "on:",
+  "  push:",
+  "    branches: [main]",
+  "    paths-ignore:",
+  '      - "docs/**"',
+  '      - "**/*.md"',
+  "  pull_request:",
+  "    branches: [main]",
+  "    paths-ignore:",
+  '      - "docs/**"',
+  '      - "**/*.md"',
+].join("\n");
+const PR_IGNORE = workflowPathsIgnore(FILTERED_INTEGRATION_YML, "pull_request");
 const REQUIRED = requiredChecks(PR_IGNORE, { merged: false });
 
 /**
@@ -658,11 +684,11 @@ describe("PATH_FILTER_COMMIT_LIMIT", () => {
 
 describe("statusAsRun", () => {
   it("treats a pending status as NOT passing", () => {
-    // The title check reports through the statuses API, not check-runs. A
-    // gate that reads only check-runs calls the revision green while the
-    // title check is still pending.
+    // An app that reports only through the statuses API is invisible to a
+    // gate that reads only check-runs, which calls the revision green while
+    // that status is still pending.
     expect(
-      jobPasses(statusAsRun({ context: "PR title", state: "pending" }))
+      jobPasses(statusAsRun({ context: "a status-only check", state: "pending" }))
     ).toBe(false);
   });
 
@@ -1016,7 +1042,7 @@ describe("workflowPathsIgnore", () => {
   // The parser is the only implementation of the integration filter, so these
   // cover it directly rather than comparing it against a second copy.
   it("reads the filter the workflow declares for a trigger", () => {
-    const globs = workflowPathsIgnore(INTEGRATION_YML, "pull_request");
+    const globs = workflowPathsIgnore(FILTERED_INTEGRATION_YML, "pull_request");
 
     // Non-empty first: a parser that silently found nothing would satisfy any
     // comparison against another empty list, so the failure to read would
@@ -1030,7 +1056,7 @@ describe("workflowPathsIgnore", () => {
     // from `pull_request`. The two blocks are edited independently, so a parser
     // exercised on only one of them can be correct there and wrong for every
     // merged pull request the gate looks at.
-    const globs = workflowPathsIgnore(INTEGRATION_YML, "push");
+    const globs = workflowPathsIgnore(FILTERED_INTEGRATION_YML, "push");
 
     expect(globs.length).toBeGreaterThan(0);
   });
@@ -1056,7 +1082,15 @@ describe("workflowPathsIgnore", () => {
     // Empty means "no filter", which `workflowApplies` treats as always
     // applicable — the direction that requires the check rather than excusing
     // it.
-    expect(workflowPathsIgnore(INTEGRATION_YML, "schedule")).toEqual([]);
+    expect(workflowPathsIgnore(FILTERED_INTEGRATION_YML, "schedule")).toEqual([]);
+  });
+
+  it("finds no filter in the integration workflow as it is now, so its legs are always due", () => {
+    // Its path filter is decided in a job, where a skipped leg still reports
+    // `skipped`. At the trigger, the same filter would leave a required check
+    // with no result at all.
+    expect(workflowPathsIgnore(INTEGRATION_YML, "pull_request")).toEqual([]);
+    expect(workflowPathsIgnore(INTEGRATION_YML, "push")).toEqual([]);
   });
 
   it("refuses input it cannot read rather than reporting no filter", () => {
@@ -1524,3 +1558,73 @@ describe("advisory review threads do not block the merge gate", () => {
     expect(verdict.blockers.some(b => b.kind === "threads-unknown")).toBe(true);
   });
 });
+
+describe("a gh too old for the filters this gate writes", () => {
+  /*
+   * gh evaluates `--jq` with a jq built into it, and before 2.75.0 that jq
+   * refuses any binary operator written bare as an object's value. The gate
+   * asks for the version it needs instead of scanning filters for what an older
+   * jq refuses: a scan misses a comparison beside a nested object, and refuses a
+   * `>` inside a string that every version accepts.
+   */
+  it("refuses every gh before 2.75.0 and a version it cannot read, and accepts 2.75.0 and later", () => {
+    expect(ghVersionProblem("gh version 2.74.2 (2025-06-23)\nhttps://github.com/cli/cli/releases/tag/v2.74.2\n")).toMatch(/^gh 2\.74\.2 is older than 2\.75\.0/);
+    expect(ghVersionProblem("gh version 2.46.0 (2024-03-26)")).toMatch(/^gh 2\.46\.0 is older than 2\.75\.0/);
+    // Compared as numbers: as text, 2.9.0 sorts after 2.75.0.
+    expect(ghVersionProblem("gh version 2.9.0")).toMatch(/^gh 2\.9\.0 is older than 2\.75\.0/);
+    expect(ghVersionProblem("gh version 2.75.0 (2025-07-09)")).toBeNull();
+    expect(ghVersionProblem("gh version 2.101.0 (2026-09-15)")).toBeNull();
+    expect(ghVersionProblem("gh version 3.0.0")).toBeNull();
+    expect(ghVersionProblem("zsh: command not found")).toMatch(/^cannot read a version from gh --version/);
+  });
+
+  /*
+   * A directory holding a gh that prints the version it is given and, for
+   * anything else, each argument on a line of its own: what reaches it is then
+   * visible, and a call refused before it ran prints nothing.
+   */
+  function fakeGh(version) {
+    const bin = mkdtempSync(join(tmpdir(), "fake-gh-"));
+    writeFileSync(join(bin, "gh"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "gh version ${version} (2026-01-01)"; exit 0; fi\nprintf '%s\\n' "$@"\n`);
+    chmodSync(join(bin, "gh"), 0o755);
+    return bin;
+  }
+
+  /* A fresh process with the fake gh first on PATH, so the version is read anew. */
+  function runUnderGh(version, args) {
+    const bin = fakeGh(version);
+    try {
+      return spawnSync(process.execPath, args, { env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` }, encoding: "utf8" });
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  }
+
+  it.runIf(POSIX)("refuses at the first call, before gh runs it, under a gh older than 2.75.0", () => {
+    const code = `import { ghText } from ${JSON.stringify(pathToFileURL(SCRIPT).href)};\nconsole.log(ghText(["api", "repos/o/r/pulls/1"]));`;
+    const run = runUnderGh("2.74.2", ["--input-type=module", "-e", code]);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/gh 2\.74\.2 is older than 2\.75\.0/);
+    expect(run.stdout).toBe("");
+  });
+
+  it.runIf(POSIX)("stops the gate with no verdict, exit 2, under a gh older than 2.75.0", () => {
+    const run = runUnderGh("2.74.2", [SCRIPT, "1927"]);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toMatch(/could not complete the check — gh 2\.74\.2 is older than 2\.75\.0/);
+  });
+
+  it.runIf(POSIX)("passes a filter to gh as written under a gh from 2.75.0 on", () => {
+    const filter = '{msg:"n > 10",outer:{x:.x},cross:.a!=.b}';
+    const bin = fakeGh("2.75.0");
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}${delimiter}${path}`;
+    try {
+      expect(ghText(["api", "repos/o/r/pulls/1", "--jq", filter]).split("\n")).toContain(filter);
+    } finally {
+      process.env.PATH = path;
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+});
+

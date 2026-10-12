@@ -49,6 +49,37 @@ export interface PluginInfo {
   hasSettings: boolean;
   /** Declared-slug → resolved-slug remap applied by the integrator. */
   renamed: Record<string, string>;
+  /**
+   * What the plugin's manifest declares about its reach, for an operator to
+   * read before installing it.
+   */
+  manifest: {
+    /** Hosts `ctx.fetch` may reach; empty when it has no `ctx.fetch`. */
+    outbound: string[];
+    rawSql: boolean;
+    /** Whether it may finish logins, signing in an account it names. */
+    completesLogins: boolean;
+    secrets: string[];
+    provides: string[];
+    /** Capability → the version range its provider must satisfy. */
+    requires: Record<string, string>;
+    /** The plugin's declared schema version; absent when it declares none. */
+    schemaVersion?: number;
+  };
+}
+
+/** What a plugin's manifest declares about its reach, with absences filled. */
+function manifestSummary(plugin: PluginDefinition): PluginInfo["manifest"] {
+  const capabilities = plugin.capabilities ?? {};
+  return {
+    outbound: capabilities.net?.outbound ?? [],
+    rawSql: capabilities.db?.rawSql === true,
+    completesLogins: capabilities.auth?.login === true,
+    secrets: capabilities.secrets ?? [],
+    provides: plugin.provides ?? [],
+    requires: plugin.requires ?? {},
+    schemaVersion: plugin.schemaVersion,
+  };
 }
 
 /**
@@ -112,6 +143,7 @@ export function collectPluginInfo(
       adminPageCount: meta?.pages?.length ?? 0,
       hasSettings: Boolean(meta?.settings),
       renamed: plugin.renameMap ?? {},
+      manifest: manifestSummary(plugin),
     };
   });
 }

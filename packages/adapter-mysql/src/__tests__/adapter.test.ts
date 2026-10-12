@@ -786,7 +786,34 @@ describe("@nextly/adapter-mysql", () => {
       expect(capabilities.supportsOnConflict).toBe(true);
       expect(capabilities.maxParamsPerQuery).toBe(65535);
       expect(capabilities.maxIdentifierLength).toBe(64);
+      // Not known before connect: the server's version decides it.
+      expect(capabilities.sharedRowLock).toBeUndefined();
     });
+
+    it.each([
+      ["8.0.33", true],
+      ["8.0.32-PlanetScale-Vitess-v18.0.0", true],
+      ["11.4.13-MariaDB-ubu2404", false],
+      ["8.0.11-TiDB-v8.5.1", false],
+    ])(
+      "reports whether %s accepts FOR SHARE once connected",
+      async (version, accepted) => {
+        mockConnection.query.mockImplementation((sql: string) =>
+          Promise.resolve(
+            sql.toLowerCase().includes("version()")
+              ? [[{ version }], []]
+              : [[], []]
+          )
+        );
+        const adapter = createMySqlAdapter({
+          url: "mysql://localhost:3306/test",
+        });
+
+        await adapter.connect();
+
+        expect(adapter.getCapabilities().sharedRowLock).toBe(accepted);
+      }
+    );
   });
 
   // ============================================================

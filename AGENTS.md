@@ -7,6 +7,45 @@ it runs inside their own Next.js app with their own database (Postgres, MySQL,
 or SQLite via Drizzle ORM). This repository is the pnpm + Turborepo monorepo
 for all published packages. Status: alpha, all packages version in lockstep.
 
+Codex reads this file, and Claude Code reads `CLAUDE.md`, a copy of it that
+`pnpm instructions:sync` writes beside every `AGENTS.md` and
+`pnpm check:agent-contract` holds identical: edit this file, never the copy.
+Each chain of these files, from the root down to a package, must fit in the
+32 KiB Codex reads (`pnpm check:instruction-size`).
+
+## Skills, and when to load one
+
+Procedures live in `.agents/skills/` rather than here, because a procedure
+needed once per task should not occupy context in every session. Codex reads
+them there; Claude Code reads `.claude/skills/`, a generated copy that
+`pnpm skills:sync` rewrites and `pnpm check:agent-contract` holds identical —
+edit the skills, never the copy. This table is the router: an agent selects a
+skill from its description, and the table is what survives a description that
+underperforms. Load the skill BEFORE the act, not
+after it goes wrong.
+
+| Load this                     | When you are about to                                    |
+| ----------------------------- | -------------------------------------------------------- |
+| `testing-evidence`            | add, change, delete or judge a test                      |
+| `writing-integration-tests`   | write or debug a `*.integration.test.ts`                 |
+| `adding-a-field-type`         | add a field type to the catalog                          |
+| `derived-checks`              | write or review a check, gate, probe or derived view     |
+| `auditing-an-instrument`      | act on a clean, empty or surprising result from a check  |
+| `reading-a-ci-verdict`        | read CI, check runs or a reviewer verdict                |
+| `reviewing-a-pr`              | review a PR or answer review-bot findings                |
+| `verifying-merged-work`       | confirm a change landed, or judge a red after a rebase   |
+| `recovering-a-clobbered-file` | recover a file a whole-file write may have replaced      |
+| `release-and-changesets`      | touch a changeset, a release or a new package name       |
+| `running-builds-and-tests`    | build, typecheck, lint or run tests, or size a local run |
+| `working-in-worktrees`        | create, work in or remove a worktree                     |
+| `running-the-fallow-gate`     | commit, push, or act on a fallow or code-hygiene finding |
+
+A rule both tools must hold in every session lives in this file, since only it
+reaches both: the whole-file write rule below. `.claude/rules/` keeps the rule
+Claude Code loads by path, `.claude/rules/integration-tests.md` for
+`*.integration.test.ts`, and Codex reads the same rules as the
+`writing-integration-tests` skill.
+
 ## Repository map
 
 - `packages/nextly` - core: config surface, Direct API, REST dispatcher, CLI,
@@ -54,11 +93,20 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 
 ## Setup and dev loop
 
-- Requirements: Node `^20.19.0 || ^22.12.0 || >=24.0.0`, pnpm 9.0.0
+- Requirements: Node `^20.19.0 || ^22.12.0 || >=24.0.0`, pnpm 12.5.1
   (`packageManager` is pinned in `package.json`; Corepack enforces the exact
   version). The ranges are disjoint deliberately, mirroring what the test
   environment supports: 20.6-20.18 and the whole 23.x line are excluded, not
   merely untested.
+- Two different facts, deliberately not one: `engines.node` above is the
+  CONTRACT the published packages make, and `.nvmrc` (24.21.0) is the version
+  contributors, CI and the release job actually run. Every workflow reads
+  `.nvmrc`, so the toolchain moves by editing that file; narrowing `engines`
+  would drop Node 20/22 for users and is a separate decision. `package-smoke`
+  derives its Node legs FROM `engines.node`, so the floors stay tested.
+- pnpm settings live in `pnpm-workspace.yaml`, not `.npmrc` and not a `pnpm`
+  block in `package.json` — pnpm reads only auth and registry settings from
+  `.npmrc`, and ignores anything else there in silence.
 - Install: `pnpm install`.
 - Dev harness: `pnpm dev:app` starts the playground on :3000 (SQLite by
   default; `pnpm dev:postgres` / `pnpm dev:mysql` for other dialects, with
@@ -68,194 +116,57 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 - There is no `nextly dev` CLI command by design: user apps run plain
   `next dev`, and schema changes apply in-process via the HMR listener.
 
+## Working in several checkouts at once
+
+Never work a PR branch in the shared checkout: another session switching
+branches underneath you removes files mid-command. Use a worktree with a slot:
+`pnpm worktree new <branch>` creates it and claims a slot of its own ports and
+test database, and `pnpm worktree remove <branch>` gives them back. Remove it
+when you are finished, since an abandoned checkout holds its slot. `git stash`
+is per-clone, not per-worktree, so prefer a branch commit to a stash while
+several sessions are live. The other commands, what a slot owns and why, and a
+slot left RESERVED: the `working-in-worktrees` skill.
+
 ## Build and test (read this before running anything)
 
-- `pnpm build` builds all packages (turbo, dependency order).
-- Exact failure counts and other perishable numbers live in
-  `AGENTS.measured.md`, GENERATED by `node scripts/measure-facts.mjs`
-  (`--full` for the forced turbo runs) — figures quoted in the prose below
-  are the EVENTS that taught each lesson, not the current state.
-- `pnpm check-types` and `pnpm lint` BOTH need a build first. On a clean
-  checkout, measured with the cache forced off so the numbers are of work that
-  actually ran:
-
-  | command                                         | result on a clean tree                    |
-  | ----------------------------------------------- | ----------------------------------------- |
-  | `pnpm turbo run check-types --continue --force` | `AGENTS.measured.md` → `check-types-cold` |
-  | `pnpm turbo run lint --continue --force`        | `AGENTS.measured.md` → `lint-cold`        |
-
-  `check-types` fails because a workspace import resolves through the sibling's
-  package exports to a `dist/index.d.ts` that does not exist yet. `lint` fails
-  for the same underlying reason through a different rule: `import-x/no-unresolved`
-  resolves the same specifiers, so an unbuilt sibling is an unresolved import.
-
-  Run `pnpm build` first. The failure is workspace-wide rather than local to one
-  package, so the whole-repo build is the honest default.
-
-  To check one package, build it WITH its dependencies:
-
-  ```
-  pnpm --filter <pkg>... build      # trailing ... includes <pkg> itself
-  ```
-
-  Not `<pkg>^...`. `pnpm recursive --help` defines that form as the dependencies
-  "without including the matched packages", so the package's own `dist` stays
-  absent — and `lint` then fails on its self-imports, which is the same missing
-  build wearing a different rule's error message.
-
-  **Two states distort these numbers in OPPOSITE directions, and neither is
-  visible in the summary line.** A warm cache overstates health; a missing
-  `dist` overstates breakage. Measured from both ends: with the cache warm this
-  entry first recorded 19 of 21 passing and `lint` clean, and on a freshly
-  installed tree with nothing built another lane saw `pnpm lint` fail with 361
-  `@nextlyhq/ui` resolution errors and vitest unable to collect at all. Same
-  repository, same commit.
-
-  So state the cache AND the build state when you quote a number.
-
-  **Measure with `--force`.** Turbo caches both tasks, and a cached task
-  reports `Tasks: N successful` without running anything — so a warm cache from
-  an earlier built state reports a clean tree as passing. That is not a
-  hypothetical: the first version of this entry claimed 19 of 21 passing and
-  `lint` clean at 22 of 22, and both numbers came from cache hits.
-
-  `TS2307` naming a workspace package (`nextly/...`, `@nextlyhq/...`) is USUALLY
-  a missing build, and the rebuild is what confirms it. It is not proof on its
-  own: a misspelled specifier, a removed export-map subpath, or a broken
-  tsconfig path mapping produces exactly the same error, and no amount of
-  rebuilding fixes those. If the error survives a successful build of that
-  package AND its dependencies — the `<pkg>...` form above, not `^...` — it is a
-  real resolution defect — see
-  `.claude/rules/verifying-merged-work.md`, which says to check what `main`
-  changed before calling any of this environmental.
-
-  **A stale or missing sibling `dist` does not only produce `no-unresolved`.**
-  Every TYPE-AWARE lint rule reads inferred types, so an unbuilt tree makes it
-  report on types the checker cannot see: measured here, a docs-only commit
-  failed `nextly#lint` with `@typescript-eslint/no-unnecessary-type-assertion`
-  on a load-bearing assertion, and `pnpm --filter nextly... build` cleared it
-  along with the `no-unresolved` error beside it.
-
-  That is the dangerous half, because the two errors read differently. An
-  unresolved import NAMES A PACKAGE and reads as environmental. A type-aware
-  finding names YOUR EXPRESSION and reads as a correctness defect — and its
-  obvious remedy, deleting the assertion, is a real regression that lints clean
-  afterwards on a built tree, because the assertion it was protecting is gone.
-  Build before you believe any lint result, not only one that names a module.
-  There is no tell in the message.
-
-  Path mappings cover part of this and are not a general answer.
-  `packages/admin` maps the bare `nextly` specifier to `../nextly/src`, which is
-  why admin resolves it without a build while `packages/plugin-sdk`, which has
-  no such mapping, does not. Subpaths like `nextly/config` and
-  `nextly/field-catalog` are not covered by that mapping and still need `dist`.
-
-- CRITICAL: integration tests require built packages. Run them from the ROOT
-  (`pnpm test:integration...`) so turbo builds first. Running
-  `pnpm --filter nextly test:integration` on an unbuilt tree fails 60+ files
-  with self-import errors that look real but are not.
-- Integration tests self-skip when the dialect's URL is unset. Use the root
-  scripts: `pnpm test:integration:postgres17` (localhost:5435),
-  `:postgres15` (:5434), `:mysql` (:3307), `:sqlite` (no URL needed). NEVER
-  point a TEST\_\* URL at a database you did not create for the test run.
-- The test databases are their own containers in `docker-compose.test.yml`,
-  separate from the dev stack. Neither `pnpm docker:test` nor `pnpm docker:up`
-  starts them: `docker:test` only PROBES a connection and exits 1 when it
-  fails, and `docker:up` brings up the DEV stack, which conflicts by container
-  name where one already exists. A `DBS DOWN` failure followed by a start
-  command that changes nothing reads like a broken environment; it is usually
-  just the wrong command.
-  - Already created but stopped, which is the usual case:
-    `docker start nextly-postgres17-test nextly-mysql-test` (add
-    `nextly-postgres15-test` for the 15 leg).
-  - Never created, on a fresh clone:
-    `docker compose -f docker-compose.test.yml up -d postgres17-test postgres15-test mysql-test`.
-    `postgres15-test` is the only service on 5434, so omitting it leaves the
-    documented `:postgres15` leg with nothing to connect to.
-  - Why not always the second: the services set a fixed `container_name`, so
-    exactly one compose project can own them, and the owner is whichever
-    directory first brought them up. In a repo worked through many worktrees
-    that is rarely the one you are standing in, and compose then tries to
-    CREATE containers whose names are taken and fails. `docker start` addresses
-    them by name and does not care which project owns them.
-- Integration files in `packages/nextly` run sequentially on purpose
-  (`fileParallelism: false`, single fork): system-table suites share fixed
-  table names. Do not "fix" slow integration runs by re-enabling parallelism.
+- `pnpm build` builds all packages (turbo, dependency order). `pnpm check-types`
+  and `pnpm lint` BOTH need a build first: an unbuilt sibling's `dist` fails
+  them workspace-wide, and a stale one makes type-aware lint rules report on
+  your own expressions, with no tell in the message. Build before you believe
+  any lint or type result. For one package, build it WITH its dependencies:
+  `pnpm --filter <pkg>... build`, not `<pkg>^...`.
+- Integration tests need built packages, so run them from the ROOT:
+  `pnpm test:integration:postgres17`, `:postgres15`, `:mysql`, `:sqlite`. They
+  self-skip when the dialect's URL is unset. Their databases are the
+  containers in `docker-compose.test.yml`, which neither `pnpm docker:test`
+  nor `pnpm docker:up` starts. NEVER point a TEST\_\* URL at a database you did
+  not create for the run, and never re-enable integration parallelism.
 - E2E: the root `e2e/` package (Playwright) boots its own playground on :3100
   with a fresh SQLite database per run.
 - Some unit suites have a known pre-existing failing baseline. NEVER add to
   it: run the tests for the area you touch before and after your change, and
   fix any new failure you introduce.
-- A test is only evidence once you have seen it FAIL for the intended reason.
-  Break the code, confirm the intended test fails, restore. After changing a
-  test, re-run its break: a fix to the test is a change to the experiment.
-  What counts as the intended failure depends on when the test runs:
-  - A RUNTIME test that stops COMPILING proves nothing — the assertion never
-    executed, so the red says only that the break was malformed.
-  - A COMPILE-TIME contract test is the opposite case: compilation IS the
-    mechanism. In `*.test-d.ts`, widening a type makes its `@ts-expect-error`
-    unused and `check-types` fails for exactly the intended reason. Red is not
-    the evidence though — the EXPECTED DIAGNOSTIC is. A typo, a bad import or
-    an unrelated type error in the same file all stop compilation too, and
-    prove nothing about the property.
-  - `@ts-expect-error` is the sharp edge here, because it suppresses ANY error
-    on the line that follows. A test asserting "this call is rejected" stays
-    green once the code starts erroring for a different reason, and stays green
-    after the original rejection stops happening. Two things that look like
-    mitigations and are not: a comment naming the expected code, which `tsc`
-    never reads; and a positive control asserting the ACCEPTED form still
-    compiles, which an unrelated error confined to the rejected line leaves
-    untouched. Only an assertion the checker EVALUATES distinguishes the cases —
-    `expectTypeOf(...)`, or a diagnostic-aware type test that names the error it
-    expects. If the property cannot be asserted that way, say in the file that
-    the directive is unverified rather than letting it read as coverage.
-  - The count must not drop by ACCIDENT: a suite that silently stopped being
-    discovered reads as a pass, which is what that guards. Removing a test on
-    purpose is a different act, sometimes correct (below), and the PR says
-    which test went and why.
-- Before you assert or measure, name the property that SEPARATES a correct
-  implementation from the plausible broken one you are worried about, and check
-  that it is the property you are about to test. A necessary-but-insufficient
-  property returns green from both, and it does so carrying the authority of
-  having been checked, which closes the question. Two worked examples, both real:
-  - measuring whether an old database constraint could be DROPPED, when what
-    decides the repair is whether the code can FIND it. Dropping succeeded, and
-    the repair would still have skipped every database silently.
-  - asserting a generated identifier is `length <= 63`, when a plain truncation
-    is also 63 characters. The one test guarding the naming passed on the broken
-    implementation; distinctness was the separating property.
+- A test is only evidence once you have watched it FAIL for the intended
+  reason: load the `testing-evidence` skill before adding, changing or judging
+  a test.
+- Why each of these holds, the container start commands, and the
+  measurements: the `running-builds-and-tests` skill. Perishable numbers live
+  in `AGENTS.measured.md`, generated by `node scripts/measure-facts.mjs`.
 
-  The operational form is to ask what ELSE would produce the same green. If
-  anything other than the property under test does — a fixture that never
-  reaches the mechanism, an unregistered type falling through to a default, an
-  assertion satisfied by absence, a search whose glob missed the directory —
-  the property is not covered yet. Add the positive control that makes the
-  mechanism's presence observable, and run it.
+## How much of the machine a local gate may take
 
-- Whatever you are currently judging WITH is not being judged. A probe, a
-  derived check, a test, a post-apply verifier and the baseline diff that reads
-  the suite all had the same defect in one week here, and every one of them
-  existed to catch the layer above it. They were hard to see not because the
-  defect was subtle but because each occupied the position auditing is done
-  from, so nothing stood further out to look at it. Periodically step out one
-  level and give the instrument the same treatment as its subject: a positive
-  control on an input where you know the answer, and where the answer is not
-  "nothing". Confirming an instrument against a case that did not move cannot
-  distinguish it from one that reports nothing under any circumstances.
-- A test that passes both with and without the fix is worse than no test: the
-  next reader takes the green as coverage. **Repair it first.** Usually the
-  fixture never reaches the mechanism or the assertion is satisfied by absence,
-  and both are fixable. Deleting the ONLY attempted coverage for a behaviour
-  trades a misleading green for no signal at all, which is not an improvement.
-  Deletion is right in two cases, and they need different notes:
-  - **redundant** — the behaviour is genuinely covered elsewhere. Say in the
-    file that remains WHERE, so the next reader can follow it.
-  - **obsolete** — the code no longer does the thing. There is no remaining
-    file, and demanding one would force a false coverage comment. Say what
-    behaviour was removed and in which change instead.
-
-  Either way this is the deliberate removal the count rule exempts, so state the
-  drop rather than letting it look like a suite that went missing.
+Every heavy command — `pnpm build`, `lint`, `check-types`, `test`,
+`test:integration*`, `verify:pr`, `verify:full` — and `.husky/pre-push` run
+through `scripts/bounded.mjs`. It sizes the run to the machine
+(`pnpm local-limits` prints it) and lets ONE heavy run at a time use it across
+every checkout; a second waits. Unbounded, turbo's 10 package tasks times
+Vitest's one worker per core exhaust an ordinary machine, and the kernel's
+answer is to kill processes. Override one command with
+`NEXTLY_LOCAL_CONCURRENCY` and `NEXTLY_LOCAL_MAX_WORKERS`. A command run inside
+one package (`pnpm --filter <pkg> test`) takes no slot, so there the rule is
+yours to keep: never a unit suite while an integration leg is in flight. The
+budget, the overrides and each operating system's caveats: the
+`running-builds-and-tests` skill.
 
 ## Conventions (enforced; violations will be rejected in review)
 
@@ -293,6 +204,25 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 - API responses use the canonical envelopes in
   `packages/nextly/src/api/response-shapes.ts` (`{ items, meta }` for lists,
   `{ message, item }` for mutations). Never invent a new response shape.
+- Parse outside input with `zod` at the boundary: a request body, a query,
+  config, plugin options, a provider's response, a webhook payload. Past it,
+  trust no client-supplied id, role or redirect target.
+- A `NextlyError`'s `publicMessage` stays generic where it could leak account
+  state or internals; the detail goes in `logMessage` and `logContext`.
+- Inside a transaction, hand nested work its `tx`; never open a second
+  transaction. On PostgreSQL and MySQL a nested `transaction()` takes another
+  connection and cannot see the outer's writes; on SQLite it waits behind the
+  outer, which is waiting for it.
+- Make retried work (jobs, webhook handlers, event subscribers) idempotent: a
+  repeated delivery adds no second row or side effect.
+- Queries select only the columns they need, filter and paginate in the
+  database, and make no N+1 round trips. Filtering or sorting a large table on
+  an unindexed column is slow: say so in the PR.
+- Never hard-code or log a secret, and redact tokens and credentials in logs
+  and errors. Return one only through a route that exists to hand it over, to
+  a caller allowed to have it: a new API key once at creation; a webhook's
+  signing secrets at creation and through the session-only, `update-webhooks`
+  reveal.
 - Admin styling is token-driven: use `--nx-*` custom properties (defined for
   light AND dark in `packages/ui/src/styles/theme.css`). Zero hardcoded
   colors, and every visual change must work in both modes.
@@ -347,16 +277,144 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   publisher answers 404 and would strand it after the rest of the train is
   already live. Details: the `release-and-changesets` skill.
 
+## Clean up what you started
+
+Anything a task brings up, that task takes down. Containers started to verify
+something, worktrees created for a branch, throwaway branches, scratch files
+and test databases all get removed when the work is done — not left for the
+next person to find and wonder about.
+
+The same applies to anything you WRITE here. Tooling that allocates a resource
+ships its teardown in the same change, not as a follow-up: a `create` with no
+matching `remove` leaks whatever is scarce, and what is scarce is rarely disk.
+
+```sh
+docker stop nextly-postgres17-test nextly-postgres15-test nextly-mysql-test
+pnpm worktree remove <branch>
+```
+
+Stopping the test containers is safe and cheap — `docker start` by name brings
+them back with their data, which is why the start commands in the
+`running-builds-and-tests` skill are `start` rather than `compose up`.
+
+## A whole-file write is a delete plus a create
+
+`cat > f`, `>` and a full-file editor write all replace the file, and the risk
+is the belief that it is new. Before writing a file blind, establish that the
+path is absent — an explicit NOT FOUND; any other failure to read it aborts,
+because a file you could not read is still one the shell will truncate.
+Better, make the write itself refuse: `set -o noclobber; printf '%s' "$content" > path`
+as ONE command (each tool call starts a fresh shell, with the option off), or
+Node's `writeFileSync(path, data, { flag: "wx" })`, which throws `EEXIST`.
+`wx` refuses a symbolic link at the path itself, even a dangling one, and so
+does `noclobber` in bash, where it was measured; another POSIX shell may follow
+a dangling link and create its target. A link in a directory above the path is
+followed by both, and a new file is created where that link points. `>|` opts
+out where overwriting is the intent.
+Under an editing tool that requires a prior read, use it rather than the shell.
+Why, as measured, and how to recover a file once it has been clobbered: the
+`recovering-a-clobbered-file` skill.
+
 ## Git and PR rules
 
-- Never commit directly to main. Branch, open a PR, request review.
-- Do not add "Generated with Claude Code", Co-Authored-By AI trailers, or any
-  other AI attribution to commits or PR bodies.
+- One flow: a short-lived branch off `main` for each pull request,
+  squash-merged into `main`, its title becoming the commit message. Never
+  commit to `main` directly, and keep no long-lived branch (`dev`, release,
+  integration): lint, type-checking, the unit and integration tests and the
+  secret scan never run on a pull request into one, and a branch that gathers
+  weeks of work is too large to review. A feature too large for one pull
+  request lands in slices, each complete and tested; public API not yet
+  finished is marked `@experimental` until the feature is, as
+  `packages/ui/STABILITY.md` uses the tag.
+- Every pull request merges through the merge queue, which runs the required
+  checks on it combined with the latest `main` and squash-merges only what
+  passes, so no branch is brought up to date by hand. `node
+scripts/verify-merge.mjs <pr-number>` reads a pull request's checks and
+  threads before it joins the queue, and checks that a merged one landed
+  whole.
+- Do not add a "generated with" line naming an AI tool, an AI co-author
+  trailer, or any other AI attribution to commits or PR bodies.
 - Husky runs gitleaks + lint-staged on commit, commitlint on the message, and
-  lint + build on push. Never bypass hooks with `--no-verify`; if a hook
-  fails, fix the cause.
+  lint + build on push; a push that only deletes remote branches runs no gates.
+  Never bypass hooks with `--no-verify`; if a hook fails, fix the cause.
 - Pre-existing lint or type failures may be left alone (mention them in the
   PR); introducing new ones is not acceptable.
+
+## Code Review Rules
+
+For the automatic reviewer. CI already decides formatting, types, lint, the
+comment convention, design tokens and bare `Error` in product code, so none of
+those belong here — a reviewer relitigating a mechanical check costs a round
+and settles nothing. Whether a changeset is present is not among them: no CI
+job requires one, so the reviewer checks it. What follows is the consequential
+behaviour no check in this repository can judge.
+
+### Published surface is a compatibility contract
+
+`packages/nextly` publishes many export subpaths and every package versions in
+lockstep. Flag a removed, renamed or retyped export, a narrowed parameter, a
+widened return, or a changed default, unless the pull request states the
+compatibility decision and what consumers should do instead. Adding an export
+is safe; changing what an existing one means is not.
+
+### Behaviour must match across database dialects
+
+Postgres, MySQL and SQLite are all supported through `adapter-drizzle`. Flag a
+change to query building, DDL, migrations or type mapping that alters
+observable behaviour on one dialect without either covering the others or
+documenting the limitation as deliberate. Field-to-column mapping has one home
+(`packages/nextly/src/domains/schema/services/field-column-descriptor.ts`); an
+adapter that starts mapping field types is the defect, not a local fix.
+
+### `plugin-sdk` is the only stable plugin surface
+
+Flag a plugin or builder reaching into `nextly` or `@nextlyhq/admin` internals
+rather than through `@nextlyhq/plugin-sdk`, and flag a new export added to the
+SDK without a statement that it is intended to be stable. The safe path is to
+widen the SDK deliberately, not to bypass it.
+
+### A precondition runs before the work it guards
+
+Authorization, ownership, validity and quota checks must execute before the
+mutation they protect. Flag any reordering that moves one behind the work for
+cost reasons: the request is then rejected after the state has already changed,
+which turns a saving into a security hole. Defensive assertions over values
+already in hand may move; preconditions may not.
+
+### Access decisions have one path
+
+`overrideAccess: false` is judged by a single gate. Flag a second place that
+decides whether a caller may read or write, a hand-assembled caller literal
+instead of `readAccessCaller`, or a rule handed the stored `action-resource`
+permission spelling rather than the rule-facing `resource:action` one. Two
+doors that answer one key differently is a defect this repository has already
+had.
+
+### One question has one implementation
+
+Flag a narrower view computed alongside the richer one rather than derived from
+it — a count kept beside a list, a summary recomputed from the same inputs, a
+test that reconstructs the call it is watching instead of observing it. Two
+implementations agree on the day they are written and drift silently after,
+because both look correct in isolation.
+
+### A test must separate correct from plausibly broken
+
+Flag a test whose assertion a plausible broken implementation would also
+satisfy: a length bound a plain truncation meets, an assertion satisfied by
+absence, a fixture that never reaches the mechanism, an `@ts-expect-error` that
+would suppress an unrelated error on the same line. Say which property is
+uncovered and what would distinguish the two implementations. Flag a suite that
+silently stopped being discovered; a deliberate removal is a different act and
+the pull request should say which test went and why.
+
+### Stored data and migrations are hard to reverse
+
+Flag a migration that drops or rewrites existing rows or columns, a change to
+an established storage spelling, or a schema change that an existing
+installation would silently fail to receive, unless the pull request names the
+compatibility decision. Reaching existing databases is the part that gets
+missed.
 
 ---
 
@@ -364,51 +422,14 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 
 ## Fallow local gate
 
-Before any `git commit` or `git push`, run `fallow audit --format json --quiet --explain --gate-marker agent`. If the verdict is `fail`, fix the reported findings before retrying. Treat JSON runtime errors like `{ "error": true, ... }` as non-blocking.
-
-Audit defaults to `gate=new-only`: only findings introduced by the current changeset affect the verdict. Inherited findings on touched files are reported under `attribution` and annotated with `introduced: false`, but do not block the commit. Set `"audit": { "gate": "all" }` in `.fallowrc.jsonc` to gate every finding in changed files.
-
-This gate reads the DIFF, and `.github/workflows/code-hygiene.yml` runs in two jobs. Its `Changed files` job runs `audit --gate new-only` via the official `fallow-rs/fallow` action, gating on newly introduced dead code and duplication in changed files, adding inline annotations and PR review threads on offending lines (with `apps/playground` excluded). Its `Whole repository` job scans the entire repository at the PR branch HEAD to post a sticky PR comment and step summary covering dead code, duplication, and code health.
-
-What CI ENFORCES and where it enforces it: `Changed files` gates on introduced DEAD CODE and introduced DUPLICATION in the PR's changed files (failing the PR check and posting PR review threads). The whole-repo job provides comprehensive visibility into repository-wide dead code, duplication, and complexity via a sticky PR comment, failing only on tooling crashes.
-
-A degraded run is the failure mode worth knowing about, because it reports nothing and looks identical to a clean one. The gate job reads the action's `changed-files-unavailable`, `post-skipped-reason` and `dedup-lookup-failed` outputs and refuses on an unscoped analysis or an empty verdict, naming itself a tooling failure rather than a finding in the change.
-
-`.claude/hooks/fallow-gate.sh` is VENDORED rather than left as `fallow hooks
-install` writes it. The generated script parses JSON with `jq` and compares
-versions with `sort -V`, and neither is safe to assume here: `jq` is not a
-dependency of this repository, and BSD `sort` has no `-V`, so on macOS the
-version check aborts the hook under `set -euo pipefail`. Both are done with
-node in the vendored copy, which every contributor already has — the engines
-field requires it and nothing in this repository runs without it. So the gate
-needs no tool a contributor does not already have installed.
-
-That has a maintenance cost worth knowing: re-running `fallow hooks install
---target agent` OVERWRITES the file and silently puts both back. Re-apply the
-vendored version if that happens. The workflows under `.github/` still use
-`jq` freely — GitHub's runners ship it, and that is not a contributor's
-machine.
-
-`FALLOW_AUDIT_BASE` is pinned to `origin/main` in `.claude/settings.json`. Left unset, the audit takes its base from the merge-base with the branch's UPSTREAM, which is the remote tracking branch — stale on any branch whose local commits are not pushed, and after a rebase that means the diff carries every commit `main` gained since. Measured here: 319 changed files and a `fail` verdict on a branch whose actual diff was nine commits. Every pull request in this repo targets `main`, so naming it removes the guesswork.
-
-For non-skill agents, treat the task map below as the local onboarding source: run the listed fallow command before destructive edits, before commits, and before pull request handoff.
-
-## Fallow task map
-
-| When the agent is about to...                                     | Run                                                                                  |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| delete an "unused" export or file                                 | `fallow dead-code --trace <file>:<export>`                                           |
-| prove a TypeScript symbol's exact consumers before refactoring    | `fallow dead-code --type-aware --symbol-impact <file>:<export-or-class.method>`      |
-| delete an "unused" dependency                                     | `fallow dead-code --trace-dependency <name>`                                         |
-| commit or open a PR                                               | `pnpm fallow:audit` (`fallow audit --base origin/main`)                              |
-| prioritize refactoring                                            | `fallow health --hotspots --targets`                                                 |
-| ask who owns code                                                 | `fallow health --ownership`                                                          |
-| check untested-but-reachable code                                 | `fallow health --coverage-gaps`                                                      |
-| consolidate duplication                                           | `fallow dupes --trace dup:<fingerprint>`                                             |
-| find feature flags                                                | `fallow flags`                                                                       |
-| check which architecture rules apply to a file before changing it | `fallow guard <files>`                                                               |
-| surface security candidates                                       | `fallow security`                                                                    |
-| understand a finding                                              | `fallow explain <issue-type>`                                                        |
-| scope a monorepo                                                  | `--workspace <glob> / --changed-workspaces <ref>` (global flags, prefix any command) |
+Before any `git commit` or `git push`, run
+`fallow audit --format json --quiet --explain --gate-marker agent`, with
+`FALLOW_AUDIT_BASE=origin/main` (`.claude/settings.json` sets it for Claude
+Code sessions). If the verdict is `fail`, fix the reported findings before
+retrying; treat a JSON runtime error (`{ "error": true, ... }`) as
+non-blocking. Only findings the change introduces decide the verdict. What CI
+enforces, the degraded run that looks clean, the vendored hook, and which
+fallow command to run before deleting an "unused" export, file or dependency:
+the `running-the-fallow-gate` skill.
 
 <!-- fallow:setup-hooks:end -->

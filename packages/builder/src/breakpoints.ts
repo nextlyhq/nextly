@@ -17,7 +17,7 @@
  * — that package is the block-agnostic layer — so it mirrored the engine's
  * shapes structurally and kept its own copy of the cap. Two implementations of
  * one rule agree the day they are written and drift silently after, which is
- * what `.claude/rules/derived-checks.md` is about, and it is why this belongs
+ * what the `derived-checks` skill is about, and it is why this belongs
  * here: `packages/builder` already depends on the engine and can ASK.
  *
  * What is still restated, stated plainly rather than left to be discovered: the

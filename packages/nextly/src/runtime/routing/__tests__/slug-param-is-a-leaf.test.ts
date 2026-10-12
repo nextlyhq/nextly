@@ -28,7 +28,7 @@
  * @module runtime/routing/__tests__/slug-param-is-a-leaf
  */
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
@@ -40,6 +40,10 @@ const ROUTING_DIR = resolve(HERE, "..");
 const SRC_DIR = resolve(ROUTING_DIR, "../..");
 
 /** Every module `entry` reaches, directly or through anything it imports. */
+/** A module under `src`, named with `/` on every platform, as the expectations write it. */
+const fromSrc = (file: string): string =>
+  relative(SRC_DIR, file).split(sep).join("/");
+
 function transitiveImports(entry: string): {
   local: Set<string>;
   bare: Set<string>;
@@ -70,10 +74,10 @@ function transitiveImports(entry: string): {
       // A relative import that resolves to nothing is a failure to RESOLVE, not
       // an absence of one. Recorded as reached so it cannot pass by vanishing.
       if (target === undefined) {
-        local.add(`${relative(SRC_DIR, base)} (unresolved)`);
+        local.add(`${fromSrc(base)} (unresolved)`);
         continue;
       }
-      local.add(relative(SRC_DIR, target));
+      local.add(fromSrc(target));
       queue.push(target);
     }
   }

@@ -242,36 +242,6 @@ function parseUserRoutes(
     };
   }
 
-  if (id && subresource === "accounts" && !subId && httpMethod === "GET") {
-    // GET /api/users/123/accounts → list user accounts
-    routeParams.userId = id;
-    return {
-      service: "users",
-      operation: "single",
-      method: "getAccounts",
-      routeParams,
-    };
-  }
-
-  if (
-    id &&
-    subresource === "accounts" &&
-    subId &&
-    additionalParams[0] &&
-    httpMethod === "DELETE"
-  ) {
-    // DELETE /api/users/123/accounts/github/123456 → unlink account
-    routeParams.userId = id;
-    routeParams.provider = subId;
-    routeParams.providerAccountId = additionalParams[0];
-    return {
-      service: "users",
-      operation: "update",
-      method: "unlinkAccountForUser",
-      routeParams,
-    };
-  }
-
   if (id && subresource === "roles" && !subId && httpMethod === "POST") {
     // POST /api/users/123/roles → assign role to user
     routeParams.userId = id;
@@ -2714,6 +2684,33 @@ export function parseRestRoute(
       routeParams
     );
     if (result) return result;
+  }
+
+  // Plugin settings. One plugin per request, named in the path, so a caller
+  // cannot ask for every plugin's configuration in one go.
+  if (resource === "plugins-settings" && id) {
+    // A SCOPED name occupies two segments. Taking only the first stored
+    // `@acme` as the plugin and left `auth` sitting in `subresource`, so
+    // `serviceFor` looked up a plugin by a name no plugin has and answered
+    // 404 — for the npm-scoped names this repository's own plugins use.
+    routeParams.plugin =
+      id.startsWith("@") && subresource ? `${id}/${subresource}` : id;
+    if (httpMethod === "GET") {
+      return {
+        service: "pluginSettings",
+        operation: "single",
+        method: "getPluginSettings",
+        routeParams,
+      };
+    }
+    if (httpMethod === "PATCH") {
+      return {
+        service: "pluginSettings",
+        operation: "update",
+        method: "updatePluginSettings",
+        routeParams,
+      };
+    }
   }
 
   // Handle Roles endpoints

@@ -16,7 +16,7 @@
  * written, and the first package added outside its assumptions is silently unscanned.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
@@ -108,10 +108,15 @@ function scannedManifests(): {
       const parsed = JSON.parse(readFileSync(manifest, "utf8")) as {
         scripts?: Record<string, string>;
       };
+      // Named with `/` on every platform, as the workspace globs and the
+      // assertions write it.
       const relative =
         directory === repoRoot
           ? "<root>"
-          : directory.slice(repoRoot.length + 1);
+          : directory
+              .slice(repoRoot.length + 1)
+              .split(sep)
+              .join("/");
       return { path: relative, scripts: parsed.scripts ?? {} };
     });
 }

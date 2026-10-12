@@ -148,6 +148,14 @@ export type Middleware = (
  */
 export type PluginRouteMount = "plugin" | "root";
 
+/** @experimental A plugin route's own rate-limit allowance. */
+export interface PluginRouteRateLimit {
+  /** Requests one client may make in a window, a positive integer. */
+  max: number;
+  /** The window, in milliseconds, a positive integer. */
+  windowMs: number;
+}
+
 /**
  * @public A single HTTP route contributed by a plugin. Answers at
  * `/plugins/<plugin-name><path>` under the existing catch-all, so its full URL
@@ -188,6 +196,76 @@ export interface PluginRoute {
   requiredPermission?: PermissionSlug | PluginRoutePermissionResolver;
   /** Opt out of auth — the route is publicly callable. */
   public?: boolean;
+  /**
+   * @experimental Apply a per-IP rate limit, counted for THIS route alone.
+   *
+   * - `"auth"` uses the same limit and window as `/auth/*`, in its OWN key
+   *   namespace — a plugin's sign-in route is as much a credential-stuffing
+   *   target as core's, and sharing core's bucket would let either exhaust the
+   *   other's budget.
+   * - `"general"` uses the app's REST read or write allowance.
+   * - `{ max, windowMs }` sets this route's own allowance: at most `max`
+   *   requests per `windowMs` milliseconds.
+   *
+   * Each route path has its own bucket per client, so an SSO sign-in
+   * spending `authorize` and `callback` costs one request from each route's
+   * budget rather than two from one. `"general"` also counts reads and writes
+   * apart, and `{ max, windowMs }` counts each method apart. IPv6 clients are
+   * counted by their /64.
+   *
+   * The client address is read only when `security.trustProxy` is on. Off,
+   * every client shares one bucket, and boot warns about each rate-limited
+   * route.
+   */
+  rateLimit?: "general" | "auth" | PluginRouteRateLimit;
+  /**
+   * @experimental Declare that the handler reads the request body as the
+   * exact bytes sent.
+   *
+   * Every plugin handler is given the untouched `Request`, flag or not: core
+   * never parses or re-serialises a plugin route's body before the handler
+   * runs (a CSRF token check reads a clone), so a signed webhook can verify
+   * its signature over `await request.arrayBuffer()` or `request.text()`. The
+   * flag states that intent, and is validated: a `GET` route declaring it is
+   * refused when the plugin's routes are collected, since that method carries
+   * no body.
+   */
+  rawBody?: boolean;
+  /**
+   * @experimental The cross-site check for unsafe methods from a
+   * session-cookie caller.
+   *
+   * - Left unset, an authenticated route checks the request's `Origin` (or
+   *   `Referer`): it must be this site or one in `NEXTLY_ALLOWED_ORIGINS`.
+   *   A same-origin write passes it without a token.
+   * - `true` also requires a valid double-submit CSRF token, in the
+   *   `x-csrf-token` header or as `csrfToken` in a JSON body. On a `public`
+   *   route it applies to callers carrying the session cookie.
+   * - `false` refuses every unsafe-method request the session cookie
+   *   authenticates, from any origin, so the route takes writes only from
+   *   callers with another credential. It cannot be combined with
+   *   `public: true`: the pair is refused when routes are collected, and
+   *   the app does not boot. API-key and webhook callers need no opt-out:
+   *   they are never checked, and a webhook route is `public: true`.
+   *
+   * The admin's `usePluginRouteMutation` sends the token on every write, so a
+   * route the plugin's admin page writes to works with `csrf` unset or
+   * `true`. A page that writes with its own `fetch` either leaves `csrf`
+   * unset or fetches a token from `/auth/csrf` and sends it.
+   *
+   * A refusal answers 403 `CSRF_FAILED` and records a `csrf-failed` audit
+   * event. API-key and Bearer callers are exempt, because a browser cannot
+   * attach those cross-site — the attack this prevents needs the credential
+   * to travel automatically, which is what a cookie does and a header does
+   * not.
+   */
+  csrf?: boolean;
+  /**
+   * @experimental Add `Cache-Control: no-store` to every response. Always set
+   * for `rateLimit: "auth"`, whose responses describe an authentication
+   * attempt.
+   */
+  noStore?: boolean;
   /**
    * Convert stored timestamps to the installation's configured timezone, the
    * way every built-in collection read does.

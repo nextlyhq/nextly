@@ -50,7 +50,7 @@ import type {
   FormFieldCatalogType,
 } from "nextly/field-catalog";
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { AnyFormField, FormFieldTypeId } from "../../../types";
 import { buildFieldReferenceMap } from "../../../utils/field-references";
@@ -315,6 +315,41 @@ export function FieldCards({
 
   const [isAddOpen, setIsAddOpen] = useState(false);
 
+  // A card's React key cannot be the field's name: the name is the one
+  // property the Field Name input rewrites on every keystroke, and a list
+  // keyed by it unmounts the renamed card mid-word, destroying the input and
+  // the focus in it. Keys are minted per card here and follow the field
+  // through a rename (handleUpdate below), so editing a name never remounts
+  // the card.
+  const cardKeysRef = useRef(new Map<string, string>());
+  const nextCardKeyRef = useRef(0);
+
+  const cardKeyFor = (name: string): string => {
+    let key = cardKeysRef.current.get(name);
+    if (key === undefined) {
+      key = `card-${++nextCardKeyRef.current}`;
+      cardKeysRef.current.set(name, key);
+    }
+    return key;
+  };
+
+  const handleUpdate = useCallback(
+    (field: AnyFormField, updates: Partial<AnyFormField>) => {
+      // Move the card's key to the field's incoming name before the state
+      // update re-renders the list, so the renamed field keeps its mounted
+      // card.
+      if (updates.name !== undefined && updates.name !== field.name) {
+        const key = cardKeysRef.current.get(field.name);
+        if (key !== undefined) {
+          cardKeysRef.current.delete(field.name);
+          cardKeysRef.current.set(updates.name, key);
+        }
+      }
+      updateField(field.name, updates);
+    },
+    [updateField]
+  );
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
@@ -390,7 +425,7 @@ export function FieldCards({
             >
               <ul className="space-y-2" aria-label="Form fields">
                 {fields.map((field, index) => (
-                  <li key={field.name}>
+                  <li key={cardKeyFor(field.name)}>
                     <FieldCard
                       field={field}
                       index={index}
@@ -405,7 +440,7 @@ export function FieldCards({
                       deleteBlockers={(referenceMap.get(field.name) ?? []).map(
                         ref => ref.label
                       )}
-                      onUpdate={updates => updateField(field.name, updates)}
+                      onUpdate={updates => handleUpdate(field, updates)}
                       onDuplicate={() => duplicateField(field.name)}
                       onDelete={() => deleteField(field.name)}
                       onMove={direction => moveField(index, index + direction)}

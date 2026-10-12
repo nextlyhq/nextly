@@ -201,4 +201,45 @@ describe("an authenticated plugin route answers ONE session", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Cache-Control")).toBeNull();
   });
+
+  it("overrides a PUBLIC route's own cacheable header when no-store was asked for", async () => {
+    // A public route never reaches the session-cache override above, so this
+    // boundary is the only thing that can apply `no-store` to it. Treating a
+    // handler-supplied `Cache-Control` as authoritative meant an auth route
+    // answering `public, max-age=300` kept it, and a shared proxy was then
+    // free to cache an authentication response or redirect that the route
+    // option promises is never cacheable.
+    const cacheable = route({
+      public: true,
+      noStore: true,
+      handler: () =>
+        Response.json(opaque, {
+          headers: { "Cache-Control": "public, max-age=300" },
+        }),
+    });
+
+    const res = await runPluginRoute(req(), match(cacheable));
+
+    const cc = (res.headers.get("Cache-Control") ?? "").toLowerCase();
+    expect(cc).toContain("no-store");
+    expect(cc).not.toContain("max-age");
+  });
+
+  it("leaves a public route that did NOT ask for no-store alone", async () => {
+    // The control. Overriding unconditionally would satisfy the test above
+    // while making every cacheable public plugin route uncacheable.
+    const cacheable = route({
+      public: true,
+      handler: () =>
+        Response.json(opaque, {
+          headers: { "Cache-Control": "public, max-age=300" },
+        }),
+    });
+
+    const res = await runPluginRoute(req(), match(cacheable));
+
+    const cc = (res.headers.get("Cache-Control") ?? "").toLowerCase();
+    expect(cc).toContain("max-age=300");
+    expect(cc).not.toContain("no-store");
+  });
 });

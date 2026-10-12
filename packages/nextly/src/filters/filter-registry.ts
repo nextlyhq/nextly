@@ -33,6 +33,37 @@ export type Action<P = unknown, C = unknown> = (
   context: C
 ) => void | Promise<void>;
 
+/**
+ * A veto point's verdict.
+ *
+ * A decision is a VALUE rather than a thrown refusal because filters are
+ * error-isolated — a handler that vetoed by throwing would be skipped, and the
+ * chain would come back allow.
+ */
+export type Decision = { allow: true } | { allow: false; reason: string };
+
+/**
+ * A verdict as a fresh {@link Decision}, or null when it is not one.
+ *
+ * Only a boolean `allow` is read as a verdict: a string, a number, or an
+ * object with no `allow` is malformed, never "truthy enough". A denial with
+ * no usable reason is given one, so a denial always says something.
+ */
+function normaliseDecision(raw: unknown): Decision | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const { allow, reason } = raw as { allow?: unknown; reason?: unknown };
+  if (allow === true) return { allow: true };
+  if (allow === false) {
+    return {
+      allow: false,
+      reason: typeof reason === "string" && reason !== "" ? reason : "denied",
+    };
+  }
+  return null;
+}
+
 /** @experimental Minimal logger shape for filter/action error diagnostics (D63). */
 export interface FilterLogger {
   warn?(message: string, meta?: unknown): void;
@@ -98,6 +129,103 @@ export class FilterRegistry {
     return acc;
   }
 
+  /**
+   * Run a chain of handlers that VETO rather than transform.
+   *
+   * Ordinary filters are error-isolated: a throwing handler is logged and
+   * skipped so one bad plugin cannot break a seam. That is right for
+   * transforming a value and exactly wrong for deciding whether something is
+   * allowed — a crashing "deny" would be skipped, and the answer would come
+   * back allow. A veto has to fail CLOSED.
+   *
+   * Two rules make that true:
+   *  - a handler that throws denies, and stops the chain;
+   *  - a handler may keep or DOWNGRADE the decision, never upgrade it. Once
+   *    something has said no, a later handler cannot overrule it, so the order
+   *    plugins happen to load in cannot decide access.
+   *
+   * Every verdict is NORMALISED, because the types do not reach a JavaScript
+   * plugin or an `as any` return: `{ allow: "false" }` or `{ allow: 1 }` came
+   * back unchanged, and a caller testing `if (verdict.allow)` allowed. So
+   * `undefined` keeps the prior verdict, `allow: true` and `allow: false` are
+   * read as said, and anything else denies with `"malformed-decision"` and
+   * stops the chain. The FIRST denial's reason is the one kept, whatever a
+   * later handler returns or throws. What comes back is always a fresh
+   * `{ allow: boolean; reason?: string }`.
+   */
+  async applyDecision<C = unknown>(
+    name: FilterName,
+    initial: Decision,
+    context: C
+  ): Promise<Decision> {
+    let decision = normaliseDecision(initial) ?? {
+      allow: false,
+      reason: "malformed-decision",
+    };
+    const list = this.filters.get(name);
+    if (!list || list.length === 0) return decision;
+
+    for (const fn of [...list]) {
+      const step = await this.runDecisionHandler(
+        fn as Filter<Decision, C>,
+        name,
+        decision,
+        context
+      );
+      decision = step.decision;
+      if (step.stop) return decision;
+    }
+    return decision;
+  }
+
+  /**
+   * One handler's turn in a decision chain: the verdict after it, and whether
+   * the chain stops there.
+   */
+  private async runDecisionHandler<C>(
+    fn: Filter<Decision, C>,
+    name: FilterName,
+    prior: Decision,
+    context: C
+  ): Promise<{ decision: Decision; stop: boolean }> {
+    // A COPY of the verdict goes in, never the authoritative object: a
+    // JavaScript handler can rewrite `allow` in place, and the mutated input
+    // would then read as true on BOTH sides of the upgrade check below — the
+    // denial overturned by the very object that carried it.
+    let raw: unknown;
+    try {
+      raw = await fn({ ...prior }, context);
+    } catch (err) {
+      this.logError("decision", name, err);
+      return { decision: deniedFrom(prior, "hook-error"), stop: true };
+    }
+
+    if (raw === undefined || raw === null)
+      return { decision: prior, stop: false };
+    const next = normaliseDecision(raw);
+    if (!next) {
+      this.logger?.warn?.(
+        `[nextly] A decision handler for "${name}" returned a malformed verdict; denied.`
+      );
+      return { decision: deniedFrom(prior, "malformed-decision"), stop: true };
+    }
+
+    // A denial is final. A later denial keeps the first reason, which is the
+    // one that decided the outcome; a later allow is logged rather than
+    // silently ignored, because a plugin trying to overrule a denial is a
+    // mistake worth seeing, and letting it through would make the verdict
+    // depend on load order.
+    if (!prior.allow) {
+      if (next.allow) {
+        this.logger?.warn?.(
+          `[nextly] A decision handler for "${name}" tried to overrule a denial; ignored.`
+        );
+      }
+      return { decision: prior, stop: false };
+    }
+    return { decision: next, stop: false };
+  }
+
   addAction<P = unknown, C = unknown>(
     name: FilterName,
     fn: Action<P, C>
@@ -153,7 +281,7 @@ export class FilterRegistry {
   }
 
   private logError(
-    kind: "filter" | "action",
+    kind: "filter" | "action" | "decision",
     name: string,
     err: unknown
   ): void {
@@ -185,4 +313,9 @@ export function getFilterRegistry(): FilterRegistry {
 /** Reset the global filter registry (testing only). */
 export function resetFilterRegistry(): void {
   globalFilters.clear();
+}
+
+/** A denial for `reason`, unless the verdict already denies, which it keeps. */
+function deniedFrom(prior: Decision, reason: string): Decision {
+  return prior.allow ? { allow: false, reason } : prior;
 }

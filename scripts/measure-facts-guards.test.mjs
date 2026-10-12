@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,3 +70,31 @@ describe("carried heavy rows keep their original stamp", () => {
     expect(fresh.stdout).toContain(row[1]);
   });
 });
+
+describe("a full run takes the heavy slot only for heavy rows", () => {
+  /*
+   * A full run of cheap rows only runs no forced turbo, so it must not wait
+   * behind a long build for the machine's heavy slot. The slot here is held
+   * by this test; a run that queued for it would time out.
+   */
+  it("does not wait for the heavy slot when only cheap rows are selected", () => {
+    const slots = mkdtempSync(join(tmpdir(), "measure-facts-slots-"));
+    try {
+      writeFileSync(join(slots, "slot-0.json"), JSON.stringify({ pid: process.pid, leader: null, command: "held by the test" }));
+      const env = { ...process.env, NEXTLY_HEAVY_SLOT_DIR: slots };
+      delete env.CI;
+      delete env.NEXTLY_BOUNDED;
+      const r = spawnSync(
+        process.execPath,
+        [resolve(repoRoot, "scripts/measure-facts.mjs"), "--full", "--only=packages", "--stdout"],
+        { env, encoding: "utf8", timeout: 20_000 }
+      );
+      expect(r.error).toBeUndefined();
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/## packages/);
+    } finally {
+      rmSync(slots, { recursive: true, force: true });
+    }
+  });
+});
+

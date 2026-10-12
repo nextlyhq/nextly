@@ -4825,11 +4825,91 @@ describe("a rename record names the nodes it renamed", () => {
     ).toBe("pricing");
   });
 
-  it("keeps a governed link pointing at a target that keeps its id", () => {
+  it("points an unrelated link at the visible renamed node past a gated namesake", () => {
+    // The namesake is gated, so the page renders only the renamed node. The
+    // link belongs to a component that renamed nothing; it has to follow the
+    // node that actually renders the id rather than keep one nothing renders.
+    const doc = insertedPage();
+    const renamed = marked([...doc.nodes], "renamed");
+    const mid = marked([...doc.nodes], "mid");
+    const withGatedNamesake = applyOps(doc, [
+      {
+        kind: "insert",
+        node: node("namesake", {
+          cssId: renamed.cssId,
+          props: { mark: "namesake" },
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+        }),
+        at: { parentId: mid.id, slot: "children", index: 0 },
+      },
+      {
+        kind: "insert",
+        node: node("stranger", {
+          origin: { from: "component", id: "def-1" },
+          attributes: { "aria-describedby": renamed.cssId ?? "" },
+          props: { mark: "stranger" },
+        } as Partial<BlockNode>),
+        at: { parentId: mid.id, slot: "children", index: 0 },
+      },
+    ]).document;
+
+    expect(stored(withGatedNamesake, "wrap", "renamed").cssId).toBe("pricing");
+    expect(stored(withGatedNamesake, "wrap", "namesake").cssId).toBe(
+      renamed.cssId
+    );
+    expect(
+      stored(withGatedNamesake, "wrap", "stranger").attributes?.[
+        "aria-describedby"
+      ]
+    ).toBe("pricing");
+  });
+
+  it("restores a pattern's link inside a gated container beside a visible namesake", () => {
+    // The container holding the renamed node and its link is gated, and an
+    // unrelated visible node carries the minted id. The link's own record knows
+    // where it pointed, so the visible namesake must not decide.
+    const doc = insertedPage();
+    const renamed = marked([...doc.nodes], "renamed");
+    const wrap = marked([...doc.nodes], "wrap");
+    const mid = marked([...doc.nodes], "mid");
+    const gatedWithNamesake = applyOps(doc, [
+      {
+        kind: "update",
+        id: mid.id,
+        patch: {
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+        },
+      },
+      {
+        kind: "insert",
+        node: node("unrelated", {
+          origin: { from: "component", id: "def-1" },
+          cssId: renamed.cssId,
+          props: { mark: "unrelated" },
+        } as Partial<BlockNode>),
+        at: { parentId: wrap.id, slot: "children", index: 1 },
+      },
+    ]).document;
+
+    expect(stored(gatedWithNamesake, "wrap", "renamed").cssId).toBe("pricing");
+    expect(stored(gatedWithNamesake, "wrap", "unrelated").cssId).toBe(
+      renamed.cssId
+    );
+    expect(
+      stored(gatedWithNamesake, "wrap", "link").attributes?.["aria-describedby"]
+    ).toBe("pricing");
+  });
+
+  it("restores a governed link from its own record past a namesake that keeps its id", () => {
     // The listed node stays on the page but outside the selection, so the
-    // record is live and the link's own record would put the source name back.
-    // The link's target in the saved forest is an unlisted namesake, which
-    // keeps the minted id — so the link follows it and keeps the id too.
+    // record is live and says what the link pointed at. The saved forest holds
+    // an unlisted namesake that keeps the minted id; the link's own record
+    // decides, so it goes back to the source name rather than following the
+    // namesake — as a link saved without its target already does.
     const doc = insertedPage();
     const renamed = marked([...doc.nodes], "renamed");
     const mid = marked([...doc.nodes], "mid");
@@ -4860,7 +4940,7 @@ describe("a rename record names the nodes it renamed", () => {
     expect(marked([...saved.nodes], "namesake").cssId).toBe(renamed.cssId);
     expect(
       marked([...saved.nodes], "link").attributes?.["aria-describedby"]
-    ).toBe(renamed.cssId);
+    ).toBe("pricing");
   });
 
   it("restores nothing when the recorded node id occurs twice", () => {

@@ -117,6 +117,10 @@ describe("createLocalUser — invite mode", () => {
       email: "direct@example.com",
       name: "Direct",
       password: "Str0ng!Passw0rd",
+      // The case this test describes: an admin typing a password for someone
+      // else. Having a password is no longer evidence on its own — a person
+      // registering themselves supplies one too.
+      emailVerification: "admin-vouched",
     });
 
     expect(created.invite).toBeUndefined();

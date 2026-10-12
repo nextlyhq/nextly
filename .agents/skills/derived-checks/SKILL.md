@@ -1,0 +1,673 @@
+---
+name: derived-checks
+description: >-
+  Use when writing or reviewing code that checks, mirrors, summarises or
+  validates what other code produces: a gate, probe, test, lint rule or
+  derived view. Covers choosing controls, what a measurement proves,
+  identifying by structure rather than by name, and whether a guard should
+  fail open or closed.
+---
+
+When one piece of code checks, mirrors or summarises what another produces:
+
+## Derive it, do not recompute it
+
+A narrower view must be derived FROM the richer one. Two implementations of the
+same question agree on the day they are written and drift afterwards, and the
+drift is silent because both look correct in isolation.
+
+This has caused defects in five unrelated packages that share no code: block
+rendering versus derived metadata, a contrast validator versus its measurement,
+an email form schema versus its descriptors, a changeset's package list versus
+the release group, and a data probe versus the conversion it guards.
+
+Two rules follow, and the second is the one that gets missed:
+
+- Export the answer from one place and have both callers ask it.
+- **A test is a derived view of the code like any other.** Prefer OBSERVING the
+  real call — spy on the arguments a function actually receives — over
+  reconstructing the same call in the test. A hand-copied argument list keeps
+  passing after someone edits the line the test exists to watch.
+
+## A derived check must match on three axes, not one
+
+Asking "does it compute the same thing" is not enough:
+
+1. **Computation** — the same expression.
+2. **Domain** — the same rows, records or inputs. A probe using the identical
+   expression over a different row set is still a divergence.
+
+   **`LIMIT 1` is sound exactly when ONE row settles the claim.** Which rows
+   those are depends on what is being claimed, not on the clause:
+   - claiming _something exists_ → one match settles it. `LIMIT 1` on the match
+     is sound.
+   - claiming _everything satisfies P_ → one match of P settles nothing, but one
+     match of NOT-P refutes it. So search for the counterexample and `LIMIT 1`
+     is sound; search for a witness of P and it is not.
+
+   The two queries look nearly identical in the source, which is why the claim
+   has to be written down next to them. A universal check phrased as a witness
+   hunt passes on the first agreeable row and never reads the rest.
+
+   **In SQL, `NOT P` is not the complement of `P`.** The logic is three-valued:
+   for a NULL input both `P` and `NOT P` evaluate to UNKNOWN, and `WHERE`
+   keeps only TRUE. So `WHERE NOT (price > 0) LIMIT 1` returns no row for a
+   table full of NULL prices and certifies "every price is positive" — the
+   counterexample hunt, done correctly, silently reporting the opposite of the
+   truth. Decide first whether NULL violates the claim, then write the
+   predicate that says so: `WHERE (price > 0) IS NOT TRUE` catches NULLs as
+   violations, `WHERE price IS NOT NULL AND NOT (price > 0)` excludes them
+   deliberately. Either is fine; the bare `NOT` is the one that is neither.
+
+3. **Failure semantics** — "the answer is no" and "I could not ask" are
+   different outcomes. A check that reports a lock timeout as a data verdict
+   blocks valid work while naming the wrong cause. Pin the error you mean, and
+   remember the signal may be WRAPPED: a driver error's code often lives on
+   `.cause`, and how deep depends on the transport, not on your code.
+
+Underneath all three sits time-of-check-to-time-of-use, which may need a
+different answer per dialect. Say which dialect a mitigation covers rather than
+implying one policy fits all.
+
+## Citing a known defect invalidates the claims that assume its absence
+
+Two implementations drifting apart is the code version of this. The prose
+version is a document that invokes a known defect for one purpose — arguing
+severity, justifying a workaround — while another paragraph asserts something
+that is only true if the defect does not exist. Both sit on the page together
+and neither looks wrong alone, which is why re-reading does not catch it.
+
+The check is mechanical rather than a matter of care: after citing a defect,
+re-read every statement about the POPULATION it affects.
+
+Worked example, from a schema task in this repo. A standing "core schema
+changes may not reach existing databases" was cited for severity in one
+paragraph. The next asserted that no existing database could hold duplicate
+rows, derived from the constraint its schema declares — which is precisely the
+guarantee the cited defect removes. The safety analysis was built on the
+absence of the defect being argued from.
+
+The same shape appears without any document involved, which is worth knowing
+because it is the harder one to see. A control that needed to modify a test file
+was run in a DISPOSABLE worktree specifically so there would be nothing to
+restore. Twenty minutes later a control on a tooling script modified it in place
+with a hand-rolled backup, the backup was taken after a previous run had already
+contaminated the file, and "restoring" reinstated the contamination.
+
+The instinct was not missing. It was SCOPED — available under "test code", not
+transposed to "tooling" — and the boundary was a category in the author's head
+rather than anything present in the work. Both halves were twenty minutes apart,
+both were the same person's, and neither looked wrong at the time. When you
+solve something structurally, ask what else you are doing right now that the
+same structure would fix.
+
+## When a check reaches for a NAME, ask what structurally decides it
+
+A name, a version string or a string pattern is nearly always a proxy, and the
+cases that motivated writing the check are the ones that violate the proxy.
+
+The reason is worth stating, because it tells you when the rule applies: **a
+name is a claim made by someone else; structure is the thing itself.** The
+engine chose the collision suffix, the vendor chose what version to report, a
+previous release of your own code chose the prefix. You never controlled any of
+those strings, and the check exists precisely for the cases where the other
+party's choice diverges from your expectation — so the divergence and the check
+have the same cause. Not every string in a codebase has that property; the ones
+assigned by something outside your control do.
+
+Five instances in one area, each found only after the name-based version had
+been written:
+
+- classify a driver failure by SQLSTATE at the specificity YOUR claim needs, not
+  by a hand-kept list of codes;
+- identify a database object by its **structural signature**, not by its name —
+  an engine appends `_2` on collision and truncates at its identifier limit, so
+  there is no single string to match;
+- decide a capability by **probing it on a scratch object**, not by reading the
+  server's version — the platforms worth detecting are the ones that misreport;
+- decide indexability by asking the **shared rule**, not by restating which
+  types a dialect can key;
+- confirm a merge by **comparing the PR's delta**, not by grepping for a marker
+  that may occur elsewhere.
+
+The tell is a check whose correctness depends on how some other system chose to
+spell something. Ask instead what property makes the answer true, and query
+that. It is usually available and it usually costs the same.
+
+**"Structural" is not automatically "coarse", and the first two above are where
+that bites.** Replacing a name with a broader property is only correct when the
+broader property still separates the cases you must tell apart:
+
+- SQLSTATE **class** `23` is right for "is this an integrity failure at all". It
+  is wrong the moment the caller must distinguish one from another — this repo's
+  `packages/nextly/src/database/errors.ts` maps `23505`, `23503` and `23502` to
+  unique, foreign-key and not-null respectively, and collapsing them to the class
+  would report a missing NOT NULL as a duplicate. Match at the specificity the
+  claim requires: class when the claim is about the family, code when it is about
+  the member.
+- A **column set** is right for "is any object covering these columns present".
+  It is wrong for "which object implements this guarantee", because one table can
+  carry several objects over the same columns — and this repo already treats
+  `{ columns: ["code"], unique: false }` and `{ columns: ["code"], unique: true }`
+  as different indexes during an index-to-unique transition. Match the signature
+  the CLAIM needs: columns, uniqueness, and whether a constraint owns the object.
+
+  Note what that signature does NOT currently separate. `indexKey` in
+  `schema/pipeline/diff/index-util.ts` SORTS the columns, so `(a, b)` and
+  `(b, a)` compare equal — even though only the first serves a left-prefix
+  lookup on `a`. Today the pipeline emits single-column indexes, so nothing
+  depends on the distinction; the moment a composite one is emitted, the key
+  will silently treat two different objects as one. Stated here rather than
+  fixed, because widening the key changes every comparison that uses it.
+
+So the rule is not "prefer the broadest structural property". It is: identify by
+structure rather than by someone else's spelling, at the granularity your claim
+actually needs — which is the separating-property test applied to the identifier
+itself.
+
+## A fix that produces the OPPOSITE failure narrowed the symptom
+
+When a repair is followed by the same defect pointing the other way, the second
+attempt was a different assumption rather than the removal of one. Only the
+third makes the wrong state unrepresentable, so go there directly.
+
+**The tell is that the fix addressed the DIRECTION of the failure rather than
+what produced both directions.** Ask what single thing made the first failure
+possible; if the second attempt leaves it standing, the third failure is already
+written.
+
+Two shapes, and the remedy differs:
+
+- **the cause is something the code cannot observe** — a runtime flag, an
+  environment shape, a value another system spells. Removal is forced, because
+  no amount of assuming correctly is stable. An entry guard here compared
+  `import.meta.url` against `pathToFileURL(process.argv[1])`, which never matches
+  under a symlinked prefix; resolving with `realpathSync` fixed that and broke
+  the opposite case, because `--preserve-symlinks-main` is settable through
+  `NODE_OPTIONS` and turns the resolution off. Accepting BOTH forms depends on
+  neither. Failure mode throughout: the module declined to run and the process
+  **exited 0 having verified nothing**.
+- **the cause is one construct serving two questions** — nothing is hidden, and
+  fixing either direction necessarily exposes the other. A `switch` with a
+  `default` arm silently absorbed a new union member: the union was fully
+  visible, the arm simply declined to look: an exhaustive `Record` makes the
+  compiler demand each case. A sentinel comparison repaired a gain/loss case
+  and immediately produced a false rename pair, because one map answered both
+  "which fields changed value" and "which fields add or drop a column". Split
+  the construct.
+
+The second shape is the commoner one, so do not reach for the first tell alone:
+"something unobservable" fits the flag case and misses the conflation case
+entirely, which would tell someone their `default`-arm bug is not an instance of
+this rule when it is the cleanest kind.
+
+**A rule is itself a generalisation from instances, so it is subject to the
+failure it describes.** The paragraph above was first written with the narrower
+tell, by someone holding only the flag case — the rule's own failure mode,
+committed while writing the rule. So before shipping a tell, test it against an
+instance you did NOT derive it from; one that fits every case you had in mind is
+evidence of nothing, because those are the cases it was fitted to.
+
+## A gate's OUTPUT is an interface, with no compiler enforcing its use
+
+A return type has a checker; a printed verdict has a person under time pressure
+who will `grep`, `head` or skim it. Both failures below were consumers
+misreading a gate correctly doing its job, and both were cheaper to fix in the
+output than in every caller:
+
+- a refusal printed below the twelfth line was cut off by `head -12`, and the
+  run read as clean. Remedy: the verdict and exit status come FIRST.
+- a finding worded "never reported — no build or test coverage for this
+  revision" was quoted as a durable property of a merged commit. The check-run
+  had not registered yet and subsequently passed. Remedy: a point-in-time
+  reading says so — "AS OF this reading" — and names the causes it cannot
+  separate, because their remedies differ.
+
+Same move as preferring a boundary to a check: make the output accommodate the
+caller it actually has, rather than the one who reads it all.
+
+## The THIRD finding of one shape is a prompt to TEST the check
+
+Two findings that rhyme are a coincidence. The third is worth a minute spent on
+the instrument rather than the instance — but it is a PROMPT, not a verdict, and
+the distinction is load-bearing. Three hardcoded-colour findings usually mean
+the change contains three hardcoded colours. A rule that let the count alone
+condemn the check would talk a reviewer out of reporting the fourth real
+violation, which is worse than the patching it was written to stop.
+
+So the third finding buys an experiment, not a diagnosis. Run the check against
+cases where you already know the answer — and the controls must exercise the
+SHAPE the findings kept arriving in, not merely some case with a known answer.
+An easy positive and an unrelated valid negative both pass while the check still
+misreads the alias, the runtime value or the population behind every one of
+those findings, which certifies the instrument on the strength of never having
+asked it the question:
+
+- a POSITIVE control — an input carrying the repeated shape that must be
+  reported. A check that reports nothing under every circumstance passes every
+  negative control ever written, which is what this one is for. But "the result
+  is not nothing" is the wrong assertion to write for it: run the check over a
+  population that already reports things and an unrelated existing finding
+  satisfies that condition while the shape you injected stays invisible. The
+  negative control then passes as well, and the instrument is certified by a
+  pair neither half of which ever saw the subshape. Assert that the output NAMES
+  the injected input, or take the DELTA against the same run without it — or put
+  the control on an isolated fixture, where "not nothing" means what it says.
+- a NEGATIVE control — a valid input it must stay silent on, in that same shape:
+  the aliased spelling, the computed value, the member of the population the
+  findings clustered around. **Its silence is evidence only once you have shown
+  the check RAN on it**, and that is not inherited from the positive control
+  being green: a fixture excluded by a glob, never discovered, or wired to a
+  path that no longer exists produces exactly the same silence as a valid input
+  correctly passed. So make the invocation observable for THIS fixture: assert
+  it was among the inputs the run read.
+
+  Mutating the same fixture into the reportable form and requiring that to be
+  reported is the tempting cheaper version, and it is sound only where
+  SELECTION is invariant under the mutation. Where what gets selected depends
+  on the property being reported — a scan that lists candidate files by
+  grepping for the violating form, a changed-files filter, a query whose
+  predicate is the finding — the mutated copy is selected precisely BECAUSE it
+  now violates, while the original stays outside the input set exactly as
+  before. The mutation then demonstrates the mechanism on an input the real run
+  never had, and the silence it was meant to license is still silence by
+  absence. Use it only after checking that the same fixture is selected either
+  way, and prefer the direct assertion when you cannot show that.
+
+One pair per SUBSHAPE, because a family of findings usually is not one shape.
+A scanner that handles a named alias can still misread a namespace alias and a
+default import — three subshapes that look like one "alias" problem, and
+controls built on the first certify nothing about the other two. Each subshape
+that produced a finding needs its own pair.
+
+And passing them certifies the CHECK on those shapes, not the findings. The
+reported instances still have to be judged one at a time: a control proves the
+instrument answers correctly on an input whose answer you knew, which is a
+different claim from every existing report being real. Where the two are
+confused, a green control run quietly converts open findings into resolved ones.
+
+If the controls pass, the instrument is sound on the shapes exercised — say so,
+rather than leaving it under suspicion, and go on judging the reported findings
+ONE AT A TIME. Passing controls does not confirm any of them; a check can be
+right about the shapes you tested and wrong about the instance in front of you.
+
+If a control fails, do not conclude "the check is broken" either. A fixture that
+never invoked the check fails its control while the reader and the classifier
+are both fine — the HARNESS case below — so a red control means only that the
+run did not produce the expected result. Establish that the check was actually
+exercised before diagnosing it, and then ask which of three things is
+unreliable; the remedies differ, and applying the wrong one looks like
+diligence:
+
+- **The READ** — the check cannot see what it is looking at. Before reaching
+  for a rewrite, separate two cases a failed control cannot tell apart, because
+  it proves only that the reader did not see the value, never that its
+  instrument could not represent it:
+  - a **repairable omission** — the instrument represents the thing fine and
+    the reader forgot a case. An AST visitor that misses default imports, or a
+    node kind it never listed, is this. Extend it; a rewrite here throws away a
+    correct approach and starts the same list of cases over.
+  - an **abstraction mismatch** — the instrument cannot represent the thing at
+    all, so every fix buys one spelling and the list has no end. A regex over
+    source cannot represent nesting; an AST cannot represent a value that only
+    exists at runtime. Replace it: a regex becomes a walk over the compiler's
+    own AST, an AST prediction of a runtime value becomes the runtime value.
+
+  **Do not settle this by asking whether the fixes have converged.** A visitor
+  that has simply not yet met its next unsupported form is indistinguishable
+  from a complete one, so "no failure since the last fix" certifies
+  patch-by-example after any number of rounds — the same absence-is-not-evidence
+  trap this file is otherwise about.
+
+  What separates them is whether the instrument's input DETERMINES the property
+  you are asking about. Not whether the syntax is finite — it usually is, and
+  that is why counting node kinds does not settle it. A JSX expression admits a
+  listable set of kinds, and two of those kinds are an identifier and a call,
+  whose resulting class string may not exist until the program runs. Finite
+  syntax, undetermined value.
+
+  So ask of the specific question: given everything this instrument can see, is
+  there exactly one answer? "Which JSX node encloses this element" — yes, the
+  tree says so, and a reader that gets it wrong is missing a case. "What string
+  will this expression evaluate to" — no, not from source, however many node
+  kinds you handle. The first is a repairable omission however long the list;
+  the second is a mismatch on the first example, and no amount of enumeration
+  reaches it.
+
+  Worked example of the second: a source
+  check for a component's class names took thirteen rounds finding spellings it
+  read wrongly — aliases, namespace imports, `{...{ className }}`, `+`
+  concatenation, template interpolation, character references. Each fix was
+  right and each was followed by another, because the surface was the whole
+  language. The end was to stop predicting the string and read it where it
+  already exists. Worked example of the first: a JSX visitor that missed
+  fragments, and later an identifier wrapped in a conditional. Two gaps, both
+  closed by asking what ENCLOSES a node rather than matching one relationship —
+  and the AST was the right instrument throughout.
+
+- **The CLASSIFICATION or the POPULATION** — the check sees correctly and
+  decides wrongly, or looks at the wrong set. Identify by structure rather than
+  by a proxy, or enumerate the members instead of counting them. Worked example:
+  an exemption allowing "one detached pager in this file" excused whichever
+  pager came first, because two pagers on one page can be identical in every
+  respect the check could see. Deleting the exempt one and detaching a different
+  one left the count unmoved and every assertion green. Naming the exempt pager
+  fixed it; a bigger allowance never would have.
+
+- **The EMISSION or the HARNESS** — the check reads correctly, decides
+  correctly, and the verdict never reaches anyone. A changed-lines filter drops
+  it, a baseline absorbs it, a formatter swallows it, a reporting step is not
+  wired up — or the control fixture never invoked the check at all, so the run
+  proved nothing about either of the two above. This one is the easiest to
+  misdiagnose as the other two, because replacing a correct reader makes the
+  symptom move without fixing anything.
+
+The controls separate them, which is why they come first. Feed the check an
+input it currently misreports and follow it all the way through:
+
+- it never sees the value at all — then ask WHY before naming a culprit, because
+  two of the three look identical here. If the value was never in the input set
+  — an underinclusive glob, a query predicate that excludes the row, a directory
+  the scan does not walk — that is the POPULATION, and extending the reader
+  fixes nothing because the reader was never handed the thing. If the value was
+  in the input and the reader could not parse or reach it, that is the READ.
+- it sees the value and reaches the wrong verdict — the CLASSIFICATION.
+- it reaches the right verdict and nothing comes out — the EMISSION. Trace the
+  harness before concluding anything, since a fixture that never reaches the
+  mechanism produces exactly the silence all three failures produce.
+
+The first bullet is where a wrong turn costs most: "the check did not see it"
+sends people to the reader by instinct, and a selector that excluded the row
+will keep excluding it however good the reader becomes.
+
+Do not substitute a thought experiment about what a human reader would conclude.
+It misfires in both directions: a value built through an imported helper or a
+runtime branch defeats a human restricted to the same input, while the defect is
+still the READ; and a human bringing outside knowledge can spot a bad
+classification the check reads perfectly. Run the input through the instrument
+instead of predicting what someone would infer from it.
+
+## A measurement standing in for a CATEGORY clears more than it checked
+
+The commonest false clean is not a wrong measurement. It is a correct one
+answering a narrower question than the claim it gets used for, which is why
+re-running it never helps: the number was right, and the sentence built on it
+was wider.
+
+Three from this repository, arriving from unrelated directions:
+
+- **"Zero queue depth" used as "not load."** It rules out BACKLOG — jobs
+  waiting to start — and not much else. Workers that have all dequeued and are
+  now competing for a lock, a CPU, a database connection or a disk leave the
+  queue at zero while contention is exactly what is causing the timeout; and a
+  runner intrinsically slower per unit of work is invisible to it entirely. A
+  test dying at a timeout was declared a hang on the strength of a measurement
+  that could not see either of the causes it was taken to exclude.
+- **"The marker is present" used as "the commit landed."** It confirms that
+  matching text exists in the scope searched, and nothing more. Unless the
+  marker is UNIQUE to that commit and the search is scoped to the path it
+  changed, text that was already in the base — or arrived independently —
+  satisfies it while the commit is missing. the `verifying-merged-work` skill says the
+  same from the other side; the presence is evidence about the text, and the
+  claim is about a change.
+- **"The controls pass" used as "the findings are real."** It rules out the
+  check being wrong on the shapes tested, not on the ones that produced the
+  reports.
+
+**The sharpest special case: an assertion satisfied by ABSENCE certifies
+whatever it could not see.** Where the passing condition is "no evidence of a
+problem", no evidence AT ALL satisfies it perfectly, and the two are the same
+output. Three from one day here, all different mechanisms:
+
+- a page that failed to load, read as fewer changed files
+- a check a filtered workflow never created, read as an excused check
+- a commit pushed onto an already-merged branch, whose SHA no CI run will ever
+  be created for, read as a clean gate — an empty check-run list satisfies
+  "nothing failed" exactly
+
+The fix is not a better query for failures. It is to assert the POPULATION
+first and the verdict second: `total > 0 AND bad == 0`, rows fetched before
+rows judged. A filter written to find problems will never supply that first
+clause — `select(status != ok)` cannot tell you whether anything was selected
+from.
+
+**Which population, though — the one whose emptiness means "I could not look",
+never the one whose emptiness is a legitimate clean answer.** Those are
+different sets and only the first is evidence. A scan for forbidden imports
+across a package that has none is empty at the FINDINGS level and is a correct
+pass; what would mean the run was blind is zero FILES read. So the clause
+belongs on the input the check consumed, not on the verdict it emitted —
+`files > 0 AND violations == 0`. Put it on the verdict instead and every
+correct run of a check whose happy path is silence fails, which is most of
+them, and the rule gets removed for being wrong rather than fixed.
+
+**And nonempty is not complete, which is the failure the first clause invites
+you to stop looking for.** `total > 0` separates "read nothing" from "read
+something" and says nothing about whether it read everything, so a PARTIAL read
+passes it while hiding exactly what a full one would have found: a paginated
+query answering with its first page, a glob that matched one directory of
+three, a query capped by a server-side maximum nobody set. The violation on
+page two is as absent as it was before, and now a population assertion vouches
+for the run.
+
+So assert the population you EXPECT, not merely a nonzero one — and assert it by
+MEMBERSHIP, because a count is the same substitution one level up. A selector
+that drops one expected member and duplicates or adds another matches any total
+you compare against, while the dropped member and whatever violation it carried
+stay unseen; the total agreeing is then evidence of arithmetic, not of coverage.
+
+What actually separates a complete read from a lucky prefix, and it varies by
+check: exhaust the pagination and assert the exhaustion happened rather than
+assuming the loop ran; require the specific IDENTITIES you know must be present;
+or plant a sentinel in the region a truncated read would miss and require it
+back. Each of those names something the read must contain. A count names
+nothing, and `> 0` names less.
+
+**The population may not have ARRIVED yet, which the count form cannot express.**
+Everything above assumes the read is finished and the question is how much it
+covered. When the answer is asynchronous there is a third state, and it looks
+exactly like a clean verdict: `result === null` is both "there is nothing" and
+"nothing has come back". Measured here, in one day, in three unrelated places:
+
+- a hook test asserted "no recovery offer" after waiting only for the REQUEST,
+  and passed with the rule under test DELETED — the read had not returned, and
+  the window it passed in exists for a few milliseconds on every run;
+- a component test asserted an indicator was absent, and passed against a parent
+  that rendered NOTHING AT ALL;
+- a merge gate read a CI job as not-failing while it sat queued, which is the
+  same statement about a job that had not started.
+
+`total > 0` does not reach any of these, because the population is not small —
+it is not yet knowable. What does reach it is making ARRIVAL observable inside
+the assertion: expose an explicit `isResolved` beside the result and wait for
+the ANSWER rather than for the call, require a control the render always
+produces before asserting a sibling is absent, and assert `success` per job
+rather than the absence of `failure`. In each case the fix adds a value that
+distinguishes "asked and got nothing" from "have not asked yet", and in each
+case that value turned out to be worth exposing to real callers too: a consumer
+needs the same distinction to avoid rendering nothing and then flashing.
+
+**A control in a NEIGHBOURING test is a real control and a fragile one.** Where
+a negative assertion is only meaningful because some positive case elsewhere in
+the file proves the matcher resolves, the guarantee is by adjacency rather than
+by construction: rewrite or delete those positives — a routine act, done by
+someone who never read this — and the negatives go on passing while meaning
+nothing, silently. Prefer a control INSIDE the assertion that needs it. Where
+that is genuinely impractical, say in the negative which test carries its
+control, so the dependency is declared rather than inferred.
+
+**None of the three was found by reading the code.** Each was found by breaking
+something and watching what failed, and in two of them the break changed no test
+result at all, which was itself the finding. A break-verify that moves nothing
+is not a clean bill; it means the property has no coverage yet.
+
+**And a break that moves something is not automatically evidence either**, which
+is the generalisation of everything above: the break has to have reached the
+code, and reached the code whose behaviour is being CLAIMED. A string
+replacement that hit the first of two occurrences — changing the file, but not
+the site under test — a probe whose worktree was unbuilt so a setup guard threw
+before any test ran, and a build whose failure went to a log nobody read all
+produce a result that reads as a verdict about the change.
+the `auditing-an-instrument` skill collects those, with the controls that
+separate them.
+
+The tell is a sentence where the evidence names one thing and the conclusion
+names a family: a queue, a marker, a control — against load, a merge, a set of
+findings. When you notice it, do not look for a better number first. Name the
+CATEGORY, list what else is in it, and ask which members the measurement can
+actually see.
+
+What narrows it is usually evidence that VARIES with the thing being claimed,
+and "narrows" is the honest verb. The load case was constrained by a factor
+appearing only where there was real work to be slow at — 4ms to 11ms on a
+trivial test against 85ms to 5136ms on a rendering one. That is strong evidence
+for per-unit-of-work slowness, and it is NOT a proof: an input-dependent
+deadlock reached only by the heavy fixture, or contention that begins above some
+concurrency threshold, produce the same curve. Excluding those needs something
+that varies workload and contention independently, or a look at the blocker
+state while it hangs. What the curve did do is rule out the SIMPLE forms of
+both — a hang that stalls regardless of input, and contention already present
+at rest — and that was enough to move a wrong diagnosis, which a single timing
+at the ceiling could not have done however precise.
+
+## For an ADVISORY check, firing on correct code is worse than missing
+
+Read the scope first, because the asymmetry inverts and the inverted case is a
+security hole rather than a style preference.
+
+**Classify by what a MISS costs, at the call site — never by the check's form.**
+"Lint" is a shape, not a consequence. This repository runs `gitleaks` from three
+call sites, and they do not classify alike, which is the clearest argument
+available that the call site rather than the check decides:
+
+- `.husky/pre-commit` runs it when the binary is present and prints a nudge when
+  it is not. Deliberately fail-open, and right to be — a tool missing from a
+  laptop must not stop work.
+- `secret-scan.yml` on `pull_request: branches: [main]` is the PRECONDITION. It
+  runs before the commit can reach `main`, so a miss there is what puts a
+  credential in the repository.
+- `secret-scan.yml` on `push: branches: [main]` is neither. It runs after the
+  commit is already on `main`, so it cannot prevent anything; it detects. Useful,
+  and not a gate.
+
+The last two are one workflow file, which is exactly why the FILE is the wrong
+unit to classify. Reading "the workflow is the enforcement gate" off its own
+header — which is what an earlier version of this paragraph did — quietly counts
+post-commit detection as prevention, and the remedy for a credential that has
+already landed is rotation and history rewriting rather than a failed check.
+
+Read the enforcing invocation's own boundary too, rather than assuming it covers
+whatever the advisory side skipped. It is `branches: [main]`, so a pull request
+stacked on another feature branch never triggers it — the layering is real for
+the main-targeting case and absent for the stacked one.
+
+**An advisory check** is one whose false negative costs only the defect it
+failed to report — a convention guard, a dead-code or dead-class warning, a
+style rule. There a false positive costs the GUARD: it gets suppressed, worked
+around, or deleted, and takes its true positives with it. The two are not
+symmetric, and where they conflict, prefer the miss.
+
+**A precondition must not be widened, whatever it looks like.** Authorization,
+ownership, validity, quota, release gating, secret scanning, anything guarding a
+destructive or irreversible operation: there a miss PERMITS the prohibited
+action while a false positive merely rejects a valid one, so accepting misses
+converts a cost saving into a hole. `AGENTS.md` already says preconditions run
+first whatever they cost; this is the same instruction from the other side. When
+such a guard cannot decide, it must fail CLOSED and say why, never widen until
+it stops objecting.
+
+The question to ask is therefore never "what kind of check is this" but "what
+gets through if this one stays quiet, and who is relying on it not to".
+
+The rest of this section applies to the advisory case only.
+
+It decides what to do when a property is **not decidable from what the check can
+see**, which is common and is not a failure. Do not add another exception each
+time one is found; that is the third-finding shape above, wearing the costume of
+thoroughness. Instead:
+
+- Widen the SUPPRESSING condition — the exemption, the evidence that a report
+  is unwarranted — so it cannot have gaps, accepting misses. Check the polarity
+  before applying this, because it inverts: widening the REPORTING predicate
+  produces more false positives, which is the opposite of the goal. "What
+  excuses a finding" is the thing to make gap-free; "what triggers one" is not.
+
+  Prefer a PREFIX or a structural property over a list of spellings — a list of
+  Tailwind border widths must keep up with `border-2`, `border-x`, the logical
+  `border-s`, arbitrary `border-[3px]` and whatever ships next, and every gap
+  reports a caller's deliberate border as dead. "Is any other border utility
+  present" cannot have that gap — and note that this IS the suppressing side:
+  finding a border is what excuses the colour, so widening it silences more.
+
+- Say in the file which direction the check errs in, and why. An
+  under-reporting guard that documents itself is honest; one that silently
+  drifts toward under-reporting is the same code with the reader misled.
+
+State the remaining boundary rather than covering it badly — and where you can,
+REPRESENT it in the output rather than only in a comment. A documented
+limitation still emits the same nothing for "checked and valid" as for "not
+checked", so CI, the next reader and any downstream consumer go on treating an
+unexamined input as a clean one; prose in the file does not reach them.
+
+Give the unchecked case its own value: a third state beside pass and fail, a
+`skipped` count the run prints, a `{ known: false }` in the result. Then a
+caller that needs certainty can ask for it, and one that does not can carry on —
+which a comment cannot arrange.
+
+Where the result shape is fixed and admits no third state, the remedy is NOT to
+fall back to documenting it — a sentence in the file does not reach a caller.
+But it is not to REFUSE the input either, and that correction is worth stating
+because refusing is the obvious next move and this section spent a round making
+it. Mapping "cannot decide" onto `fail` inside an advisory check emits a finding
+against input that may be perfectly valid, which is the false positive the top
+of this section calls more damaging than a miss: the guard gets suppressed and
+takes its true positives with it. Squeezing an unknown into a binary does not
+preserve it whichever value you pick — `pass` hides it, `fail` misreports it.
+
+So the remedy depends on the classification the section already made, and the
+two answers are genuinely different:
+
+- **A precondition** may and should refuse. A miss there permits the prohibited
+  action, so failing closed on an undecidable input is correct however
+  inconvenient, and the caller has to handle it.
+- **An advisory check** must not. Keep it silent on what it cannot decide, and
+  put the unknown where it survives the binary instead: a skipped count the run
+  prints, a line in the summary, a separate artifact. Then make sure nothing
+  gates on that clean result as though it meant "checked" — an advisory answer
+  wired into a decisive gate is the actual defect, and it is fixed at the gate
+  rather than by making the check shout.
+
+The comment records the decision either way. It is never the control.
+
+And classify at the CALL SITE, not at the definition. A shared helper does not
+acquire one kind: a caller that logs a warning and a caller that gates a write
+are an advisory use and a precondition use of the same function, both live at
+once. A definition-level label is therefore worse than none, because "this
+helper is advisory" invites the widening above — safe for the first caller,
+a hole in the second, and the note at the definition still reads correctly.
+
+This is the same unit the `catch` section below audits, and for the same reason:
+the direction of a fallback is a joint property of the check and what the caller
+does with its answer. When a check gains a caller, classify that caller.
+
+## A bare `catch` is only a defect when its fallback makes a CLAIM
+
+`catch { return conservative }` that degrades to caution is sound for the
+failures it was written for, and this repo has several that are deliberately
+so. It stops being sound when the same `catch` also swallows a failure that is
+not about the data at all — a bad credential, a missing config, a dropped
+connection, a `TypeError` in the handler. Those come back as "be cautious",
+which blocks valid work while naming no cause, and the wider the catch the
+longer that takes to find. Catch the errors you mean, and let an unexpected one
+be seen: rethrow it, or log it with its code before degrading.
+
+`catch { return verdict }` that
+asserts something about the user's data manufactures a confident wrong
+diagnosis — and it poisons every test asserting the negative outcome, because
+those tests go green on the strength of _some_ error rather than the right one.
+
+**The direction is a joint property of the fallback and the CALLER's use**, so
+the unit to audit is the call site. The live risk for a well-documented shared
+helper is gaining a second caller with the opposite polarity, where the
+comment above it still reads correctly and nothing at the definition looks
+wrong.

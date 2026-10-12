@@ -21,7 +21,7 @@ importedSpecifiers(readFileSync(file, "utf8"), file);
 
 Several packages each need the same answer — which packages does this file reach
 — and each had grown its own reader. They agreed the day they were written and
-had already drifted. `.claude/rules/derived-checks.md` states the rule: a
+had already drifted. the `derived-checks` skill states the rule: a
 narrower view must be DERIVED from the richer one, never computed alongside it.
 
 ## Scope: the IMPORT boundary, not reachability

@@ -14,6 +14,7 @@ import { BaseService } from "../../../services/base-service";
 import { invalidatePermissionCache } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
+import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
 
 import { invalidateApiKeyPermissionsCache } from "./api-key-service";
 
@@ -105,22 +106,22 @@ export class UserRoleService extends BaseService {
         expiresAt: opts?.expiresAt ?? null,
       };
 
-      const insert = (this.db as RBACDatabaseInstance)
-        .insert(this.tables.userRoles)
-        .values(userRoleData);
+      // Through the adapter on SQLite, as the removal below is: a plain insert
+      // made while another request's transaction is open would run inside it
+      // and be undone by its rollback.
+      await serializeOnSqlite(this.adapter, async () => {
+        const insert = (this.db as RBACDatabaseInstance)
+          .insert(this.tables.userRoles)
+          .values(userRoleData);
 
-      if (typeof insert.onConflictDoNothing === "function") {
-        await insert.onConflictDoNothing();
-      } else {
-        await insert;
-      }
+        if (typeof insert.onConflictDoNothing === "function") {
+          await insert.onConflictDoNothing();
+        } else {
+          await insert;
+        }
+      });
 
-      await invalidatePermissionCache({ userId });
-
-      // Invalidate API key permission caches for this user's read-only and
-      // full-access keys — their effective permissions derive from the creator's
-      // role set, which just changed.
-      await this.invalidateApiKeyCachesForUser(userId);
+      await this.invalidateRoleCaches(userId);
 
       return {
         success: true,
@@ -166,21 +167,21 @@ export class UserRoleService extends BaseService {
         };
       }
 
-      await (this.db as RBACDatabaseInstance)
-        .delete(this.tables.userRoles)
-        .where(
-          and(
-            eq(this.tables.userRoles.userId, userId),
-            eq(this.tables.userRoles.roleId, roleId)
+      // Through the adapter on SQLite: a plain delete made while another
+      // request's transaction is open runs inside it, and that transaction's
+      // rollback would hand the user back the role just taken away.
+      await serializeOnSqlite(this.adapter, () =>
+        (this.db as RBACDatabaseInstance)
+          .delete(this.tables.userRoles)
+          .where(
+            and(
+              eq(this.tables.userRoles.userId, userId),
+              eq(this.tables.userRoles.roleId, roleId)
+            )
           )
-        );
+      );
 
-      await invalidatePermissionCache({ userId });
-
-      // Invalidate API key permission caches for this user's read-only and
-      // full-access keys — their effective permissions derive from the creator's
-      // role set, which just changed.
-      await this.invalidateApiKeyCachesForUser(userId);
+      await this.invalidateRoleCaches(userId);
 
       return {
         success: true,
@@ -197,6 +198,68 @@ export class UserRoleService extends BaseService {
             : "Failed to unassign role from user",
       };
     }
+  }
+
+  /**
+   * Replace the roles a user holds with `roleIds`, inside the caller's
+   * transaction `tx`, so the removal and the re-assignment commit or roll
+   * back together. Ids that name no role are skipped. Leaves the caches to
+   * the caller, which flushes them with {@link invalidateRoleCaches} once the
+   * transaction has committed.
+   *
+   * @returns Whether the user's roles changed.
+   */
+  async replaceUserRoles(
+    userId: string,
+    roleIds: readonly string[],
+    tx: unknown
+  ): Promise<boolean> {
+    const db = tx as typeof this.db;
+    const { roles, userRoles } = this.tables;
+    const current = await db
+      .select({ roleId: userRoles.roleId })
+      .from(userRoles)
+      .where(eq(userRoles.userId, userId));
+    const requested = new Set(roleIds);
+    const held = new Set(
+      (current as Array<{ roleId: unknown }>).map(row => String(row.roleId))
+    );
+    if (
+      held.size === requested.size &&
+      [...held].every(id => requested.has(id))
+    ) {
+      return false;
+    }
+    const existing =
+      requested.size > 0
+        ? ((await db
+            .select({ id: roles.id })
+            .from(roles)
+            .where(inArray(roles.id, [...requested]))) as Array<{
+            id: unknown;
+          }>)
+        : [];
+    await db.delete(userRoles).where(eq(userRoles.userId, userId));
+    if (existing.length > 0) {
+      const rows: UserRoleInsertData[] = existing.map(role => ({
+        id: randomUUID(),
+        userId,
+        roleId: String(role.id),
+        expiresAt: null,
+      }));
+      await (db as RBACDatabaseInstance).insert(userRoles).values(rows);
+    }
+    return true;
+  }
+
+  /**
+   * Evict what is cached from a user's roles: their permissions, and those of
+   * their read-only and full-access API keys, which resolve from the creator's
+   * role set.
+   */
+  async invalidateRoleCaches(userId: string): Promise<void> {
+    await invalidatePermissionCache({ userId });
+    await this.invalidateApiKeyCachesForUser(userId);
   }
 
   /**

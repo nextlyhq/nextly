@@ -722,6 +722,25 @@ describe("AuthService", () => {
       ).toHaveLength(0);
     });
 
+    it("issues nothing for an address that is already verified", async () => {
+      // A verified account has nothing to verify: a link would mail someone
+      // who only forgot their password, and following it re-activates an
+      // account an administrator deactivated. The caller answers the same.
+      const email = "verified@test.com";
+      await testDb.db
+        .insert(testDb.schema.users)
+        .values(userFactory({ email, emailVerified: new Date() }));
+
+      const result = await service.generateEmailVerificationToken(email);
+
+      expect(result.token).toBeUndefined();
+      expect(
+        await testDb.db.query.emailVerificationTokens.findMany({
+          where: { identifier: email },
+        })
+      ).toHaveLength(0);
+    });
+
     it("should delete old verification tokens when generating new one", async () => {
       // Arrange
       const email = "user@test.com";

@@ -26,6 +26,7 @@ import { toDbError } from "../../database/errors";
 import { insertErasureAware } from "../../domains/audit/erasure-aware-insert";
 import { SETTINGS_ACTIVITY_NAMESPACES } from "../../domains/audit/settings-activity-namespaces";
 import { NextlyError } from "../../errors";
+import type { LockableRead } from "../../shared/lib/row-lock";
 import { BaseService } from "../base-service";
 import {
   resolveDocumentVisibilityScope,
@@ -349,11 +350,7 @@ export interface ActivityWriteDb {
   select(fields: unknown): {
     from(table: unknown): {
       where(condition: unknown): {
-        limit(count: number): Promise<Record<string, unknown>[]> & {
-          // `.for("share")` exists on the Postgres and MySQL builders. SQLite
-          // has no row lock and never reaches the call.
-          for(strength: "share"): Promise<Record<string, unknown>[]>;
-        };
+        limit(count: number): LockableRead<Record<string, unknown>[]>;
       };
     };
   };
@@ -581,18 +578,20 @@ export class ActivityLogService extends BaseService {
    * be deleted at this very moment, and the two dialect families need
    * different mechanisms for it.
    *
-   * **Postgres and MySQL** first take a SHARED lock on the account row.
-   * `deleteUser` takes an EXCLUSIVE lock on that row before it erases anything,
-   * so the two cannot be in flight at once: either this lock is taken first and
-   * the deletion waits, so its erasure covers a row that already exists, or the
-   * deletion holds the row and this waits for its commit and then correctly
-   * finds the account gone. The lock is what closes the gap a single statement
-   * cannot — its subquery is answered when it STARTS while its row becomes
-   * visible when it COMMITS, and an insert spanning the deletion's commit
-   * satisfies neither the deletion's own erasure nor its post-commit sweep.
-   * Shared rather than exclusive so concurrent writes by the same author do not
-   * serialise against each other; only the deletion has to exclude them, for
-   * the length of one insert.
+   * **Postgres and MySQL** first lock the account row, with the
+   * existence-check row lock (`readUnderRowLock`). `deleteUser` takes an EXCLUSIVE lock on that row
+   * before it erases anything, so the two cannot be in flight at once: either
+   * this lock is taken first and the deletion waits, so its erasure covers a
+   * row that already exists, or the deletion holds the row and this waits for
+   * its commit and then correctly finds the account gone. The lock is what
+   * closes the gap a single statement cannot — its subquery is answered when
+   * it STARTS while its row becomes visible when it COMMITS, and an insert
+   * spanning the deletion's commit satisfies neither the deletion's own erasure
+   * nor its post-commit sweep. The lock is shared wherever the server accepts
+   * it, so concurrent writes by the same author do not serialise against each
+   * other. On MariaDB and TiDB, which reject `FOR SHARE`, it is `FOR UPDATE`,
+   * and they take turns on the author's row until each one's transaction
+   * commits.
    *
    * **SQLite** has one writer, so its insert cannot interleave with the
    * deletion's transaction at all and needs no lock. It decides the identity
@@ -629,7 +628,7 @@ export class ActivityLogService extends BaseService {
     if (input.userEmail !== undefined) supplied.userEmail = input.userEmail;
     else fromAccount.userEmail = users.email;
 
-    await insertErasureAware(db, this.dialect, {
+    await insertErasureAware(db, this.adapter.getCapabilities(), {
       table: activityLog,
       users,
       row: this.entryValues(input, new Date()),

@@ -56,9 +56,15 @@ describe("the boot core-schema drift check on a migrated database", () => {
       60_000
     );
 
-    expect(introspectLiveSnapshot).toHaveBeenCalledTimes(1);
-    const names = introspectLiveSnapshot.mock.calls[0][2] as string[];
-    expect(names).toContain(MIGRATION_TARGET.registryTable);
-    expect(names).not.toContain(STORAGE_FORMAT.registryTable);
+    // The drift check is the call naming core tables; boot also reads the
+    // columns of each retired table it finds, one table per call.
+    const calls = introspectLiveSnapshot.mock.calls.map(
+      call => call[2] as string[]
+    );
+    const drift = calls.find(names =>
+      names.includes(MIGRATION_TARGET.registryTable)
+    );
+    expect(drift).toBeDefined();
+    expect(calls.flat()).not.toContain(STORAGE_FORMAT.registryTable);
   });
 });

@@ -141,6 +141,20 @@ export interface DatabaseCapabilities {
    * - SQLite: No limit (practically unlimited)
    */
   maxIdentifierLength: number;
+
+  /**
+   * Whether the server accepts `SELECT ... FOR SHARE`.
+   *
+   * @remarks
+   * Reported by the MySQL adapter once it has connected and read the server's
+   * version: MySQL 8, Aurora MySQL and Vitess/PlanetScale accept it, MariaDB
+   * and TiDB reject it as a syntax error. PostgreSQL always accepts it and
+   * SQLite has no row locks, so their adapters leave it unset. Unset means
+   * not known; a caller then takes a lock every server accepts.
+   *
+   * @experimental
+   */
+  sharedRowLock?: boolean;
 }
 
 /**

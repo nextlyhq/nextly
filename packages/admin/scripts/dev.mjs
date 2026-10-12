@@ -35,10 +35,16 @@ const rootDir = path.resolve(__dirname, "..");
 const children = [
   {
     name: "tsup",
+    // NODE_ENV is set explicitly because tsup.config.ts folds
+    // `process.env.NODE_ENV` into the bundle, defaulting an unset value to
+    // production — correct for release builds, wrong for this watcher,
+    // whose output exists so contributors can run the admin in dev mode
+    // (dev-only branches like the dev-reload stream compile ON here).
     proc: spawn("npx tsup --watch", {
       cwd: rootDir,
       stdio: "inherit",
       shell: true,
+      env: { ...process.env, NODE_ENV: "development" },
     }),
   },
   {

@@ -1,0 +1,100 @@
+/**
+ * Code outside core — auth hooks, strategies, plugin routes — receives the
+ * request without the refresh cookie, and with everything else it carried.
+ */
+import { describe, expect, it } from "vitest";
+
+import { AuthHookRegistry } from "../../pipeline/hooks";
+import { runStrategyChain } from "../../pipeline/strategy-chain";
+import { withoutRefreshCookie } from "../refresh-token-cookie";
+
+const URL_ = "http://localhost:3000/admin/api/auth/login";
+const COOKIE = "nextly_session=acc; nextly_refresh=secret; theme=dark";
+const ctx = {} as never;
+
+function post(cookie = COOKIE): Request {
+  return new Request(URL_, {
+    method: "POST",
+    headers: { cookie, "x-custom": "1", "content-type": "application/json" },
+    body: JSON.stringify({ email: "a@b.c" }),
+  });
+}
+
+describe("withoutRefreshCookie", () => {
+  it("removes only the refresh cookie and keeps method, url, headers and body", async () => {
+    const original = post();
+    const copy = withoutRefreshCookie(original);
+    expect(copy.headers.get("cookie")).toBe("nextly_session=acc; theme=dark");
+    expect(copy.headers.get("x-custom")).toBe("1");
+    expect(copy.method).toBe("POST");
+    expect(copy.url).toBe(URL_);
+    expect(await copy.json()).toEqual({ email: "a@b.c" });
+    // The original stays readable, cookie included.
+    expect(original.headers.get("cookie")).toBe(COOKIE);
+    expect(await original.json()).toEqual({ email: "a@b.c" });
+  });
+
+  it("drops the header when the refresh cookie was the only one", () => {
+    const copy = withoutRefreshCookie(post("nextly_refresh=secret"));
+    expect(copy.headers.has("cookie")).toBe(false);
+  });
+
+  it("copies a request whose body was already read, without the body", async () => {
+    const original = post();
+    await original.json();
+    const copy = withoutRefreshCookie(original);
+    expect(copy.headers.get("cookie")).toBe("nextly_session=acc; theme=dark");
+    expect(copy.method).toBe("POST");
+  });
+
+  it("returns a request without the cookie unchanged", () => {
+    const original = post("nextly_session=acc");
+    expect(withoutRefreshCookie(original)).toBe(original);
+  });
+});
+
+describe("auth hooks and strategies", () => {
+  it("never see the refresh cookie, and still see the others", async () => {
+    const seen: string[] = [];
+    const record = (request: Request) =>
+      seen.push(request.headers.get("cookie") ?? "");
+    const hooks = new AuthHookRegistry();
+    hooks.add({
+      beforeLogin: input => void record(input.request),
+      determineUser: request => {
+        record(request);
+        return null;
+      },
+    });
+
+    await hooks.runBeforeLogin(
+      { request: post(), body: {}, strategyName: "" },
+      ctx
+    );
+    await hooks.runDetermineUser(
+      new Request(URL_.replace("login", "session"), {
+        headers: { cookie: COOKIE },
+      }),
+      ctx
+    );
+    await runStrategyChain(
+      [
+        {
+          name: "probe",
+          authenticate: input => {
+            record(input.request);
+            return Promise.resolve({ type: "pass" });
+          },
+        },
+      ],
+      { request: post(), body: {} },
+      ctx
+    );
+
+    expect(seen).toEqual([
+      "nextly_session=acc; theme=dark",
+      "nextly_session=acc; theme=dark",
+      "nextly_session=acc; theme=dark",
+    ]);
+  });
+});

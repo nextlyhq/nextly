@@ -66,6 +66,14 @@ export {
 
 export { routeAuthRequest } from "./handlers/router";
 export type { AuthRouterDeps } from "./handlers/router";
+// The types `AuthRouterDeps` names, so a caller assembling one can name them
+// too. Experimental with it.
+export type { CredentialUserRow } from "./credentials/verify-credentials";
+export type { AccountState } from "./session/account-state";
+export type {
+  SessionRowTransaction,
+  WithSessionRowTransaction,
+} from "./handlers/session-row";
 
 // Preview tokens — minting and checking scoped, short-lived draft links. The
 // route that consumes them lives in `nextly/runtime`, since only that half

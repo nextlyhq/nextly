@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Narrow gateway to the GitHub API for the review bot.
+# Narrow gateway to the GitHub API, and to the local history, for the review bot.
 #
-# The agent is allowed to run this script instead of `gh api` directly. Every
-# request here is built from a fixed endpoint template plus validated
-# arguments, so nothing the agent passes can redirect a call to another host:
-# `gh api` reads the target host from `--hostname`/`GH_HOST`, and neither is
-# reachable through this interface. That closes the outbound half of the
-# posture -- the agent cannot choose where a request goes -- which is one layer
-# of the threat model set out in .github/workflows/nextly-review-bot.yml, not
-# the whole of it.
+# The agent is allowed to run this script instead of `gh api` or `git`
+# directly. Every request here is built from a fixed endpoint template plus
+# validated arguments, so nothing the agent passes can redirect a call to
+# another host: `gh api` reads the target host from `--hostname`/`GH_HOST`, and
+# neither is reachable through this interface. The git commands are fixed the
+# same way, so no flag the agent appends can make one write a file or run a
+# program. That closes the outbound half of the posture -- the agent cannot
+# choose where a request goes -- which is one layer of the threat model set out
+# in .github/workflows/nextly-review-bot.yml, not the whole of it.
 set -euo pipefail
 
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
@@ -19,6 +20,15 @@ die() {
   echo "review-bot-gh: $*" >&2
   exit 2
 }
+
+# The review workflow has Claude Code keep credentials out of every command
+# the agent runs, this one included, and says so with REVIEW_BOT_EXPECT_SCRUB.
+# A model key here then means the scrub did not happen, whatever the workflow
+# asked, as when an action stops passing the setting on: stop, rather than go
+# on with the key in reach. A caller that does not say so is not held to it.
+if [[ "${REVIEW_BOT_EXPECT_SCRUB:-}" == 1 && -n "${ANTHROPIC_API_KEY:-}${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
+  die "a model key reached this command, though the workflow had it scrubbed"
+fi
 
 # Every caller-supplied identifier is checked before it reaches a URL, so a
 # crafted value cannot smuggle a flag or a second endpoint into the request.
@@ -33,6 +43,45 @@ require_file() {
 require_sha() {
   [[ "${1:-}" =~ ^[0-9a-fA-F]{7,40}$ ]] || die "expected a commit sha, got '${1:-}'"
 }
+
+# A path inside the checkout. It is always passed joined to a revision or a
+# line range, so it can never stand alone as an option; this refuses what
+# could still change its meaning, a leading dash or a line break.
+require_path() {
+  [[ -n "${1:-}" && "${1:0:1}" != "-" && "$1" != *$'\n'* ]] || die "expected a path, got '${1:-}'"
+}
+
+# The tag the post job ends everything it posts with: the workflow run that
+# posted it and, for a reply or a file-level comment, its place in the payload
+# (`reply:<n>`, `file:<n>`). Re-running a
+# failed job re-runs the same run with the same payload, so the tag is how a
+# re-run tells what an earlier attempt already posted; a new request is a new
+# run, and posts afresh. The tag is appended after the agent's text, so only a
+# tag that ENDS a body counts: one the agent wrote into that text, naming some
+# other run, is never the last line.
+posted_tag() {
+  printf '<!-- nextly-review-bot run:%s%s -->' "$1" "${2:+ $2}"
+}
+
+# Ids of what this bot posted at an endpoint whose last line is a tag, one per
+# line, narrowed to those whose `<field>` is `<value>`: a review's `commit_id`,
+# a reply's `in_reply_to_id`. `--paginate` prints each page as an array of its
+# own, which jq reads one after another, so a match on any page is found.
+posted_ids() {
+  gh api --paginate "$1?per_page=100" |
+    jq -r --arg tag "$2" --arg field "$3" --arg value "$4" '
+      .[]
+      | select(.user.login == "nextly-review-bot[bot]" and (.[$field] | tostring) == $value)
+      | select((.body // "") | split("\n") | map(rtrimstr("\r") | select(length > 0)) | last == $tag)
+      | .id'
+}
+
+# The local history the review reads, with every flag fixed here. `git diff`,
+# `git show` and `git log` take `--output=<file>` among their options, which
+# writes anywhere the runner can, so the agent is given these commands rather
+# than a prefix of git it could append a flag to. `--no-ext-diff` and
+# `--no-textconv` keep a configured diff driver from running anything.
+GIT_READ=(git --no-pager)
 
 command="${1:-}"
 shift || true
@@ -67,25 +116,62 @@ case "$command" in
     ;;
   threads)
     # Review threads carry the resolution state the multi-round protocol needs,
-    # and that state is only exposed through GraphQL.
+    # and that state is only exposed through GraphQL. Every thread is read, a
+    # hundred to a page, and `comments` holds every comment of each, the
+    # finding and every reply to it; `recent` holds its last ten again, where
+    # the post job tells a thread that moved while the agent worked. gh pages
+    # by the first `pageInfo` in an answer, so the threads' own comes before
+    # their nodes and no connection inside them asks for one: a thread with
+    # more comments than its first hundred is read again whole, through its
+    # own id, a hundred to a page. Prints one answer in the shape of a single
+    # page, holding every thread, or nothing if any page cannot be read.
     require_number "${1:-}"
-    exec gh api graphql -F owner="$OWNER" -F name="$NAME" -F number="$1" -f query='
-      query($owner:String!,$name:String!,$number:Int!){
+    pages=$(gh api graphql --paginate -F owner="$OWNER" -F name="$NAME" -F number="$1" -f query='
+      query($owner:String!,$name:String!,$number:Int!,$endCursor:String){
         repository(owner:$owner,name:$name){
           pullRequest(number:$number){
-            reviewThreads(first:100){
+            reviewThreads(first:100,after:$endCursor){
+              pageInfo{ hasNextPage endCursor }
               nodes{
-                isResolved isOutdated path line
-                comments(first:20){ nodes{ author{login} body url databaseId } }
+                id isResolved isOutdated path line
+                comments(first:100){ totalCount nodes{ author{login} body url databaseId createdAt } }
+                recent: comments(last:10){ nodes{ author{login} body url databaseId createdAt } }
               }
             }
           }
         }
-      }'
+      }') || die "could not read the review threads of #$1"
+    long=$(jq -rs '.[].data.repository.pullRequest.reviewThreads.nodes[]
+      | select(.comments.totalCount > (.comments.nodes | length)) | .id' <<<"$pages") ||
+      die "could not read the review threads of #$1"
+    whole=$(
+      printf '%s\n' "$pages"
+      while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        [[ "$id" =~ ^[A-Za-z0-9_=-]+$ ]] || die "expected a review thread's node id, got '$id'"
+        gh api graphql --paginate -f id="$id" -f query='
+          query($id:ID!,$endCursor:String){
+            node(id:$id){
+              ... on PullRequestReviewThread{
+                comments(first:100,after:$endCursor){
+                  pageInfo{ hasNextPage endCursor }
+                  nodes{ author{login} body url databaseId createdAt }
+                }
+              }
+            }
+          }' | jq -cs --arg id "$id" '{thread: $id, comments: [.[].data.node.comments.nodes[]]}' ||
+          die "could not read the comments of review thread $id"
+      done <<<"$long"
+    ) || die "could not read the review threads of #$1"
+    jq -s '(map(select(.thread)) | map({key: .thread, value: .comments}) | from_entries) as $all
+      | {data: {repository: {pullRequest: {reviewThreads: {nodes: [
+          .[] | select(.data) | .data.repository.pullRequest.reviewThreads.nodes[]
+          | if $all[.id] then .comments.nodes = $all[.id] else . end]}}}}}' <<<"$whole"
     ;;
   file-at)
-    # Read one file at one commit. Used by the mention workflow, whose checkout
-    # is the default branch rather than the PR head.
+    # Read one file at one commit. The review agent reads the pull request's
+    # own instruction files this way, since its checkout holds the base
+    # branch's in their place.
     # The raw media type returns the file body itself, so there is no JSON
     # envelope here to select a field out of.
     require_sha "${1:-}"
@@ -96,45 +182,163 @@ case "$command" in
     require_number "${1:-}"
     exec gh api "repos/$REPO/pulls/$1" --jq '.head.sha'
     ;;
+  base-file)
+    # One file as `main` has it: `git show origin/main:<path>`, from the local
+    # clone, which the workflow fetches whole.
+    require_path "${1:-}"
+    exec "${GIT_READ[@]}" show --no-ext-diff --no-textconv "origin/main:$1"
+    ;;
+  delta)
+    # What changed since an earlier reviewed commit: `git diff <sha>..HEAD`.
+    require_sha "${1:-}"
+    exec "${GIT_READ[@]}" diff --no-ext-diff --no-textconv "$1..HEAD"
+    ;;
+  line-history)
+    # How lines came to be: `git log -L <start>,<end>:<path>`, on HEAD unless
+    # `main` is asked for.
+    [[ "${1:-}" =~ ^[0-9]+,[0-9]+$ ]] || die "expected <start>,<end>, got '${1:-}'"
+    require_path "${2:-}"
+    case "${3:-HEAD}" in
+      HEAD) rev=HEAD ;;
+      main) rev=origin/main ;;
+      *) die "expected HEAD or main, got '${3:-}'" ;;
+    esac
+    exec "${GIT_READ[@]}" log --no-ext-diff --no-textconv -L "$1:$2" "$rev"
+    ;;
   review-ids-at)
-    # One id per line for this bot's reviews at one commit, sorted so the set
-    # can be differenced. Emitting a value PER MATCH rather than per page is
-    # what makes this survive pagination: `--paginate --jq` runs the expression
-    # once per page, so an expression that returns a single value returns one
-    # per page, and a numeric test on the result then fails open.
+    # The reviews one run of the workflow posted at one commit, one id per
+    # line. The bot posts as its own GitHub App, so its reviews are the ones
+    # under that App's login, and the run's tag tells which of them this run
+    # posted, on this attempt or an earlier one.
     require_number "${1:-}"
     require_sha "${2:-}"
-    gh api --paginate "repos/$REPO/pulls/$1/reviews" \
-      --jq ".[] | select(.user.login == \"github-actions[bot]\" and .commit_id == \"$2\") | .id" |
-      sort
+    require_number "${3:-}"
+    posted_ids "repos/$REPO/pulls/$1/reviews" "$(posted_tag "$3")" commit_id "$2"
     ;;
   post-review)
-    # The agent composes the review JSON; this only decides where it is sent.
+    # The agent composes the review JSON; this only decides where it is sent,
+    # and tags it with the run that sends it.
     #
-    # An expected head may be given, and when it is, the PR is re-read here and
-    # the post refused if the branch has moved. The agent checks the head when
-    # it starts, which leaves the whole length of a review as a window in which
-    # a push can land; closing it at the moment of writing is what keeps a
-    # review from describing a commit nobody is looking at any more.
+    # The PR is re-read here and the post refused if the branch has moved since
+    # the head reviewed. The agent checks the head when it starts, which leaves
+    # the whole length of a review as a window in which a push can land;
+    # closing it at the moment of writing is what keeps a review from
+    # describing a commit nobody is looking at any more.
+    #
+    # A run posts its review once. Re-running a failed job posts the same
+    # payload again, and a POST whose response was lost may well have landed,
+    # so a review this run already posted at this head is reported rather than
+    # posted twice. Not knowing is not taken as "not yet": if the reviews
+    # cannot be read, nothing is posted.
     require_number "${1:-}"
     require_file "${2:-}"
-    if [ -n "${3:-}" ]; then
-      require_sha "$3"
-      current=$(gh api "repos/$REPO/pulls/$1" --jq '.head.sha')
-      [ "$current" = "$3" ] || die "head moved to $current since $3 was reviewed; not posting"
+    require_sha "${3:-}"
+    require_number "${4:-}"
+    current=$(gh api "repos/$REPO/pulls/$1" --jq '.head.sha')
+    [ "$current" = "$3" ] || die "head moved to $current since $3 was reviewed; not posting"
+    tag=$(posted_tag "$4")
+    posted=$(posted_ids "repos/$REPO/pulls/$1/reviews" "$tag" commit_id "$3") ||
+      die "could not read the reviews, so cannot tell whether run $4 already posted; not posting"
+    if [ -n "$posted" ]; then
+      echo "review-bot-gh: run $4 already posted review ${posted//$'\n'/, } at $3; not posting it again" >&2
+      exit 0
     fi
-    exec gh api --method POST "repos/$REPO/pulls/$1/reviews" --input "$2"
+    review=$(jq --arg tag "$tag" '.body += "\n\n" + $tag' "$2")
+    exec gh api --method POST "repos/$REPO/pulls/$1/reviews" --input - <<<"$review"
     ;;
   reply)
     # Reply inside an existing review thread; the body comes from a file so no
-    # comment text has to survive shell quoting.
+    # comment text has to survive shell quoting. It is tagged with the run and
+    # its place in the payload, and posted once per run as a review is. Like
+    # a review, it answers the head reviewed, and none once the head has moved:
+    # it would argue about code nobody is looking at any more.
     require_number "${1:-}"
-    require_number "${2:-}"
-    require_file "${3:-}"
-    exec gh api --method POST "repos/$REPO/pulls/$1/comments" \
-      -F in_reply_to="$2" -F body=@"$3"
+    require_sha "${2:-}"
+    require_number "${3:-}"
+    require_file "${4:-}"
+    require_number "${5:-}"
+    require_number "${6:-}"
+    current=$(gh api "repos/$REPO/pulls/$1" --jq '.head.sha')
+    [ "$current" = "$2" ] || die "head moved to $current since $2 was reviewed; not posting"
+    tag=$(posted_tag "$5" "reply:$6")
+    posted=$(posted_ids "repos/$REPO/pulls/$1/comments" "$tag" in_reply_to_id "$3") ||
+      die "could not read the review comments, so cannot tell whether run $5 already replied; not posting"
+    if [ -n "$posted" ]; then
+      echo "review-bot-gh: run $5 already posted reply $6 as comment ${posted//$'\n'/, }; not posting it again" >&2
+      exit 0
+    fi
+    reply=$(jq -n --rawfile body "$4" --arg tag "$tag" --argjson to "$3" '{in_reply_to: $to, body: ($body + "\n\n" + $tag)}')
+    exec gh api --method POST "repos/$REPO/pulls/$1/comments" --input - <<<"$reply"
+    ;;
+  react-request)
+    # A reaction on the comment that asked for a review: 👀 when the request is
+    # taken, 👍 when a review already answered it, then 🚀 once the review is
+    # posted or 😕 when the run did not get that far. Only these four, on the
+    # one comment named, so nothing a caller passes can choose another
+    # endpoint or reaction. GitHub keeps one reaction of a kind per user, so a
+    # repeat changes nothing.
+    require_number "${1:-}"
+    case "${2:-}" in
+      eyes | +1 | rocket | confused) ;;
+      *) die "expected eyes, +1, rocket or confused, got '${2:-}'" ;;
+    esac
+    exec gh api --method POST "repos/$REPO/issues/comments/$1/reactions" -f content="$2" --silent
+    ;;
+  seed-reactions)
+    # 👍 and 👎 on each finding one run posted at one head, so a reader rates it
+    # in one click: the inline comments of the run's review, and the file-level
+    # comments the run posted, which carry its tag. Its replies are answers,
+    # not findings, and get none. One reaction of a kind per user, so a re-run
+    # adds nothing.
+    require_number "${1:-}"
+    require_sha "${2:-}"
+    require_number "${3:-}"
+    reviews=$(posted_ids "repos/$REPO/pulls/$1/reviews" "$(posted_tag "$3")" commit_id "$2") ||
+      die "could not read the reviews, so cannot tell which findings run $3 posted; none seeded"
+    findings=$(
+      for review in $reviews; do
+        gh api --paginate "repos/$REPO/pulls/$1/reviews/$review/comments?per_page=100" | jq -r '.[].id'
+      done
+      gh api --paginate "repos/$REPO/pulls/$1/comments?per_page=100" |
+        jq -r --arg tag "<!-- nextly-review-bot run:$3 file:" '
+          .[]
+          | select(.user.login == "nextly-review-bot[bot]")
+          | select((.body // "") | split("\n") | map(rtrimstr("\r") | select(length > 0)) | last // "" | startswith($tag))
+          | .id'
+    ) || die "could not read the findings run $3 posted; none seeded"
+    for id in $findings; do
+      gh api --method POST "repos/$REPO/pulls/comments/$id/reactions" -f content=+1 --silent
+      gh api --method POST "repos/$REPO/pulls/comments/$id/reactions" -f content=-1 --silent
+    done
+    ;;
+  post-file-comment)
+    # A finding no line of the diff shows, posted as a file-level comment on
+    # its file so that it opens a thread as an inline one would. GitHub takes
+    # such a comment only on a file the change touches, and asking first is
+    # what names the file when one is refused. It goes on the head reviewed,
+    # once per run, as a review does.
+    require_number "${1:-}"
+    require_sha "${2:-}"
+    require_path "${3:-}"
+    require_file "${4:-}"
+    require_number "${5:-}"
+    require_number "${6:-}"
+    current=$(gh api "repos/$REPO/pulls/$1" --jq '.head.sha')
+    [ "$current" = "$2" ] || die "head moved to $current since $2 was reviewed; not posting"
+    changed=$(gh api --paginate "repos/$REPO/pulls/$1/files?per_page=100" | jq -r '.[].filename') ||
+      die "could not read the changed files, so cannot tell whether $3 is one; not posting"
+    grep -qxF -- "$3" <<<"$changed" || die "$3 is not among the files the change touches; not posting"
+    tag=$(posted_tag "$5" "file:$6")
+    posted=$(posted_ids "repos/$REPO/pulls/$1/comments" "$tag" path "$3") ||
+      die "could not read the review comments, so cannot tell whether run $5 already posted it; not posting"
+    if [ -n "$posted" ]; then
+      echo "review-bot-gh: run $5 already posted file comment $6 as comment ${posted//$'\n'/, }; not posting it again" >&2
+      exit 0
+    fi
+    comment=$(jq -n --rawfile body "$4" --arg tag "$tag" --arg sha "$2" --arg path "$3" '{commit_id: $sha, path: $path, subject_type: "file", body: ($body + "\n\n" + $tag)}')
+    exec gh api --method POST "repos/$REPO/pulls/$1/comments" --input - <<<"$comment"
     ;;
   *)
-    die "usage: review-bot-gh.sh {pr|head-sha|diff|reviews|review-ids-at|review-comments|issue-comments|files|threads|file-at|post-review|reply} ..."
+    die "usage: review-bot-gh.sh {pr|head-sha|diff|reviews|review-ids-at|review-comments|issue-comments|files|threads|file-at|base-file|delta|line-history|post-review|reply|post-file-comment|react-request|seed-reactions} ..."
     ;;
 esac

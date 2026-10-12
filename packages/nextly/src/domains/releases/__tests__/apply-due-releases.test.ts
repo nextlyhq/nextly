@@ -10,7 +10,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { applyDueReleases } from "../apply-due-releases";
+import { applyDueReleases, settleableComponents } from "../apply-due-releases";
 import type { ApplyDueReleasesDeps } from "../apply-due-releases";
 import type { ReleaseMemberRow, ReleaseRow } from "../releases-repository";
 
@@ -948,6 +948,68 @@ describe("applyDueReleases", () => {
 
     expect(result).toMatchObject({ applied: 1, failed: 0 });
     expect(publish).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("deciding which due releases a pass may settle", () => {
+  /** Due releases with nothing shared, each a component of its own. */
+  const backlog = (size: number): string[] =>
+    Array.from({ length: size }, (_, i) => `r${i}`);
+
+  it("does work linear in the due releases, not their square", () => {
+    // Counts every read of the due list, the decision's unit of work, rather
+    // than timing it: wall-clock time at one size varies between runs by more
+    // than a linear bound can tell apart.
+    const reads = (size: number): number => {
+      let count = 0;
+      const ids = backlog(size);
+      const releaseIds = new Proxy(ids, {
+        get(target, key, receiver) {
+          if (typeof key === "string" && /^\d+$/.test(key)) count += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      settleableComponents(
+        { releaseIds, overlappingReleases: ids.map(id => [id]) },
+        new Set()
+      );
+      return count;
+    };
+    expect(reads(8_000)).toBeLessThanOrEqual(4 * reads(2_000));
+  });
+
+  it("keeps a held-open release out, and every component in the planner's order", () => {
+    const plan = {
+      releaseIds: ["r1", "r2", "r3", "r4"],
+      overlappingReleases: [["r3", "r1"], ["r2"], ["r4"]],
+    };
+    expect(settleableComponents(plan, new Set(["r2"]))).toEqual([
+      ["r3", "r1"],
+      [],
+      ["r4"],
+    ]);
+  });
+
+  it("settles a large backlog of empty releases within one pass's deadline, in order", async () => {
+    // Twenty thousand due releases with nothing to apply, against a real clock
+    // and the two seconds a drain can be left with when another job has used
+    // most of the tick. The linear decision settles them in about a tenth of
+    // that, so a loaded worker still finishes; a decision that scanned the due
+    // list for each release grows with the square of the backlog and stops the
+    // pass partway through it. The test above proves the growth by counting
+    // work, without a clock.
+    const ids = Array.from({ length: 20_000 }, () => crypto.randomUUID());
+    const marked: string[] = [];
+    await applyDueReleases({
+      ...deps({
+        releases: ids.map(id => release({ id })),
+        members: [],
+        marked,
+      }),
+      now: () => new Date(),
+      deadline: new Date(Date.now() + 2_000),
+    });
+    expect(marked).toEqual(ids);
   });
 });
 

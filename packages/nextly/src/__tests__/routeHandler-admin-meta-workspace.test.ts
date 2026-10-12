@@ -17,7 +17,7 @@
  * connection is opened, which is itself part of what these lock in.
  */
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { createDynamicHandlers } from "../routeHandler";
 import { sanitizeConfig } from "../shared/types/config";
@@ -217,7 +217,46 @@ describe("admin-meta split over HTTP", () => {
 
     expect(payload.plugins).toBeUndefined();
     expect(payload.showBuilder).toBeUndefined();
+    expect(payload.devReload).toBeUndefined();
     expect(payload.locales).toBeUndefined();
     expect(payload.customGroups).toBeUndefined();
+  });
+});
+
+describe("dev-reload route gate", () => {
+  // The gate reads the RUNTIME environment — the same comparison the
+  // workspace payload ships as `devReload` — so both legs are pinned: the
+  // stream answers only while the process is a development server, and the
+  // moment it is not, the request falls through to ordinary dispatch rather
+  // than opening a connection nothing ever closes.
+  //
+  // `vi.stubEnv` rather than assigning: `NODE_ENV` is declared read-only in
+  // this package's environment types.
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("streams while the runtime is development", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const response = await handlers().GET(
+      request("dev-reload"),
+      ctx(["dev-reload"])
+    );
+
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    // Cancelling fires the stream's own cancel callback, which unsubscribes
+    // the controller — otherwise this test leaves a subscriber registered in
+    // the process-global set for every later broadcast to feed.
+    await response.body?.cancel();
+  });
+
+  it("falls through to ordinary dispatch outside development", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const response = await handlers().GET(
+      request("dev-reload"),
+      ctx(["dev-reload"])
+    );
+
+    expect(response.headers.get("content-type")).not.toBe("text/event-stream");
   });
 });

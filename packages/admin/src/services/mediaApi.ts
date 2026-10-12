@@ -166,11 +166,14 @@ export async function uploadMedia(
   if (result.status === 401) {
     const code = readAuthErrorCodeFromText(result.responseText);
     if (code === "TOKEN_EXPIRED") {
-      if (await refreshAccessToken()) {
+      const refresh = await refreshAccessToken();
+      if (refresh === "ok") {
         result = await uploadMediaOnce(formData, onProgress);
-      } else {
+      } else if (refresh === "auth_failed") {
         redirectToLogin();
       }
+      // "transient": the session is still valid server-side, so the original
+      // 401 is surfaced below rather than logging the user out.
     } else if (code === "AUTH_REQUIRED" || code === "SESSION_UPGRADED") {
       redirectToLogin();
     }

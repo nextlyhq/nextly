@@ -327,7 +327,23 @@ const REVIEWED_COMMIT_MARKER = /reviewed commit:\**\s*`([0-9a-f]{7,40})`/i;
  */
 export function reviewedCommitFrom(body) {
   if (typeof body !== "string") return undefined;
-  return REVIEWED_COMMIT_MARKER.exec(body)?.[1]?.toLowerCase();
+  return (REVIEWED_COMMIT_MARKER.exec(body)?.[1] ?? summaryVerdict(body))?.toLowerCase();
+}
+
+/**
+ * The same verdict as Codex states it now: a clean review opens no review
+ * object and posts no other comment, only this row in the summary comment it
+ * keeps up to date, and a reaction. Without it, a revision Codex read and passed
+ * is exactly as silent as one nobody read. The comment's hidden marker is
+ * required, so the same table pasted into any other comment counts for
+ * nothing, and only a COMPLETED code review names a revision; a running one
+ * has read nothing yet.
+ */
+const SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->";
+const SUMMARY_COMPLETED_ROW = /\*\*Code Review\*\*\s*\|\s*✅\s*\*\*Completed\*\*[^|]*\|\s*`([0-9a-f]{7,40})`/i;
+
+function summaryVerdict(body) {
+  return body.includes(SUMMARY_MARKER) ? SUMMARY_COMPLETED_ROW.exec(body)?.[1] : undefined;
 }
 
 /**
@@ -414,7 +430,7 @@ export function abbreviationIsAmbiguous(named, head, knownRevisions) {
 export function verdictCommentReviewers(
   issueComments,
   head,
-  { since, knownRevisions, historyRewritten = false } = {}
+  { since, knownRevisions, historyRewritten = false, resolvedRevisions } = {}
 ) {
   if (
     !Array.isArray(issueComments) ||
@@ -423,13 +439,19 @@ export function verdictCommentReviewers(
   ) {
     return [];
   }
+  const target = head.toLowerCase();
   // A rewritten branch cannot supply the revisions to compare an abbreviation
   // against: the removed ones are gone from the commit list while a comment
   // naming one survives, so an abbreviation that looks unique among what
   // remains may identify a revision nobody can enumerate. A review record
-  // still carries a full revision and is unaffected.
-  if (historyRewritten) return [];
-  const target = head.toLowerCase();
+  // still carries a full revision and is unaffected. After a rewrite, then, an
+  // abbreviation counts only where the repository itself resolved it to the
+  // head: `resolvedRevisions` maps each to the full revision GitHub resolves
+  // it to, among every object it holds, and GitHub resolves an ambiguous one
+  // to nothing.
+  const identifiesHead = historyRewritten
+    ? named => resolvedRevisions?.[named] === target
+    : named => !abbreviationIsAmbiguous(named, target, knownRevisions);
   const seen = new Set();
   for (const comment of issueComments) {
     const login = comment?.user?.login;
@@ -437,7 +459,7 @@ export function verdictCommentReviewers(
     if (typeof login !== "string" || typeof body !== "string") continue;
     const named = reviewedCommitFrom(body);
     if (named === undefined || !target.startsWith(named)) continue;
-    if (abbreviationIsAmbiguous(named, target, knownRevisions)) continue;
+    if (!identifiesHead(named)) continue;
     // Same scoping rule the review objects get: a verdict predating the last
     // base move describes a diff that no longer exists, and a comment with no
     // timestamp cannot be shown to postdate it.

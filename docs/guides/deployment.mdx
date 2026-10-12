@@ -21,7 +21,7 @@ Before you ship, set the following:
 | `DATABASE_URL` | yes (Postgres / MySQL) | Database connection string. |
 | `NEXTLY_SECRET` | yes | JWT signing secret, **at least 32 characters**. Generate with `openssl rand -base64 32`. |
 | `NEXT_PUBLIC_APP_URL` | yes | The public URL of your deployment (used in client code and email links). |
-| `NEXTLY_ALLOWED_ORIGINS` | optional | Comma-separated additional CSRF origins (e.g. a separate frontend domain). |
+| `NEXTLY_ALLOWED_ORIGINS` | self-hosted | Comma-separated additional CSRF origins: the origin browsers use whenever it differs from the address a self-hosted server listens on -- behind a proxy, by IP or hostname, or in a container (the origin check otherwise sees only that address, and refuses sign-in and plugin-route writes with `CSRF_FAILED`), plus any other origin such as a separate frontend domain. |
 
 Plus storage env vars if you're using cloud storage (see [Media & Storage](/docs/guides/media-storage)) and email env vars if you're using a real provider (see [Email](/docs/guides/email)).
 
@@ -153,7 +153,7 @@ Before going live, verify:
 - [ ] `NEXTLY_SECRET` is at least 32 characters (generated with `openssl rand -base64 32`).
 - [ ] `DATABASE_URL` points to a production database (not localhost / SQLite).
 - [ ] `NEXT_PUBLIC_APP_URL` is the public URL of your deployment.
-- [ ] `NEXTLY_ALLOWED_ORIGINS` lists any additional CSRF origins (separate frontend domain, mobile bundle, etc.).
+- [ ] `NEXTLY_ALLOWED_ORIGINS` lists the origin browsers use whenever it differs from the address the self-hosted server listens on (behind a proxy, by IP or hostname, or in a container), and any additional CSRF origins (separate frontend domain, mobile bundle, etc.).
 - [ ] Storage adapter is configured for non-ephemeral filesystems (no local disk on serverless).
 - [ ] An email provider is configured (Resend, SMTP, or SendLayer) -- without one, password-reset and verification tokens are returned in the API response as a development fallback.
 - [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending).

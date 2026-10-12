@@ -40,8 +40,7 @@ function makeAdapter(): DrizzleAdapter {
     connect: async () => {},
     disconnect: async () => {},
     executeQuery: async () => [],
-    transaction: async <T>(fn: (tx: never) => Promise<T>) =>
-      fn({} as never),
+    transaction: async <T>(fn: (tx: never) => Promise<T>) => fn({} as never),
   } as unknown as DrizzleAdapter;
 }
 
@@ -89,9 +88,7 @@ function build(templateAttachments: EmailTemplateRecord["attachments"]) {
     originalFilename: `${id}.pdf`,
     mimeType: "application/pdf",
   }));
-  const readBytes = vi.fn(async (path: string) =>
-    Buffer.from(`bytes:${path}`)
-  );
+  const readBytes = vi.fn(async (path: string) => Buffer.from(`bytes:${path}`));
   const attachmentSource: EmailAttachmentSource = { findMedia, readBytes };
 
   const service = new EmailService(
@@ -148,7 +145,7 @@ describe("EmailService.sendWithTemplate — attachment merge", () => {
 
     const call = adapterSend.mock.calls[0]?.[0];
     expect(call?.attachments).toHaveLength(3);
-    expect(call?.attachments?.map((a) => a.filename)).toEqual([
+    expect(call?.attachments?.map(a => a.filename)).toEqual([
       // Per-send filename override wins for the shared mediaId
       "call-override.pdf",
       // Template-only attachment uses media's originalFilename

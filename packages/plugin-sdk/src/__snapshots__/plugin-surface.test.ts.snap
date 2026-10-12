@@ -18,6 +18,8 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "CellContext (type)",
   "CellRenderer (type)",
   "CellRendererDefinition (type)",
+  "ChallengeResolveResult (type)",
+  "ChallengeViewProps (type)",
   "Checkbox (value)",
   "ColumnProvider (type)",
   "ColumnTransform (type)",
@@ -152,6 +154,35 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
 ]
 `;
 
+exports[`plugin-sdk public export surface > \`./blocks\` surface is unchanged 1`] = `
+[
+  "AnyBlockDefinition (type)",
+  "BlockDefinition (type)",
+  "BlockEditorMeta (type)",
+  "BlockExample (type)",
+  "BlockIcon (type)",
+  "BlockIsland (type)",
+  "BlockPart (type)",
+  "BlockRenderArgs (type)",
+  "BlockRenderContext (type)",
+  "BlockRenderResult (type)",
+  "BlockSeoContribution (type)",
+  "BlockSeoImage (type)",
+  "BlockSupportKeys (type)",
+  "BlockSupports (type)",
+  "BlockVariation (type)",
+  "ComponentPath (type)",
+  "InferBlockProps (type)",
+  "NodeStyles (type)",
+  "PropSchema (type)",
+  "SlotLock (type)",
+  "SlotSpec (type)",
+  "SupportDefinition (type)",
+  "blockSupports (value)",
+  "defineBlock (value)",
+]
+`;
+
 exports[`plugin-sdk public export surface > \`./client\` surface is unchanged 1`] = `
 [
   "Can (value)",
@@ -160,9 +191,42 @@ exports[`plugin-sdk public export surface > \`./client\` surface is unchanged 1`
 ]
 `;
 
+exports[`plugin-sdk public export surface > \`./db\` surface is unchanged 1`] = `
+[
+  "and (value)",
+  "asc (value)",
+  "count (value)",
+  "desc (value)",
+  "eq (value)",
+  "gt (value)",
+  "gte (value)",
+  "inArray (value)",
+  "isNotNull (value)",
+  "isNull (value)",
+  "like (value)",
+  "lt (value)",
+  "lte (value)",
+  "ne (value)",
+  "not (value)",
+  "or (value)",
+]
+`;
+
 exports[`plugin-sdk public export surface > \`./routing\` surface is unchanged 1`] = `
 [
   "slugToStaticParam (value)",
+]
+`;
+
+exports[`plugin-sdk public export surface > \`./testing\` surface is unchanged 1`] = `
+[
+  "CreateTestNextlyOptions (type)",
+  "TestDialect (type)",
+  "TestNextly (type)",
+  "createTestNextly (value)",
+  "describeAbortedTransactions (value)",
+  "getConfiguredTestDialects (value)",
+  "takeAbortedTransactionSightings (value)",
 ]
 `;
 
@@ -199,9 +263,12 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "BulkUpdateEntry (type)",
   "Challenge (type)",
   "ChallengeDefinition (type)",
+  "CompleteLoginOptions (type)",
   "ComponentPath (type)",
   "CoreFilterSeam (type)",
+  "DEFAULT_ADMIN_PATH (value)",
   "DataWidgetArchetype (type)",
+  "Decision (type)",
   "DeclarativeWidgetArchetype (type)",
   "DocumentEventName (type)",
   "DocumentEvents (value)",
@@ -228,6 +295,11 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "HookContext (type)",
   "HookContextPhase (type)",
   "HookHandler (type)",
+  "HookPointContext (type)",
+  "HookPointNameOf (type)",
+  "HookPointPayload (type)",
+  "HookPointPayloads (type)",
+  "HookPointValue (type)",
   "HookType (type)",
   "JobContext (type)",
   "JobDefinition (type)",
@@ -260,12 +332,17 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginAdminQuerylessWidget (type)",
   "PluginAdminStatsWidget (type)",
   "PluginAdminWidget (type)",
+  "PluginAuditApi (type)",
+  "PluginAuditDeclaration (type)",
+  "PluginAuthApi (type)",
+  "PluginCapabilities (type)",
   "PluginCategory (type)",
   "PluginCollectionService (type)",
   "PluginCollectionView (type)",
   "PluginContext (type)",
   "PluginContributions (type)",
   "PluginDataFieldConfig (type)",
+  "PluginDatabase (type)",
   "PluginDeclaration (type)",
   "PluginDefinition (type)",
   "PluginEmailProvider (type)",
@@ -279,6 +356,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginFieldValidateArgs (type)",
   "PluginFieldValidationResult (type)",
   "PluginFilterRegistry (type)",
+  "PluginHookPointDeclaration (type)",
   "PluginHookRegistry (type)",
   "PluginMenuItem (type)",
   "PluginNavSection (type)",
@@ -292,6 +370,8 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginRouteMount (type)",
   "PluginRoutePermissionResolver (type)",
   "PluginRoutePermissionScope (type)",
+  "PluginRouteRateLimit (type)",
+  "PluginSettingsApi (type)",
   "PluginSingleRecord (type)",
   "PluginSinglesResult (type)",
   "PluginSinglesService (type)",
@@ -318,6 +398,10 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "TIMESERIES_INTERVALS (value)",
   "TimeseriesInterval (type)",
   "UnvalidatedAddressableField (type)",
+  "UserCreatedPayload (type)",
+  "UserDeletedPayload (type)",
+  "UserEventName (type)",
+  "UserEvents (value)",
   "ValidateFieldValuesOptions (type)",
   "ValidationIssue (type)",
   "WIDGET_ARCHETYPES (value)",
@@ -348,6 +432,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "addressableFields (value)",
   "callerReadOptions (value)",
   "checkbox (value)",
+  "collectDeclarations (value)",
   "collectionDraftSplit (value)",
   "defineEmailProvider (value)",
   "defineJob (value)",
@@ -371,6 +456,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "respondList (value)",
   "respondMutation (value)",
   "routePathIsLiteral (value)",
+  "sanitizeAdminPath (value)",
   "secret (value)",
   "text (value)",
   "textarea (value)",

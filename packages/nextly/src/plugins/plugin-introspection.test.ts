@@ -35,7 +35,7 @@ function fbPlugin(overrides: Record<string, unknown> = {}): PluginDefinition {
           label: "Export Submissions",
         },
       ],
-      events: [{ name: "form-builder.submitted" }],
+      events: [{ name: "nextlyhq-plugin-form-builder.submitted" }],
       routes: [
         {
           method: "GET",
@@ -74,11 +74,26 @@ describe("collectPluginInfo", () => {
     expect(fb.singles).toEqual(["form-settings"]);
     expect(fb.fieldGroups).toEqual(["field-group"]);
     expect(fb.permissions).toEqual(["export-submissions"]);
-    expect(fb.events).toEqual(["form-builder.submitted"]);
+    expect(fb.events).toEqual(["nextlyhq-plugin-form-builder.submitted"]);
     expect(fb.routeCount).toBe(1);
     expect(fb.adminMenuCount).toBe(1);
     expect(fb.adminPageCount).toBe(1);
     expect(fb.hasSettings).toBe(true);
+  });
+
+  it("carries the declared schemaVersion, and none when undeclared", () => {
+    const infos = collectPluginInfo(
+      cfg(),
+      [basePlugin(), fbPlugin({ schemaVersion: 4 })],
+      { coreVersion: "1.0.0" }
+    );
+    expect(
+      findPluginInfo(infos, "@nextlyhq/plugin-form-builder")!.manifest
+        .schemaVersion
+    ).toBe(4);
+    expect(
+      findPluginInfo(infos, "@acme/base")!.manifest.schemaVersion
+    ).toBeUndefined();
   });
 
   it("reports a disabled plugin: schema listed, behavior counts zeroed", () => {

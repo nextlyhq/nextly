@@ -66,7 +66,7 @@ export function selectsNothing(
  *
  * 🔴 Formatted through `formatGlobalDateTime`, the same path every other admin
  * date goes through, NOT a bare `toLocaleString`. General Settings carries a
- * timezone, `GeneralSettingsSyncProvider` publishes it to that formatter at the
+ * timezone, `GeneralSettingsSync` publishes it to that formatter at the
  * root of the admin, and a cell reading the browser's own zone instead would
  * make these cards disagree with every date beside them whenever an
  * administrator has configured one. The formatter falls back to the local zone

@@ -18,6 +18,7 @@
  */
 
 import { createAdapterFromEnv } from "../database/factory";
+import { getService, type NextlyServiceConfig } from "../di/register";
 import { NextlyError } from "../errors/nextly-error";
 import { runWithRequestScope } from "../hooks/request-scope";
 import { ServiceContainer } from "../services";
@@ -30,6 +31,7 @@ import {
   dispatchEmailProviders,
   dispatchEmailTemplates,
 } from "./handlers/email-dispatcher";
+import { dispatchPluginSettings } from "./handlers/plugin-settings-dispatcher";
 import { dispatchSingles } from "./handlers/single-dispatcher";
 import { dispatchUser } from "./handlers/user-dispatcher";
 import { dispatchUserFields } from "./handlers/user-field-dispatcher";
@@ -41,6 +43,20 @@ import type {
   Params,
   ServiceType,
 } from "./types";
+
+/**
+ * The registered config, for a dispatch that needs a plugin's own declaration.
+ *
+ * Read here rather than held on the container: the container carries services,
+ * and the plugin manifest is configuration.
+ */
+function readServiceConfig(): NextlyServiceConfig | undefined {
+  try {
+    return getService("config");
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * ServiceDispatcher routes API requests to the appropriate service
@@ -63,6 +79,7 @@ export class ServiceDispatcher {
   private container: ServiceContainer;
   private availableServices: Set<ServiceType> = new Set([
     "users",
+    "pluginSettings",
     "rbac",
     "auth",
     "collections",
@@ -253,6 +270,14 @@ export class ServiceDispatcher {
     switch (service) {
       case "users":
         return dispatchUser(this.container, method, p, body);
+      case "pluginSettings":
+        return dispatchPluginSettings(
+          this.container,
+          readServiceConfig(),
+          method,
+          p,
+          body
+        );
       case "auth":
         return dispatchAuth(this.container, method, p, body);
       case "collections":

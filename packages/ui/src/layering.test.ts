@@ -17,7 +17,7 @@
  * discards, or refuses one it would have kept. That has already happened three
  * times, in the breakpoint rules, a token predicate and an access context.
  *
- * This is not a new rule. `.claude/rules/derived-checks.md` already states it —
+ * This is not a new rule. the `derived-checks` skill already states it —
  * a narrower view must be DERIVED from the richer one, because two
  * implementations agree the day they are written and drift silently after —
  * and records defects from five unrelated packages behind it.

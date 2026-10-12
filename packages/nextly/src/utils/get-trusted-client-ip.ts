@@ -163,7 +163,12 @@ function parseCidr(entry: string): ParsedCidr | null {
   return null;
 }
 
-function ipv4ToInt(ip: string): number | null {
+/**
+ * A dotted-quad IPv4 address as an unsigned 32-bit integer, or null when it is
+ * not one. Shared by the client-address, refresh-binding and outbound-URL
+ * prefix checks.
+ */
+export function ipv4ToInt(ip: string): number | null {
   const parts = ip.split(".");
   if (parts.length !== 4) return null;
   let acc = 0;
@@ -185,7 +190,7 @@ function isIpInAnyCidr(ip: string, cidrs: readonly ParsedCidr[]): boolean {
       if (c.family !== "ipv4") continue;
       const mask =
         c.prefix === 0 ? 0 : (-1 >>> (32 - c.prefix)) << (32 - c.prefix);
-      if (((intIp & mask) >>> 0) === ((c.network as number) & mask) >>> 0) {
+      if ((intIp & mask) >>> 0 === ((c.network as number) & mask) >>> 0) {
         return true;
       }
     }

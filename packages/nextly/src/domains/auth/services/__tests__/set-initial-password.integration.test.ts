@@ -8,9 +8,10 @@
  * password is never flagged.
  */
 import { eq } from "drizzle-orm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors";
+import { refreshTokens } from "../../../../schemas/auth-tokens/sqlite";
 import { users } from "../../../../schemas/users/sqlite";
 import { ServiceContainer } from "../../../../services/index";
 import {
@@ -20,6 +21,7 @@ import {
 import type { AuthService } from "../auth-service";
 
 interface TestDb {
+  insert: (table: unknown) => { values: (data: unknown) => Promise<unknown> };
   select: () => {
     from: (table: unknown) => {
       where: (cond: unknown) => Promise<Record<string, unknown>[]>;
@@ -75,6 +77,60 @@ describe("must-change-password / setInitialPassword", () => {
     expect(after.mustChangePassword).toBeFalsy();
     // The password was actually replaced.
     expect(after.passwordHash).not.toBe(originalHash);
+  });
+
+  it("ends every session the account already holds", async () => {
+    // The admin-set password is one an administrator knows; a session it
+    // was used for must not keep renewing once the person replaced it.
+    const { container, auth, db } = await setup();
+    const created = await container.users.createLocalUser({
+      email: "sessions@example.com",
+      name: "Sessions",
+      password: STRONG,
+      mustChangePassword: true,
+    });
+    const userId = String(created.id);
+    await db.insert(refreshTokens).values({
+      id: "rt-before-change",
+      userId,
+      tokenHash: "hash-before-change",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    await auth.setInitialPassword(userId, STRONG_2);
+
+    expect(
+      await db
+        .select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.userId, userId))
+    ).toEqual([]);
+  });
+
+  it("returns the password version as stored, not as written", async () => {
+    // Mid-second, so a version returned straight from the clock keeps
+    // milliseconds the whole-second column drops.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-01T10:00:00.500Z"));
+    try {
+      const { container, auth, db } = await setup();
+      const created = await container.users.createLocalUser({
+        email: "version@example.com",
+        name: "Version",
+        password: STRONG,
+        mustChangePassword: true,
+      });
+
+      const written = await auth.setInitialPassword(
+        String(created.id),
+        STRONG_2
+      );
+
+      const row = await readUser(db, "version@example.com");
+      expect(written.passwordUpdatedAt).toEqual(row.passwordUpdatedAt);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("works exactly once — a second call rejects and leaves the account unchanged", async () => {

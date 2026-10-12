@@ -1,14 +1,14 @@
 ---
 name: reviewing-a-pr
-description: Use when reviewing a Nextly pull request, responding to review-bot feedback (CodeRabbit, Greptile), or preparing a PR to pass review.
+description: Use when reviewing a Nextly pull request, responding to reviewer feedback (Codex, CodeRabbit), or preparing a PR to pass review.
 ---
 
 # Reviewing a PR in the Nextly monorepo
 
 ## The review bar
 
-- **Verify before you trust.** For every review-bot suggestion (CodeRabbit,
-  Greptile), check the claim against the actual code and, where cheap, run
+- **Verify before you trust.** For every reviewer suggestion (Codex,
+  CodeRabbit), check the claim against the actual code and, where cheap, run
   the relevant test. Bots are frequently right about style and frequently
   wrong about behavior; apply fixes for confirmed issues, and push back with
   evidence (file/line, test output) when a suggestion is wrong. Never apply

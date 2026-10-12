@@ -15,11 +15,16 @@ declare global {
 // Dev-mode: auto-reload all open tabs when a code-first HMR schema apply
 // completes. Opens one SSE connection per page load (guarded by the window
 // flag so Turbopack module re-evaluations don't open duplicates).
-if (
-  process.env.NODE_ENV === "development" &&
-  typeof window !== "undefined" &&
-  !window.__nextlyDevReloadEs
-) {
+//
+// Subscribed EXPLICITLY, never at import: whether the stream exists is a
+// question about the RUNNING server, and the server answers it through
+// `workspace.devReload`. This module's own `NODE_ENV` was folded when the
+// package was built — it says where the library was built, never where it
+// runs — so an import-time check here once left production dists dialing a
+// route only development serves, and consumer dev builds never dialing it
+// at all.
+export function enableDevReload(): void {
+  if (typeof window === "undefined" || window.__nextlyDevReloadEs) return;
   const es = new EventSource(`${window.location.origin}/admin/api/dev-reload`);
   window.__nextlyDevReloadEs = es;
   es.addEventListener("schema-reload", () => window.location.reload());
@@ -65,14 +70,17 @@ export async function fetcher<T = unknown>(
   isProtected = false
 ): Promise<T> {
   const fullUrl = `${BASE_URL}${path}`;
+  // Headers MERGED after the rest of the options rather than replaced by them:
+  // spread last, a caller's `headers` dropped the JSON content type, so a write
+  // that added one header sent its JSON body as `text/plain`.
   const fetchOptions: RequestInit = {
     method: "GET",
+    credentials: isProtected ? "include" : "same-origin",
+    ...options,
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {}),
     },
-    credentials: isProtected ? "include" : "same-origin",
-    ...options,
   };
 
   const res = isProtected

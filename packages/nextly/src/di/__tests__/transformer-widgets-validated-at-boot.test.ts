@@ -19,6 +19,7 @@
  * rejects would pass with the validation deleted entirely.
  */
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
@@ -106,5 +107,113 @@ describe("widgets a setup transformer introduces", () => {
     expect(codeOf(await bootError(pluginContributing(validWidget)))).not.toBe(
       "NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID"
     );
+  });
+});
+
+/**
+ * A plugin whose `setup` REPLACES the list with one declaring `secretPath`.
+ *
+ * The same shape as above, aimed at the check that matters most: a secret path
+ * matching nothing in the settings schema is not inert. `ctx.settings` then
+ * stores the credential it names as ordinary text and returns it verbatim, and
+ * nothing at runtime says so — the manifest simply promised encryption it does
+ * not perform.
+ */
+function pluginDeclaringSecret(secretPath: string): PluginDefinition[] {
+  const contributor = {
+    name: "@acme/secrets",
+    version: "1.0.0",
+    nextly: "*",
+    capabilities: { secrets: [secretPath] },
+    contributes: {
+      settings: z.object({ clientSecret: z.string().default("") }),
+    },
+  };
+  return [
+    {
+      name: "@acme/transformer",
+      version: "1.0.0",
+      nextly: "*",
+      setup: (config: Record<string, unknown>) => ({
+        ...config,
+        plugins: [...(config.plugins as unknown[]), contributor],
+      }),
+    },
+  ] as unknown as PluginDefinition[];
+}
+
+describe("capabilities a setup transformer introduces", () => {
+  it("refuses a secret path the schema does not have, at boot", async () => {
+    // `resolvePlugins` validated the list the CALLER passed. This declaration
+    // did not exist then, so the typo reached a running `ctx.settings`.
+    expect(
+      codeOf(await bootError(pluginDeclaringSecret("clientSecrets")))
+    ).toBe("PLUGIN_RESOLUTION_ERROR");
+  });
+
+  it("carries a valid secret path past the check", async () => {
+    // The positive control, and it is not optional here: boot fails on the
+    // adapter either way, so the refusal above is satisfied by ANY rejection —
+    // including one that refuses every transformed manifest.
+    expect(
+      codeOf(await bootError(pluginDeclaringSecret("clientSecret")))
+    ).not.toBe("PLUGIN_RESOLUTION_ERROR");
+  });
+});
+
+describe("a plugin a setup transformer ADDS", () => {
+  /** The boot failure's resolution reason, when it is one. */
+  function reasonOf(error: unknown): string | undefined {
+    return NextlyError.is(error)
+      ? (error.logContext as { reason?: string } | undefined)?.reason
+      : undefined;
+  }
+
+  it("is version-checked like a declared plugin", async () => {
+    // Re-running only the manifest checks let a transformer-introduced plugin
+    // declare any core range it liked — the whole resolver is what carries
+    // the version gate, and the list that initializes is the transformed one.
+    const incompatible = {
+      name: "@acme/added",
+      version: "1.0.0",
+      nextly: "^99.0.0",
+    };
+    const plugins = [
+      {
+        name: "@acme/transformer",
+        version: "1.0.0",
+        nextly: "*",
+        setup: (config: Record<string, unknown>) => ({
+          ...config,
+          plugins: [...(config.plugins as unknown[]), incompatible],
+        }),
+      },
+    ] as unknown as PluginDefinition[];
+
+    expect(reasonOf(await bootError(plugins))).toBe("core-incompatible");
+  });
+
+  it("is dependency-checked like a declared plugin", async () => {
+    // The same hole on the dependency side: an addition naming a capability
+    // nothing provides would have initialized unresolved.
+    const needsGhost = {
+      name: "@acme/added",
+      version: "1.0.0",
+      nextly: "*",
+      requires: { "ghost-capability": ">=1.0.0" },
+    };
+    const plugins = [
+      {
+        name: "@acme/transformer",
+        version: "1.0.0",
+        nextly: "*",
+        setup: (config: Record<string, unknown>) => ({
+          ...config,
+          plugins: [...(config.plugins as unknown[]), needsGhost],
+        }),
+      },
+    ] as unknown as PluginDefinition[];
+
+    expect(reasonOf(await bootError(plugins))).toBe("missing-capability");
   });
 });

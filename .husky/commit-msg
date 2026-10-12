@@ -1,2 +1,14 @@
 #!/usr/bin/env sh
+# Cleared for the reason pre-commit gives: git exports GIT_DIR into every hook,
+# and in a linked worktree it names that worktree's admin directory. The check
+# below drives the git CLI, which resolves the pointer, but clearing it makes
+# "no hook inherits GIT_DIR" true of the hooks themselves rather than of
+# whatever they happen to call.
+unset GIT_DIR GIT_WORK_TREE
+
+# A commit that credits an AI tool, in its message or as its author or
+# committer, is refused here, before it exists. The same check runs in CI on
+# every pull request and in the merge queue, for a commit made past this hook.
+node scripts/ai-credit.mjs --commit-msg "$1"
+
 npx --no-install commitlint --edit "$1"

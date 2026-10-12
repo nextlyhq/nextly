@@ -38,6 +38,12 @@ export const USER_MESSAGES = {
   NO_ROLES_AVAILABLE: "No roles available. Please create roles first.",
   ROLES_FETCH_FAILED: "Failed to load roles. Cannot update user without roles.",
 
+  // Saving an edit to your own account that ends your own sessions
+  OWN_PASSWORD_CHANGED:
+    "Your password was changed. Sign in again with your new password.",
+  OWN_ACCOUNT_DEACTIVATED:
+    "Your account was deactivated, so you have been signed out.",
+
   // Form States
   UNSAVED_CHANGES_WARNING:
     "You have unsaved changes. Are you sure you want to leave?",

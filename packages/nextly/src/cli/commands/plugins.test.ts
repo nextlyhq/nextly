@@ -15,12 +15,20 @@ function info(overrides: Partial<PluginInfo> = {}): PluginInfo {
     singles: [],
     fieldGroups: [],
     permissions: ["export-submissions"],
-    events: ["form-builder.submitted"],
+    events: ["nextlyhq-plugin-form-builder.submitted"],
     routeCount: 1,
     adminMenuCount: 1,
     adminPageCount: 1,
     hasSettings: true,
     renamed: {},
+    manifest: {
+      outbound: [],
+      rawSql: false,
+      completesLogins: false,
+      secrets: [],
+      provides: [],
+      requires: {},
+    },
     ...overrides,
   };
 }
@@ -65,6 +73,19 @@ describe("renderPluginsList (D48)", () => {
 });
 
 describe("renderPluginInfo (D48)", () => {
+  it("says a plugin declares no schemaVersion rather than leaving it out", () => {
+    const logger = {
+      header: vi.fn(),
+      keyValue: vi.fn(),
+      item: vi.fn(),
+      info: vi.fn(),
+    };
+    renderPluginInfo(info(), logger);
+
+    const kv = Object.fromEntries(logger.keyValue.mock.calls);
+    expect(kv.schemaVersion).toBe("not declared");
+  });
+
   it("prints key/value details and itemized contributions", () => {
     const logger = {
       header: vi.fn(),
@@ -82,5 +103,42 @@ describe("renderPluginInfo (D48)", () => {
     expect(kv["settings page"]).toBe("yes");
     // Permissions are itemized.
     expect(logger.item).toHaveBeenCalledWith("export-submissions", 1);
+  });
+
+  it("prints the manifest an operator reviews before installing", () => {
+    const logger = {
+      header: vi.fn(),
+      keyValue: vi.fn(),
+      item: vi.fn(),
+      info: vi.fn(),
+    };
+    renderPluginInfo(
+      info({
+        manifest: {
+          outbound: ["api.stripe.com"],
+          rawSql: true,
+          completesLogins: true,
+          secrets: ["apiKey"],
+          provides: ["acme/payments"],
+          requires: { "acme/webhooks": ">=2.0.0" },
+          schemaVersion: 3,
+        },
+      }),
+      logger
+    );
+
+    const kv = Object.fromEntries(logger.keyValue.mock.calls);
+    expect(kv["raw SQL"]).toBe("declared");
+    expect(kv.schemaVersion).toBe("3");
+    expect(kv["finishes logins"]).toBe("declared");
+    const items = logger.item.mock.calls.map(call => call[0]);
+    expect(items).toEqual(
+      expect.arrayContaining([
+        "api.stripe.com",
+        "apiKey",
+        "acme/payments",
+        "acme/webhooks >=2.0.0",
+      ])
+    );
   });
 });

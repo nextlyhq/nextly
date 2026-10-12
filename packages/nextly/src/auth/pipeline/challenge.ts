@@ -1,5 +1,7 @@
+import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext } from "../../plugins/plugin-context";
 
+import { MUST_CHANGE_PASSWORD_CHALLENGE } from "./pending-token";
 import type { ChallengeDefinition } from "./types";
 
 /**
@@ -10,6 +12,21 @@ export class ChallengeRegistry {
   #defs = new Map<string, ChallengeDefinition>();
 
   add(def: ChallengeDefinition): void {
+    // Core's own continuation id is reserved. The set-initial-password step
+    // accepts any pending token carrying it, so a plugin challenge registered
+    // under the same id would hand its holders that step without ever
+    // answering the plugin's factor.
+    if (def.id === MUST_CHANGE_PASSWORD_CHALLENGE) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "id",
+            code: "RESERVED",
+            message: `The challenge id "${MUST_CHANGE_PASSWORD_CHALLENGE}" is reserved by core.`,
+          },
+        ],
+      });
+    }
     if (this.#defs.has(def.id)) {
       throw new Error(`Duplicate challenge id: ${def.id}`);
     }

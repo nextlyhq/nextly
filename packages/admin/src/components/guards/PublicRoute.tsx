@@ -24,6 +24,11 @@ export function PublicRoute({ children }: PublicRouteProps) {
     mountedRef.current = true;
 
     const checkAuth = async () => {
+      // The two checks are independent requests, so the session probe starts
+      // immediately rather than after setup-status answers. Awaited serially
+      // they cost two full API round-trips before this guard can render
+      // anything — the login screen stayed a blank themed div for both.
+      const sessionPromise = isAuthenticated();
       // `checkSetupStatus` swallows its own failures and fail-safes to
       // "setup complete," so no try/catch is needed here -- the only way
       // this function returns is with a definitive boolean.
@@ -46,8 +51,12 @@ export function PublicRoute({ children }: PublicRouteProps) {
           return;
         }
 
-        // Redirect authenticated users to dashboard
-        const authenticated = await isAuthenticated();
+        // Redirect authenticated users to dashboard. `isAuthenticated`
+        // resolves the promise started above; when setup-status was slow the
+        // session answer is often already in hand here. On the !isSetup paths
+        // the probe is simply never awaited — one request that also warms the
+        // shared 5-minute session cache.
+        const authenticated = await sessionPromise;
         if (!mountedRef.current) return;
         if (authenticated) {
           navigateTo(ROUTES.DASHBOARD);

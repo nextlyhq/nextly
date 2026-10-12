@@ -1,7 +1,8 @@
 /**
  * PATCH /auth/change-password
  * Changes password for the currently authenticated user.
- * Revokes all refresh tokens (force re-login on all devices).
+ * The password write ends every session the account holds, in the same
+ * transaction; this handler clears the caller's cookies to match.
  */
 // CSRF double-submit cookie + origin check. This endpoint is the highest-
 // value target for account takeover, so CSRF is non-negotiable here.
@@ -10,7 +11,7 @@ import { respondAction } from "../../api/response-shapes";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { clearAccessTokenCookie } from "../cookies/access-token-cookie";
-import { clearRefreshTokenCookie } from "../cookies/refresh-token-cookie";
+import { clearRefreshTokenCookies } from "../cookies/refresh-token-cookie";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 import { getSession } from "../session/get-session";
@@ -25,7 +26,6 @@ export interface ChangePasswordHandlerDeps {
     currentPassword: string,
     newPassword: string
   ) => Promise<{ success: boolean; error?: string }>;
-  deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
   /** Writer for security-sensitive auth events. */
   auditLog: AuditLogWriter;
   trustProxy: boolean;
@@ -82,9 +82,6 @@ export async function handleChangePassword(
     });
   }
 
-  // Revoke all sessions (force re-login on all devices)
-  await deps.deleteAllRefreshTokensForUser(sessionResult.user.id);
-
   // Actor and target are the same user; change-password is always
   // self-service in this handler. Admin-driven password reset for another
   // user runs through reset-password and has its own audit hook.
@@ -99,7 +96,10 @@ export async function handleChangePassword(
     userAgent: request.headers.get("user-agent"),
   });
 
-  const clearCookies = [clearAccessTokenCookie(), clearRefreshTokenCookie()];
+  const clearCookies = [
+    clearAccessTokenCookie(),
+    ...clearRefreshTokenCookies(),
+  ];
 
   // Success body is `{ message: "Password changed." }` per spec §7.6.
   // Cleared cookies (forcing re-login on every device) ride the headers.

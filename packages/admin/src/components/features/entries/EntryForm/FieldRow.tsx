@@ -34,6 +34,14 @@ export interface FieldRowProps {
  * (FieldWrapper) to span its track. FieldWrapper's `w-1/2` etc. classes
  * are correct for the legacy single-column path but would otherwise
  * shrink the field to half its track inside this grid.
+ *
+ * The sibling `[&>*]:min-w-0` zeroes each item's automatic minimum: a bare
+ * `Nfr` track is `minmax(auto, Nfr)`, and that `auto` honors an item's
+ * min-content — which a Code field can make as wide as its longest
+ * unwrapped line (CodeMirror draws its document with `white-space: pre`),
+ * growing the track past the form panel and painting the code outside the
+ * field's border. With the minimum zeroed, the track keeps its proportional
+ * width and the long line scrolls inside CodeMirror's own scroller.
  */
 export function FieldRow({
   fields,
@@ -46,7 +54,7 @@ export function FieldRow({
 
   return (
     <div
-      className="grid gap-6 items-start [&>*]:!w-full"
+      className="grid gap-6 items-start [&>*]:!w-full [&>*]:min-w-0"
       style={{ gridTemplateColumns: cols }}
     >
       {fields.map((field, i) => (

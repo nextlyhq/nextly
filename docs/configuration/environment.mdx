@@ -143,7 +143,8 @@ Nextly uses a custom JWT auth system (access + refresh tokens, sessions, API key
 |---|---|---|---|
 | `NEXTLY_SECRET` | Yes (production: ≥ 32 chars) | — | Secret used to sign JWTs and other crypto. Production startup throws if it is missing or shorter than 32 characters. Generate with `openssl rand -base64 32`. |
 | `NEXTLY_SECRET_PREVIOUS` | No | — | Secrets you have RETIRED, newest first. Kept for READING only — nothing new is ever keyed with one. See "Rotating `NEXTLY_SECRET`" below. |
-| `NEXTLY_ALLOWED_ORIGINS` | No | — | Comma-separated list of additional origins allowed for CSRF validation (e.g. `https://admin.example.com,https://staging.example.com`). The app's own origin is always allowed. |
+| `NEXTLY_ALLOWED_ORIGINS` | Self-hosted | — | Comma-separated list of additional origins allowed for CSRF validation (e.g. `https://admin.example.com,https://staging.example.com`). The origin the request arrives at is always allowed, but a self-hosted server (`next start` or the standalone build) takes that from the address it listens on, such as `http://localhost:3000`, not from your public URL. List the origin browsers use (`https://example.com`) whenever it differs from that address — behind a proxy, by IP or hostname, or in a container — or sign-in and plugin-route writes are refused with `CSRF_FAILED`. |
+| `NEXTLY_ERASE_RETIRED_AUTH_TABLES` | No | — | The retired `accounts` and `sessions` tables that are Nextly's, comma-separated (`accounts`, `sessions` or `accounts,sessions`). Deleting a user erases their rows only from a table named here, and only while it has the shape Nextly created. Nextly keeps no record that it created these tables, and the Auth.js adapters' tables share their names and shape, so name a table only when it is Nextly's. Unset, the rows stay, and the startup warning says so. See [Production migrations](/docs/guides/production-migrations). |
 
 ### Rotating `NEXTLY_SECRET`
 

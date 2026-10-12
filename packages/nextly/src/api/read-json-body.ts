@@ -100,9 +100,18 @@ export async function readBoundedJsonBody<T = unknown>(
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
-        // Released before throwing, so an oversized upload stops arriving
+        // Cancelled before throwing, so an oversized upload stops arriving
         // rather than draining in the background after the refusal.
-        await reader.cancel();
+        //
+        // NOT awaited. `cancel()` takes effect synchronously — the branch is
+        // closed and stops being fed — but on a stream teed by
+        // `Request.clone()` the promise it returns settles only once BOTH
+        // branches have been cancelled. A caller bounding the read of a clone
+        // while leaving the original for a handler would therefore await a
+        // promise nothing can settle, and the request would hang instead of
+        // being refused: the refusal path turned into the denial of service
+        // the cap exists to prevent.
+        void reader.cancel();
         tooLarge();
       }
       chunks.push(value);

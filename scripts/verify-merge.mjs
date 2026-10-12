@@ -2,7 +2,7 @@
  * Decides whether a pull request may merge, and whether a merged one landed
  * whole.
  *
- * `.claude/rules/verifying-merged-work.md` describes the same procedure in
+ * the `verifying-merged-work` skill describes the same procedure in
  * prose with runnable shell in it. Shell embedded in a document has nothing
  * executing it, and every way it can be wrong here looks like a pass: a count
  * computed and never read, an exit status swallowed by a pipeline, a comparison
@@ -31,10 +31,11 @@
  *   fails to create its check-runs is invisible here unless it is listed. Adding
  *   one is deliberate work; the list does not derive itself.
  *
- * - **A retained commit status is accepted as current.** The title check runs on
- *   `edited` as well as on a push, and GitHub keeps the previous successful
- *   status until the rerun replaces it — so a title edited without moving the
- *   head can be judged on the status of the title it replaced.
+ * - **A retained commit status is accepted as current.** GitHub keeps a
+ *   status context's previous state until a rerun replaces it, so a status can
+ *   describe a revision as it was rather than as it is. The title check reports
+ *   as a check-run, so a title edited without moving the head is judged by the
+ *   run that edit started.
  *
  * - **`refs/pull/N/merge` is resolved, not pinned.** A base branch advancing
  *   mid-run can change which revision that ref names, and the filter would then
@@ -518,10 +519,10 @@ export function pageWrapping(key) {
  * A commit STATUS, expressed as a check-run so one rule judges both.
  *
  * GitHub has two independent surfaces and a gate that reads one sees a partial
- * picture: `amannn/action-semantic-pull-request` and CodeRabbit both report
- * through the statuses API, so a check-runs-only query calls a revision green
- * while the title check is failing. Normalising here means `jobPasses` stays
- * the single definition of passing rather than growing a second one.
+ * picture: some apps, CodeRabbit among them, report only through the statuses
+ * API, so a check-runs-only query calls a revision green while one of them is
+ * failing. Normalising here means `jobPasses` stays the single definition of
+ * passing rather than growing a second one.
  */
 /**
  * Status contexts published by reviewers the gate reports rather than requires.
@@ -741,9 +742,9 @@ export function requiredChecks(integrationPathsIgnore, { merged = false } = {}) 
     { name: "Integration (postgres)", pathsIgnore: integrationPathsIgnore },
     { name: "Integration (mysql)", pathsIgnore: integrationPathsIgnore },
     { name: "Integration (sqlite)", pathsIgnore: integrationPathsIgnore },
-    // Reports through the STATUSES surface from its own workflow, and only on a
-    // pull request — a push to the base branch has no title to validate, so
-    // requiring it post-merge would demand a status that is never written.
+    // Reported by its own workflow, on a pull request and in the merge queue,
+    // and never on a push to the base branch, which has no title to validate,
+    // so requiring it post-merge would demand a result that is never written.
     // Judged only when present, a run that never started left the title
     // unvalidated and the gate green.
     ...(merged
@@ -950,11 +951,50 @@ let BASE_REMOTE = "origin";
  * as JSON therefore fails on exactly the case that matters — a pull request
  * with no review verdict yet.
  */
-function ghText(args) {
-  return execFileSync("gh", args, {
+export function ghText(args) {
+  return gh(args, {
     encoding: "utf8",
     maxBuffer: 32 * 1024 * 1024,
   }).trim();
+}
+
+/**
+ * The oldest gh this gate runs under. gh evaluates `--jq` with a jq built into
+ * it, not the jq on PATH, and before 2.75.0 that jq (gojq 0.12.15 and older)
+ * refuses any binary operator written bare as an object's value —
+ * `{cross:.a!=.b}`, `{next:.n+1}`, `{name:.a//"none"}` — before anything is
+ * checked, where 2.75.0 (gojq 0.12.17) and later parse every one of them.
+ * Measured with gh 2.46.0, 2.74.2, 2.75.0 and 2.101.0. Requiring the version
+ * makes every filter it parses safe here, which a scan of filters for what an
+ * older jq refuses could never promise. The pages this gate reads also need
+ * `gh api --slurp`, which 2.48.0 added.
+ */
+const MIN_GH = [2, 75, 0];
+
+/** Why the gh that printed this `gh --version` cannot run this gate, or null when it can. */
+export function ghVersionProblem(versionText) {
+  const found = /^gh version (\d+)\.(\d+)\.(\d+)/m.exec(versionText);
+  if (!found)
+    return `cannot read a version from gh --version: ${JSON.stringify(versionText.trim().split("\n")[0])}`;
+  const version = found.slice(1).map(Number);
+  const differs = version.findIndex((part, at) => part !== MIN_GH[at]);
+  if (differs === -1 || version[differs] > MIN_GH[differs]) return null;
+  return `gh ${version.join(".")} is older than ${MIN_GH.join(".")}, the first whose built-in jq parses every filter this gate writes; update gh`;
+}
+
+/** Why this process's gh cannot run the gate, or null; read at the first call. */
+let ghProblem;
+
+/**
+ * Every gh call this gate makes. The first reads `gh --version` and refuses a
+ * gh older than `MIN_GH`, so no call runs under a gh that would fail it later
+ * and part-way.
+ */
+function gh(args, options) {
+  if (ghProblem === undefined)
+    ghProblem = ghVersionProblem(execFileSync("gh", ["--version"], { encoding: "utf8" }));
+  if (ghProblem !== null) throw new Error(ghProblem);
+  return execFileSync("gh", args, options);
 }
 
 /** `gh api` where the result really is JSON. Empty output is a failure, not an empty value. */
@@ -980,8 +1020,7 @@ function timelinePages(pr) {
   // therefore counts zero force-pushes — a false clean produced by the check
   // that exists to refuse them.
   return JSON.parse(
-    execFileSync(
-      "gh",
+    gh(
       [
         "api",
         "--paginate",
@@ -1097,7 +1136,7 @@ export function main(argv) {
     "api",
     `repos/${REPO}/pulls/${pr}`,
     "--jq",
-    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha,state:.state,draft:.draft,changedFiles:.changed_files,baseRepo:.base.repo.full_name,baseRef:.base.ref,commits:.commits}",
+    "{cross:(.head.repo.full_name!=.base.repo.full_name),repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha,state:.state,draft:.draft,changedFiles:.changed_files,baseRepo:.base.repo.full_name,baseRef:.base.ref,commits:.commits}",
   ]);
   const remotes = configuredRemotes();
   REMOTE_FOR_FETCH = remoteForRepo(meta.repo, remotes);
@@ -1315,8 +1354,8 @@ export function main(argv) {
   // Scoped to THIS revision: a review of an earlier one is not coverage of it.
   const coderabbit = reviewsCoveringTip(reviews, tip, CODERABBIT).length;
 
-  // Commit STATUSES are a separate surface from check-runs, and this
-  // repository's title check and CodeRabbit both report through it.
+  // Commit STATUSES are a separate surface from check-runs, and some apps,
+  // CodeRabbit among them, report only through it.
   // Guarded like the check-runs lookup above. Unguarded, an empty `tip`
   // produced `commits//status`, which throws before the script can print
   // NOT CHECKABLE or return its exit code — so the documented refusal became

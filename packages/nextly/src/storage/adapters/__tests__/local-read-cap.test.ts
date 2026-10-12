@@ -15,7 +15,7 @@
  * @module storage/adapters/local-read-cap.test
  */
 import { execFile, execFileSync } from "node:child_process";
-import { createWriteStream, mkdtempSync, rmSync } from "node:fs";
+import { createWriteStream, mkdtempSync, rmSync, statSync } from "node:fs";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,8 +45,12 @@ const CAN_MAKE_FIFO = ((): boolean => {
   // temp directory on every evaluation of this module, succeed or fail.
   const probeDir = mkdtempSync(join(tmpdir(), "nextly-fifo-probe-"));
   try {
-    execFileSync("mkfifo", [join(probeDir, "probe")], { stdio: "ignore" });
-    return true;
+    const probe = join(probeDir, "probe");
+    execFileSync("mkfifo", [probe], { stdio: "ignore" });
+    // A FIFO as THIS process sees it, not only a `mkfifo` that exited 0. On
+    // Windows, Git's MSYS `mkfifo` succeeds but makes a node Node reads as a
+    // regular file, and the cases would run against no pipe at all.
+    return statSync(probe).isFIFO();
   } catch {
     return false;
   } finally {

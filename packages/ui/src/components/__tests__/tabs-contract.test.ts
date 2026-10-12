@@ -4088,16 +4088,25 @@ describe("which files the call-site scan reads", () => {
     const notReal = watched.filter(path => !existsSync(path));
     expect(notReal).toEqual([]);
 
-    const unwatchedRoots = SCAN_ROOTS.filter(
-      root =>
-        !watched.some(path => root === path || root.startsWith(`${path}/`))
-    ).map(root => root.replace(`${REPO}/`, ""));
+    // Compared with forward slashes, the form the config registers, since
+    // `resolve` gives this file's roots in the platform's own.
+    const watchedPaths = watched.map(forwardSlashes);
+    const unwatchedRoots = SCAN_ROOTS.map(forwardSlashes)
+      .filter(
+        root =>
+          !watchedPaths.some(
+            path => root === path || root.startsWith(`${path}/`)
+          )
+      )
+      .map(root => root.replace(`${repoRoot}/`, ""));
     expect(unwatchedRoots).toEqual([]);
 
     // And every file the scan actually reads, which covers shapes no synthetic
     // path anticipates. Named individually: the list is only ever wrong for a
     // whole tree at a time, and a bare count says nothing about which.
-    const unwatched = scanned().filter(file => !isMatch(file, triggers));
+    const unwatched = scanned()
+      .map(forwardSlashes)
+      .filter(file => !isMatch(file, triggers));
     expect(unwatched).toEqual([]);
   });
 

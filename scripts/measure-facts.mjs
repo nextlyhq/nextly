@@ -26,11 +26,14 @@ import { writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { handOver, requireBounded } from "./bounded.mjs";
+
 // Measurements are properties of the repository, not of wherever the caller
 // happens to stand, so every command runs from the repository root.
 process.chdir(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
 
 const FULL = process.argv.includes("--full");
+
 const STDOUT = process.argv.includes("--stdout");
 const onlyArg = process.argv.find(a => a.startsWith("--only="));
 const ONLY = onlyArg ? onlyArg.slice(7).split(",") : null;
@@ -55,6 +58,10 @@ function measure(cmd) {
 // humans quote, so it is the number recorded — with the run's exit status,
 // because turbo exits nonzero when tasks fail and that is part of the reading.
 function turboRow(cmd) {
+  // A forced turbo run outside the bounded runner is the fan-out the runner
+  // exists to stop, so it refuses rather than runs — whatever became of the
+  // hand-over below.
+  requireBounded("a forced turbo run");
   const { out, status } = measure(cmd);
   const m = out.match(/Tasks:\s+(\d+)\s+successful,\s+(\d+)\s+total/);
   return {
@@ -150,6 +157,13 @@ const lines = [
   "`--full`; their meaning depends on the build state recorded beside them.",
   "",
 ];
+
+// A run that will execute a forced turbo row hands itself to the bounded
+// runner before any row runs: the machine's heavy slot, the derived limits,
+// and a stop when its caller is killed. The rows still show the commands that
+// ran, inside it. A full run of cheap rows only (`--only`) takes no slot.
+const selected = facts.filter(f => !ONLY || ONLY.includes(f.id));
+if (FULL && selected.some(f => f.heavy)) handOver(fileURLToPath(import.meta.url), process.argv.slice(2));
 
 let failed = 0;
 for (const f of facts) {

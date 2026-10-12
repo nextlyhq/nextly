@@ -1,5 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -7,6 +9,7 @@ import {
   citedPaths,
   headings,
   LIBRARY,
+  exclusionMarker,
   markerFor,
   probeMarker,
   readCorpus,
@@ -171,14 +174,31 @@ describe("probeMarker", () => {
     expect(probeMarker("<p>markup</p>\n- a list\n", [])).toBeNull();
   });
 
-  it("finds a marker of its own in every committed excluded file", () => {
-    // The real files against everything else git tracks, so the probe has a
-    // sentence no other file the index may hold could answer for. CLAUDE.md
-    // is one line, `@AGENTS.md`, and even that is its own.
+  it("finds a sentence no kept file holds in every committed excluded file", () => {
+    // The real files against every file the configuration keeps, so a hit for
+    // the sentence can come only from an excluded file. CLAUDE.md is a copy of
+    // AGENTS.md, so the two share every sentence, which an exclusion allows.
     const config = JSON.parse(readFileSync("context7.json", "utf-8"));
     for (const name of config.excludeFiles.filter(name => corpus.has(name))) {
-      expect(markerFor(corpus, name), name).toEqual(expect.any(String));
+      expect(exclusionMarker(corpus, name, config), name).toEqual(expect.any(String));
     }
+  });
+
+  it("lets excluded files share a sentence, but never with a file the configuration keeps", () => {
+    const shared = "A sentence the source and its copy both hold.";
+    const files = new Map([
+      ["README.md", "# Nextly\n\nThe README, kept.\n"],
+      ["AGENTS.md", `# Agents\n\n${shared}\n`],
+      ["CLAUDE.md", `<!-- Generated from AGENTS.md. -->\n\n# Agents\n\n${shared}\n`],
+    ]);
+    const config = { folders: ["docs"], excludeFiles: ["AGENTS.md", "CLAUDE.md"] };
+    // The copy holds every line of its source, and a marker is still found.
+    const marker = exclusionMarker(files, "AGENTS.md", config);
+    expect(files.get("CLAUDE.md")).toContain(marker);
+    expect(files.get("README.md")).not.toContain(marker);
+    // Once the kept README holds all of it too, nothing can be asked for.
+    files.set("README.md", `# Agents\n\n${shared}\n`);
+    expect(exclusionMarker(files, "AGENTS.md", config)).toBeNull();
   });
 
   it("refuses a file git does not track, which the index cannot have read", () => {
@@ -257,6 +277,18 @@ function context7({
   };
 }
 
+/** A git repository in a temporary directory with these files tracked, as `verify` reads a checkout. */
+function scratchRepository(files) {
+  const root = mkdtempSync(join(tmpdir(), "context7-"));
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), text);
+  }
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["add", "-A"], { cwd: root });
+  return root;
+}
+
 /** The markers the script will ask for, read from the real files. */
 function realMarkers() {
   const config = JSON.parse(readFileSync("context7.json", "utf-8"));
@@ -266,7 +298,7 @@ function realMarkers() {
     excluded: Object.fromEntries(
       config.excludeFiles
         .filter(name => corpus.has(name))
-        .map(name => [name, markerFor(corpus, name)])
+        .map(name => [name, exclusionMarker(corpus, name, config)])
     ),
     witnesses: witnesses(corpus, config),
   };
@@ -300,11 +332,13 @@ describe("witnesses", () => {
   it("chooses one file per excluded set, the first in git's order with a sentence of its own", () => {
     const bySet = (a, b) => a.set.localeCompare(b.set);
     expect(witnesses(files, config).sort(bySet)).toEqual([
-      // The root file witnesses the name, before the package's copy.
+      // The root file witnesses the name, before the package's copy. Its
+      // heading is shared only with the package's file, which the same entry
+      // excludes, so the heading is a sentence no kept file holds.
       {
         set: "excludeFiles entry AGENTS.md",
         name: "AGENTS.md",
-        marker: "The root agent file.",
+        marker: "Agents",
       },
       // `docs/archive` holds only a file Context7's defaults may drop, so that
       // file stands in: absent, the folder is out one way or another; present,
@@ -435,6 +469,92 @@ describe("verify", () => {
     expect(lines.join("\n")).toContain(
       `${name} is retrievable ("${marker}" came back, or the file was cited); excludeFiles entry ${name} did not take`
     );
+  });
+
+  /*
+   * AGENTS.md and its generated CLAUDE.md share every sentence, and each is
+   * excluded by an entry of its own, so both probes ask for one sentence. An
+   * index holding one of the pair fails that entry only, since the citation
+   * says which file came back; a sentence cited from neither fails both
+   * rather than clearing either.
+   */
+  it("fails only the entry whose file came back when two excluded files share the sentence asked for", async () => {
+    const [agents, claude] = ["AGENTS.md", "CLAUDE.md"].map(name => markers.witnesses.find(witness => witness.name === name));
+    expect(agents.marker).toBe(claude.marker);
+    const { marker } = agents;
+    for (const [held, other] of [["AGENTS.md", "CLAUDE.md"], ["CLAUDE.md", "AGENTS.md"]]) {
+      const { status, lines } = await verify({ root: ".", get: context7({ topics: { ...kept, [marker]: held } }) });
+      expect(status).toBe(1);
+      expect(lines.join("\n")).toContain(`${held} is retrievable ("${marker}" came back, or the file was cited); excludeFiles entry ${held} did not take`);
+      expect(lines.join("\n")).not.toContain(`excludeFiles entry ${other}`);
+    }
+    const { status, lines } = await verify({ root: ".", get: context7({ topics: { ...kept, [marker]: "docs/getting-started/index.mdx" } }) });
+    expect(status).toBe(1);
+    for (const entry of ["AGENTS.md", "CLAUDE.md"]) expect(lines.join("\n")).toContain(`excludeFiles entry ${entry} may not have taken`);
+  });
+
+  /*
+   * A probe's answer that cites an excluded file is direct evidence that the
+   * rule excluding it did not take, whichever set was probed. Here the answer
+   * to AGENTS.md's probe cites a package's CLAUDE.md, which holds the same
+   * sentence but is not its own set's witness, and the probe of that witness,
+   * the root CLAUDE.md, comes back empty: only the citation shows it.
+   */
+  it("reports an excluded file a probe's answer cites, though it is not its own set's witness, and each finding once", async () => {
+    const guide = "# Agent Guide\n\nThe guide's own sentence.\n";
+    const root = scratchRepository({
+      "context7.json": JSON.stringify({ folders: ["docs"], excludeFiles: ["AGENTS.md", "CLAUDE.md"] }),
+      "README.md": "# Scratch Library\n\nThe README, kept.\n",
+      "docs/getting-started/index.mdx": "# Getting Started\n\nA docs page, kept.\n",
+      "AGENTS.md": guide,
+      "CLAUDE.md": "# Root Copy\n\nThe root copy's own sentence.\n",
+      "packages/x/CLAUDE.md": guide,
+    });
+    const sample = ["README.md", "docs/getting-started/index.mdx"];
+    const kept = { "Scratch Library": "README.md", "Getting Started": "docs/getting-started/index.mdx" };
+    const findings = async (topics, cites = sample) => {
+      const { status, lines } = await verify({ root, get: context7({ cites, topics: { ...kept, ...topics } }) });
+      expect(status).toBe(1);
+      return lines.slice(1);
+    };
+    try {
+      const copy = "  - packages/x/CLAUDE.md is in excludeFiles and was indexed anyway";
+      expect(await findings({ "Agent Guide": "packages/x/CLAUDE.md" })).toEqual([copy]);
+      // Cited by the sample as well, it is still one finding.
+      expect(await findings({ "Agent Guide": "packages/x/CLAUDE.md" }, [...sample, "packages/x/CLAUDE.md"])).toEqual([copy]);
+      // A witness reported as retrievable is not reported again for its citation.
+      expect(await findings({ "Agent Guide": "AGENTS.md" })).toEqual(['  - AGENTS.md is retrievable ("Agent Guide" came back, or the file was cited); excludeFiles entry AGENTS.md did not take']);
+      // A cited excluded file that does not hold the sentence does not say where it came from, so the set's own finding stands beside it.
+      expect(await findings({ "Agent Guide": "CLAUDE.md" })).toEqual([
+        '  - "Agent Guide" came back, cited from none of AGENTS.md, packages/x/CLAUDE.md, which all hold it; excludeFiles entry AGENTS.md may not have taken',
+        "  - CLAUDE.md is in excludeFiles and was indexed anyway",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // A cited file of the witness's own set is the one that came back: its citation is the finding, not a claim that the witness did.
+  it("reports a cited file of the witness's own set once, as the file that came back", async () => {
+    const guide = "# Agent Guide\n\nThe guide's own sentence.\n";
+    const root = scratchRepository({
+      "context7.json": JSON.stringify({ folders: ["docs"], excludeFiles: ["AGENTS.md"] }),
+      "README.md": "# Scratch Library\n\nThe README, kept.\n",
+      "docs/getting-started/index.mdx": "# Getting Started\n\nA docs page, kept.\n",
+      "AGENTS.md": guide,
+      "packages/y/AGENTS.md": guide,
+    });
+    try {
+      const topics = { "Scratch Library": "README.md", "Getting Started": "docs/getting-started/index.mdx", "Agent Guide": "packages/y/AGENTS.md" };
+      const { status, lines } = await verify({ root, get: context7({ cites: ["README.md", "docs/getting-started/index.mdx"], topics }) });
+      expect(status).toBe(1);
+      expect(lines.slice(1)).toEqual(["  - packages/y/AGENTS.md is in excludeFiles and was indexed anyway"]);
+      // Its sentence back with no excluded holder cited is the set's, since every holder is in the set.
+      const uncited = await verify({ root, get: context7({ cites: ["README.md", "docs/getting-started/index.mdx"], topics: { ...topics, "Agent Guide": "README.md" } }) });
+      expect(uncited.lines.slice(1)).toEqual(['  - AGENTS.md is retrievable ("Agent Guide" came back, or the file was cited); excludeFiles entry AGENTS.md did not take']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("fails when a file outside the listed folders is retrievable", async () => {

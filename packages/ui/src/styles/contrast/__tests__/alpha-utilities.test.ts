@@ -12,7 +12,7 @@
  * in a scanned call-site package invalidates the cached result. It is a
  * supplementary call-site guard for text, border, and ring color utilities.
  */
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,20 +48,24 @@ const repo = resolve(here, "../../../../../..");
  * 🔴 The FILE LIST comes from git and the matching does not. `git grep` has its
  * own engine and does not accept `\b`, so switching to it silently matched
  * NOTHING — measured, 0 hits against 466 for the same pattern — and an empty
- * scan is what a clean repository looks like here. The same `grep -E` runs, on
- * a narrower set, so every pattern in this file keeps the meaning it was
- * written with; verified equal on a clean tree, 61 hits either way.
+ * scan is what a clean repository looks like here. The matching is Node's own
+ * `RegExp`, in which every pattern in this file means what it means as an ERE:
+ * on a clean tree its output equals `grep -HoE`'s byte for byte, 60, 129 and 1
+ * hits for the three scans here (2026-10-03).
  *
  * An EMPTY file list throws rather than returning nothing. A pathspec that
  * matches no tracked file and a repository with no violations produce the same
  * empty string, and every assertion here reads emptiness as "no violations".
  */
 function scanTracked(pattern: string, paths: readonly string[]): string {
-  const listed = execSync(`git ls-files -z -- ${paths.join(" ")}`, {
-    cwd: repo,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  // Listed by git directly, each directory as a glob pathspec, so no shell has
+  // to expand `packages/*/src`: `cmd.exe`, which runs `execSync` on Windows,
+  // leaves it literal, and git then lists nothing.
+  const listed = execFileSync(
+    "git",
+    ["ls-files", "-z", "--", ...paths.map(path => `:(glob)${path}/**`)],
+    { cwd: repo, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+  );
   const tracked = listed.split("\0").filter(Boolean);
   if (tracked.length === 0) {
     throw new Error(`no tracked files under: ${paths.join(", ")}`);
@@ -78,48 +82,21 @@ function scanTracked(pattern: string, paths: readonly string[]): string {
   // catches a pathspec that names nothing at all.
   const files = tracked.filter(file => existsSync(resolve(repo, file)));
 
-  // Batched and invoked DIRECTLY rather than piped through `xargs`, so each
-  // grep's own status is read.
-  //
-  // 🔴 `xargs` collapses them: it exits 123 when ANY invocation exited 1-125,
-  // so one batch with no match makes the whole pipeline look like a failure
-  // while the others were producing hits. Treating that as "nothing found"
-  // discards every match they made — and an empty scan is exactly what a clean
-  // repository looks like here, so the assertions would pass having examined
-  // nothing. Measured on this tree: five grep invocations for the repo-wide
-  // scan, so a silent batch is ordinary rather than hypothetical.
-  //
-  // Running grep directly also keeps the pattern away from a shell, so a
-  // backslash in it means what the regex means.
+  // Matched in Node, line by line, each match reported as `file:match` as
+  // `grep -HoE` reported it. No external `grep`: on Windows, Git's MSYS `grep`
+  // returned no match at all for these patterns, and a long file list passed
+  // the command line's length limit.
+  const regex = new RegExp(pattern, "g");
   const found: string[] = [];
-  for (let from = 0; from < files.length; from += FILES_PER_GREP) {
-    const batch = files.slice(from, from + FILES_PER_GREP);
-    try {
-      found.push(
-        execFileSync("grep", ["-HoE", pattern, ...batch], {
-          cwd: repo,
-          encoding: "utf8",
-          maxBuffer: 64 * 1024 * 1024,
-        })
-      );
-    } catch (error) {
-      // 1 is "no lines selected" for THIS batch and says nothing about the
-      // others. Anything else is a real failure and must not read as silence.
-      if ((error as { status?: number }).status === 1) continue;
-      throw error;
+  for (const file of files) {
+    for (const line of readFileSync(resolve(repo, file), "utf8").split("\n")) {
+      for (const match of line.matchAll(regex)) {
+        found.push(`${file}:${match[0]}\n`);
+      }
     }
   }
   return found.join("");
 }
-
-/**
- * How many paths one `grep` is given.
- *
- * Small enough to stay well inside the argument-length limit on every platform
- * this runs on, large enough that the repository is a handful of invocations
- * rather than hundreds.
- */
-const FILES_PER_GREP = 500;
 
 const css = readFileSync(resolve(here, "../../theme.css"), "utf8");
 const { light, dark } = parseThemeTokens(css);
@@ -737,6 +714,10 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
       const pkg = /(?:^|\/)packages\/([^/]+)\/src\//.exec(path)?.[1];
       if (pkg) used.add(pkg);
     }
+    // An empty scan would satisfy every check below, and on Windows it once
+    // did: the repository uses these utilities, so finding none means the scan
+    // read nothing.
+    expect(used.size).toBeGreaterThan(0);
     const scanned = new Set(
       SCANNED_DIRS.map(d => /packages\/([^/]+)\/src/.exec(d)?.[1])
     );
@@ -746,8 +727,8 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
         `package "${p}" uses alpha color utilities but is not in SCANNED_DIRS`
       ).toBe(true);
     }
-    // A whole-monorepo `grep` in a subprocess, so the budget is I/O rather than
-    // work this test controls. Vitest's 5s default left it about twice its own
+    // A whole-monorepo scan of every tracked source file, so the budget is I/O
+    // rather than work this test controls. Vitest's 5s default left it about twice its own
     // measured runtime, which any parallel suite on the same machine can take
     // away; stated explicitly so a slower neighbour reads as a slower neighbour
     // rather than as this scan failing.

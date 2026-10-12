@@ -26,7 +26,34 @@ export const MediaEvents = {
   Deleted: "media.deleted",
 } as const;
 
+/**
+ * @experimental Account lifecycle events core emits after the change commits. Plugins
+ * subscribe to these; the per-plugin bus refuses to let one emit them.
+ */
+export const UserEvents = {
+  Created: "user.created",
+  Deleted: "user.deleted",
+} as const;
+
+/** @experimental The payload of `user.created`. */
+export interface UserCreatedPayload {
+  userId: string;
+}
+
+/** @experimental The payload of `user.deleted`. */
+export interface UserDeletedPayload {
+  userId: string;
+}
+
+/**
+ * Emitted by core after a plugin's stored settings change, with
+ * `{ plugin, changedKeys }`. Not part of the SDK's constant objects: plugins
+ * subscribe by this name, which the generated event types include.
+ */
+export const PLUGIN_SETTINGS_CHANGED_EVENT = "plugin.settings.changed";
+
 export type DocumentEventName =
   (typeof DocumentEvents)[keyof typeof DocumentEvents];
 export type AuthEventName = (typeof AuthEvents)[keyof typeof AuthEvents];
 export type MediaEventName = (typeof MediaEvents)[keyof typeof MediaEvents];
+export type UserEventName = (typeof UserEvents)[keyof typeof UserEvents];

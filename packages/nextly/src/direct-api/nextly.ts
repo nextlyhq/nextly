@@ -49,6 +49,8 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { passwordCredentialDeps } from "../auth/credentials/credential-deps";
+import type { CredentialDeps } from "../auth/credentials/verify-credentials";
 import { container } from "../di/container";
 import { isServicesRegistered } from "../di/register";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
@@ -354,6 +356,17 @@ export class Nextly implements NextlyContext {
       this._authService = new AuthService(adapter, logger, emailService);
     }
     return this._authService;
+  }
+
+  /** Cached password sign-in dependencies, shared with the auth router. */
+  private _passwordCredentialDeps: CredentialDeps | null = null;
+
+  /** @internal */
+  public get passwordCredentialDeps(): CredentialDeps {
+    this._passwordCredentialDeps ??= passwordCredentialDeps(() =>
+      container.get<DrizzleAdapter>("adapter")
+    );
+    return this._passwordCredentialDeps;
   }
 
   /** Cached UserAccountService — not registered in the DI container. */

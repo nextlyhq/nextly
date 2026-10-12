@@ -239,6 +239,73 @@ describe("useAppName", () => {
 });
 
 /**
+ * The dev-reload subscription is wired to the SERVER's answer, not the
+ * bundle's: the session-gated workspace half carries `devReload` — the
+ * running server's own runtime decision, from the same comparison that gates
+ * the route — and only an explicit `true` opens the stream. `undefined` is
+ * "the answer has not arrived", which must read as closed: dialing on it
+ * would hit a route the server may not serve. The stream's own semantics
+ * (one connection, deduped, listener registered) are covered next door in
+ * `dev-reload-guard.test.ts`.
+ */
+describe("dev-reload subscription", () => {
+  const ORIGINAL_EVENT_SOURCE = globalThis.EventSource;
+  const constructedUrls: string[] = [];
+
+  class EventSourceStub {
+    addEventListener = vi.fn();
+    constructor(url: string) {
+      constructedUrls.push(url);
+    }
+  }
+
+  afterEach(() => {
+    globalThis.EventSource = ORIGINAL_EVENT_SOURCE;
+    delete window.__nextlyDevReloadEs;
+    constructedUrls.length = 0;
+  });
+
+  function renderSubscriptionProbe(client: QueryClient) {
+    return render(
+      <QueryClientProvider client={client}>
+        <BrandingProvider>
+          <Probe />
+        </BrandingProvider>
+      </QueryClientProvider>
+    );
+  }
+
+  it("opens the stream when the workspace answer is explicitly true", async () => {
+    globalThis.EventSource = EventSourceStub as unknown as typeof EventSource;
+    get.mockResolvedValue({ logoText: "Acme" } as AdminBranding);
+    protectedGet.mockResolvedValue({ devReload: true } as AdminBranding);
+
+    renderSubscriptionProbe(
+      new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    );
+
+    await waitFor(() => expect(constructedUrls).toHaveLength(1));
+    expect(constructedUrls[0]).toContain("/admin/api/dev-reload");
+    expect(window.__nextlyDevReloadEs).toBeDefined();
+  });
+
+  it("opens nothing until the workspace answer says devReload", async () => {
+    globalThis.EventSource = EventSourceStub as unknown as typeof EventSource;
+    get.mockResolvedValue({ logoText: "Acme" } as AdminBranding);
+    // The production shape: the workspace half arrives and carries no
+    // devReload answer at all.
+    protectedGet.mockResolvedValue({ plugins: [] } as AdminBranding);
+
+    renderSubscriptionProbe(
+      new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    );
+
+    await waitFor(() => expect(status()).toBe("answered"));
+    expect(constructedUrls).toEqual([]);
+  });
+});
+
+/**
  * NOT COVERED, stated rather than left to look covered: a background refetch
  * failing while a previous response is cached must leave the status
  * `answered`, since the cached response is still a complete answer.

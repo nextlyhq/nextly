@@ -1,6 +1,7 @@
 import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import { verifyPassword } from "../password/index";
+import { assertAccountUsable } from "../session/account-state";
 
 export interface CredentialVerifyInput {
   email: string;
@@ -16,6 +17,50 @@ export interface VerifiedUser {
   isActive: boolean;
   /** True when the account still holds an admin-set password to replace. */
   mustChangePassword: boolean;
+  /**
+   * When the password just proven was set, read in the same row as its hash.
+   * A session issued for this proof is refused if the account's password has
+   * been set again by the time its refresh row is written.
+   */
+  passwordUpdatedAt: Date | null;
+}
+
+/**
+ * @experimental The user row a password sign-in reads: the widest shape any
+ * auth handler needs from a lookup by email, so the router's lookup is typed
+ * by it too.
+ */
+export interface CredentialUserRow {
+  id: string;
+  email: string;
+  name: string;
+  image: string | null;
+  /**
+   * NULLABLE, because an account can exist without one: a user created
+   * through an external identity provider is stored with no password at all.
+   * Typed non-null, the passwordless case reaches `verifyPassword` unexamined.
+   */
+  passwordHash: string | null;
+  emailVerified: Date | null;
+  isActive: boolean;
+  mustChangePassword: boolean | null;
+  failedLoginAttempts: number;
+  lockedUntil: Date | null;
+  /** When an administrator deactivated the account; null when none has. */
+  deactivatedAt: Date | null;
+  /** When the password was last set; null when it never has been. */
+  passwordUpdatedAt: Date | null;
+}
+
+/** What a password sign-in needs from the database, and its limits. */
+export interface CredentialDeps {
+  findUserByEmail: (email: string) => Promise<CredentialUserRow | null>;
+  incrementFailedAttempts: (userId: string) => Promise<void>;
+  lockAccount: (userId: string, lockedUntil: Date) => Promise<void>;
+  resetFailedAttempts: (userId: string) => Promise<void>;
+  maxLoginAttempts: number;
+  lockoutDurationSeconds: number;
+  requireEmailVerification: boolean;
 }
 
 /**
@@ -46,35 +91,30 @@ const DUMMY_HASH =
  */
 export async function verifyCredentials(
   input: CredentialVerifyInput,
-  deps: {
-    findUserByEmail: (email: string) => Promise<{
-      id: string;
-      email: string;
-      name: string;
-      image: string | null;
-      passwordHash: string;
-      emailVerified: Date | null;
-      isActive: boolean;
-      mustChangePassword: boolean | null;
-      failedLoginAttempts: number;
-      lockedUntil: Date | null;
-    } | null>;
-    incrementFailedAttempts: (userId: string) => Promise<void>;
-    lockAccount: (userId: string, lockedUntil: Date) => Promise<void>;
-    resetFailedAttempts: (userId: string) => Promise<void>;
-    maxLoginAttempts: number;
-    lockoutDurationSeconds: number;
-    requireEmailVerification: boolean;
-  }
+  deps: CredentialDeps
 ): Promise<VerifiedUser> {
   const user = await deps.findUserByEmail(input.email);
 
-  // Timing equalisation: always run bcrypt compare exactly once, regardless
-  // of whether we found a user. Without this branch, the miss path returns
-  // immediately and an attacker can enumerate registered emails via timing.
-  const passwordOk = user
-    ? await verifyPassword(input.password, user.passwordHash)
-    : await verifyPassword(input.password, DUMMY_HASH);
+  // Timing equalisation: always run bcrypt compare exactly once, against a
+  // REAL cost-12 hash. Without it the miss path returns immediately and an
+  // attacker can enumerate registered emails via timing.
+  //
+  // The decoy stands in for an account that HAS no password as well as for
+  // one that does not exist. `verifyPassword` returns on the spot when the
+  // stored hash is empty, so an externally-authenticated account — created
+  // with a null hash — answered a password attempt faster than an unknown
+  // address did. That is the enumeration oracle again, and a sharper one:
+  // it does not merely say an address is registered, it says the address
+  // signs in through the identity provider, which is the account whose
+  // password can never be the thing that stops an attacker.
+  const storedHash = user?.passwordHash;
+  const compared = await verifyPassword(
+    input.password,
+    storedHash || DUMMY_HASH
+  );
+  // A passwordless account can never be admitted BY a password, whatever the
+  // comparison against the decoy answered.
+  const passwordOk = Boolean(storedHash) && compared;
 
   if (!user || !passwordOk) {
     if (user) {
@@ -100,27 +140,28 @@ export async function verifyCredentials(
   }
 
   // Account-state checks happen AFTER the password check so they cannot be
-  // used as an enumeration side-channel either. All three paths throw the
-  // same public error; only the internal logContext distinguishes them.
-  if (user.lockedUntil && user.lockedUntil > new Date()) {
-    throw NextlyError.invalidCredentials({
-      logContext: {
-        userId: user.id,
-        reason: auditReason("locked"),
-        lockedUntil: user.lockedUntil,
-      },
-    });
-  }
-  if (deps.requireEmailVerification && !user.emailVerified) {
-    throw NextlyError.invalidCredentials({
-      logContext: { userId: user.id, reason: auditReason("unverified") },
-    });
-  }
-  if (!user.isActive) {
-    throw NextlyError.invalidCredentials({
-      logContext: { userId: user.id, reason: auditReason("inactive") },
-    });
-  }
+  // used as an enumeration side-channel either. They throw the same public
+  // error, except an unverified address, which is named now that the password
+  // is proven so the login page can offer to resend the link.
+  //
+  // The decision itself lives in the shared gate, which every session-issuing
+  // path calls, so the password path cannot drift from the rest.
+  assertAccountUsable(
+    {
+      userId: user.id,
+      isActive: user.isActive,
+      lockedUntil: user.lockedUntil,
+      emailVerified: user.emailVerified,
+      deactivatedAt: user.deactivatedAt,
+      passwordUpdatedAt: user.passwordUpdatedAt,
+    },
+    {
+      requireEmailVerification: deps.requireEmailVerification,
+      // This IS the password strategy, so the attempt lockout applies.
+      enforcePasswordLockout: true,
+      passwordProven: true,
+    }
+  );
 
   if (user.failedLoginAttempts > 0) {
     await deps.resetFailedAttempts(user.id);
@@ -134,5 +175,6 @@ export async function verifyCredentials(
     emailVerified: user.emailVerified,
     isActive: user.isActive,
     mustChangePassword: user.mustChangePassword ?? false,
+    passwordUpdatedAt: user.passwordUpdatedAt,
   };
 }

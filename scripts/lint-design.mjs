@@ -30,7 +30,7 @@
  * silencing the whole check. Run with `pnpm lint:design`.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { join, relative, sep } from "node:path";
 
 import {
   createColorLiteralPattern,
@@ -123,23 +123,25 @@ export function isCommentLine(line) {
   return t.startsWith("//") || t.startsWith("*") || t.startsWith("/*");
 }
 
-const listFiles = roots =>
-  // `execFileSync` with an argument array rather than a shell string: a root is
-  // a path from the filesystem, and one containing a space or a shell
-  // metacharacter would otherwise change the command instead of being one
-  // argument to it.
-  execFileSync(
-    "find",
-    [
-      ...roots,
-      "-type", "f",
-      "(", "-name", "*.css", "-o", "-name", "*.tsx", "-o", "-name", "*.ts", ")",
-    ],
-    { encoding: "utf8" }
-  )
-    .trim()
-    .split("\n")
-    .filter((f) => f && !/\.test\.|\.d\.ts$|__tests__/.test(f));
+/**
+ * The source files under the roots: `.css`, `.tsx` and `.ts`, leaving out
+ * tests, declaration files and anything under `__tests__`.
+ *
+ * Read with Node rather than `find`, which on Windows is a different program
+ * that rejects these arguments. Each path is written with `/` on every
+ * platform, because the allowlists and exemptions compare path endings such as
+ * `ui/src/styles/theme.css`. Sorted, so the report reads the same on every
+ * machine. Like `find -type f`, a symbolic link is not a file here.
+ */
+export const listFiles = roots =>
+  roots
+    .flatMap(root =>
+      readdirSync(root, { recursive: true, withFileTypes: true })
+        .filter(entry => entry.isFile() && /\.(css|tsx|ts)$/.test(entry.name))
+        .map(entry => `${root}/${relative(root, join(entry.parentPath, entry.name)).split(sep).join("/")}`)
+    )
+    .filter(f => !/\.test\.|\.d\.ts$|__tests__/.test(f))
+    .sort();
 
 /** A color-literal line is exempt when nothing but mode-invariant black/white/transparent
  *  (or an allowed construct) remains after stripping the permitted pieces. */
@@ -313,10 +315,8 @@ export function emptyPopulations({ files, pluginClassified }) {
 
 function main() {
   const roots = deriveRoots();
-  // Checked before `listFiles`, which shells out to `find`: with no paths that
-  // command fails and takes the process down before any population is reported,
-  // so the refusal below would be unreachable and the operator would see a
-  // stack trace instead of the reason.
+  // Checked before `listFiles`, so that no roots is refused with its reason
+  // rather than reported as a scan that looked and found nothing.
   if (roots.length === 0) refuse(["no roots"]);
 
   const files = listFiles(roots);

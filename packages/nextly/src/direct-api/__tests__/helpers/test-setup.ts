@@ -56,6 +56,31 @@ export function createMockAuthService(): Record<string, Mock> {
   });
 }
 
+/**
+ * The password sign-in's database dependencies, with the auth router's
+ * limits. `login` runs the real `verifyCredentials` over these, so a test
+ * decides what the account looks like and watches what the sign-in records.
+ */
+export function createMockCredentialDeps(): {
+  findUserByEmail: Mock;
+  incrementFailedAttempts: Mock;
+  lockAccount: Mock;
+  resetFailedAttempts: Mock;
+  maxLoginAttempts: number;
+  lockoutDurationSeconds: number;
+  requireEmailVerification: boolean;
+} {
+  return {
+    findUserByEmail: vi.fn(),
+    incrementFailedAttempts: vi.fn(),
+    lockAccount: vi.fn(),
+    resetFailedAttempts: vi.fn(),
+    maxLoginAttempts: 5,
+    lockoutDurationSeconds: 15 * 60,
+    requireEmailVerification: true,
+  };
+}
+
 export function createMockUserAccountService(): Record<string, Mock> {
   return asMocks({
     getCurrentUser: vi.fn(),
@@ -145,6 +170,7 @@ export interface TestMocks {
   singleEntryService: ReturnType<typeof createMockSingleEntryService>;
   singleRegistryService: ReturnType<typeof createMockSingleRegistryService>;
   authService: ReturnType<typeof createMockAuthService>;
+  credentialDeps: ReturnType<typeof createMockCredentialDeps>;
   userAccountService: ReturnType<typeof createMockUserAccountService>;
   userService: ReturnType<typeof createMockUserService>;
   mediaService: ReturnType<typeof createMockMediaService>;
@@ -167,6 +193,7 @@ export function setupTestNextly(): {
     singleEntryService: createMockSingleEntryService(),
     singleRegistryService: createMockSingleRegistryService(),
     authService: createMockAuthService(),
+    credentialDeps: createMockCredentialDeps(),
     userAccountService: createMockUserAccountService(),
     userService: createMockUserService(),
     mediaService: createMockMediaService(),
@@ -194,6 +221,7 @@ export function setupTestNextly(): {
 
   // Inject auth/account services directly (bypasses globalDrizzleDb dependency)
   (nextly as any)._authService = mocks.authService;
+  (nextly as any)._passwordCredentialDeps = mocks.credentialDeps;
   (nextly as any)._userAccountService = mocks.userAccountService;
 
   const cleanup = () => {

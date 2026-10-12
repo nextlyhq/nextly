@@ -325,6 +325,11 @@ export async function runReconcileCore(
         getDrizzle: <T>() => db as T,
       }),
       mode: "dev-loose",
+      // `confirmDestructive` is an interactive prompt, NOT `allowDestructive`.
+      // The retired-table cleanup is gated on the latter and therefore never
+      // runs from here, which is deliberate: dropping `accounts`/`sessions` is
+      // the documented `nextly migrate` + NEXTLY_ALLOW_CORE_DESTRUCTIVE flow,
+      // and an upgrade that only confirmed a backup has not asked for it.
       confirmDestructive: deps.confirmDestructive,
       logger: deps.logger,
     });

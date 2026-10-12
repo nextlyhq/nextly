@@ -39,13 +39,20 @@ We don't yet have a formal RFC process; significant proposals are discussed in G
 
 ### Prerequisites
 
-- Node.js `^20.19.0 || ^22.12.0 || >=24.0.0` (Node 22 LTS recommended). The
-  ranges are disjoint on purpose: they mirror what the test environment
-  supports, so 20.6–20.18 and the 23.x line are excluded rather than merely
-  untested. `--env-file`, used by `pnpm db:seed`, needs >= 20.6 and is covered
-  by every range above.
-- pnpm >= 9
+- Node.js `^20.19.0 || ^22.12.0 || >=24.0.0` (Node 24 LTS recommended, and
+  pinned at 24.21.0 in `.nvmrc` — `nvm use` picks it up). The ranges are
+  disjoint on purpose: they mirror what the test environment supports, so
+  20.6–20.18 and the 23.x line are excluded rather than merely untested.
+  `--env-file`, used by `pnpm db:seed`, needs >= 20.6 and is covered by every
+  range above. That range is what the PUBLISHED packages support; 24.21.0 is
+  what contributors and CI run, and the two move independently.
+- pnpm 12.5.1, pinned as `packageManager` in `package.json`. Do not install a
+  pnpm yourself: `corepack enable` once, and every `pnpm` in the repo resolves
+  to the pinned version. pnpm 10+ also self-corrects to it. Settings live in
+  `pnpm-workspace.yaml`, since pnpm reads only auth and registry settings from
+  `.npmrc`.
 - Docker Desktop, optional. Only needed if you want to test against PostgreSQL or MySQL via `pnpm dev:postgres` / `pnpm dev:mysql`, or run the full integration test matrix. SQLite (the default) needs none.
+- On Windows, `.gitattributes` checks text files out with LF line endings, whatever `core.autocrlf` says, so the tests read files as they read them on Linux and macOS. A clone made before `.gitattributes` said so keeps its CRLF files until they are checked out again. With nothing uncommitted, run this once in the clone: `git rm -r -q --cached . && git reset -q --hard`.
 
 ### One-command boot
 
@@ -112,7 +119,7 @@ pnpm lint
 pnpm test
 
 # Run the playground boot E2E smoke test (requires `npx playwright install chromium` once)
-pnpm test:e2e
+pnpm --filter @nextlyhq/e2e test:e2e
 ```
 
 For per-package commands, use `pnpm --filter <package-name> <script>`. For example: `pnpm --filter @nextlyhq/admin test`.
@@ -238,7 +245,7 @@ CI will catch any MySQL or SQLite failures on your PR.
 
 ### Writing a new integration test
 
-1. Name the file `<basename>.integration.test.ts`. Example: `query-builder.integration.test.ts`.
+1. Name the file `<basename>.integration.test.ts`. Example: `transaction-read-your-writes.integration.test.ts`.
 2. Use the helper:
 
    ```ts
@@ -270,12 +277,14 @@ CI will catch any MySQL or SQLite failures on your PR.
 
 ### CI test workflows
 
-Two GitHub Actions workflows run on every PR:
+The tests run in two GitHub Actions workflows on every PR:
 
-- [`ci.yml`](.github/workflows/ci.yml) — lint, typecheck, build, and unit test suite
-- [`test-integration.yml`](.github/workflows/test-integration.yml) — the 4-dialect matrix (PG 15, PG 17, MySQL 8, SQLite). Any failure blocks merge.
+- [`ci.yml`](.github/workflows/ci.yml) — lint, typecheck, build, and the unit test suite. Its `CI gate` job is the check `main` requires.
+- [`integration.yml`](.github/workflows/integration.yml) — the integration suite, one job per dialect: Postgres 17, MySQL 8.4 and SQLite. Postgres 15 runs locally only, with `pnpm test:integration:postgres15`.
 
-A PR is mergeable when all jobs are green.
+`CI gate` collects the `ci.yml` jobs a merge needs: the change filter, the comment check, `Lint / Typecheck / Test / Build`, the nextly and admin unit tests, `Published admin build`, and the CLI entry-guard smoke test. `Published admin build` packs `@nextlyhq/admin` as a release does and refuses a build that would show a production user development-only behaviour: an error's message or stack trace, the query developer tools, the development reload stream opened on its own, or a schema-builder address with no page. Run it locally with `pnpm --filter @nextlyhq/admin check:published-build`, after a build. The browser tests, the scaffold and dev-script smoke tests, and the three `Pre-push gates (windows-latest…)` jobs report on their own and are not required to merge. Those three run the pre-push hook's gates on Windows: one runs the lints, the build, the type check and most unit suites, and the other two run nextly's and the admin's unit suites. They have passed on `main` since 2026-10-03, so treat a red one on your pull request as a failure of your change. `main` also requires the integration jobs, the secret scan and the other checks listed under [Branch protection](#branch-protection), and the merge queue runs them all.
+
+Before a pull request joins the queue, `node scripts/verify-merge.mjs <pr-number>` checks that every blocking review thread is resolved, and that every check whose absence would mean no coverage has reported. Threads from advisory reviewers (CodeRabbit by default, set by `CI_VERDICT_ADVISORY`) don't count toward its verdict, but `main` still requires every conversation resolved before a merge, so resolve those too. The checks it requires are `Lint / Typecheck / Test / Build`, `gitleaks`, the comment check, the three integration jobs and the PR title. It doesn't cover the independent review, which runs only in the queue. After a merge, it checks that the pull request landed whole.
 
 ---
 
@@ -365,35 +374,45 @@ These keywords auto-close the linked issue when the PR merges.
 
 ## Submitting a pull request
 
-1. **Fork** the repo and create a branch off `dev` (not `main` — see [Branch protection](#branch-protection)).
+Every change reaches `main` the same way: a short-lived branch off `main`, one pull request into `main`, squash-merged. There are no long-lived branches — no `dev`, release or integration branch — because lint, type-checking, the unit and integration tests and the secret scan never run on a pull request into any other branch, and a branch that gathers weeks of work is too large to review.
+
+1. **Fork** the repo and create a branch off `main`, one branch per pull request.
 2. **Make your change.** Add or update tests when relevant.
 3. **Run locally**: `pnpm lint && pnpm check-types && pnpm test`.
 4. **Add a changeset** if your PR touches any publishable package (see [Release process](#release-process) below).
-5. **Open the PR against `dev`.** Fill out the [PR template](.github/pull_request_template.md) — it's auto-applied when you open a PR.
+5. **Open the PR against `main`.** Fill out the [PR template](.github/pull_request_template.md) — it's auto-applied when you open a PR.
 6. **Watch CI.** Lint, typecheck, build, unit tests, and the integration matrix all need to be green before merge.
+
+### Landing a large feature in slices
+
+A feature too large for one pull request lands as several, each complete, tested and merged into `main` on its own. Until the feature is complete, the public API it adds is marked with the TSDoc `@experimental` tag, which carries no compatibility guarantee; [`packages/ui/STABILITY.md`](packages/ui/STABILITY.md) shows the convention. Don't collect the slices on a branch of their own.
 
 ### Reviewer expectations
 
-- At least one maintainer approval is required before merge.
+- At least one maintainer approval is required before merge, from a code owner for the files [`.github/CODEOWNERS`](.github/CODEOWNERS) names.
 - All conversations resolved.
 - All CI checks passing (no `continue-on-error` workarounds).
-- Branch up to date with `dev`.
+- No need to bring a branch up to date with `main` by hand: the merge queue tests it on top of the latest `main` (see [Merge strategy](#merge-strategy)).
 
 ### Merge strategy
 
-- **Squash and merge** — the default for feature branches and bug fixes. PR title becomes the squashed commit message, so make sure it follows Conventional Commits.
-- **Rebase and merge** — only for hotfixes that need to preserve individual commits.
-- **Merge commit** — used by the release workflow when merging Version Packages PRs.
+Every pull request is squash-merged into `main`, the Version Packages pull request included. Its title becomes the commit message, so make sure it follows [Conventional Commits](#commit-messages).
+
+Every pull request merges through GitHub's merge queue: it runs the required checks on each pull request combined with the latest `main`, and squash-merges only what passes. Once a pull request is approved and its checks are green, choose **Merge when ready** to add it to the queue.
 
 ### Branch protection
 
-`main` and `dev` are protected. Direct pushes are blocked; all changes go through PRs. CI must pass before merge.
+`main` is protected by a ruleset. Direct pushes, force-pushes and deletion are blocked, so every change reaches it through a pull request. A pull request merges only through the merge queue, and only once:
+
+- a maintainer has approved it, and a code owner too for the files [`.github/CODEOWNERS`](.github/CODEOWNERS) names;
+- every conversation is resolved;
+- these checks pass: `CI gate`, `Comment convention (describes code, not process)`, `Integration (mysql)`, `Integration (postgres)`, `Integration (sqlite)`, `Validate PR title follows Conventional Commits`, `Independent review of the revision being merged`, `gitleaks` and `No AI credit`.
 
 ---
 
 ## Release process
 
-> **Status:** Nextly's release pipeline uses [Changesets](https://github.com/changesets/changesets) for versioning and [`changesets/action`](https://github.com/changesets/action) for the version-PR + publish flow. This is being initialized as part of the v1.0 launch — once `.changeset/config.json` lands in the repo, the steps below describe the steady-state flow.
+> **Status:** Nextly's release pipeline uses [Changesets](https://github.com/changesets/changesets) for versioning and [`changesets/action`](https://github.com/changesets/action) for the version-PR + publish flow, and publishes from CI through npm trusted publishing. The steps below are how releases run today.
 
 All publishable `@nextlyhq/*` packages are kept in lockstep (same version at all times) via the `fixed` array in `.changeset/config.json` — this matches Payload CMS's unified-versioning style.
 
@@ -401,7 +420,7 @@ All publishable `@nextlyhq/*` packages are kept in lockstep (same version at all
 
 You **must** add a changeset if your PR touches any publishable package under `packages/*` (excluding `@nextlyhq/eslint-config`, `@nextlyhq/prettier-config`, `@nextlyhq/tsconfig`, and the `playground` app, which are in the changeset `ignore` list).
 
-The `changeset-check` CI job fails PRs that modify a publishable package without a changeset.
+No CI job requires a changeset to be there, so reviewers check it. CI's `Changeset covers the lockstep group` step checks each changeset a PR adds or edits: it must name every package in the lockstep group.
 
 ✅ **DO create a changeset for**: user-facing features, bug fixes, breaking changes, performance work, deprecations.
 
@@ -413,14 +432,14 @@ The `changeset-check` CI job fails PRs that modify a publishable package without
 pnpm changeset
 ```
 
-The CLI will ask which packages changed. Because of `fixed[]`, whichever package you pick will pull the others along at publish time — just pick the primary one. Then choose the semver bump (`patch` / `minor` / `major`) and write a short user-facing summary.
+The CLI asks which packages changed. Select every package in `fixed[]`, the lockstep group, private ones such as `@nextlyhq/tsconfig` included, and choose `patch`: while the packages are in alpha every changeset is `patch`. CI refuses a changeset that leaves out a package of the group, or uses another bump. Then write a short user-facing summary. A pull request that changes no published package (tests, CI, docs or internal tooling only) needs no changeset.
 
 Commit the generated `.changeset/*.md` file with your PR.
 
 ### How a release happens
 
-1. You merge your PR (with its changeset) into `dev`.
-2. [`.github/workflows/release.yml`](.github/workflows/release.yml) runs on `push` to `dev` and opens a `Version Packages` PR that bumps every `fixed[]` package by the same amount and rewrites per-package `CHANGELOG.md` files.
+1. You merge your PR (with its changeset) into `main`.
+2. [`.github/workflows/release.yml`](.github/workflows/release.yml) runs on `push` to `main` and opens a `Version Packages` PR that bumps every `fixed[]` package by the same amount and rewrites per-package `CHANGELOG.md` files.
 3. The Version Packages PR accumulates as more PRs land — so all pending changes ship together when it's merged.
 4. A maintainer reviews and merges the Version Packages PR.
 5. The release workflow runs again, this time publishing to npm:
@@ -512,7 +531,7 @@ packages/admin/src/components/
 ```
 
 - **Directories**: kebab-case (`user-dialog/`, `media-library/`)
-- **Files**: PascalCase for components (`UserDialog.tsx`), `index.ts` for barrel exports
+- **Files**: PascalCase for components (`RevokeApiKeyDialog.tsx`), `index.ts` for barrel exports
 - **Exports**: named exports preferred
 
 When creating a new component, pick the appropriate tier, create a kebab-case directory with an `index.ts` barrel, and use path aliases for internal imports.
@@ -524,15 +543,15 @@ Services in the core package follow these conventions:
 - **File size**: keep service files under ~500 lines. Split large services into focused sub-services and compose.
 - **Single responsibility**: e.g. `services/users/` splits into `user-query-service.ts`, `user-mutation-service.ts`, `user-account-service.ts` rather than one monolithic file.
 - **Database access**: services access Drizzle ORM directly (no repository layer). Transactions are managed at the service level.
-- **Error handling**: throw `ServiceError` from `@nextly/services/lib/errors`:
+- **Error handling**: throw `NextlyError` from `packages/nextly/src/errors`, through its static factories (`notFound`, `forbidden`, `validation`, `conflict`, ...), never a bare `Error`:
 
   ```ts
-  import { ServiceError, ServiceErrorCode } from "@nextly/services/lib/errors";
+  import { NextlyError } from "../errors";
 
   async findById(id: string): Promise<User> {
-    const user = await this.db.select().from(users).where(eq(users.id, id));
+    const [user] = await this.db.select().from(users).where(eq(users.id, id));
     if (!user) {
-      throw new ServiceError(ServiceErrorCode.NOT_FOUND, "User not found");
+      throw NextlyError.notFound({ logContext: { userId: id } });
     }
     return user;
   }

@@ -92,6 +92,12 @@ export const nextlyTables: TableDefinition[] = [
         type: "timestamp",
       },
       {
+        // Nullable, as on the real table: set with email_verified, cleared
+        // with it, and "legacy" for an address verified before it existed.
+        name: "email_verified_via",
+        type: "text",
+      },
+      {
         name: "password_updated_at",
         type: "timestamp",
       },
@@ -116,6 +122,12 @@ export const nextlyTables: TableDefinition[] = [
         type: "boolean",
         nullable: false,
         default: false,
+      },
+      {
+        // Nullable, as on the real table: unset means no administrator has
+        // deactivated the account.
+        name: "deactivated_at",
+        type: "timestamp",
       },
       {
         name: "failed_login_attempts",

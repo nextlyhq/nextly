@@ -164,7 +164,7 @@ Nextly has a first-class plugin SDK. The Visual Page Builder is itself a plugin,
 
 | Tool       | Minimum                                           |
 | ---------- | ------------------------------------------------- |
-| Node.js    | 20+ (Node 22 LTS recommended)                     |
+| Node.js    | 20+ (Node 24 LTS recommended)                     |
 | pnpm       | 9+ recommended; npm, yarn, and bun also supported |
 | Next.js    | 16+ (App Router required)                         |
 | React      | 19+                                               |

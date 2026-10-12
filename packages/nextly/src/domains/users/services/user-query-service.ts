@@ -850,6 +850,16 @@ export class UserQueryService extends BaseService {
       });
     }
 
+    // Query the normalized value the schema produced, and — failing that —
+    // the spelling the caller actually passed. Rows written before emails
+    // were normalized can carry a mixed-case spelling, so a caller repeating
+    // that exact spelling (the super-admin seeder looking up the configured
+    // address) must still find the account; the normalized arm covers
+    // everything written since. A duplicate entry is harmless — inArray is
+    // an OR over the spellings.
+    const normalizedEmail = validation.data;
+    const lookupEmails = [normalizedEmail, email];
+
     const { users } = this.tables;
 
     // Resolve user_ext table (null if no custom fields)
@@ -873,12 +883,15 @@ export class UserQueryService extends BaseService {
     const rows = await (this.db as unknown as DrizzleChain)
       .select(selectColumns)
       .from(users)
-      .where(eq(users.email, email))
-      .limit(1);
+      .where(inArray(users.email, lookupEmails));
 
     if (!rows.length) return null;
 
-    const row = rows[0];
+    // A database upgraded from the old case-sensitive write path can hold
+    // both spellings of one address, and both match the array above. The
+    // caller's exact input is the account previous exact-match lookups
+    // returned, so it wins over the canonical twin.
+    const row = rows.find(candidate => candidate.email === email) ?? rows[0];
     const userData: Record<string, unknown> = {
       id: row.id,
       email: row.email,
@@ -903,7 +916,10 @@ export class UserQueryService extends BaseService {
           })
           .from(users)
           .leftJoin(userExtTable, eq(users.id, userExtTable.user_id))
-          .where(eq(users.email, email))
+          // The selected row's id, not the lookup spellings: with case twins
+          // on an upgraded database the spellings match both accounts, and
+          // the fields must be the selected account's own.
+          .where(eq(users.id, row.id))
           .limit(1);
 
         if (extRows.length > 0) {

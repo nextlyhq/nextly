@@ -1,4 +1,4 @@
-// i18n M7: the schema builder's Localized flags must survive serialization end-to-end —
+// The schema builder's Localized flags must survive serialization end-to-end —
 // per-field advanced.localized and the collection-level i18n toggle.
 
 import { describe, it, expect } from "vitest";

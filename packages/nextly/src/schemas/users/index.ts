@@ -4,8 +4,8 @@
  * Re-exports per-dialect Drizzle tables under canonical names. The runtime
  * dialect determines which set of tables a caller sees.
  *
- * Note: each dialect's `users`/`accounts`/`sessions` Drizzle objects have
- * different runtime identities (different columns, types). Callers either pick
+ * Note: each dialect's `users` Drizzle object has a different runtime identity
+ * (different columns, types). Callers either pick
  * a dialect at module-load time (test fixtures, dev-server.ts) or use the
  * `getCoreSchema(dialect)` factory in schemas/index.ts that compiles the
  * appropriate set into a NextlySchemaSnapshot.
@@ -29,11 +29,11 @@ export { pg, my, sl };
 export function userTables(dialect: SupportedDialect) {
   switch (dialect) {
     case "postgresql":
-      return { users: pg.users, accounts: pg.accounts, sessions: pg.sessions };
+      return { users: pg.users };
     case "mysql":
-      return { users: my.users, accounts: my.accounts, sessions: my.sessions };
+      return { users: my.users };
     case "sqlite":
-      return { users: sl.users, accounts: sl.accounts, sessions: sl.sessions };
+      return { users: sl.users };
     default: {
       // Exhaustiveness check — TypeScript flags any missing dialect at compile time.
       const _exhaustive: never = dialect;

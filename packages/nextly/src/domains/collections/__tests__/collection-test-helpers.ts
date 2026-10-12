@@ -144,6 +144,11 @@ export function createMockAdapter(db: MockRecord): MockRecord {
     // existence probe and per-locale `_status` reads). Empty by default; a
     // localized test overrides it.
     executeQuery: vi.fn().mockResolvedValue([]),
+    // No enclosing transaction holds anything here, so an after-commit effect
+    // runs at once, as on PostgreSQL and MySQL.
+    afterCommit: vi.fn().mockImplementation(async (effect: () => unknown) => {
+      await effect();
+    }),
     // The write paths run inside `adapter.transaction`. The tx exposes the
     // handle the update path reads prior state through: `lockRow` (a no-op
     // here), `getDrizzle` (returns the same mock db, so the locked pre-update

@@ -263,22 +263,27 @@ export class CollectionService extends BaseService {
     });
     // Reached only on a successful commit; a rejected transaction throws above
     // and flushes nothing. The captured `collector` outlives the map binding.
+    // On SQLite this transaction may itself be a savepoint of an enclosing one,
+    // so the flush and maintenance wait for that one's commit.
     const collectedIntents = collector ?? [];
-    if (ownsFlush && collectedIntents.length > 0) {
-      await this.entryService.flushRevalidationIntents(collectedIntents);
-    }
-    // A committed transaction runs the same post-write maintenance the automatic
-    // paths run: the opportunistic retention pass for any committed write —
-    // tracked independently of the optional revalidation/recording signals so a
-    // write that opted out of both still prunes — and the fast drain once when an
-    // outbox event was recorded, so tx-API writes deliver, and prune, as promptly
-    // as the non-transaction paths instead of waiting for an unrelated operation.
-    if (ownsFlush && (sawCommittedWrite || sawEvent)) {
-      await this.entryService.offerPostCommitTxMaintenance({
-        committedWrite: sawCommittedWrite || sawEvent,
-        recordedEvent: sawEvent,
-      });
-    }
+    await this.afterCommit(async () => {
+      if (ownsFlush && collectedIntents.length > 0) {
+        await this.entryService.flushRevalidationIntents(collectedIntents);
+      }
+      // A committed transaction runs the same post-write maintenance the
+      // automatic paths run: the opportunistic retention pass for any committed
+      // write — tracked independently of the optional revalidation/recording
+      // signals so a write that opted out of both still prunes — and the fast
+      // drain once when an outbox event was recorded, so tx-API writes deliver,
+      // and prune, as promptly as the non-transaction paths instead of waiting
+      // for an unrelated operation.
+      if (ownsFlush && (sawCommittedWrite || sawEvent)) {
+        await this.entryService.offerPostCommitTxMaintenance({
+          committedWrite: sawCommittedWrite || sawEvent,
+          recordedEvent: sawEvent,
+        });
+      }
+    });
     return result;
   }
 

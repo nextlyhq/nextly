@@ -337,6 +337,19 @@ async function finalizedEntry(get, api) {
   return entry;
 }
 
+/**
+ * A sentence of an excluded file that no file the configuration keeps holds, or
+ * `null`. A hit for it can then come only from an excluded file. Excluded
+ * files may share it — a generated CLAUDE.md shares every sentence of the
+ * AGENTS.md it copies — and a hit for a shared sentence is attributed by its
+ * citation (`leakOf`). A kept control is held to every other file instead, by
+ * `markerFor`.
+ */
+export function exclusionMarker(corpus, name, config) {
+  const kept = [...corpus].filter(([other]) => other !== name && excludingRule(other, config) === null).map(([, text]) => text);
+  return probeMarker(corpus.get(name), kept);
+}
+
 /** A marker for a tracked file, or `Unanswerable` when it offers nothing of its own to ask for. */
 export function markerFor(corpus, name) {
   if (!corpus.has(name))
@@ -373,16 +386,17 @@ export function witnesses(corpus, config) {
     set,
     ...witnessOf(
       corpus,
+      config,
       set,
       files.sort((a, b) => a.rank - b.rank).map(file => file.name)
     ),
   }));
 }
 
-/** The first of a set's files that offers a sentence of its own, with that sentence. */
-function witnessOf(corpus, set, names) {
+/** The first of a set's files that offers a sentence no kept file holds, with that sentence. */
+function witnessOf(corpus, config, set, names) {
   for (const name of names) {
-    const marker = probeMarker(corpus.get(name), othersOf(corpus, name));
+    const marker = exclusionMarker(corpus, name, config);
     if (marker !== null) return { name, marker };
   }
   throw new Unanswerable(
@@ -423,15 +437,68 @@ async function keptControls({ corpus, api, get }) {
  * only sees the status.
  */
 async function exclusionFindings({ corpus, api, get, config }) {
-  const findings = [];
-  for (const { set, name, marker } of witnesses(corpus, config)) {
-    const answer = await retrievable(get, api, marker, name);
-    if (!answer.found && !answer.cites.has(name)) continue;
-    findings.push(
-      `${name} is retrievable ("${marker}" came back, or the file was cited); ${set} did not take`
-    );
+  const probes = [];
+  for (const witness of witnesses(corpus, config)) {
+    const holders = holdersOf(corpus, witness);
+    const elsewhere = outsideSet(holders, config, witness);
+    const answer = await retrievable(get, api, witness.marker, witness.name);
+    probes.push({ witness, elsewhere, answer, leak: leakOf(answer, witness.name, elsewhere, citesAnExcludedHolder(holders, config, answer)) });
   }
-  return findings;
+  const leaks = probes.filter(probe => probe.leak);
+  return [...leaks.map(probe => leakFinding(probe.leak, probe.witness, probe.elsewhere)), ...citedExclusions(probes, config, leaks)];
+}
+
+/**
+ * The excluded files the probes' answers cite, each once, reported as the
+ * citation sample reports one. A citation is direct evidence that the rule
+ * excluding the file did not take, whichever set was probed, and the file need
+ * not be its own set's witness, whose probe may come back empty. A witness
+ * already reported as retrievable is not reported again.
+ */
+function citedExclusions(probes, config, leaks) {
+  const reported = new Set(leaks.filter(probe => probe.leak === "witness").map(probe => probe.witness.name));
+  const cited = new Set(probes.flatMap(probe => [...probe.answer.cites]));
+  return [...cited].filter(path => !reported.has(path)).map(path => citationFinding(path, config)).filter(Boolean);
+}
+
+/** Every file but the witness that holds its marker: the one inventory both the holders outside its set and a cited holder are read from. */
+function holdersOf(corpus, { name, marker }) {
+  return [...corpus].filter(([other, text]) => other !== name && text.includes(marker)).map(([other]) => other);
+}
+
+/**
+ * The holders outside a witness's set. The marker is kept from every file the
+ * configuration keeps, but excluded files may share it: a generated CLAUDE.md
+ * holds every sentence of the AGENTS.md it copies, and each is excluded by an
+ * entry of its own.
+ */
+const outsideSet = (holders, config, { set }) => holders.filter(other => excludingRule(other, config)?.set(other, config) !== set);
+
+/**
+ * What a probe's answer says about a set: `"witness"` when its witness came
+ * back, `"shared"` when its sentence came back from a file no answer names
+ * among those that hold it, or null. The witness cited is always its set's.
+ * An answer that cites another excluded file holding the sentence, of this set
+ * or another, says which file the index held, and that citation is the
+ * finding. Otherwise the sentence alone is its set's only when no file outside
+ * the set holds it, and one that came back naming none of its holders is
+ * reported against every set that holds it rather than cleared.
+ */
+function leakOf(answer, name, elsewhere, heldElsewhere) {
+  if (answer.cites.has(name)) return "witness";
+  return answer.found && !heldElsewhere ? unattributed(elsewhere) : null;
+}
+
+/** A sentence that came back with no excluded holder cited: its own set's, or every set's that holds it. */
+const unattributed = elsewhere => (elsewhere.length === 0 ? "witness" : "shared");
+
+/** Whether a probe's answer cites one of the sentence's holders that the configuration excludes. */
+const citesAnExcludedHolder = (holders, config, answer) => holders.some(path => answer.cites.has(path) && citationFinding(path, config) !== null);
+
+function leakFinding(leak, { set, name, marker }, elsewhere) {
+  return leak === "witness"
+    ? `${name} is retrievable ("${marker}" came back, or the file was cited); ${set} did not take`
+    : `"${marker}" came back, cited from none of ${[name, ...elsewhere].join(", ")}, which all hold it; ${set} may not have taken`;
 }
 
 /** The findings the index earns against the configuration, given a working library. */
@@ -445,9 +512,12 @@ async function indexFindings({ corpus, api, get, config, cited }) {
   ) {
     return findings;
   }
+  // A file the sample and a probe both cite is one finding, not two.
   return [
-    ...findings,
-    ...(await exclusionFindings({ corpus, api, get, config })),
+    ...new Set([
+      ...findings,
+      ...(await exclusionFindings({ corpus, api, get, config })),
+    ]),
   ];
 }
 

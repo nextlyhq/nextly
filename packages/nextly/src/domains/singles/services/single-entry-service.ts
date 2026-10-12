@@ -237,6 +237,18 @@ export class SingleEntryService extends BaseService {
     result: SingleResult<unknown>,
     disableRevalidate: boolean
   ): Promise<void> {
+    // A write inside an enclosing SQLite transaction is a savepoint it can
+    // still undo, so all of this waits for that commit there.
+    await this.afterCommit(() =>
+      this.runPostWriteEffects(result, disableRevalidate)
+    );
+  }
+
+  /** The post-write side effects {@link afterWrite} runs once durable. */
+  private async runPostWriteEffects(
+    result: SingleResult<unknown>,
+    disableRevalidate: boolean
+  ): Promise<void> {
     if (
       result.committed === true ||
       result.eventRecorded === true ||

@@ -3,7 +3,7 @@ import type { PluginContext } from "../../plugins/plugin-context";
 import { clearAccessTokenCookie } from "../cookies/access-token-cookie";
 import {
   readRefreshTokenCookie,
-  clearRefreshTokenCookie,
+  clearRefreshTokenCookies,
 } from "../cookies/refresh-token-cookie";
 import {
   clearCsrfCookie,
@@ -50,7 +50,7 @@ export async function handleLogout(
   }
 
   // beforeLogout hook (D71). The logout endpoint doesn't resolve the user, so
-  // pass null; plugins that need the user can read it from the request/session.
+  // the hook receives null and no request.
   if (deps.authHooks && deps.pluginCtx) {
     await deps.authHooks.runBeforeLogout(null, deps.pluginCtx);
   }
@@ -67,7 +67,7 @@ export async function handleLogout(
 
   const clearCookies = [
     clearAccessTokenCookie(),
-    clearRefreshTokenCookie(),
+    ...clearRefreshTokenCookies(),
     clearCsrfCookie(),
   ];
 

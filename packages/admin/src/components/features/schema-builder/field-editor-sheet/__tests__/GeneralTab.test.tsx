@@ -117,6 +117,56 @@ describe("GeneralTab -- PR E1 Label-first + Name auto-derive", () => {
     expect(last.name).toBe("blog_post");
   });
 
+  it("derives punctuation in the Label away rather than underscoring it", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Controlled initial={blank} onChange={onChange} />);
+    await user.type(screen.getByLabelText(/^Label$/), "phone no.");
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.label).toBe("phone no.");
+    expect(last.name).toBe("phone_no");
+  });
+
+  it("keeps following the Label for a name minted under the previous rule", async () => {
+    // A field whose label was "phone no." derived "phone_no_" before
+    // punctuation runs collapsed. That stored name is legal and stays as it
+    // is, but it must still read as AUTO-derived — otherwise the first label
+    // edit after the rule change would treat it as manually overridden and
+    // strand the name while the label moves on.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const seeded: BuilderField = {
+      ...blank,
+      label: "phone no.",
+      name: "phone_no_",
+    };
+    render(<Controlled initial={seeded} onChange={onChange} />);
+    await user.type(screen.getByLabelText(/^Label$/), "!");
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.label).toBe("phone no.!");
+    expect(last.name).toBe("phone_no");
+  });
+
+  it("does not treat a manual repeated-underscore name as automatic", async () => {
+    // `line__item` is a legal name the save path preserves verbatim as the
+    // field's identity; the label "Line Item" derives to `line_item`, and a
+    // comparison through normalization would call the two equal and rewrite
+    // the manual name on the first label edit. Recognition must match the
+    // derivations EXACTLY, never a normalized stored name.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const seeded: BuilderField = {
+      ...blank,
+      label: "Line Item",
+      name: "line__item",
+    };
+    render(<Controlled initial={seeded} onChange={onChange} />);
+    await user.type(screen.getByLabelText(/^Label$/), "s");
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.label).toBe("Line Items");
+    expect(last.name).toBe("line__item");
+  });
+
   it("stops auto-deriving Name once the user manually edits Name", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

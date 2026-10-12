@@ -34,7 +34,9 @@ describe("SchemaRegistry.getRelations", () => {
     const registry = makeRegistry();
     const relations = registry.getRelations() as unknown as RelationsShape;
 
-    expect(Object.keys(relations.users?.relations ?? {})).toContain("sessions");
+    expect(Object.keys(relations.users?.relations ?? {})).toContain(
+      "refreshTokens"
+    );
     expect(Object.keys(relations.roles?.relations ?? {})).toContain(
       "childInherits"
     );
@@ -62,7 +64,9 @@ describe("SchemaRegistry.getRelations", () => {
     const relations = registry.getRelations() as unknown as RelationsShape;
 
     // Static edges survive composition…
-    expect(Object.keys(relations.users?.relations ?? {})).toContain("sessions");
+    expect(Object.keys(relations.users?.relations ?? {})).toContain(
+      "refreshTokens"
+    );
     // …and the dynamic table gained its edge.
     expect(Object.keys(relations.dc_posts?.relations ?? {})).toEqual([
       "author",
@@ -119,6 +123,8 @@ describe("SchemaRegistry.getRelations", () => {
 
     const relations = registry.getRelations() as unknown as RelationsShape;
     expect(relations.dc_posts).toBeUndefined();
-    expect(Object.keys(relations.users?.relations ?? {})).toContain("sessions");
+    expect(Object.keys(relations.users?.relations ?? {})).toContain(
+      "refreshTokens"
+    );
   });
 });

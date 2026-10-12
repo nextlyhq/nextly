@@ -117,7 +117,7 @@ describe("when a job is due", () => {
 describe("timestamp formatting", () => {
   /*
    * The admin renders dates through one configured formatter — an installation
-   * sets a timezone and a format, and `GeneralSettingsSyncProvider` applies it.
+   * sets a timezone and a format, and `GeneralSettingsSync` applies it.
    * A local `toLocaleString()` reads the BROWSER's settings instead, so the
    * same instant renders two different ways on one page and whoever configured
    * it sees no error.

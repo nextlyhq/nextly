@@ -124,6 +124,15 @@ export {
   type DocumentIdentity,
 } from "./components/features/entries/EntryForm/EntryFormContext";
 /**
+ * What a plugin's sign-in challenge view receives, and what `resolve` answers.
+ * Exported for the plugin surface, so a view is typed against the contract
+ * the host renders it with.
+ */
+export type {
+  ChallengeResolveResult,
+  ChallengeViewProps,
+} from "./components/features/auth-login/auth-ui-extras";
+/**
  * Which language the surrounding document is being edited in. Separate from the
  * identity for the same reason the status is: a document is the same document
  * in every language, so a consumer reading only the identity should not

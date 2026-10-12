@@ -1,20 +1,24 @@
 /**
  * The locked write path, on MySQL.
  *
- * `logActivity` takes a shared lock and writes inside a transaction on both
- * MVCC dialects, and the two drivers do not have to agree about a locking
- * clause. Covering only Postgres is what let a dialect-specific defect through
- * once already — a CASE whose untyped branches Postgres could not infer a
- * parameter type for, which failed every write silently because this method
- * swallows its own errors. The same class of failure on MySQL would be just as
- * quiet, so the path is exercised here too.
+ * `logActivity` reads the account row under the existence-check lock and
+ * writes inside a transaction on both MVCC dialects. The lock's strength
+ * follows the server: `FOR SHARE` on Postgres and on MySQL 8, Aurora and
+ * Vitess, and `FOR UPDATE` on MariaDB and TiDB, which reject `FOR SHARE` —
+ * the adapter reports which as `getCapabilities().sharedRowLock`. A dialect-
+ * specific defect in this statement fails every write silently, because the
+ * method swallows its own errors, so the path is exercised on MySQL as well
+ * as Postgres.
  *
- * The lock-blocking assertion lives in the Postgres suite; what matters here is
- * that the statement the driver actually emits runs at all, and decides the
- * identity correctly in both directions.
+ * This suite checks that the statement the driver emits runs at all, that it
+ * decides the identity correctly in both directions, that the capability
+ * matches the connected server, and that the write waits behind another
+ * transaction's exclusive lock on the author's row — which it does only if
+ * it locks that row itself.
  */
 
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
+import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../../database/index";
@@ -170,5 +174,72 @@ describeMaybe("the locked activity write on MySQL", () => {
     expect(rows[0].user_name).toBeNull();
     expect(rows[0].user_email).toBeNull();
     expect(rows[0].identity_erased_at).not.toBeNull();
+  });
+
+  it("reports the shared-lock capability the connected server supports", async () => {
+    const [{ version }] = await adapter.executeQuery<{ version: string }>(
+      "SELECT VERSION() AS version"
+    );
+    expect(adapter.getCapabilities().sharedRowLock).toBe(
+      !/mariadb|tidb/i.test(version)
+    );
+  });
+
+  it("waits behind an exclusive lock on the author's row until it is released", async () => {
+    // Hold `FOR UPDATE` on the author's row from another connection. Any row
+    // lock the write takes on that row, shared or exclusive, waits for it; a
+    // write that reads the row without a lock would not.
+    const db = adapter.getDrizzle() as unknown as {
+      transaction: (
+        fn: (tx: { execute: (q: unknown) => Promise<unknown> }) => Promise<void>
+      ) => Promise<void>;
+    };
+    let release!: () => void;
+    let acquired!: () => void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const lockHeld = new Promise<void>(resolve => {
+      acquired = resolve;
+    });
+    const holder = db.transaction(async tx => {
+      await tx.execute(
+        sql.raw(`SELECT id FROM users WHERE id = '${LIVE_ACTOR}' FOR UPDATE`)
+      );
+      acquired();
+      await held;
+    });
+    await lockHeld;
+
+    let settled = false;
+    const write = activity
+      .logActivity({
+        actorType: "user",
+        userId: LIVE_ACTOR,
+        userName: "Live Actor",
+        userEmail: "mysql-live@test.local",
+        action: "update",
+        collection: "mysql_lock_posts",
+        entryTitle: "Behind An Exclusive Lock",
+      })
+      .finally(() => {
+        settled = true;
+      });
+
+    // A write that took no lock settles within milliseconds; the bound only
+    // has to outlast that, and InnoDB's lock-wait timeout (50 s by default)
+    // keeps a waiting write from settling first.
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    expect(settled).toBe(false);
+
+    release();
+    await holder;
+    await write;
+
+    const rows = await adapter.executeQuery<{ id: string }>(
+      "SELECT id FROM activity_log WHERE user_id = ? AND collection = ?",
+      [LIVE_ACTOR, "mysql_lock_posts"]
+    );
+    expect(rows).toHaveLength(1);
   });
 });

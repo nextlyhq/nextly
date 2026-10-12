@@ -13,39 +13,44 @@
  * collapses to a generic invalid-credentials response.
  */
 import { readOrGenerateRequestId } from "../../api/request-id";
-import { auditFailureMetadata } from "../../domains/audit/audit-log-writer";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
-import { validateCsrf } from "../csrf/validate";
+import { readPendingCookie } from "../cookies/pending-cookie";
 import {
   MUST_CHANGE_PASSWORD_CHALLENGE,
   verifyPendingToken,
 } from "../pipeline/pending-token";
 
 import {
-  jsonResponse,
   stallResponse,
-  buildAuthErrorResponse,
+  csrfRefusal,
+  loginFailureResponse,
+  readJsonObjectBody,
+  recordLoginFailure,
 } from "./handler-utils";
-import { issueSession, type IssueSessionDeps } from "./issue-session";
+import {
+  gateAccountForSession,
+  finishResumedSignIn,
+  type IssueSessionDeps,
+} from "./issue-session";
 
 export interface SetInitialPasswordDeps extends IssueSessionDeps {
   allowedOrigins: string[];
   loginStallTimeMs: number;
   auditLog: AuditLogWriter;
   /**
-   * Replaces the admin-set password and clears the must-change flag. Throws
+   * Replaces the admin-set password and clears the must-change flag, and
+   * returns the `passwordUpdatedAt` it wrote, read back as stored. Throws
    * NextlyError(VALIDATION_ERROR) on a weak password and NextlyError(INVALID_INPUT)
    * when the account is no longer in the must-change state.
    */
   setInitialPassword: (
     userId: string,
     newPassword: string
-  ) => Promise<{ userId: string }>;
+  ) => Promise<{ userId: string; passwordUpdatedAt: Date | null }>;
   findUserById: (userId: string) => Promise<{
     id: string;
     email: string;
@@ -61,33 +66,25 @@ export async function handleSetInitialPassword(
 ): Promise<Response> {
   const startTime = Date.now();
   const requestId = readOrGenerateRequestId(request);
+  // Outside the try so the failure row names the method the paused login was
+  // using, as the challenge path's does.
+  let strategy: string | undefined;
 
   try {
-    const raw: unknown = await request.json().catch(() => null);
-    const body: Record<string, unknown> =
-      raw !== null && typeof raw === "object" && !Array.isArray(raw)
-        ? (raw as Record<string, unknown>)
-        : {};
+    const body = await readJsonObjectBody(request);
 
-    const csrfCookie = readCsrfCookie(request);
-    const csrfToken = readCsrfFromRequest(body, request);
-    const csrfResult = validateCsrf(
-      request,
-      csrfCookie,
-      csrfToken,
-      deps.allowedOrigins
-    );
-    if (!csrfResult.valid) {
+    const refusal = csrfRefusal(request, body, deps, requestId);
+    if (refusal) {
       await stallResponse(startTime, deps.loginStallTimeMs);
-      return jsonResponse(
-        403,
-        { error: { code: "CSRF_FAILED", message: csrfResult.error } },
-        { "x-request-id": requestId }
-      );
+      return refusal;
     }
 
+    // Body or cookie, for the same reason as the challenge path: an external
+    // login arrives here by redirect with its token in an HttpOnly cookie.
     const pendingTokenInput =
-      typeof body.pendingToken === "string" ? body.pendingToken : "";
+      typeof body.pendingToken === "string"
+        ? body.pendingToken
+        : (readPendingCookie(request) ?? "");
     const newPassword =
       typeof body.newPassword === "string" ? body.newPassword : "";
     if (!pendingTokenInput || !newPassword) {
@@ -119,14 +116,22 @@ export async function handleSetInitialPassword(
         logContext: { reason: auditReason("pending-token-invalid") },
       });
     }
+    strategy = pending.strategy;
     if (pending.challengeId !== MUST_CHANGE_PASSWORD_CHALLENGE) {
       throw NextlyError.invalidCredentials({
         logContext: { reason: auditReason("pending-token-wrong-challenge") },
       });
     }
 
+    // Before the password changes, not only at the session after it: an
+    // account disabled or unverified since its pending token was issued must
+    // not complete a change to its credentials. The session gate still runs
+    // afterwards, for a change of state in between.
+    await gateAccountForSession(deps, pending.userId, pending.strategy);
+
+    let written;
     try {
-      await deps.setInitialPassword(pending.userId, newPassword);
+      written = await deps.setInitialPassword(pending.userId, newPassword);
     } catch (err) {
       // Only a stale/replayed flow (the account is no longer in the must-change
       // state) collapses to the generic invalid-credentials response. A
@@ -144,6 +149,9 @@ export async function handleSetInitialPassword(
       throw err;
     }
 
+    // Kept alongside the gate inside `issueSession` for the same reason as the
+    // challenge path: this refusal has its own audit reason and response
+    // timing, which the shared gate does not reproduce.
     const u = await deps.findUserById(pending.userId);
     if (!u || !u.isActive) {
       throw NextlyError.invalidCredentials({
@@ -171,26 +179,25 @@ export async function handleSetInitialPassword(
       userAgent: request.headers.get("user-agent"),
     });
 
-    const response = await issueSession(user, deps, request, requestId);
-    await stallResponse(startTime, deps.loginStallTimeMs);
-    return response;
+    return await finishResumedSignIn(
+      user,
+      deps,
+      request,
+      requestId,
+      // The version this request wrote, not one read afterwards: a reset
+      // committed between the change and the session would otherwise be the
+      // version the session is judged against, and the session would
+      // outlive it.
+      {
+        strategy: pending.strategy,
+        next: pending.next,
+        passwordUpdatedAt: written.passwordUpdatedAt?.getTime() ?? null,
+      },
+      startTime
+    );
   } catch (err) {
     await stallResponse(startTime, deps.loginStallTimeMs);
-    await deps.auditLog.write({
-      kind: "login-failed",
-      ipAddress: getTrustedClientIp(request, {
-        trustProxy: deps.trustProxy,
-        trustedProxyIps: deps.trustedProxyIps,
-      }),
-      userAgent: request.headers.get("user-agent"),
-      metadata: auditFailureMetadata(err, requestId),
-    });
-    if (NextlyError.is(err)) {
-      return buildAuthErrorResponse(err, requestId);
-    }
-    return buildAuthErrorResponse(
-      NextlyError.internal({ cause: err as Error }),
-      requestId
-    );
+    await recordLoginFailure(deps, request, err, requestId, strategy);
+    return loginFailureResponse(err, requestId);
   }
 }

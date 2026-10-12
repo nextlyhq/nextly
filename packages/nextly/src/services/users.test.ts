@@ -917,22 +917,6 @@ describe("UsersService", () => {
     });
   });
 
-  // Note: Skipping getAccounts() tests - accounts table not in test schema
-  // These would require updating test database schema to include accounts table
-  describe.skip("getAccounts()", () => {
-    it.skip("should get user accounts successfully", async () => {
-      // Test requires accounts table in test schema
-    });
-
-    it.skip("should return 404 when no accounts found", async () => {
-      // Test requires accounts table in test schema
-    });
-
-    it.skip("should handle multiple accounts", async () => {
-      // Test requires accounts table in test schema
-    });
-  });
-
   describe("hasPassword()", () => {
     it("should return true when user has password", async () => {
       // Arrange
@@ -983,32 +967,6 @@ describe("UsersService", () => {
 
       // Assert
       expect(result).toBeNull();
-    });
-  });
-
-  // Note: Skipping deleteUserAccount() and unlinkAccountForUser() tests
-  // These require accounts table in test schema
-  describe.skip("deleteUserAccount()", () => {
-    it.skip("should delete account and return count", async () => {
-      // Test requires accounts table in test schema
-    });
-
-    it.skip("should return 0 when account not found", async () => {
-      // Test requires accounts table in test schema
-    });
-  });
-
-  describe.skip("unlinkAccountForUser()", () => {
-    it.skip("should unlink account successfully", async () => {
-      // Test requires accounts table in test schema
-    });
-
-    it.skip("should return 400 when trying to unlink last auth method without password", async () => {
-      // Test requires accounts table in test schema
-    });
-
-    it.skip("should return 404 when account not found", async () => {
-      // Test requires accounts table in test schema
     });
   });
 });

@@ -7,6 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { detectPackageManager, detectProject } from "../utils/detect";
 
+/** A path in `/` form, so expectations written with `/` hold on Windows too, where `path.join` gives `\\`. */
+const posix = (p: unknown) => String(p).replaceAll("\\", "/");
+
 // Mock fs-extra
 vi.mock("fs-extra", () => ({
   default: {
@@ -41,7 +44,7 @@ describe("detectPackageManager", () => {
 
   it("should detect pnpm from pnpm-lock.yaml", async () => {
     mockPathExists.mockImplementation(async path => {
-      return String(path).endsWith("pnpm-lock.yaml");
+      return posix(path).endsWith("pnpm-lock.yaml");
     });
 
     const result = await detectPackageManager("/test/project");
@@ -50,7 +53,7 @@ describe("detectPackageManager", () => {
 
   it("should detect yarn from yarn.lock", async () => {
     mockPathExists.mockImplementation(async path => {
-      return String(path).endsWith("yarn.lock");
+      return posix(path).endsWith("yarn.lock");
     });
 
     const result = await detectPackageManager("/test/project");
@@ -59,7 +62,7 @@ describe("detectPackageManager", () => {
 
   it("should detect bun from bun.lockb", async () => {
     mockPathExists.mockImplementation(async path => {
-      return String(path).endsWith("bun.lockb");
+      return posix(path).endsWith("bun.lockb");
     });
 
     const result = await detectPackageManager("/test/project");
@@ -76,7 +79,7 @@ describe("detectPackageManager", () => {
   it("should prioritize pnpm over yarn (check order)", async () => {
     // Both pnpm-lock.yaml and yarn.lock exist
     mockPathExists.mockImplementation(async path => {
-      const pathStr = String(path);
+      const pathStr = posix(path);
       return (
         pathStr.endsWith("pnpm-lock.yaml") || pathStr.endsWith("yarn.lock")
       );
@@ -90,7 +93,7 @@ describe("detectPackageManager", () => {
     // pnpm-lock.yaml exists in cwd, but UA says yarn — UA wins.
     process.env.npm_config_user_agent = "yarn/1.22.22 npm/? node/v22.10.0";
     mockPathExists.mockImplementation(async path => {
-      return String(path).endsWith("pnpm-lock.yaml");
+      return posix(path).endsWith("pnpm-lock.yaml");
     });
     expect(await detectPackageManager("/test/project")).toBe("yarn");
   });
@@ -98,7 +101,7 @@ describe("detectPackageManager", () => {
   it("falls back to lockfile when user-agent is not a known PM", async () => {
     process.env.npm_config_user_agent = "unknown-tool/1.0";
     mockPathExists.mockImplementation(async path => {
-      return String(path).endsWith("yarn.lock");
+      return posix(path).endsWith("yarn.lock");
     });
     expect(await detectPackageManager("/test/project")).toBe("yarn");
   });
@@ -127,7 +130,7 @@ describe("detectProject", () => {
 
   it("should detect a valid Next.js App Router project", async () => {
     mockPathExists.mockImplementation(async path => {
-      const pathStr = String(path);
+      const pathStr = posix(path);
       if (pathStr.endsWith("package.json")) return true;
       if (pathStr.endsWith("tsconfig.json")) return true;
       if (pathStr.endsWith("src")) return true;
@@ -158,7 +161,7 @@ describe("detectProject", () => {
 
   it("should detect project without src directory", async () => {
     mockPathExists.mockImplementation(async path => {
-      const pathStr = String(path);
+      const pathStr = posix(path);
       if (pathStr.endsWith("package.json")) return true;
       if (pathStr.endsWith("tsconfig.json")) return true;
       if (pathStr.endsWith("src")) return false;
@@ -181,7 +184,7 @@ describe("detectProject", () => {
 
   it("should detect project without TypeScript", async () => {
     mockPathExists.mockImplementation(async path => {
-      const pathStr = String(path);
+      const pathStr = posix(path);
       if (pathStr.endsWith("package.json")) return true;
       if (pathStr.endsWith("tsconfig.json")) return false;
       if (pathStr.endsWith("src")) return false;
@@ -210,7 +213,7 @@ describe("detectProject", () => {
 
   it("should throw error if Next.js is not in dependencies", async () => {
     mockPathExists.mockImplementation(async path => {
-      return String(path).endsWith("package.json");
+      return posix(path).endsWith("package.json");
     });
 
     mockReadJson.mockResolvedValue({
@@ -226,7 +229,7 @@ describe("detectProject", () => {
 
   it("should detect Next.js in devDependencies", async () => {
     mockPathExists.mockImplementation(async path => {
-      const pathStr = String(path);
+      const pathStr = posix(path);
       if (pathStr.endsWith("package.json")) return true;
       if (pathStr.endsWith("app")) return true;
       return false;
@@ -245,7 +248,7 @@ describe("detectProject", () => {
 
   it("should throw error if App Router is not detected", async () => {
     mockPathExists.mockImplementation(async path => {
-      const pathStr = String(path);
+      const pathStr = posix(path);
       if (pathStr.endsWith("package.json")) return true;
       // No app directory
       return false;
@@ -264,7 +267,7 @@ describe("detectProject", () => {
 
   it("should handle Next.js version without semver prefix", async () => {
     mockPathExists.mockImplementation(async path => {
-      const pathStr = String(path);
+      const pathStr = posix(path);
       if (pathStr.endsWith("package.json")) return true;
       if (pathStr.endsWith("app")) return true;
       return false;

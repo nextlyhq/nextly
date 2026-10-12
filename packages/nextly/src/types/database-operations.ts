@@ -1,11 +1,37 @@
 // Database operation types for better type safety
 
+/**
+ * How an account's address came to be verified, stored in
+ * `users.email_verified_via` beside `email_verified`. Null exactly when
+ * `email_verified` is.
+ *
+ * - `"link"`: the person followed a verification link sent to the address.
+ * - `"invite"`: the person accepted an invite link sent to the address.
+ * - `"admin"`: the app vouched for it: an administrator creating or updating
+ *   the account, the app's own server code through the Direct API, first-run
+ *   setup and the seeders.
+ * - `"plugin"`: a plugin vouched for it through `ctx.services.users`.
+ * - `"external"`: a login provider vouched for it (`createExternalUser`).
+ * - `"legacy"`: verified with nothing recording how: before this column
+ *   existed, or by a write outside Nextly's own paths. `nextly migrate` sets it
+ *   on every verified row it finds without a value.
+ */
+export type EmailVerifiedVia =
+  | "link"
+  | "invite"
+  | "admin"
+  | "plugin"
+  | "external"
+  | "legacy";
+
 export interface UserInsertData {
   id: string;
   email: string;
   name: string | null;
   passwordHash: string | null;
   emailVerified: Date | null;
+  /** How the address was verified; null when it is not. */
+  emailVerifiedVia?: EmailVerifiedVia | null;
   image: string | null;
   isActive?: boolean;
   /** True when an admin set the password and the user must replace it on first sign-in. */
@@ -19,8 +45,14 @@ export interface UserUpdateData {
   name?: string | null;
   image?: string | null;
   emailVerified?: Date | null;
+  /** How the address was verified; null when it is not. */
+  emailVerifiedVia?: EmailVerifiedVia | null;
   passwordHash?: string;
+  /** When the password was last set. */
+  passwordUpdatedAt?: Date;
   isActive?: boolean;
+  /** When an administrator deactivated the account; null once reactivated. */
+  deactivatedAt?: Date | null;
   /** Cleared to false once the user replaces an admin-set password. */
   mustChangePassword?: boolean;
   updatedAt?: Date;
@@ -111,50 +143,10 @@ export interface AccountQueryResult {
 
 // Database instance types
 export interface DatabaseInstance {
-  query: {
-    users: {
-      findMany: (options: {
-        columns: Record<string, boolean>;
-        where?: unknown;
-      }) => Promise<UserQueryResult[]>;
-      findFirst: (options: {
-        where?: unknown;
-        columns: Record<string, boolean>;
-      }) => Promise<UserQueryResult | undefined>;
-    };
-    accounts: {
-      findMany: (options: {
-        where?: unknown;
-        columns: Record<string, boolean>;
-      }) => Promise<AccountQueryResult[]>;
-    };
-    passwordResetTokens: {
-      findFirst: (options: {
-        where: unknown;
-        columns: Record<string, boolean>;
-      }) => Promise<
-        | {
-            id: string;
-            identifier: string;
-            expires: Date;
-          }
-        | undefined
-      >;
-    };
-    emailVerificationTokens: {
-      findFirst: (options: {
-        where: unknown;
-        columns: Record<string, boolean>;
-      }) => Promise<
-        | {
-            id: string;
-            identifier: string;
-            expires: Date;
-          }
-        | undefined
-      >;
-    };
-  };
+  // The relational `query` namespace is deliberately absent. It described a
+  // handful of core tables by name, so it could never answer about a plugin's
+  // own tables, and the account entries it carried had no live consumer.
+  // Reads go through the fluent API below, or through the typed services.
   update: (table: unknown) => {
     set: (data: unknown) => {
       where: (condition: unknown) => Promise<void>;

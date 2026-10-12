@@ -27,14 +27,35 @@ export {
   type PluginAdminAppearance,
   type PluginAdminConfig,
   type PluginActionRegistry,
+  type PluginAuditApi,
+  type PluginCapabilities,
   type PluginContext,
+  type PluginDatabase,
   type PluginDefinition,
   type PluginFilterRegistry,
   type PluginHookRegistry,
+  type PluginSettingsApi,
 } from "./plugin-context";
 
+// What each hook point carries, by name; a plugin augments the map.
 export type {
+  HookPointContext,
+  HookPointNameOf,
+  HookPointPayload,
+  HookPointPayloads,
+  HookPointValue,
+} from "./hook-point-payloads";
+
+// What `ctx.auth` offers a plugin that authenticated someone elsewhere.
+export type {
+  CompleteLoginOptions,
+  PluginAuthApi,
+} from "../auth/plugin-auth-api";
+
+export type {
+  PluginAuditDeclaration,
   PluginContributions,
+  PluginHookPointDeclaration,
   PluginPermission,
   PluginRole,
   PluginEmailProvider,
@@ -78,6 +99,7 @@ export type {
   PluginRouteContext,
   PluginRouteHandler,
   PluginRouteMount,
+  PluginRouteRateLimit,
   Middleware,
   RouteMethod,
 } from "./routes/route-types";

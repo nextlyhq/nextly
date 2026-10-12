@@ -107,3 +107,85 @@ describe("FilterRegistry", () => {
     expect(await reg.applyFilters("c", 7, {})).toBe(7);
   });
 });
+
+describe("FilterRegistry.applyDecision: every verdict is normalised", () => {
+  const ALLOW = { allow: true } as const;
+
+  it.each([
+    [{ allow: "false" }],
+    [{ allow: "yes" }],
+    [{ allow: 1 }],
+    ["deny"],
+    [{ reason: "no allow key" }],
+  ])(
+    "denies on the malformed verdict %j instead of passing it through",
+    async malformed => {
+      // A caller doing `if (verdict.allow)` read `{ allow: "false" }` as allow.
+      const reg = new FilterRegistry();
+      reg.addFilter("acme.gate", () => malformed as never);
+      const verdict = await reg.applyDecision("acme.gate", ALLOW, {});
+      expect(verdict).toEqual({ allow: false, reason: "malformed-decision" });
+    }
+  );
+
+  it("stops the chain at a malformed verdict", async () => {
+    const reg = new FilterRegistry();
+    let laterRan = false;
+    reg.addFilter("acme.gate", () => ({ allow: 1 }) as never);
+    reg.addFilter("acme.gate", () => {
+      laterRan = true;
+      return ALLOW;
+    });
+    await reg.applyDecision("acme.gate", ALLOW, {});
+    expect(laterRan).toBe(false);
+  });
+
+  it("keeps the FIRST denial's reason when a later handler throws", async () => {
+    // A throw after a specific denial overwrote its reason with "hook-error".
+    const reg = new FilterRegistry();
+    reg.addFilter("acme.gate", () => ({
+      allow: false,
+      reason: "domain-blocked",
+    }));
+    reg.addFilter("acme.gate", () => {
+      throw new Error("boom");
+    });
+    expect(await reg.applyDecision("acme.gate", ALLOW, {})).toEqual({
+      allow: false,
+      reason: "domain-blocked",
+    });
+  });
+
+  it("keeps the first denial's reason over a later denial's", async () => {
+    const reg = new FilterRegistry();
+    reg.addFilter("acme.gate", () => ({ allow: false, reason: "first" }));
+    reg.addFilter("acme.gate", () => ({ allow: false, reason: "second" }));
+    expect(await reg.applyDecision("acme.gate", ALLOW, {})).toEqual({
+      allow: false,
+      reason: "first",
+    });
+  });
+
+  it("returns a fresh object, never the handler's", async () => {
+    const returned = { allow: true as const, extra: "kept by the plugin" };
+    const reg = new FilterRegistry();
+    reg.addFilter("acme.gate", () => returned);
+    const verdict = await reg.applyDecision("acme.gate", ALLOW, {});
+    expect(verdict).toEqual({ allow: true });
+    expect(verdict).not.toBe(returned);
+  });
+
+  it("still reads a well-formed verdict as said", async () => {
+    // The control: denying everything would pass the cases above.
+    const reg = new FilterRegistry();
+    reg.addFilter("acme.gate", () => undefined as never);
+    reg.addFilter("acme.gate", () => ALLOW);
+    expect(await reg.applyDecision("acme.gate", ALLOW, {})).toEqual(ALLOW);
+    const denying = new FilterRegistry();
+    denying.addFilter("acme.gate", () => ({ allow: false, reason: "nope" }));
+    expect(await denying.applyDecision("acme.gate", ALLOW, {})).toEqual({
+      allow: false,
+      reason: "nope",
+    });
+  });
+});

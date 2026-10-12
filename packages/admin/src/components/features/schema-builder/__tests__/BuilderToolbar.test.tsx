@@ -3,6 +3,7 @@
 // - No icon tile, no source badge, no Hooks button, no unsaved-count
 //   badge. Save schema disabled when nothing dirty and when locked.
 // - Locked state surfaces via the disabled buttons' tooltip text.
+import { fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -100,11 +101,63 @@ describe("BuilderToolbar", () => {
       />
     );
     // The legacy first-letter tile rendered the first character of the
-    // icon name in a square. With it removed, the standalone "H" or "F"
-    // letter shouldn't appear before the breadcrumb.
-    const breadcrumb = screen.getByText(/field groups/i);
-    const sibling = breadcrumb.previousSibling;
-    expect(sibling).toBeNull();
+    // icon name in a square. With it removed, no standalone letter appears
+    // beside the breadcrumb — the crumb's chevron is decoration INSIDE the
+    // back link, not a tile.
+    expect(screen.queryByText(/^[HF]$/)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /back to field groups/i })
+    ).toBeInTheDocument();
+  });
+
+  it("renders the crumb as a link back to the kind's builder list", () => {
+    // Builder pages render standalone, so the crumb is the only way back to
+    // the list — it must be a link with the list as its destination, not a
+    // label.
+    render(
+      <BuilderToolbar
+        config={collectionConfig}
+        name="Posts"
+        unsavedCount={0}
+        onOpenSettings={vi.fn()}
+        onSave={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole("link", { name: /back to collections/i })
+    ).toHaveAttribute("href", "/admin/builder/collections");
+  });
+
+  it("asks before leaving with unsaved changes, and not when clean", () => {
+    // No builder page mounts a navigation guard, so the crumb — the page's
+    // only exit — must stand in front of unsaved work itself.
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const { rerender } = render(
+      <BuilderToolbar
+        config={collectionConfig}
+        name="Posts"
+        unsavedCount={2}
+        onOpenSettings={vi.fn()}
+        onSave={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole("link", { name: /back to collections/i }));
+    expect(confirmSpy).toHaveBeenCalledOnce();
+    expect(confirmSpy.mock.calls[0][0]).toMatch(/unsaved changes/i);
+
+    confirmSpy.mockClear();
+    rerender(
+      <BuilderToolbar
+        config={collectionConfig}
+        name="Posts"
+        unsavedCount={0}
+        onOpenSettings={vi.fn()}
+        onSave={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole("link", { name: /back to collections/i }));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 
   it("disables Save when no unsaved changes", () => {

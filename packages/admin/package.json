@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/admin",
-  "version": "0.0.2-alpha.65",
+  "version": "0.0.2-alpha.66",
   "description": "Nextly - Admin dashboard and management interface",
   "license": "MIT",
   "type": "module",
@@ -34,6 +34,7 @@
     "build:css:watch": "node scripts/build-css-watch.mjs",
     "dev": "node scripts/dev.mjs",
     "check-types": "tsc --noEmit",
+    "check:published-build": "node scripts/check-published-build.mjs",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
@@ -49,7 +50,7 @@
   "peerDependencies": {
     "@nextlyhq/ui": "workspace:^",
     "next": "^14.0.0 || ^15.0.0 || ^16.0.0",
-    "nextly": "0.0.2-alpha.65",
+    "nextly": "0.0.2-alpha.66",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0"
   },
