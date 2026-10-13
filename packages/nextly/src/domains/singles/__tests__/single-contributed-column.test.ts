@@ -5,7 +5,7 @@
  * `extendTable` on a Single's table adds a real column there and marks it
  * hidden, so every `selectOne()` and every `update(..., { returning: "*" })`
  * on that table carries it, and every write payload that names it reaches it.
- * Its contributor writes it through its own queries; the Single's read and write
+ * Its contributor writes it through `ctx.db.contributed`; the Single's read and write
  * responses must not return it, and a Single write must not set it.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

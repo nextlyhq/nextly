@@ -51,7 +51,7 @@ export function newestEventsByFilename(
  * Filenames whose NEWEST event is `applied` — what "is this file applied?"
  * means everywhere the ledger is read.
  *
- * Not "has an `applied` row": `migrate:down` records a
+ * Not "has an `applied` row": `migrate:down` and `plugins uninstall` record a
  * rollback by INSERTING a `rolled_back` event after the `applied` one, and a
  * failed re-apply inserts a `failed` one, so an older `applied` row says
  * nothing about the file's current state.

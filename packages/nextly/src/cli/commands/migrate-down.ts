@@ -41,7 +41,6 @@ import {
 } from "../../domains/schema/migrate/migration-transaction";
 import {
   compareModuleNames,
-  moduleSql,
   qualifiedFilename,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { recordPluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
@@ -80,8 +79,8 @@ import { compareMigrationBaseNames } from "../utils/migration-discovery";
 
 import { parseSqlSections } from "./migrate";
 import {
+  pluginModuleDown,
   recordRollbackFailed,
-  verifiedPluginModule,
 } from "./plugin-module-rollback";
 
 /**
@@ -269,7 +268,7 @@ export interface MigrationDown {
 }
 
 /** One rollback target, as planned before anything runs. */
-interface PlannedDown {
+export interface PlannedDown {
   filename: string;
   downSql: string;
   /** False when the DOWN runs outside a transaction. */
@@ -294,10 +293,10 @@ interface PlannedDown {
 /**
  * The reason a real run refuses to roll `p` back, or undefined when nothing
  * does — every refusal that does not depend on a flag the operator passes.
- * One function for the real run, which throws it, and the dry run, which
- * reports it.
+ * One function for the real run, which throws it, the dry run, which reports
+ * it, and `plugins uninstall`, which throws it before any module runs.
  */
-function refusalOf(
+export function refusalOf(
   p: PlannedDown,
   deps: Pick<
     MigrateDownCoreDeps,
@@ -407,9 +406,18 @@ function asError(thrown: unknown): Error {
  * back. A failure is recorded as a failed rollback, except a lost race
  * rolled back whole, which leaves nothing of this run to record.
  */
-async function rollBackOne(
+export async function rollBackOne(
   p: PlannedDown,
-  deps: MigrateDownCoreDeps
+  deps: Pick<
+    MigrateDownCoreDeps,
+    | "dialect"
+    | "logger"
+    | "options"
+    | "execDown"
+    | "recordRolledBack"
+    | "recordPluginSchemaVersion"
+    | "recordFailed"
+  >
 ): Promise<void> {
   if (!p.transaction) {
     deps.logger.warn(outsideTransactionNotice(p.filename));
@@ -442,39 +450,40 @@ async function rollBackOne(
   }
 }
 
-export async function migrateDownCore(
-  deps: MigrateDownCoreDeps
-): Promise<MigrateDownResult> {
-  const step = deps.options.step ?? 1;
-  // Plugin rows belong to their own migration stream, so they are excluded
-  // unless `--plugin` names one; an unscoped run must never revert a plugin's
-  // migration while reporting an app rollback.
-  const rows = scopeLedgerRows(
-    await deps.listFileApplies(),
-    deps.options.plugin
-  );
-  const targets = selectAppliedTargets(rows, step, deps.options.plugin);
-
-  if (targets.length === 0) {
-    deps.logger.info("Nothing to roll back.");
-    return { rolledBack: [] };
-  }
-
-  // Load each target's DOWN SQL.
-  //
-  // `reversible` asks whether the section holds any STATEMENT, not whether it
-  // holds any text. A generated migration with nothing to reverse still emits
-  // a `-- DOWN` header and an explanatory comment, so a length check reads it
-  // as reversible, executes nothing, and records the file rolled back — after
-  // which `migrate` treats it as pending and re-applies its `CREATE TABLE`s
-  // against the tables that are still there. A baseline is the case where
-  // that always happens, because it never has a down section.
-  //
-  // A target whose DOWN cannot be read — a module the plugin no longer
-  // ships, or one changed since it was sealed or applied — is kept with the
-  // reason, so a dry run can report it; a real run refuses on it below.
+/**
+ * Each target's DOWN as it will run, in the order given, with the live state
+ * the guards judge it against (`readLiveState`). Reads; runs nothing.
+ *
+ * The one planner for every rollback: `migrate:down` and `plugins uninstall`
+ * judge and run the statements it returns, so the two cannot disagree about
+ * what a module's DOWN holds.
+ *
+ * `reversible` asks whether the section holds any STATEMENT, not whether it
+ * holds any text. A generated migration with nothing to reverse still emits
+ * a `-- DOWN` header and an explanatory comment, so a length check reads it
+ * as reversible, executes nothing, and records the file rolled back — after
+ * which `migrate` treats it as pending and re-applies its `CREATE TABLE`s
+ * against the tables that are still there. A baseline is the case where
+ * that always happens, because it never has a down section.
+ *
+ * A target whose DOWN cannot be read — a module the plugin no longer
+ * ships, or one changed since it was sealed or applied — is kept with the
+ * reason, so a dry run can report it; `refusalOf` refuses a real run on it.
+ */
+export async function planRollback(
+  filenames: readonly string[],
+  deps: Pick<
+    MigrateDownCoreDeps,
+    | "dialect"
+    | "readDownSql"
+    | "readLiveColumns"
+    | "readLiveElements"
+    | "readLiveTables"
+    | "readLiveIndexTables"
+  >
+): Promise<PlannedDown[]> {
   const planned: PlannedDown[] = [];
-  for (const filename of targets) {
+  for (const filename of filenames) {
     try {
       const down = await deps.readDownSql(filename);
       const downSql = down.sql.trim();
@@ -495,6 +504,28 @@ export async function migrateDownCore(
     }
   }
   await readLiveState(planned, deps);
+  return planned;
+}
+
+export async function migrateDownCore(
+  deps: MigrateDownCoreDeps
+): Promise<MigrateDownResult> {
+  const step = deps.options.step ?? 1;
+  // Plugin rows belong to their own migration stream, so they are excluded
+  // unless `--plugin` names one; an unscoped run must never revert a plugin's
+  // migration while reporting an app rollback.
+  const rows = scopeLedgerRows(
+    await deps.listFileApplies(),
+    deps.options.plugin
+  );
+  const targets = selectAppliedTargets(rows, step, deps.options.plugin);
+
+  if (targets.length === 0) {
+    deps.logger.info("Nothing to roll back.");
+    return { rolledBack: [] };
+  }
+
+  const planned = await planRollback(targets, deps);
 
   // Dry-run is a non-destructive preview: it never throws and never
   // executes. Every refusal a real run would make is reported instead, by
@@ -614,6 +645,8 @@ export async function downDatabaseDeps(args: {
     name: string;
     migrations: ReadonlyArray<{ name: string; schemaVersion: number }>;
   };
+  /** The command a failed DOWN's ledger note names; `migrate:down` if absent. */
+  command?: string;
 }): Promise<
   Pick<
     MigrateDownCoreDeps,
@@ -689,7 +722,7 @@ export async function downDatabaseDeps(args: {
         filename,
         dialect,
         transaction,
-        note: `migrate:down failed: ${message}`,
+        note: `${args.command ?? "migrate:down"} failed: ${message}`,
       }),
   };
 }
@@ -784,27 +817,21 @@ export async function runMigrateDown(
       const pluginName = pluginOfLedgerRow(filename);
       if (pluginName !== null) {
         // A plugin module is read from the plugin's definition, verified as
-        // the module that was applied (`verifiedPluginModule`) — and joined
-        // the way the apply path joins its UP. The core splits it with the
-        // splitter `pluginModuleStatements` uses, so the guards read, and
-        // `execDown` runs, the statements the module's DOWN holds.
+        // the module that was applied — the read `plugins uninstall` makes,
+        // through the same function — and joined the way the apply path
+        // joins its UP. The core splits it with the splitter
+        // `pluginModuleStatements` uses, so the guards read, and `execDown`
+        // runs, the statements the module's DOWN holds.
         const definition = (configResult.config.plugins ?? []).find(
           p => p.name === pluginName
         );
-        const module = verifiedPluginModule({
+        return pluginModuleDown({
           pluginName,
           migrations: definition?.contributes?.schema?.migrations ?? [],
-          // The last slash for the same reason `pluginOfLedgerRow` uses it:
-          // a scoped plugin name carries a slash, and the first one is
-          // inside the NAME.
-          moduleName: filename.slice(filename.lastIndexOf("/") + 1),
           filename,
           recordedSha: await recordedSha(filename),
+          dialect,
         });
-        return {
-          sql: moduleSql(module, dialect, "down"),
-          transaction: module.transaction !== false,
-        };
       }
       const name = filename.endsWith(".sql") ? filename : `${filename}.sql`;
       const content = await readFile(resolve(migrationsDir, name), "utf-8");

@@ -4,7 +4,7 @@
  *
  * The column is real — on the table and in the runtime Drizzle object — so a
  * read returns it and a write reaches it unless the entry boundary stops each.
- * Its contributor writes it through its own queries; a caller of the entry API can
+ * Its contributor writes it through `ctx.db.contributed`; a caller of the entry API can
  * neither see it nor set it, in either spelling of its name.
  *
  * Collections, Singles and field groups each have their own read and write
