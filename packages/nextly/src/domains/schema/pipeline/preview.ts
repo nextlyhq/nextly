@@ -22,16 +22,17 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { getActiveExtensionSchema } from "../extension/build-extension-schema";
+
 import { RealClassifier } from "./classifier/classifier";
 import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
-import { desiredCollectionTable } from "./desired-collection-table";
 import {
-  buildDesiredTableFromComponentFields,
-  buildDesiredTableFromFields,
-} from "./diff/build-from-fields";
+  buildDesiredSnapshot,
+  desiredSchemaTableNames,
+} from "./desired-snapshot";
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
@@ -45,7 +46,6 @@ import type {
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
-import { builtByFor } from "./registered-collections";
 import { RegexRenameDetector } from "./rename-detector";
 import type { ClassifierEvent } from "./resolution/types";
 import type { DesiredSchema } from "./types";
@@ -118,58 +118,24 @@ export async function previewDesiredSchema(
   const introspect = deps.introspect ?? introspectLiveSnapshot;
 
   // Phase A: introspect live + build desired snapshot + diff.
-  // Iterates all three buckets: collections, singles, and components.
-  // Singles use the same system columns as collections (id, title, slug,
-  // created_at, updated_at). Components use a separate builder that injects
-  // component system columns (_parent_id, _parent_table, etc.) instead.
-  const managedTableNames = [
-    ...Object.values(desired.collections).map(c => c.tableName),
-    ...Object.values(desired.singles).map(s => s.tableName),
-    ...Object.values(desired.components).map(c => c.tableName),
-  ];
-
-  const liveSnapshot = await introspect(db, dialect, managedTableNames);
-
-  // The apply's own builder, so every key a desired collection carries
-  // (status, localized, declared indexes) reaches the preview too. A key the
-  // preview dropped showed as a change: a missing `status` as a column to
-  // drop, a missing declared index as an index to drop.
-  const collectionTables = Object.values(desired.collections).map(c =>
-    desiredCollectionTable(c, dialect)
+  //
+  // The apply's own table list and snapshot builder, with the extension
+  // schema the apply merges: the tables plugins and the app declare, and what
+  // hooks contribute to entity tables. Built from the entities alone, the
+  // preview showed a contributed column as one to drop and a declared table
+  // as one to create, which the apply never does.
+  const extensions = getActiveExtensionSchema(dialect);
+  const liveSnapshot = await introspect(
+    db,
+    dialect,
+    desiredSchemaTableNames(desired, extensions)
   );
-  const singleTables = Object.values(desired.singles).map(s =>
-    buildDesiredTableFromFields(
-      s.tableName,
-      s.fields as unknown as Parameters<typeof buildDesiredTableFromFields>[1],
-      dialect,
-      // Forward `localized` so a localized single's translatable columns are omitted from the
-      // preview's desired snapshot (they live in the companion), matching the collection path —
-      // otherwise the diff reports phantom main-table changes the apply never makes.
-      {
-        builtBy: builtByFor("single", s.builderOwned),
-        hasStatus: s.status === true,
-        localized: s.localized === true,
-      }
-    )
-  );
-  const componentTables = Object.values(desired.components).map(c =>
-    buildDesiredTableFromComponentFields(
-      c.tableName,
-      c.fields as unknown as Parameters<
-        typeof buildDesiredTableFromComponentFields
-      >[1],
-      dialect,
-      // Forward `localized` so a localized component's translatable columns are omitted from the
-      // preview's desired snapshot (they live in the companion), matching collections/singles.
-      {
-        builtBy: builtByFor("fieldGroup", c.builderOwned),
-        localized: (c as { localized?: boolean }).localized === true,
-      }
-    )
-  );
-  const desiredSnapshot: NextlySchemaSnapshot = {
-    tables: [...collectionTables, ...singleTables, ...componentTables],
-  };
+  const { snapshot: desiredSnapshot } = buildDesiredSnapshot({
+    desired,
+    dialect,
+    liveSnapshot,
+    extensions,
+  });
 
   const allOperations = diffSnapshots(liveSnapshot, desiredSnapshot);
 

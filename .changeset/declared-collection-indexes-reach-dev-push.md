@@ -38,3 +38,10 @@ SQLite a table rebuild lost it outright. The boot drift warning and the schema
 preview read the collection the same way, so they reported a migration-created
 index as a change. Each of them now carries the declared indexes, and an edit
 that only adds or removes one is applied by the next reload.
+
+The schema preview (the admin's confirm step and the boot drift warning) now
+builds the schema it compares from the same function as the apply, with the
+tables plugins and the app declare and what schema hooks add to entity tables.
+It used to leave those out, so it showed a hook-contributed column as one to
+drop and a declared table as nothing to create, neither of which the apply
+does.
