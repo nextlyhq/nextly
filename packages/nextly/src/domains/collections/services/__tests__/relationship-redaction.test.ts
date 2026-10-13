@@ -23,6 +23,17 @@ import {
 import { CollectionRelationshipService } from "../collection-relationship-service";
 import { TRUSTS_EVERY_COLLECTION } from "../../../../services/collections/trust-grant";
 
+// Every caller here may read the related row, since what is under test is
+// what is stripped from it. No access-control service is registered in this
+// suite, so the row gate asks the caller's database grants, as a direct read
+// does; they hold the grant.
+vi.mock("../../../../services/lib/permissions", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../../services/lib/permissions")
+  >()),
+  hasPermission: vi.fn().mockResolvedValue(true),
+}));
+
 // getSystemEntityTable() resolves the users table via env.DB_DIALECT (not the
 // adapter); sqlite needs no DATABASE_URL, so it validates cleanly in a unit
 // test while still exposing a users table with a password_hash column.
