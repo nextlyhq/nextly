@@ -444,7 +444,11 @@ export interface PluginContext {
      * update giving a role that reaches `super-admin` (directly or by
      * inheritance), and an update to the password, email, activation,
      * verification or roles of an account that reaches it, or its deletion,
-     * are refused with `NextlyError` code `FORBIDDEN`. An
+     * are refused with `NextlyError` code `FORBIDDEN`. So is a create or
+     * update that would leave an account active, verified and without a
+     * password, or move such an account to another address: core makes that
+     * account for an externally verified identity, only when an app's login
+     * plugin hands it a sign-in. An
      * address a plugin vouches for is recorded as verified by `"plugin"`.
      */
     users: PluginUserService;

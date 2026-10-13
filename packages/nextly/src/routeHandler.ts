@@ -919,8 +919,27 @@ async function resolveAuthorization(
     // A plugin may name its own permission for its settings in place of
     // `manage-settings` (`contributes.settingsPermission`), checked at boot to
     // be one it declares.
-    const declared = settingsWritePermission(
-      readServiceConfig()?.plugins,
+    //
+    // Services are booted before the declaration is read, as the dispatch
+    // after this gate boots them anyway. On a cold process neither config
+    // answered for the boot: the registered one did not exist yet, and the
+    // handler's still held the plugins as declared, before a `setup`
+    // transformer could change one's `settingsPermission`. Either way the
+    // first request was judged against a permission the dispatch would not
+    // serve under. Booted, the registered config is the plugin list the
+    // dispatch reads; the handler's config stays the fallback for a process
+    // that registered without one.
+    //
+    // The caller is authenticated first. A request this gate refuses for want
+    // of a session or key must not make the process boot, run its startup
+    // migrations or start plugins, which is why the dispatch path keeps
+    // authorization ahead of boot too. Authentication itself needs no booted
+    // service; only the permission it is then judged by does.
+    const caller = await requireAuthentication(req);
+    if (isErrorResponse(caller)) return caller;
+    await ensureServicesInitialized();
+    const write = settingsWritePermission(
+      readServiceConfig()?.plugins ?? getHandlerConfig()?.plugins,
       routeParams?.plugin
     );
     if (httpMethod === "GET") {
@@ -929,16 +948,14 @@ async function resolveAuthorization(
       return requireAnyPermission(req, [
         { action: "read", resource: "settings" },
         { action: "manage", resource: "settings" },
-        ...(declared ? [declared] : []),
+        write,
       ]);
     }
     // A write to a plugin's configuration is a settings change, so it takes
     // the same permission a settings change takes anywhere else, unless the
     // plugin named its own: then that one alone, so `manage-settings` does
     // not reach settings the plugin kept to a narrower role.
-    return declared
-      ? requirePermission(req, declared.action, declared.resource)
-      : requirePermission(req, "manage", "settings");
+    return requirePermission(req, write.action, write.resource);
   }
 
   // --- Email providers → manage-email-providers ---

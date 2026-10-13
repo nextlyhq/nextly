@@ -438,6 +438,21 @@ function userValidationError(
   });
 }
 
+/**
+ * Whether an account has the shape core gives an identity another system has
+ * verified: active, with a verified address, and no password. Such an account
+ * is signed in to only through that system, and only core makes one, from an
+ * app's login plugin. One definition for every plugin write that is refused
+ * for producing it.
+ */
+function isExternalIdentityShape(account: {
+  isActive: boolean;
+  verified: boolean;
+  hasPassword: boolean;
+}): boolean {
+  return account.isActive && account.verified && !account.hasPassword;
+}
+
 export class UserMutationService extends BaseService {
   private readonly userConfig?: UserConfig;
   private readonly userExtSchemaService?: UserExtSchemaService;
@@ -1163,13 +1178,14 @@ export class UserMutationService extends BaseService {
       //
       // So both paths pay the hash, both leave at the same time, and the
       // enumeration property the endpoint is designed around holds.
+      // Every password given here is a raw one, and is hashed whatever it
+      // looks like. Guessing from its shape whether it was already a hash
+      // stored a long password containing a colon as plain text. A caller
+      // holding a real hash sets it through `updatePasswordHash`, the one
+      // write that takes a hash, and which refuses anything else.
       let passwordHash: string | null = null;
       if (userData.password && userData.password.length > 0) {
-        const looksPlain =
-          userData.password.length < 32 || !userData.password.includes(":");
-        passwordHash = looksPlain
-          ? await hashPassword(userData.password)
-          : userData.password;
+        passwordHash = await hashPassword(userData.password);
       }
 
       // Account-enumeration sensitive: the public message stays generic
@@ -1282,6 +1298,23 @@ export class UserMutationService extends BaseService {
         createdAt: now,
         updatedAt: now,
       };
+
+      // Over the row about to be written, before it is: a plugin never
+      // creates the account core makes for an externally verified identity.
+      // An invite is never verified at creation, so today this cannot fire;
+      // it costs nothing, and holds if the rule above it changes.
+      if (
+        caller === "plugin" &&
+        isExternalIdentityShape({
+          isActive: values.isActive === true,
+          verified: values.emailVerified != null,
+          hasPassword: values.passwordHash != null,
+        })
+      ) {
+        throw NextlyError.forbidden({
+          logContext: { reason: "plugin-external-identity-refused", email },
+        });
+      }
 
       // Mint the invite token value up front (pure computation) so the hash can
       // be written inside the same transaction as the account. Storing only the
@@ -1682,6 +1715,19 @@ export class UserMutationService extends BaseService {
 
       const hasFieldUpdates = Object.keys(updateData).length > 0;
 
+      // A plugin may not turn the account into an externally verified
+      // identity's (active, verified, no password), nor move one to another
+      // address; see the method. Asked in the transaction below, holding the
+      // account's row, before the write. Activating or verifying can bring an
+      // account into that shape, and an address change keeps it there under
+      // an address no provider asserted; a password takes it out. No other
+      // update pays for the locking read.
+      const guardsExternalIdentity =
+        caller === "plugin" &&
+        (updateData.isActive !== undefined ||
+          updateData.emailVerified !== undefined ||
+          updateData.email !== undefined);
+
       // 2b) Extract custom field values from changes (only fields present in payload)
       const hasExt = this.hasCustomFields();
       const customFieldUpdates: Record<string, unknown> = {};
@@ -1748,6 +1794,13 @@ export class UserMutationService extends BaseService {
             await this.refuseSuperAdminAccount(
               currentUser.id,
               administratorRefusal,
+              txDb
+            );
+          }
+          if (guardsExternalIdentity) {
+            await this.refuseExternalIdentityShape(
+              currentUser.id,
+              updateData,
               txDb
             );
           }
@@ -2063,6 +2116,72 @@ export class UserMutationService extends BaseService {
     )[0];
     if (!anchor) {
       throw NextlyError.forbidden({ logContext });
+    }
+  }
+
+  /**
+   * Refuse a plugin's update that would turn an account into an externally
+   * verified identity's: active, verified and without a password.
+   *
+   * That is the account core provisions for an identity another system has
+   * verified, and only core makes one, when an app's login plugin hands it a
+   * sign-in. A plugin reaching the same account through its users service,
+   * by verifying an active invite say, would mint one outside that hand-off.
+   * Judged on the account the write leaves: one already in that shape, made
+   * by a login plugin's sign-in, still takes a plugin's other edits, and may
+   * be deactivated or given a password, but not re-verified, reactivated or
+   * moved to another address while it stays in that shape. Each would
+   * restate on the plugin's word what the provider asserted; a new address
+   * kept verified is one a login plugin's sign-in could then be matched to.
+   *
+   * Asked inside the write's transaction, before the write, holding the
+   * account's row on PostgreSQL and MySQL as the super-admin check beside it
+   * does, so a concurrent write cannot change the answer before it lands.
+   * SQLite serializes write transactions.
+   */
+  private async refuseExternalIdentityShape(
+    userId: string | number,
+    set: UserUpdateData,
+    txDb: DrizzleTransactionLike
+  ): Promise<void> {
+    const { users } = this.tables;
+    const read = txDb
+      .select({
+        isActive: users.isActive,
+        emailVerified: users.emailVerified,
+        passwordHash: users.passwordHash,
+      })
+      .from(users)
+      .where(eq(users.id, String(userId)))
+      .limit(1);
+    const [row] = (
+      this.dialect === "sqlite" ? await read : await read.for("update")
+    ) as Array<{
+      isActive: unknown;
+      emailVerified: unknown;
+      passwordHash: unknown;
+    }>;
+    // Gone since the update read it: the write that follows changes no row.
+    if (!row) return;
+    // A column this update leaves alone keeps the value the row holds.
+    const after = {
+      isActive:
+        set.isActive !== undefined
+          ? Boolean(set.isActive)
+          : Boolean(row.isActive),
+      verified:
+        set.emailVerified !== undefined
+          ? set.emailVerified != null
+          : row.emailVerified != null,
+      hasPassword:
+        set.passwordHash !== undefined
+          ? set.passwordHash != null
+          : row.passwordHash != null,
+    };
+    if (isExternalIdentityShape(after)) {
+      throw NextlyError.forbidden({
+        logContext: { reason: "plugin-external-identity-refused", userId },
+      });
     }
   }
 

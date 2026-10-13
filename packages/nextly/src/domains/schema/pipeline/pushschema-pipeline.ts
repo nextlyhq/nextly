@@ -64,7 +64,10 @@ import {
   desiredSchemaTableNames,
 } from "./desired-snapshot";
 import { diffSnapshots } from "./diff/diff";
-import { introspectLiveSnapshot } from "./diff/introspect-live";
+import {
+  introspectLiveSnapshot,
+  introspectSqliteRebuildLosses,
+} from "./diff/introspect-live";
 import type { Operation, NextlySchemaSnapshot, TableSpec } from "./diff/types";
 import { describePrecondition } from "./errors";
 // Index restore uses the all-dialect templates, not ddl-emitter/: that module
@@ -77,9 +80,17 @@ import {
   isDrizzleTable,
   stripKitDropsOfDeclaredConstraints,
   stripKitDropsOfDeclaredIndexes,
+  stripKitDropsOfLiveUniqueConstraints,
 } from "./filter-unsafe-statements";
 import { indexRestoreStatements } from "./index-restore";
 import { kitRouteConstraintStatements } from "./kit-route-constraints";
+import {
+  desiredUniqueColumns,
+  liveTableName,
+  liveUniqueConstraintsToKeep,
+  renamesOf,
+  uniqueColumnsToKeep,
+} from "./live-uniques";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
 import { assertPreCleanupAccepted } from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
@@ -857,6 +868,27 @@ export class PushSchemaPipeline {
       const resolvedOps = allResolvedOps;
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
+      //
+      // What a drizzle-kit rebuild of a SQLite table would lose that the
+      // desired snapshot does not describe: its UNIQUE constraints, which the
+      // runtime tables then declare, and its triggers, which refuse the
+      // rebuild in `runApply`. Read once, before anything writes, and only on
+      // the route that rebuilds a table from its runtime definition.
+      const renames = renamesOf(resolvedOps);
+      const desiredUnique = desiredUniqueColumns(patchedDesired);
+      // Every table drizzle-kit may rebuild here, the one set the destructive
+      // scan below allows a rebuild for and the trigger refusal reads.
+      const approvedRebuilds = approvedRebuildTables(resolvedOps, dialect);
+      const rebuildLosses: RebuildLosses =
+        dialect === "sqlite" && !canEmitWithoutDrizzleKit(resolvedOps, dialect)
+          ? await rebuildLossesOf(db, renames, [
+              ...Object.values(patchedDesired.collections).map(
+                c => c.tableName
+              ),
+              ...Object.values(patchedDesired.singles).map(s => s.tableName),
+              ...approvedRebuilds,
+            ])
+          : new Map();
       const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
         ? this.testHooks._buildDrizzleSchemaOverride(patchedDesired, dialect)
         : this.buildDrizzleSchema(
@@ -864,7 +896,14 @@ export class PushSchemaPipeline {
             dialect,
             fieldGroupTypeColumns,
             fieldGroupRegistryTable,
-            desiredSnapshot
+            desiredSnapshot,
+            tableName =>
+              uniqueColumnsToKeep(
+                tableName,
+                rebuildLosses.get(tableName.toLowerCase())?.unique ?? [],
+                renames,
+                desiredUnique
+              )
           );
 
       // Scope drizzleSchema down to the table(s) actually touched by
@@ -983,6 +1022,11 @@ export class PushSchemaPipeline {
           await refuseKitRebuildsLosingConstraints(
             sqliteSessionOf(tx),
             resolvedOps,
+            desiredSnapshot.tables
+          );
+          refuseRebuildsDroppingTriggers(
+            approvedRebuilds,
+            rebuildLosses,
             desiredSnapshot.tables
           );
         }
@@ -1217,7 +1261,25 @@ export class PushSchemaPipeline {
             stripped.kept,
             desiredSnapshot
           );
-          emittedStatements = keptConstraints.kept;
+          // And the live UNIQUE constraints no spec describes, which only
+          // this apply's own drop_index removes (a Builder one-to-one's).
+          const keptUniques = stripKitDropsOfLiveUniqueConstraints(
+            keptConstraints.kept,
+            liveUniqueConstraintsToKeep(
+              liveSnapshot,
+              resolvedOps,
+              renames,
+              desiredUnique
+            )
+          );
+          emittedStatements = keptUniques.kept;
+          if (keptUniques.strippedCount > 0) {
+            console.debug(
+              `[Nextly schema] Kept ${keptUniques.strippedCount} live unique ` +
+                `constraint(s) drizzle-kit emitted a drop for (only a ` +
+                `drop_index operation removes one).`
+            );
+          }
           if (stripped.strippedCount > 0) {
             // Once per apply, not per statement: enough to see the guard
             // acted without turning a routine emission into log noise.
@@ -1270,9 +1332,7 @@ export class PushSchemaPipeline {
         // approved a rebuild-justifying change — a rebuild on any other
         // table is the kit encoding a column drop we never approved
         // (rc.4 emits exactly that shape; probe-verified).
-        const allowedRebuildTables = new Set(
-          resolvedOps.flatMap(op => rebuildApprovedBy(op, dialect))
-        );
+        const allowedRebuildTables = approvedRebuilds;
         // Tables this apply is answerable for. On a UI save the locked ones are
         // excluded: their statements are dropped below and never execute, so
         // holding the apply to account for destructive DDL on them would let
@@ -1539,7 +1599,12 @@ export class PushSchemaPipeline {
     typeColumns: Map<string, string>,
     fieldGroupRegistryTable: string | undefined,
     /** The snapshot the diff compared, whose foreign keys SQLite's tables declare. */
-    desiredSnapshot: NextlySchemaSnapshot
+    desiredSnapshot: NextlySchemaSnapshot,
+    /**
+     * The live single-column UNIQUEs a SQLite runtime table declares
+     * (`uniqueColumnsToKeep`); none off SQLite's drizzle-kit route.
+     */
+    uniqueColumnsFor: (tableName: string) => string[]
   ): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     const foreignKeysOf = (tableName: string) =>
@@ -1606,6 +1671,7 @@ export class PushSchemaPipeline {
           // SQLite keeps them and the kit sees no key it would drop. Read on
           // SQLite only; the other dialects add keys with statements.
           foreignKeys: foreignKeysOf(c.tableName),
+          uniqueColumns: uniqueColumnsFor(c.tableName),
         }
       );
       out[c.tableName] = table;
@@ -1626,6 +1692,7 @@ export class PushSchemaPipeline {
           builtBy: builtByFor("single", s.builderOwned),
           status: s.status === true,
           localized: (s as { localized?: boolean }).localized === true,
+          uniqueColumns: uniqueColumnsFor(s.tableName),
         }
       );
       out[s.tableName] = table;
@@ -1801,6 +1868,82 @@ function sqliteSessionOf(db: unknown): SqliteForeignKeySession {
       await client.run(sql.raw(statement));
     },
   };
+}
+
+/** What a SQLite rebuild of each table would lose, keyed by lower-cased name. */
+type RebuildLosses = Awaited<ReturnType<typeof introspectSqliteRebuildLosses>>;
+
+/** Each table once, whatever the case it was named in. */
+function distinctTableNames(names: readonly string[]): string[] {
+  return [...new Map(names.map(name => [name.toLowerCase(), name])).values()];
+}
+
+/**
+ * Every table, lower-cased, this apply approves a rebuild of
+ * (`rebuildApprovedBy`): the one set the destructive scan lets drizzle-kit
+ * rebuild, and so every table whose triggers a rebuild could drop.
+ */
+function approvedRebuildTables(
+  ops: readonly Operation[],
+  dialect: SupportedDialect
+): Set<string> {
+  return new Set(ops.flatMap(op => rebuildApprovedBy(op, dialect)));
+}
+
+/**
+ * What a SQLite rebuild of each table would lose, read before this apply's
+ * renames run: each table under the name it has in the database now, keyed
+ * by the name the desired schema gives it, lower-cased.
+ */
+async function rebuildLossesOf(
+  db: unknown,
+  renames: ReturnType<typeof renamesOf>,
+  tables: readonly string[]
+): Promise<RebuildLosses> {
+  const desired = distinctTableNames(tables);
+  const read = await introspectSqliteRebuildLosses(
+    db,
+    desired.map(table => liveTableName(table, renames))
+  );
+  return new Map(
+    desired.flatMap(table => {
+      const losses = read.get(liveTableName(table, renames).toLowerCase());
+      return losses === undefined ? [] : [[table.toLowerCase(), losses]];
+    })
+  );
+}
+
+/**
+ * Refuses a SQLite rebuild of a table that has triggers.
+ *
+ * A rebuild drops the table, and every trigger on it goes with it; nothing in
+ * the schema describes a trigger, so nothing recreates it, and the behaviour
+ * it carried stops without a word. Nextly creates none, so a trigger is the
+ * app's or a plugin migration's, and only a migration that recreates it can
+ * make the change. A migration's own rebuild refuses the same table
+ * (`sqliteTableRebuildStatements`).
+ */
+function refuseRebuildsDroppingTriggers(
+  tables: Iterable<string>,
+  losses: RebuildLosses,
+  desiredTables: readonly TableSpec[]
+): void {
+  for (const table of tables) {
+    if ((losses.get(table.toLowerCase())?.triggers ?? 0) === 0) continue;
+    const name =
+      desiredTables.find(t => t.name.toLowerCase() === table.toLowerCase())
+        ?.name ?? table;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `schema.${name}`,
+          code: "SQLITE_REBUILD_WOULD_DROP_UNTRACKED_CONSTRAINTS",
+          message: untrackedConstraintRefusal(name, "triggers"),
+        },
+      ],
+      logContext: { table: name, lost: "triggers" },
+    });
+  }
 }
 
 /**

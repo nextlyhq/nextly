@@ -20,7 +20,10 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { runAfterDrizzle, type DrizzleSchemaHook } from "../after-drizzle";
+import { compileExtensionSchema } from "../publish";
 import type { SchemaOwner } from "../types";
+
+import { REFUSED_CONSTRUCT_HOOKS } from "./after-drizzle-refused-constructs";
 
 const OWNERS = new Map<string, SchemaOwner>([
   ["app_notes", { kind: "app" }],
@@ -299,5 +302,70 @@ describe("refused: tables that are not the app's to shape", () => {
         app_notes: pgTable("something_else", { id: pgText("id") }),
       }))
     ).toMatch(/SQL name is "something_else"/);
+  });
+});
+
+describe("refused: every construct the model cannot carry", () => {
+  it.each(Object.entries(REFUSED_CONSTRUCT_HOOKS))(
+    "refuses %s, naming the table and the construct",
+    async (construct, hook) => {
+      const message = await refusal(hook);
+      expect(message).toContain(`Table "app_notes" declares ${construct},`);
+    }
+  );
+
+  it("points a check and a foreign key at the declaration that carries them", async () => {
+    expect(
+      await refusal(REFUSED_CONSTRUCT_HOOKS["a check constraint"])
+    ).toContain("`checks` on `defineTable`");
+    expect(await refusal(REFUSED_CONSTRUCT_HOOKS["a foreign key"])).toContain(
+      "`foreignKeys` on `defineTable`"
+    );
+  });
+});
+
+describe("a plugin has no Drizzle-level hook", () => {
+  /** A hook that would refuse anything it ran over. */
+  const refusing = () => {
+    throw new Error("a Drizzle-level hook ran");
+  };
+  const compileWith = (
+    plugin: Record<string, unknown>,
+    appAfterDrizzle: unknown[] = []
+  ) =>
+    compileExtensionSchema({
+      dialect: "postgresql",
+      plugins: [
+        {
+          name: "@test/fx",
+          version: "1.0.0",
+          nextly: ">=0.0.0",
+          ...plugin,
+        } as never,
+      ],
+      config: { db: { schema: { afterDrizzle: appAfterDrizzle } } } as never,
+      logger: { warn: () => {} },
+    });
+
+  it("never runs one a plugin declares", async () => {
+    const built = await compileWith({
+      contributes: {
+        schema: {
+          prefix: "fx",
+          tables: [],
+          afterDrizzle: [refusing],
+        },
+      },
+    });
+    expect(built).toBeDefined();
+  });
+
+  it("runs the app's, through the same compile", async () => {
+    // The control: the plugin's hook did not run because only the app's do.
+    await expect(
+      compileWith({ contributes: { schema: { prefix: "fx", tables: [] } } }, [
+        refusing,
+      ])
+    ).rejects.toThrow("a Drizzle-level hook ran");
   });
 });

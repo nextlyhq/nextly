@@ -64,7 +64,9 @@ caller who could read that `users` row by name:
   rule if it has one. A key granted only `read-posts` does not see populated authors.
 - **`users` and media** have no rules of their own, so the grant decides: a signed-in user or
   an API key needs `read-users` to see a populated user and `read-media` to see an upload's
-  media row. Visitors keep both, as their own reads of them ask no grant.
+  media row. Visitors keep media, which public pages embed, but never see a populated user:
+  no visitor can read a user directly. A page your server renders with the Direct API reads
+  as the system by default, so it still shows authors.
 
 This holds at every depth, inside groups and repeaters, for each collection of a polymorphic
 relationship separately, on a Single, and for the entry a create or an update returns.

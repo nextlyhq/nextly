@@ -2,6 +2,7 @@
 
 import type React from "react";
 
+import { PermissionGuard } from "@admin/components/guards/PermissionGuard";
 import { Package } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -9,8 +10,15 @@ import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
+import type { PluginMetadata } from "@admin/types/branding";
+
+import { InstalledPluginsUnavailable } from "../components/InstalledPluginsUnavailable";
+import { PluginPageLoading } from "../components/PluginPageLoading";
 
 interface PluginSettingsPageProps {
   params?: { slug?: string };
@@ -30,19 +38,90 @@ export default function PluginSettingsPage({
 }: PluginSettingsPageProps): React.ReactElement {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
-        <PluginSettingsContent activeSlug={params?.slug} />
-      </PageContainer>
+      <PluginSettingsGate activeSlug={params?.slug}>
+        <PageContainer>
+          <PluginSettingsContent activeSlug={params?.slug} />
+        </PageContainer>
+      </PluginSettingsGate>
     </QueryErrorBoundary>
+  );
+}
+
+/** The installed plugin this page's address names, if any. */
+function pluginAt(
+  plugins: PluginMetadata[] | undefined,
+  activeSlug: string | undefined
+): PluginMetadata | undefined {
+  return activeSlug
+    ? plugins?.find(p => pluginSlug(p.name) === activeSlug)
+    : undefined;
+}
+
+/**
+ * Admit only a caller holding the permission a change to this plugin's
+ * settings needs, as the server publishes it in the plugin's metadata.
+ *
+ * Decided here rather than in the route table, which can only name one
+ * permission for every plugin: `manage-settings` there shut out the role a
+ * plugin keeps its settings to, and showed a `manage-settings` holder an
+ * editor whose saves the server refuses. It never gates on a default it
+ * merely assumed: while the plugin list is loading it waits, and when the list
+ * never arrived it says so, since either way the page cannot know what to ask
+ * for, and the default would send away the plugin's own role and admit the one
+ * it replaced. A plugin missing from a list that did arrive, or a server that
+ * does not name the permission, keeps `manage-settings`.
+ */
+function PluginSettingsGate({
+  activeSlug,
+  children,
+}: {
+  activeSlug?: string;
+  children: React.ReactNode;
+}) {
+  const branding = useBranding();
+  const status = useBrandingStatus();
+  const unresolved = unresolvedPluginList(branding?.plugins, status);
+  if (unresolved) return unresolved;
+  return (
+    <PermissionGuard
+      requiredPermission={settingsPermissionAt(branding?.plugins, activeSlug)}
+    >
+      {children}
+    </PermissionGuard>
+  );
+}
+
+/**
+ * What the gate shows while there is no plugin list to read, or `undefined`
+ * once there is one.
+ *
+ * Only a request that never answered is an outage. A settled answer for a
+ * project with no plugins carries no list at all, and is read as an empty
+ * one: the plugin is not found, under core's permission.
+ */
+function unresolvedPluginList(
+  plugins: PluginMetadata[] | undefined,
+  status: { isPending: boolean; isUnavailable: boolean }
+): React.ReactElement | undefined {
+  if (plugins !== undefined) return undefined;
+  if (status.isPending) return <PluginPageLoading label="Loading plugin…" />;
+  if (status.isUnavailable) return <InstalledPluginsUnavailable />;
+  return undefined;
+}
+
+/** The permission the plugin's metadata names for its settings, or core's. */
+function settingsPermissionAt(
+  plugins: PluginMetadata[] | undefined,
+  activeSlug: string | undefined
+): string {
+  return (
+    pluginAt(plugins, activeSlug)?.settings?.permission ?? "manage-settings"
   );
 }
 
 function PluginSettingsContent({ activeSlug }: { activeSlug?: string }) {
   const branding = useBranding();
-  const plugins = branding?.plugins ?? [];
-  const plugin = activeSlug
-    ? plugins.find(p => pluginSlug(p.name) === activeSlug)
-    : undefined;
+  const plugin = pluginAt(branding?.plugins, activeSlug);
 
   const title = plugin?.appearance?.label ?? plugin?.name;
   // A disabled plugin's settings UI must not load: its behavior is off, so a
