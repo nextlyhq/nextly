@@ -8,6 +8,7 @@ import {
   findUnexpectedDestructiveStatements,
   stripKitDropsOfDeclaredConstraints,
   stripKitDropsOfDeclaredIndexes,
+  stripKitDropsOfLiveUniqueConstraints,
 } from "../filter-unsafe-statements";
 
 afterEach(() => vi.restoreAllMocks());
@@ -345,5 +346,37 @@ describe("DROP SCHEMA", () => {
     ];
     expect(filterUnsafeStatements(kept, ["users"])).toEqual(kept);
     expect(findUnexpectedDestructiveStatements(kept)).toEqual([]);
+  });
+});
+
+describe("stripKitDropsOfLiveUniqueConstraints", () => {
+  // What `liveUniqueConstraintsToKeep` decided to keep: a Builder one-to-one's
+  // UNIQUE, under PostgreSQL's constraint name and MySQL's index name.
+  const keep = new Set(["dc_posts.dc_posts_profile_key", "dc_posts.profile"]);
+
+  it("strips the kit's drop of a kept constraint, in either spelling", () => {
+    const other = `ALTER TABLE "dc_posts" ADD COLUMN "lead_author" text;`;
+    expect(
+      stripKitDropsOfLiveUniqueConstraints(
+        [
+          `ALTER TABLE "dc_posts" DROP CONSTRAINT "dc_posts_profile_key";`,
+          "DROP INDEX `profile` ON `dc_posts`;",
+          other,
+        ],
+        keep
+      )
+    ).toEqual({ kept: [other], strippedCount: 2 });
+  });
+
+  it("keeps a drop of anything not kept, and the same name on another table", () => {
+    const statements = [
+      `ALTER TABLE "dc_posts" DROP CONSTRAINT "idx_dc_posts_profile";`,
+      "DROP INDEX `profile` ON `dc_authors`;",
+      `ALTER TABLE "dc_authors" DROP CONSTRAINT "dc_posts_profile_key";`,
+    ];
+    expect(stripKitDropsOfLiveUniqueConstraints(statements, keep)).toEqual({
+      kept: statements,
+      strippedCount: 0,
+    });
   });
 });

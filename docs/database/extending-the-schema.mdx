@@ -53,6 +53,15 @@ export default defineConfig({
 App tables carry no prefix, and they go into your migrations like any other
 table.
 
+Hooks run in a fixed order: the plugins' in dependency order, whatever order
+your config lists them in, each seeing every table registered before it, and
+then the app's, which sees them all. A hook must declare the same schema every
+time it runs, so derive nothing from the clock, a counter or a random value:
+Nextly runs the hooks twice when it builds the schema it pushes or writes into
+a migration, and refuses a hook whose output differs, naming its owner and its
+position, rather than plan a change on every push. A hook that throws is named
+the same way.
+
 `col.id()` has no database default: the code that inserts a row supplies the
 `id` (any UUID fits; a UUIDv7 keeps new rows in key order), and `InferInsert`
 requires it. `col.timestamps()` defaults both columns to the current time on
@@ -323,16 +332,34 @@ plugin and app tables only, and it may return only app tables.
 Anything the schema model cannot carry into migrations and drift detection is
 **refused at boot**, naming the table and the construct — because the
 alternative is a constraint that exists on your machine and on no deployment,
-with nothing reporting the difference. Checks, foreign keys and expression
-indexes all carry through the DSL above; the escape hatch refuses
-them because the DSL is the one path that keeps them in migrations and drift.
+with nothing reporting the difference. A table the hook returns is refused if
+it declares any of these:
+
+- **a partial index**: refused on every dialect, because MySQL cannot build
+  one; index the column whole.
+- **an expression index**: declare it in `indexes` on `defineTable`, with its
+  expression.
+- **a column-level unique constraint**: declare a unique index instead.
+- **a table-level unique constraint**: declare a unique index instead.
+- **a generated column**: compute the value on write.
+- **an identity column**: use a generated id.
+- **an enum column**: use `col.enum()` in the DSL, or a text column.
+- **a check constraint**: declare it in `checks` on `defineTable`.
+- **a foreign key**: declare it in `foreignKeys` on `defineTable`.
+- **a composite primary key**: use a single generated id and a unique index
+  over the columns.
+
+Checks, foreign keys and expression indexes all carry through the DSL above;
+the escape hatch refuses them because the DSL is the one path that keeps them
+in migrations and drift. These are the exceptions to the comparison with
+Payload below, whose `afterSchemaInit` keeps them on your machine only.
 
 ## Coming from Payload
 
 | Payload | Nextly |
 | --- | --- |
 | `beforeSchemaInit` | `db.schema.extend`, which also runs for plugins |
-| `afterSchemaInit` | `db.schema.afterDrizzle`, with loss checking |
+| `afterSchemaInit` | `db.schema.afterDrizzle`, refusing what migrations cannot carry (listed under the escape hatch) |
 | `extendTable` | `schema.extendTable`, with ownership rules |
 | `rawTables` | `defineTable` + `col.*`, the primary path rather than an escape |
 | Collection `indexes` | Collection `indexes`, now actually emitted |

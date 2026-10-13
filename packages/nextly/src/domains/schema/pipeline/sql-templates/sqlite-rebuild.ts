@@ -236,11 +236,12 @@ export function sqliteTableRebuildStatements(
  * The refusal for a rebuild that would lose constraints the schema does not
  * describe. It says what to do, because the rebuild guard reports it as a bare
  * constraint name in "CHECK constraint failed: ...": no generated rebuild can
- * keep such a constraint, only a migration that declares it can.
+ * keep such a constraint, only a migration that declares it can. The dev push
+ * says the same of triggers, which no schema tracks at all.
  */
 export function untrackedConstraintRefusal(
   table: string,
-  kind: "foreign keys" | "checks"
+  kind: "foreign keys" | "checks" | "triggers"
 ): string {
   return `rebuilding ${table} would drop ${kind} its schema does not track: write this change as a manual migration (nextly migrate:create --blank) that recreates ${table} with its ${kind}`;
 }

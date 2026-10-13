@@ -15,6 +15,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import {
   clearFieldTypes,
@@ -116,5 +117,38 @@ describe("a plugin a setup transformer adds, in the CLI", () => {
     await load([adding(withFieldType)]);
 
     expect(getFieldType("b-rating")).toBeDefined();
+  });
+});
+
+describe("a plugin's settings permission, in the CLI", () => {
+  /** A plugin keeping its settings to `settingsPermission`. */
+  function paying(settingsPermission: string) {
+    return {
+      name: "@t/pay",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      contributes: {
+        settings: z.object({ apiKey: z.string().default("") }),
+        permissions: [{ action: "update", resource: "pay-settings" }],
+        settingsPermission,
+      },
+    };
+  }
+
+  it("is refused when it is not one the plugin owns, as the boot refuses it", async () => {
+    // A command that accepted it would build or migrate an application whose
+    // boot then refuses to start.
+    await expect(load([paying("update-unowned-settings")])).rejects.toSatisfy(
+      (err: unknown) =>
+        NextlyError.is(err) &&
+        (err.logContext as { reason?: string }).reason ===
+          "settings-permission-undeclared"
+    );
+  });
+
+  it("is accepted when it is one the plugin owns", async () => {
+    // The control: a check refusing every settings permission passes the case
+    // above.
+    await expect(load([paying("update-pay-settings")])).resolves.toBeDefined();
   });
 });

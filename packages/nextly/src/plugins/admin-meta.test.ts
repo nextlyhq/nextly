@@ -199,6 +199,43 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].settings?.component).toBe("@acme/p/admin#Settings");
   });
 
+  describe("the permission the settings page asks for", () => {
+    const settingsPage = { component: "@acme/p/admin#Settings" };
+
+    it("is the plugin's own settings permission when it names one", () => {
+      // The request gate takes this one alone for a write, so a page gated on
+      // anything else either shuts out the role it was granted to or shows
+      // an editor whose saves are refused.
+      const meta = buildPluginAdminMeta(
+        asPlugins([
+          {
+            ...base,
+            contributes: {
+              permissions: [{ action: "update", resource: "pay-settings" }],
+              settingsPermission: "update-pay-settings",
+              admin: { settings: settingsPage },
+            },
+          },
+        ]),
+        undefined
+      );
+      expect(meta[0].settings).toEqual({
+        ...settingsPage,
+        permission: "update-pay-settings",
+      });
+    });
+
+    it("is manage-settings when it names none", () => {
+      const meta = buildPluginAdminMeta(
+        asPlugins([
+          { ...base, contributes: { admin: { settings: settingsPage } } },
+        ]),
+        undefined
+      );
+      expect(meta[0].settings?.permission).toBe("manage-settings");
+    });
+  });
+
   it("folds headerSlot + widgets for enabled plugins", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([

@@ -624,6 +624,9 @@ async function buildPluginDraft(args: {
       dialect: args.dialect,
       coreTableNames: CORE_TABLE_NAMES,
       entities: [],
+      // Written into a migration, so a hook whose output moves between builds
+      // would make every run write a new one: refused, naming it.
+      refuseNondeterministicHooks: true,
       pluginPrefixes: args.pluginPrefixes,
       dependencies: args.dependencies,
       plugins: [

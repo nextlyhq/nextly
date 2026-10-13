@@ -20,6 +20,9 @@
 
 export type Factory<T> = () => T;
 
+/** What `Container.restore` put into a container: each name, with its entry. */
+export type RestoredRegistrations = Map<string, Factory<unknown>>;
+
 export class Container {
   private singletons = new Map<string, unknown>();
   private factories = new Map<string, Factory<unknown>>();
@@ -117,6 +120,41 @@ export class Container {
     this.singletons = new Map();
     this.factories = new Map();
     return detached;
+  }
+
+  /**
+   * Take back what `detach` moved out, for as long as the code it was moved
+   * aside for needs every lookup to find it: the teardown of plugins a
+   * cleared registration left running, which reaches some services through
+   * this container itself rather than its contexts' own resolvers. A name
+   * registered here since keeps its own registration. Each restored singleton
+   * is the same instance, cached in the map it moved with. Returns what it
+   * put in, for `withdraw` to take out again.
+   */
+  restore(detached: Container): RestoredRegistrations {
+    const restored: RestoredRegistrations = new Map();
+    for (const [name, factory] of detached.factories) {
+      if (this.factories.has(name)) continue;
+      // An entry of its own rather than the detached factory itself, so
+      // `withdraw` can tell it from a registration made since, even one made
+      // with the very same factory function.
+      const entry: Factory<unknown> = () => factory();
+      this.factories.set(name, entry);
+      restored.set(name, entry);
+    }
+    return restored;
+  }
+
+  /**
+   * Take out again what `restore` put in, and nothing else: a name goes only
+   * while its registration here is still the entry restored. A service
+   * registered since, under a new name or over a restored one, belongs to
+   * whoever registered it and stays, which `clear` would not leave.
+   */
+  withdraw(restored: RestoredRegistrations): void {
+    for (const [name, entry] of restored) {
+      if (this.factories.get(name) === entry) this.factories.delete(name);
+    }
   }
 }
 

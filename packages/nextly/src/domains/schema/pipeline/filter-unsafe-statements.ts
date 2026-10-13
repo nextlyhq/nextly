@@ -407,22 +407,78 @@ export function stripKitDropsOfDeclaredConstraints(
 
   let strippedCount = 0;
   const kept = statements.filter(stmt => {
-    const alter = stmt.match(
-      /^ALTER\s+TABLE\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s+DROP\s+(?:CONSTRAINT|FOREIGN\s+KEY|CHECK)\s+(?:IF\s+EXISTS\s+)?["`]?(\w+)["`]?\s*;?\s*$/i
-    );
-    const index = alter
-      ? null
-      : stmt.match(
-          /^DROP\s+INDEX\s+["`]?(\w+)["`]?\s+ON\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s*;?\s*$/i
-        );
-    const isDeclared = alter
-      ? declared.has(`${alter[1].toLowerCase()}.${alter[2].toLowerCase()}`)
-      : index !== null &&
-        foreignKeyNames.has(
-          `${index[2].toLowerCase()}.${index[1].toLowerCase()}`
-        );
+    const drop = constraintDropOf(stmt);
+    const isDeclared =
+      drop !== null &&
+      (drop.form === "alter" ? declared : foreignKeyNames).has(drop.key);
     if (isDeclared) strippedCount++;
     return !isDeclared;
+  });
+  return { kept, strippedCount };
+}
+
+/**
+ * The `table.name` key, lower-cased, of a drizzle-kit drop of a constraint or
+ * of an index, in the spelling it came in: PostgreSQL's and MySQL's `ALTER
+ * TABLE ... DROP CONSTRAINT | FOREIGN KEY | CHECK` (`alter`), and MySQL's
+ * `DROP INDEX ... ON` (`index`). `null` for any other statement, which
+ * every strip keeps. One reading, shared by every strip, so they cannot
+ * disagree about what a statement drops.
+ */
+function constraintDropOf(
+  stmt: string
+): { key: string; form: "alter" | "index" } | null {
+  const alter = stmt.match(
+    /^ALTER\s+TABLE\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s+DROP\s+(?:CONSTRAINT|FOREIGN\s+KEY|CHECK)\s+(?:IF\s+EXISTS\s+)?["`]?(\w+)["`]?\s*;?\s*$/i
+  );
+  if (alter) {
+    return {
+      key: `${alter[1].toLowerCase()}.${alter[2].toLowerCase()}`,
+      form: "alter",
+    };
+  }
+  const index = stmt.match(
+    /^DROP\s+INDEX\s+["`]?(\w+)["`]?\s+ON\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s*;?\s*$/i
+  );
+  return index
+    ? {
+        key: `${index[2].toLowerCase()}.${index[1].toLowerCase()}`,
+        form: "index",
+      }
+    : null;
+}
+
+/**
+ * Remove drizzle-kit's drops of the live UNIQUE constraints a save keeps.
+ *
+ * A Schema Builder table gets one inline from its own DDL, on a one-to-one
+ * relationship's column, and the snapshot tracks it only as the live unique
+ * index backing it. The kit's runtime tables carry no constraints on
+ * PostgreSQL and MySQL, so on any apply it handles the kit reads the
+ * constraint as undeclared and drops it, and the column then takes
+ * duplicates. Which constraints are kept is decided by
+ * `liveUniqueConstraintsToKeep`: those a desired field still makes unique,
+ * less any this apply drops itself. SQLite's runtime tables declare theirs
+ * instead (`uniqueColumns`), since a rebuild there recreates the table.
+ *
+ * Both spellings of the drop are matched, per table: PostgreSQL's `ALTER
+ * TABLE ... DROP CONSTRAINT` and MySQL's `DROP INDEX ... ON`, as
+ * {@link stripKitDropsOfDeclaredConstraints} reads them. A statement this
+ * does not recognise is KEPT.
+ */
+export function stripKitDropsOfLiveUniqueConstraints(
+  statements: string[],
+  /** `table.constraint` keys, lower-cased, of the constraints to keep. */
+  keep: ReadonlySet<string>
+): { kept: string[]; strippedCount: number } {
+  if (keep.size === 0) return { kept: statements, strippedCount: 0 };
+
+  let strippedCount = 0;
+  const kept = statements.filter(stmt => {
+    const drop = constraintDropOf(stmt);
+    const isKept = drop !== null && keep.has(drop.key);
+    if (isKept) strippedCount++;
+    return !isKept;
   });
   return { kept, strippedCount };
 }

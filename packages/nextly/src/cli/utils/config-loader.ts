@@ -72,6 +72,7 @@ import {
   finalizeRelationTargets,
   validateCrossPluginRelations,
 } from "../../plugins/schema/validate-relations";
+import { assertSettingsPermissionsOwned } from "../../plugins/settings-permission";
 
 import { bundleAndRequire } from "./config-bundler";
 
@@ -705,7 +706,17 @@ async function loadConfigInternal(
 
       // Fail fast on invalid plugin-declared custom permissions (D36) — same
       // collector the runtime boot runs (register.ts), so both paths agree (D50).
-      collectCustomPermissions(config, transformedPlugins);
+      // A plugin's settings permission is then checked against what it keeps,
+      // with the Builder's entities beside it, as the boot checks it: a command
+      // must not build or migrate an application whose boot would refuse it.
+      assertSettingsPermissionsOwned(
+        transformedPlugins,
+        collectCustomPermissions(config, transformedPlugins),
+        [
+          ...(builderEntities.collections ?? []),
+          ...(builderEntities.singles ?? []),
+        ].map(entity => entity.slug)
+      );
 
       debugLog(
         options,

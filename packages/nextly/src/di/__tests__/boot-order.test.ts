@@ -202,3 +202,38 @@ describe("the boot sequence in registerServices", () => {
     expect(schemaPhase).toBeLessThan(schemaRegistryInit);
   });
 });
+
+describe("the settings permission check in the Builder reconcile", () => {
+  it("refuses an unowned settings permission before any Builder row or table is written", () => {
+    // A boot that refuses the configuration must not have changed the
+    // installation first: the check is asked as soon as the Builder's entities
+    // are loaded, ahead of the materialization that writes registry rows and
+    // runs DDL.
+    const phase = bodyOf("reconcileBuilderTargets");
+    const loaded = phase.indexOf("loadBuilderEntities(");
+    const checked = phase.indexOf("assertSettingsPermissionsOwned(");
+    const written = phase.indexOf("materializeBuilderChanges(");
+    expect(loaded).toBeGreaterThan(-1);
+    expect(checked).toBeGreaterThan(-1);
+    expect(written).toBeGreaterThan(-1);
+    expect(loaded).toBeLessThan(checked);
+    expect(checked).toBeLessThan(written);
+  });
+});
+
+describe("the settings permission check before the adapter connects", () => {
+  it("refuses an unowned settings permission before first-run setup can write schema", () => {
+    // A misspelt or foreign permission is known from the config alone, so it
+    // stops the boot in the pre-connection validation, before
+    // `initializeSchemaRegistry` runs first-run setup on a fresh database.
+    expect(bodyOf("validateBootContributions")).toContain(
+      "assertSettingsPermissionsOwned("
+    );
+    const phase = bodyOf("registerServicesOnce");
+    const validated = phase.indexOf("validateBootContributions(");
+    const schemaSetup = phase.indexOf("initializeSchemaRegistry(");
+    expect(validated).toBeGreaterThan(-1);
+    expect(schemaSetup).toBeGreaterThan(-1);
+    expect(validated).toBeLessThan(schemaSetup);
+  });
+});

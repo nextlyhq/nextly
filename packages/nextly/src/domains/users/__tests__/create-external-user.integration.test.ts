@@ -579,6 +579,144 @@ describe.each(getConfiguredTestDialects())(
       expect(addedEdge).toBe(true);
     });
 
+    /**
+     * Run `change` once, after every check before the transaction has passed
+     * and before the transaction starts: what another request could commit
+     * there. The super-admin refusal is the last of those checks, so the
+     * change runs as it returns, as in the case above.
+     */
+    function inTheGap(
+      users: ReturnType<typeof services>["users"],
+      change: () => Promise<void>
+    ): () => boolean {
+      const mutation = (
+        users as unknown as {
+          mutationService: {
+            refuseSuperAdminRoles: (
+              ids: string[],
+              logContext: Record<string, unknown>
+            ) => Promise<void>;
+          };
+        }
+      ).mutationService;
+      const realRefusal = mutation.refuseSuperAdminRoles.bind(mutation);
+      let ran = false;
+      mutation.refuseSuperAdminRoles = async (ids, logContext) => {
+        await realRefusal(ids, logContext);
+        if (!ran) {
+          ran = true;
+          await change();
+        }
+      };
+      return () => ran;
+    }
+
+    // Each check before the transaction is a read, so another request can
+    // change its answer before the insert. Each case below changes one answer
+    // in that gap and expects the check made inside the transaction to refuse.
+    it("refuses, writing nothing, when the last account is deleted after the early check", async () => {
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const editor = await makeRole(t, "editor");
+      const db = t.adapter.getDrizzle() as unknown as {
+        delete: (table: unknown) => Promise<unknown>;
+      };
+      const { users, userRoles } = getDialectTables();
+
+      const external = services(t).users;
+      const ran = inTheGap(external, async () => {
+        await db.delete(userRoles);
+        await db.delete(users);
+      });
+
+      await expect(
+        external.createExternalUser(
+          {
+            email: "first@example.com",
+            name: "First",
+            roleIds: [editor],
+            emailVerifiedAt: new Date(),
+          },
+          SYSTEM_CONTEXT
+        )
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(ran()).toBe(true);
+      expect(await countUsers(t)).toBe(0);
+    });
+
+    it("refuses, writing nothing, when a role is deleted after the early check", async () => {
+      // On MySQL `user_roles` carries no foreign key, so without the re-read
+      // the account commits holding a role that no longer exists.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const editor = await makeRole(t, "editor");
+      const db = t.adapter.getDrizzle() as unknown as {
+        delete: (table: unknown) => {
+          where: (cond: unknown) => Promise<unknown>;
+        };
+      };
+      const { roles } = getDialectTables();
+
+      const external = services(t).users;
+      const ran = inTheGap(external, async () => {
+        await db.delete(roles).where(eq(roles.id, editor));
+      });
+
+      await expect(
+        external.createExternalUser(
+          {
+            email: "orphan@example.com",
+            name: "Orphan",
+            roleIds: [editor],
+            emailVerifiedAt: new Date(),
+          },
+          SYSTEM_CONTEXT
+        )
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(ran()).toBe(true);
+      expect(await userRow(t, "orphan@example.com")).toBeUndefined();
+    });
+
+    it("refuses as a duplicate, writing nothing, when another account takes the address after the early check", async () => {
+      // No re-read decides this one: every write stores the address in its
+      // canonical form, so the unique index on it refuses the insert inside
+      // the transaction. Here the index is met for real, on each dialect's
+      // own driver, where the case further down induces its error.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const editor = await makeRole(t, "editor");
+
+      const external = services(t).users;
+      const ran = inTheGap(external, async () => {
+        await services(t).users.createLocalUser({
+          email: "Taken@Example.com",
+          name: "Signed up first",
+          password: "Str0ng-P@ssw0rd!",
+          isActive: true,
+          emailVerification: "admin-vouched",
+        });
+      });
+      const before = await countUsers(t);
+
+      await expect(
+        external.createExternalUser(
+          {
+            email: "taken@example.com",
+            name: "Second",
+            roleIds: [editor],
+            emailVerifiedAt: new Date(),
+          },
+          SYSTEM_CONTEXT
+        )
+      ).rejects.toMatchObject({ code: "DUPLICATE" });
+      expect(ran()).toBe(true);
+      // The one account the gap made, and no other.
+      expect(await countUsers(t)).toBe(before + 1);
+      expect((await userRow(t, "taken@example.com"))?.name).toBe(
+        "Signed up first"
+      );
+    });
+
     it("refuses, writing no account, when the in-transaction role read FAILS", async () => {
       // The gate is a refusal, so an unreadable answer must refuse. Asked
       // through the access-check form, a failed read came back `false` —
