@@ -342,6 +342,8 @@ export {
   type NextlyServiceConfig,
   type ServiceMap,
 } from "./di";
+// Named by `NextlyServiceConfig.pluginConsent`.
+export type { PluginConsent } from "./plugins/plugin-consent";
 
 // Validation Types and Utilities
 export type {
@@ -482,9 +484,26 @@ export {
   type PluginAuthApi,
   type PluginCapabilities,
   type CompleteLoginOptions,
+  // `ctx.config` and what it lists, so a plugin can type a helper that reads
+  // the application's configuration.
+  type PluginConfig,
+  type PluginSummary,
+  // The types `ctx.config` is built from, so a plugin's emitted declarations
+  // can name them rather than spell their structure out.
+  type FrozenCopy,
+  type FrozenValue,
+  type PluginEmailSettings,
   type PluginContext,
   type PluginContributions,
   type PluginDatabase,
+  type PluginRawDatabase,
+  // What each core service in `ctx.services` exposes to a plugin.
+  type PluginUserService,
+  type PluginMediaService,
+  type PluginEmailService,
+  type PluginVersionsService,
+  type PluginInsert,
+  type PluginTransaction,
   type PluginHookPointDeclaration,
   type PluginSettingsApi,
   type PluginDeclaration,
@@ -659,6 +678,7 @@ export {
 export type {
   ServiceOpts,
   PluginCollectionService,
+  PluginCollectionTransaction,
 } from "./plugins/service-opts";
 // Exported alongside `PluginCollectionService` because a plugin typing its own
 // helper against `ctx.services.singles` needs to name the type, and an

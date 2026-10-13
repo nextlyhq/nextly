@@ -767,7 +767,7 @@ export interface CollectionConfig {
 
   /**
    * @experimental Internal/private storage (D30). The collection stays in the
-   * merged schema — relatable and accessible via `ctx.services` / raw `ctx.db` —
+   * merged schema — relatable and accessible via `ctx.services` / `ctx.db.raw` —
    * but is hidden from the content-admin navigation (implies `admin.hidden`).
    * Intended for plugin-private collections (e.g. a plugin's internal records).
    */

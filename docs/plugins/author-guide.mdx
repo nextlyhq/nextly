@@ -59,6 +59,7 @@ export const myPlugin = (opts: MyPluginOptions = {}) =>
       /* declarative nouns — see below */
     },
     setup(config) {
+      // a copy of the plain settings and plugin definitions, no live handles
       return config;
     }, // escape hatch — all setups run before any init
     init(ctx) {
@@ -130,13 +131,14 @@ something newer.
 | Field | Use |
 |---|---|
 | `ctx.services` | Managed data access — **secure by default** (acts as the ambient user, RBAC on). Pass `{ as: "system" }` to elevate. Validation/hooks/events always run. |
-| `ctx.db` | Raw Drizzle escape hatch — **unmanaged** (you own consistency + portability). |
+| `ctx.db` | Typed, owner-checked access to your declared tables — **unmanaged** (no validation, hooks or events). `ctx.db.raw` is the Drizzle builder escape hatch; `execute`/`run` need `capabilities.db.rawSql` and the app's `db.rawSqlPlugins` listing. |
+| `ctx.dialect` | The database this installation runs on (`@experimental`). |
 | `ctx.hooks` | In-transaction hooks — can **modify or abort** an operation. |
 | `ctx.events` | Post-commit event bus — **observe-only, best-effort** (may be dropped). React/notify here. |
 | `ctx.filters` / `ctx.actions` | Typed seams to transform values / run ordered side-effects. |
 | `ctx.self` | Your entities' **resolved** slugs after any host `.rename()`. Always reference your own entities through this. |
 | `ctx.logger` | Structured logging. |
-| `ctx.config` | Read-only Nextly config. |
+| `ctx.config` | A `PluginConfig`: a frozen copy of the plain configuration values. No live handle (adapter, logger, hook registry, storage, rate limiter) and no email provider credentials; `plugins` lists summaries, not definitions. Reach the database through `ctx.db` and log through `ctx.logger`. |
 | `ctx.nextlyVersion` | The running core version (feature detection). |
 
 **Hooks vs events:** need to change or block an operation → use a **hook**; need to react after it commits → use an **event**.
@@ -212,4 +214,4 @@ Build (`tsup`), publish to npm, and add the `nextly-plugin` keyword to `package.
 
 ## Stability
 
-The public surface (`definePlugin`/`contributes`/lifecycle, `ctx.services`, `contributes.routes`, `contributes.admin`, `ctx.events` + event names, `HookContext`, and `@nextlyhq/plugin-sdk/testing`) is now **`@public`** — semver-protected, so breaking it requires a Nextly major. Some surfaces are still `@experimental` (the raw `ctx.db`, `ctx.hooks` registration, filters/actions, `secret()`, `useCan`/`<Can>`, admin widgets) and may change. The full ledger is on the [API stability](/docs/plugins/stability) page. Pin versions while we are pre-`1.0`.
+The public surface (`definePlugin`/`contributes`/lifecycle, `ctx.services`, `contributes.routes`, `contributes.admin`, `ctx.events` + event names, `HookContext`, and `@nextlyhq/plugin-sdk/testing`) is now **`@public`** — semver-protected, so breaking it requires a Nextly major. Some surfaces are still `@experimental` (`ctx.db` and its `ctx.db.raw` escape hatch, `ctx.hooks` registration, filters/actions, `secret()`, `useCan`/`<Can>`, admin widgets) and may change. The full ledger is on the [API stability](/docs/plugins/stability) page. Pin versions while we are pre-`1.0`.

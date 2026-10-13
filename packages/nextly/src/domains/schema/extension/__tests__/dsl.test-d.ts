@@ -8,6 +8,10 @@
  */
 import { describe, expectTypeOf, it } from "vitest";
 
+import type {
+  PluginDatabase,
+  PluginInsert,
+} from "../../../../plugins/database/plugin-database";
 import {
   col,
   defineTable,
@@ -82,6 +86,16 @@ describe("DSL types", () => {
       expectTypeOf<IsOptional<Insert, "createdAt">>().toEqualTypeOf<true>();
       expectTypeOf<IsOptional<Insert, "updatedAt">>().toEqualTypeOf<true>();
     });
+
+    // `ctx.db.insert` fills a missing `col.id()` key, so its insert type
+    // leaves it optional; everything else it requires is what `InferInsert`
+    // requires.
+    it("leaves col.id() optional on a ctx.db insert, which fills it", () => {
+      type ViaDb = PluginInsert<typeof identities>;
+      expectTypeOf<IsOptional<ViaDb, "id">>().toEqualTypeOf<true>();
+      expectTypeOf<IsOptional<ViaDb, "provider">>().toEqualTypeOf<false>();
+      expectTypeOf<ViaDb["id"]>().toEqualTypeOf<string | undefined>();
+    });
   });
 
   describe("a col.serial() key", () => {
@@ -99,18 +113,31 @@ describe("DSL types", () => {
 
     it("cannot be given a value on insert", () => {
       // `never` is the property: a value of any type is refused, and leaving
-      // the key out is still allowed.
-      expectTypeOf<
-        InferInsert<typeof counters>["seq"]
-      >().toEqualTypeOf<undefined>();
-      const omitted: InferInsert<typeof counters> = { label: "a" };
-      void omitted;
-      const written: InferInsert<typeof counters> = {
-        label: "a",
-        // @ts-expect-error -- a database-assigned key cannot be written
-        seq: 1,
-      };
-      void written;
+      // the key out is still allowed. Both halves are evaluated assignability,
+      // so the table failing to infer for another reason breaks the control
+      // rather than passing the refusal.
+      type Insert = InferInsert<typeof counters>;
+      expectTypeOf<Insert["seq"]>().toEqualTypeOf<undefined>();
+      expectTypeOf<{ label: string; seq: number }>().not.toExtend<Insert>();
+      expectTypeOf<{ label: string }>().toExtend<Insert>();
+    });
+
+    it("cannot be given a value through ctx.db, on insert or update", () => {
+      // The value types are read off the real method signatures, instantiated
+      // for this table, rather than restated: a signature that stopped
+      // closing the key fails here even if `InferInsert` still does.
+      const db = null as unknown as PluginDatabase;
+      type InsertValues = Parameters<typeof db.insert<typeof counters>>[1];
+      type InsertRow = Exclude<InsertValues, readonly unknown[]>;
+      type UpdateValues = Parameters<typeof db.update<typeof counters>>[1];
+
+      expectTypeOf<InsertRow["seq"]>().toEqualTypeOf<undefined>();
+      expectTypeOf<{ label: string; seq: number }>().not.toExtend<InsertRow>();
+      expectTypeOf<UpdateValues["seq"]>().toEqualTypeOf<undefined>();
+      expectTypeOf<{ seq: number }>().not.toExtend<UpdateValues>();
+      // The controls: the same values without the key are accepted.
+      expectTypeOf<{ label: string }>().toExtend<InsertRow>();
+      expectTypeOf<{ label: string }>().toExtend<UpdateValues>();
     });
 
     it("leaves every other column's insert type as it was", () => {

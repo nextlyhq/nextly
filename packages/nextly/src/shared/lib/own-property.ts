@@ -22,10 +22,14 @@
  *
  * Mirrors what assignment is meant to do — enumerable, writable, configurable —
  * without consulting the prototype chain for an accessor.
+ *
+ * A symbol key is accepted as well as a string, so a copy that carries a
+ * value's symbol-keyed properties (a brand such as `pluginField()`'s) writes
+ * them the same way as its string keys rather than through a second path.
  */
 export function defineOwnProperty(
-  target: Record<string, unknown>,
-  key: string,
+  target: object,
+  key: string | symbol,
   value: unknown
 ): void {
   Object.defineProperty(target, key, {

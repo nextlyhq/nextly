@@ -12,6 +12,7 @@
 
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import type { NextlyServiceConfig } from "../di/register";
+import { pluginConsentFromConfig } from "../plugins/plugin-consent";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -135,6 +136,13 @@ export function buildServiceConfig(
     // registers it — an option that validates and does nothing.
     if (!serviceConfig.jobs && nextlyConfig?.jobs) {
       serviceConfig.jobs = nextlyConfig.jobs;
+    }
+
+    // What the app lists plugins for, derived from its config by the same
+    // function the CLI uses, so the boot and the CLI refuse alike. Left
+    // unset without a config: nothing is listed then.
+    if (!serviceConfig.pluginConsent && nextlyConfig) {
+      serviceConfig.pluginConsent = pluginConsentFromConfig(nextlyConfig);
     }
 
     // If plugins not explicitly provided, use from nextly.config.ts

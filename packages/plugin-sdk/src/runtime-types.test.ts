@@ -19,8 +19,10 @@ import {
   type PluginCapabilities,
   type PluginDatabase,
   type PluginHookPointDeclaration,
+  type PluginRawDatabase,
   type PluginRouteRateLimit,
   type PluginSettingsApi,
+  type PluginTransaction,
   type UserCreatedPayload,
   type UserDeletedPayload,
 } from "./index";
@@ -30,7 +32,8 @@ interface PaymentsSurface {
   settings: PluginSettingsApi<{ apiKey: string }>;
   audit: PluginAuditApi;
   auth: PluginAuthApi;
-  db: PluginDatabase;
+  db: PluginDatabase & { raw: PluginRawDatabase };
+  tx: PluginTransaction;
   login: CompleteLoginOptions;
   verdict: Decision;
   capabilities: PluginCapabilities;

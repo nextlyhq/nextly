@@ -114,6 +114,18 @@ export type SerialColumnBuilder = ColumnBuilder<number, false, true> & {
   readonly kind: "serial";
 };
 
+/**
+ * The builder `col.id()` returns: a `ColumnBuilder` whose `generated` is the
+ * literal `"uuidv7"`.
+ *
+ * `InferInsert` still requires the key, because the database has no default
+ * for it. The literal is what lets `ctx.db`'s insert type (`PluginInsert`)
+ * make it optional, since `ctx.db` fills it when the caller leaves it out.
+ */
+export type GeneratedIdColumnBuilder = ColumnBuilder<string, false, false> & {
+  readonly generated: "uuidv7";
+};
+
 /** Options every scalar builder accepts. */
 export interface ColOpts<TValue> {
   nullable?: boolean;
@@ -479,11 +491,12 @@ export const col = {
    *
    * The database has no portable UUIDv7 default, so the column has none and
    * the code inserting a row supplies the id; `InferInsert` requires it.
+   * `ctx.db.insert` fills one when the caller leaves it out.
    *
    * Bounded rather than `text` so it stays indexable and usable in a unique key
    * on MySQL, where an unbounded text column is neither.
    */
-  id(): ColumnBuilder<string, false, false> {
+  id(): GeneratedIdColumnBuilder {
     return {
       kind: "varchar",
       length: 36,
@@ -1574,6 +1587,13 @@ type OptionalInsertKeys<TColumns> = {
       : THasDefault extends true
         ? K
         : never
+    : never;
+}[keyof TColumns];
+
+/** The `col.id()` keys, which `ctx.db` fills when an insert leaves them out. */
+export type GeneratedIdKeys<TColumns> = {
+  [K in keyof TColumns]: TColumns[K] extends { readonly generated: "uuidv7" }
+    ? K
     : never;
 }[keyof TColumns];
 
