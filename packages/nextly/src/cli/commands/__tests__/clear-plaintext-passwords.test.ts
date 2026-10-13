@@ -5,6 +5,7 @@
  * count. The clean-up itself is integration-tested on every dialect; this
  * checks which half the command asks for, and that it prints counts only.
  */
+import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const find = vi.fn<() => Promise<string[]>>();
@@ -24,6 +25,7 @@ vi.mock("../../utils/adapter", () => ({
 
 import {
   plainTextPasswordNotice,
+  registerClearPlaintextPasswordsCommand,
   runClearPlaintextPasswords,
 } from "../clear-plaintext-passwords";
 
@@ -64,6 +66,35 @@ describe("users:clear-plaintext-passwords", () => {
     expect(clear).not.toHaveBeenCalled();
     expect(find).not.toHaveBeenCalled();
     expect(printed.join("\n")).toContain("--confirm-default-hasher");
+  });
+
+  it("exits with status 1 when --apply lacks the hasher confirmation", async () => {
+    // Automation reads the exit status: a refusal that exited 0 would record
+    // the clean-up as done while every value stays.
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(() => undefined as never);
+    try {
+      const run = async (...args: string[]) => {
+        const program = new Command();
+        registerClearPlaintextPasswordsCommand(program, () => context);
+        await program.parseAsync(["users:clear-plaintext-passwords", ...args], {
+          from: "user",
+        });
+      };
+      await run("--apply");
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(clear).not.toHaveBeenCalled();
+
+      // The control: with the confirmation the same command clears, and does
+      // not exit with an error.
+      exit.mockClear();
+      await run("--apply", "--confirm-default-hasher");
+      expect(clear).toHaveBeenCalledTimes(1);
+      expect(exit).not.toHaveBeenCalled();
+    } finally {
+      exit.mockRestore();
+    }
   });
 
   it("clears with --apply and the hasher confirmation", async () => {

@@ -76,6 +76,8 @@ async function seed(t: TestNextly): Promise<Record<string, string | null>> {
     ...MODULAR_CRYPT,
     hexpair: HEX_SALT_AND_DIGEST,
     none: null,
+    // No password either: there is nothing to clear, and its sessions stay.
+    empty: "",
   };
   for (const [kind, passwordHash] of Object.entries(stored)) {
     // Written directly: no path today stores a password as given, which is
@@ -182,6 +184,10 @@ describe.each(getConfiguredTestDialects())(
       }
       expect(await account(t, "none")).toEqual({
         passwordHash: null,
+        sessions: 1,
+      });
+      expect(await account(t, "empty")).toEqual({
+        passwordHash: "",
         sessions: 1,
       });
     });

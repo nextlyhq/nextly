@@ -653,6 +653,10 @@ holds. It prints only counts, never an address or a value, and a second run find
 left to change. Accounts with a proper password, and accounts without one, are left as
 they are.
 
+Clearing the database does not reach your backups. Any backup taken before the command
+ran still holds these passwords as typed: purge or expire those backups, or treat them as
+holding exposed passwords.
+
 What the people affected see: signing in with a password is refused with the same message
 as a wrong password, as it already was. They set a new password with **Forgot password**,
 or an administrator sets one for them.

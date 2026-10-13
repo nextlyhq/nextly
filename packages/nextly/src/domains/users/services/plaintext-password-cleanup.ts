@@ -139,8 +139,12 @@ export class PlainTextPasswordCleanup extends BaseService {
         .orderBy(asc(users.id))
         .limit(PAGE_SIZE);
       for (const row of page) {
+        // An empty value is no password, as null is: there is nothing to
+        // clear, and ending its sessions would sign out an account that signs
+        // in another way.
         if (
           typeof row.value === "string" &&
+          row.value !== "" &&
           !isPasswordHash(row.value) &&
           !isOtherHasherFormat(row.value)
         ) {
