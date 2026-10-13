@@ -95,7 +95,9 @@ function columnOperations(
 describe.skipIf(!PG.url)(
   "a Builder single's repeater and group (postgres)",
   () => {
-    const tableName = `${PG.prefix}_single_site`;
+    // `single_` first: the diff reads a table as a Single by that prefix, and a Single has no owner
+    // column, so a name that hid it would be judged as a collection and asked for one.
+    const tableName = `single_${PG.prefix}_site`;
     let pool: Pool;
     let db: ReturnType<typeof drizzlePg>;
 
@@ -129,7 +131,8 @@ describe.skipIf(!PG.url)(
 describe.skipIf(!MYSQL.url)(
   "a Builder single's repeater and group (mysql)",
   () => {
-    const tableName = `${MYSQL.prefix}_single_site`;
+    // `single_` first, as above.
+    const tableName = `single_${MYSQL.prefix}_site`;
     let pool: MysqlPool;
     let db: ReturnType<typeof drizzleMysql<Record<string, never>, MysqlPool>>;
 
