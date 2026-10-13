@@ -70,7 +70,9 @@ async function loginDeps(gateReads: Date, hooks = new AuthHookRegistry()) {
     trustProxy: false,
     trustedProxyIps: [],
     fetchAccountState: state,
-    fetchRoleIds: vi.fn().mockResolvedValue([]),
+    fetchSessionRoles: vi
+      .fn()
+      .mockResolvedValue({ roleIds: [], validUntil: undefined }),
     fetchCustomFields: vi.fn().mockResolvedValue({}),
     withSessionRowTransaction: rows.withSessionRowTransaction,
     authStrategies: [

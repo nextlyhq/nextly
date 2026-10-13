@@ -45,7 +45,7 @@ import {
 } from "../../webhooks/recording-policy";
 import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
-import type { CollectionDbOptions } from "./collection-id";
+import type { CollectionDbOptions } from "./collection-db-options";
 import { resolveDescription } from "./collection-sync-service";
 
 /** Options for updating a collection. */

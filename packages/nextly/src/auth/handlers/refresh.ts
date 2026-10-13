@@ -18,7 +18,7 @@ import {
 import { sessionCookies } from "../cookies/session-cookies";
 import { clearCsrfCookie } from "../csrf/csrf-cookie";
 import { buildClaims } from "../jwt/claims";
-import { signAccessToken } from "../jwt/sign";
+import { signAccessTokenWithExpiry } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import {
   accountMayHoldSession,
@@ -27,6 +27,7 @@ import {
 } from "../session/account-state";
 import { hashRefreshToken } from "../session/refresh";
 import { evaluateRefreshBinding } from "../session/refresh-binding";
+import type { SessionRoles } from "../session/session-roles";
 
 import { buildCookieHeaders, buildAuthErrorResponse } from "./handler-utils";
 import { newRefreshToken } from "./issue-session";
@@ -58,7 +59,8 @@ export interface RefreshHandlerDeps {
     image: string | null;
     isActive: boolean;
   } | null>;
-  fetchRoleIds: (userId: string) => Promise<string[]>;
+  /** The roles in force, and when the first of them lapses; see `SessionRoles`. */
+  fetchSessionRoles: (userId: string) => Promise<SessionRoles>;
   fetchCustomFields: (userId: string) => Promise<Record<string, unknown>>;
   /** Reads the account state the shared session gate decides on. */
   fetchAccountState: (userId: string) => Promise<AccountState | null>;
@@ -176,17 +178,23 @@ export async function handleRefresh(
     if (!accountState || !accountMayHoldSession(accountState, gate)) {
       return refuseAccount(deps, tokenRecord.id);
     }
-    const [roleIds, customFields] = await Promise.all([
-      deps.fetchRoleIds(user.id),
+    const [sessionRoles, customFields] = await Promise.all([
+      deps.fetchSessionRoles(user.id),
       deps.fetchCustomFields(user.id),
     ]);
+    const { roleIds } = sessionRoles;
 
     const claims = await refreshedClaims(deps, user, roleIds, customFields);
-    const accessToken = await signAccessToken(
-      claims,
-      deps.secret,
-      deps.accessTokenTTL
-    );
+    // Ending no later than the first of its roles lapses, and reporting the
+    // expiry the token actually carries rather than a second reading of it.
+    const { token: accessToken, expiresAt: accessTokenExpiresAt } =
+      await signAccessTokenWithExpiry(
+        claims,
+        deps.secret,
+        deps.accessTokenTTL,
+        "session",
+        sessionRoles.validUntil
+      );
 
     const rotated = await rotateRefreshRow(deps, request, {
       presentedId: tokenRecord.id,
@@ -215,9 +223,7 @@ export async function handleRefresh(
         accessToken,
         refreshToken: newRawToken,
         // Authoritative server-side exp lives on the JWT itself.
-        expiresAt: new Date(
-          Date.now() + deps.accessTokenTTL * 1000
-        ).toISOString(),
+        expiresAt: accessTokenExpiresAt.toISOString(),
       },
       { status: 200, headers: buildCookieHeaders(cookies) }
     );

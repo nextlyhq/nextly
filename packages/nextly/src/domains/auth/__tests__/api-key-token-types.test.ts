@@ -41,6 +41,13 @@ vi.mock("../../../services/lib/permissions", async importOriginal => ({
   // whole property here, since that sibling answers `[]` instead of refusing.
   listRoleSlugsForUser: vi.fn(),
   listRoleSlugsForUserOrRefuse: vi.fn(),
+  // When the owner's roles next lapse, which ends a key's cached grants. The
+  // expiry and the cap are proven end to end in `role-expiry.integration.test.ts`;
+  // here no role expires, so the cache keeps its usual life.
+  resolveUserRoles: vi.fn(async () => ({
+    roleIds: new Set<string>(),
+    validUntil: undefined,
+  })),
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────

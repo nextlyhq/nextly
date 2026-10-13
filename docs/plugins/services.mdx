@@ -323,7 +323,11 @@ It comes in two layers:
   and a table your plugin may not reach is refused before a query is built,
   and checked again when the query runs: a `ctx.db.query.<table>` entry or a
   `select`, `update` or `delete` builder kept across a schema reload cannot
-  reach a table your plugin no longer may. A `select` builder is immutable:
+  reach a table your plugin no longer may. Your dependencies are read from the
+  config in force too, so a reload that drops one from `dependsOn` takes its
+  tables away without a restart. Reflection reaches no further than a call:
+  `ctx.db.query` hands out only the checked entry of a table you may reach,
+  and refuses an assignment. A `select` builder is immutable:
   `where`, `orderBy`, `limit` and `offset` each return a new builder and leave
   the one they were called on as it was, and `first()` runs the query without
   changing its builder, so one base builder can be narrowed several ways. See
@@ -354,7 +358,9 @@ throws, on every dialect. Inside one, write through `tx`:
 
 `tx` works only while the callback runs. Kept and called after the callback
 has settled, it is refused with `VALIDATION_ERROR` (`logContext.reason` is
-`plugin-transaction-finished`) rather than running outside the transaction.
+`plugin-transaction-finished`) rather than running outside the transaction. So
+is a method taken off it while the callback ran, such as `const insert =
+tx.insert`, when it is called after.
 
 In `ctx.db.transaction`, a statement the callback started without awaiting is
 finished inside the transaction before it commits; if one fails, the
