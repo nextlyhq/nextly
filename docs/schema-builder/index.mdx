@@ -59,6 +59,23 @@ The palette ships every field type Nextly supports through code-first definition
 
 For the full per-type option reference, see [Fields](/docs/configuration/fields).
 
+### Relationships and foreign keys
+
+A one-to-one or many-to-one Relationship field stores the target's id in a
+column of its own, and that column carries a foreign key to the target
+collection, with the field's on-delete and on-update actions. The key is
+created with the collection, or by the save that adds the field to an
+existing one, on PostgreSQL, MySQL and SQLite alike. On SQLite, where a key
+can only be created by rebuilding the table, a save that changes a field's
+type rebuilds the table with every key it holds, and the rows of other
+collections that point at it are kept: no delete action runs during the
+rebuild.
+
+A relationship field added to an existing collection before Nextly created
+keys this way has none, and a later save does not add one, so a database that
+already holds rows pointing at missing entries is never asked to accept a key
+those rows would break.
+
 ### Container fields and nesting
 
 Repeater, Group, and Component fields can themselves contain fields. Nesting is capped at 4 levels deep — `MAX_NESTING_DEPTH = 4` in `packages/admin/src/components/features/schema-builder/types.ts`. Each level renders with a progressively darker background to make the hierarchy visible.

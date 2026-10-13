@@ -14,7 +14,9 @@
  * proved by a write the key must refuse: a table without the key accepts every
  * row here, so only enforcement separates the two.
  */
-import { afterEach, expect, it } from "vitest";
+import { randomBytes } from "node:crypto";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   defineCollection,
@@ -22,6 +24,12 @@ import {
   defineSingle,
   text,
 } from "../../../config";
+import { createAdapter } from "../../../database/factory";
+import {
+  createDatabaseStatement,
+  dropDatabaseStatement,
+} from "../../../database/test-database-ddl";
+import { clearServices } from "../../../di/register";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
@@ -29,6 +37,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { _resetEnvCache } from "../../../shared/lib/env";
 
 import { col, defineTable } from "./dsl";
 
@@ -169,3 +178,139 @@ describeEachDialect(
     });
   }
 );
+
+/** The name of the foreign key on `table`'s `column`, read from the catalog. */
+async function foreignKeyNameOn(
+  adapter: TestNextly["adapter"],
+  dialect: "postgresql" | "mysql",
+  table: string,
+  column: string
+): Promise<string> {
+  const rows = await adapter.executeQuery<{ name: string }>(
+    dialect === "postgresql"
+      ? `SELECT tc.constraint_name AS name
+           FROM information_schema.table_constraints tc
+           JOIN information_schema.key_column_usage kcu
+             ON kcu.constraint_name = tc.constraint_name
+            AND kcu.table_schema = tc.table_schema
+          WHERE tc.constraint_type = 'FOREIGN KEY'
+            AND tc.table_schema = current_schema()
+            AND tc.table_name = '${table}'
+            AND kcu.column_name = '${column}'`
+      : `SELECT CONSTRAINT_NAME AS name
+           FROM information_schema.KEY_COLUMN_USAGE
+          WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = '${table}'
+            AND COLUMN_NAME = '${column}'
+            AND REFERENCED_TABLE_NAME IS NOT NULL`
+  );
+  const name = rows[0]?.name;
+  expect(name, `foreign key on ${table}.${column}`).toBeDefined();
+  return String(name);
+}
+
+// PostgreSQL and MySQL only: they hold a foreign key apart from its table, so a
+// key can go missing while its table stays — as when an apply commits the
+// code-first tables and fails on the key, which MySQL's DDL can. SQLite keeps
+// the key inside its CREATE TABLE, so it has no such state to restart into.
+//
+// The boot is the code under test, so the database is created here and booted
+// three times: once fresh, once after the key is dropped, and once after the
+// table gains a row. The harness's own provisioning drops its database when
+// the next instance boots, which is why this one is not used.
+for (const dialect of ["postgresql", "mysql"] as const) {
+  const serverUrl =
+    process.env[
+      dialect === "postgresql" ? "TEST_POSTGRES_URL" : "TEST_MYSQL_URL"
+    ];
+  (serverUrl ? describe : describe.skip)(
+    `a restart that finds a key to a code-first table missing (${dialect})`,
+    () => {
+      it("is refused while the table holds no rows, and boots once it holds one", async () => {
+        const server = await createAdapter({
+          type: dialect,
+          url: serverUrl as string,
+        });
+        const name = `nextly_t_${randomBytes(12).toString("hex")}`;
+        const databaseUrl = new URL(serverUrl as string);
+        databaseUrl.pathname = `/${name}`;
+        const previousUrl = process.env.DATABASE_URL;
+        const previousDialect = process.env.DB_DIALECT;
+        await server.executeQuery(createDatabaseStatement(dialect, name));
+        let handle: TestNextly | undefined;
+        try {
+          process.env.DATABASE_URL = databaseUrl.toString();
+          process.env.DB_DIALECT = dialect;
+          _resetEnvCache();
+          const adapter = await createAdapter({
+            type: dialect,
+            url: databaseUrl.toString(),
+          });
+
+          handle = await createTestNextly({ adapter, plugins: [fixture] });
+          const key = await foreignKeyNameOn(
+            adapter,
+            dialect,
+            "cf__refs",
+            "post_id"
+          );
+          await adapter.executeQuery(
+            dialect === "postgresql"
+              ? `ALTER TABLE cf__refs DROP CONSTRAINT ${key}`
+              : `ALTER TABLE cf__refs DROP FOREIGN KEY ${key}`
+          );
+
+          // The tables are all there, so this boot creates nothing; only
+          // asking again finds the key gone.
+          clearServices();
+          // A boot that wrongly succeeds is kept, so `finally` releases its
+          // connection before the database is dropped.
+          const restart = await createTestNextly({
+            adapter,
+            plugins: [fixture],
+          }).then(
+            booted => {
+              handle = booted;
+              return undefined;
+            },
+            (error: unknown) => error
+          );
+          expect(restart).toMatchObject({
+            code: "VALIDATION_ERROR",
+            logContext: {
+              missingForeignKeys: [
+                expect.stringContaining(`"${key}" on "cf__refs"`),
+              ],
+            },
+          });
+
+          // A row makes it drift on a table in use, which the boot leaves to
+          // `nextly db:sync` and migrations rather than refusing. A refused
+          // boot releases the adapter it was handed, so this one connects
+          // anew.
+          const reopened = await createAdapter({
+            type: dialect,
+            url: databaseUrl.toString(),
+          });
+          await reopened.executeQuery(
+            `INSERT INTO cf__refs (id) VALUES ('018f2c2e-0000-7000-8000-00000000f201')`
+          );
+          clearServices();
+          handle = await createTestNextly({
+            adapter: reopened,
+            plugins: [fixture],
+          });
+        } finally {
+          await handle?.destroy();
+          await server.executeQuery(dropDatabaseStatement(dialect, name));
+          await server.disconnect();
+          if (previousUrl === undefined) delete process.env.DATABASE_URL;
+          else process.env.DATABASE_URL = previousUrl;
+          if (previousDialect === undefined) delete process.env.DB_DIALECT;
+          else process.env.DB_DIALECT = previousDialect;
+          _resetEnvCache();
+        }
+      });
+    }
+  );
+}

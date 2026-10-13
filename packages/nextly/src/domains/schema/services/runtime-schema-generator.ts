@@ -50,6 +50,7 @@ import {
 } from "drizzle-orm/pg-core";
 import {
   check as sqliteCheck,
+  foreignKey as sqliteForeignKey,
   sqliteTable,
   text as sqliteText,
   integer as sqliteInteger,
@@ -69,6 +70,7 @@ import {
 } from "../extension/column-descriptor";
 import { enumChecks } from "../extension/enum-check";
 import type { ExtensionColumn } from "../extension/types";
+import type { ForeignKeySpec } from "../pipeline/diff/types";
 
 import {
   type getSystemColumnDescriptors,
@@ -144,6 +146,18 @@ export interface RuntimeSchemaOptions {
    * reaching process state.
    */
   extensionColumns?: readonly ExtensionColumn[];
+  /**
+   * The foreign keys THIS table's desired spec carries, declared on a SQLite
+   * table only.
+   *
+   * SQLite holds a key nowhere but `CREATE TABLE`, and drizzle-kit rebuilds a
+   * table from this definition when a change needs it, reading the whole
+   * database as it does. A key the spec carries and this definition lacks is
+   * then dropped by any rebuild, or seen as one to drop, which the push
+   * refuses. PostgreSQL and MySQL add their keys with statements of their own,
+   * so the option is not read there.
+   */
+  foreignKeys?: readonly ForeignKeySpec[];
 }
 
 /**
@@ -393,7 +407,39 @@ function generateSQLiteSchema(
     tableName,
     options.extensionColumns ?? []
   );
-  return sqliteTable(tableName, columns, () => checks);
+  const foreignKeys = options.foreignKeys ?? [];
+  // The local side is read from the BUILT columns Drizzle hands this
+  // callback: a builder has no name until its table is built.
+  return sqliteTable(tableName, columns, built => [
+    ...checks,
+    ...foreignKeys.map(fk => sqliteForeignKeyOf(fk, built)),
+  ]);
+}
+
+/**
+ * One foreign key of a SQLite runtime table, as drizzle-kit renders it.
+ *
+ * The referenced table is described by name and key columns only: that is all
+ * a rendered `REFERENCES` clause carries, and the table it names need not be
+ * part of the schema handed over.
+ */
+function sqliteForeignKeyOf(
+  fk: ForeignKeySpec,
+  built: Record<string, unknown>
+): ReturnType<typeof sqliteForeignKey> {
+  const referenced = sqliteTable(
+    fk.referencesTable,
+    Object.fromEntries(
+      fk.referencesColumns.map(name => [name, sqliteText(name)])
+    )
+  ) as unknown as Record<string, unknown>;
+  return sqliteForeignKey({
+    name: fk.name,
+    columns: fk.columns.map(name => built[name]),
+    foreignColumns: fk.referencesColumns.map(name => referenced[name]),
+  } as never)
+    .onDelete(fk.onDelete)
+    .onUpdate(fk.onUpdate);
 }
 
 /**

@@ -156,6 +156,52 @@ describe("handleChallengeResolve (D71)", () => {
     );
   });
 
+  it.each([
+    "/%2F%2Fevil.example",
+    "/%5Cevil.example",
+    "https://evil.example/admin",
+  ])(
+    "answers the admin root, not the off-site destination %s a pending token carries",
+    async next => {
+      // A token is signed after its destination is sanitized, so this one is
+      // minted directly to stand for one that slipped past that: the
+      // destination decides where the browser goes next, and the answer
+      // sanitizes it again rather than trusting the token's copy.
+      const deps = makeDeps();
+      const pendingToken = await mint({
+        userId: "u1",
+        challengeId: "totp",
+        next,
+      });
+      const res = await handleChallengeResolve(
+        makeRequest({ pendingToken, response: { code: "123456" } }),
+        deps
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.next).toBe("/admin");
+    }
+  );
+
+  it("answers a safe destination a pending token carries unchanged", async () => {
+    // The control for the cases above: the destination does travel to the
+    // answer, so "/admin" there is the sanitizing at work rather than a field
+    // that is always the default or never carried.
+    const deps = makeDeps();
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      next: "/admin/posts?tab=a%26b",
+    });
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.next).toBe("/admin/posts?tab=a%26b");
+  });
+
   it("re-challenges with a fresh pending token on a wrong code", async () => {
     const deps = makeDeps();
     const pendingToken = await mint({ userId: "u1", challengeId: "totp" });

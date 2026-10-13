@@ -37,13 +37,13 @@
  * - Foreign keys or checks the target spec does not TRACK (`undefined`, as an
  *   entity's spec leaves foreign keys) while the live table has some. The
  *   rebuilt table is declared from the spec, so it would come back without
- *   them — a cascade or a check silently gone. An entity's spec cannot track
- *   them: the Schema Builder declares a relationship's foreign key in CREATE
- *   TABLE, but on SQLite a relationship added to an existing table gets none
- *   (SQLite cannot add a constraint to a table), so two tables with the same
- *   fields hold different foreign keys depending on their history, and no
- *   spec derived from the fields could describe both. The refusal fires only
- *   where something would be lost. Foreign keys are counted from
+ *   them — a cascade or a check silently gone. A generated migration's
+ *   entity spec does not track them: it is built from the config and the
+ *   Builder's manifest, which record no keys, and a Builder table on a
+ *   database older than dev push's own key tracking (`builder-foreign-keys`)
+ *   holds a relationship's key only if the relationship existed when the
+ *   table was created, so no spec derived from the fields could describe both
+ *   histories. The refusal fires only where something would be lost. Foreign keys are counted from
  *   `pragma_foreign_key_list`; SQLite keeps no catalog of checks, so any
  *   `CHECK` in the stored CREATE statement counts, which refuses rather than
  *   risks a false "none".

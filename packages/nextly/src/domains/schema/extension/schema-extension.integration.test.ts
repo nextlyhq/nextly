@@ -184,6 +184,8 @@ describeEachDialect("a plugin's declared table", dialect => {
 // The data-safety rule, end to end: boot with the plugin, write a row, then
 // boot the SAME database again without it, and push. Every unit test for the
 // rule asserts a decision; this asserts the table and its row are still there.
+// The plugin is only taken out of the config: nothing uninstalls it, so what
+// happens to its tables is the push's decision alone.
 //
 // The push is what puts the table at risk, and a restart alone runs none
 // against existing tables. So the restarted config also relaxes a required

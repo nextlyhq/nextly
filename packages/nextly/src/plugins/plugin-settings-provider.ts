@@ -56,29 +56,9 @@ export function createPluginSettings(
     });
   }
 
-  // The dialect is PASSED, not read off the handle. What a plugin receives is
-  // a restricted wrapper exposing four query methods and nothing else, so
-  // `db.dialect` was always undefined and every install fell back to SQLite:
-  // MySQL has no `onConflictDoUpdate` and failed the write outright, and
-  // Postgres was handed SQLite's column encoders, which store a timestamp as
-  // an integer. The store itself stays lazy, because a context can be built
-  // before the database is connected.
-  const service = () => {
-    return new PluginSettingsService({
-      owner: plugin.name,
-      schema,
-      secretPaths: plugin.capabilities?.secrets ?? [],
-      store: createPluginSettingsStore(
-        db,
-        dialect,
-        // SQLite cannot use Drizzle's transaction (better-sqlite3 refuses an
-        // async callback), so writes ride the adapter's manual BEGIN IMMEDIATE
-        // runner; the store's handle shares the connection it opens.
-        dialect === "sqlite" ? sqliteTransaction(adapter) : undefined
-      ),
-      secrets: () => pluginSettingsSecrets(env),
-    });
-  };
+  // The store stays lazy, because a context can be built before the database
+  // is connected.
+  const service = () => settingsService(plugin, schema, db, dialect, adapter);
 
   return {
     get: () => service().get(),
@@ -96,6 +76,58 @@ export function createPluginSettings(
       await (adapter ? afterCommit(adapter(), announce) : announce());
     },
   };
+}
+
+/**
+ * Encrypt what one plugin's stored settings hold in plain text at a path its
+ * manifest now calls secret, before the plugin starts.
+ *
+ * Through the same service `ctx.settings` uses, so the boot seals with
+ * exactly the rules a read or a write would repair by. A plugin that
+ * declares no settings, or no secrets, has nothing to seal.
+ */
+export async function sealPluginSettings(
+  plugin: PluginDefinition,
+  db: unknown,
+  dialect: SupportedDialect,
+  adapter?: () => SettingsAdapter
+): Promise<void> {
+  const schema = plugin.contributes?.settings;
+  if (!schema || (plugin.capabilities?.secrets ?? []).length === 0) return;
+  await settingsService(plugin, schema, db, dialect, adapter).sealStored();
+}
+
+/**
+ * One plugin's settings service, over the core-owned settings table.
+ *
+ * The dialect is PASSED, not read off the handle. What a plugin receives is
+ * a restricted wrapper exposing four query methods and nothing else, so
+ * `db.dialect` was always undefined and every install fell back to SQLite:
+ * MySQL has no `onConflictDoUpdate` and failed the write outright, and
+ * Postgres was handed SQLite's column encoders, which store a timestamp as
+ * an integer.
+ */
+function settingsService(
+  plugin: PluginDefinition,
+  schema: NonNullable<NonNullable<PluginDefinition["contributes"]>["settings"]>,
+  db: unknown,
+  dialect: SupportedDialect,
+  adapter: (() => SettingsAdapter) | undefined
+): PluginSettingsService {
+  return new PluginSettingsService({
+    owner: plugin.name,
+    schema,
+    secretPaths: plugin.capabilities?.secrets ?? [],
+    store: createPluginSettingsStore(
+      db,
+      dialect,
+      // SQLite cannot use Drizzle's transaction (better-sqlite3 refuses an
+      // async callback), so writes ride the adapter's manual BEGIN IMMEDIATE
+      // runner; the store's handle shares the connection it opens.
+      dialect === "sqlite" ? sqliteTransaction(adapter) : undefined
+    ),
+    secrets: () => pluginSettingsSecrets(env),
+  });
 }
 
 /** The adapter surface a plugin's settings write needs. */

@@ -104,6 +104,16 @@ describe("ctx.auth.completeLogin for one plugin", () => {
     }
   );
 
+  it("refuses the plugin's own prefix with no method name after it", async () => {
+    // `acme-google-auth:` begins with the prefix, so a rule that only checked
+    // the start would let it through, and a plugin with two ways in would
+    // record both as the same nameless strategy.
+    setPluginAuthDepsResolver(refusingDeps);
+    await expect(login("acme-google-auth:")).rejects.toSatisfy(
+      (err: unknown) => NextlyError.is(err) && err.code === "VALIDATION_ERROR"
+    );
+  });
+
   it("reaches the shared login with a declared plugin and its own strategy", async () => {
     setPluginAuthDepsResolver(refusingDeps);
     const res = await login("acme-google-auth:google");

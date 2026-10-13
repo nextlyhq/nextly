@@ -1690,3 +1690,159 @@ describe("a null inside a group the store does not hold yet", () => {
     expect(settings.providers).toEqual({});
   });
 });
+
+describe("sealing stored secrets before the plugin runs", () => {
+  const CLIENT_ID = "client-id-plain-4d2b8e";
+  const NEWLY_SECRET = [
+    "clientSecret",
+    "providers.*.clientSecret",
+    "providers.*.clientId",
+  ];
+
+  /** A store holding a row stored as secret whose `clientId` is plain text. */
+  async function storeWithPlainLeafInSecretRow() {
+    const store = memoryStore();
+    await service(store).set({
+      providers: {
+        google: { clientId: CLIENT_ID, clientSecret: SECRET_VALUE },
+      },
+    });
+    const row = store.rows.find(r => r.key === "providers");
+    // The premise: the row is secret, and the leaf the next manifest calls
+    // secret is in it as plain text.
+    expect(row?.isSecret).toBe(true);
+    expect(row?.value).toContain(CLIENT_ID);
+    return store;
+  }
+
+  it("encrypts a path newly marked secret inside a row already stored as secret", async () => {
+    const store = await storeWithPlainLeafInSecretRow();
+
+    await service(store, [KEY_A], NEWLY_SECRET).sealStored();
+
+    expect(store.rows.find(r => r.key === "providers")?.value).not.toContain(
+      CLIENT_ID
+    );
+    const settings = await service(store, [KEY_A], NEWLY_SECRET).get<{
+      providers: Record<string, { clientId: string; clientSecret: string }>;
+    }>();
+    expect(settings.providers.google).toEqual({
+      clientId: CLIENT_ID,
+      clientSecret: SECRET_VALUE,
+    });
+  });
+
+  it("encrypts it on the next write of an unrelated key, too", async () => {
+    // The write's repair asks the same question as the boot's.
+    const store = await storeWithPlainLeafInSecretRow();
+
+    await service(store, [KEY_A], NEWLY_SECRET).set({ port: 8443 });
+
+    expect(store.rows.find(r => r.key === "providers")?.value).not.toContain(
+      CLIENT_ID
+    );
+  });
+
+  it("encrypts a top-level row stored while its key was public", async () => {
+    const store = memoryStore();
+    await service(store, [KEY_A], []).set({ clientSecret: SECRET_VALUE });
+
+    await service(store).sealStored();
+
+    const row = store.rows.find(r => r.key === "clientSecret");
+    expect(row?.isSecret).toBe(true);
+    expect(row?.value).not.toContain(SECRET_VALUE);
+  });
+
+  it("writes nothing when every secret is already sealed", async () => {
+    // The control: a seal that rewrote every row on every boot would pass the
+    // cases above while taking a write lock per plugin per start.
+    const store = memoryStore();
+    await service(store).set({
+      clientSecret: SECRET_VALUE,
+      providers: {
+        google: { clientId: CLIENT_ID, clientSecret: SECRET_VALUE },
+      },
+    });
+    let mutations = 0;
+    const counting: PluginSettingsStore = {
+      read: owner => store.read(owner),
+      mutate: (owner, keys, compute) => {
+        mutations += 1;
+        return store.mutate(owner, keys, compute);
+      },
+    };
+
+    await service(counting).sealStored();
+
+    expect(mutations).toBe(0);
+  });
+
+  it("leaves alone a value no configured key can open", async () => {
+    const store = memoryStore();
+    await service(store, [KEY_B]).set({ clientSecret: SECRET_VALUE });
+    const before = store.rows.find(r => r.key === "clientSecret")?.value;
+
+    await service(store, [KEY_A]).sealStored();
+
+    expect(store.rows.find(r => r.key === "clientSecret")?.value).toBe(before);
+  });
+
+  it("throws when the encrypted value cannot be stored", async () => {
+    // Unlike a read's repair, which logs and carries on: the plugin is about
+    // to start, and the manifest says this value is not plain text by then.
+    const store = await storeWithPlainLeafInSecretRow();
+    const failing: PluginSettingsStore = {
+      read: owner => store.read(owner),
+      mutate: async () => {
+        throw new Error("database unavailable");
+      },
+    };
+
+    await expect(
+      service(failing, [KEY_A], NEWLY_SECRET).sealStored()
+    ).rejects.toThrow("database unavailable");
+  });
+});
+
+describe("a value written to a path no longer secret", () => {
+  it("is stored as the newer manifest says, and shown to the admin", async () => {
+    // Encrypted and unreturned only until a new value is written to the path:
+    // re-sealing the new value too kept it hidden from the admin for good,
+    // though the manifest calls it public.
+    const store = memoryStore();
+    await service(store, [KEY_A], ["clientSecret"]).set({
+      clientSecret: SECRET_VALUE,
+    });
+
+    const newer = service(store, [KEY_A], []);
+    await newer.set({ clientSecret: "now-public-value" });
+
+    const row = store.rows.find(r => r.key === "clientSecret");
+    expect(row?.value).toContain("now-public-value");
+    expect((await newer.view()).settings).toMatchObject({
+      clientSecret: "now-public-value",
+    });
+  });
+
+  it("keeps a sealed leaf the write did not touch sealed", async () => {
+    // The control: dropping every sealed path of a key the patch names would
+    // pass the case above while opening up `github`'s secret, which nobody
+    // wrote again.
+    const store = memoryStore();
+    await service(store, [KEY_A], ["providers.*.clientSecret"]).set({
+      providers: {
+        google: { clientId: "g", clientSecret: SECRET_VALUE },
+        github: { clientId: "h", clientSecret: ROTATED_SECRET_VALUE },
+      },
+    });
+
+    await service(store, [KEY_A], []).set({
+      providers: { google: { clientId: "g", clientSecret: "google-public" } },
+    });
+
+    const value = store.rows.find(r => r.key === "providers")?.value ?? "";
+    expect(value).toContain("google-public");
+    expect(value).not.toContain(ROTATED_SECRET_VALUE);
+  });
+});

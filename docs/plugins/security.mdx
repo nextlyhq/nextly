@@ -306,6 +306,32 @@ follow a schema it can walk: under `z.any()`, `z.unknown()`, a pipe (such as
 one there matches nothing, so the value it meant is stored in plain text.
 Spell such a path exactly.
 
+**A path you newly mark secret is encrypted before your plugin starts.** When
+an update adds a path to `capabilities.secrets`, values stored under it while
+it was public are encrypted at boot, before any plugin's `init` runs, whether
+or not anything reads or writes the settings afterwards. That holds for a path
+inside a value that already held an encrypted secret, too. If one cannot be
+encrypted, the boot fails and names the plugin. A path you stop marking secret
+stays encrypted, and is still answered as `{ set: true }`, until a new value
+is written to it.
+
+**Who may change the settings.** Changing a plugin's settings takes core's
+`manage-settings`, and reading them `read-settings` or `manage-settings`. A
+plugin can keep its settings to a narrower role by naming one of its own
+`permissions` in `contributes.settingsPermission` (`@experimental`): a write
+then takes that permission alone, and holding it also lets the operator read
+them. A name that is not one of the plugin's own permissions, or that comes
+without a `settings` schema, fails boot.
+
+```ts
+contributes: {
+  settings: z.object({ apiKey: z.string().default("") }),
+  permissions: [{ action: "update", resource: "pay-settings" }],
+  settingsPermission: "update-pay-settings",
+},
+capabilities: { secrets: ["apiKey"] },
+```
+
 ## The audit trail
 
 `ctx.audit.write` records only kinds the plugin declared, namespaced under its

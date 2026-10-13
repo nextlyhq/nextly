@@ -5,7 +5,12 @@ import { clearServices, registerServices } from "../../di/register";
 import { getNextly } from "../../init";
 import { getImageProcessor } from "../../storage/image-processor";
 import { definePlugin, type PluginDefinition } from "../plugin-context";
-import { createTestNextly, type TestNextly } from "../test-nextly";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../test-nextly";
 
 let current: TestNextly | undefined;
 
@@ -156,3 +161,42 @@ describe("plugin destroy() through nextly.shutdown()", () => {
     expect(order).toEqual(["init a", "init b", "destroy b", "destroy a"]);
   });
 });
+
+describe.each(getConfiguredTestDialects())(
+  "a cleared registration's plugin teardown on %s",
+  (dialect: TestDialect) => {
+    it("still reaches the services the plugin was started with", async () => {
+      // `clearServices()` empties the container at once, and the plugin is
+      // torn down only when the next registration starts. A teardown that
+      // opens a transaction reaches for the adapter, which on SQLite is
+      // looked up through the container, so it found nothing and the plugin
+      // was left half torn down while the boot went on.
+      const order: string[] = [];
+      const plugin = definePlugin({
+        name: "@test/d-db",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        init() {},
+        async destroy(ctx) {
+          await ctx.db.transaction(async () => {
+            order.push("destroyed inside a transaction");
+          });
+        },
+      });
+      current = await createTestNextly(
+        dialect === "sqlite"
+          ? { plugins: [plugin] }
+          : { dialect, plugins: [plugin] }
+      );
+
+      clearServices();
+      await registerServices({
+        adapter: current.adapter,
+        imageProcessor: getImageProcessor(),
+        plugins: [plugin],
+      });
+
+      expect(order).toEqual(["destroyed inside a transaction"]);
+    });
+  }
+);
