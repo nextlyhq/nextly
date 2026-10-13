@@ -61,6 +61,18 @@ export function passwordColumns(
 }
 
 /**
+ * The columns that remove an account's password with nothing in its place,
+ * as the clean-up of passwords stored as typed does. Its own type because
+ * `UserUpdateData` only ever carries a hash, so only a write that means to
+ * clear the password can put `null` there.
+ */
+export interface PasswordRemoval {
+  passwordHash: null;
+  passwordUpdatedAt: Date;
+  updatedAt: Date;
+}
+
+/**
  * Update the user row and delete every refresh token the account holds, both
  * inside the transaction `tx` belongs to.
  *
@@ -78,7 +90,7 @@ export async function updateUserEndingSessions(
   dialect: SupportedDialect,
   args: {
     userId: string | number;
-    set: UserUpdateData;
+    set: UserUpdateData | PasswordRemoval;
     unlessDeactivated?: boolean;
     when?: SQL;
   }
