@@ -101,6 +101,26 @@ describe("the boot sequence in registerServices", () => {
   });
 
   /**
+   * A fresh install's foreign keys to code-first tables are created by the
+   * apply that creates those tables. Checked before it, the check would refuse
+   * keys moments from being created; checked after migrations or plugins,
+   * something would already have used tables missing their keys.
+   */
+  it("checks a fresh install's foreign keys after the code-first tables are created, before migrations", () => {
+    const tables = boot.indexOf("await syncCodeFirstEntities(");
+    const check = boot.indexOf("await checkFreshInstallForeignKeys(");
+    expect(tables).toBeGreaterThan(-1);
+    expect(check).toBeGreaterThan(tables);
+    expect(check).toBeLessThan(boot.indexOf("await runBootMigrations("));
+    expect(bodyOf("syncCodeFirstEntities")).toContain(
+      "await createMissingCodeFirstTables("
+    );
+    expect(bodyOf("checkFreshInstallForeignKeys")).toContain(
+      "await assertFreshInstallForeignKeys("
+    );
+  });
+
+  /**
    * First-run setup runs inside `initializeSchemaRegistry` and decides what to
    * create by introspecting the ACTIVE PostgreSQL schema. Published after it,
    * a boot into a new schema introspected `public` instead — and when `public`
