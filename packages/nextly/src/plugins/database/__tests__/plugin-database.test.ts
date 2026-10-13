@@ -18,6 +18,7 @@ import { uuidV7Timestamp } from "../../../utils/uuid-v7";
 import {
   createPluginDatabase,
   type PluginTransaction,
+  type RelationalQuery,
 } from "../plugin-database";
 
 const notes = defineTable("notes", {
@@ -776,7 +777,7 @@ describe("relational queries", () => {
       transaction: fn => fn({ db: relational, relationalDb: relational }),
     });
 
-    return { surface, answered };
+    return { surface, answered, relational };
   }
 
   it("answers for a table this owner owns", async () => {
@@ -840,6 +841,58 @@ describe("relational queries", () => {
     expect(Object.keys(surface.query)).toEqual(["fx__notes"]);
     expect("users" in surface.query).toBe(false);
     expect("fx__notes" in surface.query).toBe(true);
+  });
+
+  describe("reached by reflection rather than by name", () => {
+    it("hands out no descriptor for a table it would refuse", async () => {
+      // A descriptor lookup the namespace did not answer for went to Drizzle's
+      // own, whose value is the raw entry: a read of a core table, or another
+      // plugin's, past every check.
+      const { surface, answered } = queryHarness();
+      for (const table of ["users", "other__invoices"]) {
+        const descriptor = Object.getOwnPropertyDescriptor(
+          surface.query,
+          table
+        );
+        expect(descriptor).toBeUndefined();
+        await (descriptor?.value as RelationalQuery | undefined)?.findMany();
+      }
+      expect(answered).toEqual([]);
+    });
+
+    it("hands out the checked entry, never Drizzle's, for a table it allows", async () => {
+      const { surface, answered, relational } = queryHarness();
+      const value: unknown = Object.getOwnPropertyDescriptor(
+        surface.query,
+        "fx__notes"
+      )?.value;
+      expect(value).not.toBe(relational.query.fx__notes);
+      await (value as RelationalQuery).findMany();
+      expect(answered).toEqual(["fx__notes"]);
+    });
+
+    it("copies out only the tables it allows, and only their checked entries", () => {
+      const { surface, relational } = queryHarness();
+      const copy = { ...surface.query };
+      expect(Object.keys(copy)).toEqual(["fx__notes"]);
+      expect(copy.fx__notes).not.toBe(relational.query.fx__notes);
+      expect(
+        Object.keys(Object.getOwnPropertyDescriptors(surface.query))
+      ).toEqual(["fx__notes"]);
+    });
+
+    it("refuses an assignment, which reached the namespace core queries through", () => {
+      const { surface, relational } = queryHarness();
+      const original = relational.query.users;
+      const replacement = {
+        findMany: async () => [],
+        findFirst: async () => null,
+      };
+      expect(() => {
+        (surface.query as Record<string, unknown>).users = replacement;
+      }).toThrow(TypeError);
+      expect(relational.query.users).toBe(original);
+    });
   });
 });
 

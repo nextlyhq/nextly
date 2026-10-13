@@ -339,7 +339,7 @@ them because the DSL is the one path that keeps them in migrations and drift.
 | `.references()` / `RawForeignKey` | `foreignKeys` on `defineTable` |
 | `check()` | `checks` on `defineTable` |
 | A plugin's `(config) => config` over other plugins' collections | `contributes.transforms` (and `contributes.extend` for added fields) |
-| `defaultIDType` | `db.idType` per collection (`uuid` or `uuidv7`) |
+| `idType` (`serial`, `uuid` or `uuidv7`) | `db.idType` per collection, `uuid` or `uuidv7`; `serial` is refused (see [Generated integer keys](#generated-integer-keys)) |
 | A client-supplied `id` on create | `db.allowIdOnCreate` per collection |
 | `.where()` partial index | not supported: refused on every dialect, because MySQL has none |
 | `relations()` | `relations` on `defineTable` + `ref()` auto-edges |
@@ -410,6 +410,20 @@ overlap each get their own row back.
 Only on a table its own owner declares. Added to somebody else's, it would be
 a second auto-assigning column on a row whose identity is already decided, and
 MySQL will not accept a second AUTO_INCREMENT column at all.
+
+Collections don't take one. A collection's id is text, which every relation,
+API path and admin screen reads, so `db.idType` offers `uuid` and the
+time-ordered `uuidv7`, and a collection that sets `serial` is refused where it
+is defined. A sequential number, such as an order number, goes on a table of
+its own keyed by `col.serial()`, beside the row it numbers:
+
+```ts
+defineTable(
+  "order_numbers",
+  { number: col.serial(), orderId: col.shortText() },
+  { indexes: [{ columns: ["orderId"], unique: true }] }
+);
+```
 
 ## Enums
 

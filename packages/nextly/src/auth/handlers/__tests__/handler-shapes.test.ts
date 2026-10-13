@@ -181,7 +181,9 @@ describe("login handler: respondAction shape", () => {
       incrementFailedAttempts,
       lockAccount,
       resetFailedAttempts,
-      fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
+      fetchSessionRoles: vi
+        .fn()
+        .mockResolvedValue({ roleIds: ["super-admin"], validUntil: undefined }),
       fetchCustomFields: vi.fn().mockResolvedValue({}),
       storeRefreshToken: vi.fn().mockResolvedValue(undefined),
       ...loginPipelineDeps({
@@ -261,7 +263,9 @@ describe("login handler: respondAction shape", () => {
       incrementFailedAttempts,
       lockAccount,
       resetFailedAttempts,
-      fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
+      fetchSessionRoles: vi
+        .fn()
+        .mockResolvedValue({ roleIds: ["super-admin"], validUntil: undefined }),
       fetchCustomFields: vi.fn().mockResolvedValue({}),
       storeRefreshToken: vi.fn().mockResolvedValue(undefined),
       ...pipeline,
@@ -335,7 +339,9 @@ describe("login handler: respondAction shape", () => {
       incrementFailedAttempts,
       lockAccount,
       resetFailedAttempts,
-      fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
+      fetchSessionRoles: vi
+        .fn()
+        .mockResolvedValue({ roleIds: ["super-admin"], validUntil: undefined }),
       fetchCustomFields: vi.fn().mockResolvedValue({}),
       storeRefreshToken: vi.fn().mockResolvedValue(undefined),
       ...pipeline,
@@ -487,7 +493,9 @@ describe("login handler: respondAction shape", () => {
       incrementFailedAttempts,
       lockAccount,
       resetFailedAttempts,
-      fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
+      fetchSessionRoles: vi
+        .fn()
+        .mockResolvedValue({ roleIds: ["super-admin"], validUntil: undefined }),
       fetchCustomFields: vi.fn().mockResolvedValue({}),
       storeRefreshToken,
       // Read earlier than the session path now: the account-state gate runs
@@ -579,7 +587,9 @@ describe("login handler: an unverified account", () => {
       allowedOrigins: ALLOWED_ORIGINS,
       trustProxy: false,
       trustedProxyIps: [],
-      fetchRoleIds: vi.fn().mockResolvedValue([]),
+      fetchSessionRoles: vi
+        .fn()
+        .mockResolvedValue({ roleIds: [], validUntil: undefined }),
       fetchCustomFields: vi.fn().mockResolvedValue({}),
       storeRefreshToken: vi.fn().mockResolvedValue(undefined),
       fetchAccountState: vi.fn().mockResolvedValue({
@@ -664,7 +674,9 @@ describe("refresh handler: respondData shape", () => {
         image: null,
         isActive: true,
       }),
-      fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
+      fetchSessionRoles: vi
+        .fn()
+        .mockResolvedValue({ roleIds: ["super-admin"], validUntil: undefined }),
       fetchCustomFields: vi.fn().mockResolvedValue({}),
     };
 
@@ -713,7 +725,9 @@ describe("refresh handler: respondData shape", () => {
       deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
       withSessionRowTransaction: rows.withSessionRowTransaction,
       findUserById: vi.fn().mockRejectedValue(new Error("connection lost")),
-      fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
+      fetchSessionRoles: vi
+        .fn()
+        .mockResolvedValue({ roleIds: ["super-admin"], validUntil: undefined }),
       fetchCustomFields: vi.fn().mockResolvedValue({}),
     };
 
@@ -854,7 +868,9 @@ describe("setup handler: respondAction shape", () => {
         email: "a@example.com",
         name: "A",
       }),
-      fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
+      fetchSessionRoles: vi
+        .fn()
+        .mockResolvedValue({ roleIds: ["super-admin"], validUntil: undefined }),
       seedPermissions: vi.fn().mockResolvedValue(undefined),
       storeRefreshToken: vi.fn().mockResolvedValue(undefined),
       auditLog: { write: vi.fn().mockResolvedValue(undefined) },
@@ -907,7 +923,7 @@ describe("setup handler: respondAction shape", () => {
       trustedProxyIps: [],
       getUserCount: vi.fn().mockResolvedValue(0),
       createSuperAdmin,
-      fetchRoleIds: vi.fn(),
+      fetchSessionRoles: vi.fn(),
       seedPermissions: vi.fn(),
       storeRefreshToken: vi.fn(),
       auditLog: { write: vi.fn().mockResolvedValue(undefined) },
@@ -956,7 +972,7 @@ describe("setup handler: respondAction shape", () => {
       trustedProxyIps: [],
       getUserCount: vi.fn().mockRejectedValue(new Error("connection lost")),
       createSuperAdmin,
-      fetchRoleIds: vi.fn(),
+      fetchSessionRoles: vi.fn(),
       seedPermissions: vi.fn(),
       storeRefreshToken: vi.fn(),
     };
@@ -1292,7 +1308,9 @@ describe("the account-state gate before continuations", () => {
         incrementFailedAttempts: vi.fn().mockResolvedValue(undefined),
         lockAccount: vi.fn().mockResolvedValue(undefined),
         resetFailedAttempts: vi.fn().mockResolvedValue(undefined),
-        fetchRoleIds: vi.fn().mockResolvedValue([]),
+        fetchSessionRoles: vi
+          .fn()
+          .mockResolvedValue({ roleIds: [], validUntil: undefined }),
         fetchCustomFields: vi.fn().mockResolvedValue({}),
         storeRefreshToken: vi.fn().mockResolvedValue(undefined),
         authStrategies: [custom] as never,

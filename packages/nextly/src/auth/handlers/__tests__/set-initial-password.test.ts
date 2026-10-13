@@ -25,7 +25,9 @@ function makeDeps(state: { isActive: boolean; emailVerified: Date | null }) {
     refreshTokenTTL: 604800,
     trustProxy: false,
     trustedProxyIps: [],
-    fetchRoleIds: vi.fn().mockResolvedValue([]),
+    fetchSessionRoles: vi
+      .fn()
+      .mockResolvedValue({ roleIds: [], validUntil: undefined }),
     fetchCustomFields: vi.fn().mockResolvedValue({}),
     withSessionRowTransaction: sessionRows.withSessionRowTransaction,
     sessionRows,
