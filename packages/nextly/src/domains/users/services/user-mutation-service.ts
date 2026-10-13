@@ -24,7 +24,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Table, Column } from "drizzle-orm";
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 
-import { hashPassword } from "@nextly/auth/password";
+import { hashPassword, isPasswordHash } from "@nextly/auth/password";
 import {
   CreateLocalUserSchema,
   UpdateUserSchema,
@@ -451,6 +451,17 @@ function isExternalIdentityShape(account: {
   hasPassword: boolean;
 }): boolean {
   return account.isActive && account.verified && !account.hasPassword;
+}
+
+/**
+ * Whether a verification date names the moment already stored. Compared by
+ * instant: two `Date`s for one moment are never the same object, so a
+ * full-object update passing back the date it read would otherwise count as
+ * verifying the address again, and restamp who vouched for it.
+ */
+function sameVerificationInstant(next: Date, stored: unknown): boolean {
+  if (!(stored instanceof Date || typeof stored === "string")) return false;
+  return new Date(stored).getTime() === next.getTime();
 }
 
 export class UserMutationService extends BaseService {
@@ -1308,7 +1319,7 @@ export class UserMutationService extends BaseService {
         isExternalIdentityShape({
           isActive: values.isActive === true,
           verified: values.emailVerified != null,
-          hasPassword: values.passwordHash != null,
+          hasPassword: isPasswordHash(values.passwordHash),
         })
       ) {
         throw NextlyError.forbidden({
@@ -1621,15 +1632,20 @@ export class UserMutationService extends BaseService {
       // 2) Build updateData (only include fields that actually change)
       const updateData: UserUpdateData = {};
 
+      // Whether the account moves to another address. An update that carries
+      // the address it already has, as a full-object update does, moves
+      // nothing, and is not judged as a move.
+      let addressMoves = false;
+
       // EMAIL
       if (typeof changes.email !== "undefined") {
         const normalizedNewEmail = (changes.email ?? "").trim().toLowerCase();
         const currentEmailNormalized = (currentUser.email ?? "").toLowerCase();
+        addressMoves =
+          normalizedNewEmail !== "" &&
+          normalizedNewEmail !== currentEmailNormalized;
 
-        if (
-          normalizedNewEmail &&
-          normalizedNewEmail !== currentEmailNormalized
-        ) {
+        if (addressMoves) {
           const existing = await this.db.query.users.findFirst({
             where: { email: requireFilterValue(normalizedNewEmail, "email") },
             columns: { id: true, email: true },
@@ -1687,7 +1703,13 @@ export class UserMutationService extends BaseService {
           // writes nothing for it, and keeping the key keeps such an update
           // counting as one.
           updateData.emailVerified = undefined;
-        } else {
+        } else if (
+          changes.emailVerified === null ||
+          !sameVerificationInstant(
+            changes.emailVerified,
+            currentUser.emailVerified
+          )
+        ) {
           // With how it was verified, in the same statement: whoever is
           // updating the account is who vouched for the address.
           Object.assign(
@@ -1726,7 +1748,7 @@ export class UserMutationService extends BaseService {
         caller === "plugin" &&
         (updateData.isActive !== undefined ||
           updateData.emailVerified !== undefined ||
-          updateData.email !== undefined);
+          addressMoves);
 
       // 2b) Extract custom field values from changes (only fields present in payload)
       const hasExt = this.hasCustomFields();
@@ -2173,10 +2195,11 @@ export class UserMutationService extends BaseService {
         set.emailVerified !== undefined
           ? set.emailVerified != null
           : row.emailVerified != null,
-      hasPassword:
-        set.passwordHash !== undefined
-          ? set.passwordHash != null
-          : row.passwordHash != null,
+      // A password only where a hash is stored: a stored value that is not
+      // one signs nobody in, so the account has no password to speak of.
+      hasPassword: isPasswordHash(
+        set.passwordHash !== undefined ? set.passwordHash : row.passwordHash
+      ),
     };
     if (isExternalIdentityShape(after)) {
       throw NextlyError.forbidden({
