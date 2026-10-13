@@ -13,6 +13,7 @@ import {
   writingPermissions,
 } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
+import { isMissingTable } from "../../field-groups/migration/session";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 
 import { PermissionService } from "./permission-service";
@@ -598,8 +599,11 @@ export class PermissionSeedService extends BaseService {
         const collectionResult = await this.seedCollectionPermissions(slug);
         this.mergeSeedResult(result, collectionResult);
       }
-    } catch {
-      // Table may not exist yet (fresh DB). Return empty result.
+    } catch (error) {
+      // A registry table a migration has not created yet holds no slugs. Any
+      // other failure to read it left permissions unwritten, and is counted so
+      // a caller does not take the seeding for complete.
+      if (!isMissingTable(error, this.dialect)) result.errors++;
       this.logger.warn(
         "Could not read dynamic_collections table — skipping collection permission seeding."
       );
@@ -628,8 +632,9 @@ export class PermissionSeedService extends BaseService {
         const singleResult = await this.seedSinglePermissions(slug);
         this.mergeSeedResult(result, singleResult);
       }
-    } catch {
-      // Table may not exist yet (fresh DB). Return empty result.
+    } catch (error) {
+      // As for collections: only a table not created yet is no failure.
+      if (!isMissingTable(error, this.dialect)) result.errors++;
       this.logger.warn(
         "Could not read dynamic_singles table — skipping single permission seeding."
       );

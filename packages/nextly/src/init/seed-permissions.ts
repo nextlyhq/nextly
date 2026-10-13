@@ -17,6 +17,7 @@ import { seedRolePresets } from "../database/seeders/role-presets";
 import { getService } from "../di/register";
 import { isMissingTable } from "../domains/field-groups/migration/session";
 import { describeError } from "../errors/describe-error";
+import { NextlyError } from "../errors/nextly-error";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../plugins/roles/seed-roles";
@@ -29,9 +30,11 @@ import { seedPluginRoles } from "../plugins/roles/seed-roles";
  * rows rather than inserting blindly, and only the ids it reports as new are
  * granted.
  *
- * Throws nothing of its own — callers boot regardless of whether the
- * permissions table exists yet — but deliberately does not catch, so the two
- * boot paths keep their own logging.
+ * Does not catch, so its caller decides what a failure means. The seeders
+ * count a permission they could not write rather than throw, so once
+ * everything that could be written has been, a count above zero is thrown
+ * here: a caller that reads success from the absence of an error would
+ * otherwise take a partial seeding for a whole one.
  */
 export async function seedAllPermissions(): Promise<void> {
   const permissionSeedService = getService("permissionSeedService");
@@ -62,6 +65,25 @@ export async function seedAllPermissions(): Promise<void> {
   if (allNewIds.length > 0) {
     await permissionSeedService.assignNewPermissionsToSuperAdmin(allNewIds);
   }
+
+  const failed =
+    systemResult.errors +
+    collectionResult.errors +
+    singleResult.errors +
+    customResult.errors;
+  if (failed > 0) {
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "An unexpected error occurred.",
+      logMessage: `${failed} permission(s) could not be seeded`,
+      logContext: {
+        system: systemResult.errors,
+        collections: collectionResult.errors,
+        singles: singleResult.errors,
+        custom: customResult.errors,
+      },
+    });
+  }
 }
 
 /** The value Next.js gives `NEXT_PHASE` while `next build` runs. */
@@ -75,6 +97,7 @@ const NEXT_PRODUCTION_BUILD_PHASE = "phase-production-build";
  */
 const globalForSeeding = globalThis as unknown as {
   __nextly_seeding?: Promise<void>;
+  __nextly_seedingHolds?: Set<Promise<void>>;
 };
 
 /**
@@ -131,15 +154,42 @@ export function seedPermissionsAndRolePresets(): Promise<void> {
 }
 
 /**
- * Wait for a seeding another boot has in flight. Resolves at once when none is.
+ * Hold the seeding gate from before a boot registers the services until it has
+ * seeded, and return the release. Releasing twice is harmless, so a `finally`
+ * can release whatever path the boot took.
+ *
+ * The services read as registered as soon as `registerServices` returns, and
+ * the registering boot does more before it seeds: a drift check, template
+ * setup. A boot arriving in that interval finds the services registered and
+ * no seeding in flight yet. Held from before registration, the gate is closed
+ * for the whole of it.
+ */
+export function holdBootSeeding(): () => void {
+  let release: () => void = () => {};
+  const held = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const holds = (globalForSeeding.__nextly_seedingHolds ??= new Set());
+  holds.add(held);
+  return () => {
+    holds.delete(held);
+    release();
+  };
+}
+
+/**
+ * Wait until no boot is registering or seeding. Resolves at once when none is.
  *
  * The two boot paths keep separate latches, and each seeds only when it is the
  * one that registered the services. The other one then finds the services
- * registered and would serve while the first is still writing the roles, so a
- * boot that skips the seeding waits here instead. Never rejects: the seeding
- * logs its own failures.
+ * registered and would serve while the first has yet to write the roles, so a
+ * boot that skips the seeding waits here instead: for every hold a registering
+ * boot has taken, then for the run in flight. Never rejects: the seeding logs
+ * its own failures.
  */
 export async function awaitBootSeeding(): Promise<void> {
+  const holds = globalForSeeding.__nextly_seedingHolds;
+  if (holds) await Promise.all(holds);
   await globalForSeeding.__nextly_seeding;
 }
 

@@ -6,8 +6,11 @@
  * to finish seeding before the request goes on, as the instrumentation boot
  * does, or the first requests on a fresh instance are judged against roles
  * that are still being written. The same holds when the instrumentation boot
- * registered the services and is still seeding: this boot then seeds nothing
- * itself, and waits for that run.
+ * registered the services and has yet to seed: this boot then seeds nothing
+ * itself, and waits for it. And while this boot is between registering the
+ * services and seeding, a boot that finds them registered waits for it. The
+ * seeding gate here is the real one; only the seeding itself and the boot's
+ * other steps are stood in for.
  */
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -23,25 +26,28 @@ function pending(): { promise: Promise<void>; finish: () => void } {
 }
 
 let seeding = pending();
-let otherBootSeeding: Promise<void> = Promise.resolve();
+let templates: Promise<void> = Promise.resolve();
 let registered = false;
 const seedPermissionsAndRolePresets = vi.fn(() => seeding.promise);
-const awaitBootSeeding = vi.fn(() => otherBootSeeding);
+const registerServices = vi.fn(async () => {
+  registered = true;
+});
 
-vi.mock("../../init/seed-permissions", () => ({
+vi.mock("../../init/seed-permissions", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../init/seed-permissions")>()),
   seedPermissionsAndRolePresets,
-  awaitBootSeeding,
-  seedAllPermissions: vi.fn(async () => undefined),
 }));
 vi.mock("../../di", () => ({
-  registerServices: vi.fn(async () => {
-    registered = true;
-  }),
+  registerServices,
   isServicesRegistered: () => registered,
   shutdownServices: vi.fn(),
-  // Every other post-registration step resolves to nothing: this test is about
-  // the order of the seeding and the boot's own return, not what they produce.
-  getService: () => new Proxy({}, { get: () => () => undefined }),
+  // The template step is the one between registering and seeding that a test
+  // can hold up; every other step resolves to nothing, since this is about the
+  // order of the seeding and the boot's own return, not what they produce.
+  getService: (name: string) =>
+    name === "emailTemplateService"
+      ? { ensureBuiltInTemplates: () => templates }
+      : new Proxy({}, { get: () => () => undefined }),
 }));
 vi.mock("../../runtime/hmr-listener", () => ({ ensureHmrListener: vi.fn() }));
 vi.mock("../../storage/image-processor", () => ({
@@ -51,55 +57,71 @@ vi.mock("../../storage/image-processor", () => ({
 const { ensureServicesInitialized, setHandlerConfig } = await import(
   "../auth-handler"
 );
+const { awaitBootSeeding, holdBootSeeding } = await import(
+  "../../init/seed-permissions"
+);
 
 afterEach(() => {
   registered = false;
   seeding = pending();
-  otherBootSeeding = Promise.resolve();
+  templates = Promise.resolve();
   vi.clearAllMocks();
 });
 
-/** Whether the boot is still pending once a boot that did not wait would be done. */
-async function stillBooting(booting: { done: boolean }): Promise<boolean> {
+/** Whether the promise is still pending once a boot that did not wait would be done. */
+async function stillPending(promise: Promise<unknown>): Promise<boolean> {
+  let settled = false;
+  void promise.then(() => {
+    settled = true;
+  });
   // Long enough for a boot that did not wait to have finished already.
   await new Promise(resolve => setTimeout(resolve, 100));
-  return !booting.done;
-}
-
-function boot(): { done: boolean; finished: Promise<void> } {
-  const state = { done: false, finished: Promise.resolve() };
-  state.finished = ensureServicesInitialized().then(() => {
-    state.done = true;
-  });
-  return state;
+  return !settled;
 }
 
 it("does not finish booting while permissions and roles are still seeding", async () => {
   setHandlerConfig({} as SanitizedNextlyConfig);
 
-  const booting = boot();
+  const booting = ensureServicesInitialized();
   await vi.waitFor(() =>
     expect(seedPermissionsAndRolePresets).toHaveBeenCalled()
   );
-  expect(await stillBooting(booting)).toBe(true);
+  expect(await stillPending(booting)).toBe(true);
 
   seeding.finish();
-  await booting.finished;
-  expect(booting.done).toBe(true);
+  await booting;
 });
 
-it("waits for the seeding of the boot that registered the services", async () => {
+it("waits for the boot that registered the services to seed them", async () => {
   setHandlerConfig({} as SanitizedNextlyConfig);
-  // The instrumentation boot registered the services and is still seeding.
+  // The instrumentation boot registered the services and holds the gate until
+  // it has seeded.
   registered = true;
-  const other = pending();
-  otherBootSeeding = other.promise;
+  const release = holdBootSeeding();
 
-  const booting = boot();
-  expect(await stillBooting(booting)).toBe(true);
+  const booting = ensureServicesInitialized();
+  expect(await stillPending(booting)).toBe(true);
   expect(seedPermissionsAndRolePresets).not.toHaveBeenCalled();
 
-  other.finish();
-  await booting.finished;
-  expect(booting.done).toBe(true);
+  release();
+  await booting;
+});
+
+it("holds the gate from before it registers the services until it has seeded", async () => {
+  setHandlerConfig({} as SanitizedNextlyConfig);
+  seeding.finish();
+  const slowTemplates = pending();
+  templates = slowTemplates.promise;
+
+  // Registered, then held up in the template step, before it seeds.
+  const booting = ensureServicesInitialized();
+  await vi.waitFor(() => expect(registerServices).toHaveBeenCalled());
+
+  // What the instrumentation boot does on finding the services registered.
+  const otherBoot = awaitBootSeeding();
+  expect(await stillPending(otherBoot)).toBe(true);
+
+  slowTemplates.finish();
+  await booting;
+  await otherBoot;
 });

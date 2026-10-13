@@ -28,9 +28,9 @@ vi.mock("../../di/register", () => ({
       case "permissionSeedService":
         return {
           seedSystemPermissions,
-          seedAllCollectionPermissions: async () => ({ newPermissionIds: [] }),
-          seedAllSinglePermissions: async () => ({ newPermissionIds: [] }),
-          seedCustomPermissions: async () => ({ newPermissionIds: [] }),
+          seedAllCollectionPermissions: async () => seeded(),
+          seedAllSinglePermissions: async () => seeded(),
+          seedCustomPermissions: async () => seeded(),
           markOrphanedPermissions: async () => undefined,
           assignNewPermissionsToSuperAdmin: async () => undefined,
         };
@@ -42,9 +42,13 @@ vi.mock("../../di/register", () => ({
 vi.mock("../../database/seeders/role-presets", () => ({ seedRolePresets }));
 vi.mock("../../plugins/roles/seed-roles", () => ({ seedPluginRoles }));
 
-const { awaitBootSeeding, seedPermissionsAndRolePresets } = await import(
-  "../seed-permissions"
-);
+const { awaitBootSeeding, holdBootSeeding, seedPermissionsAndRolePresets } =
+  await import("../seed-permissions");
+
+/** A seeder's result: nothing new, and `errors` permissions it could not write. */
+function seeded(errors = 0) {
+  return { newPermissionIds: [], errors };
+}
 
 /** What PostgreSQL reports for a table that does not exist. */
 function missingTable(): Error {
@@ -56,7 +60,7 @@ function missingTable(): Error {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllEnvs();
-  seedSystemPermissions.mockResolvedValue({ newPermissionIds: [] });
+  seedSystemPermissions.mockResolvedValue(seeded());
   seedRolePresets.mockResolvedValue(undefined);
   seedPluginRoles.mockResolvedValue(undefined);
 });
@@ -90,13 +94,28 @@ describe("seedPermissionsAndRolePresets", () => {
     await seedPermissionsAndRolePresets();
     expect(seedPluginRoles).not.toHaveBeenCalled();
 
-    seedSystemPermissions.mockResolvedValue({ newPermissionIds: [] });
+    seedSystemPermissions.mockResolvedValue(seeded());
     await seedPermissionsAndRolePresets();
     expect(seedPluginRoles).toHaveBeenCalledTimes(1);
   });
 
+  it("takes permissions a seeder could not write for a failed step, though nothing threw", async () => {
+    // The seeders count a permission they could not write rather than throw.
+    seedSystemPermissions.mockResolvedValue(seeded(2));
+
+    await seedPermissionsAndRolePresets();
+
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0]?.[0]).toContain("Seeding permissions failed");
+    expect(error.mock.calls[0]?.[0]).toContain(
+      "2 permission(s) could not be seeded"
+    );
+    expect(seedRolePresets).toHaveBeenCalled();
+    expect(seedPluginRoles).not.toHaveBeenCalled();
+  });
+
   it("runs once at a time: a boot arriving mid-seeding joins the run, and waits for it", async () => {
-    let finish: (value: { newPermissionIds: never[] }) => void = () => {};
+    let finish: (value: ReturnType<typeof seeded>) => void = () => {};
     seedSystemPermissions.mockReturnValue(
       new Promise(resolve => {
         finish = resolve;
@@ -114,7 +133,7 @@ describe("seedPermissionsAndRolePresets", () => {
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(waited).toBe(false);
 
-    finish({ newPermissionIds: [] });
+    finish(seeded());
     await Promise.all([first, second, waiting]);
     expect(waited).toBe(true);
     expect(seedSystemPermissions).toHaveBeenCalledTimes(1);
@@ -122,6 +141,25 @@ describe("seedPermissionsAndRolePresets", () => {
   });
 
   it("does not hold a boot up when nothing is seeding", async () => {
+    await expect(awaitBootSeeding()).resolves.toBeUndefined();
+  });
+
+  it("keeps a boot waiting while another holds the gate, until it releases it", async () => {
+    // Held from before a boot registers the services, so the interval before
+    // its seeding starts is covered too.
+    const release = holdBootSeeding();
+    let waited = false;
+    const waiting = awaitBootSeeding().then(() => {
+      waited = true;
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(waited).toBe(false);
+
+    release();
+    release();
+    await waiting;
+    expect(waited).toBe(true);
     await expect(awaitBootSeeding()).resolves.toBeUndefined();
   });
 

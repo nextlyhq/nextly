@@ -30,13 +30,18 @@
 
 When one boot finds the services already registered by the other, as when
 `instrumentation.ts` and a first request boot at the same time, it now waits for
-that boot's permission and role seeding rather than serving while the roles are
-still being written. Both boots share one seeding run per process.
+that boot's permission and role seeding rather than serving before the roles are
+written. The registering boot holds that wait from before its services read as
+registered, so the steps it runs before seeding are covered too. Both boots
+share one seeding run per process.
 
 A plugin-declared role is created only once a boot has seeded every
 permission. A plugin role is never revisited after it exists, so one created
 after a permission step that failed part-way kept, for good, only the grants
-that step managed to write.
+that step managed to write. A permission seeding counts as failed when any
+permission could not be written, or when the collection or Single registry
+could not be read for a reason other than its table not existing yet; it is
+logged as an error naming how many.
 
 On MySQL, whose `role_permissions` table has no foreign key, an assignment
 whose permission no longer exists is left out of a role's permission list and

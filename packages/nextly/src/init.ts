@@ -56,6 +56,7 @@ import { runPostInitTasks } from "./init/post-init-tasks";
 import { reloadNextlyConfig } from "./init/reload-config";
 import {
   awaitBootSeeding,
+  holdBootSeeding,
   seedPermissionsAndRolePresets,
 } from "./init/seed-permissions";
 // HMR listener primitives (F1 PR 2). Lazy WS setup inside getNextly()
@@ -313,6 +314,9 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   // Begin first-time initialisation and store the Promise so concurrent calls
   // above return it rather than spawning duplicate DB connections.
   const initPromise = (async (): Promise<Nextly> => {
+    // Released once this boot has seeded, or by the `finally` on any other way
+    // out, so a boot waiting on the gate is never left waiting.
+    let releaseSeeding: (() => void) | undefined;
     try {
       // INSIDE the published promise, never before it. An `await` above this
       // point yields after the `__nextly_initPromise` check but before the
@@ -330,6 +334,10 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // Build final config from provided options
         const finalConfig = buildServiceConfig(options);
 
+        // Taken before the services read as registered: from then until this
+        // boot has seeded, the request-path boot finds them registered and
+        // waits on this hold rather than serving.
+        releaseSeeding = holdBootSeeding();
         await registerServices(finalConfig);
 
         // Log capabilities on first initialisation
@@ -390,6 +398,7 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // do: it can only be called inside a request, and getNextly() also runs
         // from instrumentation and scripts.
         await seedPermissionsAndRolePresets();
+        releaseSeeding();
 
         // The remaining post-initialisation tasks (templates, code-field sync,
         // and the like) run in the background so that getNextly() returns as
@@ -416,6 +425,7 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
 
       return instance;
     } finally {
+      releaseSeeding?.();
       // Always clear the in-flight promise so future calls use the cached
       // instance (or retry on failure).
       globalForInit.__nextly_initPromise = null;

@@ -21,6 +21,7 @@ import { awaitBootMigrations } from "../init/boot-migrations-gate";
 import { buildServiceConfig } from "../init/build-service-config";
 import {
   awaitBootSeeding,
+  holdBootSeeding,
   seedPermissionsAndRolePresets,
 } from "../init/seed-permissions";
 import { ensureHmrListener } from "../runtime/hmr-listener";
@@ -356,11 +357,20 @@ export async function ensureServicesInitialized(): Promise<void> {
   while (_initInFlight) {
     await _initInFlight;
   }
+  // Taken before this pass registers the services, which is when the
+  // instrumentation boot would start finding them registered: it waits on this
+  // hold until the pass has seeded. Released before this boot waits on the gate
+  // itself, so it never waits on its own hold.
+  const releaseSeeding = isServicesRegistered() ? undefined : holdBootSeeding();
   const run = initializeServicesOnce().finally(() => {
     if (_initInFlight === run) _initInFlight = null;
   });
   _initInFlight = run;
-  await run;
+  try {
+    await run;
+  } finally {
+    releaseSeeding?.();
+  }
 
   // The pass above seeds only when it registered the services itself. When the
   // instrumentation boot registered them, it may still be seeding, and this
