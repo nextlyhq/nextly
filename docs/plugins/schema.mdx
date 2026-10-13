@@ -68,6 +68,43 @@ so they're cleaned up if your plugin is removed.
 > Extending an entity that doesn't exist in the merged schema is a **fail-fast boot
 > error** — see the [error reference](/docs/plugins/error-reference).
 
+## Change entities you don't own
+
+`contributes.transforms` (`@experimental`) changes an entity another plugin or the app
+declared, not only adds fields to it: an access rule, a hook list, a field's options.
+Each transform receives a frozen copy of the entity and returns the new definition:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+
+export default definePlugin({
+  name: "@acme/nextly-plugin-public-posts",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.63",
+  dependsOn: { "@acme/nextly-plugin-blog": "^1" },
+  contributes: {
+    transforms: [
+      {
+        target: "posts", // a slug, or an array of slugs
+        transform: entity => ({ ...entity, access: { read: () => true } }),
+      },
+    ],
+  },
+});
+```
+
+`setup(config)` cannot do this: it runs before plugins' collections, singles and
+components are merged, so it never sees them. Transforms run after the merge and after
+`extend`, in dependency order, so a plugin transforming a dependency's collection sees
+it as the dependency left it. They target code-first entities, the app's and every
+plugin's; a Schema Builder entity is stored data, so change it in the Builder and add
+fields to it with `extend`. A transform naming a slug the config does not declare is
+refused at boot.
+
+A disabled plugin's transforms still run, so disabling it never changes a table, but
+contribute no behaviour: a hook, access rule, validator or function default they set
+is put back to what the entity had.
+
 ## Migrations & databases
 
 A plugin doesn't write SQL or manage tables itself — it **declares** schema through
@@ -137,6 +174,26 @@ is why declaring everything through `contributes` (rather than hand-writing tabl
 > `ctx.services` is provenance-tagged and pruned automatically. Anything you create by
 > reaching into `ctx.db` (raw DDL, side tables) is **not** tracked and will be left
 > behind on uninstall — document it, or avoid it.
+
+### Tables declared with `defineTable`
+
+Tables a plugin declares with `defineTable` and ships migration modules for are
+installed and removed with two commands, run while the plugin is in your config:
+
+```bash
+nextly plugins install <name>                # apply its pending modules, then onInstall
+nextly plugins uninstall <name>              # onUninstall, then every module's DOWN
+nextly plugins uninstall <name> --keep-data  # onUninstall only; the tables stay, orphaned
+```
+
+Install refuses while a plugin it depends on is not installed
+(`PLUGIN_DEPENDENCY_NOT_INSTALLED`). Uninstall refuses while another enabled plugin
+depends on it (`PLUGIN_HAS_DEPENDENTS`) or when a module has no DOWN
+(`PLUGIN_UNINSTALL_IRREVERSIBLE`), and asks for `--yes` before dropping anything
+(`PLUGIN_UNINSTALL_UNCONFIRMED`). Every refusal comes before anything runs. After a
+full uninstall the boot refuses the plugin while it is still listed
+(`PLUGIN_SCHEMA_UNINSTALLED`): remove it from the config, or install it again. See
+[Uninstalling](/docs/guides/production-migrations#uninstalling) for the rules.
 
 See also: [Data access](/docs/plugins/services) · [Testing](/docs/plugins/testing).
 
@@ -265,6 +322,12 @@ naming it is refused, including under a component field's path for a column
 on a component's table; a group key naming it is refused, and a sort by it is
 ignored. The column
 must be nullable or have a default, since the table may already have rows.
+
+You read and write a column you added to an entity or core table through
+`ctx.db.contributed(table, columns)`, keyed by row id — see
+[Columns on a table you do not own](/docs/database/extending-the-schema#columns-on-a-table-you-do-not-own).
+It reaches only your own contributed columns and the row's id; the table's
+other columns, other plugins' contributions, inserts and deletes are refused.
 
 A hidden column is storage for your plugin's own bookkeeping, not a field. To
 give a collection a field that editors and API callers see, with validation and

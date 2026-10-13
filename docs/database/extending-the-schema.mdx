@@ -11,11 +11,11 @@ thought to create.
 
 ## Three ways in
 
-| You want                                                       | Use                                                             |
-| -------------------------------------------------------------- | --------------------------------------------------------------- |
+| You want | Use |
+| --- | --- |
 | A field on an existing entity, with REST, admin and validation | `contributes.extend` (plugins) or the collection's own `fields` |
-| A table of your own, portable across all three dialects        | `db.schema.extend` with the DSL                                 |
-| A column or type only one dialect has                          | `db.schema.afterDrizzle`                                        |
+| A table of your own, portable across all three dialects | `db.schema.extend` with the DSL |
+| A column or type only one dialect has | `db.schema.afterDrizzle` |
 
 ## A table of your own
 
@@ -117,10 +117,12 @@ predicate would enforce it over rows you did not intend, so an index carrying
 `where` fails when the table is registered.
 
 An explicit index or foreign key `name` is used exactly as written, so it may
-be at most 63 characters, and so may a column's SQL name (the snake-cased key:
-`ownerAccountId` is `owner_account_id`): PostgreSQL cuts a longer name short
-and MySQL refuses one past 64. Derived names (and every check name, which is
-`ck_<table>_<name>`) are shortened with a hash when they would be longer. A
+be at most 63 bytes once encoded as UTF-8, and so may a column's SQL name (the
+snake-cased key: `ownerAccountId` is `owner_account_id`) and a table's name:
+PostgreSQL cuts a longer name short and MySQL refuses one past 64 characters.
+That is 63 characters of plain ASCII, and fewer for letters outside it: `é` is
+two bytes. Derived names (and every check name, which is `ck_<table>_<name>`)
+are shortened with a hash when they would be longer. A
 foreign key's name, written or derived, must also be unique across the
 tables plugins and the app declare, as MySQL requires of a database, and so
 must a check's, including the one an enum column implies. An index's must be
@@ -203,23 +205,12 @@ keys, so a declared relation may not reuse a column's name, and each relation
 on a table needs a name of its own. Any table can declare more relations:
 
 ```ts
-const linked = defineTable(
-  "linked",
-  {
-    id: col.id(),
-    orderId: col.shortText(),
-  },
-  {
-    relations: [
-      {
-        name: "order",
-        kind: "one",
-        targetTable: "app__orders",
-        fromColumn: "orderId",
-      },
-    ],
-  }
-);
+const linked = defineTable("linked", {
+  id: col.id(),
+  orderId: col.shortText(),
+}, {
+  relations: [{ name: "order", kind: "one", targetTable: "app__orders", fromColumn: "orderId" }],
+});
 ```
 
 A `one` edge joins its `fromColumn` to the target's `toColumn` (its `id` when
@@ -264,7 +255,6 @@ FROM dc_places
 GROUP BY country, city
 HAVING COUNT(*) > 1;
 ```
-
 </Callout>
 
 Column order matters. Only `(country, city)` serves a lookup on `country`
@@ -332,22 +322,23 @@ them because the DSL is the one path that keeps them in migrations and drift.
 
 ## Coming from Payload
 
-| Payload                           | Nextly                                                                                                    |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `beforeSchemaInit`                | `db.schema.extend`, which also runs for plugins                                                           |
-| `afterSchemaInit`                 | `db.schema.afterDrizzle`, with loss checking                                                              |
-| `extendTable`                     | `schema.extendTable`, with ownership rules                                                                |
-| `rawTables`                       | `defineTable` + `col.*`, the primary path rather than an escape                                           |
-| Collection `indexes`              | Collection `indexes`, now actually emitted                                                                |
-| `.references()` / `RawForeignKey` | `foreignKeys` on `defineTable`                                                                            |
-| `check()`                         | `checks` on `defineTable`                                                                                 |
-| `defaultIDType`                   | `db.idType` per collection (`uuid` or `uuidv7`)                                                           |
-| A client-supplied `id` on create  | `db.allowIdOnCreate` per collection                                                                       |
-| `.where()` partial index          | not supported: refused on every dialect, because MySQL has none                                           |
-| `relations()`                     | `relations` on `defineTable` + `ref()` auto-edges                                                         |
-| `pgEnum`                          | `col.enum([...])` — stored as text (`varchar(255)` on MySQL), values enforced by a CHECK on every dialect |
-| `schemaName`                      | not yet — `db.postgres.schema` accepts only `"public"`                                                    |
-| `generate:db-schema`              | not needed — types come from the declaration                                                              |
+| Payload | Nextly |
+| --- | --- |
+| `beforeSchemaInit` | `db.schema.extend`, which also runs for plugins |
+| `afterSchemaInit` | `db.schema.afterDrizzle`, with loss checking |
+| `extendTable` | `schema.extendTable`, with ownership rules |
+| `rawTables` | `defineTable` + `col.*`, the primary path rather than an escape |
+| Collection `indexes` | Collection `indexes`, now actually emitted |
+| `.references()` / `RawForeignKey` | `foreignKeys` on `defineTable` |
+| `check()` | `checks` on `defineTable` |
+| A plugin's `(config) => config` over other plugins' collections | `contributes.transforms` (and `contributes.extend` for added fields) |
+| `defaultIDType` | `db.idType` per collection (`uuid` or `uuidv7`) |
+| A client-supplied `id` on create | `db.allowIdOnCreate` per collection |
+| `.where()` partial index | not supported: refused on every dialect, because MySQL has none |
+| `relations()` | `relations` on `defineTable` + `ref()` auto-edges |
+| `pgEnum` | `col.enum([...])` — stored as text (`varchar(255)` on MySQL), values enforced by a CHECK on every dialect |
+| `schemaName` | not yet — `db.postgres.schema` accepts only `"public"` |
+| `generate:db-schema` | not needed — types come from the declaration |
 
 Two differences worth knowing:
 
@@ -357,7 +348,7 @@ plugins cannot quietly fight over one table.
 
 Payload's `extendTable` reaches into Drizzle's internal symbols, and its hook
 tables lose their types. Ours build Drizzle objects from the neutral model and
-type them from the declaration (`InferRow`, `InferInsert`), with no codegen step.
+type them from the declaration, so `ctx.db` is checked without a codegen step.
 
 ## The PostgreSQL schema
 
@@ -452,6 +443,48 @@ it is refused with `FIELD_NOT_FILTERABLE` (for a column on a component's
 table, under the component field's path, such as `seo.searchVector`), a group
 key naming it is refused, and a sort by it is ignored.
 
+The contributor reads and writes its own columns through
+`ctx.db.contributed`, by row id. Pass the same `columns` object the
+contribution declared, and it is typed from it:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { col } from "@nextlyhq/plugin-sdk/schema";
+
+const columns = { searchVector: col.text({ nullable: true }) };
+
+export default definePlugin({
+  name: "@acme/search",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.63",
+  contributes: {
+    schema: {
+      extend: [({ schema }) => schema.extendTable("dc_posts", { columns })],
+    },
+  },
+  async init(ctx) {
+    const posts = ctx.db.contributed("dc_posts", columns);
+    await posts.set("post-1", { searchVector: "…" });
+    const row = await posts.get("post-1"); // { id, searchVector } or null
+    const rows = await posts.getMany(["post-1", "post-2"]);
+    ctx.logger.info(`indexed ${rows.length} posts, first: ${row?.id}`);
+  },
+});
+```
+
+It reaches the row's id and the columns the CALLER contributed, and nothing
+else: naming the table's own columns, or a column another plugin contributed,
+is refused before anything runs. There is no insert or delete, because the
+rows belong to the entry API, and no free-form `where`, because a predicate
+could read any column. The table itself stays unreachable through the other
+`ctx.db` methods and through a relational `with`. It works the same inside
+`ctx.db.transaction`, and the app gets the same rule for the columns it
+contributed — on an entity or core table, and on a plugin's table, which the
+app's `ctx.db` otherwise cannot reach. A plugin that contributed to a
+dependency's table reads that table through the ordinary `ctx.db` methods, and
+writes its own column there through `ctx.db.contributed`: the ordinary methods
+write through the dependency's definition, which does not declare it.
+
 ## What is not supported
 
 Views; native PostgreSQL enum TYPES (the values are a CHECK instead, see
@@ -460,7 +493,9 @@ the table that declares it, and MySQL will not take a second AUTO_INCREMENT
 column anyway; columns added to an extendable CORE table are not created by
 dev push, because core tables are migration-owned and the column arrives with
 the app's migrations (`nextly migrate:create` in the app writes it, whoever
-contributed it); `col.ref()` alone records a reference for documentation and validation
+contributed it). Until that migration has run, `ctx.db.contributed` on the
+column refuses with an error naming the column and the table, rather than
+failing inside the query; `col.ref()` alone records a reference for documentation and validation
 — a constraint comes from `foreignKeys`. Resizing a `varchar(n)` or
 `decimal(p, s)` produces no migration — the diff normalises type modifiers
 away, and collections behave the same. Add a new column and migrate the data

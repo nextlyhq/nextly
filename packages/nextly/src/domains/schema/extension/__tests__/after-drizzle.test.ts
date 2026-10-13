@@ -212,7 +212,7 @@ describe("refused: constructs migrations cannot carry", () => {
           index(`idx_${"n".repeat(60)}`).on(t.id),
         ]),
       }))
-    ).toMatch(/at most 63 characters/);
+    ).toMatch(/at most 63 bytes/);
   });
 
   it("refuses a column name past 63 characters, and accepts 63", async () => {
@@ -225,7 +225,7 @@ describe("refused: constructs migrations cannot carry", () => {
           long: pgText("c".repeat(64)),
         }),
       }))
-    ).toMatch(/A column name may be at most 63 characters/);
+    ).toMatch(/A column name may be at most 63 bytes/);
     await expect(
       run(() => ({
         app_notes: pgTable("app_notes", {
