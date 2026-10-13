@@ -75,6 +75,7 @@ jobs:
             blocks-engine
             blocks-react
             builder
+            plugin-commerce
             plugin-form-builder
             plugin-mcp
             plugin-page-builder
