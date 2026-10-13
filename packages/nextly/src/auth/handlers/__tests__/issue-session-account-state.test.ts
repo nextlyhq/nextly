@@ -46,7 +46,10 @@ function deps(
       passwordUpdatedAt: null,
       ...state,
     })),
-    fetchRoleIds: vi.fn(async () => []),
+    fetchSessionRoles: vi.fn(async () => ({
+      roleIds: [],
+      validUntil: undefined,
+    })),
     fetchCustomFields: vi.fn(async () => ({})),
     authHooks: {
       runCustomizeClaims: async (c: unknown) => c,

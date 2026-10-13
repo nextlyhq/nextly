@@ -13,6 +13,10 @@ import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 import { buildClaims } from "../jwt/claims";
 import { signAccessTokenWithExpiry } from "../jwt/sign";
+import {
+  accessTokenLifetime,
+  type SessionRoles,
+} from "../session/session-roles";
 // hashPassword not needed here -- seedSuperAdmin handles hashing internally
 
 import {
@@ -40,7 +44,8 @@ export interface SetupHandlerDeps {
     name: string;
     password: string;
   }) => Promise<{ id: string; email: string; name: string }>;
-  fetchRoleIds: (userId: string) => Promise<string[]>;
+  /** The roles in force, and when the first of them lapses; see `SessionRoles`. */
+  fetchSessionRoles: (userId: string) => Promise<SessionRoles>;
   seedPermissions: () => Promise<void>;
   storeRefreshToken: (record: {
     id: string;
@@ -170,7 +175,8 @@ export async function handleSetup(
   // Create super admin (seeds permissions internally, hashes password internally)
   const user = await deps.createSuperAdmin({ email, name, password });
 
-  const roleIds = await deps.fetchRoleIds(user.id);
+  const sessionRoles = await deps.fetchSessionRoles(user.id);
+  const { roleIds } = sessionRoles;
   const claims = buildClaims({
     userId: user.id,
     email: user.email,
@@ -179,7 +185,12 @@ export async function handleSetup(
     roleIds,
   });
   const { token: accessToken, expiresAt: accessTokenExpiresAt } =
-    await signAccessTokenWithExpiry(claims, deps.secret, deps.accessTokenTTL);
+    // Capped as every session's token is, by the first of its roles to lapse.
+    await signAccessTokenWithExpiry(
+      claims,
+      deps.secret,
+      accessTokenLifetime(deps.accessTokenTTL, sessionRoles)
+    );
 
   const rawRefreshToken = await storeNewRefreshToken(deps, user.id, request);
 

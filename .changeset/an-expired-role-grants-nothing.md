@@ -32,7 +32,9 @@ passes. Until now the expiry was ignored almost everywhere: an expired role
 kept its permissions in every check, an expired super-admin assignment kept
 super-admin authority, and login and session refresh still put the role in
 the session's claims. Cached permission answers, super-admin answers and API
-key grants now also end no later than the expiry of a role they came from.
+key grants now also end no later than the expiry of a role they came from, and
+a session's access token ends no later than the first of its roles to lapse, so
+the client refreshes into claims without it.
 
 Assigning a role whose earlier assignment has expired now gives it again,
 instead of answering that it is already assigned. Listing a user's roles shows

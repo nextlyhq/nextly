@@ -28,6 +28,10 @@ import {
   hashRefreshToken,
   generateRefreshTokenId,
 } from "../session/refresh";
+import {
+  accessTokenLifetime,
+  type SessionRoles,
+} from "../session/session-roles";
 
 import { buildCookieHeaders, stallResponse } from "./handler-utils";
 import { writeSessionRow, type WithSessionRowTransaction } from "./session-row";
@@ -119,7 +123,8 @@ export interface IssueSessionDeps {
    * from the caller, because the caller may be any strategy or a plugin.
    */
   fetchAccountState: (userId: string) => Promise<AccountState | null>;
-  fetchRoleIds: (userId: string) => Promise<string[]>;
+  /** The roles in force, and when the first of them lapses; see `SessionRoles`. */
+  fetchSessionRoles: (userId: string) => Promise<SessionRoles>;
   fetchCustomFields: (userId: string) => Promise<Record<string, unknown>>;
   /**
    * Runs the session's refresh-row write in one transaction, under a lock on
@@ -256,10 +261,11 @@ export async function mintSession(
   // refuse an account no matter which path authenticated it.
   const gated = await gateAccountForSession(deps, user.id, opts?.strategy);
 
-  const [roleIds, customFields] = await Promise.all([
-    deps.fetchRoleIds(user.id),
+  const [sessionRoles, customFields] = await Promise.all([
+    deps.fetchSessionRoles(user.id),
     deps.fetchCustomFields(user.id),
   ]);
+  const { roleIds } = sessionRoles;
 
   let claims = buildClaims({
     userId: user.id,
@@ -277,7 +283,13 @@ export async function mintSession(
   );
 
   const { token: accessToken, expiresAt: accessTokenExpiresAt } =
-    await signAccessTokenWithExpiry(claims, deps.secret, deps.accessTokenTTL);
+    // Ending no later than the first of its roles lapses: the claims are a
+    // copy of the roles, read by the stateless session checks until expiry.
+    await signAccessTokenWithExpiry(
+      claims,
+      deps.secret,
+      accessTokenLifetime(deps.accessTokenTTL, sessionRoles)
+    );
 
   // Judged again as the row is written, under a lock on the user row: a
   // deactivation or a password set while the roles, the hooks and the

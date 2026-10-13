@@ -33,7 +33,10 @@ import {
   type PluginContext,
   type PluginDefinition,
 } from "../../plugins/plugin-context";
-import { userRoleAssignmentsInForce } from "../../services/lib/role-assignments";
+import {
+  soonestExpiry,
+  userRoleAssignmentsInForce,
+} from "../../services/lib/role-assignments";
 import { affectedRowCount } from "../../shared/lib/affected-row-count";
 import { readUnderRowLock, type LockableRead } from "../../shared/lib/row-lock";
 import {
@@ -50,6 +53,7 @@ import { AuthHookRegistry } from "../pipeline/hooks";
 import { createPasswordStrategy } from "../pipeline/password-strategy";
 import type { AuthHooks, ChallengeDefinition } from "../pipeline/types";
 import type { AccountState } from "../session/account-state";
+import type { SessionRoles } from "../session/session-roles";
 
 import { aggregateAuthUi } from "./auth-ui";
 import type { AuthRouterDeps } from "./router";
@@ -129,11 +133,12 @@ export function buildAuthRouterDeps(
       return result[0] || null;
     },
 
-    fetchRoleIds: async (userId: string) => {
+    fetchSessionRoles: async (userId: string): Promise<SessionRoles> => {
       // Only the assignments in force: an expired role granted nothing, and
       // put into the claims it would be handed back to every reader of them
       // until the token expired. The condition is the one every reader of
-      // `user_roles` that decides access shares.
+      // `user_roles` that decides access shares. The soonest expiry comes
+      // back with the roles, so the token ends when the first of them lapses.
       //
       // Errors propagate, as in fetchAccountState above, so a failed read
       // refuses the login or refresh. Answered with no roles, it issued a
@@ -142,13 +147,19 @@ export function buildAuthRouterDeps(
       const adapter = getService("adapter");
       const db = adapter.getDrizzle();
       const schema = getDialectTables();
-      const rows = await db
-        .select({ roleId: schema.userRoles.roleId })
+      const rows = (await db
+        .select({
+          roleId: schema.userRoles.roleId,
+          expiresAt: schema.userRoles.expiresAt,
+        })
         .from(schema.userRoles)
         .where(
           userRoleAssignmentsInForce(schema.userRoles, userId, new Date())
-        );
-      return rows.map((r: { roleId: string }) => r.roleId);
+        )) as Array<{ roleId: string; expiresAt: Date | null }>;
+      return {
+        roleIds: rows.map(r => r.roleId),
+        validUntil: soonestExpiry(rows),
+      };
     },
 
     fetchCustomFields: async (userId: string) => {

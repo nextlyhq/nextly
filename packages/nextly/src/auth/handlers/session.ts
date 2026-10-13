@@ -35,6 +35,7 @@ import {
   generateRefreshTokenId,
   hashRefreshToken,
 } from "../session/refresh";
+import { accessTokenLifetime } from "../session/session-roles";
 
 import { jsonResponse, buildCookieHeaders } from "./handler-utils";
 import type { AuthRouterDeps } from "./router";
@@ -52,7 +53,7 @@ export type SessionHandlerDeps = Pick<
   | "refreshTokenTTL"
   | "devAutoLogin"
   | "findUserByEmail"
-  | "fetchRoleIds"
+  | "fetchSessionRoles"
   | "fetchCustomFields"
   | "storeRefreshToken"
 > & {
@@ -266,10 +267,11 @@ async function attemptDevAutoLogin(
   // session directly rather than through `issueSession`, and it is hard-blocked
   // in production above, so the only accounts it can reach are ones a developer
   // named in their own config.
-  const [roleIds, customFields] = await Promise.all([
-    deps.fetchRoleIds(user.id),
+  const [sessionRoles, customFields] = await Promise.all([
+    deps.fetchSessionRoles(user.id),
     deps.fetchCustomFields(user.id),
   ]);
+  const { roleIds } = sessionRoles;
 
   const claims = buildClaims({
     userId: user.id,
@@ -280,10 +282,11 @@ async function attemptDevAutoLogin(
     customFields,
   });
 
+  // Capped as every session's token is, by the first of its roles to lapse.
   const accessToken = await signAccessToken(
     claims,
     deps.secret,
-    deps.accessTokenTTL
+    accessTokenLifetime(deps.accessTokenTTL, sessionRoles)
   );
   const rawRefreshToken = generateRefreshToken();
   const refreshTokenHash = hashRefreshToken(rawRefreshToken);

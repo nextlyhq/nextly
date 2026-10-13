@@ -33,7 +33,7 @@ describe("reading a session's roles", () => {
     };
     const deps = buildAuthRouterDeps(name => services[name] ?? {});
 
-    await expect(deps.fetchRoleIds("u1")).rejects.toBe(ROLE_READ_FAILED);
+    await expect(deps.fetchSessionRoles("u1")).rejects.toBe(ROLE_READ_FAILED);
   });
 
   it("issues no session when the read fails", async () => {
@@ -61,7 +61,7 @@ describe("reading a session's roles", () => {
         lockedUntil: null,
         emailVerified: new Date(),
       })),
-      fetchRoleIds: vi.fn(async () => {
+      fetchSessionRoles: vi.fn(async () => {
         throw ROLE_READ_FAILED;
       }),
       fetchCustomFields: vi.fn(async () => ({})),

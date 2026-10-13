@@ -246,6 +246,66 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("ends a session's token no later than a role it carries lapses", async () => {
+      // A role in force at login that lapses within the token's life would
+      // otherwise answer the stateless session checks until the token expired.
+      const t = await boot(dialect);
+      const userId = await makeUser(t, "brief-holder@example.com");
+      const lapses = wholeSecondsAhead(120);
+      await assign(t, userId, ROLES.brief.id, lapses);
+      const steady = await makeUser(t, "steady@example.com");
+      await assign(t, steady, ROLES.current.id, null);
+      const deps = buildAuthRouterDeps(
+        t.getService as unknown as (name: string) => unknown
+      );
+
+      const tokenOf = async (res: Response) => {
+        const body = (await res.json()) as {
+          accessToken: string;
+          refreshToken?: string;
+        };
+        const claims = decodeJwt(body.accessToken) as {
+          iat: number;
+          exp: number;
+          roleIds?: string[];
+        };
+        return { claims, refreshToken: body.refreshToken };
+      };
+
+      const login = await tokenOf(
+        await handleLogin(
+          authRequest("login", {
+            email: "brief-holder@example.com",
+            password: PASSWORD,
+          }),
+          deps
+        )
+      );
+      expect(login.claims.roleIds).toEqual([ROLES.brief.id]);
+      expect(login.claims.exp * 1000).toBeLessThanOrEqual(lapses.getTime());
+
+      const refreshed = await tokenOf(
+        await handleRefresh(
+          authRequest("refresh", {}, `nextly_refresh=${login.refreshToken}`),
+          deps
+        )
+      );
+      expect(refreshed.claims.exp * 1000).toBeLessThanOrEqual(lapses.getTime());
+
+      // The control: roles that never lapse leave the configured lifetime.
+      const control = await tokenOf(
+        await handleLogin(
+          authRequest("login", {
+            email: "steady@example.com",
+            password: PASSWORD,
+          }),
+          deps
+        )
+      );
+      expect(control.claims.exp - control.claims.iat).toBe(deps.accessTokenTTL);
+      expect(deps.accessTokenTTL).toBeGreaterThan(120);
+    });
+
     it("grants no permission through a lapsed role", async () => {
       const t = await boot(dialect);
       const userId = await userWithThreeRoles(t);
