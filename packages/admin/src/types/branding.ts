@@ -192,8 +192,12 @@ export interface PluginMetadata {
   menu?: PluginMenuItemMeta[];
   /** Custom admin pages contributed via `contributes.admin.pages`. */
   pages?: PluginPageMeta[];
-  /** Plugin settings UI contributed via `contributes.admin.settings`. */
-  settings?: { component: string };
+  /**
+   * Plugin settings UI contributed via `contributes.admin.settings`, with the
+   * permission a change to those settings needs: the one the server's gate
+   * asks for, which the settings page asks for too.
+   */
+  settings?: { component: string; permission?: string };
   /** Admin header-slot component contributed via `contributes.admin.headerSlot`. */
   headerSlot?: string;
   /** Header customization contributed via `contributes.admin.header`. */

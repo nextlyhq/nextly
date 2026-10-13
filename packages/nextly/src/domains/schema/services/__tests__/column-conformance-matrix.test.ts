@@ -408,15 +408,6 @@ const ACCEPTED = byAspect([
     "collection generator emits a single FK column for a multi-reference relationship; descriptor stores the ids as JSON",
     { origins: ["collection"], dialects: ["postgresql", "mysql"] }
   ),
-  // Repeater and group hold structured data. The collection generator stores them as text while
-  // the descriptor names the dialect's JSON type — the same storage-class hold as above.
-  ...everywhere(
-    ["repeater", "group"],
-    ["plain"],
-    "type",
-    "collection generator stores structured values as text; descriptor names the JSON type",
-    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
-  ),
   // --- 🔴 A select that holds several choices -------------------------------
   // The field-group generator switches a hasMany select to a JSON column; the descriptor does not
   // look at `hasMany` for a select at all and keeps describing a single string. Recorded against the

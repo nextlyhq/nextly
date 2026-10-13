@@ -54,6 +54,7 @@ import { driftCheckCollections, runDriftCheck } from "./init/drift-check";
 import type { Nextly } from "./init/nextly-instance";
 import { runPostInitTasks } from "./init/post-init-tasks";
 import { reloadNextlyConfig } from "./init/reload-config";
+import { seedPermissionsAndRolePresets } from "./init/seed-permissions";
 // HMR listener primitives (F1 PR 2). Lazy WS setup inside getNextly()
 // detects code-first config edits and flips a reload flag; the next
 // getNextly() call drains the flag, calls reloadNextlyConfig, and then
@@ -377,11 +378,20 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // migrations ran THROWS, because serving a schema nobody verified is
         // worse than not starting.
 
-        // Run post-initialisation tasks (template seeding, code-field sync,
-        // permission seeding, etc.) in the background so that getNextly()
-        // returns as soon as the DB connection is ready.  All tasks are
-        // idempotent and their errors are already caught internally, so
-        // firing without await is safe.
+        // Permissions and roles are seeded BEFORE getNextly() resolves, as the
+        // request-path boot already does. Left to run in the background, a
+        // serverless instance could be frozen after its first response with a
+        // role's permissions half-written, and every cold start rewrote them
+        // against every other. The seeding writes only what differs, so an
+        // unchanged boot pays for its reads alone. Next.js's `after()` would not
+        // do: it can only be called inside a request, and getNextly() also runs
+        // from instrumentation and scripts.
+        await seedPermissionsAndRolePresets();
+
+        // The remaining post-initialisation tasks (templates, code-field sync,
+        // and the like) run in the background so that getNextly() returns as
+        // soon as the database is ready. Each is idempotent and catches its own
+        // errors.
         void runPostInitTasks();
       }
 

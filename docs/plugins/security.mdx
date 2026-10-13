@@ -287,8 +287,11 @@ stored at, so a value copied to another plugin or path does not decrypt.
 
 Each value names the secret generation that encrypted it. After a rotation,
 keep the old secret in `NEXTLY_SECRET_PREVIOUS`: values encrypted under it are
-still read, and are re-encrypted under the new secret the next time they are
-read. A value no configured secret can decrypt is shown in the admin as set but
+still read, and are re-encrypted under the new secret at the next boot, before
+any plugin starts, including a value at a path the plugin no longer marks
+secret, the values of a disabled plugin, and those of a plugin that no longer
+declares settings at all. Once the app has started with both, the old secret
+can go. A value no configured secret can decrypt is shown in the admin as set but
 unreadable, `{ set: true, readable: false }`, and `ctx.settings.get()` refuses
 until it is entered again; saving a new value replaces it.
 
@@ -310,7 +313,8 @@ Spell such a path exactly.
 an update adds a path to `capabilities.secrets`, values stored under it while
 it was public are encrypted at boot, before any plugin's `init` runs, whether
 or not anything reads or writes the settings afterwards. That holds for a path
-inside a value that already held an encrypted secret, too. If one cannot be
+inside a value that already held an encrypted secret, too, and beside a
+secret no configured key can open, which is kept as stored. If one cannot be
 encrypted, the boot fails and names the plugin. A path you stop marking secret
 stays encrypted, and is still answered as `{ set: true }`, until a new value
 is written to it.
@@ -319,9 +323,12 @@ is written to it.
 `manage-settings`, and reading them `read-settings` or `manage-settings`. A
 plugin can keep its settings to a narrower role by naming one of its own
 `permissions` in `contributes.settingsPermission` (`@experimental`): a write
-then takes that permission alone, and holding it also lets the operator read
-them. A name that is not one of the plugin's own permissions, or that comes
-without a `settings` schema, fails boot.
+then takes that permission alone, holding it also lets the operator read
+them, and the admin's settings page for the plugin asks for it in place of
+`manage-settings`. A name that is not one of the plugin's own permissions, or
+that comes without a `settings` schema, fails boot. A `publish` or `unpublish`
+permission declared on a collection or Single is not the plugin's own: it is
+that entity's publish permission, which every content publisher holds.
 
 ```ts
 contributes: {

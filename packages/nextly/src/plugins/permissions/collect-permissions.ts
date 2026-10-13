@@ -63,6 +63,26 @@ const SINGLE_ACTIONS = new Set(["read", "update"]);
 export const ADOPTED_LIFECYCLE_ACTIONS = new Set(["publish", "unpublish"]);
 
 /**
+ * Whether a declared permission is one the seeder owns rather than its
+ * declarer: a publish lifecycle action on an entity's slug. `entitySlugs` is
+ * in lower case.
+ *
+ * One rule for the entities the config defines, which the collector below
+ * drops, and for the Schema Builder's, which only the database knows and the
+ * boot checks once it has loaded them.
+ */
+export function isAdoptedLifecyclePermission(
+  action: string,
+  resource: string,
+  entitySlugs: ReadonlySet<string>
+): boolean {
+  return (
+    ADOPTED_LIFECYCLE_ACTIONS.has(action.toLowerCase()) &&
+    entitySlugs.has(resource.toLowerCase())
+  );
+}
+
+/**
  * The parts of a config a permission collector reads.
  *
  * Named rather than taking the whole service config: a caller holding a loaded
@@ -103,6 +123,10 @@ export function collectCustomPermissions(
   const lowerSingleSlugs = new Set(
     [...singleSlugs].map(slug => slug.toLowerCase())
   );
+  const lowerEntitySlugs = new Set([
+    ...lowerCollectionSlugs,
+    ...lowerSingleSlugs,
+  ]);
   const seen = new Map<string, string>(); // `${action}:${resource}` -> first owner
   const out: CollectedPermission[] = [];
 
@@ -148,12 +172,10 @@ export function collectCustomPermissions(
     // permission while the seeder recognises it as the seeded `publish/posts` and withholds it —
     // so a role bundle and a generated type name a slug no row was ever written under.
     const entitySlug = resource.toLowerCase();
-    const ownedByEntity =
-      lowerCollectionSlugs.has(entitySlug) || lowerSingleSlugs.has(entitySlug);
 
     // Redundant with what the seeder now emits, and valid before it did. Drop
     // it and carry on rather than failing the boot of an app that upgraded.
-    if (ADOPTED_LIFECYCLE_ACTIONS.has(action.toLowerCase()) && ownedByEntity) {
+    if (isAdoptedLifecyclePermission(action, resource, lowerEntitySlugs)) {
       return;
     }
 

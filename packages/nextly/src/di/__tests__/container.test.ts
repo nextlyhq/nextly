@@ -72,9 +72,9 @@ describe("Container.withdraw", () => {
     const original = new Container();
     original.registerSingleton("adapter", () => ({ connection: 1 }));
     const detached = original.detach();
-    original.restore(detached);
+    const restored = original.restore(detached);
 
-    original.withdraw(detached);
+    original.withdraw(restored);
 
     expect(original.has("adapter")).toBe(false);
   });
@@ -86,21 +86,54 @@ describe("Container.withdraw", () => {
     original.registerSingleton("adapter", () => ({ connection: 1 }));
     const detached = original.detach();
     original.registerSingleton("custom", () => ({ mine: true }));
-    original.restore(detached);
+    const restored = original.restore(detached);
 
-    original.withdraw(detached);
+    original.withdraw(restored);
 
     expect(original.get("custom")).toEqual({ mine: true });
+  });
+
+  it("leaves a service registered since with the very same factory", () => {
+    // `register` stores the factory it is given as it is, so a consumer that
+    // registers a shared factory again after the clear holds the same
+    // function the detached container does. Only what `restore` put in may
+    // go: told apart by identity alone, this registration went with it.
+    const shared = () => ({ id: "shared" });
+    const original = new Container();
+    original.register("custom", shared);
+    const detached = original.detach();
+    original.register("custom", shared);
+    const restored = original.restore(detached);
+
+    original.withdraw(restored);
+
+    expect(original.get("custom")).toEqual({ id: "shared" });
+  });
+
+  it("leaves a service registered over a restored one with the very same factory", () => {
+    // Registered while the teardown runs, after the restore: the same function
+    // the detached container holds, so only an entry `restore` made of its own
+    // can tell the two apart.
+    const shared = () => ({ id: "shared" });
+    const original = new Container();
+    original.register("custom", shared);
+    const detached = original.detach();
+    const restored = original.restore(detached);
+    original.register("custom", shared);
+
+    original.withdraw(restored);
+
+    expect(original.get("custom")).toEqual({ id: "shared" });
   });
 
   it("leaves a service registered over a restored one", () => {
     const original = new Container();
     original.registerSingleton("logger", () => ({ id: "old" }));
     const detached = original.detach();
-    original.restore(detached);
+    const restored = original.restore(detached);
     original.registerSingleton("logger", () => ({ id: "new" }));
 
-    original.withdraw(detached);
+    original.withdraw(restored);
 
     expect(original.get("logger")).toEqual({ id: "new" });
   });
