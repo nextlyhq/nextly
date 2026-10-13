@@ -8,6 +8,8 @@ import { buildClaims } from "../claims";
 import { secretToKey, signAccessTokenWithExpiry, TOKEN_TYP } from "../sign";
 import { verifyToken } from "../verify";
 
+import { signUnmarkedPendingToken, signUnmarkedToken } from "./unmarked-tokens";
+
 const secret = "s".repeat(32);
 
 describe("typed tokens", () => {
@@ -24,11 +26,7 @@ describe("typed tokens", () => {
   });
 
   it("accepts a legacy session token with no typ header (release 1)", async () => {
-    const legacy = await new SignJWT({ sub: "u1" })
-      .setProtectedHeader({ alg: "HS256" })
-      .setIssuedAt()
-      .setExpirationTime("1m")
-      .sign(secretToKey(secret));
+    const legacy = await signUnmarkedToken({ sub: "u1" }, secret, 60);
     const r = await verifyToken(legacy, secret, "session");
     expect(r.valid).toBe(true);
   });
@@ -47,16 +45,7 @@ describe("typed tokens", () => {
     // The case the payload-claim check exists for. A pending token minted
     // before the header existed is accepted by the header rule, which lets an
     // absent typ through, so only the claim stands between it and a session.
-    const legacyPending = await new SignJWT({
-      typ: "pending-auth",
-      sub: "u1",
-      challengeId: "totp",
-      attempts: 0,
-    })
-      .setProtectedHeader({ alg: "HS256" })
-      .setIssuedAt()
-      .setExpirationTime("5m")
-      .sign(secretToKey(secret));
+    const legacyPending = await signUnmarkedPendingToken("u1", secret);
     expect((await verifyToken(legacyPending, secret, "session")).valid).toBe(
       false
     );
@@ -136,11 +125,7 @@ describe("the window for session tokens with no typ header", () => {
     // fails here rather than leaving the window open until someone remembers.
     const [major, minor] = packageMinorVersion();
     const windowClosed = major > 0 || minor >= 1;
-    const untyped = await new SignJWT({ sub: "u1" })
-      .setProtectedHeader({ alg: "HS256" })
-      .setIssuedAt()
-      .setExpirationTime("1m")
-      .sign(secretToKey(secret));
+    const untyped = await signUnmarkedToken({ sub: "u1" }, secret, 60);
 
     expect((await verifyToken(untyped, secret, "session")).valid).toBe(
       !windowClosed
