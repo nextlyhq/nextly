@@ -69,7 +69,10 @@ function makeDeps(o: Overrides = {}): CompleteLoginDeps {
       passwordUpdatedAt: null,
       ...state,
     })),
-    fetchRoleIds: vi.fn(async () => []),
+    fetchSessionRoles: vi.fn(async () => ({
+      roleIds: [],
+      validUntil: undefined,
+    })),
     fetchCustomFields: vi.fn(async () => ({})),
     withSessionRowTransaction: sessionRows.withSessionRowTransaction,
     authHooks: o.hooks ?? new AuthHookRegistry(),

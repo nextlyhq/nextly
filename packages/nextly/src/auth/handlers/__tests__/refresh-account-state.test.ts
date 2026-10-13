@@ -57,7 +57,9 @@ function makeDeps(
       isActive: state.isActive,
     }),
     fetchAccountState: vi.fn().mockResolvedValue({ userId: "u1", ...state }),
-    fetchRoleIds: vi.fn().mockResolvedValue(["editor"]),
+    fetchSessionRoles: vi
+      .fn()
+      .mockResolvedValue({ roleIds: ["editor"], validUntil: undefined }),
     fetchCustomFields: vi.fn().mockResolvedValue({}),
   };
   return { deps, deleteRefreshToken, rows };

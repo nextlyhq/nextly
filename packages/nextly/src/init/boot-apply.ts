@@ -43,6 +43,9 @@ import type {
   pluginMigrationArgs,
 } from "../domains/schema/migrate/plugin/run-plugin-migrations";
 import { NextlyError } from "../errors";
+// The operator view of an error: code, the `logMessage` detail its generic
+// public message leaves out, the cause chain and the log context.
+import { describeError } from "../errors/describe-error";
 
 import { reloadDynamicTables } from "./reload-dynamic-tables";
 
@@ -179,17 +182,6 @@ export function checkRelationsBeforePlugins(
       `[Nextly] ${describeError(error)} The development boot's schema apply may yet register the table; it asks again once it has run.`
     );
   }
-}
-
-/**
- * The error's message, with the detail a `NextlyError` keeps in `logMessage`:
- * its message is the generic public one, which names nothing to fix.
- */
-function describeError(err: unknown): string {
-  if (NextlyError.is(err) && err.logMessage !== undefined) {
-    return `${err.message} ${err.logMessage}`;
-  }
-  return err instanceof Error ? err.message : String(err);
 }
 
 /**

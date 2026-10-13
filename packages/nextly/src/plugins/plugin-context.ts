@@ -70,6 +70,7 @@ import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
 import { type PluginConfig, pluginConfigView } from "./plugin-config-view";
 import { NO_PLUGIN_GRANTS, type PluginGrants } from "./plugin-consent";
+import { currentDependencies } from "./plugin-dependencies";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
 import { createPluginSettings } from "./plugin-settings-provider";
 import { wrapSinglesForPlugin } from "./plugin-singles";
@@ -1173,6 +1174,9 @@ export const PLUGIN_SERVICE_NAMES = [
   "adapter",
 ] as const;
 
+/** The app's own surface depends on no plugin: it owns what the app owns. */
+const NO_DEPENDENCIES: ReadonlySet<string> = new Set();
+
 /**
  * Every column contributed to a table its contributor does not own, by
  * table SQL name, with the contributor each carries: the hidden columns on
@@ -1221,10 +1225,6 @@ function buildPluginDatabase(
   const owner: SchemaOwner = plugin
     ? { kind: "plugin", id: plugin.name }
     : { kind: "app" };
-  const dependsOn = new Set<string>([
-    ...(plugin?.dependsOn ? Object.keys(plugin.dependsOn) : []),
-    ...(plugin?.optionalDependsOn ? Object.keys(plugin.optionalDependsOn) : []),
-  ]);
 
   // The schema compiled for the dialect this process runs, asked for by name.
   // Taking the first dialect that had one returned whichever was compiled
@@ -1239,7 +1239,12 @@ function buildPluginDatabase(
       return dialect();
     },
     owner,
-    dependsOn,
+    // Read when an operation runs, like the schema below: the context
+    // outlives a config reload, and the dependencies a plugin may reach
+    // through are the ones the config in force declares.
+    get dependsOn() {
+      return plugin ? currentDependencies(plugin) : NO_DEPENDENCIES;
+    },
     owners: () => active()?.owners ?? new Map(),
     tables: () => ({
       ...(active()?.drizzle ?? {}),
@@ -1457,7 +1462,7 @@ function fluentOnly(handle: DatabaseInstance): DatabaseInstance {
 
 /**
  * `handle` for as long as `scope` is open, refusing every property read
- * after.
+ * after, and every call of a method read from it while it was open.
  *
  * The handle `ctx.db.raw.transaction` passes its work is bound to the
  * transaction's connection: on PostgreSQL and MySQL a client the pool leased
@@ -1467,6 +1472,9 @@ function fluentOnly(handle: DatabaseInstance): DatabaseInstance {
  * the pool, or on SQLite outside any transaction. Every statement starts with
  * a property read on the handle (`insert`, `select`, `execute`, `query`, ...),
  * so refusing the read refuses the statement before Drizzle builds anything.
+ * A method read while the transaction was open and kept (`const insert =
+ * tx.insert`) needs no read to start a statement later, so each method is
+ * handed out wrapped: it checks again when it is called.
  *
  * `then` stays readable: resolving a promise with a value reads its `then`,
  * and a callback that returns its handle must not have its transaction fail
@@ -1476,16 +1484,28 @@ function fluentOnly(handle: DatabaseInstance): DatabaseInstance {
  * What it cannot refuse is a builder made inside the callback and run after
  * it. Drizzle's builders hold the session they were made from, not this
  * handle, and run when first awaited, so a kept
- * `tx.insert(t).values(v)` awaited after the transaction still runs. The
- * typed `ctx.db.transaction` covers that case; this escape hatch does not.
+ * `tx.insert(t).values(v)` awaited after the transaction still runs. An
+ * object read off a full Drizzle handle (`tx.query`, for a plugin declaring
+ * raw SQL) is the same case: it is Drizzle's, and handing it out wrapped would
+ * break the identity Drizzle looks its tables up by. The typed
+ * `ctx.db.transaction` covers those cases; this escape hatch does not.
  */
 function scopedHandle<H extends object>(handle: H, scope: TransactionScope): H {
   return new Proxy(handle, {
     get(target, property, receiver) {
-      if (typeof property === "string" && property !== "then") {
-        scope.assertOpen();
+      if (typeof property !== "string" || property === "then") {
+        return Reflect.get(target, property, receiver) as unknown;
       }
-      return Reflect.get(target, property, receiver) as unknown;
+      scope.assertOpen();
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      const method = value as (...args: unknown[]) => unknown;
+      // Called as the method was called before it was wrapped, with the same
+      // receiver, so a Drizzle method reads its own instance as it always has.
+      return function scopedMethod(this: unknown, ...args: unknown[]) {
+        scope.assertOpen();
+        return Reflect.apply(method, this, args);
+      };
     },
   });
 }
