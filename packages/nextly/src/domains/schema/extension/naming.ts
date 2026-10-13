@@ -32,6 +32,7 @@ import {
 } from "../services/field-column-descriptor";
 import {
   columnTypeIsIndexable,
+  identifierBytes,
   MAX_INDEX_NAME_LENGTH,
   uniquenessCanBeAnIndex,
 } from "../services/index-name";
@@ -59,7 +60,8 @@ export const ALL_DIALECTS: readonly SupportedDialect[] = [
 ];
 
 /**
- * The strictest identifier limit of the three dialects (Postgres).
+ * The strictest identifier limit of the three dialects (Postgres), in UTF-8
+ * bytes (`identifierBytes`).
  *
  * The bound derived index and constraint names are held to, read from there
  * rather than restated, so a table name and the names derived from it can
@@ -247,10 +249,14 @@ function assertVerbatimIdentifier(
   what: string
 ): void {
   assertQuotableIdentifier(name, path, what);
-  if (name.length > MAX_IDENTIFIER_LENGTH) {
+  // Measured as the derived names are (`identifierBytes`): PostgreSQL's limit
+  // is in bytes, so a name of letters outside ASCII reaches it in fewer
+  // characters, and past it PostgreSQL keeps a shortened name nothing declared.
+  const bytes = identifierBytes(name);
+  if (bytes > MAX_IDENTIFIER_LENGTH) {
     refuse(
       path,
-      `${what} may be at most ${String(MAX_IDENTIFIER_LENGTH)} characters, the longest every dialect stores unchanged; "${name}" is ${String(name.length)}.`
+      `${what} may be at most ${String(MAX_IDENTIFIER_LENGTH)} bytes once encoded as UTF-8 (${String(MAX_IDENTIFIER_LENGTH)} characters of plain ASCII), the longest every dialect stores unchanged; "${name}" is ${String(bytes)} bytes.`
     );
   }
 }

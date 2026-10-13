@@ -5,11 +5,12 @@
 // installed index as unexpected and the declared one as missing, so a reconcile replaced an index
 // with an identical index for as long as anyone kept running it.
 //
-// The bound is 63 characters, which is the smaller of the two limits that matter and therefore
-// the only safe one. MySQL REFUSES an identifier over 64. PostgreSQL accepts one and silently
-// TRUNCATES it to 63, so at 64 two names differing only in their last character arrive as a
-// single identifier — a collision no error reports. A collection name and a field name may each
-// be 50 characters, so the composed name reaches 105 and the bound is genuinely reachable.
+// The bound is 63 bytes of UTF-8, which is the smaller of the two limits that matter and
+// therefore the only safe one. MySQL REFUSES an identifier over 64 characters. PostgreSQL accepts
+// one and silently TRUNCATES it to 63 bytes, so at 64 two names differing only in their last
+// character arrive as a single identifier — a collision no error reports. A collection name and a
+// field name may each be 50 characters, so the composed name reaches 105 and the bound is
+// genuinely reachable; with letters outside ASCII it is reached sooner.
 
 import { NextlyError } from "../../../errors/nextly-error";
 
@@ -48,8 +49,42 @@ export function boundedIdentifier(full: string): string {
  * the column-list digest a compound index name already carries.
  */
 function fitWithSuffix(full: string, suffix: string): string {
-  if (full.length <= MAX_INDEX_NAME_LENGTH) return full;
-  return `${full.slice(0, MAX_INDEX_NAME_LENGTH - suffix.length - 1)}_${suffix}`;
+  if (identifierBytes(full) <= MAX_INDEX_NAME_LENGTH) return full;
+  // The suffix is base-36, so its characters are its bytes.
+  return `${utf8Prefix(full, MAX_INDEX_NAME_LENGTH - suffix.length - 1)}_${suffix}`;
+}
+
+const utf8 = new TextEncoder();
+
+/**
+ * How long an identifier is where the bound applies: in UTF-8 bytes.
+ *
+ * PostgreSQL's limit is in bytes (`NAMEDATALEN` 64, so 63 usable), and it
+ * stores a name in the database's encoding, UTF-8 by default. Counted in
+ * characters, a name of 40 accented letters passed as 40 and was 80 bytes, so
+ * PostgreSQL kept the first 63 bytes of it, a name nothing declared. MySQL
+ * counts characters (64), which a name within 63 bytes always satisfies. For a
+ * name of ASCII letters, digits and underscores the two counts are equal, so
+ * every such name is bounded exactly as before.
+ */
+export function identifierBytes(name: string): number {
+  return utf8.encode(name).length;
+}
+
+/**
+ * The longest leading part of `text` within `maxBytes` of UTF-8, cut between
+ * characters: a cut inside one would leave half a character in the name.
+ */
+function utf8Prefix(text: string, maxBytes: number): string {
+  let prefix = "";
+  let bytes = 0;
+  for (const character of text) {
+    const size = identifierBytes(character);
+    if (bytes + size > maxBytes) break;
+    prefix += character;
+    bytes += size;
+  }
+  return prefix;
 }
 
 /**
@@ -137,7 +172,10 @@ export function indexNameForColumns(
   );
 }
 
-/** PostgreSQL truncates at this length; MySQL refuses one character beyond it. */
+/**
+ * In UTF-8 bytes (`identifierBytes`): PostgreSQL truncates past it; MySQL
+ * refuses past 64 characters, which a name within it never reaches.
+ */
 export const MAX_INDEX_NAME_LENGTH = 63;
 
 /**

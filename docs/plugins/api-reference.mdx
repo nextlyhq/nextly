@@ -35,6 +35,8 @@ interface PluginDefinition {
   setup?:   (config: NextlyServiceConfig) => NextlyServiceConfig; // all setups before any init; receives copies, no live handles
   init?:    (ctx: PluginContext) => void | Promise<void>;
   onReady?: (ctx: PluginContext) => void | Promise<void>; // after every init and route registration
+  onInstall?:   (ctx: PluginContext) => void | Promise<void>; // `nextly plugins install`, after its migrations; @experimental
+  onUninstall?: (ctx: PluginContext, opts: { keepData: boolean }) => void | Promise<void>; // `nextly plugins uninstall`, before its DOWN migrations; @experimental
   destroy?: (ctx: PluginContext) => void | Promise<void>;
   rename?:  (map: Record<string, string>) => PluginDefinition;  // integrator-side remap (D54)
 }
@@ -580,6 +582,9 @@ prefixes (`hook-point-reserved`), outside the plugin's slug
 ### Lifecycle
 
 `onReady` runs after every plugin has initialised and routes are registered.
-There are no install or uninstall hooks yet: they arrive with the install
-command that calls them. Do one-time setup in `init`, written so running it on
-every boot is harmless.
+`onInstall` and `onUninstall` (`@experimental`) never run at boot: `nextly
+plugins install` calls `onInstall` after the plugin's migrations, and `nextly
+plugins uninstall` calls `onUninstall` before its DOWN migrations, with
+`{ keepData }`. Write both so they can run again: an install can be retried
+after a failure part-way through. Work that must happen on every start, rather
+than once per install, belongs in `init`.

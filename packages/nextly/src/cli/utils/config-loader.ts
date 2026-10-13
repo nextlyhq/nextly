@@ -235,6 +235,17 @@ export interface LoadConfigResult {
    * is the transformed one.
    */
   pluginConsent: PluginConsent;
+
+  /**
+   * @experimental The config as the app wrote it, sanitized, before any
+   * `setup` transformer ran or any plugin contribution was folded in.
+   *
+   * What a command that boots the runtime builds its service config from:
+   * the boot runs every transformer and fold itself, so booting from
+   * `config`, which already holds their result, runs each a second time, and
+   * a transformer that adds a plugin or a collection adds it twice.
+   */
+  appConfig: SanitizedNextlyConfig;
 }
 
 /**
@@ -487,8 +498,10 @@ async function loadConfigInternal(
     // types registered, and Builder saves would go on recognizing them and
     // running their `validate` and `validateOptions`.
     clearFieldTypes();
+    const appConfig = defineConfig({});
     return {
-      config: defineConfig({}),
+      config: appConfig,
+      appConfig,
       configPath: undefined,
       dependencies: [],
       pluginConsent: NO_PLUGIN_CONSENT,
@@ -565,7 +578,11 @@ async function loadConfigInternal(
       });
     }
 
-    let config = defineConfig(rawConfig);
+    // Kept as written: the transformers below receive copies of it
+    // (`setupTransformerInput`), and `config` is rebuilt from their result,
+    // so this stays the untransformed config a boot starts from.
+    const appConfig = defineConfig(rawConfig);
+    let config = appConfig;
     let deferredExtends: DeferredExtend[] | undefined;
 
     // Resolve (validate + topo order) before running setups, mirroring the
@@ -712,6 +729,7 @@ async function loadConfigInternal(
 
     return {
       config,
+      appConfig,
       configPath,
       dependencies,
       deferredExtends,

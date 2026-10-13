@@ -101,6 +101,9 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_UI_SCHEMA_INVALID: 400,
   NEXTLY_SCHEMA_SLUG_COLLISION: 409,
   NEXTLY_SCHEMA_RELATION_TARGET_MISSING: 400,
+  // A declared table's relation names a table or column the registry does
+  // not have once every table is registered.
+  NEXTLY_SCHEMA_RELATION_UNRESOLVED: 400,
   // Plugin schema: `contributes.extend` and relations.
   NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN: 400,
   NEXTLY_SCHEMA_EXTEND_FIELD_DUPLICATE: 409,
@@ -117,10 +120,16 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
-  // Plugin schema migrations. All 409: each is a state
+  // Plugin schema lifecycle. All 409: each is a state
   // the database and the config disagree about, which retrying cannot change
   // and an operator command resolves.
+  PLUGIN_DEPENDENCY_NOT_INSTALLED: 409,
+  PLUGIN_HAS_DEPENDENTS: 409,
+  PLUGIN_UNINSTALL_IRREVERSIBLE: 409,
+  // A full uninstall that would drop tables, run without `--yes`.
+  PLUGIN_UNINSTALL_UNCONFIRMED: 409,
   PLUGIN_SCHEMA_BEHIND: 409,
+  PLUGIN_SCHEMA_UNINSTALLED: 409,
   PLUGIN_SCHEMA_VERSION_NOT_ADVANCED: 409,
   // A generated plugin migration that would drop a table or column the
   // plugin's earlier modules created: a rename comes out as a drop and an add.
