@@ -12,6 +12,8 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { defineCollection, text } from "../../../config";
+import { clearServices } from "../../../di/register";
 import {
   definePlugin,
   type PluginContext,
@@ -177,19 +179,90 @@ describeEachDialect("a plugin's declared table", dialect => {
       insert("018f2c2e-0000-7000-8000-000000000003")
     ).rejects.toThrow();
   });
-
-  it("does not drop the table when the plugin is removed from config", async () => {
-    // The data-safety rule, end to end. Every unit test for it asserts a
-    // decision; this asserts the table is still there.
-    current = await createTestNextly({ dialect, plugins: [fixture] });
-    const adapter = current.adapter;
-    await adapter.executeQuery(
-      `INSERT INTO e2e__notes (id, title, pinned, position, created_at, updated_at)
-       VALUES ('018f2c2e-0000-7000-8000-000000000004', 'keepme', ${dialect === "postgresql" ? "false" : "0"}, 0, ${NOW(dialect)}, ${NOW(dialect)})`
-    );
-    expect(await adapter.tableExists("e2e__notes")).toBe(true);
-  });
 });
+
+// The data-safety rule, end to end: boot with the plugin, write a row, then
+// boot the SAME database again without it, and push. Every unit test for the
+// rule asserts a decision; this asserts the table and its row are still there.
+//
+// The push is what puts the table at risk, and a restart alone runs none
+// against existing tables. So the restarted config also relaxes a required
+// field: SQLite can drop NOT NULL only by rebuilding the table, a change that
+// goes through drizzle-kit, which on SQLite reads the WHOLE database and so
+// sees the plugin's table as one nothing declares.
+//
+// SQLite only: a restart onto the same database reuses the first boot's
+// adapter, which the harness can do for an in-memory SQLite database and not
+// for the throwaway server databases it drops between boots.
+(getConfiguredTestDialects().includes("sqlite") ? describe : describe.skip)(
+  "a plugin removed from the configuration (sqlite)",
+  () => {
+    const posts = (titleRequired: boolean) =>
+      defineCollection({
+        slug: "kept_posts",
+        fields: [text({ name: "headline", required: titleRequired })],
+      });
+
+    async function headlineIsNotNull(adapter: TestNextly["adapter"]) {
+      const columns = await adapter.executeQuery<{
+        name: string;
+        notnull: number;
+      }>(`PRAGMA table_info("dc_kept_posts")`);
+      return Number(columns.find(c => c.name === "headline")?.notnull) === 1;
+    }
+
+    it("keeps its table and the rows in it across a restart and a push", async () => {
+      current = await createTestNextly({
+        dialect: "sqlite",
+        plugins: [fixture],
+        collections: [posts(true)],
+      });
+      const adapter = current.adapter;
+      await adapter.executeQuery(
+        `INSERT INTO e2e__notes (id, title, pinned, position, created_at, updated_at)
+         VALUES ('018f2c2e-0000-7000-8000-000000000004', 'keepme', 0, 0, ${NOW("sqlite")}, ${NOW("sqlite")})`
+      );
+      expect(await headlineIsNotNull(adapter)).toBe(true);
+
+      // Restart on the same database, with the plugin gone from the config.
+      clearServices();
+      current = await createTestNextly({
+        adapter,
+        plugins: [],
+        collections: [posts(true)],
+      });
+      // The premise: the restart really left the plugin out, so its table is
+      // no longer declared anywhere.
+      expect(getActiveExtensionSchema("sqlite")).toBeNull();
+
+      const pushed = await applyDesiredSchema(
+        {
+          collections: {
+            kept_posts: {
+              slug: "kept_posts",
+              tableName: "dc_kept_posts",
+              fields: posts(false).fields,
+            },
+          },
+          singles: {},
+          components: {},
+        },
+        "code",
+        { promptChannel: "terminal" }
+      );
+      expect(pushed.success, JSON.stringify(pushed)).toBe(true);
+      // The push rebuilt a table through drizzle-kit: nothing short of a
+      // rebuild drops NOT NULL on SQLite.
+      expect(await headlineIsNotNull(adapter)).toBe(false);
+
+      expect(await adapter.tableExists("e2e__notes")).toBe(true);
+      const rows = await adapter.executeQuery<{ title: string }>(
+        `SELECT title FROM e2e__notes WHERE id = '018f2c2e-0000-7000-8000-000000000004'`
+      );
+      expect(rows.map(row => row.title)).toEqual(["keepme"]);
+    });
+  }
+);
 
 const authors = defineTable("authors", { id: col.id(), name: col.shortText() });
 const links = defineTable(

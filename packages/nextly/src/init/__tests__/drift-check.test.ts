@@ -63,9 +63,45 @@ describe("runDriftCheck", () => {
     });
 
     it("aggregates operations across multiple collections", async () => {
+      // Each preview reports an operation on the table it was asked about.
+      const previewDesiredSchema = vi
+        .fn()
+        .mockImplementation(
+          (args: { desired: { collections: Record<string, unknown> } }) =>
+            Promise.resolve({
+              operations: Object.keys(args.desired.collections).map(slug => ({
+                type: "add_column",
+                tableName: `dc_${slug}`,
+                column: { name: "x" },
+              })),
+              events: [],
+              candidates: [],
+              classification: "safe",
+              liveSnapshot: { tables: [] },
+            })
+        );
+
+      const result = await runDriftCheck({
+        adapter: makeAdapter(),
+        collections: [
+          { slug: "a", tableName: "dc_a", fields: [] },
+          { slug: "b", tableName: "dc_b", fields: [] },
+        ],
+        logger: fakeLogger,
+        deps: { previewDesiredSchema },
+      });
+
+      expect(result.kind).toBe("drift");
+      expect((result as { pending: number }).pending).toBe(2);
+      expect(previewDesiredSchema).toHaveBeenCalledTimes(2);
+    });
+
+    it("counts once an operation every preview reports", async () => {
+      // Every preview also compares the tables plugins declare, so a plugin
+      // table the database lacks reaches the preview of each collection.
       const previewDesiredSchema = vi.fn().mockResolvedValue({
         operations: [
-          { type: "add_column", tableName: "dc_x", column: { name: "x" } },
+          { type: "add_table", table: { name: "fx__notes", columns: [] } },
         ],
         events: [],
         candidates: [],
@@ -83,9 +119,8 @@ describe("runDriftCheck", () => {
         deps: { previewDesiredSchema },
       });
 
-      expect(result.kind).toBe("drift");
-      expect((result as { pending: number }).pending).toBe(2);
       expect(previewDesiredSchema).toHaveBeenCalledTimes(2);
+      expect(result).toEqual({ kind: "drift", pending: 1 });
     });
 
     it("runs previews in parallel (review #4)", async () => {

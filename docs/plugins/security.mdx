@@ -260,7 +260,11 @@ A public route skips the default check — it authenticated no one, and a cookie
 on the request says nothing about what admitted it. A public handler that
 resolves the session user through `ctx.auth.currentUser` is checked there
 instead: a POST, PUT, PATCH or DELETE whose origin is not your site or an
-allowed one, or that names no origin, gets no user (`null`). Declare
+allowed one, or that names no origin, gets no user (`null`). When that
+request carried the session cookie, it is recorded as a `csrf-failed` audit
+event naming your plugin and the route, once per request however often the
+handler asks, just as an authenticated route records the cross-site write it
+refuses. Declare
 `csrf: true` to require the token as well; only callers carrying the session
 cookie are asked for it, so webhook callers and browsers with only unrelated
 cookies stay free. `csrf: false` cannot be combined with `public: true`: boot refuses

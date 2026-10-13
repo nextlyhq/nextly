@@ -23,6 +23,7 @@ import { env } from "../lib/env";
 import type { PluginContext } from "../plugins/plugin-context";
 import type { AuthUser } from "../types/auth";
 
+import { readAccessTokenCookie } from "./cookies/access-token-cookie";
 import { setPendingCookie } from "./cookies/pending-cookie";
 import { readCsrfCookie, readCsrfFromRequest } from "./csrf/csrf-cookie";
 import { readCsrfBody } from "./csrf/read-csrf-body";
@@ -270,7 +271,10 @@ function isSystemFailure(err: unknown): boolean {
  * nothing but the call stack between them, and a module variable would be
  * shared by every request the process is serving at once.
  */
-const consultationScope = new AsyncLocalStorage<{ consulted: boolean }>();
+const consultationScope = new AsyncLocalStorage<{
+  consulted: boolean;
+  crossSiteRefused: boolean;
+}>();
 
 /**
  * Begin tracking one route invocation's session consultation.
@@ -279,15 +283,21 @@ const consultationScope = new AsyncLocalStorage<{ consulted: boolean }>();
  * after the invocation THREW. An error response is personal too when the
  * handler read a session before failing, and a refusal a shared cache holds
  * for one caller is the same defect as an answer it holds.
+ *
+ * `crossSiteRefused` says the invocation was answered "no user" for a write
+ * another site posted with a session cookie. The dispatcher, which knows the
+ * route, records that once however often the handler asked.
  */
 export function beginSessionConsultation(): {
   run: <T>(fn: () => Promise<T>) => Promise<T>;
   consulted: () => boolean;
+  crossSiteRefused: () => boolean;
 } {
-  const box = { consulted: false };
+  const box = { consulted: false, crossSiteRefused: false };
   return {
     run: fn => consultationScope.run(box, fn),
     consulted: () => box.consulted,
+    crossSiteRefused: () => box.crossSiteRefused,
   };
 }
 
@@ -454,6 +464,14 @@ export function createPluginAuthApi(
         isUnsafeMethod(request.method) &&
         !validateOrigin(request, env.NEXTLY_ALLOWED_ORIGINS_PARSED ?? [])
       ) {
+        // With a session cookie this is a forged request the handler was
+        // kept from acting on, and the operator should see the attempt, as
+        // they do when an authenticated route refuses one. Without one it
+        // forges nobody's request: a provider's webhook posts cross-site.
+        if (readAccessTokenCookie(request) !== null) {
+          const box = consultationScope.getStore();
+          if (box) box.crossSiteRefused = true;
+        }
         return null;
       }
       const result = await getSession(request, deps.secret);

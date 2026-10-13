@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 
 import { COOKIE_NAMES } from "../../cookies/cookie-config";
+import {
+  signUnmarkedPendingToken,
+  signUnmarkedPendingTokenWithoutMarker,
+} from "../../jwt/__tests__/unmarked-tokens";
 import { signAccessToken } from "../../jwt/sign";
 import { mintPendingToken } from "../../pipeline/pending-token";
 import { getSession } from "../get-session";
@@ -31,6 +35,28 @@ describe("getSession rejects pending-auth tokens (D71 security gate)", () => {
       300
     );
     const res = await getSession(withAccessCookie(access), secret);
+    expect(res.authenticated).toBe(true);
+  });
+});
+
+describe("getSession and pending tokens minted before tokens named their purpose", () => {
+  // Such a token has no header `typ`, which the verifier still lets through
+  // for tokens already in circulation, so its `typ` claim is the only thing
+  // that keeps it from opening a session here.
+  it("does NOT authenticate one", async () => {
+    const pending = await signUnmarkedPendingToken("u1", secret);
+    const res = await getSession(withAccessCookie(pending), secret);
+    expect(res).toEqual({ authenticated: false, reason: "invalid" });
+  });
+
+  it("authenticates the same unmarked shape without the pending claim", async () => {
+    // The control that makes the refusal above mean something: a token of the
+    // same shape, missing only the pending claim, does open a session, so the
+    // refusal comes from that claim rather than from the cookie, the
+    // signature or the absent header. It holds only while unmarked tokens are
+    // accepted, and goes when that allowance ends.
+    const unmarked = await signUnmarkedPendingTokenWithoutMarker("u1", secret);
+    const res = await getSession(withAccessCookie(unmarked), secret);
     expect(res.authenticated).toBe(true);
   });
 });

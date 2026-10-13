@@ -43,7 +43,6 @@ import {
 } from "./di/register";
 import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
-import { resolveCollectionTableName } from "./domains/schema/utils/resolve-table-name";
 import { NextlyError } from "./errors/nextly-error";
 import { runBootTimeApplyIfDev } from "./init/boot-apply";
 import { awaitBootMigrations } from "./init/boot-migrations-gate";
@@ -51,7 +50,7 @@ import {
   buildServiceConfig,
   type GetNextlyOptions,
 } from "./init/build-service-config";
-import { runDriftCheck } from "./init/drift-check";
+import { driftCheckCollections, runDriftCheck } from "./init/drift-check";
 import type { Nextly } from "./init/nextly-instance";
 import { runPostInitTasks } from "./init/post-init-tasks";
 import { reloadNextlyConfig } from "./init/reload-config";
@@ -353,20 +352,11 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
           warn: (msg: string) => console.warn(msg),
           error: (msg: string) => console.error(msg),
         };
-        const collections = (config.collections ?? []).map(c => ({
-          slug: c.slug,
-          tableName: resolveCollectionTableName(c.slug, c.dbName),
-          fields: c.fields ?? [],
-          // Why: forward the Draft/Published flag so the boot-time drift
-          // check actually compares the desired status column against the
-          // live DB. Without this, a code-first collection that opted into
-          // `status: true` after its table was created would never report
-          // drift, masking a missing system status column.
-          status: (c as { status?: boolean }).status === true,
-        }));
+        // Reduced by the drift check's own helper, which carries every
+        // attribute that changes a table (status, declared indexes).
         await runDriftCheck({
           adapter,
-          collections,
+          collections: driftCheckCollections(config.collections ?? []),
           logger: driftLogger,
         });
 

@@ -47,6 +47,7 @@ import { registerExtensionTables } from "../domains/schema/extension/register-ta
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
+import { desiredCollectionTable } from "../domains/schema/pipeline/desired-collection-table";
 import { buildDesiredTableFromFields } from "../domains/schema/pipeline/diff/build-from-fields";
 import { diffSnapshots } from "../domains/schema/pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../domains/schema/pipeline/diff/introspect-live";
@@ -164,6 +165,8 @@ type CollectionDef = {
   status?: boolean;
   /** i18n: localized collections omit translatable cols from main + register a companion. */
   localized?: boolean;
+  /** Compound indexes, carried into the desired schema the reload applies. */
+  indexes?: DesiredCollection["indexes"];
   /** Content-versioning option; persisted (resolved) to dynamic_collections.versions. */
   versions?: boolean | VersionsConfig;
   /** Webhook recording opt-out; resolved into the process-level recording policy. */
@@ -1739,6 +1742,7 @@ async function applyReload(opts?: {
     fields: MinimalField[];
     status?: boolean;
     localized?: boolean;
+    indexes?: DesiredCollection["indexes"];
   }> = [];
   for (const c of newConfig.collections ?? []) {
     if (!c.slug) continue;
@@ -1751,6 +1755,10 @@ async function applyReload(opts?: {
       // columns from the main table and the runtime schema is regenerated with
       // the companion split.
       localized: c.localized === true,
+      // The compound indexes the collection declares. Without them a reload
+      // that only adds one finds nothing to apply, and the apply plans a drop
+      // of one a migration already created.
+      ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),
     });
   }
 
@@ -1960,24 +1968,17 @@ async function applyReload(opts?: {
       // i18n: carry `localized` on the desired entry so the runtime-schema
       // regeneration below omits translatable columns and registers a companion.
       localized: target.localized === true,
+      ...(target.indexes !== undefined ? { indexes: target.indexes } : {}),
     };
     try {
       const live = liveByTable.has(target.tableName)
         ? { tables: [liveByTable.get(target.tableName)!] }
         : { tables: [] };
-      const desiredTable = buildDesiredTableFromFields(
-        target.tableName,
-        target.fields,
-        dialect,
-        // i18n: omit translatable columns from the main table's desired snapshot
-        // so the HMR diff doesn't re-add them (they live in the companion). H2.
-        {
-          // These branches apply a CONFIG edit, so the table is the pipeline's.
-          builtBy: "codeFirst" as const,
-          hasStatus: target.status === true,
-          localized: target.localized === true,
-        }
-      );
+      // Built from the entry itself, by the builder the apply uses, so this
+      // gate asks about exactly the table the apply will push. An entry
+      // states no `builderOwned`, which reads as code-first: these branches
+      // apply a CONFIG edit, so the table is the pipeline's.
+      const desiredTable = desiredCollectionTable(entry, dialect);
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
       if (operations.length === 0) {

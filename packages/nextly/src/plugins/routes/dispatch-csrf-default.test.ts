@@ -29,6 +29,11 @@ vi.mock("../../domains/audit/audit-log-writer", async importOriginal => ({
 vi.mock("../../di/register", () => ({ getService: () => ({}) }));
 
 import { requireAuthentication } from "../../auth/middleware";
+import { signAccessToken } from "../../auth/jwt/sign";
+import {
+  createPluginAuthApi,
+  type CompleteLoginDeps,
+} from "../../auth/plugin-auth-api";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext, PluginDefinition } from "../plugin-context";
 
@@ -251,5 +256,145 @@ describe("a route that opts out with csrf: false", () => {
     );
     expect(res.status).toBe(200);
     expect(handlerCalls).toBe(1);
+  });
+});
+
+describe("a public route that reads the signed-in user", () => {
+  const SECRET = "a-test-secret-of-at-least-thirty-two-characters";
+  // Only `secret` is read on the path under test: `currentUser` verifies the
+  // session cookie with it and touches nothing else.
+  const auth = createPluginAuthApi(
+    () => ({ secret: SECRET }) as unknown as CompleteLoginDeps
+  );
+
+  /** A route whose handler asks who is signed in, as many times as told. */
+  function readsUser(reads = 1, after?: () => never): RouteMatch {
+    const base = match({ public: true });
+    return {
+      ...base,
+      baseCtx: { ...baseCtx, auth } as unknown as PluginContext,
+      route: {
+        ...base.route,
+        handler: async (req: Request, ctx: PluginContext) => {
+          handlerCalls++;
+          let user: unknown = null;
+          for (let i = 0; i < reads; i++) {
+            user = await ctx.auth.currentUser(req);
+          }
+          after?.();
+          return Response.json({ user });
+        },
+      } as PluginRoute,
+    };
+  }
+
+  async function sessionCookies(): Promise<string> {
+    const token = await signAccessToken(
+      { sub: "u1", email: "u1@x.com" },
+      SECRET
+    );
+    return `nextly_session=${token}; nextly_csrf=tok`;
+  }
+
+  const csrfRows = () =>
+    auditWrite.mock.calls.filter(
+      ([event]) => (event as { kind?: string }).kind === "csrf-failed"
+    );
+
+  it("answers no user to a signed-in cross-site write, and records it", async () => {
+    const res = await runPluginRoute(
+      write(await sessionCookies(), "https://evil.example"),
+      readsUser()
+    );
+
+    expect(((await res.json()) as { user: unknown }).user).toBeNull();
+    expect(csrfRows()).toEqual([
+      [
+        expect.objectContaining({
+          kind: "csrf-failed",
+          metadata: { path: "plugins/@a/x/patterns", method: "POST" },
+        }),
+      ],
+    ]);
+  });
+
+  it("answers the user to a same-origin write, and records nothing", async () => {
+    // The control: a route that refused and recorded every write would pass
+    // the case above.
+    const res = await runPluginRoute(
+      write(await sessionCookies(), "http://localhost:3000"),
+      readsUser()
+    );
+
+    expect(((await res.json()) as { user: { id: string } }).user.id).toBe("u1");
+    expect(csrfRows()).toEqual([]);
+  });
+
+  it("records nothing for a cross-site write that carries no session", async () => {
+    // A cookie-less post from another site, such as a provider's webhook,
+    // forges nobody's request.
+    const res = await runPluginRoute(
+      write("_ga=GA1.2.3", "https://evil.example"),
+      readsUser()
+    );
+
+    expect(((await res.json()) as { user: unknown }).user).toBeNull();
+    expect(csrfRows()).toEqual([]);
+  });
+
+  it("records one row however often the handler asks", async () => {
+    await runPluginRoute(
+      write(await sessionCookies(), "https://evil.example"),
+      readsUser(3)
+    );
+    expect(csrfRows()).toHaveLength(1);
+  });
+
+  it("still records it when the handler then fails", async () => {
+    const res = await runPluginRoute(
+      write(await sessionCookies(), "https://evil.example"),
+      readsUser(1, () => {
+        throw NextlyError.forbidden();
+      })
+    );
+
+    expect(res.status).toBe(403);
+    expect(csrfRows()).toHaveLength(1);
+  });
+});
+
+describe("a route that asks for the raw body and a token", () => {
+  it("hands the handler the exact bytes sent, after the token was read from them", async () => {
+    // Bytes a parse-and-reserialise would change: spacing, key order, an
+    // escaped character, a non-ASCII one and a trailing newline. A signature
+    // a webhook route checks is over exactly these.
+    const sent = new TextEncoder().encode(
+      '{ "z": 1,  "csrfToken": "tok", "a": "caf\\u00e9 é" }\n'
+    );
+    let received: Uint8Array | undefined;
+    const route = match({ csrf: true, rawBody: true });
+    route.route.handler = async (req: Request) => {
+      handlerCalls++;
+      received = new Uint8Array(await req.arrayBuffer());
+      return Response.json({ ok: true });
+    };
+
+    const res = await runPluginRoute(
+      new Request("http://localhost:3000/admin/api/plugins/@a/x/patterns", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: ADMIN_COOKIES,
+          origin: "http://localhost:3000",
+        },
+        body: sent,
+      }),
+      route
+    );
+
+    // The check passed on the token in the body, so it read the body first.
+    expect(res.status).toBe(200);
+    expect(handlerCalls).toBe(1);
+    expect(received).toEqual(sent);
   });
 });

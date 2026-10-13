@@ -3,9 +3,11 @@
  *
  * Against real local servers, because each property is about a connection or
  * bytes the transport produces itself: the address a socket reached, a socket
- * another library parked in Node's global pool, a status line the platform
- * `Response` cannot represent, and a compressed body.
+ * another library parked in Node's global pool, a proxy the environment
+ * names, a status line the platform `Response` cannot represent, and a
+ * compressed body.
  */
+import * as nodeHttp from "node:http";
 import {
   Agent as HttpAgent,
   createServer,
@@ -122,6 +124,128 @@ describe("the vetted address is where the socket goes", () => {
     globalAgent.destroy();
   });
 });
+
+/**
+ * Node's switch that points the GLOBAL http and https agents at the proxies
+ * an environment names, which is what setting `NODE_USE_ENV_PROXY` with
+ * `HTTP_PROXY` and `HTTPS_PROXY` does to them at startup. Read through
+ * `Reflect.get` because this package's Node types predate it, and absent on a
+ * Node that cannot apply proxy variables to an agent at all.
+ */
+const setGlobalProxyFromEnv: unknown = Reflect.get(
+  nodeHttp,
+  "setGlobalProxyFromEnv"
+);
+
+function isProxySwitch(
+  value: unknown
+): value is (env: Record<string, string>) => () => void {
+  return typeof value === "function";
+}
+
+/** A TCP server that counts the connections it is offered and drops each. */
+async function recordConnections(): Promise<{
+  port: number;
+  connections: () => number;
+}> {
+  let connections = 0;
+  const server = createTcpServer(socket => {
+    connections += 1;
+    socket.destroy();
+  });
+  servers.push({ close: cb => server.close(cb) });
+  await new Promise<void>(resolve =>
+    server.listen(0, "127.0.0.1", () => resolve())
+  );
+  return {
+    port: (server.address() as AddressInfo).port,
+    connections: () => connections,
+  };
+}
+
+/** Settle once a request has either answered or failed; either will do. */
+function settled(request: Promise<unknown>): Promise<void> {
+  return request.then(
+    () => undefined,
+    () => undefined
+  );
+}
+
+describe.skipIf(!isProxySwitch(setGlobalProxyFromEnv))(
+  "proxy variables in the environment",
+  () => {
+    // With the variables set, Node sends a request on its global agents to the
+    // proxy, which resolves the name again on its own network: the address
+    // vetted here is not where the request goes. The transport's own agents
+    // are what keep it off them. Proxy and vetted server share 127.0.0.1, so
+    // the socket check below the pin could not tell them apart: only where
+    // the connection went separates the two.
+    let restore: (() => void) | undefined;
+
+    afterEach(() => {
+      restore?.();
+      restore = undefined;
+      vi.unstubAllEnvs();
+    });
+
+    async function proxyFromEnvironment(): Promise<() => number> {
+      const proxy = await recordConnections();
+      const proxyUrl = `http://127.0.0.1:${String(proxy.port)}`;
+      vi.stubEnv("NODE_USE_ENV_PROXY", "1");
+      vi.stubEnv("HTTP_PROXY", proxyUrl);
+      vi.stubEnv("HTTPS_PROXY", proxyUrl);
+      if (!isProxySwitch(setGlobalProxyFromEnv)) {
+        throw new TypeError("setGlobalProxyFromEnv is unavailable");
+      }
+      restore = setGlobalProxyFromEnv({
+        HTTP_PROXY: proxyUrl,
+        HTTPS_PROXY: proxyUrl,
+      });
+
+      // The control: a request left to the global agent reaches the proxy.
+      // Without it, a proxy that recorded nothing would also be what a switch
+      // that never took effect looks like.
+      await settled(
+        new Promise((resolve, reject) => {
+          httpGet("http://control.invalid/", resolve).on("error", reject);
+        })
+      );
+      expect(proxy.connections()).toBe(1);
+      return proxy.connections;
+    }
+
+    it("still sends an http request to the vetted address", async () => {
+      const proxied = await proxyFromEnvironment();
+      const port = await listen((_req, res) => res.end("vetted"));
+
+      // Where the connection went is asserted first: a request sent to the
+      // proxy is dropped there, and that rejection alone would not say why.
+      const answer = await send(
+        `http://proxy-check.invalid:${String(port)}/`
+      ).then(
+        response => response.text(),
+        () => "no answer"
+      );
+
+      expect(proxied()).toBe(1);
+      expect(answer).toBe("vetted");
+    });
+
+    it("still sends an https request to the vetted address", async () => {
+      // No certificate is needed to see where an https request connected: the
+      // vetted server drops the handshake, and only the connection counts.
+      const proxied = await proxyFromEnvironment();
+      const vetted = await recordConnections();
+
+      await settled(
+        send(`https://proxy-check.invalid:${String(vetted.port)}/`)
+      );
+
+      expect(vetted.connections()).toBe(1);
+      expect(proxied()).toBe(1);
+    });
+  }
+);
 
 describe("a socket that reached another address", () => {
   it("is refused before a single request byte is written", async () => {
