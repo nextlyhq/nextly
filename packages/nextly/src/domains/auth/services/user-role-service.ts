@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, not } from "drizzle-orm";
 
 import type {
   RBACDatabaseInstance,
@@ -11,7 +11,10 @@ import type {
 import { getDialectTables } from "../../../database";
 import { BaseService } from "../../../services/base-service";
 import { invalidatePermissionCache } from "../../../services/lib/permissions";
-import { userRoleAssignmentsInForce } from "../../../services/lib/role-assignments";
+import {
+  roleAssignmentInForce,
+  userRoleAssignmentsInForce,
+} from "../../../services/lib/role-assignments";
 import type { Logger } from "../../../services/shared";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
@@ -88,12 +91,15 @@ export class UserRoleService extends BaseService {
       // nothing, so answering 409 for it left the role impossible to give
       // again while every check refused it.
       const { userRoles } = this.tables;
+      // One moment for the check and the replacement below, so the row this
+      // request found lapsed is the row it replaces.
+      const now = new Date();
       const held = await this.db
         .select({ id: userRoles.id })
         .from(userRoles)
         .where(
           and(
-            userRoleAssignmentsInForce(userRoles, userId, new Date()),
+            userRoleAssignmentsInForce(userRoles, userId, now),
             eq(userRoles.roleId, roleId)
           )
         )
@@ -119,12 +125,20 @@ export class UserRoleService extends BaseService {
       // and be undone by its rollback.
       await serializeOnSqlite(this.adapter, async () => {
         // A lapsed assignment of this role is replaced rather than kept beside
-        // the new one: nothing is in force for the pair (checked above), so
-        // any row left for it has lapsed, and one pair holds one row.
+        // the new one, since one pair holds one row. Only a lapsed one: the
+        // check above is a read, and on PostgreSQL and MySQL another request
+        // can grant the role between it and this delete. Deleting every row
+        // for the pair removed that completed grant and put this request's
+        // expiry in its place; now it stands, and the pair's unique index
+        // keeps the insert below from adding a second row beside it.
         await (this.db as RBACDatabaseInstance)
           .delete(userRoles)
           .where(
-            and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId))
+            and(
+              eq(userRoles.userId, userId),
+              eq(userRoles.roleId, roleId),
+              not(roleAssignmentInForce(userRoles, now))
+            )
           );
         const insert = (this.db as RBACDatabaseInstance)
           .insert(this.tables.userRoles)

@@ -28,10 +28,7 @@ import {
   hashRefreshToken,
   generateRefreshTokenId,
 } from "../session/refresh";
-import {
-  accessTokenLifetime,
-  type SessionRoles,
-} from "../session/session-roles";
+import type { SessionRoles } from "../session/session-roles";
 
 import { buildCookieHeaders, stallResponse } from "./handler-utils";
 import { writeSessionRow, type WithSessionRowTransaction } from "./session-row";
@@ -288,7 +285,9 @@ export async function mintSession(
     await signAccessTokenWithExpiry(
       claims,
       deps.secret,
-      accessTokenLifetime(deps.accessTokenTTL, sessionRoles)
+      deps.accessTokenTTL,
+      "session",
+      sessionRoles.validUntil
     );
 
   // Judged again as the row is written, under a lock on the user row: a

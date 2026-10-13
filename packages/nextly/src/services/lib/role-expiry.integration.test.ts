@@ -19,7 +19,7 @@ process.env.NEXTLY_SECRET = "test-secret-must-be-at-least-32-characters-long!!";
 
 import { randomUUID } from "node:crypto";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { decodeJwt } from "jose";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -28,6 +28,10 @@ import { handleLogin } from "../../auth/handlers/login";
 import { handleRefresh } from "../../auth/handlers/refresh";
 import { getDialectTables } from "../../database/index";
 import { ApiKeyService } from "../../domains/auth/services/api-key-service";
+import {
+  cacheRowId,
+  PermissionCacheService,
+} from "../../domains/auth/services/permission-cache-service";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -466,6 +470,125 @@ describe.each(getConfiguredTestDialects())(
       expect(changed).toBe(true);
       expect(await hasPermission(userId, "read", ROLES.lapsed.resource)).toBe(
         true
+      );
+    });
+
+    it("keeps a grant another request made between the check and the replacement", async () => {
+      // Giving a lapsed role again replaces its lapsed row. The check that
+      // finds it lapsed is a read, so another request can grant the role in
+      // between, and the replacement must leave that grant as it was rather
+      // than put this request's expiry over it. The other request runs at the
+      // last moment it could: as this one's delete is about to execute.
+      const t = await boot(dialect);
+      const userId = await makeUser(t, "regrant@example.com");
+      await assign(t, userId, ROLES.lapsed.id, new Date(Date.now() - DAY_MS));
+      const { userRoles } = getDialectTables();
+      const service = new ServiceContainer(t.adapter).userRoles;
+
+      let granted = false;
+      const otherRequest = async () => {
+        granted = true;
+        await raw(t).delete(userRoles).where(eq(userRoles.userId, userId));
+        await assign(t, userId, ROLES.lapsed.id, null);
+      };
+      const realDb = (service as unknown as { db: object }).db;
+      const db = new Proxy(realDb, {
+        get(target, prop) {
+          const value = Reflect.get(target, prop) as unknown;
+          if (prop === "delete" && typeof value === "function" && !granted) {
+            return (table: unknown) => {
+              const builder = (
+                value as (t: unknown) => {
+                  where: (cond: unknown) => Promise<unknown>;
+                }
+              ).call(target, table);
+              return {
+                where: async (cond: unknown) => {
+                  await otherRequest();
+                  return builder.where(cond);
+                },
+              };
+            };
+          }
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      Object.defineProperty(service, "db", { get: () => db });
+
+      // This request asks for an hour; the grant made meanwhile has no end.
+      await service.assignRoleToUser(userId, ROLES.lapsed.id, {
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      });
+
+      expect(granted).toBe(true);
+      const rows = (await raw(t)
+        .select({ id: userRoles.id, expiresAt: userRoles.expiresAt })
+        .from(userRoles)
+        .where(
+          and(
+            eq(userRoles.userId, userId),
+            eq(userRoles.roleId, ROLES.lapsed.id)
+          )
+        )) as unknown as Array<{ id: string; expiresAt: unknown }>;
+      expect(rows).toEqual([
+        { id: `${userId}-${ROLES.lapsed.id}`, expiresAt: null },
+      ]);
+    });
+
+    it("serves no cached answer an earlier release wrote", async () => {
+      // An earlier release ended a cached row only at the cache TTL, whatever
+      // the roles it came from. After an upgrade, one that granted through a
+      // role since lapsed must not answer for the rest of that TTL.
+      const t = await boot(dialect);
+      const userId = await makeUser(t, "upgraded@example.com");
+      await assign(t, userId, ROLES.lapsed.id, new Date(Date.now() - DAY_MS));
+      const cache = new PermissionCacheService(t.adapter as never, {
+        debug() {},
+        info() {},
+        warn() {},
+        error() {},
+      });
+      const { userPermissionCache } = getDialectTables();
+      /** A granting row for `resource`, filed under `id`, ending in five minutes. */
+      const grantRow = (id: string, resource: string) =>
+        raw(t)
+          .insert(userPermissionCache)
+          .values({
+            id,
+            userId,
+            action: "read",
+            resource,
+            hasPermission: true,
+            roleIds:
+              dialect === "sqlite"
+                ? JSON.stringify([ROLES.lapsed.id])
+                : [ROLES.lapsed.id],
+            expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+            createdAt: new Date(),
+          });
+      // The control: the same row under the id this release files it under
+      // is read back, so the miss below is about the id, not a cache that
+      // reads nothing. Truthy rather than `true`: what is under test is that
+      // the row is found, and MySQL hands back the stored flag as `1`.
+      await grantRow(
+        cacheRowId(userId, "read", ROLES.current.resource),
+        ROLES.current.resource
+      );
+      expect(
+        await cache.getCachedPermission(userId, "read", ROLES.current.resource)
+      ).toBeTruthy();
+
+      // The row as that release filed it: under `user|action|resource`.
+      await grantRow(
+        `${userId}|read|${ROLES.lapsed.resource}`,
+        ROLES.lapsed.resource
+      );
+
+      expect(
+        await cache.getCachedPermission(userId, "read", ROLES.lapsed.resource)
+      ).toBeNull();
+      expect(await hasPermission(userId, "read", ROLES.lapsed.resource)).toBe(
+        false
       );
     });
   }

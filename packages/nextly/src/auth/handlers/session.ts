@@ -35,7 +35,6 @@ import {
   generateRefreshTokenId,
   hashRefreshToken,
 } from "../session/refresh";
-import { accessTokenLifetime } from "../session/session-roles";
 
 import { jsonResponse, buildCookieHeaders } from "./handler-utils";
 import type { AuthRouterDeps } from "./router";
@@ -286,7 +285,9 @@ async function attemptDevAutoLogin(
   const accessToken = await signAccessToken(
     claims,
     deps.secret,
-    accessTokenLifetime(deps.accessTokenTTL, sessionRoles)
+    deps.accessTokenTTL,
+    "session",
+    sessionRoles.validUntil
   );
   const rawRefreshToken = generateRefreshToken();
   const refreshTokenHash = hashRefreshToken(rawRefreshToken);

@@ -13,10 +13,7 @@ import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 import { buildClaims } from "../jwt/claims";
 import { signAccessTokenWithExpiry } from "../jwt/sign";
-import {
-  accessTokenLifetime,
-  type SessionRoles,
-} from "../session/session-roles";
+import type { SessionRoles } from "../session/session-roles";
 // hashPassword not needed here -- seedSuperAdmin handles hashing internally
 
 import {
@@ -200,7 +197,9 @@ export async function handleSetup(
     await signAccessTokenWithExpiry(
       claims,
       deps.secret,
-      accessTokenLifetime(deps.accessTokenTTL, sessionRoles)
+      deps.accessTokenTTL,
+      "session",
+      sessionRoles.validUntil
     );
 
   const rawRefreshToken = await storeNewRefreshToken(deps, user.id, request);

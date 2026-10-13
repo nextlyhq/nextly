@@ -26,6 +26,25 @@ function shouldLogError(errorKey: string): boolean {
 }
 
 /**
+ * The row id a decision is filed under.
+ *
+ * Versioned, because a row an earlier release wrote ends only at the cache
+ * TTL, whatever the roles it was computed from, while a row this one writes
+ * ends no later than the first of them lapses. Read under the old id after an
+ * upgrade, a cached grant from a role that had since lapsed answered until
+ * its TTL ran out. Under an id they never had, those rows are never served,
+ * and expire and are swept as any other. Change the version whenever what a
+ * row means changes.
+ */
+export function cacheRowId(
+  userId: string,
+  action: string,
+  resource: string
+): string {
+  return `v2|${userId}|${action}|${resource}`;
+}
+
+/**
  * PermissionCacheService manages database-backed permission caching.
  *
  * This service implements Tier 2 caching (database-backed) as part of
@@ -139,7 +158,7 @@ export class PermissionCacheService extends BaseService {
 
     try {
       const { userPermissionCache } = this.tables;
-      const cacheKey = `${userId}|${action}|${resource}`;
+      const cacheKey = cacheRowId(userId, action, resource);
       const now = new Date();
 
       const result = await this.db
@@ -230,7 +249,7 @@ export class PermissionCacheService extends BaseService {
 
     try {
       const { userPermissionCache } = this.tables;
-      const cacheKey = `${userId}|${action}|${resource}`;
+      const cacheKey = cacheRowId(userId, action, resource);
       const expiresAt = new Date(
         cacheExpiry(Date.now(), this.cacheTtlMs, validUntil)
       );

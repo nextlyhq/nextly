@@ -27,10 +27,7 @@ import {
 } from "../session/account-state";
 import { hashRefreshToken } from "../session/refresh";
 import { evaluateRefreshBinding } from "../session/refresh-binding";
-import {
-  accessTokenLifetime,
-  type SessionRoles,
-} from "../session/session-roles";
+import type { SessionRoles } from "../session/session-roles";
 
 import { buildCookieHeaders, buildAuthErrorResponse } from "./handler-utils";
 import { newRefreshToken } from "./issue-session";
@@ -194,7 +191,9 @@ export async function handleRefresh(
       await signAccessTokenWithExpiry(
         claims,
         deps.secret,
-        accessTokenLifetime(deps.accessTokenTTL, sessionRoles)
+        deps.accessTokenTTL,
+        "session",
+        sessionRoles.validUntil
       );
 
     const rotated = await rotateRefreshRow(deps, request, {

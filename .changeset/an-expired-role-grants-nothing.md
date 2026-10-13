@@ -40,3 +40,16 @@ Assigning a role whose earlier assignment has expired now gives it again,
 instead of answering that it is already assigned. Listing a user's roles shows
 only the roles in force. If a user's roles cannot be read at login or refresh,
 the session is refused rather than issued with no roles.
+
+Permission answers cached in the database before this release are no longer
+read: they could have come from a role that has since expired. They expire and
+are cleared as usual, and the first check of each permission after the upgrade
+is worked out afresh.
+
+Breaking, for code that builds its own `AuthRouterDeps` for
+`routeAuthRequest` (`nextly/auth`, experimental): the `fetchRoleIds(userId)`
+dependency is replaced by `fetchSessionRoles(userId)`, which returns
+`{ roleIds, validUntil }` (the `SessionRoles` type, now exported):
+the role ids in force, and the soonest expiry among them in epoch milliseconds,
+or `undefined` when none expires. Read only assignments whose `expires_at` is
+empty or later than now. The access token is bounded by `validUntil`.

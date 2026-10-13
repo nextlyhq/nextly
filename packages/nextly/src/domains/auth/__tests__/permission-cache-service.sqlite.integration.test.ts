@@ -19,7 +19,10 @@ import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { PermissionCacheService } from "../services/permission-cache-service";
+import {
+  cacheRowId,
+  PermissionCacheService,
+} from "../services/permission-cache-service";
 
 // Minimal stand-in for `Logger` — we only need `.log` to be callable so the
 // service's auth-logger fallback path doesn't blow up. Body is intentionally
@@ -101,7 +104,8 @@ describe("PermissionCacheService — SQLite real-driver integration", () => {
     // the service's setCachedPermission so this test isolates the read
     // path. expires_at is stored as epoch seconds to match Drizzle's
     // `integer mode:"timestamp"` on-disk format.
-    const cacheKey = "user-1|read|users";
+    // Under the id the service files a decision under.
+    const cacheKey = cacheRowId("user-1", "read", "users");
     const futureSeconds = Math.floor(Date.now() / 1000) + 3600;
     sqlite
       .prepare(
@@ -130,7 +134,7 @@ describe("PermissionCacheService — SQLite real-driver integration", () => {
   });
 
   it("returns null for a stale cache row (expires_at in the past)", async () => {
-    const cacheKey = "user-2|read|users";
+    const cacheKey = cacheRowId("user-2", "read", "users");
     const pastSeconds = Math.floor(Date.now() / 1000) - 3600;
     sqlite
       .prepare(
