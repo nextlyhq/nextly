@@ -253,6 +253,13 @@ those are the names schema changes manage, so an index you remove from the
 config is dropped from the database. Without one, a name is derived from the
 table and columns.
 
+Development push creates the indexes a collection declares, whether the change
+arrives through a hot reload, `nextly db:sync`, or the boot that creates the
+collection's table, and `migrate:create` writes them into a migration for
+production. `migrate:check` and the drift warning at boot count a declared
+index the database lacks as a pending change. Collections made in the Schema
+Builder cannot declare compound indexes.
+
 Every index is checked against PostgreSQL, MySQL and SQLite when the schema
 is built from the config (development push, `db:sync`, `migrate:create`),
 whichever one you run. A JSON field, or a text field with no bounded width

@@ -34,6 +34,7 @@ import type {
   DesiredCollection,
   DesiredSchema,
 } from "../domains/schema/pipeline/types";
+import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
 
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
@@ -51,6 +52,38 @@ interface DriftCheckCollection {
   slug: string;
   tableName: string;
   fields: unknown[];
+  status?: boolean;
+  indexes?: DesiredCollection["indexes"];
+}
+
+/** The parts of a config collection the drift check reads. */
+interface ConfigCollectionLike {
+  slug: string;
+  dbName?: string;
+  fields?: unknown[];
+  status?: boolean;
+  indexes?: DesiredCollection["indexes"];
+}
+
+/**
+ * The drift check's input, reduced from the config's collections.
+ *
+ * Every attribute that changes a table travels, or the check compares the
+ * live table against a smaller one: without `status` a collection that turned
+ * Draft/Published on after its table existed never reports the missing status
+ * column, and without `indexes` a declared compound index the database already
+ * holds is counted as drift on every boot.
+ */
+export function driftCheckCollections(
+  collections: readonly ConfigCollectionLike[]
+): DriftCheckCollection[] {
+  return collections.map(c => ({
+    slug: c.slug,
+    tableName: resolveCollectionTableName(c.slug, c.dbName),
+    fields: c.fields ?? [],
+    status: c.status === true,
+    ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),
+  }));
 }
 
 export interface RunDriftCheckDeps {

@@ -64,6 +64,7 @@ import {
   emitDdl,
   withoutUnemittableIndexes,
 } from "./ddl-emitter";
+import { desiredCollectionTable } from "./desired-collection-table";
 import {
   buildDesiredTableFromFields,
   buildDesiredTableFromComponentFields,
@@ -806,30 +807,11 @@ export class PushSchemaPipeline {
 
       const desiredSnapshot: NextlySchemaSnapshot = {
         tables: [
+          // Built by the one helper the preview and the hot reload's change
+          // gate share, so the three cannot describe a collection's table
+          // differently.
           ...Object.values(desired.collections).map(c =>
-            withContributions(
-              buildDesiredTableFromFields(
-                c.tableName,
-                // FieldConfig has the shape buildDesiredTableFromFields expects;
-                // cast through unknown for the structural-vs-nominal type gap.
-                c.fields as unknown as Parameters<
-                  typeof buildDesiredTableFromFields
-                >[1],
-                dialect,
-                // Thread the status flag so the diff includes the status system
-                // column when Draft/Published is enabled. Thread `localized` so a
-                // localized collection's translatable columns are omitted from the
-                // main table's desired snapshot (they live in the companion
-                // `_locales` table) rather than being re-added by the diff.
-                {
-                  builtBy: builtByFor("collection", c.builderOwned),
-                  hasStatus: c.status === true,
-                  localized: c.localized === true,
-                  // Config-declared compound indexes name FIELDS.
-                  indexes: [...(c.indexes ?? [])],
-                }
-              )
-            )
+            withContributions(desiredCollectionTable(c, dialect))
           ),
           ...Object.values(desired.singles).map(s =>
             withContributions(

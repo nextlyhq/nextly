@@ -27,6 +27,7 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
+import { desiredCollectionTable } from "./desired-collection-table";
 import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
@@ -129,25 +130,12 @@ export async function previewDesiredSchema(
 
   const liveSnapshot = await introspect(db, dialect, managedTableNames);
 
-  // Forward Draft/Published flag — without it the desired snapshot omits
-  // `status`, the diff reports it as removed, and the rename detector pairs
-  // it with the newest user field, surfacing a SchemaChangeDialog that
-  // DROPs the column on confirm.
+  // The apply's own builder, so every key a desired collection carries
+  // (status, localized, declared indexes) reaches the preview too. A key the
+  // preview dropped showed as a change: a missing `status` as a column to
+  // drop, a missing declared index as an index to drop.
   const collectionTables = Object.values(desired.collections).map(c =>
-    buildDesiredTableFromFields(
-      c.tableName,
-      c.fields as unknown as Parameters<typeof buildDesiredTableFromFields>[1],
-      dialect,
-      // Forward `localized` so a localized collection's translatable columns are
-      // omitted from the preview's desired snapshot (they live in the companion
-      // `_locales` table); otherwise the diff reports them as missing and the
-      // SchemaChangeDialog tries to re-add them to the main table.
-      {
-        builtBy: builtByFor("collection", c.builderOwned),
-        hasStatus: c.status === true,
-        localized: c.localized === true,
-      }
-    )
+    desiredCollectionTable(c, dialect)
   );
   const singleTables = Object.values(desired.singles).map(s =>
     buildDesiredTableFromFields(

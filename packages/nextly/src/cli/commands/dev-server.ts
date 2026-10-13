@@ -522,6 +522,11 @@ export async function performAutoSync(
       tableName,
       fields: fields as DesiredCollection["fields"],
       status: hasStatus,
+      // The compound indexes the collection declares. Left out, the sync
+      // never creates one, and plans a drop of one a migration created.
+      ...(collection.indexes !== undefined
+        ? { indexes: collection.indexes }
+        : {}),
     };
 
     // Register in the live SchemaRegistry so subsequent adapter queries in

@@ -2935,6 +2935,12 @@ async function syncCodeFirstCollections(
       // this the main table is created WITH the translatable columns and no companion is
       // ever provisioned — the exact "no _locales table" failure on a fresh boot.
       localized: (collection as { localized?: boolean }).localized === true,
+      // The compound indexes the collection declares, created with its table.
+      // A table made here without them would carry none until a later push,
+      // and a declared unique index would enforce nothing in the meantime.
+      ...(collection.indexes !== undefined
+        ? { indexes: collection.indexes }
+        : {}),
     };
     work.desired.collections[slug] = desired;
 
