@@ -1539,16 +1539,20 @@ ${allColumnDefs.join(",\n")}
       if (oldField.index !== field.index) {
         const idxCol = toSnakeCase(field.name);
         if (field.index) {
+          // Judged by the column as it stands in the database, which the caller reads: a repeater
+          // or group is JSON on a table created now and text on one created before, and MySQL can
+          // index only the second. Without the live types the legacy rendering stands, as before.
           const toggleIndexSql = this.createIndexSql(
             tableName,
             idxCol,
-            this.mapFieldTypeToSQL(
-              field.type,
-              field.length,
-              field.options,
-              field.validation,
-              field
-            )
+            options?.liveColumnTypes?.get(idxCol) ??
+              this.mapFieldTypeToSQL(
+                field.type,
+                field.length,
+                field.options,
+                field.validation,
+                field
+              )
           );
           if (toggleIndexSql) statements.push(toggleIndexSql);
         } else {
