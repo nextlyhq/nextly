@@ -155,6 +155,10 @@ import type {
   PluginServiceName,
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
+import {
+  clearPluginDependencies,
+  publishPluginDependencies,
+} from "../plugins/plugin-dependencies";
 import { sealPluginSettings } from "../plugins/plugin-settings-provider";
 import {
   resolveDeclaredPlugins,
@@ -703,6 +707,9 @@ async function registerServicesOnce(
     unresolvedPermissions,
     pluginBootContributions,
   } = validateBootContributions(transformedConfig, transformedPlugins);
+  // Before any plugin context exists to read them: the dependencies `ctx.db`
+  // grants table access by are the ones this boot's plugins declare.
+  publishPluginDependencies(transformedPlugins);
 
   const {
     adapter: providedAdapter,
@@ -4244,6 +4251,7 @@ function clearActiveHookRegistry(): void {
   // Nothing is initialized in a process whose services have been cleared, and a
   // stale list would let the next reload treat a plugin as started.
   setInitializedPlugins([]);
+  clearPluginDependencies();
 }
 
 /**

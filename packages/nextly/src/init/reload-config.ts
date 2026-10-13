@@ -107,6 +107,7 @@ import {
 import type { HookOwner } from "../hooks/types";
 import { getInitializedPlugins } from "../plugins/initialized-plugins";
 import type { PluginDefinition } from "../plugins/plugin-context";
+import { publishPluginDependencies } from "../plugins/plugin-dependencies";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
@@ -1629,6 +1630,13 @@ async function applyReload(opts?: {
     committed = true;
     commitConfigHooks();
     commitFieldFunctions?.();
+    // The plugins each plugin may reach through `ctx.db`, as the reloaded
+    // config declares them; a context built at `init` reads them from here.
+    // Only when the config carries a plugin list: an absent key says nothing
+    // about which dependencies hold.
+    if (Array.isArray(newConfig.plugins)) {
+      publishPluginDependencies(newConfig.plugins);
+    }
     publishCollectionDbOptions(
       buildCollectionSyncPayload(newConfig.collections ?? [])
     );
