@@ -48,7 +48,8 @@ inside `packages/nextly`.
   A rule that throws denies. Relationship expansion (`judgeTarget`) asks a
   populated TARGET the same: no read rule means a person needs a grant, and a
   key needs `read-<target>` in its own scope before any rule; `users` and
-  media need `read-users` / `read-media` of a person or key, not of visitors.
+  media need `read-users` / `read-media` of a person or key; a visitor keeps
+  media and never gets a user.
   A row refused by name is withheld from a relationship too.
 - FIELD-level rules are different: they run whenever `overrideAccess` is
   false, user or not. "Which fields may this writer set" has a perfectly good

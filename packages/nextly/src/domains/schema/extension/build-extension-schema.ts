@@ -48,7 +48,12 @@ import {
 import { type SeedEntityTable, SchemaDraftStore } from "./draft";
 import { enumChecks } from "./enum-check";
 import { assertMysqlRowFits, foreignKeyColumnProblem } from "./naming";
-import { runExtensionHooks, type SchemaContribution } from "./run-hooks";
+import {
+  describeHookOwner,
+  type HookPosition,
+  runExtensionHooks,
+  type SchemaContribution,
+} from "./run-hooks";
 import type {
   DeclaredForeignKey,
   ExtensionColumn,
@@ -82,6 +87,13 @@ export interface ExtensionSchemaInput {
    * already have been derived from the pre-hook tables.
    */
   afterDrizzle?: readonly DrizzleSchemaHook[];
+  /**
+   * Run the schema hooks a second time and refuse the first whose output
+   * differs (`refuseNondeterministicHooks`). Set by the callers whose output
+   * is pushed or written into migrations; a caller that only inspects a
+   * schema leaves it off, so its hooks run once.
+   */
+  refuseNondeterministicHooks?: boolean;
 }
 
 export interface ExtensionSchema {
@@ -721,18 +733,80 @@ function compileAdoptedTables(
   return { adopted, adoptedRelations };
 }
 
-export async function buildExtensionSchema(
-  input: ExtensionSchemaInput
-): Promise<ExtensionSchema> {
-  const store = new SchemaDraftStore({
+/** A fresh draft store for one run of the input's hooks. */
+function draftStoreFor(input: ExtensionSchemaInput): SchemaDraftStore {
+  return new SchemaDraftStore({
     dialect: input.dialect,
     coreTableNames: input.coreTableNames,
     entities: input.entities,
     pluginPrefixes: input.pluginPrefixes,
     dependencies: input.dependencies,
   });
+}
 
-  await runExtensionHooks(store, input.plugins, input.app);
+/** Each hook, with the store's state as that hook left it. */
+type HookTrail = { hook: HookPosition; state: string }[];
+
+/** Run the input's hooks into `store`, recording the trail when asked. */
+async function runHooksInto(
+  store: SchemaDraftStore,
+  input: ExtensionSchemaInput,
+  trail?: HookTrail
+): Promise<void> {
+  await runExtensionHooks(
+    store,
+    input.plugins,
+    input.app,
+    trail === undefined
+      ? undefined
+      : hook => trail.push({ hook, state: store.state() })
+  );
+}
+
+/**
+ * Refuse a schema hook whose output differs between two builds of one
+ * configuration, naming it.
+ *
+ * A hook that reads the clock, a counter or a random value into a
+ * declaration produces a different schema on every build, so dev push plans
+ * the same change forever and `migrate:create` writes a migration nobody
+ * asked for. The hooks run again into a fresh store and the stores are
+ * compared after each one: everything before the first difference matched,
+ * so that hook is the one whose output moved.
+ */
+async function refuseNondeterministicHooks(
+  input: ExtensionSchemaInput,
+  first: HookTrail
+): Promise<void> {
+  const second: HookTrail = [];
+  await runHooksInto(draftStoreFor(input), input, second);
+  const moved = first.find((step, i) => step.state !== second[i]?.state);
+  if (moved === undefined) return;
+  const owner = describeHookOwner(moved.hook.owner);
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: `schema.extend.${owner}.${moved.hook.position}`,
+        code: "NONDETERMINISTIC_SCHEMA_HOOK",
+        message: `Schema hook ${moved.hook.position} of ${owner} declared a different schema on a second build of the same configuration. A hook must declare the same tables, columns and defaults every time it runs: derive nothing from the clock, a counter or a random value, or every push would plan a change nobody asked for.`,
+      },
+    ],
+    logContext: { owner, hookIndex: moved.hook.position },
+  });
+}
+
+export async function buildExtensionSchema(
+  input: ExtensionSchemaInput
+): Promise<ExtensionSchema> {
+  const store = draftStoreFor(input);
+
+  if (input.refuseNondeterministicHooks === true) {
+    const trail: HookTrail = [];
+    await runHooksInto(store, input, trail);
+    await refuseNondeterministicHooks(input, trail);
+  } else {
+    await runHooksInto(store, input);
+  }
 
   const tables = extensionTablesOf(store);
   const elementOwners = collectElementOwners(tables, input.dialect);
@@ -902,30 +976,4 @@ export function isRegisteredExtensionTable(
   dialect: SupportedDialect
 ): boolean {
   return getActiveExtensionSchema(dialect)?.owners.has(name) === true;
-}
-
-/**
- * Warn once when a hook is not deterministic.
- *
- * A hook reading `Date.now()` into a column default produces a different
- * schema on every build, so dev push proposes the same change forever and
- * never converges. Detected by building twice and comparing fingerprints —
- * which is why the fingerprint is of the compiled output.
- */
-export async function assertDeterministic(
-  input: ExtensionSchemaInput,
-  first: ExtensionSchema,
-  warn: (message: string) => void
-): Promise<void> {
-  const second = await buildExtensionSchema(input);
-  if (second.fingerprint === first.fingerprint) return;
-
-  const changed = [...first.owners.entries()]
-    .filter(([name]) => !second.owners.has(name))
-    .map(([name]) => name);
-  warn(
-    `A schema hook is not deterministic: two builds of the same config produced different schemas${
-      changed.length > 0 ? ` (${changed.join(", ")})` : ""
-    }. Dev push will churn.`
-  );
 }

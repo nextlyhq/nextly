@@ -31,6 +31,7 @@ import {
   upload,
 } from "../../../config";
 import { getDialectTables } from "../../../database/index";
+import { container } from "../../../di/container";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -136,6 +137,7 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
           }),
           relationship({ name: "chain", relationTo: "chains" }),
           relationship({ name: "author", relationTo: "users" }),
+          relationship({ name: "reviewer", relationTo: "users" }),
           upload({ name: "image", relationTo: "media" }),
           group({
             name: "box",
@@ -273,6 +275,7 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
     ],
     chain: chainId,
     author,
+    reviewer: author,
     image: "media-1",
     box: { nested: pageId },
     lines: [{ item: pageId }],
@@ -460,6 +463,54 @@ describe.each(getConfiguredTestDialects())(
         expect(
           shows((await readRef(fx, keyOf("refs", "users"))).author, TITLE.user)
         ).toBe(true);
+      });
+
+      it("asks once per expansion whether the caller may read users, however many fields relate to them", async () => {
+        const fx = await boot(dialect);
+        const rbac = container.get<{
+          checkAccess: (query: {
+            operation: string;
+            resource: string;
+          }) => Promise<boolean>;
+        }>("rbacAccessControlService");
+        const checks = vi.spyOn(rbac, "checkAccess");
+        try {
+          const data = await readRef(fx, as(fx.userReader));
+          // Both fields relate to the same user, and both carry it.
+          expect(shows(data.author, TITLE.user)).toBe(true);
+          expect(shows(data.reviewer, TITLE.user)).toBe(true);
+          const usersReads = checks.mock.calls.filter(
+            ([query]) =>
+              query.operation === "read" && query.resource === "users"
+          );
+          expect(usersReads).toHaveLength(1);
+        } finally {
+          checks.mockRestore();
+        }
+      });
+
+      it("answers as the direct read's gate does when no access-control service is registered", async () => {
+        // That gate falls back to the caller's database grants; a
+        // relationship that admitted the person instead served rows the same
+        // caller was refused by name.
+        const fx = await boot(dialect);
+        const realHas = container.has.bind(container);
+        const has = vi
+          .spyOn(container, "has")
+          .mockImplementation(
+            name => name !== "rbacAccessControlService" && realHas(name)
+          );
+        try {
+          expect(
+            shows((await readRef(fx, as(fx.stranger))).plain, TITLE.page)
+          ).toBe(false);
+          // The control: a person holding the grant still reads it.
+          expect(
+            shows((await readRef(fx, as(fx.pageReader))).plain, TITLE.page)
+          ).toBe(true);
+        } finally {
+          has.mockRestore();
+        }
       });
 
       it("judges a Single's relationship and upload the same way", async () => {
@@ -738,14 +789,22 @@ describe.each(getConfiguredTestDialects())(
         expect(shows(both, TITLE.page)).toBe(true);
       });
 
-      it("leaves a visitor's related users and media as before", async () => {
-        // No route lets a visitor read a system resource by a grant, and their
-        // direct reads of media need none, so a visitor's populated media and
-        // users are left as they were.
+      it("leaves a visitor the related media, and withholds a related user", async () => {
+        // Pages served to the public embed the images they reference, so a
+        // visitor keeps media. No visitor reads a user row directly, and a
+        // user row carries a person's address, so it is withheld.
         const fx = await boot(dialect);
         const visitor = await readRef(fx, VISITOR);
         expect(shows(visitor.image, TITLE.media)).toBe(true);
-        expect(shows(visitor.author, TITLE.user)).toBe(true);
+        expect(shows(visitor.author, TITLE.user)).toBe(false);
+        // The control: a read holding a bypass still populates the user, as a
+        // server-rendered page's read does.
+        expect(
+          shows(
+            (await readRef(fx, { ...VISITOR, overrideAccess: true })).author,
+            TITLE.user
+          )
+        ).toBe(true);
       });
     });
   }

@@ -37,6 +37,11 @@ type Tables = Pick<
  *
  * A new password satisfies any admin-set must-change requirement, so the
  * account is not sent through the first-sign-in change again.
+ *
+ * Takes a hash its caller computed. Every path that sets a password hashes
+ * first, with core's hasher or an app's configured `passwordHasher`, so this
+ * write imposes no format of its own; the one write whose hash comes from
+ * outside, `updatePasswordHash`, checks it before calling this.
  */
 export function passwordColumns(
   passwordHash: string

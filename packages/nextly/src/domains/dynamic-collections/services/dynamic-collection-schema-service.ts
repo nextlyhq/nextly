@@ -193,6 +193,23 @@ const NO_REFERENTIAL_ACTION_CHANGE: ReferentialActionChange = {
 };
 
 /**
+ * Whether a Builder field's column is unique.
+ *
+ * A one-to-one relationship is unique by its cardinality, not by anything the author ticks, so
+ * the flag alone does not decide it. Asked in one place because the answer has to be the same
+ * whether the column arrives with its table or is added to one that already exists (a table
+ * that gained its one-to-one by an edit was not enforcing the cardinality it declared), and
+ * whether a later save keeps the constraint its table holds.
+ */
+export function builderColumnIsUnique(field: FieldDefinition): boolean {
+  return (
+    field.unique === true ||
+    (field.type === "relationship" &&
+      field.options?.relationType === "oneToOne")
+  );
+}
+
+/**
  * Field types whose value is a structured object or array, stored in the
  * dialect's JSON type as the descriptor names it. See `newColumnType`.
  */
@@ -443,11 +460,7 @@ export class DynamicCollectionSchemaService {
    * that gained its one-to-one by an edit was not enforcing the cardinality it declared.
    */
   private columnIsUnique(field: FieldDefinition): boolean {
-    return (
-      field.unique === true ||
-      (field.type === "relationship" &&
-        field.options?.relationType === "oneToOne")
-    );
+    return builderColumnIsUnique(field);
   }
 
   /**

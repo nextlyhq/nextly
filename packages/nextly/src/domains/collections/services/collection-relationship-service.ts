@@ -44,6 +44,7 @@ import {
   boundReaches,
   TRUSTS_EVERY_COLLECTION,
 } from "../../../services/collections/trust-grant";
+import { hasPermission } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { detachData } from "../../../shared/lib/detach";
@@ -1572,17 +1573,25 @@ export class CollectionRelationshipService extends BaseService {
       // A caller that holds a bypass and REFUSED this target asked to be read
       // as the caller would: the grant decides, and a route serving the public
       // holds none, so its refused rows stay withheld.
-      if (boundRefuses(access, targetCollection)) {
-        return canReadSystemResource(
-          targetCollection.toLowerCase(),
-          callerId(access),
-          access.authenticatedScope
-        );
-      }
-      // A read holding no bypass is asked what its direct read asks. Answered
-      // "yes" for everyone before, which let a key or a person refused `users`
-      // by name read a post's author through the relationship.
-      return identifiedCallerMayRead(access, targetCollection.toLowerCase());
+      //
+      // Kept with the expansion's other verdicts, by target: the caller and
+      // its bypass do not change within one expansion, and a schema with
+      // several relationships to `users` asked the same question once per
+      // field otherwise, each a permission lookup.
+      return this.memoizedVerdict(access, targetCollection, async () => {
+        if (boundRefuses(access, targetCollection)) {
+          return canReadSystemResource(
+            targetCollection.toLowerCase(),
+            callerId(access),
+            access.authenticatedScope
+          );
+        }
+        // A read holding no bypass is asked what its direct read asks.
+        // Answered "yes" for everyone before, which let a key or a person
+        // refused `users` by name read a post's author through the
+        // relationship.
+        return identifiedCallerMayRead(access, targetCollection.toLowerCase());
+      });
     }
 
     const accessService = this.resolveAccessService();
@@ -1697,13 +1706,24 @@ export class CollectionRelationshipService extends BaseService {
     targetCollection: string,
     access: RelatedRowAccess
   ): Promise<boolean> {
+    return this.memoizedVerdict(access, targetCollection, () =>
+      this.judgeTarget(user, targetCollection, access.authenticatedScope)
+    );
+  }
+
+  /**
+   * The verdict this expansion already holds for the target, or `decide`'s,
+   * kept for the rest of the expansion. Pending verdicts are kept too, so
+   * fields fetched concurrently share one question rather than each asking.
+   */
+  private memoizedVerdict(
+    access: RelatedRowAccess,
+    targetCollection: string,
+    decide: () => Promise<boolean>
+  ): Promise<boolean> {
     const cached = access.targetVerdicts?.get(targetCollection);
     if (cached) return cached;
-    const pending = this.judgeTarget(
-      user,
-      targetCollection,
-      access.authenticatedScope
-    );
+    const pending = decide();
     access.targetVerdicts?.set(targetCollection, pending);
     return pending;
   }
@@ -1780,7 +1800,15 @@ export class CollectionRelationshipService extends BaseService {
       return false;
     }
 
-    if (!rbac) return true;
+    // Without the access-control service, the answer the direct read's gate
+    // gives without it: a key's grant, already asked above, and a person's
+    // database grants. Admitting the person here let a relationship serve rows
+    // the same caller was refused by name.
+    if (!rbac) {
+      return authenticatedScope?.actorType === "apiKey"
+        ? true
+        : hasPermission(user.id, "read", targetCollection);
+    }
     const codeAccess = rbac.getRegisteredAccess(targetCollection);
 
     if (authenticatedScope?.actorType === "apiKey") {

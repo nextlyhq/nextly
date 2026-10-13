@@ -1,10 +1,15 @@
-import { describe, expect, it } from "vitest";
+import bcrypt from "bcryptjs";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   hashPassword,
+  isPasswordHash,
   verifyPassword,
   validatePasswordStrength,
 } from "../password";
+
+/** A raw password a shape test once stored as given: long, with a colon. */
+const COLON_PASSPHRASE = "correct-horse:battery-staple-and-more-words";
 
 describe("password utilities", () => {
   describe("hashPassword()", () => {
@@ -510,6 +515,36 @@ describe("password utilities", () => {
         hashedPassword
       );
       expect(isAuthenticatedWrong).toBe(false);
+    });
+  });
+
+  describe("a stored value that is not a hash", () => {
+    it("is refused without being compared, even when it is the password given", async () => {
+      // Refused by rule, not left to bcrypt to reject: the comparison is
+      // never asked about a value that is not a hash.
+      const compare = vi.spyOn(bcrypt, "compare");
+      try {
+        expect(await verifyPassword(COLON_PASSPHRASE, COLON_PASSPHRASE)).toBe(
+          false
+        );
+        expect(compare).not.toHaveBeenCalled();
+        // The control: a real hash is compared, and the right password
+        // matches it.
+        const hash = await hashPassword(COLON_PASSPHRASE);
+        expect(await verifyPassword(COLON_PASSPHRASE, hash)).toBe(true);
+        expect(compare).toHaveBeenCalledTimes(1);
+      } finally {
+        compare.mockRestore();
+      }
+    });
+
+    it("is told from a hash whatever it looks like", async () => {
+      expect(isPasswordHash(await hashPassword(COLON_PASSPHRASE))).toBe(true);
+      expect(isPasswordHash(COLON_PASSPHRASE)).toBe(false);
+      // A bcrypt prefix is not enough: the whole hash is.
+      expect(isPasswordHash("$2a$12$invalidhashvalue")).toBe(false);
+      expect(isPasswordHash("")).toBe(false);
+      expect(isPasswordHash(null)).toBe(false);
     });
   });
 });

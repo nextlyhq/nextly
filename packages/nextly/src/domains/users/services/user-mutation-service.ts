@@ -1163,13 +1163,14 @@ export class UserMutationService extends BaseService {
       //
       // So both paths pay the hash, both leave at the same time, and the
       // enumeration property the endpoint is designed around holds.
+      // Every password given here is a raw one, and is hashed whatever it
+      // looks like. Guessing from its shape whether it was already a hash
+      // stored a long password containing a colon as plain text. A caller
+      // holding a real hash sets it through `updatePasswordHash`, the one
+      // write that takes a hash, and which refuses anything else.
       let passwordHash: string | null = null;
       if (userData.password && userData.password.length > 0) {
-        const looksPlain =
-          userData.password.length < 32 || !userData.password.includes(":");
-        passwordHash = looksPlain
-          ? await hashPassword(userData.password)
-          : userData.password;
+        passwordHash = await hashPassword(userData.password);
       }
 
       // Account-enumeration sensitive: the public message stays generic
