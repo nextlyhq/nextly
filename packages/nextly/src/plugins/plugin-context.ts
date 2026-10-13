@@ -10,7 +10,7 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import type { AnyRelations } from "drizzle-orm";
+import { getTableName, type AnyRelations, type Table } from "drizzle-orm";
 
 import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import type { CollectionConfig } from "../collections/config/define-collection";
@@ -20,7 +20,10 @@ import {
   type JobsNamespace,
 } from "../direct-api/namespaces/jobs";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
-import type { SchemaOwner } from "../domains/schema/extension/types";
+import type {
+  ExtensionColumn,
+  SchemaOwner,
+} from "../domains/schema/extension/types";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
 import { NextlyError } from "../errors/nextly-error";
@@ -50,6 +53,7 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
+import type { ContributedColumn } from "./database/access";
 import {
   createPluginDatabase,
   type PluginDatabase,
@@ -484,8 +488,9 @@ export interface PluginContext {
 
   /**
    * @experimental Typed, owner-checked access to the tables this plugin
-   * declared (`contributes.schema`) and its dependencies' tables. The same on
-   * every dialect; `db.transaction` makes several writes atomic.
+   * declared (`contributes.schema`), its dependencies' tables, and the columns
+   * it contributed to other tables (`db.contributed`). The same on every
+   * dialect; `db.transaction` makes several writes atomic.
    *
    * `db.raw` is the handle this property used to be: Drizzle's fluent builder
    * (`select`, `insert`, `update`, `delete`) and a `transaction`, with no
@@ -1009,6 +1014,29 @@ export interface PluginDefinition {
   onReady?: (context: PluginContext) => Promise<void> | void;
 
   /**
+   * @experimental Runs when the plugin is INSTALLED, after its migrations.
+   *
+   * Never called during an ordinary boot, so it is the right place for
+   * one-time setup — seeding a row, registering with an external service —
+   * that would otherwise run on every start. Must be idempotent regardless: an
+   * install can be retried after a failure part-way through.
+   */
+  onInstall?: (context: PluginContext) => Promise<void> | void;
+
+  /**
+   * @experimental Runs when the plugin is UNINSTALLED, before its down
+   * migrations, so its tables are still readable.
+   *
+   * `keepData` tells it which kind of uninstall this is: with data kept, the
+   * tables survive and an external deregistration may still be wanted; without
+   * it, this is the last moment anything can read them.
+   */
+  onUninstall?: (
+    context: PluginContext,
+    opts: { keepData: boolean }
+  ) => Promise<void> | void;
+
+  /**
    * @public Teardown on shutdown / HMR / test teardown.
    * Invocation is wired.
    */
@@ -1146,6 +1174,37 @@ export const PLUGIN_SERVICE_NAMES = [
 ] as const;
 
 /**
+ * Every column contributed to a table its contributor does not own, by
+ * table SQL name, with the contributor each carries: the hidden columns on
+ * entity and extendable core tables, and those on extension tables.
+ */
+function contributedColumnsByTable(
+  schema: ReturnType<typeof getActiveExtensionSchema>
+): Map<string, ContributedColumn[]> {
+  const byTable = new Map<string, ContributedColumn[]>();
+  const add = (table: string, column: ExtensionColumn): void => {
+    const list = byTable.get(table) ?? [];
+    list.push({
+      name: column.name,
+      key: column.key,
+      contributedBy: column.contributedBy,
+      spec: column,
+    });
+    byTable.set(table, list);
+  };
+  for (const [table, columns] of schema?.entityColumns ?? []) {
+    for (const column of columns) add(table, column);
+  }
+  const extensionColumns = (schema?.tables ?? []).flatMap(table =>
+    table.columns
+      .filter(column => column.contributedBy !== undefined)
+      .map(column => ({ table: table.name, column }))
+  );
+  for (const { table, column } of extensionColumns) add(table, column);
+  return byTable;
+}
+
+/**
  * Compose the plugin database surface for one plugin.
  *
  * Everything the surface needs about the schema is read through a closure
@@ -1189,6 +1248,20 @@ function buildPluginDatabase(
       // plugin's check does not.
       ...(active()?.adopted ?? {}),
     }),
+    // What `ctx.db.contributed` may reach: every column contributed to a
+    // table its contributor does not own, with the contributor each carries —
+    // the hidden columns on entity and extendable core tables, and those on
+    // extension tables (an app's on a plugin's table, a plugin's on a
+    // dependency's). The access rule decides which of them a caller may use.
+    contributions: () => contributedColumnsByTable(active()),
+    // The runtime table an entity or core table queries through, found in
+    // the relations config the registry assembles from every registered
+    // table — keyed differently for core and dynamic tables, so matched by
+    // the table's SQL name rather than by key.
+    entityTable: tableName =>
+      Object.values(relations()).find(
+        entry => getTableName(entry.table as Table) === tableName
+      )?.table,
     tableList: () => [
       ...(active()?.tables ?? []).map(table => ({
         name: table.name,
