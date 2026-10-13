@@ -205,6 +205,13 @@ describe("a provider's answer", () => {
           "cancelled",
         ] as const
       ).map(status => ({ ...valid, status })),
+      // A payment is for a positive amount; no provider holds one for nothing.
+      {
+        ...valid,
+        status: "pending",
+        amount: { amount: 0, currency: "USD" },
+        amountCaptured: { amount: 0, currency: "USD" },
+      },
     ];
     for (const answer of refusals) {
       expect(
@@ -257,6 +264,22 @@ describe("starting a payment through commerce", () => {
     }
     return undefined;
   };
+
+  it("refuses a request outside the contract before calling the provider", async () => {
+    const { spy, calls } = counted();
+    for (const request of [
+      start(0),
+      start(-100),
+      { ...start(100), operationId: "has space" },
+      { ...start(100), reference: "" },
+    ]) {
+      expect(
+        await asyncCodeOf(() => startProviderPayment(spy, request)),
+        JSON.stringify(request)
+      ).toBe("VALIDATION_ERROR");
+    }
+    expect(calls).toHaveLength(0);
+  });
 
   it("refuses a total above the provider's limit before calling it", async () => {
     const { spy, calls } = counted({

@@ -39,6 +39,7 @@ export {
 export {
   assertPaymentProvider,
   parseProviderAnswer,
+  parseStartPaymentInput,
   paymentAmountRefusal,
   paymentProviderCapabilitiesSchema,
   providerPaymentSchema,

@@ -120,6 +120,18 @@ export async function paymentProviderContract(
     return { reference, payment: confirmed };
   }
 
+  // An answer about a payment must be about that payment: a structurally valid
+  // answer for another one would corrupt the record commerce keeps of it.
+  function expectAnswerFor(answer: ProviderPayment, started: ProviderPayment) {
+    expectContract(
+      answer.providerReference === started.providerReference &&
+        answer.reference === started.reference &&
+        answer.amount.amount === started.amount.amount &&
+        answer.amount.currency === started.amount.currency,
+      "the answer is for the payment asked about"
+    );
+  }
+
   // What a repeated confirm or capture must leave behind: the amount captured
   // once, read back from the provider rather than taken from the answer.
   async function expectCapturedOnce(
@@ -274,6 +286,7 @@ export async function paymentProviderContract(
       };
       await p.confirm(request); // the answer is lost
       const repeated = asPayment(await p.confirm(request));
+      expectAnswerFor(repeated, started);
       expectContract(
         repeated.status === "paid",
         `the payment is paid, not ${repeated.status}`
@@ -292,6 +305,7 @@ export async function paymentProviderContract(
         paymentMethod: options.paymentMethods.declines,
       })
     );
+    expectAnswerFor(declined, started);
     expectContract(
       declined.status === "failed",
       `a declined payment is failed, not ${declined.status}`
@@ -320,6 +334,18 @@ export async function paymentProviderContract(
       expectContract(
         again.eventId === event.eventId,
         "the same delivery has the same event id"
+      );
+      const other = asEvent(
+        await p.verifyWebhook(
+          await signWebhook({
+            type: "payment.updated",
+            providerReference: started.providerReference,
+          })
+        )
+      );
+      expectContract(
+        other.eventId !== event.eventId,
+        "another event has another id, so commerce does not drop it as a repeat"
       );
 
       const tampered = await expectRefusal(
@@ -362,6 +388,9 @@ export async function paymentProviderContract(
           atLimit.amount.amount === limit,
           "a payment at the limit starts"
         );
+        // No amount exists above the largest safe one, so a provider whose
+        // limit is that has nothing to refuse.
+        if (limit >= Number.MAX_SAFE_INTEGER) return;
         const reference = unique("pay");
         const error = await expectRefusal(
           () =>

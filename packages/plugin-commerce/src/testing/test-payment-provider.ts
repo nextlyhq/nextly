@@ -6,9 +6,9 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { assertOperationId } from "../contracts/operation";
 import {
   assertPaymentProvider,
+  parseStartPaymentInput,
   paymentAmountRefusal,
   providerWebhookEventSchema,
-  startPaymentInputSchema,
   type ConfirmPaymentInput,
   type PaymentOperationInput,
   type PaymentProvider,
@@ -223,17 +223,8 @@ export function createTestPaymentProvider(
     }
   }
 
-  function start(input: StartPaymentInput): ProviderPayment {
-    const parsed = startPaymentInputSchema.safeParse(input);
-    if (!parsed.success) {
-      throw NextlyError.validation({
-        errors: parsed.error.issues.map(issue => ({
-          path: issue.path.join("."),
-          code: "INVALID",
-          message: issue.message,
-        })),
-      });
-    }
+  function start(request: StartPaymentInput): ProviderPayment {
+    const input = parseStartPaymentInput(request);
     if (input.capture === "later" && !capabilities.captureLater) {
       throw commerceError("COMMERCE_UNSUPPORTED_OPERATION", {
         provider: id,

@@ -55,6 +55,15 @@ describe("the payment contract suite against a provider offering no optional ope
   });
 });
 
+describe("the payment contract suite against a provider whose limit is the largest safe amount", async () => {
+  // No amount above it can be made, so the suite checks the limit itself and
+  // leaves out the payment above it rather than failing to build one.
+  const cases = await suiteFor({
+    capabilities: { maxAmounts: { USD: Number.MAX_SAFE_INTEGER } },
+  });
+  for (const c of cases) it(c.name, c.run);
+});
+
 describe("the payment contract suite catches a broken provider", () => {
   // Each provider below breaks one rule of the contract. The suite must fail
   // the case that guards that rule; otherwise the case proves nothing.
@@ -149,6 +158,34 @@ describe("the payment contract suite catches a broken provider", () => {
     });
     expect(failed).toContain(
       "refunds once when the answer to a refund is lost, and finds the refund by commerce's reference"
+    );
+  });
+
+  it("fails a provider whose confirm answer names another payment", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      confirm: async input => ({
+        ...(await p.confirm(input)),
+        providerReference: "pay_elsewhere",
+      }),
+    }));
+    expect(failed).toContain(
+      "charges once when the answer to a confirm is lost and the confirm is repeated"
+    );
+  });
+
+  it("fails a provider that gives every webhook the same event id", async () => {
+    // Commerce records an event once by its id, so one id for every delivery
+    // would drop every update after the first.
+    const failed = await failingCases(p => ({
+      ...p,
+      verifyWebhook: async input => ({
+        ...(await p.verifyWebhook(input)),
+        eventId: "evt_always",
+      }),
+    }));
+    expect(failed).toContain(
+      "verifies a signed webhook, and refuses a tampered or unsigned one"
     );
   });
 

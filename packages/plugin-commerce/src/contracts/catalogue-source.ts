@@ -122,7 +122,11 @@ export interface CatalogueSource {
       readonly quantity: number;
     }[];
   }): Promise<readonly PricedLine[]>;
-  /** Browse the catalogue a page at a time, optionally narrowed by a search. */
+  /**
+   * Browse the catalogue a page at a time, optionally narrowed by a search.
+   * Each item is listed once; every page but the last holds at least one
+   * item, and a cursor is handed out once, so a listing always moves forward.
+   */
   list?(input: {
     readonly limit: number;
     readonly cursor?: string | null;

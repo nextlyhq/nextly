@@ -1,3 +1,4 @@
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
 import { commerceError } from "../errors";
@@ -367,17 +368,19 @@ export function requirePaymentAmount(
 /**
  * Start a payment with a provider: the way commerce starts every payment.
  *
- * Its preconditions run before the provider is called, so a payment it cannot
- * take (a currency it does not charge in, more than it accepts, a hold it
- * cannot capture) creates nothing at the provider; its answer is then held to
- * the contract before anything reads it.
+ * Its preconditions run before the provider is called, so a request outside
+ * the contract (a zero amount, a malformed operation key) or a payment the
+ * provider cannot take (a currency it does not charge in, more than it
+ * accepts, a hold it cannot capture) creates nothing at the provider; its
+ * answer is then held to the contract before anything reads it.
  *
  * @experimental
  */
 export async function startProviderPayment(
   provider: PaymentProvider,
-  input: StartPaymentInput
+  request: StartPaymentInput
 ): Promise<ProviderPayment> {
+  const input = parseStartPaymentInput(request);
   if (input.capture === "later") requirePaymentOperation(provider, "capture");
   requirePaymentAmount(provider, input.amount);
   return parseProviderAnswer(
@@ -500,6 +503,9 @@ export const providerPaymentSchema = z
       p.amountRefunded.amount <= p.amountCaptured.amount,
     { message: "0 <= refunded <= captured <= amount" }
   )
+  .refine(p => p.amount.amount > 0, {
+    message: "a payment is a positive amount",
+  })
   .refine(p => (p.status === "paid") === p.amountCaptured.amount > 0, {
     message: "a paid payment has money captured, and no other has any",
   });
@@ -566,3 +572,24 @@ export const startPaymentInputSchema = z.strictObject({
   email: z.email().optional(),
   description: z.string().max(1000).optional(),
 });
+
+/**
+ * The start request held to `startPaymentInputSchema`: what commerce checks
+ * before calling a provider, and what a provider checks at its own boundary.
+ *
+ * @experimental
+ * @throws `VALIDATION_ERROR` naming each field outside the contract.
+ */
+export function parseStartPaymentInput(input: unknown): StartPaymentInput {
+  const parsed = startPaymentInputSchema.safeParse(input);
+  if (!parsed.success) {
+    throw NextlyError.validation({
+      errors: parsed.error.issues.map(issue => ({
+        path: issue.path.join("."),
+        code: "INVALID",
+        message: issue.message,
+      })),
+    });
+  }
+  return parsed.data;
+}

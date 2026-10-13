@@ -163,10 +163,12 @@ export async function catalogueSourceContract(
       const list = source.list?.bind(source);
       expectContract(list !== undefined, "the source lists");
       const seen = new Set<string>();
+      const cursors = new Set<string>();
       let cursor: string | null = null;
-      // A bound on pages, so a source whose cursor never ends fails the case
-      // instead of hanging it.
-      for (let page = 0; page < 1000; page++) {
+      // No bound on the number of pages, so a catalogue of any size passes.
+      // The listing still always ends or fails: every page but the last adds
+      // an item never listed before, and a cursor handed out twice is a loop.
+      do {
         const answer = await list({ limit: 2, cursor });
         expectContract(
           answer.items.length <= 2,
@@ -181,8 +183,16 @@ export async function catalogueSourceContract(
         }
         cursor = answer.nextCursor;
         if (cursor === null) break;
-      }
-      expectContract(cursor === null, "the listing ends");
+        expectContract(
+          answer.items.length > 0,
+          "a page before the last holds at least one item"
+        );
+        expectContract(
+          !cursors.has(cursor),
+          "a cursor is handed out once, so the listing moves forward"
+        );
+        cursors.add(cursor);
+      } while (cursor !== null);
       const known = [fixtures.listed, fixtures.onRequest, fixtures.soldFrom];
       for (const reference of known) {
         if (reference === undefined) continue;
@@ -249,16 +259,23 @@ export async function catalogueSourceContract(
         await stock.report({
           operationId,
           kind: "hold",
-          reference: fixtures.listed,
+          reference: soldFrom,
           quantity: 1,
           orderReference: unique("order"),
         });
+        // The refused report is a sale, which would lower the watched item's
+        // stock, so a source that applies it before refusing is caught.
+        const before = await available(source, soldFrom);
+        expectContract(
+          before > 0,
+          `the fixture item ${soldFrom} has stock left`
+        );
         const error = await expectRefusal(
           () =>
             stock.report({
               operationId,
-              kind: "release",
-              reference: fixtures.listed,
+              kind: "sale",
+              reference: soldFrom,
               quantity: 1,
               orderReference: unique("order"),
             }),
@@ -267,6 +284,11 @@ export async function catalogueSourceContract(
         expectContract(
           NextlyError.isCode(error, "COMMERCE_OPERATION_KEY_REUSED"),
           `the refusal is COMMERCE_OPERATION_KEY_REUSED, not ${describeError(error)}`
+        );
+        const after = await available(source, soldFrom);
+        expectContract(
+          after === before,
+          `a refused report changes no stock (${before} before, ${after} after)`
         );
       }
     );

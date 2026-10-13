@@ -4,6 +4,7 @@ import type {
   CatalogueItem,
   CatalogueSource,
 } from "../contracts/catalogue-source";
+import { commerceError } from "../errors";
 import { money } from "../money/money";
 
 import { catalogueSourceContract } from "./catalogue-source-contract";
@@ -75,6 +76,36 @@ describe("the catalogue contract suite's options", () => {
           createInMemoryCatalogueSource({ currency: "USD", items }).source,
       })
     ).rejects.toBeInstanceOf(ContractViolation);
+  });
+});
+
+describe("the catalogue contract suite against a large catalogue", () => {
+  it("lists every item however many pages it takes", async () => {
+    // At two items a page, 2,100 items take 1,050 pages: more than any fixed
+    // page bound a suite might pick, which a correct source must still pass.
+    const many: CatalogueItem[] = Array.from({ length: 2_100 }, (_, i) => ({
+      reference: `part-${i}`,
+      name: `Part ${i}`,
+      price: { kind: "listed", unitPrice: money(100 + i, "USD") },
+      stock: { kind: "untracked" },
+    }));
+    const cases = await catalogueSourceContract({
+      currency: "USD",
+      fixtures: {
+        listed: "drill-press",
+        onRequest: "custom-rig",
+        unknown: "no-such-item",
+        soldFrom: "drill-press",
+      },
+      create: () =>
+        createInMemoryCatalogueSource({
+          currency: "USD",
+          items: [...items, ...many],
+        }).source,
+    });
+    const listing = cases.find(c => c.name.startsWith("lists every item"));
+    expect(listing).toBeDefined();
+    await expect(listing?.run()).resolves.toBeUndefined();
   });
 });
 
@@ -153,6 +184,51 @@ describe("the catalogue contract suite catches a broken source", () => {
         },
       };
     });
+    expect(failed).toContain("lists every item a page at a time, each once");
+  });
+
+  it("fails a source that records a conflicting report before refusing its reused operation id", async () => {
+    const failed = await failingCases(s => {
+      const stock = s.stock;
+      if (!stock) return s;
+      const reports = new Map<string, string>();
+      let n = 0;
+      return {
+        ...s,
+        stock: {
+          report: async input => {
+            const report = `${input.kind}:${input.reference}:${input.quantity}:${input.orderReference}`;
+            const seen = reports.get(input.operationId);
+            reports.set(input.operationId, report);
+            if (seen !== undefined && seen !== report) {
+              await stock.report({ ...input, operationId: `late-${++n}` });
+              throw commerceError("COMMERCE_OPERATION_KEY_REUSED");
+            }
+            return stock.report(input);
+          },
+          confirm: input => stock.confirm(input),
+        },
+      };
+    });
+    expect(failed).toContain(
+      "refuses a stock report that reuses another report's operation id"
+    );
+  });
+
+  it("fails a source whose listing cursor goes round in a loop", async () => {
+    const failed = await failingCases(s => ({
+      ...s,
+      list: async () => ({ items: [], nextCursor: "again" }),
+    }));
+    expect(failed).toContain("lists every item a page at a time, each once");
+  });
+
+  it("fails a source whose listing hands out empty pages without end", async () => {
+    let n = 0;
+    const failed = await failingCases(s => ({
+      ...s,
+      list: async () => ({ items: [], nextCursor: String(++n) }),
+    }));
     expect(failed).toContain("lists every item a page at a time, each once");
   });
 

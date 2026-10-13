@@ -55,6 +55,27 @@ describe("currencies", () => {
     }
     expect(codeOf(() => minorUnits("ABC"))).toBe("COMMERCE_UNKNOWN_CURRENCY");
   });
+
+  it("accepts ISO 4217's current currencies and refuses withdrawn ones the engine still lists", () => {
+    // Node 24.21's ICU still lists HRK (replaced by EUR in 2023), BGN (by EUR
+    // in 2026), ANG (by XCG), SLL (by SLE), ZWL (by ZWG) and CUC; XAD is a fund
+    // code added to the list in 2026.
+    for (const code of ["HRK", "BGN", "ANG", "SLL", "ZWL", "CUC", "XAD"]) {
+      expect(isCurrencyCode(code), code).toBe(false);
+    }
+    for (const code of [
+      "EUR",
+      "XCG",
+      "SLE",
+      "ZWG",
+      "VED",
+      "VES",
+      "MRU",
+      "STN",
+    ]) {
+      expect(isCurrencyCode(code), code).toBe(true);
+    }
+  });
 });
 
 describe("money", () => {
