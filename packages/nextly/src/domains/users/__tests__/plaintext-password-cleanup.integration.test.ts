@@ -33,8 +33,13 @@ const COLON_PLAIN = "Correct-Horse:Battery-Staple:2026-Phrase";
 const NEW_PASSWORD = "Str0ng-P@ssw0rd!";
 // What other password hashers write: an app's own `passwordHasher`, or a hash
 // made elsewhere that account creation once accepted. Neither is plain text.
-const MODULAR_CRYPT =
-  "$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaA";
+const MODULAR_CRYPT = {
+  argon2:
+    "$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaA",
+  scrypt:
+    "$scrypt$ln=16,r=8,p=1$c2FsdHNhbHRzYWx0$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaA",
+  pbkdf2: "$pbkdf2-sha256$29000$c2FsdHNhbHQ$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNo",
+};
 const HEX_SALT_AND_DIGEST = `${"a1".repeat(16)}:${"9f".repeat(64)}`;
 
 interface TestDb {
@@ -68,8 +73,8 @@ async function seed(t: TestNextly): Promise<Record<string, string | null>> {
     hashed: await hashPassword(NEW_PASSWORD),
     short: SHORT_PLAIN,
     colon: COLON_PLAIN,
-    argon2: MODULAR_CRYPT,
-    scrypt: HEX_SALT_AND_DIGEST,
+    ...MODULAR_CRYPT,
+    hexpair: HEX_SALT_AND_DIGEST,
     none: null,
   };
   for (const [kind, passwordHash] of Object.entries(stored)) {
@@ -169,7 +174,7 @@ describe.each(getConfiguredTestDialects())(
       }
       // The controls: a hash, another hasher's hashes and an account with no
       // password are untouched, and keep their sessions.
-      for (const kind of ["hashed", "argon2", "scrypt"]) {
+      for (const kind of ["hashed", "argon2", "scrypt", "pbkdf2", "hexpair"]) {
         expect(await account(t, kind)).toEqual({
           passwordHash: stored[kind],
           sessions: 1,
