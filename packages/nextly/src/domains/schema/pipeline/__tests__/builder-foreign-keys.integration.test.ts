@@ -92,6 +92,20 @@ const authorFields = (rank: "text" | "number") => [
   { name: "name", type: "text" },
   { name: "rank", type: rank },
 ];
+
+/**
+ * A relationship from one author to another, emptied when that author goes:
+ * added to the authors, it changes the table the posts cascade from.
+ */
+const mentorField = (pair: Pair) => ({
+  name: "mentor",
+  type: "relationship",
+  options: {
+    target: pair.authorsSlug,
+    relationType: "manyToOne",
+    onDelete: "set null",
+  },
+});
 const postFields = (
   pair: Pair,
   score: "text" | "number",
@@ -177,17 +191,17 @@ function save(target: Target, desired: DesiredSchema) {
   });
 }
 
-/** The posts table's keys, as the diff reads them. */
-async function postKeys(target: Target, pair: Pair) {
-  const live = await introspectLiveSnapshot(target.db, target.dialect, [
-    pair.posts,
-  ]);
+/** A table's keys, as the diff reads them. */
+async function keysOf(target: Target, table: string) {
+  const live = await introspectLiveSnapshot(target.db, target.dialect, [table]);
   return (live.tables[0]?.foreignKeys ?? []).map(fk => ({
     columns: fk.columns,
     referencesTable: fk.referencesTable,
     onDelete: fk.onDelete,
   }));
 }
+
+const postKeys = (target: Target, pair: Pair) => keysOf(target, pair.posts);
 
 const keyTo = (pair: Pair) => ({
   columns: ["lead_author"],
@@ -253,6 +267,11 @@ describe("a Schema Builder collection's foreign keys (sqlite)", () => {
 
   it("gets the key of a relationship added to it after it was created", async () => {
     createTables(false);
+    sqlite
+      .prepare(
+        `INSERT INTO "${pair.posts}" (id, title, slug, score) VALUES ('p1', 'P', 'p', '5')`
+      )
+      .run();
     expect(await postKeys(target, pair)).toEqual([]);
 
     const result = await save(
@@ -263,6 +282,10 @@ describe("a Schema Builder collection's foreign keys (sqlite)", () => {
     expect(result.error).toBeUndefined();
     expect(result.success).toBe(true);
     expect(await postKeys(target, pair)).toEqual([keyTo(pair)]);
+    // The row the table held before is still there, with no author yet.
+    expect(
+      sqlite.prepare(`SELECT id, lead_author FROM "${pair.posts}"`).all()
+    ).toEqual([{ id: "p1", lead_author: null }]);
   });
 
   it("keeps a child's rows and key when a type change rebuilds the parent", async () => {
@@ -314,6 +337,40 @@ describe("a Schema Builder collection's foreign keys (sqlite)", () => {
     ).toThrow(/FOREIGN KEY/);
     sqlite.prepare(`DELETE FROM "${pair.authors}" WHERE id = 'a1'`).run();
     expect(sqlite.prepare(`SELECT id FROM "${pair.posts}"`).all()).toEqual([]);
+  });
+
+  it("keeps every row and key when a relationship is added to the parent", async () => {
+    createTables(true);
+    seed();
+
+    const result = await save(
+      target,
+      desiredFor(
+        pair,
+        [...authorFields("text"), mentorField(pair)],
+        postFields(pair, "text")
+      )
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.success).toBe(true);
+    expect(await keysOf(target, pair.authors)).toEqual([
+      {
+        columns: ["mentor"],
+        referencesTable: pair.authors,
+        onDelete: "set null",
+      },
+    ]);
+    // The parent's own rows, and the child's that cascade from it: no delete
+    // action fired while the parent changed.
+    expect(
+      sqlite.prepare(`SELECT id, mentor FROM "${pair.authors}"`).all()
+    ).toEqual([{ id: "a1", mentor: null }]);
+    expect(
+      sqlite.prepare(`SELECT id, lead_author FROM "${pair.posts}"`).all()
+    ).toEqual([{ id: "p1", lead_author: "a1" }]);
+    expect(await postKeys(target, pair)).toEqual([keyTo(pair)]);
+    expect(sqlite.prepare(`PRAGMA foreign_key_check`).all()).toEqual([]);
   });
 });
 
