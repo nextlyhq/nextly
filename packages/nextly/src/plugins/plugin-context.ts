@@ -448,8 +448,8 @@ export interface PluginContext {
      * would leave an account active, verified and without a password, or move
      * such an account to another address: core makes that account for an
      * externally verified identity, only when an app's login plugin hands it
-     * a sign-in. A create cannot make one, since it requires a password and
-     * refuses its absence with `VALIDATION_ERROR`. An
+     * a sign-in. A create cannot make one, since it requires a password and,
+     * once an account exists, refuses its absence with `VALIDATION_ERROR`. An
      * address a plugin vouches for is recorded as verified by `"plugin"`.
      */
     users: PluginUserService;

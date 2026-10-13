@@ -37,11 +37,19 @@ and, on other accounts, restamped as vouched for by the plugin.
 
 An update that carries an account's address unchanged no longer writes it, so a
 stale update cannot put back an address another request has since moved the
-account from. A verification date sent as an ISO string, which the update schema
-accepts, is now stored instead of failing the update.
+account from. An address stored in mixed case before addresses were lowercased
+is still rewritten in lowercase, so sign-in can find it. When an address moves,
+a verification date carried with it is recorded as the updater's vouching, not
+kept as whoever verified the old address.
 
-A stored password value that is not a hash now counts as no password when a
-plugin's update is judged, since it signs nobody in.
+The update schema now takes a verification date as a `Date` or an ISO 8601
+date-time string, and refuses any other string with `VALIDATION_ERROR`. A string
+failed every update before, and `"0"` would have parsed as the year 2000.
+
+When a plugin's update is judged, a stored password counts as one when it is a
+hash core made, or, where the app passes its own `passwordHasher` to
+`getNextly`, whatever that hasher stored.
 
 The plugin services documentation now says that `ctx.services.users.create`
-refuses a missing password with `VALIDATION_ERROR`, rather than `FORBIDDEN`.
+refuses a missing password with `VALIDATION_ERROR` once an account exists, and
+with `FORBIDDEN` on an empty install.

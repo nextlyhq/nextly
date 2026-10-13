@@ -413,7 +413,10 @@ export class UserService {
           isActive,
           ...customFields,
         },
-        this.caller
+        this.caller,
+        // Only this service knows whether the app configures its own hasher,
+        // and so whether a stored value in another format is a password.
+        { customPasswordHasher: this.passwordHasher !== undefined }
       );
 
       this.logger.info("User updated", { userId });

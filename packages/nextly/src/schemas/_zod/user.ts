@@ -63,7 +63,12 @@ export const UpdateUserSchema = z.object({
       message: "Image must be a valid URL or media path",
     })
     .optional(),
-  emailVerified: z.union([z.date(), z.string(), z.null()]).optional(),
+  // A string only as an ISO 8601 date-time: anything else either parses to
+  // some other moment ("0" is the year 2000) or not at all, and verified an
+  // address on a date nobody gave, or failed the write.
+  emailVerified: z
+    .union([z.date(), z.string().datetime({ offset: true }), z.null()])
+    .optional(),
   roles: z.array(z.string().min(1)).optional(),
   isActive: z.boolean().optional(),
   sendWelcomeEmail: z.boolean().optional(),

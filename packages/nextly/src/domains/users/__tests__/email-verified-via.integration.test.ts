@@ -285,6 +285,36 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("refuses a verification date string that is not an ISO date-time", async () => {
+      // "0" would parse as the year 2000 and verify the address on a date
+      // nobody gave; "soon" would not parse at all and fail the write.
+      const t = await boot(dialect);
+      const adminId = await seedFounder(t);
+      await services(t).users.createLocalUser({
+        email: "pending@example.com",
+        name: "Pending",
+        password: PASSWORD,
+        emailVerification: "pending",
+      });
+      const users = t.getService("userService") as UserService;
+      const found = await users.findByEmail("pending@example.com", {});
+      const params = {
+        userId: found?.id as string,
+        _authenticatedActorType: "user",
+        _authenticatedActorId: adminId,
+      };
+
+      for (const emailVerified of ["0", "soon"]) {
+        await expect(
+          dispatchUser(services(t), "updateUser", params, { emailVerified })
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      }
+      expect(await verification(t, "pending@example.com")).toEqual({
+        verified: false,
+        via: null,
+      });
+    });
+
     it("takes a verification date the admin route sends as a string", async () => {
       // The update schema accepts an ISO string, and the route passes it on.
       const t = await boot(dialect);

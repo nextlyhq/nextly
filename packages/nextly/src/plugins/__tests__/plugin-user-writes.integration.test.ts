@@ -842,6 +842,74 @@ describe.each(getConfiguredTestDialects())(
       expect((await userRow(t, "moved@example.com"))?.name).toBe("Renamed");
     });
 
+    it("rewrites a mixed-case address in lowercase when an update carries it", async () => {
+      // A row stored before addresses were lowercased is found by sign-in
+      // only once rewritten; carrying it unchanged is no move.
+      const { t, pluginUsers, coreUsers } = await boot(dialect);
+      await seedFounder(coreUsers);
+      const id = await externalAccount(t);
+      const { users } = getDialectTables();
+      await db(t)
+        .update(users)
+        .set({ email: "External@Example.com" })
+        .where(eq(users.id, id));
+
+      await pluginUsers.update(
+        id,
+        { name: "Renamed", email: "External@Example.com" },
+        CONTEXT
+      );
+
+      expect((await controlColumns(t, id)).email).toBe("external@example.com");
+    });
+
+    it("records a carried verification date as the plugin's once the address moves", async () => {
+      // The date was the old address's. Moved with a password, as a plugin
+      // may, the new address is the plugin's to vouch for, not the provider's.
+      const { t, pluginUsers, coreUsers } = await boot(dialect);
+      await seedFounder(coreUsers);
+      const id = await externalAccount(t);
+      const read = await pluginUsers.findById(id, CONTEXT);
+
+      await pluginUsers.update(
+        id,
+        {
+          email: "moved@example.com",
+          password: "Passw0rd!long",
+          emailVerified: read.emailVerified,
+        },
+        CONTEXT
+      );
+
+      const { users } = getDialectTables();
+      const [row] = await db(t).select().from(users).where(eq(users.id, id));
+      expect(row?.email).toBe("moved@example.com");
+      expect(row?.emailVerifiedVia).toBe("plugin");
+    });
+
+    it("counts any stored value as a password where the app configures its own hasher", async () => {
+      // That hasher's hashes can take any form, and its sign-in takes them.
+      const { t, coreUsers } = await boot(dialect);
+      await seedFounder(coreUsers);
+      const id = await adminInvite(t, true);
+      const { users } = getDialectTables();
+      await db(t)
+        .update(users)
+        .set({ passwordHash: "custom-hasher:c2FsdA:aGFzaA" })
+        .where(eq(users.id, id));
+
+      await new UserMutationService(t.adapter, consoleLogger).updateUser(
+        id,
+        { emailVerified: new Date() },
+        "plugin",
+        { customPasswordHasher: true }
+      );
+
+      // The control is "counts a stored value that is not a hash as no
+      // password": the same write without the app's hasher is refused.
+      expect((await controlColumns(t, id)).emailVerified).toBe(true);
+    });
+
     it("refuses activating an account verified after the update read it", async () => {
       // The update reads the account first, unverified here, and another
       // request verifies it before the write: judged on that first read, the
