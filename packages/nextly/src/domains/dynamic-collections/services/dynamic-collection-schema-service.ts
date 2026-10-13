@@ -192,6 +192,15 @@ const NO_REFERENTIAL_ACTION_CHANGE: ReferentialActionChange = {
   emitAfterColumnWork: false,
 };
 
+/**
+ * Field types whose value is a structured object or array, stored in the
+ * dialect's JSON type as the descriptor names it. See `newColumnType`.
+ */
+const STRUCTURED_JSON_TYPES: ReadonlySet<string> = new Set([
+  "repeater",
+  "group",
+]);
+
 export class DynamicCollectionSchemaService {
   private validationService: DynamicCollectionValidationService;
   private dialect: SupportedDialect;
@@ -277,7 +286,18 @@ export class DynamicCollectionSchemaService {
     //
     // So the storage class is held and the disagreement stays recorded in the conformance matrix.
     // Converging it is a change that has to move those consumers in the same commit.
-    if (described.kind === "json" && legacy !== described.dialectType) {
+    //
+    // A repeater or group is converged. None of the four consumers above reaches it: it is never a
+    // relationship, so it gets no foreign key; it carries no min or max, so no CHECK; its required
+    // backfill is already a JSON object or array literal; and an index over it is judged from the
+    // type created here, which `columnTypeIsIndexable` refuses for MySQL's JSON. Held as text, a
+    // Builder table disagreed with the schema every diff compares it against, so `db:sync` offered
+    // to convert each one it met.
+    if (
+      described.kind === "json" &&
+      legacy !== described.dialectType &&
+      !STRUCTURED_JSON_TYPES.has(field.type)
+    ) {
       return legacy;
     }
     return described.dialectType;
