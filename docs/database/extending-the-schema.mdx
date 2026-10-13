@@ -11,11 +11,11 @@ thought to create.
 
 ## Three ways in
 
-| You want                                                       | Use                                                             |
-| -------------------------------------------------------------- | --------------------------------------------------------------- |
+| You want | Use |
+| --- | --- |
 | A field on an existing entity, with REST, admin and validation | `contributes.extend` (plugins) or the collection's own `fields` |
-| A table of your own, portable across all three dialects        | `db.schema.extend` with the DSL                                 |
-| A column or type only one dialect has                          | `db.schema.afterDrizzle`                                        |
+| A table of your own, portable across all three dialects | `db.schema.extend` with the DSL |
+| A column or type only one dialect has | `db.schema.afterDrizzle` |
 
 ## A table of your own
 
@@ -203,23 +203,12 @@ keys, so a declared relation may not reuse a column's name, and each relation
 on a table needs a name of its own. Any table can declare more relations:
 
 ```ts
-const linked = defineTable(
-  "linked",
-  {
-    id: col.id(),
-    orderId: col.shortText(),
-  },
-  {
-    relations: [
-      {
-        name: "order",
-        kind: "one",
-        targetTable: "app__orders",
-        fromColumn: "orderId",
-      },
-    ],
-  }
-);
+const linked = defineTable("linked", {
+  id: col.id(),
+  orderId: col.shortText(),
+}, {
+  relations: [{ name: "order", kind: "one", targetTable: "app__orders", fromColumn: "orderId" }],
+});
 ```
 
 A `one` edge joins its `fromColumn` to the target's `toColumn` (its `id` when
@@ -264,7 +253,6 @@ FROM dc_places
 GROUP BY country, city
 HAVING COUNT(*) > 1;
 ```
-
 </Callout>
 
 Column order matters. Only `(country, city)` serves a lookup on `country`
@@ -332,22 +320,22 @@ them because the DSL is the one path that keeps them in migrations and drift.
 
 ## Coming from Payload
 
-| Payload                           | Nextly                                                                                                    |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `beforeSchemaInit`                | `db.schema.extend`, which also runs for plugins                                                           |
-| `afterSchemaInit`                 | `db.schema.afterDrizzle`, with loss checking                                                              |
-| `extendTable`                     | `schema.extendTable`, with ownership rules                                                                |
-| `rawTables`                       | `defineTable` + `col.*`, the primary path rather than an escape                                           |
-| Collection `indexes`              | Collection `indexes`, now actually emitted                                                                |
-| `.references()` / `RawForeignKey` | `foreignKeys` on `defineTable`                                                                            |
-| `check()`                         | `checks` on `defineTable`                                                                                 |
-| `defaultIDType`                   | `db.idType` per collection (`uuid` or `uuidv7`)                                                           |
-| A client-supplied `id` on create  | `db.allowIdOnCreate` per collection                                                                       |
-| `.where()` partial index          | not supported: refused on every dialect, because MySQL has none                                           |
-| `relations()`                     | `relations` on `defineTable` + `ref()` auto-edges                                                         |
-| `pgEnum`                          | `col.enum([...])` — stored as text (`varchar(255)` on MySQL), values enforced by a CHECK on every dialect |
-| `schemaName`                      | not yet — `db.postgres.schema` accepts only `"public"`                                                    |
-| `generate:db-schema`              | not needed — types come from the declaration                                                              |
+| Payload | Nextly |
+| --- | --- |
+| `beforeSchemaInit` | `db.schema.extend`, which also runs for plugins |
+| `afterSchemaInit` | `db.schema.afterDrizzle`, with loss checking |
+| `extendTable` | `schema.extendTable`, with ownership rules |
+| `rawTables` | `defineTable` + `col.*`, the primary path rather than an escape |
+| Collection `indexes` | Collection `indexes`, now actually emitted |
+| `.references()` / `RawForeignKey` | `foreignKeys` on `defineTable` |
+| `check()` | `checks` on `defineTable` |
+| `defaultIDType` | `db.idType` per collection (`uuid` or `uuidv7`) |
+| A client-supplied `id` on create | `db.allowIdOnCreate` per collection |
+| `.where()` partial index | not supported: refused on every dialect, because MySQL has none |
+| `relations()` | `relations` on `defineTable` + `ref()` auto-edges |
+| `pgEnum` | `col.enum([...])` — stored as text (`varchar(255)` on MySQL), values enforced by a CHECK on every dialect |
+| `schemaName` | not yet — `db.postgres.schema` accepts only `"public"` |
+| `generate:db-schema` | not needed — types come from the declaration |
 
 Two differences worth knowing:
 
