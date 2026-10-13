@@ -125,7 +125,10 @@ import {
 import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
-import { bootApplyEnabled } from "../init/boot-apply";
+import {
+  bootApplyEnabled,
+  checkRelationsBeforePlugins,
+} from "../init/boot-apply";
 import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
 import { unwrittenSlugs } from "../init/sync-outcome";
@@ -884,6 +887,8 @@ async function registerServicesOnce(
   );
 
   await checkForeignKeysToCodeFirstTables(adapter, bootExtensionSchema);
+
+  assertBootRelationsResolve(schemaRegistry, resolvedLogger);
 
   // ----------------------------------------
   // Layer 7: Initialize Plugins
@@ -2023,6 +2028,35 @@ async function checkForeignKeysToCodeFirstTables(
     adapter,
     specs: bootExtensionSchema.specs,
     codeFirstTables: bootExtensionSchema.codeFirstTables,
+  });
+}
+
+/**
+ * Layer 6.96: every relation a declared table names resolves, before any
+ * plugin initialises.
+ *
+ * The registry otherwise assembles relations on the first `db.query`, so a
+ * relation naming a table or column that does not exist surfaced there, as an
+ * internal error that took every relational query down with it. By now every
+ * table is registered: Builder-made ones on the registry's first load,
+ * extension tables and field groups beside them, code-first ones by their
+ * sync, and what boot migrations created by their reload. So a relation to a
+ * Builder-made collection resolves, and a misspelled one stops the boot,
+ * naming each.
+ *
+ * When the development boot apply runs, it is reported instead: a Builder-made
+ * table arriving through a migration is registered only by that apply, after
+ * this returns, and the apply asks again (`runBootTimeApplyIfDev`). The
+ * relations that resolve are kept either way, so a plugin's `init` can query
+ * them. See `checkRelationsBeforePlugins`.
+ */
+function assertBootRelationsResolve(
+  schemaRegistry: SchemaRegistry | undefined,
+  logger: Logger
+): void {
+  checkRelationsBeforePlugins(schemaRegistry, {
+    refuse: !bootApplyEnabled(),
+    warn: message => logger.warn?.(message),
   });
 }
 
