@@ -22,6 +22,17 @@ import {
 } from "./handler-utils";
 import { storeNewRefreshToken } from "./issue-session";
 
+/**
+ * The strategy the first administrator's session is recorded under.
+ *
+ * Its own name rather than `password`: no password was checked, the account
+ * was created on the spot by whoever reached the setup route of an empty
+ * install. Recorded as `password`, the trail would point anyone asking which
+ * door let the first administrator in at a credential check that never ran,
+ * rather than at the setup route.
+ */
+const SETUP_STRATEGY = "setup";
+
 export interface SetupHandlerDeps {
   /**
    * Records the session this hands out. Setup is account creation, but it
@@ -200,6 +211,8 @@ export async function handleSetup(
       trustedProxyIps: deps.trustedProxyIps,
     }),
     userAgent: request.headers.get("user-agent"),
+    // Which way in, as every other success row says: here, the setup route.
+    metadata: { strategy: SETUP_STRATEGY },
   });
 
   const cookies = sessionCookies(accessToken, rawRefreshToken, deps);

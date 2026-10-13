@@ -35,6 +35,10 @@ import {
   isFieldGroupFieldType,
 } from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import type {
+  ForeignKeySpec,
+  ReferentialAction,
+} from "../../schema/pipeline/diff/types";
 import {
   addForeignKeySql,
   changeForeignKeyActionStatements,
@@ -555,6 +559,50 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * The foreign key a relationship field's column carries, or `null` for a
+   * field that has none.
+   *
+   * One description for the two readers that need it: the CREATE this class
+   * writes, and the desired schema the push pipeline builds for a Schema
+   * Builder table, which creates the key when the relationship is added to an
+   * existing table. A many-to-one, one-to-one or one-to-many with a target
+   * stores the target's id in a column of its own, keyed to the target table's
+   * `id`; a many-to-many lives in a junction table instead. The actions are
+   * the ones `relationOnDelete` and `relationOnUpdate` resolve, refusing the
+   * same impossible pairs, spelled as the diff spells them.
+   */
+  relationshipForeignKey(
+    tableName: string,
+    field: FieldDefinition
+  ): ForeignKeySpec | null {
+    if (field.type !== "relationship" || !field.options?.target) return null;
+    // Many-to-one when unstated, as the Builder creates it.
+    const relationType = field.options.relationType || "manyToOne";
+    if (
+      relationType !== "oneToOne" &&
+      relationType !== "manyToOne" &&
+      relationType !== "oneToMany"
+    ) {
+      return null;
+    }
+    const column = toSnakeCase(field.name);
+    return {
+      name: `fk_${tableName}_${column}`,
+      columns: [column],
+      referencesTable: `dc_${field.options.target}`,
+      referencesColumns: ["id"],
+      // Through the SQL spelling and back, so an action the mapping does not
+      // know falls back exactly as the rendered constraint does.
+      onDelete: this.mapOnDeleteAction(
+        this.relationOnDelete(field)
+      ).toLowerCase() as ReferentialAction,
+      onUpdate: this.mapOnUpdateAction(
+        this.relationOnUpdate(field)
+      ).toLowerCase() as ReferentialAction,
+    };
+  }
+
+  /**
    * What happens to this row when the id it points at changes.
    *
    * The same rule as {@link relationOnDelete} and asked the same way, because
@@ -833,25 +881,15 @@ export class DynamicCollectionSchemaService {
           }
         }
 
-        // Handle relations (foreign keys)
-        if (f.type === "relationship" && f.options?.target) {
-          const relationType = f.options.relationType || "manyToOne"; // Default to many-to-one
-          const targetTable = `dc_${f.options.target}`;
-
-          // Handle oneToOne, manyToOne, and oneToMany (oneToMany is defined on the opposite side)
-          if (
-            relationType === "oneToOne" ||
-            relationType === "manyToOne" ||
-            relationType === "oneToMany"
-          ) {
-            const onDelete = this.mapOnDeleteAction(this.relationOnDelete(f));
-            const onUpdate = this.mapOnUpdateAction(this.relationOnUpdate(f));
-
-            const fkColName = toSnakeCase(f.name);
-            constraints.push(
-              `  CONSTRAINT ${this.quoteIdentifier(`fk_${tableName}_${fkColName}`)} FOREIGN KEY (${this.quoteIdentifier(fkColName)}) REFERENCES ${this.quoteIdentifier(targetTable)}(${this.quoteIdentifier("id")}) ON DELETE ${onDelete} ON UPDATE ${onUpdate}`
-            );
-          }
+        // A relationship's foreign key, as `relationshipForeignKey` describes
+        // it: the same description the push pipeline's desired schema reads,
+        // so the key a table is created with and the key a later push expects
+        // are one key.
+        const fk = this.relationshipForeignKey(tableName, f);
+        if (fk !== null) {
+          constraints.push(
+            `  CONSTRAINT ${this.quoteIdentifier(fk.name)} FOREIGN KEY (${this.quoteIdentifier(fk.columns[0])}) REFERENCES ${this.quoteIdentifier(fk.referencesTable)}(${this.quoteIdentifier(fk.referencesColumns[0])}) ON DELETE ${this.mapOnDeleteAction(fk.onDelete)} ON UPDATE ${this.mapOnUpdateAction(fk.onUpdate)}`
+          );
         }
 
         // Convert camelCase field names to snake_case for column names

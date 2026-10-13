@@ -101,22 +101,31 @@ describe("the boot sequence in registerServices", () => {
   });
 
   /**
-   * A fresh install's foreign keys to code-first tables are created by the
-   * apply that creates those tables. Checked before it, the check would refuse
-   * keys moments from being created; checked after migrations or plugins,
-   * something would already have used tables missing their keys.
+   * Extension tables' foreign keys to code-first tables are added by the apply
+   * that creates those tables, by boot migrations, and in development by the
+   * extension-table reconcile. Checked before any of them, the check would
+   * refuse keys moments from being added; checked after plugins initialise,
+   * something would already have used tables missing their keys. The boot's
+   * executed path is observed by the integration suite
+   * (`fresh-install-foreign-keys.integration.test.ts`); this pins the order.
    */
-  it("checks a fresh install's foreign keys after the code-first tables are created, before migrations", () => {
-    const tables = boot.indexOf("await syncCodeFirstEntities(");
-    const check = boot.indexOf("await checkFreshInstallForeignKeys(");
-    expect(tables).toBeGreaterThan(-1);
-    expect(check).toBeGreaterThan(tables);
-    expect(check).toBeLessThan(boot.indexOf("await runBootMigrations("));
+  it("checks foreign keys to code-first tables after every step that adds them, before plugins", () => {
+    const check = boot.indexOf("await checkForeignKeysToCodeFirstTables(");
+    expect(check).toBeGreaterThan(-1);
+    for (const step of [
+      "await syncCodeFirstEntities(",
+      "await runBootMigrations(",
+      "await prepareExtensionTablesForInit(",
+    ]) {
+      expect(boot.indexOf(step), step).toBeGreaterThan(-1);
+      expect(boot.indexOf(step), step).toBeLessThan(check);
+    }
+    expect(check).toBeLessThan(pluginCall);
     expect(bodyOf("syncCodeFirstEntities")).toContain(
       "await createMissingCodeFirstTables("
     );
-    expect(bodyOf("checkFreshInstallForeignKeys")).toContain(
-      "await assertFreshInstallForeignKeys("
+    expect(bodyOf("checkForeignKeysToCodeFirstTables")).toContain(
+      "await assertForeignKeysToCodeFirstTables("
     );
   });
 

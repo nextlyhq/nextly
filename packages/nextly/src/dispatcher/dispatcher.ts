@@ -48,9 +48,10 @@ import type {
  * The registered config, for a dispatch that needs a plugin's own declaration.
  *
  * Read here rather than held on the container: the container carries services,
- * and the plugin manifest is configuration.
+ * and the plugin manifest is configuration. Exported so the route gate in
+ * front of a dispatch reads the same declaration the dispatch serves.
  */
-function readServiceConfig(): NextlyServiceConfig | undefined {
+export function readServiceConfig(): NextlyServiceConfig | undefined {
   try {
     return getService("config");
   } catch {
