@@ -398,12 +398,15 @@ describe("UserAccountService", () => {
   // ── updatePasswordHash ───────────────────────────────────────────────
 
   describe("updatePasswordHash", () => {
+    // A value of a real bcrypt hash's shape: the write refuses anything else.
+    const HASH = "$2b$10$" + "h".repeat(53);
+
     it("should update password hash and return void", async () => {
       mockDb.query.users.findFirst.mockResolvedValue({ id: "user-1" });
 
       // Post-migration: returns void on success, throws on failure.
       await expect(
-        service.updatePasswordHash("user-1", "$2b$10$hashedpassword")
+        service.updatePasswordHash("user-1", HASH)
       ).resolves.toBeUndefined();
 
       expect(mockDb.update).toHaveBeenCalled();
@@ -415,7 +418,7 @@ describe("UserAccountService", () => {
       mockDb.query.users.findFirst.mockResolvedValue(null);
 
       await expect(
-        service.updatePasswordHash("nonexistent", "$2b$10$hashedpassword")
+        service.updatePasswordHash("nonexistent", HASH)
       ).rejects.toSatisfy((err: unknown) => NextlyError.isNotFound(err));
     });
 
@@ -426,7 +429,7 @@ describe("UserAccountService", () => {
       });
 
       await expect(
-        service.updatePasswordHash("user-1", "$2b$10$newhash")
+        service.updatePasswordHash("user-1", HASH)
       ).rejects.toSatisfy(
         (err: unknown) => NextlyError.is(err) && err.statusCode === 500
       );

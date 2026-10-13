@@ -159,6 +159,11 @@ export class UserAccountService extends BaseService {
     userId: number | string,
     passwordHash: string
   ): Promise<void> {
+    // Before any read: the value must be a hash, and a raw password is
+    // refused as invalid input rather than stored or reported as a database
+    // failure by the catch around the write.
+    const set = passwordColumns(passwordHash);
+
     // Check if user exists. §13.8 + spec note: user existence is sensitive,
     // so the public message stays generic; the id flows through logContext.
     let user;
@@ -184,7 +189,7 @@ export class UserAccountService extends BaseService {
           tx as PasswordWriteTx,
           this.tables,
           this.dialect,
-          { userId, set: passwordColumns(passwordHash) }
+          { userId, set }
         );
       });
     } catch (err) {
@@ -209,6 +214,8 @@ export class UserAccountService extends BaseService {
     userId: number | string,
     passwordHash: string
   ): Promise<boolean> {
+    // Before the write, outside the catch that reports a database failure.
+    const set = passwordColumns(passwordHash);
     let changed = 0;
     try {
       await this.withTransaction(async tx => {
@@ -218,7 +225,7 @@ export class UserAccountService extends BaseService {
           this.dialect,
           {
             userId,
-            set: passwordColumns(passwordHash),
+            set,
             unlessDeactivated: true,
           }
         );

@@ -15,7 +15,9 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, isNull, type SQL } from "drizzle-orm";
 
+import { isPasswordHash } from "../../../auth/password/index";
 import type { getDialectTables } from "../../../database/index";
+import { NextlyError } from "../../../errors";
 import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import type { UserUpdateData } from "../../../types/database-operations";
 
@@ -37,6 +39,12 @@ type Tables = Pick<
  *
  * A new password satisfies any admin-set must-change requirement, so the
  * account is not sent through the first-sign-in change again.
+ *
+ * Refuses a value that is not a password hash, before anything is written.
+ * Every path that sets a password comes through here, so none of them can
+ * store one as given; the route that takes a hash from its caller
+ * (`updatePasswordHash`) is answered with a validation error for a raw
+ * password, and every other path hashes before it calls this.
  */
 export function passwordColumns(
   passwordHash: string
@@ -46,6 +54,20 @@ export function passwordColumns(
     "passwordHash" | "passwordUpdatedAt" | "mustChangePassword" | "updatedAt"
   >
 > {
+  if (!isPasswordHash(passwordHash)) {
+    // The value itself stays out of the error and the log: it may be a
+    // password.
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "passwordHash",
+          code: "INVALID",
+          message: "Not a password hash.",
+        },
+      ],
+      logContext: { reason: "password-write-not-a-hash" },
+    });
+  }
   const now = new Date();
   return {
     passwordHash,
