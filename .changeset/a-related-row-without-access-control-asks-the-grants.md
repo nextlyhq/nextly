@@ -31,3 +31,8 @@ When an app runs without the access-control service, a populated relationship no
 a signed-in person as a direct read does, from the person's permission grants, instead of
 returning every related row. Whether the caller may read related users is now asked once
 per read, however many relationships point at users, rather than once per field.
+
+An anonymous visitor no longer receives a populated user through a relationship: no
+visitor can read a user directly, and a user row carries the person's address. Visitors
+keep populated media, which public pages embed. A page your server renders with the
+Direct API reads as the system by default and still shows authors.

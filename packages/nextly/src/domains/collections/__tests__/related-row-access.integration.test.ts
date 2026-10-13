@@ -789,14 +789,22 @@ describe.each(getConfiguredTestDialects())(
         expect(shows(both, TITLE.page)).toBe(true);
       });
 
-      it("leaves a visitor's related users and media as before", async () => {
-        // No route lets a visitor read a system resource by a grant, and their
-        // direct reads of media need none, so a visitor's populated media and
-        // users are left as they were.
+      it("leaves a visitor the related media, and withholds a related user", async () => {
+        // Pages served to the public embed the images they reference, so a
+        // visitor keeps media. No visitor reads a user row directly, and a
+        // user row carries a person's address, so it is withheld.
         const fx = await boot(dialect);
         const visitor = await readRef(fx, VISITOR);
         expect(shows(visitor.image, TITLE.media)).toBe(true);
-        expect(shows(visitor.author, TITLE.user)).toBe(true);
+        expect(shows(visitor.author, TITLE.user)).toBe(false);
+        // The control: a read holding a bypass still populates the user, as a
+        // server-rendered page's read does.
+        expect(
+          shows(
+            (await readRef(fx, { ...VISITOR, overrideAccess: true })).author,
+            TITLE.user
+          )
+        ).toBe(true);
       });
     });
   }
