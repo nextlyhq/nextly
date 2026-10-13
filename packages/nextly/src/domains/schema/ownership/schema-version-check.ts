@@ -26,11 +26,14 @@ export interface PluginSchemaState {
   declaredVersion: number | undefined;
   /** What the database has applied, from the migration ledger. */
   appliedVersion: number | null;
+  /** Whether the plugin's owner rows are marked uninstalled. */
+  uninstalled?: boolean;
 }
 
 export type SchemaVersionVerdict =
   | { kind: "ok" }
-  | { kind: "behind"; declared: number; applied: number | null };
+  | { kind: "behind"; declared: number; applied: number | null }
+  | { kind: "uninstalled" };
 
 /**
  * Judge one plugin's schema state.
@@ -42,6 +45,11 @@ export type SchemaVersionVerdict =
 export function judgeSchemaVersion(
   state: PluginSchemaState
 ): SchemaVersionVerdict {
+  // An uninstalled plugin still listed in config is a contradiction the
+  // operator has to resolve, in EVERY environment: dev push would otherwise
+  // recreate the tables an uninstall deliberately removed.
+  if (state.uninstalled === true) return { kind: "uninstalled" };
+
   // A plugin that declares no version is never checked. It has made no claim
   // about the schema, so there is nothing to be behind.
   if (state.declaredVersion === undefined) return { kind: "ok" };
@@ -60,7 +68,9 @@ export function judgeSchemaVersion(
 /**
  * Refuse a boot the plugin's schema cannot support.
  *
- * `production` decides whether a `behind` verdict refuses or logs.
+ * `production` decides only whether a `behind` verdict refuses or logs. An
+ * `uninstalled` one refuses everywhere, because no amount of dev push makes a
+ * deliberately removed plugin's tables correct to recreate.
  */
 export function assertSchemaVersionUsable(
   state: PluginSchemaState,
@@ -69,7 +79,15 @@ export function assertSchemaVersionUsable(
   const verdict = judgeSchemaVersion(state);
   if (verdict.kind === "ok") return;
 
-  const message = `The plugin "${state.name}" expects schema version ${String(verdict.declared)}, and the database has ${verdict.applied === null ? "none" : String(verdict.applied)}. Run "nextly migrate".`;
+  if (verdict.kind === "uninstalled") {
+    throw new NextlyError({
+      code: "PLUGIN_SCHEMA_UNINSTALLED",
+      publicMessage: `The plugin "${state.name}" has been uninstalled but is still listed in your config. Run "nextly plugins install ${state.name}" to reinstate it, or remove it from the config.`,
+      logContext: { plugin: state.name },
+    });
+  }
+
+  const message = `The plugin "${state.name}" expects schema version ${String(verdict.declared)}, and the database has ${verdict.applied === null ? "none" : String(verdict.applied)}. Run "nextly migrate" or "nextly plugins install ${state.name}".`;
 
   if (!opts.production) {
     // Development push reconciles from config on every reload, so this
@@ -112,6 +130,13 @@ export interface PluginSchemaDeclaration {
  * A ledger that is not there yet is an install whose migrations have not run,
  * so every plugin reads as having applied nothing; a ledger that is there and
  * cannot be read is a fault, and is not turned into "nothing applied".
+ *
+ * Whether a plugin was UNINSTALLED is the owner registry's answer, the state
+ * `nextly plugins uninstall` leaves on the plugin's rows. The same rule
+ * holds: a registry not there yet holds no such state, and one that is there
+ * and cannot be read throws, because reading it as empty would turn the
+ * refusal into a behind-version warning, and a development push would then
+ * recreate the tables the uninstall removed.
  */
 export async function assertPluginSchemaVersionsUsable(args: {
   plugins: readonly PluginSchemaDeclaration[];
@@ -119,6 +144,10 @@ export async function assertPluginSchemaVersionsUsable(args: {
   readLedger: () => Promise<SchemaEventRow[]>;
   /** Whether the ledger table exists, asked only when reading it fails. */
   ledgerExists: () => Promise<boolean>;
+  /** The plugins whose owner rows are marked `uninstalled`. */
+  readUninstalled: () => Promise<ReadonlySet<string>>;
+  /** Whether the owner registry exists, asked only when reading it fails. */
+  registryExists: () => Promise<boolean>;
   production: boolean;
   warn: (message: string) => void;
 }): Promise<void> {
@@ -131,6 +160,12 @@ export async function assertPluginSchemaVersionsUsable(args: {
       'Migration ledger not found — plugin schema versions cannot be checked yet. Run "nextly migrate" to create it.'
     );
   }
+  let uninstalled: ReadonlySet<string> = new Set();
+  try {
+    uninstalled = await args.readUninstalled();
+  } catch (error) {
+    if (await args.registryExists()) throw error;
+  }
   for (const plugin of args.plugins) {
     assertSchemaVersionUsable(
       {
@@ -141,6 +176,7 @@ export async function assertPluginSchemaVersionsUsable(args: {
           plugin.name,
           plugin.migrations
         ),
+        uninstalled: uninstalled.has(plugin.name),
       },
       { production: args.production, warn: args.warn }
     );

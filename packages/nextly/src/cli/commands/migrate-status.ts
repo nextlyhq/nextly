@@ -532,8 +532,8 @@ function displayFailedRollbacks(
  * event per filename, kept when it is `applied`, or an attempt that did not
  * finish (`attemptUnfinished`: `failed`, or still `in_progress`).
  *
- * Newest per filename by `newestEventsByFilename`, the rule `migrate`
- * and `migrate:down` read the ledger by. A rollback is
+ * Newest per filename by `newestEventsByFilename`, the rule `migrate`,
+ * `migrate:down` and `plugins uninstall` read the ledger by. A rollback is
  * recorded as a `rolled_back` event after the `applied` one, and the older
  * `applied` row stays in the ledger, so only the newest event says whether a
  * migration is applied now.

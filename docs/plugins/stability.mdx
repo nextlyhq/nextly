@@ -67,6 +67,11 @@ These ship today but carry no guarantee yet — use them, but expect change:
   `PluginRawDatabase` (`ctx.db.raw`)
 - `PluginMigration.transaction` — `false` runs a migration module outside a
   transaction, statement by statement
+- `onInstall` / `onUninstall`, called by `nextly plugins install` and
+  `nextly plugins uninstall`, never at boot
+- `contributes.transforms` — changing entities another plugin declared
+- `ctx.db.contributed(table, columns)` — reading and writing the hidden
+  columns a plugin contributed to a table it does not own
 - `createTestNextly`'s `pluginConsent` option
 - `ctx.hooks` plugin registration (`PluginHookRegistry`, `HookType`, `HookHandler`)
 - Filters & actions (D63): `ctx.filters` / `ctx.actions` + seam types
