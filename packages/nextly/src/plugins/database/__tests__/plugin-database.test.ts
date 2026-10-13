@@ -836,6 +836,38 @@ describe("relational queries", () => {
     expect(() => namespace.other__invoices).not.toThrow();
   });
 
+  it("reads a dependency change inside a transaction that is already running", async () => {
+    // A reload republishes the dependencies as a new set, so the surface
+    // must keep asking for them: one copied when the transaction opened kept
+    // answering for the dependencies in force at that moment.
+    let dependencies: ReadonlySet<string> = new Set(["other"]);
+    const relational = {
+      query: { other__invoices: { findMany: async () => [] } },
+    };
+    const surface = createPluginDatabase({
+      dialect: "postgresql",
+      owner: OWNER,
+      get dependsOn() {
+        return dependencies;
+      },
+      owners: () =>
+        new Map<string, SchemaOwner>([
+          ["other__invoices", { kind: "plugin", id: "other" }],
+        ]),
+      tables: () => ({}),
+      tableList: () => [],
+      db: () => relational,
+      relationalDb: () => relational,
+      transaction: fn => fn({ db: relational, relationalDb: relational }),
+    });
+
+    await surface.transaction(async tx => {
+      expect(() => tx.query.other__invoices).not.toThrow();
+      dependencies = new Set();
+      expect(() => tx.query.other__invoices).toThrow(NextlyError);
+    });
+  });
+
   it("does not enumerate a table it would refuse", () => {
     const { surface } = queryHarness();
     expect(Object.keys(surface.query)).toEqual(["fx__notes"]);

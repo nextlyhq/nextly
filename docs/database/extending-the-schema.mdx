@@ -53,6 +53,15 @@ export default defineConfig({
 App tables carry no prefix, and they go into your migrations like any other
 table.
 
+Hooks run in a fixed order: the plugins' in dependency order, whatever order
+your config lists them in, each seeing every table registered before it, and
+then the app's, which sees them all. A hook must declare the same schema every
+time it runs, so derive nothing from the clock, a counter or a random value:
+Nextly runs the hooks twice when it builds the schema it pushes or writes into
+a migration, and refuses a hook whose output differs, naming its owner and its
+position, rather than plan a change on every push. A hook that throws is named
+the same way.
+
 `col.id()` has no database default: the code that inserts a row supplies the
 `id` (any UUID fits; a UUIDv7 keeps new rows in key order), and `InferInsert`
 requires it. `col.timestamps()` defaults both columns to the current time on

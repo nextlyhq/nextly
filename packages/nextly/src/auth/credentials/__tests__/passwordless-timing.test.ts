@@ -19,7 +19,12 @@ import { describe, expect, it, vi } from "vitest";
 const { verifyPassword } = vi.hoisted(() => ({
   verifyPassword: vi.fn(async () => false),
 }));
-vi.mock("../../password/index", () => ({ verifyPassword }));
+vi.mock("../../password/index", async importOriginal => ({
+  // The real hash test: what counts as a stored hash is part of what is
+  // under test here.
+  ...(await importOriginal<typeof import("../../password/index")>()),
+  verifyPassword,
+}));
 
 import { verifyCredentials } from "../verify-credentials";
 
@@ -81,6 +86,26 @@ describe("the cost of a failed password attempt", () => {
     // everywhere would equalise the timing and break signing in.
     const stored = "$2b$12$" + "s".repeat(53);
     await expect(attempt(account(stored))).resolves.toBe(stored);
+  });
+
+  it("compares against a real hash for an account whose stored value is not a hash", async () => {
+    // A password stored as given, as a long one containing a colon was. It
+    // is never compared, and its refusal costs what any other does.
+    const plain = "correct-horse:battery-staple-and-more-words";
+    await expect(attempt(account(plain))).resolves.toMatch(/^\$2[aby]\$12\$/);
+  });
+
+  it("refuses an account whose stored value is the password itself", async () => {
+    // The login a text comparison would admit: the attempt is exactly what
+    // is stored. Refused even when the comparison it is given answers yes.
+    const plain = "correct-horse:battery-staple-and-more-words";
+    verifyPassword.mockResolvedValueOnce(true);
+    await expect(
+      verifyCredentials(
+        { email: "a@example.test", password: plain },
+        { ...deps, findUserByEmail: async () => account(plain) }
+      )
+    ).rejects.toThrow();
   });
 
   it("refuses a passwordless account even if the decoy MATCHED", async () => {

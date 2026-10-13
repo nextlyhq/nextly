@@ -1,6 +1,6 @@
 import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
-import { verifyPassword } from "../password/index";
+import { isPasswordHash, verifyPassword } from "../password/index";
 import { assertAccountUsable } from "../session/account-state";
 
 export interface CredentialVerifyInput {
@@ -107,14 +107,21 @@ export async function verifyCredentials(
   // it does not merely say an address is registered, it says the address
   // signs in through the identity provider, which is the account whose
   // password can never be the thing that stops an attacker.
+  //
+  // A stored value that is not a password hash takes the decoy's place too:
+  // it can only be a password stored as given, which must never be a working
+  // credential, and comparing against the decoy keeps the refusal as slow as
+  // any other.
   const storedHash = user?.passwordHash;
+  const usableHash = isPasswordHash(storedHash);
   const compared = await verifyPassword(
     input.password,
-    storedHash || DUMMY_HASH
+    usableHash ? storedHash : DUMMY_HASH
   );
-  // A passwordless account can never be admitted BY a password, whatever the
-  // comparison against the decoy answered.
-  const passwordOk = Boolean(storedHash) && compared;
+  // A passwordless account, or one whose stored value is not a hash, can
+  // never be admitted BY a password, whatever the comparison against the
+  // decoy answered.
+  const passwordOk = usableHash && compared;
 
   if (!user || !passwordOk) {
     if (user) {

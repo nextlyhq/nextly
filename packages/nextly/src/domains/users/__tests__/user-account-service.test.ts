@@ -398,12 +398,15 @@ describe("UserAccountService", () => {
   // ── updatePasswordHash ───────────────────────────────────────────────
 
   describe("updatePasswordHash", () => {
+    // A value of a real bcrypt hash's shape: the write refuses anything else.
+    const HASH = "$2b$10$" + "h".repeat(53);
+
     it("should update password hash and return void", async () => {
       mockDb.query.users.findFirst.mockResolvedValue({ id: "user-1" });
 
       // Post-migration: returns void on success, throws on failure.
       await expect(
-        service.updatePasswordHash("user-1", "$2b$10$hashedpassword")
+        service.updatePasswordHash("user-1", HASH)
       ).resolves.toBeUndefined();
 
       expect(mockDb.update).toHaveBeenCalled();
@@ -411,11 +414,34 @@ describe("UserAccountService", () => {
       expect(mockDb.delete).toHaveBeenCalledWith(refreshTokensColumns);
     });
 
+    it("refuses a raw password before reading or writing anything", async () => {
+      // The one write that takes a hash from its caller: a password sent
+      // here was stored as given.
+      await expect(
+        service.updatePasswordHash(
+          "user-1",
+          "Correct-Horse:Battery-Staple:2026-Phrase"
+        )
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(mockDb.query.users.findFirst).not.toHaveBeenCalled();
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it("leaves a user's own password write to the hasher that made it", async () => {
+      // An app's configured `passwordHasher` writes its own format through
+      // the shared password write; only the route above checks a format.
+      const appHash = "$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHQ$aGFzaGhhc2g";
+      await expect(
+        service.changeOwnPasswordHash("user-1", appHash)
+      ).resolves.toBeTypeOf("boolean");
+      expect(mockDb.update).toHaveBeenCalled();
+    });
+
     it("should throw NextlyError(NOT_FOUND) when user not found", async () => {
       mockDb.query.users.findFirst.mockResolvedValue(null);
 
       await expect(
-        service.updatePasswordHash("nonexistent", "$2b$10$hashedpassword")
+        service.updatePasswordHash("nonexistent", HASH)
       ).rejects.toSatisfy((err: unknown) => NextlyError.isNotFound(err));
     });
 
@@ -426,7 +452,7 @@ describe("UserAccountService", () => {
       });
 
       await expect(
-        service.updatePasswordHash("user-1", "$2b$10$newhash")
+        service.updatePasswordHash("user-1", HASH)
       ).rejects.toSatisfy(
         (err: unknown) => NextlyError.is(err) && err.statusCode === 500
       );

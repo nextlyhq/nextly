@@ -51,7 +51,9 @@ import {
 import {
   check as sqliteCheck,
   foreignKey as sqliteForeignKey,
+  type SQLiteColumn,
   sqliteTable,
+  unique as sqliteUnique,
   text as sqliteText,
   integer as sqliteInteger,
   real as sqliteReal,
@@ -159,6 +161,13 @@ export interface RuntimeSchemaOptions {
    * so the option is not read there.
    */
   foreignKeys?: readonly ForeignKeySpec[];
+  /**
+   * The column, by SQL name, of each single-column UNIQUE constraint THIS
+   * table's live SQLite table holds, declared on a SQLite table only, as
+   * `foreignKeys` is (see `sqliteUniquesOf`). Read from the live table rather
+   * than the desired schema, which does not describe these constraints.
+   */
+  uniqueColumns?: readonly string[];
 }
 
 /**
@@ -409,12 +418,57 @@ function generateSQLiteSchema(
     options.extensionColumns ?? []
   );
   const foreignKeys = options.foreignKeys ?? [];
+  const uniqueColumns = options.uniqueColumns ?? [];
   // The local side is read from the BUILT columns Drizzle hands this
   // callback: a builder has no name until its table is built.
   return sqliteTable(tableName, columns, built => [
     ...checks,
     ...foreignKeys.map(fk => sqliteForeignKeyOf(fk, built)),
+    ...sqliteUniquesOf(uniqueColumns, built),
   ]);
+}
+
+/**
+ * The built columns of a runtime table by the SQL name each was built with,
+ * lower-cased as SQLite compares names.
+ *
+ * The built record is keyed by each field's NAME (`leadAuthor`) while a
+ * constraint names the column (`lead_author`), so a constraint's column is
+ * found here and never by indexing the record.
+ */
+function builtColumnsBySqlName(
+  built: Record<string, unknown>
+): Map<string, SQLiteColumn> {
+  return new Map(
+    Object.values(built).map(column => [
+      (column as SQLiteColumn).name.toLowerCase(),
+      column as SQLiteColumn,
+    ])
+  );
+}
+
+/**
+ * The single-column UNIQUE constraints of a SQLite runtime table: the ones its
+ * live table holds.
+ *
+ * A Schema Builder table gets one inline from its own DDL, on a one-to-one
+ * relationship's column, and nothing in the desired schema describes it:
+ * introspection skips the `sqlite_autoindex_*` index that backs it. Left out
+ * of this definition, drizzle-kit rebuilds the table only to drop it, and a
+ * rebuild for any other reason loses it, after which the column takes
+ * duplicates. Declared unnamed, as drizzle-kit reads an inline UNIQUE back,
+ * so it plans nothing for one that is there. A constraint on a column this
+ * definition no longer has goes with the column.
+ */
+function sqliteUniquesOf(
+  columns: readonly string[],
+  built: Record<string, unknown>
+): ReturnType<ReturnType<typeof sqliteUnique>["on"]>[] {
+  const bySqlName = builtColumnsBySqlName(built);
+  return columns.flatMap(name => {
+    const column = bySqlName.get(name.toLowerCase());
+    return column === undefined ? [] : [sqliteUnique().on(column)];
+  });
 }
 
 /**
@@ -434,18 +488,10 @@ function sqliteForeignKeyOf(
       fk.referencesColumns.map(name => [name, sqliteText(name)])
     )
   ) as unknown as Record<string, unknown>;
-  // The built record is keyed by each field's NAME (`leadAuthor`), the spec
-  // names the column (`lead_author`), so a column is found by the SQL name it
-  // was built with. A key whose column is not on the table is refused rather
-  // than handed over as undefined, which drizzle-kit would render as a key
-  // over nothing.
-  const bySqlName = new Map(
-    Object.values(built).map(column => [
-      (column as { name: string }).name,
-      column,
-    ])
-  );
-  const columns = fk.columns.map(name => bySqlName.get(name));
+  // A key whose column is not on the table is refused rather than handed over
+  // as undefined, which drizzle-kit would render as a key over nothing.
+  const bySqlName = builtColumnsBySqlName(built);
+  const columns = fk.columns.map(name => bySqlName.get(name.toLowerCase()));
   if (columns.includes(undefined)) {
     throw NextlyError.internal({
       logContext: {
