@@ -251,6 +251,43 @@ export async function catalogueSourceContract(
     );
 
     add(
+      "records a hold and its release once each when their answers are lost and they are repeated",
+      async source => {
+        const stock = source.stock;
+        expectContract(stock !== undefined, "the source hears stock reports");
+        const before = await available(source, soldFrom);
+        const orderReference = unique("order");
+        const hold = {
+          operationId: unique("op"),
+          kind: "hold" as const,
+          reference: soldFrom,
+          quantity: 1,
+          orderReference,
+        };
+        const release = {
+          ...hold,
+          operationId: unique("op"),
+          kind: "release" as const,
+        };
+        for (const report of [hold, release]) {
+          await stock.report(report); // the answer is lost
+          await stock.report(report);
+          expectContract(
+            (await stock.confirm({ operationId: report.operationId })).recorded,
+            `the ${report.kind} is confirmed`
+          );
+        }
+        // A hold and its release cancel out whether or not this source counts
+        // holds in its own figure, so one applied twice shows here.
+        const after = await available(source, soldFrom);
+        expectContract(
+          after === before,
+          `a hold and its release leave the stock as it was (${before} before, ${after} after)`
+        );
+      }
+    );
+
+    add(
       "refuses a stock report that reuses another report's operation id",
       async source => {
         const stock = source.stock;

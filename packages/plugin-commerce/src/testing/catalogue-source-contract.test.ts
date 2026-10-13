@@ -215,6 +215,59 @@ describe("the catalogue contract suite catches a broken source", () => {
     );
   });
 
+  it("fails a source that drops every release report", async () => {
+    const failed = await failingCases(s => {
+      const stock = s.stock;
+      if (!stock) return s;
+      const dropped = new Set<string>();
+      return {
+        ...s,
+        stock: {
+          report: async input => {
+            if (input.kind === "release") {
+              dropped.add(input.operationId);
+              return;
+            }
+            return stock.report(input);
+          },
+          confirm: async input =>
+            dropped.has(input.operationId)
+              ? { recorded: false }
+              : stock.confirm(input),
+        },
+      };
+    });
+    expect(failed).toContain(
+      "records a hold and its release once each when their answers are lost and they are repeated"
+    );
+  });
+
+  it("fails a source that refuses a repeated hold as a reused key", async () => {
+    const failed = await failingCases(s => {
+      const stock = s.stock;
+      if (!stock) return s;
+      const holds = new Set<string>();
+      return {
+        ...s,
+        stock: {
+          report: async input => {
+            if (input.kind === "hold") {
+              if (holds.has(input.operationId)) {
+                throw commerceError("COMMERCE_OPERATION_KEY_REUSED");
+              }
+              holds.add(input.operationId);
+            }
+            return stock.report(input);
+          },
+          confirm: input => stock.confirm(input),
+        },
+      };
+    });
+    expect(failed).toContain(
+      "records a hold and its release once each when their answers are lost and they are repeated"
+    );
+  });
+
   it("fails a source whose listing cursor goes round in a loop", async () => {
     const failed = await failingCases(s => ({
       ...s,
