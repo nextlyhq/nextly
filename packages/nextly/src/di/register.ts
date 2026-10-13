@@ -528,11 +528,11 @@ const globalForReg = globalThis as unknown as {
     context: PluginContext;
   }>;
   /**
-   * Where the started plugins' contexts look their services up. The live
-   * container while they run; after `clearServices()`, the registrations it
-   * moved aside, until their teardown at the next registration.
+   * The registrations `clearServices()` moved aside while plugins it left
+   * running still had to be torn down, held until that teardown runs at the
+   * next registration.
    */
-  __nextly_pluginServiceContainer?: { container: Container };
+  __nextly_clearedServices?: Container;
   /**
    * The registry `registerServices` actually registered into. A caller may
    * supply its own, and clearing the process-global one would leave that
@@ -673,7 +673,21 @@ async function runRegistrationAttempt(
   // shutdown or a failed attempt the list is already empty and this runs
   // nothing. Inside the latch, so a caller waiting on this attempt cannot
   // start plugins while the old ones are still being destroyed.
-  await destroyRegisteredPlugins();
+  //
+  // With the services they were started with back in the container for the
+  // length of it: `clearServices()` emptied the container, and a `destroy`
+  // reaches services through it however its context gets there, the adapter
+  // behind `ctx.db.transaction` on SQLite, the jobs behind
+  // `ctx.services.jobs`, the audit writer. Taken out again before this
+  // registration fills the container.
+  const cleared = globalForReg.__nextly_clearedServices;
+  globalForReg.__nextly_clearedServices = undefined;
+  if (cleared !== undefined) container.restore(cleared);
+  try {
+    await destroyRegisteredPlugins();
+  } finally {
+    if (cleared !== undefined) container.clear();
+  }
   try {
     await registerServicesOnce(config);
   } catch (error) {
@@ -3870,16 +3884,6 @@ async function initializePlugins(
    * of these are lazy on the context side for the same reason, and eager
    * lookups here would undo that.
    */
-  // The container a plugin context looks its services up in, boxed so
-  // `clearServices()` can re-point it. That call empties the container at
-  // once, while the plugins it leaves running are torn down only when the
-  // next registration starts: a `destroy` reaching for the adapter, as
-  // `ctx.db.transaction` does on SQLite, found nothing there and failed
-  // half-way. Boxed per registration, so a later one never re-points this
-  // registration's plugins, nor this one later ones.
-  const services: { container: Container } = { container };
-  globalForReg.__nextly_pluginServiceContainer = services;
-
   const pluginServiceResolvers: Record<
     PluginServiceName,
     () =>
@@ -3897,15 +3901,13 @@ async function initializePlugins(
       | AdapterTransactions
   > = {
     collectionService: () =>
-      services.container.get<CollectionService>("collectionService"),
-    userService: () => services.container.get<UserService>("userService"),
-    mediaService: () =>
-      services.container.get<UnifiedMediaService>("mediaService"),
-    emailService: () => services.container.get<EmailService>("emailService"),
-    versionsService: () =>
-      services.container.get<VersionsService>("versionsService"),
+      container.get<CollectionService>("collectionService"),
+    userService: () => container.get<UserService>("userService"),
+    mediaService: () => container.get<UnifiedMediaService>("mediaService"),
+    emailService: () => container.get<EmailService>("emailService"),
+    versionsService: () => container.get<VersionsService>("versionsService"),
     singleRegistryService: () =>
-      services.container.get<SingleRegistryService>("singleRegistryService"),
+      container.get<SingleRegistryService>("singleRegistryService"),
     db: () => adapterDrizzleDb,
     // The adapter's own answer. Everything that turns a plugin's settings into
     // SQL picks its table metadata and its upsert spelling from this, and the
@@ -3922,7 +3924,7 @@ async function initializePlugins(
     // The transaction-capable adapter, for core-owned stores that must run on
     // EVERY dialect: Drizzle's better-sqlite3 transaction cannot carry awaited
     // work, so SQLite writes ride the adapter's manual BEGIN IMMEDIATE path.
-    adapter: () => services.container.get<AdapterTransactions>("adapter"),
+    adapter: () => container.get<AdapterTransactions>("adapter"),
   };
 
   const getServiceForPlugin = <T extends PluginServiceName>(name: T) =>
@@ -4268,9 +4270,6 @@ function clearActiveHookRegistry(): void {
 export async function destroyRegisteredPlugins(): Promise<void> {
   const teardown = globalForReg.__nextly_pluginTeardown ?? [];
   globalForReg.__nextly_pluginTeardown = undefined;
-  // Released after the loop: the destroys below still resolve through it,
-  // and once they are done nothing started from it is left to.
-  const services = globalForReg.__nextly_pluginServiceContainer;
   for (let i = teardown.length - 1; i >= 0; i--) {
     const { plugin, context } = teardown[i];
     if (!plugin.destroy) continue;
@@ -4280,9 +4279,6 @@ export async function destroyRegisteredPlugins(): Promise<void> {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`Plugin "${plugin.name}" destroy failed: ${message}`);
     }
-  }
-  if (globalForReg.__nextly_pluginServiceContainer === services) {
-    globalForReg.__nextly_pluginServiceContainer = undefined;
   }
 }
 
@@ -4348,10 +4344,15 @@ async function releaseServices(opts: {
 export function clearServices(): void {
   // Plugins still running are torn down at the next registration, and their
   // `destroy` may still need the services they were started with: those move
-  // aside for them rather than vanish. Either way the container is empty now.
-  const services = globalForReg.__nextly_pluginServiceContainer;
-  if ((globalForReg.__nextly_pluginTeardown ?? []).length > 0 && services) {
-    services.container = container.detach();
+  // aside for them rather than vanish (`runRegistrationAttempt` puts them back
+  // for the teardown). Moved once: a second clear before that registration
+  // finds the live container already empty, and moving that aside would lose
+  // the first. Either way the container is empty now.
+  if (
+    (globalForReg.__nextly_pluginTeardown ?? []).length > 0 &&
+    globalForReg.__nextly_clearedServices === undefined
+  ) {
+    globalForReg.__nextly_clearedServices = container.detach();
   } else {
     container.clear();
   }

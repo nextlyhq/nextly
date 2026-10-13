@@ -42,3 +42,27 @@ describe("Container.detach", () => {
     expect(original.get("logger")).toEqual({ id: "new" });
   });
 });
+
+describe("Container.restore", () => {
+  it("puts back what detach moved out, the same instances", () => {
+    const original = new Container();
+    original.registerSingleton("adapter", () => ({ connection: 1 }));
+    const before = original.get("adapter");
+    const detached = original.detach();
+
+    original.restore(detached);
+
+    expect(original.get("adapter")).toBe(before);
+  });
+
+  it("leaves a name registered since with its own registration", () => {
+    const original = new Container();
+    original.registerSingleton("logger", () => ({ id: "old" }));
+    const detached = original.detach();
+    original.registerSingleton("logger", () => ({ id: "new" }));
+
+    original.restore(detached);
+
+    expect(original.get("logger")).toEqual({ id: "new" });
+  });
+});

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineConfig } from "../../collections/config/define-config";
-import { clearServices, registerServices } from "../../di/register";
+import { clearServices, getService, registerServices } from "../../di/register";
 import { getNextly } from "../../init";
 import { getImageProcessor } from "../../storage/image-processor";
 import { definePlugin, type PluginDefinition } from "../plugin-context";
@@ -189,6 +189,68 @@ describe.each(getConfiguredTestDialects())(
           : { dialect, plugins: [plugin] }
       );
 
+      clearServices();
+      await registerServices({
+        adapter: current.adapter,
+        imageProcessor: getImageProcessor(),
+        plugins: [plugin],
+      });
+
+      expect(order).toEqual(["destroyed inside a transaction"]);
+    });
+
+    it("finds them through the container itself, as every service does", async () => {
+      // Not every service a context offers is looked up through the plugin's
+      // own resolvers: `ctx.services.jobs` and `ctx.audit` read the container
+      // directly, and found it empty after the clear.
+      const found: string[] = [];
+      const plugin = definePlugin({
+        name: "@test/d-container",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        init() {},
+        destroy() {
+          found.push(getService("adapter") === undefined ? "none" : "adapter");
+        },
+      });
+      current = await createTestNextly(
+        dialect === "sqlite"
+          ? { plugins: [plugin] }
+          : { dialect, plugins: [plugin] }
+      );
+
+      clearServices();
+      await registerServices({
+        adapter: current.adapter,
+        imageProcessor: getImageProcessor(),
+        plugins: [plugin],
+      });
+
+      expect(found).toEqual(["adapter"]);
+    });
+
+    it("still reaches them after a second clear before the next registration", async () => {
+      // Moved aside again, the empty container would have replaced the one
+      // holding them.
+      const order: string[] = [];
+      const plugin = definePlugin({
+        name: "@test/d-twice",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        init() {},
+        async destroy(ctx) {
+          await ctx.db.transaction(async () => {
+            order.push("destroyed inside a transaction");
+          });
+        },
+      });
+      current = await createTestNextly(
+        dialect === "sqlite"
+          ? { plugins: [plugin] }
+          : { dialect, plugins: [plugin] }
+      );
+
+      clearServices();
       clearServices();
       await registerServices({
         adapter: current.adapter,

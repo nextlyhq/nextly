@@ -118,6 +118,20 @@ export class Container {
     this.factories = new Map();
     return detached;
   }
+
+  /**
+   * Take back what `detach` moved out, for as long as the code it was moved
+   * aside for needs every lookup to find it: the teardown of plugins a
+   * cleared registration left running, which reaches services through this
+   * container however their contexts get there. A name registered here since
+   * keeps its own registration. Each restored singleton is the same instance,
+   * cached in the map it moved with.
+   */
+  restore(detached: Container): void {
+    for (const [name, factory] of detached.factories) {
+      if (!this.factories.has(name)) this.factories.set(name, factory);
+    }
+  }
 }
 
 /**
