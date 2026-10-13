@@ -306,6 +306,18 @@ account (core makes that one super-admin), to give a role that reaches `super-ad
 activation, email verification or roles of an account that reaches `super-admin`, or to
 delete one. An address it marks verified is recorded as verified by `plugin`.
 
+It also refuses, with `FORBIDDEN` and nothing written, a create or update that would leave
+an account active, verified and without a password. That is the account core makes for a
+person another system has verified, and core makes it only when one of the app's login
+plugins hands it a sign-in. The refusal is judged on the account a write leaves, and only
+for a write to its activation, verification or address. An account core made this way
+still takes your plugin's other edits, and can be deactivated or given a password, but a
+plugin cannot verify an active account that has no password (re-verifying one core made
+included), activate a verified one that has none, reactivate one core made, or move one
+core made to another address unless the same write gives it a password. An active account
+with no password that is not verified, such as an imported account whose owner sets a
+password by reset, stays allowed.
+
 ## When to drop to `ctx.db`
 
 `ctx.db` is the **`@experimental`** database surface — unmanaged: it bypasses

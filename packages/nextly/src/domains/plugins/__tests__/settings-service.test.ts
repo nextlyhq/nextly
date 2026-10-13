@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import {
+  MAX_SETTING_BYTES,
   PluginSettingsService,
   type PluginSettingRow,
   type PluginSettingsStore,
@@ -1786,6 +1787,122 @@ describe("sealing stored secrets before the plugin runs", () => {
     await service(store, [KEY_A]).sealStored();
 
     expect(store.rows.find(r => r.key === "clientSecret")?.value).toBe(before);
+  });
+
+  /** One provider's group in the admin view of the settings. */
+  function providerView(settings: unknown, provider: string): unknown {
+    const groups = (settings as { providers?: Record<string, unknown> })
+      .providers;
+    return groups?.[provider];
+  }
+
+  /** The stored text of one leaf of the `providers` row. */
+  function storedLeaf(
+    store: { rows: PluginSettingRow[] },
+    provider: string,
+    field: string
+  ): unknown {
+    const row = store.rows.find(r => r.key === "providers");
+    const value = JSON.parse(row?.value ?? "{}") as Record<
+      string,
+      Record<string, unknown>
+    >;
+    return value[provider]?.[field];
+  }
+
+  it("seals a newly secret leaf beside a value no configured key can open, keeping that value as stored", async () => {
+    // The row holds a secret sealed under a key since lost, and a `clientId`
+    // the next manifest calls secret. Skipping the row because one value in
+    // it cannot be opened left the credential in plain text for as long as
+    // the key stayed lost.
+    const store = memoryStore();
+    await service(store, [KEY_B]).set({
+      providers: {
+        google: { clientId: CLIENT_ID, clientSecret: SECRET_VALUE },
+      },
+    });
+    const lost = storedLeaf(store, "google", "clientSecret");
+
+    await service(store, [KEY_A], NEWLY_SECRET).sealStored();
+
+    expect(store.rows.find(r => r.key === "providers")?.value).not.toContain(
+      CLIENT_ID
+    );
+    // Copied across untouched: it cannot be opened, so it cannot be written
+    // again any other way.
+    expect(storedLeaf(store, "google", "clientSecret")).toBe(lost);
+    const view = await service(store, [KEY_A], NEWLY_SECRET).view();
+    // Exact, not a subset: `{ set: true }` is also a subset of the view of a
+    // value that cannot be read.
+    expect(providerView(view.settings, "google")).toEqual({
+      clientId: { set: true },
+      clientSecret: { set: true, readable: false },
+    });
+  });
+
+  it("seals again under the current key a value opened with a retired one, beside one no key can open", async () => {
+    // Two values sealed apart, then held in one row: one under a key since
+    // lost, one under the key the install has just rotated away from.
+    const lostStore = memoryStore();
+    await service(lostStore, [KEY_B]).set({
+      providers: { google: { clientId: "g", clientSecret: SECRET_VALUE } },
+    });
+    const retiredKey = "c".repeat(32);
+    const retiredStore = memoryStore();
+    await service(retiredStore, [retiredKey]).set({
+      providers: { github: { clientId: "h", clientSecret: SECRET_VALUE } },
+    });
+    const store = memoryStore();
+    const [lostRow] = lostStore.rows.filter(r => r.key === "providers");
+    store.rows.push({
+      ...lostRow,
+      value: JSON.stringify({
+        google: JSON.parse(lostRow.value).google,
+        github: JSON.parse(
+          retiredStore.rows.find(r => r.key === "providers")?.value ?? "{}"
+        ).github,
+      }),
+    });
+    const lost = storedLeaf(store, "google", "clientSecret");
+
+    await service(store, [KEY_A, retiredKey]).sealStored();
+
+    expect(storedLeaf(store, "google", "clientSecret")).toBe(lost);
+    // Opened with the current key alone, so the retired one can now go.
+    const view = await service(store, [KEY_A]).view();
+    expect(providerView(view.settings, "github")).toEqual({
+      clientId: "h",
+      clientSecret: { set: true },
+    });
+    expect(providerView(view.settings, "google")).toEqual({
+      clientId: "g",
+      clientSecret: { set: true, readable: false },
+    });
+  });
+
+  it("refuses to store a repair that seals a row past the size a setting may hold", async () => {
+    // Beside a value no key can open, the row is repaired from its stored
+    // form; sealing a large plain-text leaf there grows it, and a row stored
+    // past the bound would refuse every later write of its key.
+    const large = "x".repeat(200 * 1024);
+    const store = memoryStore();
+    await service(store, [KEY_B]).set({
+      providers: { google: { clientId: large, clientSecret: SECRET_VALUE } },
+    });
+    const before = store.rows.find(r => r.key === "providers")?.value;
+    // The premise: stored, it fits.
+    expect(Buffer.byteLength(before ?? "", "utf8")).toBeLessThan(
+      MAX_SETTING_BYTES
+    );
+
+    await expect(
+      service(store, [KEY_A], NEWLY_SECRET).sealStored()
+    ).rejects.toMatchObject({
+      publicData: expect.objectContaining({
+        errors: [expect.objectContaining({ code: "TOO_LARGE" })],
+      }),
+    });
+    expect(store.rows.find(r => r.key === "providers")?.value).toBe(before);
   });
 
   it("throws when the encrypted value cannot be stored", async () => {

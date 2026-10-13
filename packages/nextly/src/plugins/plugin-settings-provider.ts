@@ -9,6 +9,7 @@
  * @since 1.0.0
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { z } from "zod";
 
 import { announcePluginSettingsChange } from "../domains/plugins/settings-activity";
 import {
@@ -83,8 +84,16 @@ export function createPluginSettings(
  * manifest now calls secret, before the plugin starts.
  *
  * Through the same service `ctx.settings` uses, so the boot seals with
- * exactly the rules a read or a write would repair by. A plugin that
- * declares no settings, or no secrets, has nothing to seal.
+ * exactly the rules a read or a write would repair by.
+ *
+ * Every plugin is asked, whatever its manifest now declares. A past manifest
+ * may have declared secrets, or settings at all, and what it encrypted stays
+ * encrypted in the plugin's rows until a new value is written there. Sealed
+ * under a secret since rotated, those values have to be sealed again under
+ * the current one before the previous secret is retired, or a later version
+ * that reads them again finds them unreadable. A plugin with no settings
+ * schema is sealed against an empty one: the seal reads nothing but the rows'
+ * envelopes, and a plugin that never stored a setting costs one read.
  */
 export async function sealPluginSettings(
   plugin: PluginDefinition,
@@ -92,10 +101,12 @@ export async function sealPluginSettings(
   dialect: SupportedDialect,
   adapter?: () => SettingsAdapter
 ): Promise<void> {
-  const schema = plugin.contributes?.settings;
-  if (!schema || (plugin.capabilities?.secrets ?? []).length === 0) return;
+  const schema = plugin.contributes?.settings ?? NO_SETTINGS;
   await settingsService(plugin, schema, db, dialect, adapter).sealStored();
 }
+
+/** The settings schema of a plugin that declares none. */
+const NO_SETTINGS = z.object({});
 
 /**
  * One plugin's settings service, over the core-owned settings table.

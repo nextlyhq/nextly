@@ -648,15 +648,88 @@ export class PluginSettingsService {
           this.owesRepair(row, decoded)
       )
       .map(row =>
-        this.rowFor(
-          row.key,
-          decoded.values[row.key],
-          opts,
-          decoded.sealedPaths.get(row.key)
-        )
+        // A row holding an unreadable value cannot be rebuilt from its
+        // decoded form, which carries a marker where that value was: it is
+        // repaired as stored instead.
+        decoded.unreadableKeys.has(row.key)
+          ? this.repairedAsStored(row, opts)
+          : this.rowFor(
+              row.key,
+              decoded.values[row.key],
+              opts,
+              decoded.sealedPaths.get(row.key)
+            )
       );
 
     return { rows: [...rows, ...rewritten], changedKeys };
+  }
+
+  /**
+   * A stored secret row repaired without opening what cannot be opened.
+   *
+   * Works on the row as stored, so each envelope is copied across untouched
+   * unless it opened with a retired generation, which is sealed again under
+   * the current one, and each plain-text leaf at a path the manifest calls
+   * secret is sealed. Plain text here is already in its stored, escaped form,
+   * which is the form a seal takes, so a leaf that claims the envelope prefix
+   * reads back as it did.
+   */
+  private repairedAsStored(
+    row: PluginSettingRow,
+    opts?: { actorUserId?: string }
+  ): PluginSettingRow {
+    const resealed = this.resealStale(JSON.parse(row.value), [row.key]);
+    const sealed = mapSecrets(
+      resealed,
+      this.deps.secretPaths,
+      (leaf, at) =>
+        typeof leaf === "string" && !leaf.startsWith(SECRET_ENVELOPE)
+          ? this.sealOne(leaf, at)
+          : leaf,
+      [row.key]
+    );
+    const stored = JSON.stringify(sealed);
+    this.assertFits(row.key, stored);
+    return {
+      owner: this.deps.owner,
+      key: row.key,
+      value: stored,
+      isSecret: true,
+      updatedAt: new Date(),
+      updatedBy: opts?.actorUserId ?? null,
+    };
+  }
+
+  /**
+   * Every envelope in a stored value that opens only with a retired
+   * generation, sealed again under the current one; every other leaf as it
+   * was stored.
+   */
+  private resealStale(value: unknown, path: string[]): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item, i) =>
+        this.resealStale(item, [...path, String(i)])
+      );
+    }
+    if (isPlainObject(value)) {
+      const out: Record<string, unknown> = {};
+      for (const [name, item] of Object.entries(value)) {
+        out[name] = this.resealStale(item, [...path, name]);
+      }
+      return out;
+    }
+    if (typeof value !== "string" || !value.startsWith(SECRET_ENVELOPE)) {
+      return value;
+    }
+    const opened = openSetting(
+      value.slice(SECRET_ENVELOPE.length),
+      this.deps.secrets(),
+      this.deps.owner,
+      path
+    );
+    return opened.readable && opened.stale
+      ? this.sealOne(opened.plaintext, path)
+      : value;
   }
 
   /**
@@ -862,9 +935,27 @@ export class PluginSettingsService {
           )
         : value
     );
-    // One bound for all three dialects. MySQL's column holds 16 MB and the
-    // others are unbounded, so without it a value saved fine on one install
-    // and failed — or was truncated — on another.
+    this.assertFits(key, stored);
+    return {
+      owner: this.deps.owner,
+      key,
+      value: stored,
+      isSecret: holdsSecret,
+      updatedAt: new Date(),
+      updatedBy: opts?.actorUserId ?? null,
+    };
+  }
+
+  /**
+   * Refuse a stored value larger than any settings row may hold.
+   *
+   * One bound for all three dialects. MySQL's column holds 16 MB and the
+   * others are unbounded, so without it a value saved fine on one install and
+   * failed — or was truncated — on another. Asked of every row this service
+   * writes, a repair's included: sealing adds to a value's size, and a row
+   * stored past the bound refuses every later write of its key.
+   */
+  private assertFits(key: string, stored: string): void {
     if (Buffer.byteLength(stored, "utf8") > MAX_SETTING_BYTES) {
       throw this.invalid([
         {
@@ -874,14 +965,6 @@ export class PluginSettingsService {
         },
       ]);
     }
-    return {
-      owner: this.deps.owner,
-      key,
-      value: stored,
-      isSecret: holdsSecret,
-      updatedAt: new Date(),
-      updatedBy: opts?.actorUserId ?? null,
-    };
   }
 
   /** The refusal for a settings value that cannot live in a settings row. */
@@ -927,14 +1010,17 @@ export class PluginSettingsService {
    * asked it separately and missed the same case: a path newly marked
    * secret INSIDE a row already stored as secret. That row's other leaves
    * are encrypted, so "the row is secret" read as "the row is sealed" while
-   * the new path's value stayed plain text. A value no configured generation
-   * can open is left alone: it is encrypted already, and writing it again
-   * needs the key nobody has.
+   * the new path's value stayed plain text.
+   *
+   * A row holding a value no configured generation can open still owes the
+   * rest: that value is kept as stored — it is encrypted already, and opening
+   * it needs the key nobody has — but a sibling in plain text at a secret path
+   * is sealed, and one opened with a retired generation is sealed again. Left
+   * out whole, as it once was, the row kept a credential the manifest calls
+   * secret in plain text for as long as the lost key stayed lost.
    */
   private owesRepair(row: PluginSettingRow, decoded: DecodedSettings): boolean {
-    if (row.key === OWNER_LOCK_KEY || decoded.unreadableKeys.has(row.key)) {
-      return false;
-    }
+    if (row.key === OWNER_LOCK_KEY) return false;
     if (decoded.staleKeys.has(row.key)) return true;
     if (!row.isSecret) {
       return topLevelKeyHoldsSecret(row.key, this.deps.secretPaths);
