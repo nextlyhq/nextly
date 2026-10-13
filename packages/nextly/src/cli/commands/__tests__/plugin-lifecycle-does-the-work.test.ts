@@ -45,6 +45,23 @@ const logger = {
   debug: vi.fn(),
 };
 
+/**
+ * A database whose tables exist until a DOWN runs, and are gone after it:
+ * what an uninstall checks before it records the plugin uninstalled.
+ */
+function droppedByDowns(
+  runDown: PluginLifecycleDeps["runDown"] = async () => 1
+): Pick<PluginLifecycleDeps, "liveTables" | "runDown"> {
+  let dropped = false;
+  return {
+    liveTables: async tables => new Set(dropped ? [] : tables),
+    runDown: async (plugin, down) => {
+      dropped = true;
+      return runDown(plugin, down);
+    },
+  };
+}
+
 function deps(over: Partial<PluginLifecycleDeps> = {}): PluginLifecycleDeps {
   return {
     adapter: {} as never,
@@ -173,7 +190,11 @@ describe("what uninstall tells the operator to do next", () => {
     await runPluginUninstallCommand(
       "@acme/fx",
       { ...opts, yes: true },
-      deps({ logger: { ...logger, info } as never, ...over })
+      deps({
+        logger: { ...logger, info } as never,
+        ...droppedByDowns(),
+        ...over,
+      })
     );
     return String(info.mock.calls.at(-1)?.[0]);
   }
@@ -198,6 +219,98 @@ describe("what uninstall tells the operator to do next", () => {
     const message = await lastInfo({ keepData: false }, {});
     expect(message).not.toMatch(/refuse/);
     expect(message).toMatch(/owns no schema/);
+  });
+});
+
+describe("plugins uninstall over a DOWN that leaves a table", () => {
+  it("refuses to record the plugin uninstalled while the table exists", async () => {
+    const row = {
+      tableName: "fx__notes",
+      elementKind: "table",
+      elementName: "",
+      ownerKind: "plugin",
+      ownerId: "@acme/fx",
+      migratedBy: "plugin:@acme/fx",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active",
+    };
+    const updates: unknown[] = [];
+    const db = {
+      select: () => ({
+        from: () => Object.assign([row], { where: () => [row] }),
+      }),
+      update: () => ({
+        set: (values: unknown) => {
+          updates.push(values);
+          return { where: () => Promise.resolve() };
+        },
+      }),
+      insert: () => ({ values: () => Promise.resolve() }),
+    };
+    // Every DOWN runs without error, and the table is still there after.
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: true },
+        deps({ db: db as never })
+      )
+    ).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "tables-left-by-down", tables: ["fx__notes"] },
+    });
+    expect(updates).toEqual([]);
+  });
+});
+
+describe("what install reports", () => {
+  it("counts tables, not owner rows", async () => {
+    // One table, with an index row on it and a column the plugin added to
+    // another owner's table: three rows, one table.
+    const base = {
+      ownerKind: "plugin",
+      ownerId: "@acme/fx",
+      migratedBy: "plugin:@acme/fx",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active",
+    };
+    const rows = [
+      {
+        ...base,
+        tableName: "fx__notes",
+        elementKind: "table",
+        elementName: "",
+      },
+      {
+        ...base,
+        tableName: "fx__notes",
+        elementKind: "index",
+        elementName: "i",
+      },
+      {
+        ...base,
+        tableName: "dc_posts",
+        elementKind: "column",
+        elementName: "c",
+      },
+    ];
+    const success = vi.fn();
+    await runPluginInstallCommand(
+      "@acme/fx",
+      deps({
+        logger: { ...logger, success } as never,
+        db: {
+          select: () => ({
+            from: () => Object.assign(rows, { where: () => rows }),
+          }),
+          update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+        } as never,
+      })
+    );
+    expect(success).toHaveBeenCalledWith(
+      "@acme/fx installed (1 table(s) recorded)."
+    );
   });
 });
 
@@ -496,7 +609,7 @@ describe("plugins uninstall decides before it takes the lock", () => {
         runLifecycleHook: vi.fn(async () => {
           reached.push("hook");
         }),
-        runDown: vi.fn(async () => {
+        ...droppedByDowns(async () => {
           reached.push("down");
           return 1;
         }),
@@ -586,7 +699,7 @@ describe("plugins uninstall decides before it takes the lock", () => {
       deps({
         db: ownsTable as never,
         plugins: [target],
-        runDown,
+        ...droppedByDowns(runDown),
         underMigrateLock: async <T>(work: () => Promise<T>) => {
           target.modules = [
             { name: "0001_init", reversible: true },

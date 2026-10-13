@@ -402,6 +402,11 @@ defineTable("counters", {
 nullable and never written — the database assigns it, so a value you supply is
 one the sequence does not know about.
 
+`ctx.db.insertReturning` returns the inserted row with the key the database
+chose. The key is read from the insert's own result (`RETURNING` on PostgreSQL
+and SQLite, the insert id MySQL reports for the statement), so inserts that
+overlap each get their own row back.
+
 Only on a table its own owner declares. Added to somebody else's, it would be
 a second auto-assigning column on a row whose identity is already decided, and
 MySQL will not accept a second AUTO_INCREMENT column at all.

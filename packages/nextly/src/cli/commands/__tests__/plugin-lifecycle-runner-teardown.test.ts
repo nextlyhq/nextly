@@ -26,6 +26,8 @@ const state = vi.hoisted(() => {
   return {
     calls: [] as string[],
     alreadyRegistered: false,
+    /** Whether `nextly migrate` has created the ledger and owner registry. */
+    migrated: true,
     onInstall,
     registerServices: vi.fn(),
     appConfig,
@@ -46,6 +48,7 @@ vi.mock("../../utils/adapter", () => ({
   createCliAdapter: async () => ({
     dialect: "sqlite",
     getDrizzle: () => ({}),
+    tableExists: async () => state.migrated,
     disconnect: async () => {
       state.calls.push("disconnect");
     },
@@ -113,6 +116,7 @@ const context = {
 beforeEach(() => {
   calls.length = 0;
   state.bootedFrom.length = 0;
+  state.migrated = true;
   state.alreadyRegistered = false;
   onInstall.mockReset().mockImplementation(async () => {
     calls.push("onInstall");
@@ -167,6 +171,18 @@ describe("the lifecycle hook's boot is torn down", () => {
     );
 
     expect(calls).toEqual(["register", "destroy", "clear", "disconnect"]);
+  });
+
+  it("when the database has not been migrated yet", async () => {
+    // Refused before anything is read or run, and the adapter still
+    // released: `connect` had not handed it back to the caller's `finally`.
+    state.migrated = false;
+
+    await expect(runPluginInstall("@acme/fx", {}, context)).rejects.toThrow(
+      /nextly migrate/
+    );
+
+    expect(calls).toEqual(["disconnect"]);
   });
 
   it("but never tears down a registration it did not make", async () => {
