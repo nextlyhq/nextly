@@ -132,6 +132,11 @@ import {
   getSortedBaseNames,
 } from "../utils/migration-discovery";
 
+import {
+  plainTextPasswordCleanup,
+  plainTextPasswordNotice,
+} from "./clear-plaintext-passwords";
+
 /**
  * Options specific to the migrate command
  */
@@ -463,6 +468,21 @@ export async function runMigrate(
     } catch (err) {
       logger.error(describeError(err));
       process.exit(1);
+    }
+
+    // Read-only: accounts an earlier release left holding a password as given
+    // are counted, and the command that clears them is named. Migrate changes
+    // no credential, and a count it cannot read never fails a migrate that
+    // succeeded. Here in the CLI run only, never in the core a boot shares.
+    try {
+      const notice = plainTextPasswordNotice(
+        (await plainTextPasswordCleanup(adapter).find()).length
+      );
+      if (notice) logger.warn(notice);
+    } catch (err) {
+      logger.warn(
+        `Could not check for passwords stored as given: ${describeError(err)}`
+      );
     }
 
     const duration = Date.now() - startTime;

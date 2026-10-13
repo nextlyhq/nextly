@@ -17,6 +17,7 @@ import { getCoreVersion } from "../plugins/core-version";
 
 import { registerAddCommand } from "./commands/add";
 import { registerBuildCommand } from "./commands/build";
+import { registerClearPlaintextPasswordsCommand } from "./commands/clear-plaintext-passwords";
 // What: import the renamed one-shot sync command.
 import { registerDbSyncCommand } from "./commands/db-sync";
 import { registerGenerateManifestCommand } from "./commands/generate-manifest";
@@ -232,6 +233,7 @@ function registerCommands(program: Command): void {
   registerMigrateStatusCommand(program);
   registerMigrateBaselineCommand(program); // adopt an existing DB into the history
   registerMigrateFieldGroupsCommand(program); // rename field-group storage, previewing by default
+  registerClearPlaintextPasswordsCommand(program, createContext); // clear passwords stored as given, previewing by default
   registerMigrateResolveCommand(program); // Plan C3 — recovery command
   registerPruneCommand(program); // P2b — drop orphaned plugin/code schema (D14)
   registerWebhooksPruneCommand(program); // manual webhook-queue retention pass

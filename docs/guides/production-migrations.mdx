@@ -27,6 +27,7 @@ This page covers the common deploy patterns. Pick whichever fits your stack.
 | `nextly migrate:resolve` | Recovery: mark a file applied/rolled-back or clean up a failed attempt without running SQL. See [Recovering from a failed migration](#recovering-from-a-failed-migration). |
 | `nextly migrate:fresh` | Wipes all tables and re-applies every migration. Local-dev only. Confirmation required. |
 | `nextly migrate:down` | Rolls back the most-recently-applied migration(s) using their `-- DOWN` section. CLI-only; never runs on boot. See [Rolling back a migration](#rolling-back-a-migration). |
+| `nextly users:clear-plaintext-passwords` | Finds accounts an earlier release left holding a password stored as typed and, with `--apply`, clears it and ends their sessions. Previews by default. See [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed). |
 
 Global flags inherited from the root `nextly` command: `--config <path>` (custom `nextly.config.ts` path), `--cwd <path>`, `--verbose`, `-q/--quiet`.
 
@@ -41,6 +42,7 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished).
 - `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
 - `nextly migrate:down` -- `--step <n>` (roll back the last N migrations), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--plugin <name>` (roll back that plugin's modules instead of the app's files), `--force-unlock`.
+- `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions; without it the command only counts them).
 
 ---
 
@@ -282,6 +284,7 @@ Specific examples:
 4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp).
 5. Applies each pending file in one transaction on one connection (on MySQL each DDL statement still commits as it runs; see [database support](/docs/database/support) for MySQL caveats). What a file may contain is below.
 6. Records each applied file in `nextly_schema_events` as a `file_apply` event, opened with `started_at`, `filename` and `sha256` and closed with `ended_at` and `statements_executed`.
+7. Counts the accounts holding a password stored as typed, and when there are any, names the command that clears them. It changes nothing; see [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).
 
 | Exit code | Meaning |
 |---|---|
@@ -610,6 +613,36 @@ NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 nextly migrate
 The flag disables the refusal for **every** operation in that run, not just the one you
 judged safe. Read the whole list before setting it.
 </Callout>
+
+## Clearing passwords stored as typed
+
+Earlier releases stored some passwords as they were typed instead of hashing them: a
+password of 32 characters or more that contained a colon, given when an account was
+created, and any value sent to `PATCH /api/users/:id/password`. Such a value never let
+anyone sign in, because sign-in only compares against a hash, but it is a readable
+password in your database and in every backup of it.
+
+`nextly migrate` counts these accounts after each run and names the command below. To
+see how many your database holds, without changing anything:
+
+```bash
+nextly users:clear-plaintext-passwords
+```
+
+To clear them:
+
+```bash
+nextly users:clear-plaintext-passwords --apply
+```
+
+For each such account it removes the stored value and ends every session the account
+holds. It prints only counts, never an address or a value, and a second run finds nothing
+left to change. Accounts with a proper password, and accounts without one, are left as
+they are.
+
+What the people affected see: signing in with a password is refused with the same message
+as a wrong password, as it already was. They set a new password with **Forgot password**,
+or an administrator sets one for them.
 
 ## What you should never do
 
