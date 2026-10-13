@@ -16,7 +16,7 @@
  */
 import type { NextlyServiceConfig } from "../di/register";
 import type { EmailConfig, EmailSettings } from "../domains/email/types";
-import { copyPlainValues } from "../shared/lib/plain-copy";
+import { copyPlainValues, type FrozenCopy } from "../shared/lib/plain-copy";
 
 import type { PluginCapabilities, PluginDefinition } from "./plugin-context";
 
@@ -123,7 +123,7 @@ export interface PluginSummary {
   /** False when the app configured the plugin with `enabled: false`. */
   readonly enabled: boolean;
   /** A copy of what the plugin's manifest declares it may do. */
-  readonly capabilities?: Readonly<PluginCapabilities>;
+  readonly capabilities?: FrozenCopy<PluginCapabilities>;
   readonly contributes?: {
     /** A copy of what the plugin declared for other plugins to read. */
     readonly declarations?: Readonly<Record<string, unknown>>;
@@ -144,14 +144,20 @@ export type PluginEmailSettings = EmailSettings &
  * not part of it; a plugin reaches the database through `ctx.db` and logs
  * through `ctx.logger`. `plugins` lists summaries (`PluginSummary`) rather
  * than definitions, and `email` leaves out the provider's credentials.
+ *
+ * Typed readonly all the way down (`FrozenCopy`) because the value is frozen
+ * all the way down: `ctx.config.collections.push(...)` or a write under
+ * `ctx.config.security` would throw, so neither compiles. Hooks, validators
+ * and components are kept by reference and stay callable as declared; see
+ * `FrozenCopy` for how instances of classes are treated.
  */
-export type PluginConfig = Readonly<
+export type PluginConfig = FrozenCopy<
   Omit<
     Pick<NextlyServiceConfig, (typeof PLUGIN_CONFIG_KEYS)[number]>,
     "plugins" | "email"
   > & {
     plugins?: readonly PluginSummary[];
-    email?: Readonly<PluginEmailSettings>;
+    email?: PluginEmailSettings;
   }
 >;
 

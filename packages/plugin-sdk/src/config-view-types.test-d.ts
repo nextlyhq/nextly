@@ -23,6 +23,24 @@ const summaryHasInit: Has<PluginSummary, "init"> = false;
 // The email settings leave the provider's credentials out.
 const emailHasCredentials: Has<PluginConfig["email"], "providerConfig"> = false;
 
+// Frozen all the way down at runtime, so readonly all the way down in the
+// published types: no list under `ctx.config` offers `push`, however deep.
+type Capabilities = NonNullable<PluginSummary["capabilities"]>;
+const collectionsHavePush: Has<PluginConfig["collections"], "push"> = false;
+const corsOriginsHavePush: Has<
+  NonNullable<NonNullable<PluginConfig["security"]>["cors"]>["origin"],
+  "push"
+> = false;
+const outboundHasPush: Has<
+  NonNullable<Capabilities["net"]>["outbound"],
+  "push"
+> = false;
+
+// Exported below without an annotation, so the compiler has to write its
+// type into a declaration file: it can only do so if every name the type
+// reaches is one a plugin can import. A field declaration's brand is not.
+const users = ctx.config.users;
+
 // The core services are facades of their plugin methods.
 const email: PluginEmailService = ctx.services.email;
 const emailHasAdapter: Has<PluginEmailService, "adapter"> = false;
@@ -41,6 +59,10 @@ export const __configViewTypeCheck = {
   first,
   summaryHasInit,
   emailHasCredentials,
+  collectionsHavePush,
+  corsOriginsHavePush,
+  outboundHasPush,
+  users,
   email,
   emailHasAdapter,
   done,

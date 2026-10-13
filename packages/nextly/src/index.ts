@@ -488,6 +488,10 @@ export {
   // the application's configuration.
   type PluginConfig,
   type PluginSummary,
+  // The types `ctx.config` is built from, so a plugin's emitted declarations
+  // can name them rather than spell their structure out.
+  type FrozenCopy,
+  type FrozenValue,
   type PluginEmailSettings,
   type PluginContext,
   type PluginContributions,

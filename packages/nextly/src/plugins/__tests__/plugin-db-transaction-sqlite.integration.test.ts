@@ -18,12 +18,14 @@ import { col, defineTable } from "../../domains/schema/extension/dsl";
 import { NextlyError } from "../../errors/nextly-error";
 import { nextlyPluginSettings } from "../../schemas/plugin-settings/sqlite";
 import type { UserService } from "../../services/users/user-service";
+import type { DatabaseInstance } from "../../types/database-operations";
 import {
   definePlugin,
   type PluginContext,
   type PluginDefinition,
   type PluginRawDatabase,
   type PluginSettingsApi,
+  type PluginTransaction,
   type PluginUserService,
 } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
@@ -152,6 +154,134 @@ describe.each(SURFACES)("a transaction through %s on sqlite", (_, pick) => {
     expect(await db.stored()).toEqual([]);
   });
 });
+
+describe("the typed ctx.db's transaction handle, kept past its callback, on sqlite", () => {
+  // After the commit, the handle the work was given is bound to the shared
+  // connection with no transaction open on it, so a write through it would
+  // land on its own, outside the unit it was written for.
+  it("refuses a later write and read through it, and writes nothing", async () => {
+    const ctx = await bootPlugin();
+    let kept: PluginTransaction | undefined;
+    await ctx.db.transaction(async tx => {
+      await tx.insert(marks, { key: "a" });
+      kept = tx;
+    });
+    if (!kept) throw new Error("the transaction's work did not run");
+
+    const finished = (error: unknown) =>
+      NextlyError.is(error) &&
+      (error.logContext as { reason?: unknown } | undefined)?.reason ===
+        "plugin-transaction-finished";
+    await expect(kept.insert(marks, { key: "late" })).rejects.toSatisfy(
+      finished
+    );
+    await expect(kept.select(marks).all()).rejects.toSatisfy(finished);
+    expect(await typed(ctx.db).stored()).toEqual(["a"]);
+  });
+
+  it("finishes an insertReturning the callback started and did not await", async () => {
+    // On SQLite a single statement runs synchronously when Drizzle's query is
+    // first awaited, inside the call that made it, so it cannot outlive the
+    // callback. `insertReturning` is two statements: its read-back reaches
+    // the handle a tick after the insert, when the callback may already have
+    // returned. Waiting for it before the commit is what lets it complete
+    // inside the transaction rather than being refused after its insert.
+    const ctx = await bootPlugin();
+    let unawaited: Promise<{ key: string }> | undefined;
+    await ctx.db.transaction(async tx => {
+      await tx.insert(marks, { key: "a" });
+      unawaited = tx.insertReturning(marks, { key: "b" });
+    });
+    await expect(unawaited).resolves.toMatchObject({ key: "b" });
+    expect(await typed(ctx.db).stored()).toEqual(["a", "b"]);
+  });
+
+  it("rolls back an insertReturning the callback started and did not await when it then throws", async () => {
+    // The rollback counterpart of the case above. A single un-awaited insert
+    // proves nothing here: better-sqlite3 runs it synchronously inside the
+    // call, so it lands in the transaction whether or not anything waits for
+    // it. The read-back is the step that comes later; not waiting, it is
+    // refused after its insert. Both steps must land inside the transaction,
+    // so the rollback takes the row and the call still resolves.
+    const ctx = await bootPlugin();
+    let unawaited: Promise<unknown> | undefined;
+    await ctx.db
+      .transaction(async tx => {
+        unawaited = tx.insertReturning(marks, { key: "a" });
+        unawaited.catch(() => undefined);
+        throw new Error("later step failed");
+      })
+      .catch(() => undefined);
+
+    await expect(unawaited).resolves.toMatchObject({ key: "a" });
+    expect(await typed(ctx.db).stored()).toEqual([]);
+  });
+});
+
+describe.each([
+  ["the restricted ctx.db.raw", false],
+  ["the rawSql ctx.db.raw", true],
+] as const)(
+  "a transaction handle kept past its callback, through %s on sqlite",
+  (_, rawSql) => {
+    // Kept, the handle reaches the shared connection with no transaction
+    // open on it, so a statement through it would run outside the unit it
+    // was written for. With rawSql the handle is the live instance itself,
+    // which stays usable as `ctx.db.raw`; only the one the work received
+    // refuses.
+    const finished = (error: unknown) =>
+      NextlyError.is(error) &&
+      (error.logContext as { reason?: unknown } | undefined)?.reason ===
+        "plugin-transaction-finished";
+    const thrownBy = (run: () => unknown): unknown => {
+      try {
+        run();
+      } catch (error) {
+        return error;
+      }
+      return "did not throw";
+    };
+
+    it("refuses every entry method after a commit and after a rollback", async () => {
+      const ctx = await bootPlugin(rawSql ? rawSqlManifest : {}, rawSql);
+      const db = ctx.db.raw;
+      let committed: DatabaseInstance | undefined;
+      let rolledBack: DatabaseInstance | undefined;
+      await db.transaction(async tx => {
+        await tx.insert(nextlyPluginSettings).values(row("a"));
+        committed = tx;
+      });
+      await db
+        .transaction(async tx => {
+          rolledBack = tx;
+          throw new Error("roll back");
+        })
+        .catch(() => undefined);
+      if (!committed || !rolledBack) {
+        throw new Error("the transactions' work did not run");
+      }
+
+      for (const kept of [committed, rolledBack]) {
+        expect(thrownBy(() => kept.insert(nextlyPluginSettings))).toSatisfy(
+          finished
+        );
+        expect(
+          thrownBy(() =>
+            kept.select({ key: nextlyPluginSettings.key } as never)
+          )
+        ).toSatisfy(finished);
+        expect(thrownBy(() => kept.update(nextlyPluginSettings))).toSatisfy(
+          finished
+        );
+        expect(thrownBy(() => kept.delete(nextlyPluginSettings))).toSatisfy(
+          finished
+        );
+      }
+      // The handle the plugin holds outside any transaction still answers.
+      expect(await keysStored(db)).toEqual(["a"]);
+    });
+  }
+);
 
 describe.each(SURFACES)(
   "a core write inside a transaction through %s on sqlite",

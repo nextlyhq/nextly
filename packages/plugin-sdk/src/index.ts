@@ -309,12 +309,16 @@ export type {
  *   `PluginUserService`, `PluginMediaService`, `PluginEmailService`,
  *   `PluginVersionsService` (the methods `ctx.services.users`, `media`,
  *   `email` and `versions` expose) and `PluginCollectionTransaction` (what
- *   `ctx.services.collections.withTransaction` hands its work). See
- *   STABILITY.md.
+ *   `ctx.services.collections.withTransaction` hands its work). `FrozenCopy`
+ *   is the readonly-all-the-way-down type `PluginConfig` is built from, and
+ *   `FrozenValue` the type of each of its properties, both exported so a
+ *   plugin's declaration files can name them. See STABILITY.md.
  */
 export type {
   PluginConfig,
   PluginSummary,
+  FrozenCopy,
+  FrozenValue,
   PluginEmailSettings,
   PluginUserService,
   PluginMediaService,

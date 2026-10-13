@@ -113,38 +113,31 @@ describe("DSL types", () => {
 
     it("cannot be given a value on insert", () => {
       // `never` is the property: a value of any type is refused, and leaving
-      // the key out is still allowed.
-      expectTypeOf<
-        InferInsert<typeof counters>["seq"]
-      >().toEqualTypeOf<undefined>();
-      const omitted: InferInsert<typeof counters> = { label: "a" };
-      void omitted;
-      const written: InferInsert<typeof counters> = {
-        label: "a",
-        // @ts-expect-error -- a database-assigned key cannot be written
-        seq: 1,
-      };
-      void written;
+      // the key out is still allowed. Both halves are evaluated assignability,
+      // so the table failing to infer for another reason breaks the control
+      // rather than passing the refusal.
+      type Insert = InferInsert<typeof counters>;
+      expectTypeOf<Insert["seq"]>().toEqualTypeOf<undefined>();
+      expectTypeOf<{ label: string; seq: number }>().not.toExtend<Insert>();
+      expectTypeOf<{ label: string }>().toExtend<Insert>();
     });
 
     it("cannot be given a value through ctx.db, on insert or update", () => {
-      // Never called: the assertions are the type checker's, on the real
-      // method signatures rather than on a restatement of them.
-      function writes(db: PluginDatabase) {
-        void db.insert(counters, {
-          label: "a",
-          // @ts-expect-error -- a database-assigned key cannot be inserted
-          seq: 1,
-        });
-        void db.update(counters, {
-          // @ts-expect-error -- a database-assigned key cannot be updated
-          seq: 2,
-        });
-        // The controls: the same calls without the key compile.
-        void db.insert(counters, { label: "a" });
-        void db.update(counters, { label: "b" });
-      }
-      void writes;
+      // The value types are read off the real method signatures, instantiated
+      // for this table, rather than restated: a signature that stopped
+      // closing the key fails here even if `InferInsert` still does.
+      const db = null as unknown as PluginDatabase;
+      type InsertValues = Parameters<typeof db.insert<typeof counters>>[1];
+      type InsertRow = Exclude<InsertValues, readonly unknown[]>;
+      type UpdateValues = Parameters<typeof db.update<typeof counters>>[1];
+
+      expectTypeOf<InsertRow["seq"]>().toEqualTypeOf<undefined>();
+      expectTypeOf<{ label: string; seq: number }>().not.toExtend<InsertRow>();
+      expectTypeOf<UpdateValues["seq"]>().toEqualTypeOf<undefined>();
+      expectTypeOf<{ seq: number }>().not.toExtend<UpdateValues>();
+      // The controls: the same values without the key are accepted.
+      expectTypeOf<{ label: string }>().toExtend<InsertRow>();
+      expectTypeOf<{ label: string }>().toExtend<UpdateValues>();
     });
 
     it("leaves every other column's insert type as it was", () => {

@@ -57,7 +57,8 @@ These ship today but carry no guarantee yet — use them, but expect change:
 - `ctx.config` and its types `PluginConfig`, `PluginSummary` and
   `PluginEmailSettings`: a frozen copy of the plain configuration values, with
   no live handles and no email provider credentials, and plugin summaries in
-  place of definitions
+  place of definitions; `FrozenCopy` and `FrozenValue`, which type it readonly
+  all the way down
 - The service facade types `PluginUserService`, `PluginMediaService`,
   `PluginEmailService`, `PluginVersionsService` and
   `PluginCollectionTransaction`

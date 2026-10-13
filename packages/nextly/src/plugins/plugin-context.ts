@@ -80,6 +80,7 @@ import {
 } from "./service-opts";
 import { buildPluginServicesNamespace } from "./services/plugin-services-registry";
 import { recordPluginSubscription } from "./subscription-tracker";
+import { type TransactionScope, transactionScope } from "./transaction-scope";
 
 // The typed surface `ctx.db` is, under the names the package exports.
 export type {
@@ -1332,6 +1333,10 @@ export interface PluginRawDatabase extends DatabaseInstance {
    * every later transaction waits, and other requests' writes land in it
    * uncommitted and are lost on restart.
    * Keep it short, and never await network I/O (`ctx.fetch`) inside it.
+   *
+   * `tx` lives only as long as `work`: once `work` has settled, every method
+   * of `tx` refuses. A builder made from `tx` inside `work` and run after it
+   * is not refused, so finish every statement before `work` returns.
    */
   transaction<T>(work: (tx: DatabaseInstance) => Promise<T>): Promise<T>;
 }
@@ -1378,6 +1383,53 @@ function fluentOnly(handle: DatabaseInstance): DatabaseInstance {
 }
 
 /**
+ * `handle` for as long as `scope` is open, refusing every property read
+ * after.
+ *
+ * The handle `ctx.db.raw.transaction` passes its work is bound to the
+ * transaction's connection: on PostgreSQL and MySQL a client the pool leased
+ * to it, on SQLite the database's only connection, where the transaction is
+ * the adapter's `BEGIN IMMEDIATE`. A plugin that keeps it past the callback
+ * and starts a statement through it would write on a client already back in
+ * the pool, or on SQLite outside any transaction. Every statement starts with
+ * a property read on the handle (`insert`, `select`, `execute`, `query`, ...),
+ * so refusing the read refuses the statement before Drizzle builds anything.
+ *
+ * `then` stays readable: resolving a promise with a value reads its `then`,
+ * and a callback that returns its handle must not have its transaction fail
+ * on that read. Symbols stay readable too: they are how a value is inspected
+ * or converted, and no statement starts with one.
+ *
+ * What it cannot refuse is a builder made inside the callback and run after
+ * it. Drizzle's builders hold the session they were made from, not this
+ * handle, and run when first awaited, so a kept
+ * `tx.insert(t).values(v)` awaited after the transaction still runs. The
+ * typed `ctx.db.transaction` covers that case; this escape hatch does not.
+ */
+function scopedHandle<H extends object>(handle: H, scope: TransactionScope): H {
+  return new Proxy(handle, {
+    get(target, property, receiver) {
+      if (typeof property === "string" && property !== "then") {
+        scope.assertOpen();
+      }
+      return Reflect.get(target, property, receiver) as unknown;
+    },
+  });
+}
+
+/**
+ * Runs `work` with `handle` behind a fresh scope, so the handle refuses once
+ * the work has settled (see `scopedHandle`), whichever way it settles.
+ */
+function inRawTransactionScope<T>(
+  handle: DatabaseInstance,
+  work: (tx: DatabaseInstance) => Promise<T>
+): Promise<T> {
+  const scope = transactionScope("ctx.db.raw.transaction");
+  return scope.run(() => work(scopedHandle(handle, scope)));
+}
+
+/**
  * The database surface a plugin actually receives.
  *
  * A NEW object exposing the fluent methods and a transaction, rather than the
@@ -1411,15 +1463,38 @@ function restrictDatabase(
     // instance unchanged. The work's handle is this same proxy, so its
     // `transaction` nests as a savepoint, as a Drizzle transaction's does on
     // PostgreSQL and MySQL, instead of reaching the synchronous one.
+    //
+    // On every dialect the handle the work receives refuses once the work
+    // has settled (`inRawTransactionScope`), as the restricted handle below
+    // does: holding raw SQL makes a kept handle more dangerous, not less. On
+    // SQLite that handle is this proxy behind the scope, so a kept `tx`
+    // refuses while `ctx.db.raw` itself stays usable.
     const live: PluginRawDatabase = new Proxy(raw as PluginRawDatabase, {
       get(target, property, receiver) {
-        if (property === "transaction" && dialect() === "sqlite") {
+        if (property !== "transaction") {
+          return Reflect.get(target, property, receiver) as unknown;
+        }
+        if (dialect() === "sqlite") {
           return <T>(work: (tx: DatabaseInstance) => Promise<T>) =>
             runAdapterTransaction(adapterTransaction(), () =>
-              runInPluginTransaction(() => work(live))
+              runInPluginTransaction(() => inRawTransactionScope(live, work))
             );
         }
-        return Reflect.get(target, property, receiver) as unknown;
+        const native = Reflect.get(target, property, target) as (
+          work: (tx: DatabaseInstance) => Promise<unknown>,
+          ...rest: unknown[]
+        ) => Promise<unknown>;
+        // Drizzle's own transaction, with any config it was given passed
+        // through; only the handle its callback receives is scoped.
+        return <T>(
+          work: (tx: DatabaseInstance) => Promise<T>,
+          ...rest: unknown[]
+        ) =>
+          native.call(
+            target,
+            tx => inRawTransactionScope(tx, work),
+            ...rest
+          ) as Promise<T>;
       },
     });
     return live;
@@ -1427,14 +1502,20 @@ function restrictDatabase(
   const native = raw as DatabaseInstance & {
     transaction: <T>(work: (tx: DatabaseInstance) => Promise<T>) => Promise<T>;
   };
+  // The work's handle refuses once the work has settled
+  // (`inRawTransactionScope`): kept past the callback it would otherwise
+  // write on a client already back in the pool, or on SQLite on the shared
+  // connection outside any transaction.
   return {
     ...fluentOnly(raw),
     transaction: work =>
       dialect() === "sqlite"
         ? runAdapterTransaction(adapterTransaction(), () =>
-            runInPluginTransaction(() => work(fluentOnly(raw)))
+            runInPluginTransaction(() =>
+              inRawTransactionScope(fluentOnly(raw), work)
+            )
           )
-        : native.transaction(tx => work(fluentOnly(tx))),
+        : native.transaction(tx => inRawTransactionScope(fluentOnly(tx), work)),
   };
 }
 

@@ -197,12 +197,15 @@ expressed cannot drift between them.
 ## Reading and writing
 
 The declaration creates and migrates the table under its SQL name
-(`auth__identities` above). Plugin code queries it through `ctx.db`, the
-Drizzle builder, with a Drizzle table object that names the same table and
-columns.
+(`auth__identities` above). Plugin code queries it through `ctx.db`, the typed,
+owner-checked surface (see [When to drop to
+`ctx.db`](/docs/plugins/services#when-to-drop-to-ctxdb)), or through
+`ctx.db.raw`, the Drizzle builder, with a Drizzle table object that names the
+same table and columns.
 
-`col.id()` has no database default, so the code that inserts a row supplies
-its `id`, and `InferInsert` requires it. Any UUID fits the `varchar(36)`
+`col.id()` has no database default. `ctx.db.insert` fills a UUIDv7 when the
+row leaves `id` out; code writing the table through `ctx.db.raw` supplies its
+`id`, and `InferInsert` requires it. Any UUID fits the `varchar(36)`
 column; a UUIDv7 (the `uuid` package's `v7()`, for example) keeps new rows in
 key order. `col.timestamps()` gives `created_at` and `updated_at` a database
 default of the current time, so an insert may leave both out, but nothing

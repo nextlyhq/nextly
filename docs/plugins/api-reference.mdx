@@ -102,7 +102,7 @@ interface PluginContext {
 ### `PluginConfig`
 
 ```ts
-type PluginConfig = Readonly<
+type PluginConfig = FrozenCopy<
   Pick<
     NextlyServiceConfig,
     | "basePath" | "preview" | "schemasDir" | "migrationsDir" | "runMigrationsOnBoot"
@@ -112,7 +112,7 @@ type PluginConfig = Readonly<
     | "emailRetention" | "webhookAuditEnabled"
   > & {
     plugins?: readonly PluginSummary[];
-    email?: Readonly<PluginEmailSettings>; // the email settings without providerConfig
+    email?: PluginEmailSettings; // the email settings without providerConfig
   }
 >;
 
@@ -120,7 +120,7 @@ interface PluginSummary {
   readonly name: string;
   readonly version: string;
   readonly enabled: boolean;                            // false when configured with enabled: false
-  readonly capabilities?: Readonly<PluginCapabilities>; // a copy
+  readonly capabilities?: FrozenCopy<PluginCapabilities>; // a copy
   readonly contributes?: { readonly declarations?: Readonly<Record<string, unknown>> }; // a copy
 }
 ```
@@ -129,6 +129,18 @@ Every plain object and array is copied and frozen; functions and class
 instances are kept by reference. `adapter`, `db`, `pluginConsent`,
 `storagePlugins`, `imageProcessor`, `logger`, `hookRegistry`, `passwordHasher`
 and `rateLimit` are not on it. All three types are `@experimental`.
+
+`FrozenCopy<T>` makes every property `readonly` and every array a `readonly`
+array, all the way down, matching the frozen value: a write that would throw at
+runtime does not compile. Each property's type is `FrozenValue<T[K]>`, which
+keeps a function (a hook, a validator, a component) and a built-in instance
+such as a `Date` or a `Map` as they are. Both types are exported
+(`@experimental`) from `nextly` and `@nextlyhq/plugin-sdk`, so a plugin's
+declaration files can name them. A helper that takes part of `ctx.config`
+types its parameter from it, `PluginConfig["collections"]` or
+`FrozenCopy<CollectionConfig>`, rather than as the mutable `CollectionConfig`:
+spreading the array (`[...collections]`) is not enough, since each entry in it
+is still frozen and still typed readonly.
 
 ### Transactions
 

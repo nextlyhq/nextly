@@ -5,6 +5,10 @@
  */
 import { describe, expect, it } from "vitest";
 
+import {
+  pluginField,
+  pluginFieldBrand,
+} from "../collections/fields/types/plugin-field";
 import { NextlyError } from "../errors/nextly-error";
 import { buildServiceConfig } from "../init/build-service-config";
 import type { SanitizedNextlyConfig } from "../shared/types/config";
@@ -14,6 +18,7 @@ import {
   assertPluginConsent,
   NO_PLUGIN_CONSENT,
   pluginConsentFromConfig,
+  setupTransformerInput,
   snapshotPluginConsent,
   unmatchedConsentWarnings,
 } from "./plugin-consent";
@@ -174,6 +179,25 @@ describe("the consent an app's config makes", () => {
       } as unknown as SanitizedNextlyConfig,
     } as Parameters<typeof buildServiceConfig>[0]);
     expect(result.pluginConsent).toEqual({ rawSql: ["@acme/reports"] });
+  });
+});
+
+describe("setupTransformerInput", () => {
+  // A transformer's returned copy becomes the config the boot continues
+  // with, so a field the copy loses its brand on is a field the rest of the
+  // boot no longer recognises as a plugin field.
+  it("keeps the brand pluginField() puts on a collection's field", () => {
+    const score = pluginField({ name: "score", type: "star-rating" });
+    const config = {
+      collections: [{ slug: "pages", fields: [score] }],
+    };
+
+    const input = setupTransformerInput(config, []);
+    const copied = input.collections[0].fields[0];
+
+    expect(copied).not.toBe(score);
+    expect(copied[pluginFieldBrand]).toBe(true);
+    expect(copied).toEqual(score);
   });
 });
 

@@ -3,8 +3,8 @@ title: Data access (ctx.services)
 description: Read and write data from a plugin through the managed, secure-by-default service layer — queries, bulk operations, and system elevation.
 ---
 
-`ctx.services` is the **managed** data path for plugins. Prefer it over the raw
-`ctx.db` escape hatch: it enforces validation, hooks, events, and RBAC, and it stays
+`ctx.services` is the **managed** data path for plugins. Prefer it over the unmanaged
+`ctx.db` surface: it enforces validation, hooks, events, and RBAC, and it stays
 portable across database dialects. It is `@public` and semver-protected (D56).
 
 ```ts
@@ -265,6 +265,14 @@ The token carries nothing else, so it cannot run SQL. Any other value passed
 where the token goes is rejected with `VALIDATION_ERROR`
 (`logContext.reason` is `plugin-transaction-token-unknown`).
 
+The token works only while the work runs. Kept and passed to an
+`*InTransaction` method after the work has settled, it is refused with
+`VALIDATION_ERROR` (`logContext.reason` is `plugin-transaction-finished`).
+A write the work started without awaiting is finished inside the transaction
+before it commits, and if it fails the transaction rolls back and
+`withTransaction` rejects with that failure (or with the work's own error, if
+the work threw). Await each write anyway, so the work sees its result.
+
 ```ts
 await ctx.services.collections.warmLocalizedReadiness("orders");
 await ctx.services.collections.withTransaction(async tx => {
@@ -312,7 +320,13 @@ It comes in two layers:
   `insertReturning`, `update`, `delete`, `table`, `query` and `transaction`,
   over the tables your plugin declared and its dependencies' tables. It
   behaves the same on every dialect,
-  and a table your plugin may not reach is refused before a query is built. See
+  and a table your plugin may not reach is refused before a query is built,
+  and checked again when the query runs: a `ctx.db.query.<table>` entry or a
+  `select`, `update` or `delete` builder kept across a schema reload cannot
+  reach a table your plugin no longer may. A `select` builder is immutable:
+  `where`, `orderBy`, `limit` and `offset` each return a new builder and leave
+  the one they were called on as it was, and `first()` runs the query without
+  changing its builder, so one base builder can be narrowed several ways. See
   [Tables of your own](/docs/plugins/schema#tables-of-your-own).
 - **`ctx.db.raw`** is Drizzle's fluent builder for the configured dialect —
   `select`, `insert`, `update`, `delete` — plus `transaction`, with no owner
@@ -337,6 +351,19 @@ throws, on every dialect. Inside one, write through `tx`:
 - `ctx.db.raw.transaction(async tx => { ... })` hands `tx` the fluent builder,
   without a nested `transaction`. With `rawSql` listed, `tx` is the live handle
   and its `transaction` nests as a savepoint.
+
+`tx` works only while the callback runs. Kept and called after the callback
+has settled, it is refused with `VALIDATION_ERROR` (`logContext.reason` is
+`plugin-transaction-finished`) rather than running outside the transaction.
+
+In `ctx.db.transaction`, a statement the callback started without awaiting is
+finished inside the transaction before it commits; if one fails, the
+transaction rolls back and rejects with that failure (or with the callback's
+own error, if the callback threw). In `ctx.db.raw.transaction`, awaiting each
+Drizzle statement before the callback returns is yours to do: a kept `tx` is
+refused, but a Drizzle builder made inside the callback carries the
+transaction's connection with it, so one awaited after the callback has
+settled runs outside the transaction.
 
 Another service or `ctx.settings` called inside a transaction runs on its own
 connection on PostgreSQL and MySQL, outside the transaction, and commits on its

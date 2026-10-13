@@ -74,6 +74,13 @@ interface PluginTx {
   rowsLeft(): Promise<number>;
 }
 
+/** The failure a plugin transaction's work throws to roll itself back. */
+class ProviderFailure extends Error {
+  constructor() {
+    super("provider failed");
+  }
+}
+
 /** Write, wait `ms`, note the moment and throw. */
 async function writeWaitThrow(
   write: () => Promise<unknown>,
@@ -83,25 +90,44 @@ async function writeWaitThrow(
   await write();
   await sleep(ms);
   threw(Date.now());
-  throw new Error("provider failed");
+  throw new ProviderFailure();
+}
+
+/**
+ * Run a plugin transaction that should end in its own `ProviderFailure`, and
+ * resolve with the moment it threw.
+ *
+ * Any other outcome fails the test rather than counting as a rollback: had the
+ * setup write been refused, the transaction would end at once, holding the
+ * connection for no time at all, and every assertion that compares against
+ * the moment it threw would pass without the window ever having been open.
+ */
+async function rolledBack(
+  transaction: (threw: (at: number) => void) => Promise<unknown>
+): Promise<number> {
+  let threwAt = 0;
+  const outcome = await transaction(at => (threwAt = at)).then(
+    () => undefined,
+    (error: unknown) => error
+  );
+  if (!(outcome instanceof ProviderFailure)) {
+    throw new Error(
+      "the plugin transaction did not end in its own throw, so it never held the connection",
+      { cause: outcome }
+    );
+  }
+  return threwAt;
 }
 
 /** The typed `ctx.db`, writing to the plugin's own table. */
 function typedTx(ctx: PluginContext): PluginTx {
   return {
-    async rollBackAfter(ms) {
-      let threwAt = 0;
-      await ctx.db
-        .transaction(tx =>
-          writeWaitThrow(
-            () => tx.insert(marks, { key: "k" }),
-            ms,
-            at => (threwAt = at)
-          )
+    rollBackAfter: ms =>
+      rolledBack(threw =>
+        ctx.db.transaction(tx =>
+          writeWaitThrow(() => tx.insert(marks, { key: "k" }), ms, threw)
         )
-        .catch(() => undefined);
-      return threwAt;
-    },
+      ),
     rowsLeft: async () => (await ctx.db.select(marks).all()).length,
   };
 }
@@ -109,10 +135,9 @@ function typedTx(ctx: PluginContext): PluginTx {
 /** `ctx.db.raw`, writing to a core table through the builder. */
 function rawTx(ctx: PluginContext, db: Db): PluginTx {
   return {
-    async rollBackAfter(ms) {
-      let threwAt = 0;
-      await ctx.db.raw
-        .transaction(tx =>
+    rollBackAfter: ms =>
+      rolledBack(threw =>
+        ctx.db.raw.transaction(tx =>
           writeWaitThrow(
             () =>
               tx.insert(nextlyPluginSettings).values({
@@ -124,12 +149,10 @@ function rawTx(ctx: PluginContext, db: Db): PluginTx {
                 updatedBy: null,
               }),
             ms,
-            at => (threwAt = at)
+            threw
           )
         )
-        .catch(() => undefined);
-      return threwAt;
-    },
+      ),
     async rowsLeft() {
       const rows = await db
         .select()

@@ -17,6 +17,7 @@ import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
 
 import { methodFacade } from "./service-facade";
+import { type TransactionScope, transactionScope } from "./transaction-scope";
 
 /**
  * @public Elevation options for the managed `ctx.services` path.
@@ -493,21 +494,31 @@ export type PluginCollectionService = Pick<
 };
 
 /**
- * The adapter transaction behind each token `withTransaction` handed out.
- * Weak, so a token outliving its transaction holds nothing.
+ * What a token `withTransaction` handed out stands for: the adapter's
+ * transaction, and the scope that decides how long the token may reach it
+ * (`transactionScope`, the same rule `ctx.db.transaction` follows).
  */
-const pluginTransactions = new WeakMap<object, TransactionContext>();
+interface PluginTransactionRecord {
+  readonly tx: TransactionContext;
+  readonly scope: TransactionScope;
+}
 
 /**
- * The adapter transaction a plugin's token stands for, or a refusal when the
- * value is not one `withTransaction` handed out.
+ * The record behind each token `withTransaction` handed out. Weak, so a token
+ * outliving its transaction holds nothing.
  */
-function transactionOf(token: unknown): TransactionContext {
-  const tx =
+const pluginTransactions = new WeakMap<object, PluginTransactionRecord>();
+
+/**
+ * The record a plugin's token stands for, or a refusal when the value is not
+ * one `withTransaction` handed out.
+ */
+function transactionOf(token: unknown): PluginTransactionRecord {
+  const record =
     typeof token === "object" && token !== null
       ? pluginTransactions.get(token)
       : undefined;
-  if (tx === undefined) {
+  if (record === undefined) {
     throw NextlyError.validation({
       logContext: { reason: "plugin-transaction-token-unknown" },
       errors: [
@@ -520,7 +531,7 @@ function transactionOf(token: unknown): TransactionContext {
       ],
     });
   }
-  return tx;
+  return record;
 }
 
 /**
@@ -537,24 +548,47 @@ export function wrapCollectionsForPlugin(
   const translated = translateServiceOpts(collections, deps);
   const facade = methodFacade(translated, PLUGIN_COLLECTION_METHODS);
   // The transaction a plugin's work receives is a token, mapped back to the
-  // adapter's transaction where a method needs it. Async, so an unknown token
-  // is a rejection like every other failure of these methods.
+  // adapter's transaction where a method needs it. Async, so an unknown or
+  // finished token is a rejection like every other failure of these methods,
+  // and both checks run before the service is reached: a refused write never
+  // gets as far as resolving its `ServiceOpts`.
+  //
+  // A write is tracked on its token's scope for as long as it runs, because
+  // the check alone happens too early to be the whole guard. The service sees
+  // the transaction only after the caller is resolved, which awaits a role
+  // lookup, so a write started inside the callback but not awaited by it
+  // could pass the check while the transaction is live and reach the service
+  // after it ended. The scope holds the transaction open until it settles.
   const inTransaction =
     (method: InTransactionMethod) =>
-    async (token: unknown, ...rest: unknown[]): Promise<unknown> =>
-      (facade[method] as (...args: unknown[]) => Promise<unknown>)(
-        transactionOf(token),
-        ...rest
+    async (token: unknown, ...rest: unknown[]): Promise<unknown> => {
+      const { tx, scope } = transactionOf(token);
+      scope.assertOpen();
+      return scope.track(
+        (facade[method] as (...args: unknown[]) => Promise<unknown>)(
+          tx,
+          ...rest
+        )
       );
+    };
   return Object.freeze({
     ...facade,
     withTransaction: <T>(
       work: (tx: PluginCollectionTransaction) => Promise<T>
     ): Promise<T> =>
-      facade.withTransaction(tx => {
+      facade.withTransaction(async tx => {
         const token = Object.freeze({}) as PluginCollectionTransaction;
-        pluginTransactions.set(token, tx);
-        return work(token);
+        const scope = transactionScope(
+          "ctx.services.collections.withTransaction"
+        );
+        pluginTransactions.set(token, { tx, scope });
+        // Settled either way: writes the work started and did not await
+        // finish inside the transaction, one of those failing rolls it back
+        // even when the work resolved, and the token refuses from then on,
+        // whether the transaction is about to commit or to roll back. A
+        // write that failed before the work settled — a validation refusal
+        // the work caught, say — is the work's to handle and does not.
+        return scope.run(() => work(token));
       }),
     createEntryInTransaction: inTransaction("createEntryInTransaction"),
     updateEntryInTransaction: inTransaction("updateEntryInTransaction"),

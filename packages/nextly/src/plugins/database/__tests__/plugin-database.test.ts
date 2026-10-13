@@ -7,7 +7,7 @@
  * those decisions harder to observe. The three-dialect behaviour is the
  * integration suite's job.
  */
-import { defineRelations } from "drizzle-orm";
+import { defineRelations, sql } from "drizzle-orm";
 import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { describe, expect, it, vi } from "vitest";
 
@@ -15,7 +15,10 @@ import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import type { SchemaOwner } from "../../../domains/schema/extension/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import { uuidV7Timestamp } from "../../../utils/uuid-v7";
-import { createPluginDatabase } from "../plugin-database";
+import {
+  createPluginDatabase,
+  type PluginTransaction,
+} from "../plugin-database";
 
 const notes = defineTable("notes", {
   id: col.id(),
@@ -1131,5 +1134,448 @@ describe("relational queries that reach other tables", () => {
       tx.query.fx__notes.findMany({ with: { author: true } })
     );
     expect(received).toEqual([{ with: { author: true } }]);
+  });
+});
+
+/**
+ * A fake handle covering every statement the surface issues, over a schema
+ * the test can change between building a query and running it.
+ *
+ * `select` records the state each statement EXECUTED with, and answers with
+ * the stored rows cut to its limit, so a builder that kept a stale `limit` or
+ * `where` shows in both the record and the rows returned. `schema` is read
+ * through the deps on every call, as the compiled schema is in production, so
+ * swapping it models an HMR reload that drops a table or changes its owner.
+ *
+ * Statements run the way Drizzle's do: a write reaches the driver on a later
+ * tick than the call that made it, and a relational query is a lazy thenable
+ * that runs each time it is awaited. `log` records those executions and the
+ * transaction's commit in the order they happened, which is what shows
+ * whether a statement ran inside the transaction or after it.
+ */
+function liveHarness() {
+  const OTHER: SchemaOwner = { kind: "plugin", id: "other" };
+  const rows = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const executed: {
+    table: string;
+    where?: unknown;
+    limit?: number;
+    offset?: number;
+  }[] = [];
+  const written: string[] = [];
+  const answered: string[] = [];
+  const log: string[] = [];
+  /** Writes the driver refuses, by what `write` records them as. */
+  const failing = new Map<string, Error>();
+  /**
+   * A write the driver performs on a later tick, as a real one does, or
+   * refuses on that tick when the test has marked it failing.
+   */
+  const write = (what: string) =>
+    new Promise<{ rowCount: number }>((resolve, reject) =>
+      setTimeout(() => {
+        const refusal = failing.get(what);
+        if (refusal) {
+          log.push(`${what} failed`);
+          reject(refusal);
+          return;
+        }
+        written.push(what);
+        log.push(what);
+        resolve({ rowCount: 1 });
+      }, 0)
+    );
+  /** A lazy query: runs, and is recorded, on every `then`. */
+  const lazy = (what: string, result: unknown) => ({
+    then: (resolve: (value: unknown) => void) => {
+      answered.push(what);
+      log.push(what);
+      resolve(result);
+    },
+  });
+
+  type Recorded = (typeof executed)[number];
+  const selectFrom = (state: Recorded) => ({
+    where: (where: unknown) => selectFrom({ ...state, where }),
+    orderBy: () => selectFrom(state),
+    limit: (limit: number) => selectFrom({ ...state, limit }),
+    offset: (offset: number) => selectFrom({ ...state, offset }),
+    then: (resolve: (value: unknown) => void) => {
+      executed.push(state);
+      resolve(rows.slice(0, state.limit ?? rows.length));
+    },
+  });
+  const handle = {
+    select: () => ({
+      from: (table: { name: string }) => selectFrom({ table: table.name }),
+    }),
+    insert: (table: { name: string }) => ({
+      values: () => write(`insert ${table.name}`),
+    }),
+    update: (table: { name: string }) => ({
+      set: () => ({ where: () => write(`update ${table.name}`) }),
+    }),
+    delete: (table: { name: string }) => ({
+      where: () => write(`delete ${table.name}`),
+    }),
+    query: {
+      fx__notes: {
+        findMany: () => lazy("findMany", []),
+        findFirst: () => lazy("findFirst", null),
+      },
+    },
+  };
+
+  const schema = {
+    owner: OWNER,
+    compiled: { name: "fx__notes" } as { name: string } | undefined,
+  };
+  /** The reload a plugin can sleep through: `fx__notes` changes hands. */
+  const handOver = () => {
+    schema.owner = OTHER;
+  };
+  /** A reload that recompiles `fx__notes` into a new Drizzle object. */
+  const recompile = (name: string) => {
+    schema.compiled = { name };
+  };
+
+  const surface = createPluginDatabase({
+    dialect: "postgresql",
+    owner: OWNER,
+    dependsOn: new Set(),
+    owners: () => new Map([["fx__notes", schema.owner]]),
+    tables: () => ({ fx__notes: schema.compiled }),
+    tableList: () => [
+      { name: "fx__notes", authored: "notes", owner: schema.owner },
+    ],
+    db: () => handle,
+    relationalDb: () => handle,
+    transaction: async fn => {
+      const result = await fn({ db: handle, relationalDb: handle });
+      log.push("commit");
+      return result;
+    },
+  });
+  return {
+    surface,
+    executed,
+    written,
+    answered,
+    log,
+    failing,
+    handOver,
+    recompile,
+  };
+}
+
+describe("a select builder", () => {
+  const first = sql`first`;
+  const second = sql`second`;
+
+  it("leaves a builder unchanged after first(), so all() still returns every row", async () => {
+    // `first()` narrows a copy to one row; the builder it was called on
+    // keeps its own state, so its `all()` still sees every row.
+    const { surface, executed } = liveHarness();
+    const query = surface.select(notes).where(first);
+
+    expect(await query.first()).toEqual({ id: "a" });
+    expect(await query.all()).toHaveLength(3);
+    expect(executed.map(run => run.limit)).toEqual([1, undefined]);
+  });
+
+  it("keeps two queries branched from one base independent", async () => {
+    // Each branch carries its own `where`, and the base carries none: a
+    // builder sharing one state would run all three with the last `where`.
+    const { surface, executed } = liveHarness();
+    const base = surface.select(notes);
+    const a = base.where(first).limit(2);
+    const b = base.where(second);
+
+    await a.all();
+    await b.all();
+    await base.all();
+
+    expect(executed).toEqual([
+      { table: "fx__notes", where: first, limit: 2 },
+      { table: "fx__notes", where: second },
+      { table: "fx__notes" },
+    ]);
+  });
+});
+
+/**
+ * Access judged when a statement RUNS, not only when its builder was made.
+ *
+ * Each case builds the handle, then changes the schema under it the way a
+ * reload would, then runs it. The positive control is the recompile case: the
+ * builder runs, against the handle compiled after it was built.
+ */
+describe("a handle kept across a schema reload", () => {
+  const forbidden = (error: unknown) => NextlyError.isForbidden(error);
+
+  it("runs a select against the table compiled after the builder was made", async () => {
+    const { surface, executed, recompile } = liveHarness();
+    const query = surface.select(notes);
+    recompile("fx__notes (recompiled)");
+    await query.all();
+    expect(executed.map(run => run.table)).toEqual(["fx__notes (recompiled)"]);
+  });
+
+  it("refuses a select whose table changed owner before it ran", async () => {
+    const { surface, executed, handOver } = liveHarness();
+    const query = surface.select(notes).where(sql`x`);
+    handOver();
+    await expect(query.all()).rejects.toSatisfy(forbidden);
+    await expect(query.first()).rejects.toSatisfy(forbidden);
+    expect(executed).toEqual([]);
+  });
+
+  it("refuses an update whose table changed owner before it ran, writing nothing", async () => {
+    const { surface, written, handOver } = liveHarness();
+    const pending = surface.update(notes, { bodyText: "x" } as never);
+    handOver();
+    await expect(pending.where(sql`x`)).rejects.toSatisfy(forbidden);
+    expect(written).toEqual([]);
+  });
+
+  it("refuses a delete whose table changed owner before it ran, deleting nothing", async () => {
+    const { surface, written, handOver } = liveHarness();
+    const pending = surface.delete(notes);
+    handOver();
+    await expect(pending.where(sql`x`)).rejects.toSatisfy(forbidden);
+    expect(written).toEqual([]);
+  });
+
+  it("runs a kept relational entry against the handle current when it runs", async () => {
+    // The control for the refusal below: an entry kept across a reload that
+    // leaves the table with its owner still answers, through the handle
+    // resolved at the call.
+    const { surface, answered, recompile } = liveHarness();
+    const entry = surface.query.fx__notes;
+    recompile("fx__notes (recompiled)");
+    await expect(entry.findMany()).resolves.toEqual([]);
+    await expect(entry.findFirst()).resolves.toBeNull();
+    expect(answered).toEqual(["findMany", "findFirst"]);
+  });
+
+  it("refuses a kept relational entry whose table changed owner", () => {
+    const { surface, answered, handOver } = liveHarness();
+    const entry = surface.query.fx__notes;
+    handOver();
+    const thrown = (run: () => unknown): unknown => {
+      try {
+        run();
+      } catch (error) {
+        return error;
+      }
+      return "did not throw";
+    };
+    expect(thrown(() => entry.findMany())).toSatisfy(forbidden);
+    expect(thrown(() => entry.findFirst())).toSatisfy(forbidden);
+    expect(answered).toEqual([]);
+  });
+});
+
+describe("the handle a finished transaction passed its work", () => {
+  function isFinished(error: unknown): boolean {
+    if (!NextlyError.is(error)) return false;
+    const reason = (error.logContext as { reason?: unknown } | undefined)
+      ?.reason;
+    const data = error.publicData as
+      | { errors?: { path: string; message: string }[] }
+      | undefined;
+    return (
+      reason === "plugin-transaction-finished" &&
+      data?.errors?.[0]?.path === "tx" &&
+      (data?.errors?.[0]?.message ?? "").includes(
+        "This transaction has already finished: do this work inside the callback you passed to ctx.db.transaction."
+      )
+    );
+  }
+
+  /** What `run` threw, or a marker no predicate here accepts if it did not. */
+  function thrownBy(run: () => unknown): unknown {
+    try {
+      run();
+    } catch (error) {
+      return error;
+    }
+    return "did not throw";
+  }
+
+  it("refuses an insert and a select through a kept tx, writing nothing", async () => {
+    const { surface, written, executed } = liveHarness();
+    let kept: PluginTransaction | undefined;
+    await surface.transaction(async tx => {
+      kept = tx;
+    });
+    if (!kept) throw new Error("the transaction's work did not run");
+
+    await expect(
+      kept.insert(notes, { bodyText: "late" } as never)
+    ).rejects.toSatisfy(isFinished);
+    await expect(kept.select(notes).all()).rejects.toSatisfy(isFinished);
+    expect(written).toEqual([]);
+    expect(executed).toEqual([]);
+  });
+
+  it("refuses a builder and a relational entry made inside, run after", async () => {
+    const { surface, written, answered } = liveHarness();
+    const kept = await surface.transaction(async tx => ({
+      select: tx.select(notes),
+      update: tx.update(notes, { bodyText: "late" } as never),
+      entry: tx.query.fx__notes,
+      tx,
+    }));
+
+    await expect(kept.select.first()).rejects.toSatisfy(isFinished);
+    await expect(kept.update.where(sql`x`)).rejects.toSatisfy(isFinished);
+    expect(thrownBy(() => kept.entry.findMany())).toSatisfy(isFinished);
+    expect(thrownBy(() => kept.tx.query)).toSatisfy(isFinished);
+    expect(written).toEqual([]);
+    expect(answered).toEqual([]);
+  });
+
+  it("refuses after a transaction that rolled back, too", async () => {
+    const { surface, written } = liveHarness();
+    let kept: PluginTransaction | undefined;
+    await surface
+      .transaction(async tx => {
+        kept = tx;
+        throw new Error("rolled back");
+      })
+      .catch(() => undefined);
+    if (!kept) throw new Error("the transaction's work did not run");
+
+    await expect(
+      kept.insert(notes, { bodyText: "late" } as never)
+    ).rejects.toSatisfy(isFinished);
+    expect(written).toEqual([]);
+  });
+
+  it("lets work the callback is still awaiting run", async () => {
+    // The control. A flag cleared when the callback RETURNS its promise,
+    // rather than when that promise settles, would refuse this.
+    const { surface, written } = liveHarness();
+    await surface.transaction(async tx => {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      await tx.insert(notes, { bodyText: "inside" } as never);
+      await tx.update(notes, { bodyText: "inside" } as never).where(sql`x`);
+    });
+    expect(written).toEqual(["insert fx__notes", "update fx__notes"]);
+  });
+
+  it("finishes a write the callback started and did not await before the commit", async () => {
+    // The handle is read when the call is made, but the statement reaches
+    // the driver later; the commit waits for both statements, so each runs
+    // inside the transaction rather than after it has ended.
+    const { surface, log } = liveHarness();
+    await surface.transaction(async tx => {
+      void tx.insert(notes, { bodyText: "unawaited" } as never);
+      void tx.update(notes, { bodyText: "unawaited" } as never).where(sql`x`);
+    });
+    expect(log).toEqual(["insert fx__notes", "update fx__notes", "commit"]);
+  });
+
+  it("lets an unawaited insertReturning read its row back before the commit", async () => {
+    // Its read-back needs the handle after the insert has landed; a handle
+    // closed before the drain would refuse that step after the write.
+    const { surface, log } = liveHarness();
+    let pending: Promise<unknown> | undefined;
+    await surface.transaction(async tx => {
+      pending = tx.insertReturning(notes, { bodyText: "unawaited" } as never);
+    });
+    await expect(pending).resolves.toEqual({ id: "a" });
+    expect(log).toEqual(["insert fx__notes", "commit"]);
+  });
+
+  it("runs an unawaited relational query once, inside the transaction", async () => {
+    // Drizzle's query runs on every await. What the surface hands back is a
+    // promise that has already run it, so awaiting it after the transaction
+    // reads that result instead of running it again on the finished handle.
+    const { surface, log } = liveHarness();
+    let pending: Promise<unknown> | undefined;
+    await surface.transaction(async tx => {
+      pending = tx.query.fx__notes.findMany();
+    });
+    await pending;
+    expect(log).toEqual(["findMany", "commit"]);
+  });
+
+  it("runs a relational query once outside a transaction too, however often it is awaited", async () => {
+    // The same promise outside a transaction as inside one: started once,
+    // when the call is made, rather than Drizzle's thenable that runs again
+    // on every await.
+    const { surface, answered } = liveHarness();
+    const pending = surface.query.fx__notes.findMany();
+    await pending;
+    await pending;
+    expect(answered).toEqual(["findMany"]);
+  });
+
+  it("rejects, without committing, when a write the callback did not await fails", async () => {
+    // The callback resolves, so only the record of what it started can say
+    // the transaction must not commit. On PostgreSQL the failed statement
+    // has already aborted the transaction, and a COMMIT would roll it back
+    // while reporting success; on SQLite and MySQL it would commit the rest.
+    const { surface, log, failing } = liveHarness();
+    const violation = new Error("unique violation");
+    failing.set("insert fx__notes", violation);
+    let unawaited: Promise<unknown> | undefined;
+
+    const outcome = await surface
+      .transaction(async tx => {
+        await tx.update(notes, { bodyText: "kept" } as never).where(sql`x`);
+        unawaited = tx.insert(notes, { bodyText: "duplicate" } as never);
+        // Held, not awaited, by the callback; handled here so the test run
+        // does not report it as unhandled.
+        unawaited.catch(() => undefined);
+      })
+      .catch((error: unknown) => error);
+
+    expect(outcome).toBe(violation);
+    expect(log).toEqual(["update fx__notes", "insert fx__notes failed"]);
+    await expect(unawaited).rejects.toBe(violation);
+  });
+
+  it("commits past a failed write the callback awaited and caught", async () => {
+    // The control for the rule above: a failure that settled while the
+    // callback ran is the callback's to handle, so catching it and carrying
+    // on commits the rest.
+    const { surface, log, failing } = liveHarness();
+    failing.set("insert fx__notes", new Error("unique violation"));
+
+    await surface.transaction(async tx => {
+      await tx
+        .insert(notes, { bodyText: "duplicate" } as never)
+        .catch(() => undefined);
+      await tx.update(notes, { bodyText: "kept" } as never).where(sql`x`);
+    });
+
+    expect(log).toEqual([
+      "insert fx__notes failed",
+      "update fx__notes",
+      "commit",
+    ]);
+  });
+
+  it("rejects with the callback's own error when a write it did not await fails as well", async () => {
+    const { surface, log, failing } = liveHarness();
+    const violation = new Error("unique violation");
+    const workError = new Error("work failed");
+    failing.set("insert fx__notes", violation);
+
+    const outcome = await surface
+      .transaction(async tx => {
+        tx.insert(notes, { bodyText: "duplicate" } as never).catch(
+          () => undefined
+        );
+        throw workError;
+      })
+      .catch((error: unknown) => error);
+
+    expect(outcome).toBe(workError);
+    // Drained before the rejection reached the transaction.
+    expect(log).toEqual(["insert fx__notes failed"]);
   });
 });

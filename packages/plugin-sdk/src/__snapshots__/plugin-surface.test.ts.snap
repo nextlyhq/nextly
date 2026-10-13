@@ -321,6 +321,8 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "FieldValueDeclarationInput (type)",
   "Filter (type)",
   "FilterSeams (value)",
+  "FrozenCopy (type)",
+  "FrozenValue (type)",
   "GrantedPermission (type)",
   "HookContext (type)",
   "HookContextPhase (type)",

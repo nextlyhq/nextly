@@ -101,7 +101,8 @@ export default defineConfig({
   plus imperative **`setup` → `init` → `destroy`** lifecycle functions. All plugins'
   `setup`s run before any `init`; load order is a topological sort over `dependsOn`.
 - **`ctx` (in `init`/`destroy`)** gives you: `services` (managed, secure-by-default
-  data access — pass `{ as: "system" }` to elevate), `db` (raw Drizzle escape hatch),
+  data access — pass `{ as: "system" }` to elevate), `db` (typed, owner-checked access to your own tables;
+  `db.raw` is the Drizzle builder),
   `hooks` (in-transaction, modify/abort), `events` (post-commit, observe-only),
   `filters`/`actions` (typed seams), `self` (your entities' resolved slugs after any
   host `.rename()`), `logger`, `config`, and `nextlyVersion`.

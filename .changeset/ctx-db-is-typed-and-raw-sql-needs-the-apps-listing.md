@@ -96,8 +96,9 @@ plugin code no longer reaches core's live handles through `ctx.config`,
     grants nothing without them.
 - **A `setup` transformer receives copies of settings, not live handles.** It
   receives copies of the plugin definitions and of the plain settings, with
-  `db.rawSqlPlugins` frozen. `adapter`, `logger`, `hookRegistry`,
-  `passwordHasher`, `rateLimit`, `storagePlugins` (the CLI's `storage`),
+  `db.rawSqlPlugins` frozen. The copies keep symbol-keyed properties, so a
+  field declaration's brand survives a transformer that returns them.
+  `adapter`, `logger`, `hookRegistry`, `passwordHasher`, `rateLimit`, `storagePlugins` (the CLI's `storage`),
   `imageProcessor` and `pluginConsent` are absent from its input, and a value
   it returns under those keys, or under any other key it was not handed, is
   ignored: the app's own value is kept. Editing a definition in place no
@@ -116,6 +117,12 @@ plugin code no longer reaches core's live handles through `ctx.config`,
     (the provider's credentials).
   - `ctx.config.plugins` lists `PluginSummary` entries (`name`, `version`,
     `enabled`, `capabilities`, `contributes.declarations`), not definitions.
+  - `PluginConfig` is typed readonly all the way down (`FrozenCopy`), as the
+    value is frozen, and so is `PluginSummary.capabilities`. Code passing
+    part of it to a parameter typed mutable, such as `ctx.config.collections`
+    to one wanting `CollectionConfig[]`, stops compiling; type the parameter
+    from it instead (`PluginConfig["collections"]`). Spreading the array is
+    not enough, since its entries stay frozen.
 - **`ctx.services` hands out facades.**
   - `users`, `media`, `email`, `versions` and `collections` are frozen
     facades of the methods meant for plugins. A service's `adapter`, Drizzle
@@ -141,6 +148,23 @@ plugin code no longer reaches core's live handles through `ctx.config`,
   instead of opening a second transaction on another connection. With
   `rawSql` listed, `ctx.db.raw.transaction`'s `tx` is the live handle and its
   `transaction` nests as a savepoint.
+- **A transaction ends with its callback.** The `tx` of `ctx.db.transaction`
+  and `ctx.db.raw.transaction`, and the token `withTransaction` hands its
+  work, kept and used after the callback settles, are refused with
+  `VALIDATION_ERROR` (`plugin-transaction-finished`) instead of running
+  outside the transaction. In `ctx.db.transaction` and `withTransaction`, a
+  write the callback started without awaiting is finished before the commit,
+  and if it fails the transaction rolls back and rejects with that failure
+  (or with the callback's own error, if it threw). In
+  `ctx.db.raw.transaction`, awaiting each Drizzle statement, and every
+  builder made from `tx`, before the callback returns stays the callback's
+  job.
+- **`ctx.db` checks table access when a query runs.** A `ctx.db.query.<table>`
+  entry or a `select`, `update` or `delete` builder kept across a schema
+  reload is refused a table the plugin may no longer reach, not only when it
+  is built. `ctx.db.select()` builders are immutable: `where`, `orderBy`,
+  `limit` and `offset` return a new builder, and `first()` leaves its builder
+  unchanged.
 
 This corrects the earlier release note that said a plugin declaring `rawSql`
 gets the live Drizzle instance at `ctx.db`: the live instance is at
@@ -170,7 +194,9 @@ gets the live Drizzle instance at `ctx.db`: the live instance is at
 - New experimental types, from `nextly` and `@nextlyhq/plugin-sdk`:
   `PluginConfig`, `PluginSummary`, `PluginEmailSettings`, `PluginUserService`,
   `PluginMediaService`, `PluginEmailService`, `PluginVersionsService`,
-  `PluginCollectionTransaction` and `PluginInsert`.
+  `PluginCollectionTransaction`, `PluginInsert`, and `FrozenCopy` and
+  `FrozenValue`, which type `ctx.config`, so a plugin's declaration files can
+  name them.
 - `createTestNextly` takes a `pluginConsent` option (`@experimental`), the
   test's counterpart of `db.rawSqlPlugins`, and its refusal of a plugin that
   declares `rawSql` names the option and the value to pass.

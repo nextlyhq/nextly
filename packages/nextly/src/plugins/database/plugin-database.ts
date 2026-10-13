@@ -32,6 +32,7 @@ import type {
 import type { SchemaOwner } from "../../domains/schema/extension/types";
 import { NextlyError } from "../../errors/nextly-error";
 import { uuidV7 } from "../../utils/uuid-v7";
+import { transactionScope } from "../transaction-scope";
 
 import {
   assertTableAccess,
@@ -88,6 +89,13 @@ export interface PluginDatabaseDeps {
   transaction: <R>(
     fn: (tx: { db: unknown; relationalDb: unknown }) => Promise<R>
   ) => Promise<R>;
+  /**
+   * Called with every statement's promise as it starts, and returns the
+   * promise the caller receives. Absent outside a transaction; inside one it
+   * is the transaction's record of the work still running on its connection
+   * (see `transactionScope`).
+   */
+  track?: <R>(work: PromiseLike<R>) => Promise<R>;
 }
 
 /**
@@ -187,6 +195,23 @@ function nestedTransactionError(): NextlyError {
 }
 
 /**
+ * The deps' statement tracker, or, outside a transaction, a plain subscription.
+ *
+ * Both hand back a native promise that has already started its statement.
+ * Drizzle's relational query is a lazy thenable that runs on every await, and
+ * it carries the session and schema it was built from; handing it back as it
+ * is outside a transaction would make `ctx.db.query.x.findMany()` run once per
+ * await there and exactly once inside one, and would expose a handle able to
+ * assemble queries past the owner check. Every other terminal call is an
+ * async function, so for it this changes nothing.
+ */
+function trackerOf(
+  deps: PluginDatabaseDeps
+): <R>(work: PromiseLike<R>) => Promise<R> {
+  return deps.track ?? (work => Promise.resolve(work));
+}
+
+/**
  * The refusal for an authored name two reachable plugins both use.
  *
  * Names every colliding table and its owner, because the fix is the author's
@@ -221,6 +246,11 @@ function isSameOwner(a: SchemaOwner, b: SchemaOwner): boolean {
   return a.kind === "app" && b.kind === "app";
 }
 
+/**
+ * The rules as they stand NOW. `deps.owners()` is called on every use rather
+ * than captured, so a handle built before a schema reload is judged against
+ * the ownership map after it.
+ */
 function rulesOf(deps: PluginDatabaseDeps): TableAccessRules {
   return {
     owner: deps.owner,
@@ -235,6 +265,14 @@ function rulesOf(deps: PluginDatabaseDeps): TableAccessRules {
  * Both halves matter and neither is optional: resolving without checking hands
  * a plugin somebody else's table, and checking without resolving checks a name
  * that is not the one the query will use.
+ *
+ * A method that hands back a builder calls this twice: once when the builder
+ * is made, so a bad call fails where it was written, and again in the method
+ * that runs the statement, which executes against what that second call
+ * returned. Only the second is the boundary. A plugin can keep a builder
+ * across a schema reload that drops the table or hands it to another owner,
+ * and a check made when the builder was built would still be vouching for the
+ * schema that has since been replaced.
  */
 function resolveTable(
   definition: TableDefinition,
@@ -441,7 +479,15 @@ export interface PluginDatabase {
    * inside joins it as a savepoint and rolls back with it, its after-commit
    * effects (hooks, events, revalidation) wait for the commit and never run
    * on rollback, and deleting media is refused. Keep it short, and never
-   * await network I/O inside it.
+   * await network I/O inside it. `tx` lives only as long as `fn`: a statement
+   * `fn` started on it without awaiting is finished before the transaction
+   * ends, and once it has ended, `tx` and every builder made from it refuse.
+   * A statement still running on `tx` when `fn` settles (one `fn` did not
+   * await) is waited for, and if it fails the transaction rolls back and
+   * rejects with that failure, even though `fn` resolved. A statement that
+   * failed before `fn` settled is `fn`'s to handle: caught, the transaction
+   * carries on. When `fn` itself throws, its error is the one the caller
+   * receives.
    */
   transaction<R>(fn: (tx: PluginTransaction) => Promise<R>): Promise<R>;
   /**
@@ -747,27 +793,74 @@ function checkedFieldFilter(
 }
 
 /**
- * One table's entry point, with its config judged before Drizzle sees it.
+ * The relational handle as it stands now: its query namespace, and the
+ * relations config it was built with.
+ *
+ * `_.relations` is Drizzle's own record of the config this handle was built
+ * with, on all three dialects' database classes. Read from the SAME handle as
+ * `query` rather than asked of the registry again, so the edges judged cannot
+ * be a different build from the edges run.
+ */
+function relationalHandle(deps: PluginDatabaseDeps): {
+  query: RelationalQueries;
+  relations: AnyRelations | undefined;
+} {
+  const db = deps.relationalDb() as {
+    query: RelationalQueries;
+    _?: { relations?: AnyRelations };
+  };
+  return { query: db.query, relations: db._?.relations };
+}
+
+/**
+ * One table's entry point, judged again each time it runs.
  *
  * A plain object carrying only the two methods, rather than Drizzle's builder:
  * the builder also exposes the schema and session it was built from, which
  * are enough to assemble a query over any table without passing through here.
+ *
+ * Each call re-checks the root table, then resolves the handle afresh and
+ * runs the entry, and judges the config against the relations, of THAT
+ * handle. A plugin may keep `ctx.db.query.x` across a schema reload that
+ * drops `x` or gives it to another owner; a check made only when the property
+ * was read would keep answering for the schema that existed then. The check
+ * is a precondition, so it comes before Drizzle is handed anything.
  */
 function checkedEntry(
-  entry: RelationalQuery,
   tableKey: string,
-  relations: AnyRelations | undefined,
   deps: PluginDatabaseDeps
 ): RelationalQuery {
+  const prepare = (
+    config: unknown
+  ): { entry: RelationalQuery; checked: unknown } => {
+    const rules = rulesOf(deps);
+    assertTableAccess(tableKey, rules);
+    const { query, relations } = relationalHandle(deps);
+    const entry = Object.hasOwn(query, tableKey) ? query[tableKey] : undefined;
+    if (entry === undefined) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "declared table has no relational query entry",
+          table: tableKey,
+        },
+      });
+    }
+    return {
+      entry,
+      checked: checkedQueryConfig(config, tableKey, relations, rules),
+    };
+  };
   return {
-    findMany: config =>
-      entry.findMany(
-        checkedQueryConfig(config, tableKey, relations, rulesOf(deps))
-      ),
-    findFirst: config =>
-      entry.findFirst(
-        checkedQueryConfig(config, tableKey, relations, rulesOf(deps))
-      ),
+    // Judged synchronously, so a refusal throws at the call as it always
+    // has; only the query itself is handed to the tracker.
+    findMany: config => {
+      const { entry, checked } = prepare(config);
+      return trackerOf(deps)(entry.findMany(checked));
+    },
+    findFirst: config => {
+      const { entry, checked } = prepare(config);
+      return trackerOf(deps)(entry.findFirst(checked));
+    },
   };
 }
 
@@ -795,13 +888,12 @@ function checkedEntry(
  *
  * The root check alone would judge only the table a query STARTS from, so the
  * entry handed back judges every table its config reaches as well — see
- * `checkedQueryConfig`. `relations` is the config the namespace itself was
- * built from, read off the same handle, so the edges judged are the edges
- * Drizzle will follow.
+ * `checkedQueryConfig`. The check made here, when the property is read, is
+ * the early refusal; the entry repeats it when it runs, against the handle
+ * current at that moment (see `checkedEntry`).
  */
 function ownedQueries(
   namespace: RelationalQueries,
-  relations: AnyRelations | undefined,
   deps: PluginDatabaseDeps
 ): RelationalQueries {
   const hideable = (target: RelationalQueries, key: string): boolean => {
@@ -814,8 +906,7 @@ function ownedQueries(
     get(target, property, receiver) {
       if (typeof property === "string" && Object.hasOwn(target, property)) {
         assertTableAccess(property, rulesOf(deps));
-        const entry = Reflect.get(target, property, receiver);
-        return checkedEntry(entry, property, relations, deps);
+        return checkedEntry(property, deps);
       }
       return Reflect.get(target, property, receiver);
     },
@@ -837,6 +928,14 @@ function ownedQueries(
   });
 }
 
+/** What a `select` builder has been narrowed by so far; copied, never mutated. */
+interface SelectState {
+  readonly where?: SQL;
+  readonly orderBy: readonly SQL[];
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
 /** Build the database surface one owner sees. */
 export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
   type AnyDb = {
@@ -850,6 +949,10 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
     delete: (table: unknown) => { where: (c: SQL) => Promise<unknown> };
   };
 
+  // Every terminal call hands its whole promise to this, so a transaction
+  // can wait for statements its callback started and never awaited.
+  const track = trackerOf(deps);
+
   const surface: PluginDatabase = {
     table(definition) {
       // `resolveTable` carries the Drizzle object as `unknown` — it is built
@@ -862,62 +965,164 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
     },
 
     select(definition) {
-      const { table } = resolveTable(definition, deps);
-      const state: {
-        where?: SQL;
-        orderBy: SQL[];
-        limit?: number;
-        offset?: number;
-      } = { orderBy: [] };
+      // Resolved now so a bad call fails where it was written; `all` resolves
+      // again, and runs against what it resolved then (see `resolveTable`).
+      resolveTable(definition, deps);
 
-      const build = (): PortableSelect<typeof definition> => ({
-        where(condition) {
-          state.where = condition;
-          return build();
-        },
-        orderBy(...columns) {
-          state.orderBy = columns;
-          return build();
-        },
-        limit(count) {
-          state.limit = count;
-          return build();
-        },
-        offset(count) {
-          state.offset = count;
-          return build();
-        },
-        async all() {
-          const db = deps.db() as {
-            select: () => {
-              from: (t: unknown) => Record<string, (...a: never[]) => unknown>;
-            };
-          };
-          let query = db.select().from(table);
-          if (state.where) {
-            query = query.where(state.where as never) as typeof query;
-          }
-          if (state.orderBy.length > 0) {
-            query = query.orderBy(
-              ...(state.orderBy as never[])
-            ) as typeof query;
-          }
-          if (state.limit !== undefined) {
-            query = query.limit(state.limit as never) as typeof query;
-          }
-          if (state.offset !== undefined) {
-            query = query.offset(state.offset as never) as typeof query;
-          }
-          return (await (query as unknown as Promise<unknown>)) as never;
-        },
+      // Each step returns a NEW builder over a copy of the state, never
+      // mutating the one it was called on. Two queries branched from one base
+      // therefore keep their own `where`, and `first()` narrows only the copy
+      // it runs, so a later `all()` on the same builder still returns every
+      // row.
+      const build = (
+        state: SelectState
+      ): PortableSelect<typeof definition> => ({
+        where: condition => build({ ...state, where: condition }),
+        orderBy: (...columns) => build({ ...state, orderBy: columns }),
+        limit: count => build({ ...state, limit: count }),
+        offset: count => build({ ...state, offset: count }),
+        all: () => track(selectRows(state)),
         async first() {
-          const rows = await build().limit(1).all();
+          const rows = await build({ ...state, limit: 1 }).all();
           return rows[0] ?? null;
         },
       });
-      return build();
+      const selectRows = async (
+        state: SelectState
+      ): Promise<InferRow<typeof definition>[]> => {
+        const { table } = resolveTable(definition, deps);
+        const db = deps.db() as {
+          select: () => {
+            from: (t: unknown) => Record<string, (...a: never[]) => unknown>;
+          };
+        };
+        let query = db.select().from(table);
+        if (state.where) {
+          query = query.where(state.where as never) as typeof query;
+        }
+        if (state.orderBy.length > 0) {
+          query = query.orderBy(...(state.orderBy as never[])) as typeof query;
+        }
+        if (state.limit !== undefined) {
+          query = query.limit(state.limit as never) as typeof query;
+        }
+        if (state.offset !== undefined) {
+          query = query.offset(state.offset as never) as typeof query;
+        }
+        return (await (query as unknown as Promise<unknown>)) as never;
+      };
+      return build({ orderBy: [] });
     },
 
+    insert(definition, values) {
+      return track(writes.insert(definition, values));
+    },
+
+    insertReturning(definition, values) {
+      return track(writes.insertReturning(definition, values));
+    },
+
+    update(definition, set) {
+      // Resolved here to fail fast, and again in `where`, which writes to the
+      // table it resolved itself (see `resolveTable`).
+      resolveTable(definition, deps);
+      const run = async (condition: SQL): Promise<number> => {
+        const { table } = resolveTable(definition, deps);
+        const values = toColumns(
+          definition,
+          withUpdatedColumns(definition, set)
+        );
+        const result = await (deps.db() as AnyDb)
+          .update(table)
+          .set(values)
+          .where(condition);
+        return affectedRows(result);
+      };
+      return { where: condition => track(run(condition)) };
+    },
+
+    delete(definition) {
+      // As `update`: checked now, and resolved again where the delete runs.
+      resolveTable(definition, deps);
+      const run = async (condition: SQL): Promise<number> => {
+        const { table } = resolveTable(definition, deps);
+        const result = await (deps.db() as AnyDb)
+          .delete(table)
+          .where(condition);
+        return affectedRows(result);
+      };
+      return { where: condition => track(run(condition)) };
+    },
+
+    async transaction(fn) {
+      return deps.transaction(async tx => {
+        // The same surface, reading the transaction's handles. Built rather
+        // than mutated so a caller holding the outer `ctx.db` cannot
+        // accidentally write outside the transaction.
+        //
+        // BOTH handles, not just `db`. The `query` getter resolves
+        // `relationalDb`, and the pooled one is a different connection on
+        // PostgreSQL and MySQL, from which `tx.query.x.findMany()` could not
+        // see the callback's uncommitted writes. The relational
+        // handle cannot simply be `tx.db` either: that instance is built
+        // without a relations config, and its `query` namespace is empty.
+        // `deps.transaction` supplies a relations-enabled instance bound to
+        // the same connection instead. `tx.relationalDb` is read on every
+        // access to `query` rather than captured, so a supplier that resolves
+        // it lazily — plugin-context does — keeps the relations config current.
+        //
+        // Its own `transaction` refuses. `PluginTransaction` leaves it out of
+        // the type, but a plugin written in JavaScript can still call it, and
+        // the outer `deps.transaction` would open a second transaction: on
+        // PostgreSQL and MySQL that is another pooled connection, outside
+        // this one and blind to its uncommitted writes.
+        //
+        // And it refuses everything once `fn` has settled, either way. A
+        // plugin can keep `tx`, a builder made from it or one of its `query`
+        // entries past the callback, and the transaction's handles then point
+        // at a connection the transaction no longer owns — on SQLite the
+        // shared one, outside any transaction; on PostgreSQL and MySQL a
+        // client already back in the pool. Every statement this surface runs
+        // reaches its handle through these two suppliers, so the one check in
+        // them covers every path; it runs before `tx.relationalDb` is read,
+        // since reading it may build a handle on that connection. The scope
+        // closes only after `fn`'s promise settles and the statements it
+        // started have finished, so neither work the callback is awaiting nor
+        // work it started and did not await is refused or left to run after
+        // the transaction ends. `scope.run` also decides the outcome: a
+        // statement still in flight when the callback settled that then
+        // fails rejects the transaction, and so rolls it back, even when the
+        // callback itself resolved (see `transactionScope`).
+        const scope = transactionScope("ctx.db.transaction");
+        const scoped = createPluginDatabase({
+          ...deps,
+          db: () => {
+            scope.assertOpen();
+            return tx.db;
+          },
+          relationalDb: () => {
+            scope.assertOpen();
+            return tx.relationalDb;
+          },
+          transaction: () => Promise.reject(nestedTransactionError()),
+          track: scope.track,
+        });
+        return scope.run(() => fn(scoped));
+      });
+    },
+
+    // Resolved per access, never cached: the registry invalidates its
+    // assembled relations when a table is re-registered, and that only
+    // propagates if consumers re-resolve — the same rule core services
+    // follow through BaseService.db.
+    get query() {
+      return ownedQueries(relationalHandle(deps).query, deps);
+    },
+  };
+
+  // The two inserts, untracked: the surface's methods above hand each call's
+  // promise to the tracker, and these are the work that promise stands for.
+  const writes: Pick<PluginDatabase, "insert" | "insertReturning"> = {
     async insert(definition, values) {
       const { table } = resolveTable(definition, deps);
       const rows = (Array.isArray(values) ? values : [values]).map(row =>
@@ -994,83 +1199,6 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         });
       }
       return row;
-    },
-
-    update(definition, set) {
-      const { table } = resolveTable(definition, deps);
-      return {
-        async where(condition) {
-          const values = toColumns(
-            definition,
-            withUpdatedColumns(definition, set)
-          );
-          const result = await (deps.db() as AnyDb)
-            .update(table)
-            .set(values)
-            .where(condition);
-          return affectedRows(result);
-        },
-      };
-    },
-
-    delete(definition) {
-      const { table } = resolveTable(definition, deps);
-      return {
-        async where(condition) {
-          const result = await (deps.db() as AnyDb)
-            .delete(table)
-            .where(condition);
-          return affectedRows(result);
-        },
-      };
-    },
-
-    async transaction(fn) {
-      return deps.transaction(async tx => {
-        // The same surface, reading the transaction's handles. Built rather
-        // than mutated so a caller holding the outer `ctx.db` cannot
-        // accidentally write outside the transaction.
-        //
-        // BOTH handles, not just `db`. Replacing `db` alone left the `query`
-        // getter resolving `relationalDb` from the pool — a different
-        // connection on PostgreSQL and MySQL — so `tx.query.x.findMany()`
-        // could not see the callback's uncommitted writes. The relational
-        // handle cannot simply be `tx.db` either: that instance is built
-        // without a relations config, and its `query` namespace is empty.
-        // `deps.transaction` supplies a relations-enabled instance bound to
-        // the same connection instead. `tx.relationalDb` is read on every
-        // access to `query` rather than captured, so a supplier that resolves
-        // it lazily — plugin-context does — keeps the relations config current.
-        //
-        // Its own `transaction` refuses. `PluginTransaction` leaves it out of
-        // the type, but a plugin written in JavaScript can still call it, and
-        // the outer `deps.transaction` would open a second transaction: on
-        // PostgreSQL and MySQL that is another pooled connection, outside
-        // this one and blind to its uncommitted writes.
-        const scoped = createPluginDatabase({
-          ...deps,
-          db: () => tx.db,
-          relationalDb: () => tx.relationalDb,
-          transaction: () => Promise.reject(nestedTransactionError()),
-        });
-        return fn(scoped);
-      });
-    },
-
-    // Resolved per access, never cached: the registry invalidates its
-    // assembled relations when a table is re-registered, and that only
-    // propagates if consumers re-resolve — the same rule core services
-    // follow through BaseService.db.
-    get query() {
-      // `_.relations` is Drizzle's own record of the config this handle was
-      // built with, on all three dialects' database classes. Read from the
-      // SAME handle as `query` rather than asked of the registry again, so
-      // the edges judged cannot be a different build from the edges run.
-      const db = deps.relationalDb() as {
-        query: RelationalQueries;
-        _?: { relations?: AnyRelations };
-      };
-      return ownedQueries(db.query, db._?.relations, deps);
     },
   };
 

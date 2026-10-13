@@ -54,6 +54,7 @@ These are thrown to the plugin code that made the call, not at boot.
 | --- | --- | --- | --- |
 | `INVALID_INPUT` | 400 | `transaction` was called on the handle `ctx.db.transaction` passes its work (`logContext.reason` is `nested-plugin-transaction`). | Do the nested work in the same callback, through the handle it was given. |
 | `VALIDATION_ERROR` | 400 | A `ctx.services.collections.*InTransaction` method was passed something other than the token `withTransaction` handed the work (`logContext.reason` is `plugin-transaction-token-unknown`). | Pass the `tx` your `withTransaction` callback received. |
+| `VALIDATION_ERROR` | 400 | A transaction was used after its callback settled: the `tx` of `ctx.db.transaction` or `ctx.db.raw.transaction`, or the token `withTransaction` handed its work, kept and called later (`logContext.reason` is `plugin-transaction-finished`). | Do the work inside the callback, before it returns, and await it there. |
 
 ## Permissions
 
