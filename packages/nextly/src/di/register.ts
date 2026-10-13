@@ -27,6 +27,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
+import type { AnyRelations } from "drizzle-orm";
 
 import { authUiProblems } from "../auth/handlers/auth-ui";
 import {
@@ -40,6 +41,7 @@ import type {
 } from "../collections/config/define-config";
 import type { FieldConfig } from "../collections/fields/types";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
+import { resolveRelations } from "../database/resolve-relations";
 import type { SchemaRegistry } from "../database/schema-registry";
 import { requireNextly } from "../direct-api/nextly";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
@@ -137,6 +139,15 @@ import {
   finalizePermissionTargets,
 } from "../plugins/permissions/collect-permissions";
 import { setPluginAuthDepsResolver } from "../plugins/plugin-auth-provider";
+import { withWithheldConfig } from "../plugins/plugin-config-view";
+import {
+  NO_PLUGIN_CONSENT,
+  type PluginConsent,
+  type PluginGrants,
+  setupTransformerInput,
+  snapshotPluginConsent,
+  unmatchedConsentWarnings,
+} from "../plugins/plugin-consent";
 import type {
   AdapterTransactions,
   PluginContext,
@@ -144,7 +155,10 @@ import type {
   PluginServiceName,
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
-import { resolvePlugins, resolveTransformedPlugins } from "../plugins/resolve";
+import {
+  resolveDeclaredPlugins,
+  resolveTransformedPlugins,
+} from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import {
   collectPluginRoutes,
@@ -332,6 +346,14 @@ export interface NextlyServiceConfig {
 
   /** Plugins to initialize with Nextly. */
   plugins?: PluginDefinition[];
+
+  /**
+   * @experimental What the app lists plugins for, beyond their own manifests
+   * (`db.rawSqlPlugins`). Filled by `buildServiceConfig` from the app's
+   * config. Absent, nothing is listed: a plugin that declares such a
+   * capability refuses the boot.
+   */
+  pluginConsent?: PluginConsent;
 
   /**
    * @experimental Fail fast (throw) when a plugin `extend`/relation targets an
@@ -636,6 +658,15 @@ function startRegistrationAttempt(config: NextlyServiceConfig): Promise<void> {
 async function runRegistrationAttempt(
   config: NextlyServiceConfig
 ): Promise<void> {
+  // Plugins an earlier registration started and nobody tore down: the one
+  // `clearServices()` ended, which empties the container but cannot await a
+  // plugin's `destroy`. Their timers and connections are still live, and the
+  // registration below starts a second copy of each plugin beside them. Torn
+  // down here, in reverse, before any plugin initialises again. After a
+  // shutdown or a failed attempt the list is already empty and this runs
+  // nothing. Inside the latch, so a caller waiting on this attempt cannot
+  // start plugins while the old ones are still being destroyed.
+  await destroyRegisteredPlugins();
   try {
     await registerServicesOnce(config);
   } catch (error) {
@@ -654,8 +685,12 @@ async function runRegistrationAttempt(
 async function registerServicesOnce(
   config: NextlyServiceConfig
 ): Promise<void> {
-  const { transformedConfig, transformedPlugins, deferredExtends } =
-    await resolveBootConfig(config);
+  const {
+    transformedConfig,
+    transformedPlugins,
+    deferredExtends,
+    pluginGrants,
+  } = await resolveBootConfig(config);
   const {
     unresolvedRelations,
     unresolvedPermissions,
@@ -722,10 +757,8 @@ async function registerServicesOnce(
     resolvedLogger
   );
 
-  const schemaRegistry = await initializeSchemaRegistry(
-    adapter,
-    bootExtensionSchema
-  );
+  const { registry: schemaRegistry, freshInstall } =
+    await initializeSchemaRegistry(adapter, bootExtensionSchema);
 
   // Publish the webhook recording policy from the config INDEPENDENTLY of the
   // schema registry. `registerConfigTablesInResolver` (below) only runs when the
@@ -791,6 +824,10 @@ async function registerServicesOnce(
     "config",
     () => transformedConfig
   );
+  // Beside the config rather than in it: what the boot granted, decided once
+  // when the plugin list was resolved. The auth router builds its plugin
+  // contexts from this entry, as `initializePlugins` does from the same value.
+  container.registerSingleton<PluginGrants>("pluginGrants", () => pluginGrants);
 
   const { mediaStorage, storage } = registerBootMediaStorage(
     storagePlugins,
@@ -817,7 +854,18 @@ async function registerServicesOnce(
 
   registerDomainServices(ctx);
 
-  await syncCodeFirstEntities(adapter, resolvedLogger, transformedConfig);
+  const createdCodeFirstTables = await syncCodeFirstEntities(
+    adapter,
+    resolvedLogger,
+    transformedConfig
+  );
+
+  await checkFreshInstallForeignKeys(
+    adapter,
+    bootExtensionSchema,
+    freshInstall,
+    createdCodeFirstTables
+  );
 
   await runBootMigrations(config, transformedConfig, deferredExtends, {
     adapter,
@@ -848,6 +896,7 @@ async function registerServicesOnce(
   // previous registration's names in place for a reload to believe.
   globalForReg.__nextly_pluginTeardown = await initializePlugins(
     transformedConfig,
+    pluginGrants,
     pluginBootContributions,
     adapterDrizzleDb,
     adapter.getCapabilities().dialect,
@@ -927,6 +976,8 @@ interface ResolvedBootConfig {
   transformedConfig: NextlyServiceConfig;
   transformedPlugins: PluginDefinition[];
   deferredExtends: DeferredExtends;
+  /** What `resolveBootPlugins` granted the plugins of `transformedConfig`. */
+  pluginGrants: PluginGrants;
 }
 
 /**
@@ -942,7 +993,8 @@ async function resolveBootConfig(
   // ----------------------------------------
   // Layers 0a/0b: resolve, transform and re-resolve the plugin list
   // ----------------------------------------
-  const transformedSetupConfig = await resolveBootPlugins(config);
+  const { config: transformedSetupConfig, grants: pluginGrants } =
+    await resolveBootPlugins(config);
   const transformedPlugins = transformedSetupConfig.plugins ?? [];
 
   // ----------------------------------------
@@ -969,6 +1021,7 @@ async function resolveBootConfig(
     ),
     transformedPlugins,
     deferredExtends,
+    pluginGrants,
   };
 }
 
@@ -1775,12 +1828,15 @@ function registerBootMediaStorage(
  * Each sync registers its entities and gathers the tables they are
  * missing; `createMissingCodeFirstTables` (Layer 6.1) then creates all of
  * them in one pipeline apply, once every registry row exists.
+ *
+ * Returns the tables it set out to create, whether or not the apply managed
+ * to: the fresh-install check asks after the keys pointing at exactly these.
  */
 async function syncCodeFirstEntities(
   adapter: DrizzleAdapter,
   logger: Logger,
   transformedConfig: NextlyServiceConfig
-): Promise<void> {
+): Promise<ReadonlySet<string>> {
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections
   // ----------------------------------------
@@ -1817,6 +1873,40 @@ async function syncCodeFirstEntities(
   // Layer 6.1: Create the missing code-first tables
   // ----------------------------------------
   await createMissingCodeFirstTables(adapter, logger, bootTableWork);
+
+  const { collections, singles, components } = bootTableWork.desired;
+  return new Set(
+    [
+      ...Object.values(collections),
+      ...Object.values(singles),
+      ...Object.values(components),
+    ].map(entity => entity.tableName)
+  );
+}
+
+/**
+ * Layer 6.2: a fresh install's foreign keys to code-first tables.
+ *
+ * First-run creates the extension tables before any code-first table exists,
+ * and the code-first apply above adds their keys to the tables it creates. Run
+ * straight after it, before migrations or any plugin, so an install whose keys
+ * could not be created stops here, naming each, rather than serving tables
+ * that accept rows pointing at nothing. See `assertFreshInstallForeignKeys`
+ * for what is asked and why only on a fresh install.
+ */
+async function checkFreshInstallForeignKeys(
+  adapter: DrizzleAdapter,
+  bootExtensionSchema: ExtensionSchema | undefined,
+  freshInstall: boolean,
+  createdTables: ReadonlySet<string>
+): Promise<void> {
+  if (!freshInstall || bootExtensionSchema === undefined) return;
+  const { assertFreshInstallForeignKeys } = await import("../init/first-run");
+  await assertFreshInstallForeignKeys({
+    adapter,
+    specs: bootExtensionSchema.specs,
+    createdTables,
+  });
 }
 
 /**
@@ -2116,12 +2206,17 @@ export function bootMigrationsArgs(
  * transformers run in resolved order, and the transformed list resolved again
  * in full. Fail-fast; nothing has connected to the database yet.
  *
- * Exported for the boot's tests, which judge the resolved list on exactly the
+ * Returns the transformed config and, beside it, the grants the resolved
+ * list holds (`decidePluginGrants`). Every plugin context the boot builds
+ * reads those grants, never a manifest.
+ *
+ * Exported for the boot's tests, which judge the consent rules on exactly the
  * config the boot hands its plugins without opening a database.
  */
-export async function resolveBootPlugins(
-  config: NextlyServiceConfig
-): Promise<NextlyServiceConfig & { plugins: PluginDefinition[] }> {
+export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
+  config: NextlyServiceConfig & { plugins: PluginDefinition[] };
+  grants: PluginGrants;
+}> {
   // ----------------------------------------
   // Layer 0a: Resolve Plugins (validate + order)
   // ----------------------------------------
@@ -2129,18 +2224,39 @@ export async function resolveBootPlugins(
   // dependencies, failing fast with a clear error. The resolved order drives
   // BOTH setup here and init later in the boot. Runs over all plugins
   // (including disabled ones) so the schema stays deterministic.
-  const resolvedPlugins = resolvePlugins(config.plugins ?? [], {
-    coreVersion: getCoreVersion(),
-  });
-  const resolvedConfig: NextlyServiceConfig = {
-    ...config,
-    plugins: resolvedPlugins,
-  };
+  //
+  // The consent is read once, here, from the config as the app passed it,
+  // and held as a frozen copy: the re-resolution below runs against the SAME
+  // grants, and a `setup` transformer, which is plugin code, neither receives
+  // them nor can reach a list it could add its own name to.
+  const pluginConsent = snapshotPluginConsent(
+    config.pluginConsent ?? NO_PLUGIN_CONSENT
+  );
+  // Resolved from copies and recorded before any transformer runs: the
+  // transformers receive further copies, so nothing they edit in place
+  // reaches the record the transformed list is judged against, or the app's
+  // own definitions.
+  const { plugins: resolvedPlugins, preSetup } = resolveDeclaredPlugins(
+    config.plugins ?? [],
+    { coreVersion: getCoreVersion(), consent: pluginConsent }
+  );
+  for (const warning of unmatchedConsentWarnings(
+    resolvedPlugins,
+    pluginConsent
+  )) {
+    (config.logger ?? consoleLogger).warn(warning);
+  }
+  const resolvedConfig = setupTransformerInput(config, resolvedPlugins);
 
   // ----------------------------------------
   // Layer 0b: Process Plugin Config Transformers (resolved order)
   // ----------------------------------------
-  const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
+  // The app's own live handles and consent go back in after the
+  // transformers, which were handed neither (`setupTransformerInput`).
+  const setupConfig = withWithheldConfig(
+    config,
+    await applyPluginConfigTransformers(resolvedConfig)
+  );
 
   // RE-RESOLVED in full, not merely re-checked. A `setup` transformer may
   // add, rename or replace entries in `plugins`, and the rest of the boot
@@ -2158,6 +2274,8 @@ export async function resolveBootPlugins(
   // collections and singles fold exactly like a declared plugin's.
   return resolveTransformedPlugins(setupConfig, {
     coreVersion: getCoreVersion(),
+    consent: pluginConsent,
+    declared: preSetup,
   });
 }
 
@@ -2226,11 +2344,18 @@ async function resolveAdapter(
  * Static tables come from compile-time Drizzle schema definitions.
  * Dynamic tables come from the `dynamic_collections`, `dynamic_singles`,
  * and `dynamic_components` DB tables and are generated at runtime.
+ *
+ * Also says whether first-run setup created this database's tables, which
+ * decides whether the boot checks a fresh install's foreign keys once the
+ * code-first tables exist (`checkFreshInstallForeignKeys`). Reported even when
+ * the registry itself could not be built, since the tables were created
+ * either way.
  */
 async function initializeSchemaRegistry(
   adapter: DrizzleAdapter,
   extensionSchema?: ExtensionSchema
-): Promise<SchemaRegistry | undefined> {
+): Promise<{ registry: SchemaRegistry | undefined; freshInstall: boolean }> {
+  let freshInstall = false;
   try {
     const { SchemaRegistry } = await import("../database/schema-registry");
     const { getDialectTables } = await import("../database/index");
@@ -2264,7 +2389,7 @@ async function initializeSchemaRegistry(
       // initializeSchemaRegistry doesn't have resolvedLogger in scope;
       // console is the right fallback because first-run is a one-time
       // user-visible event and the boot logger wiring isn't done yet.
-      await ensureFirstRunSetup({
+      const firstRun = await ensureFirstRunSetup({
         adapter,
         extensionSchema,
         logger: {
@@ -2274,6 +2399,7 @@ async function initializeSchemaRegistry(
           error: msg => console.error(msg),
         },
       });
+      freshInstall = firstRun.ranSetup;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(
@@ -2457,11 +2583,11 @@ async function initializeSchemaRegistry(
       }
     }
 
-    return registry;
+    return { registry, freshInstall };
   } catch {
     // SchemaRegistry setup failed entirely — adapter falls back to
     // executeQuery for basic operations.
-    return undefined;
+    return { registry: undefined, freshInstall };
   }
 }
 
@@ -2935,6 +3061,12 @@ async function syncCodeFirstCollections(
       // this the main table is created WITH the translatable columns and no companion is
       // ever provisioned — the exact "no _locales table" failure on a fresh boot.
       localized: (collection as { localized?: boolean }).localized === true,
+      // The compound indexes the collection declares, created with its table.
+      // A table made here without them would carry none until a later push,
+      // and a declared unique index would enforce nothing in the meantime.
+      ...(collection.indexes !== undefined
+        ? { indexes: collection.indexes }
+        : {}),
     };
     work.desired.collections[slug] = desired;
 
@@ -3710,6 +3842,8 @@ async function createMissingCodeFirstTables(
  */
 async function initializePlugins(
   transformedConfig: NextlyServiceConfig,
+  /** What `resolveBootPlugins` granted the plugins of `transformedConfig`. */
+  pluginGrants: PluginGrants,
   /**
    * The routes and widget sources of `transformedConfig.plugins`, collected
    * and validated by `registerServicesOnce` before the adapter connected,
@@ -3763,6 +3897,7 @@ async function initializePlugins(
       | VersionsService
       | SingleRegistryService
       | DatabaseInstance
+      | AnyRelations
       | SupportedDialect
       | Logger
       | NextlyServiceConfig
@@ -3782,6 +3917,11 @@ async function initializePlugins(
     // database handle a plugin receives is a restricted wrapper that carries
     // no dialect of its own to infer one from.
     dialect: () => dialect,
+    // The relations config behind ctx.db.query. The context asks for it on
+    // every relational access, like BaseService.db, so a registry
+    // invalidation propagates immediately; it builds the handle itself, from
+    // the pool or from a transaction's client as the call requires.
+    relations: () => resolveRelations(dialect),
     logger: () => logger,
     config: () => transformedConfig,
     // The transaction-capable adapter, for core-owned stores that must run on
@@ -3888,7 +4028,8 @@ async function initializePlugins(
     const pluginContext = createPluginContext(
       getServiceForPlugin as Parameters<typeof createPluginContext>[0],
       pluginHookRegistry,
-      plugin
+      plugin,
+      pluginGrants
     );
     teardown.push({ plugin, context: pluginContext });
     contexts.set(plugin.name, pluginContext);
@@ -4173,6 +4314,10 @@ async function releaseServices(opts: {
  * Clear all registered services. Primarily for testing or re-initialization
  * with different configuration. For production shutdown, prefer
  * `shutdownServices()` so resources are properly released.
+ *
+ * Synchronous, so it cannot await a plugin's `destroy`: the plugins this
+ * registration started keep running until the next `registerServices`, which
+ * tears them down in reverse before it initialises any plugin.
  */
 export function clearServices(): void {
   container.clear();

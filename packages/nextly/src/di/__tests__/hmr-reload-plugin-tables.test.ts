@@ -1,19 +1,19 @@
 /**
- * A plugin's tables follow an HMR reload of its config without a restart.
+ * A plugin's `ctx.db`, captured at `init()`, follows an HMR reload of its
+ * tables without a restart.
  *
- * Everything that reaches a plugin table reads the active extension schema
- * per call. A reload that did not recompile that schema left it describing
- * boot's tables, so a table the plugin gained in the reload was never created
- * or published, and one it dropped was still offered.
+ * The surface reads its tables, owners and relations per call, from the active
+ * extension schema and the registry. A reload that did not recompile that
+ * schema left it describing boot's tables, so a table the plugin gained in the
+ * reload was refused as undeclared and one it dropped was still offered.
  *
  * Driven end to end on an in-memory SQLite: a real boot, the real reload with
- * only the config loader replaced (it reads `nextly.config.ts` from disk), and
- * the real push pipeline.
+ * only the config loader replaced (it reads `nextly.config.ts` from disk), the
+ * real push pipeline, and the `ctx.db` the plugin was handed at `init`.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createAdapter } from "../../database/factory";
-import { getActiveExtensionSchema } from "../../domains/schema/extension/active-schema";
 import { col, defineTable } from "../../domains/schema/extension/dsl";
 import type { PromptDispatcher } from "../../domains/schema/pipeline/pushschema-pipeline-interfaces";
 import type { PluginDefinition } from "../../plugins/plugin-context";
@@ -34,23 +34,20 @@ const { reloadNextlyConfig } = await import("../../init/reload-config");
 const notes = defineTable("notes", { id: col.id(), body: col.text() });
 const tags = defineTable("tags", { id: col.id(), label: col.text() });
 
-/** The plugin at one point in its life, declaring `tables`. */
+/** The plugin at one point in its life, handing its `ctx.db` to `into`. */
 function notesPlugin(
-  tables: ReturnType<typeof defineTable>[]
+  tables: ReturnType<typeof defineTable>[],
+  into: { db?: unknown }
 ): PluginDefinition {
   return {
     name: "@acme/notes",
     version: "1.0.0",
     nextly: "*",
     contributes: { schema: { tables } },
+    init: async (ctx: { db: unknown }) => {
+      into.db = ctx.db;
+    },
   } as unknown as PluginDefinition;
-}
-
-/** The SQL name of the published table the plugin authored as `authored`. */
-function publishedTable(authored: string): string | undefined {
-  return getActiveExtensionSchema("sqlite")?.tables.find(
-    table => table.authored === authored
-  )?.name;
 }
 
 /**
@@ -65,57 +62,65 @@ const confirmAll: PromptDispatcher = {
   }),
 };
 
+type Db = {
+  insert: (table: unknown, values: Record<string, unknown>) => Promise<unknown>;
+  select: (table: unknown) => { all: () => Promise<unknown[]> };
+};
+
 afterEach(async () => {
   await shutdownServices();
   vi.unstubAllEnvs();
 });
 
-describe("plugin tables across an HMR reload", () => {
-  it("creates and publishes a table the reload added, and unpublishes one it dropped", async () => {
+describe("ctx.db across an HMR reload", () => {
+  it("reaches a table the reload added, through the handle taken at init", async () => {
     vi.stubEnv("DB_DIALECT", "sqlite");
+    const captured: { db?: unknown } = {};
     const adapter = await createAdapter({
       type: "sqlite",
       memory: true,
     } as Parameters<typeof createAdapter>[0]);
     await registerServices({
       adapter,
-      plugins: [notesPlugin([notes])],
+      plugins: [notesPlugin([notes], captured)],
     } as unknown as Parameters<typeof registerServices>[0]);
+    const db = captured.db as Db;
 
-    // Before the reload the table is not declared, so nothing publishes it.
-    const kept = publishedTable("notes");
-    expect(kept).toBeDefined();
-    expect(publishedTable("tags")).toBeUndefined();
+    // Before the reload the table is not declared, so it is refused.
+    await expect(
+      db.insert(tags, { id: "t1", label: "x" })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      logContext: expect.objectContaining({ reason: "table-not-declared" }),
+    });
 
     loaded.config = {
       collections: [],
-      plugins: [notesPlugin([notes, tags])],
+      plugins: [notesPlugin([notes, tags], {})],
     };
     await reloadNextlyConfig({ dispatcher: confirmAll });
 
-    // Published by the reload, and created by its push: a row written to it
-    // reads back.
-    const added = publishedTable("tags");
-    expect(added).toBeDefined();
-    await adapter.executeQuery(
-      `INSERT INTO "${String(added)}" ("id", "label") VALUES ('t1', 'x')`
-    );
-    expect(
-      await adapter.executeQuery(`SELECT "id", "label" FROM "${String(added)}"`)
-    ).toEqual([expect.objectContaining({ id: "t1", label: "x" })]);
+    await db.insert(tags, { id: "t1", label: "x" });
+    expect(await db.select(tags).all()).toEqual([
+      expect.objectContaining({ id: "t1", label: "x" }),
+    ]);
 
-    // A reload that drops the table takes it out of the published schema, so
-    // nothing reading the active schema reaches it as a table the plugin
-    // still has.
+    // And a reload that drops the table takes it away from the same handle:
+    // it is refused as undeclared, not reached as a table the plugin no
+    // longer has.
     loaded.config = {
       collections: [],
-      plugins: [notesPlugin([notes])],
+      plugins: [notesPlugin([notes], {})],
     };
     await reloadNextlyConfig({ dispatcher: confirmAll });
 
-    expect(publishedTable("tags")).toBeUndefined();
-    // The table the plugin kept is still published and still there.
-    expect(publishedTable("notes")).toBe(kept);
-    expect(await adapter.tableExists(String(kept))).toBe(true);
+    // `select` refuses when it resolves the table, before any query, so the
+    // call is wrapped to observe that refusal as a rejection.
+    await expect((async () => db.select(tags).all())()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      logContext: expect.objectContaining({ reason: "table-not-declared" }),
+    });
+    // The table the plugin kept is still reachable.
+    await expect(db.select(notes).all()).resolves.toEqual([]);
   });
 });

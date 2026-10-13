@@ -10,9 +10,32 @@
  * @module plugins/hook-points
  * @since 1.0.0
  */
+import { FilterSeams } from "../filters/seams";
+
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
 import { resolutionError } from "./resolution-error";
+
+/**
+ * The prefixes core's own seams sit under: `email.`, `admin.`, `collections.`.
+ *
+ * Derived from `FilterSeams` rather than listed, so a seam core adds under a
+ * new prefix reserves that prefix the day it is added. The plugin prefix rule
+ * alone cannot keep plugins out of these: a plugin whose slug is `admin`
+ * passes it with `admin.nav`, and declaring that core seam as a decision would
+ * make core's own filter call there refused as a kind mismatch on every
+ * request.
+ */
+const CORE_SEAM_PREFIXES: readonly string[] = [
+  ...new Set(
+    Object.values(FilterSeams).map(seam => seam.slice(0, seam.indexOf(".") + 1))
+  ),
+];
+
+/** The core prefix a hook point name falls under, or `undefined`. */
+function coreSeamPrefixOf(name: string): string | undefined {
+  return CORE_SEAM_PREFIXES.find(prefix => name.startsWith(prefix));
+}
 
 /** One declared seam, and which plugin published it. */
 export interface DeclaredHookPoint {
@@ -57,9 +80,11 @@ export function getDeclaredHookPoints(): ReadonlyMap<
 /**
  * Whether this plugin may declare this name at all.
  *
- * Both refusals, together, because they answer one question — who owns the
+ * Every refusal, together, because they answer one question — who owns the
  * name — and separating them from the loop leaves it reading as what it
- * builds rather than as the rules it enforces on the way.
+ * builds rather than as the rules it enforces on the way. Core's prefixes are
+ * checked first, as event names are: a name core owns is refused as core's,
+ * whichever plugin's prefix it does or does not carry.
  */
 function assertPointDeclarable(
   points: ReadonlyMap<string, DeclaredHookPoint>,
@@ -67,6 +92,15 @@ function assertPointDeclarable(
   pluginName: string,
   slug: string
 ): void {
+  const corePrefix = coreSeamPrefixOf(name);
+  if (corePrefix !== undefined) {
+    throw resolutionError(
+      "hook-point-reserved",
+      `Plugin "${pluginName}" declares the hook point "${name}", whose prefix "${corePrefix}" core reserves for its own seams.`,
+      { plugin: pluginName, hookPoint: name, reservedPrefix: corePrefix }
+    );
+  }
+
   if (!isInPluginNamespace(pluginName, name)) {
     throw resolutionError(
       "hook-point-outside-prefix",

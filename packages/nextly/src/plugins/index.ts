@@ -19,6 +19,7 @@ export {
 export { pluginAdminSlug } from "./plugin-slug";
 export { collectDeclarations } from "./declarations";
 export type { PluginDeclaration } from "./declarations";
+export type { FrozenCopy, FrozenValue } from "../shared/lib/plain-copy";
 export type { AdminPlacement as AdminPlacementType } from "./admin-placement";
 
 export {
@@ -29,9 +30,19 @@ export {
   type PluginActionRegistry,
   type PluginAuditApi,
   type PluginCapabilities,
+  type PluginConfig,
   type PluginContext,
   type PluginDatabase,
   type PluginDefinition,
+  type PluginEmailService,
+  type PluginEmailSettings,
+  type PluginMediaService,
+  type PluginRawDatabase,
+  type PluginSummary,
+  type PluginUserService,
+  type PluginVersionsService,
+  type PluginInsert,
+  type PluginTransaction,
   type PluginFilterRegistry,
   type PluginHookRegistry,
   type PluginSettingsApi,

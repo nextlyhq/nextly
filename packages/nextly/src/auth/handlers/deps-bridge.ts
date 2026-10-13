@@ -14,6 +14,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { eq as drizzleEq } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
+import { resolveRelations } from "../../database/resolve-relations";
 import type { NextlyServiceConfig } from "../../di/register";
 import {
   buildAuditLogWriter,
@@ -23,6 +24,10 @@ import { NextlyError } from "../../errors";
 import { getHookRegistry } from "../../hooks/hook-registry";
 import { env } from "../../lib/env";
 import type { RateLimitStore } from "../../middleware/rate-limit";
+import {
+  NO_PLUGIN_GRANTS,
+  type PluginGrants,
+} from "../../plugins/plugin-consent";
 import {
   createPluginContext,
   type PluginContext,
@@ -427,6 +432,23 @@ export function buildAuthRouterDeps(
       const adapter = getService("adapter") as { getDrizzle: () => unknown };
       return adapter.getDrizzle();
     }
+    // The relations config behind `ctx.db.query`, translated for the same
+    // reason `db` is: neither is a container entry, and `getService` would
+    // throw rather than resolve one. Asked for per relational access, so it is
+    // resolved here per call rather than captured.
+    //
+    // This is the OTHER place a plugin context is built — the auth router's.
+    // When `ctx.db` gained relational queries only `di/register.ts` learned
+    // the new name, so every login through a plugin strategy threw
+    // `Service "relationalDb" is not registered in container` before reaching
+    // the strategy at all. A name added to the plugin service list has to be
+    // answered here too.
+    if (name === "relations") {
+      const adapter = getService("adapter") as {
+        getCapabilities: () => { dialect: SupportedDialect };
+      };
+      return resolveRelations(adapter.getCapabilities().dialect);
+    }
     // Also not a DI service. The container registers the adapter, and the
     // dialect is something it is asked for; a plugin's settings store picks
     // its table metadata and its upsert spelling from this answer, and the
@@ -455,6 +477,10 @@ export function buildAuthRouterDeps(
   // page — which filters disabled plugins — had no view for it, leaving that
   // login unfinishable until the plugin was removed or enabled.
   const config = readServiceConfig(getService);
+  // What the boot granted, decided when it resolved the plugin list. Each
+  // plugin's context reads this rather than the plugin's manifest, so a
+  // manifest edited after the boot grants nothing here either.
+  const grants = readPluginGrants(getService);
   const authHooks = new AuthHookRegistry({
     userFieldClaims: userFieldClaimNames(config),
   });
@@ -473,7 +499,8 @@ export function buildAuthRouterDeps(
     const ownCtx = createPluginContext(
       ctxGetService,
       getHookRegistry(),
-      plugin
+      plugin,
+      grants
     );
     if (authContrib.hooks) {
       authHooks.add(bindHooksToContext(authContrib.hooks, ownCtx));
@@ -640,6 +667,21 @@ async function deleteRefreshTokens(
   await serializeOnSqlite(adapter, () =>
     adapter.getDrizzle().delete(refreshTokens).where(condition)
   );
+}
+
+/**
+ * The grants the boot registered, or none when the container holds no boot:
+ * a context built without one is granted nothing.
+ */
+function readPluginGrants(getService: (name: string) => unknown): PluginGrants {
+  try {
+    return (
+      (getService("pluginGrants") as PluginGrants | undefined) ??
+      NO_PLUGIN_GRANTS
+    );
+  } catch {
+    return NO_PLUGIN_GRANTS;
+  }
 }
 
 /** Read the sanitized NextlyServiceConfig from the DI container, if present. */

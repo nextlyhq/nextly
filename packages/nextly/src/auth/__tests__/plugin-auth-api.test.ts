@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../errors/nextly-error";
 import { fakeSessionRows } from "../handlers/__tests__/session-row-fake";
+import {
+  signUnmarkedPendingToken,
+  signUnmarkedPendingTokenWithoutMarker,
+} from "../jwt/__tests__/unmarked-tokens";
 import { AuthHookRegistry } from "../pipeline/hooks";
 import {
   createPluginAuthApi,
@@ -501,5 +505,42 @@ describe("ctx.auth.currentUser", () => {
     });
 
     expect(await api(makeDeps()).currentUser(withPending)).toBeNull();
+  });
+
+  describe("pending tokens minted before tokens named their purpose", () => {
+    function withSessionCookie(token: string): Request {
+      return new Request("http://localhost/admin/api/x", {
+        headers: { cookie: `nextly_session=${token}` },
+      });
+    }
+
+    it("returns null for one presented as a session", async () => {
+      // Such a token has no header `typ`, which the verifier still lets
+      // through for tokens already in circulation, so its `typ` claim is the
+      // only thing that keeps a plugin from reading a user out of it.
+      const pending = await signUnmarkedPendingToken("u1", SECRET);
+
+      expect(
+        await api(makeDeps()).currentUser(withSessionCookie(pending))
+      ).toBeNull();
+    });
+
+    it("returns the user for the same unmarked shape without the pending claim", async () => {
+      // The control that makes the refusal above mean something: a token of
+      // the same shape, missing only the pending claim, does name the user, so
+      // the refusal comes from that claim rather than from the cookie, the
+      // signature or the absent header. It holds only while unmarked tokens
+      // are accepted, and goes when that allowance ends.
+      const unmarked = await signUnmarkedPendingTokenWithoutMarker(
+        "u1",
+        SECRET
+      );
+
+      // The old pending claims carry no address, so the user is told by id.
+      const user = await api(makeDeps()).currentUser(
+        withSessionCookie(unmarked)
+      );
+      expect(user?.id).toBe("u1");
+    });
   });
 });

@@ -1,5 +1,6 @@
 /**
- * Deleting media inside `ctx.db.transaction` on SQLite is refused.
+ * Deleting media inside a plugin's transaction on SQLite is refused, through
+ * the typed `ctx.db` and through `ctx.db.raw` alike.
  *
  * The media service's row delete joins the plugin's transaction as a
  * savepoint, but it removes the stored files once that savepoint releases. A
@@ -22,7 +23,11 @@ import type { CollectionEntryService } from "../../services/collections/collecti
 import type { CollectionsHandler } from "../../services/collections-handler";
 import type { MediaService } from "../../services/media/media-service";
 import { getMediaStorage } from "../../storage/storage";
-import { definePlugin, type PluginDatabase } from "../plugin-context";
+import {
+  definePlugin,
+  type PluginContext,
+  type PluginMediaService,
+} from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
 
 let current: TestNextly | undefined;
@@ -36,8 +41,10 @@ afterEach(async () => {
 async function boot(
   collections: CollectionConfig[] = [],
   rawSql = false
-): Promise<{ db: PluginDatabase; media: MediaService }> {
-  let captured: { db: PluginDatabase; media: MediaService } | undefined;
+): Promise<{ db: PluginContext["db"]; media: PluginMediaService }> {
+  let captured:
+    | { db: PluginContext["db"]; media: PluginMediaService }
+    | undefined;
   const plugin = definePlugin({
     name: "@test/tx-media",
     version: "1.0.0",
@@ -47,7 +54,11 @@ async function boot(
       captured = { db: ctx.db, media: ctx.services.media };
     },
   });
-  current = await createTestNextly({ plugins: [plugin], collections });
+  current = await createTestNextly({
+    plugins: [plugin],
+    collections,
+    pluginConsent: { rawSql: rawSql ? ["@test/tx-media"] : [] },
+  });
   if (!captured) throw new Error("the plugin's init did not run");
   return captured;
 }
@@ -97,15 +108,18 @@ describe("deleting media inside ctx.db.transaction on sqlite", () => {
     expect(await mediaRowExists(handle, "kept-file")).toBe(true);
   });
 
-  it("is refused inside a rawSql plugin's transaction too", async () => {
-    const { db, media } = await boot([], true);
+  it.each([
+    ["the restricted ctx.db.raw", false],
+    ["a rawSql plugin's ctx.db.raw", true],
+  ])("is refused inside a transaction of %s too", async (_, rawSql) => {
+    const { db, media } = await boot([], rawSql);
     const handle = current!;
     await insertMedia(handle, "kept-raw");
     const removeFile = vi
       .spyOn(getMediaStorage(), "delete")
       .mockResolvedValue(undefined);
 
-    const caught = await db
+    const caught = await db.raw
       .transaction(async () => {
         await media.delete("kept-raw", {});
       })
@@ -173,7 +187,7 @@ describe("deleting media inside core's own transaction on sqlite", () => {
   it("deletes it from an afterDelete hook of an in-transaction entry delete", async () => {
     // A collection hook cleaning up the media an entry referenced, while the
     // entry delete runs inside core's transaction.
-    let hookMedia: MediaService | undefined;
+    let hookMedia: PluginMediaService | undefined;
     let hookError: unknown;
     const posts = defineCollection({
       slug: "posts",

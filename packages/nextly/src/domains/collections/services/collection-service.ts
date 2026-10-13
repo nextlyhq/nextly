@@ -791,9 +791,9 @@ export class CollectionService extends BaseService {
   /**
    * Count entries matching an optional filter (D56 aggregation-lite).
    *
-   * Lets plugins answer "how many?" without loading rows or dropping to raw
-   * `ctx.db`. For richer aggregations (sum/avg/group-by) use the raw `ctx.db`
-   * escape hatch (D33) — relational aggregation pipelines are out of scope.
+   * Lets plugins answer "how many?" without loading rows or dropping to
+   * `ctx.db.raw`. For richer aggregations (sum/avg/group-by) use the
+   * `ctx.db.raw` escape hatch (D33) — relational aggregation pipelines are out of scope.
    *
    * @param collectionName - Name of the collection
    * @param options - Optional `where` filter and full-text `search`

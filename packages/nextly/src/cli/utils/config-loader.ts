@@ -48,9 +48,16 @@ import { NextlyError, describeError } from "../../errors/index";
 import type { PluginFieldType } from "../../plugins/contributions";
 import { getCoreVersion } from "../../plugins/core-version";
 import { collectCustomPermissions } from "../../plugins/permissions/collect-permissions";
+import { withWithheldConfig } from "../../plugins/plugin-config-view";
+import {
+  NO_PLUGIN_CONSENT,
+  pluginConsentFromConfig,
+  type PluginConsent,
+  setupTransformerInput,
+} from "../../plugins/plugin-consent";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import {
-  resolvePlugins,
+  resolveDeclaredPlugins,
   resolveTransformedPlugins,
 } from "../../plugins/resolve";
 import {
@@ -77,13 +84,19 @@ function builderCollectionSlugs(builder: BuilderEntities): string[] {
  * Validate (D6) and topologically order (D5) the configured plugins using the
  * single shared resolver — the SAME resolver the runtime uses (register.ts), so
  * CLI and runtime agree on order and fail identically (D6). Fail-fast (D7).
- * The CLI then runs each plugin's `setup` in this order.
+ * The CLI then runs each plugin's `setup` in this order, and judges the
+ * transformed list against the record (`preSetup`) taken here, before any of
+ * them ran.
  */
 export function orderConfigPlugins(
-  plugins: PluginDefinition[]
-): PluginDefinition[] {
-  if (plugins.length === 0) return plugins;
-  return resolvePlugins(plugins, { coreVersion: getCoreVersion() });
+  plugins: PluginDefinition[],
+  consent: PluginConsent
+): ReturnType<typeof resolveDeclaredPlugins> {
+  if (plugins.length === 0) return { plugins: [], preSetup: [] };
+  return resolveDeclaredPlugins(plugins, {
+    coreVersion: getCoreVersion(),
+    consent,
+  });
 }
 
 /** Merge the folded collections/singles/components + transformed plugins/storage onto base. Pure. */
@@ -213,6 +226,14 @@ export interface LoadConfigResult {
    * which the next load clears and rebuilds.
    */
   fieldTypes?: ReadonlyMap<string, PluginFieldType>;
+
+  /**
+   * What the app lists plugins for, read from the config as the app wrote it,
+   * before any `setup` transformer ran. A command that resolves or boots the
+   * plugins again uses this rather than deriving consent from `config`, which
+   * is the transformed one.
+   */
+  pluginConsent: PluginConsent;
 }
 
 /**
@@ -469,6 +490,7 @@ async function loadConfigInternal(
       config: defineConfig({}),
       configPath: undefined,
       dependencies: [],
+      pluginConsent: NO_PLUGIN_CONSENT,
       // Empty, matching the clear above: work pinned to this result must not
       // resolve plugin types a later config happens to register.
       fieldTypes: snapshotFieldTypes(),
@@ -547,7 +569,15 @@ async function loadConfigInternal(
 
     // Resolve (validate + topo order) before running setups, mirroring the
     // runtime boot (register.ts) so both paths agree (D5/D6/D7).
-    const plugins = orderConfigPlugins(config.plugins ?? []);
+    //
+    // The consent comes from the config as the app wrote it, before any
+    // `setup` transformer runs, exactly as the boot reads it: a transformer
+    // is plugin code and must not be able to list a plugin itself.
+    const pluginConsent = pluginConsentFromConfig(config);
+    const { plugins, preSetup } = orderConfigPlugins(
+      config.plugins ?? [],
+      pluginConsent
+    );
 
     // Cleared on EVERY load, not only when plugins are present. A reload that
     // removes the last plugin would otherwise leave its types in the
@@ -557,7 +587,7 @@ async function loadConfigInternal(
 
     if (plugins.length > 0) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let transformedConfig: any = { ...config, plugins };
+      let transformedConfig: any = setupTransformerInput(config, plugins);
 
       for (const plugin of plugins) {
         if (plugin.setup) {
@@ -591,9 +621,16 @@ async function loadConfigInternal(
       // order, is also what the fold and the field types below read, so a
       // transformer-added plugin's collections and field types reach the CLI
       // exactly as they reach the boot.
-      transformedConfig = resolveTransformedPlugins(transformedConfig, {
-        coreVersion: getCoreVersion(),
-      });
+      transformedConfig = resolveTransformedPlugins(
+        // The app's own live handles back in: the transformers were handed
+        // none of them (`setupTransformerInput`).
+        withWithheldConfig(config, transformedConfig),
+        {
+          coreVersion: getCoreVersion(),
+          consent: pluginConsent,
+          declared: preSetup,
+        }
+      ).config;
       const transformedPlugins: PluginDefinition[] = transformedConfig.plugins;
 
       // Fold plugin contributions. Extend targets that aren't code/plugin
@@ -667,6 +704,7 @@ async function loadConfigInternal(
       configPath,
       dependencies,
       deferredExtends,
+      pluginConsent,
       // Captured after registration, so it holds exactly what this config
       // contributed rather than whatever the live set becomes later.
       fieldTypes: snapshotFieldTypes(),

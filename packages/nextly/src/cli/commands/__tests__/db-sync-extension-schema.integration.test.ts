@@ -26,6 +26,7 @@ import { createAdapter } from "../../../database/factory";
 import { SchemaRegistry } from "../../../database/schema-registry";
 import { clearActiveExtensionSchema } from "../../../domains/schema/extension/active-schema";
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
+import { NO_PLUGIN_CONSENT } from "../../../plugins/plugin-consent";
 import { definePlugin } from "../../../plugins/plugin-context";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
@@ -165,6 +166,7 @@ async function watchedResync(
     const result: LoadConfigResult = {
       config,
       dependencies: [],
+      pluginConsent: NO_PLUGIN_CONSENT,
     };
     createDebouncedSync(cli, options, { ...context, logger })(result);
     await done;

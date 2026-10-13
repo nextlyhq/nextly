@@ -30,9 +30,12 @@ import {
   tableConstraintOps,
 } from "../domains/schema/pipeline/ddl-emitter";
 import type {
+  ForeignKeySpec,
+  NextlySchemaSnapshot,
   Operation,
   TableSpec,
 } from "../domains/schema/pipeline/diff/types";
+import { NextlyError } from "../errors";
 
 import { runBoundedDiagnostic } from "./bounded-diagnostic";
 
@@ -213,6 +216,217 @@ async function createExtensionConstraints(
       );
     }
   }
+}
+
+/**
+ * `specs` with each foreign key whose target table does not exist yet left off.
+ *
+ * First-run runs before the code-first collections', Singles' and field
+ * groups' tables exist, so a key pointing at one of them could not be added
+ * yet on PostgreSQL or MySQL. The attempt failed and printed a warning, and the
+ * code-first apply then created the key moments later, because it diffs the
+ * extension tables beside the entities it creates — so the warning reported a
+ * failure that was not one. Those keys are left to that apply, and
+ * `assertFreshInstallForeignKeys` refuses the boot when it did not create them.
+ * A check names no other table, so every check stays. SQLite has nothing to
+ * hold back: its keys are already in the CREATE TABLE the push ran.
+ */
+async function withoutKeysToMissingTables(
+  adapter: AdapterLike,
+  logger: LoggerLike,
+  specs: readonly TableSpec[]
+): Promise<TableSpec[]> {
+  if (adapter.dialect === "sqlite") return [...specs];
+  const targets = new Set(
+    specs.flatMap(spec =>
+      (spec.foreignKeys ?? []).map(fk => fk.referencesTable)
+    )
+  );
+  const missing = new Set<string>();
+  for (const target of targets) {
+    if (!(await tableExistsOrAssumed(adapter, target))) missing.add(target);
+  }
+  if (missing.size === 0) return [...specs];
+  logger.debug?.(
+    `[nextly] foreign keys to ${[...missing].join(", ")} skipped here: those tables do not exist yet`
+  );
+  return specs.map(spec => ({
+    ...spec,
+    foreignKeys: spec.foreignKeys?.filter(
+      fk => !missing.has(fk.referencesTable)
+    ),
+  }));
+}
+
+/**
+ * Whether `table` exists, read as yes when the database cannot say: the key is
+ * then attempted as it always was, and the replay reports it if it fails.
+ */
+async function tableExistsOrAssumed(
+  adapter: AdapterLike,
+  table: string
+): Promise<boolean> {
+  try {
+    return await adapter.tableExists(table);
+  } catch {
+    return true;
+  }
+}
+
+/** A foreign key the fresh-install check found missing, and whether its target is. */
+interface MissingForeignKey {
+  table: string;
+  key: ForeignKeySpec;
+  targetExists: boolean;
+}
+
+/**
+ * Refuse a fresh install whose extension tables lack a foreign key to a
+ * code-first table the same boot created.
+ *
+ * A code-first collection's, Single's or field group's table is created after
+ * first-run, by the code-first apply, and that apply adds the keys extension
+ * tables declare to it. When it could not — the apply failed, or a target was
+ * never created — the extension table kept no key and accepted rows pointing at
+ * nothing, while the boot carried on with a warning. On a database with no rows
+ * yet, a missing key can only mean the creation failed, so the boot stops,
+ * naming each table, key and target, rather than serve an install whose
+ * declared integrity is silently absent.
+ *
+ * Only keys to `createdTables` are asked about. A key to a table the boot never
+ * creates — one made in the Builder, or an adopted one — belongs to migrations
+ * and the development push, and refusing it here would stop a fresh install
+ * from ever starting. And only on a fresh install: on an existing database a
+ * missing key is drift that existing rows can legitimately block, which the
+ * development push and `nextly db:sync` reconcile.
+ *
+ * Present is decided by the pipeline's own diff of the live tables against
+ * their specs, so this asks the question the code-first apply answered, in the
+ * same terms. A missing target is asked of the database directly: SQLite keeps
+ * a key in its CREATE TABLE whether or not the table it names exists.
+ */
+export async function assertFreshInstallForeignKeys(args: {
+  adapter: AdapterLike;
+  specs: readonly TableSpec[];
+  /** The code-first tables this boot set out to create. */
+  createdTables: ReadonlySet<string>;
+  /** The live tables named; the pipeline's introspection unless injected. */
+  introspect?: (tables: string[]) => Promise<NextlySchemaSnapshot>;
+}): Promise<void> {
+  const holding = specsKeyedTo(args.specs, args.createdTables);
+  if (holding.length === 0) return;
+
+  const absent = await absentTargets(args.adapter, holding);
+  const missing = [
+    ...holding.flatMap(spec =>
+      spec.foreignKeys
+        .filter(key => absent.has(key.referencesTable))
+        .map(key => ({ table: spec.name, key, targetExists: false }))
+    ),
+    ...(await keysNotCreated(args, holding, absent)),
+  ];
+  if (missing.length > 0) throw freshInstallKeysRefusal(missing);
+}
+
+/** Each spec with only its keys to `tables`, and only the specs with any. */
+function specsKeyedTo(
+  specs: readonly TableSpec[],
+  tables: ReadonlySet<string>
+): Array<TableSpec & { foreignKeys: ForeignKeySpec[] }> {
+  return specs
+    .map(spec => ({
+      ...spec,
+      foreignKeys: (spec.foreignKeys ?? []).filter(fk =>
+        tables.has(fk.referencesTable)
+      ),
+    }))
+    .filter(spec => spec.foreignKeys.length > 0);
+}
+
+/** The keys' target tables the database does not have. */
+async function absentTargets(
+  adapter: AdapterLike,
+  specs: readonly TableSpec[]
+): Promise<Set<string>> {
+  const targets = new Set(
+    specs.flatMap(spec =>
+      (spec.foreignKeys ?? []).map(fk => fk.referencesTable)
+    )
+  );
+  const absent = new Set<string>();
+  for (const target of targets) {
+    if (!(await adapter.tableExists(target))) absent.add(target);
+  }
+  return absent;
+}
+
+/**
+ * The keys whose target exists and which the live tables still lack: what the
+ * diff would add. A table missing altogether lacks every key it declares.
+ */
+async function keysNotCreated(
+  args: Parameters<typeof assertFreshInstallForeignKeys>[0],
+  holding: ReadonlyArray<TableSpec & { foreignKeys: ForeignKeySpec[] }>,
+  absent: ReadonlySet<string>
+): Promise<MissingForeignKey[]> {
+  const [{ diffSnapshots }, { introspectLiveSnapshot }] = await Promise.all([
+    import("../domains/schema/pipeline/diff/diff"),
+    import("../domains/schema/pipeline/diff/introspect-live"),
+  ]);
+  const introspect =
+    args.introspect ??
+    ((tables: string[]) =>
+      introspectLiveSnapshot(
+        args.adapter.getDrizzle(),
+        args.adapter.dialect,
+        tables
+      ));
+  const live = await introspect(holding.map(spec => spec.name));
+  const lacking = diffSnapshots(live, { tables: [...holding] }).flatMap(op =>
+    keysAddedBy(op)
+  );
+  return lacking
+    .filter(({ key }) => !absent.has(key.referencesTable))
+    .map(({ table, key }) => ({ table, key, targetExists: true }));
+}
+
+/** The keys an operation would add: its own, or a whole new table's. */
+function keysAddedBy(
+  op: Operation
+): Array<{ table: string; key: ForeignKeySpec }> {
+  if (op.type === "add_foreign_key") {
+    return [{ table: op.tableName, key: op.foreignKey }];
+  }
+  if (op.type === "add_table") {
+    return (op.table.foreignKeys ?? []).map(key => ({
+      table: op.table.name,
+      key,
+    }));
+  }
+  return [];
+}
+
+/**
+ * The refusal, one entry per key, each naming its table, key and target.
+ *
+ * The messages are repeated as plain strings in `logContext`, because a boot
+ * failure reaches the developer as the printed error object, and Node prints
+ * the entries of `publicData.errors` past its default depth as `[Object]`.
+ */
+function freshInstallKeysRefusal(
+  missing: readonly MissingForeignKey[]
+): NextlyError {
+  const errors = missing.map(({ table, key, targetExists }) => ({
+    path: `${table}.foreignKeys.${key.name}`,
+    code: "INVALID",
+    message: targetExists
+      ? `The foreign key "${key.name}" on "${table}" to "${key.referencesTable}" was not created on this fresh install. The apply that creates code-first tables logged why above; fix that, then run \`nextly db:sync\`, which adds the key.`
+      : `The foreign key "${key.name}" on "${table}" references "${key.referencesTable}", a code-first table this fresh install did not create. The apply that creates code-first tables logged why above; fix that, then start again.`,
+  }));
+  return NextlyError.validation({
+    errors,
+    logContext: { missingForeignKeys: errors.map(entry => entry.message) },
+  });
 }
 
 /** The check itself; bounded by its caller. */
@@ -400,11 +614,17 @@ export async function ensureFirstRunSetup(
     // declared foreign key and the check that enforces `col.enum()` all
     // enforced nothing on a fresh database. An installation that never runs
     // dev push afterwards keeps that unconstrained schema forever.
+    //
+    // Only the keys whose target exists now: see `withoutKeysToMissingTables`.
     await createExtensionConstraints(
       adapter,
       dialect,
       logger,
-      extensionSchema?.specs ?? []
+      await withoutKeysToMissingTables(
+        adapter,
+        logger,
+        extensionSchema?.specs ?? []
+      )
     );
 
     // `freshPushSchema` above already creates the ledger (it is in

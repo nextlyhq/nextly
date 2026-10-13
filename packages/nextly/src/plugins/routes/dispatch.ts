@@ -648,6 +648,14 @@ export async function runPluginRoute(
   // and a refusal a shared cache holds for one caller is the same defect as
   // an answer it holds.
   const session = beginSessionConsultation();
+  // A public route's handler that asked for the user of a write another site
+  // posted with a session cookie got "no user" from `ctx.auth.currentUser`.
+  // Recorded here, once and on either path out, as the refusal above records
+  // it for a declared-authenticated route: the same event, naming the route
+  // by its declared pattern.
+  const recordCrossSiteRead = async (): Promise<void> => {
+    if (session.crossSiteRefused()) await auditRouteCsrfFailure(req, matched);
+  };
 
   try {
     // Both scopes pinned for the length of the handler, so a service call
@@ -661,6 +669,7 @@ export async function runPluginRoute(
         runWithCallerScope(auth.authenticatedScope, () => run(req, ctx))
       )
     );
+    await recordCrossSiteRead();
     return markPluginResponse(
       withNoStore(response, matched.route),
       matched.route,
@@ -672,6 +681,7 @@ export async function runPluginRoute(
     // answer is never stored, and a thrown `NextlyError.notFound()` is a
     // cacheable status: a shared cache could hold it and go on serving a
     // refusal the route never repeated.
+    await recordCrossSiteRead();
     return markPluginResponse(
       withNoStore(toErrorResponse(req, err), matched.route),
       matched.route,

@@ -26,7 +26,7 @@ definePlugin({
     // Runtime wiring: subscribe to events, register hooks, read/write via ctx.services.
   },
   async destroy(ctx) {
-    // Teardown on shutdown / HMR / test teardown. Undo anything init() set up.
+    // Teardown on shutdown, re-registration and test teardown. Undo anything init() set up.
   },
 });
 ```
@@ -38,8 +38,11 @@ Phase order:
 2. **`setup(config)`** runs for **every** plugin before any `init` — so a plugin can
    adjust config that a later plugin's `init` relies on.
 3. **`init(ctx)`** runs once services are live. This is where you do runtime work.
-4. **`destroy(ctx)`** runs on shutdown, hot-reload, and test teardown. Always clean up
-   here — leaked subscriptions break HMR and tests.
+4. **`destroy(ctx)`** runs, in reverse init order, on shutdown (`nextly.shutdown()`),
+   when a failed start is rolled back, before services register again, and on test
+   teardown. A config hot reload runs neither `init` nor `destroy`: a running plugin
+   keeps running, and a change to either takes effect on the next start. Always clean
+   up here — a subscription or timer left behind outlives the plugin and breaks tests.
 
 ## Load order (D5)
 

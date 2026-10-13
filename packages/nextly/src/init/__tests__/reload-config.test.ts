@@ -1705,6 +1705,71 @@ describe("reloadNextlyConfig", () => {
   });
 
   /**
+   * A collection's declared compound indexes. The reload's change gate built
+   * each table without them and so did the entry it handed the pipeline: an
+   * edit that only added an index found nothing to do, and a database that a
+   * migration had given the index reached the pipeline as a drop of it.
+   *
+   * The live tables carry their indexes (built by the table builder, as a
+   * migration writes them), because the diff compares indexes only when both
+   * sides list them.
+   */
+  describe("a collection's declared indexes", () => {
+    const fields = [
+      { name: "country", type: "text" },
+      { name: "city", type: "text" },
+    ];
+    const declared = [{ fields: ["country", "city"], unique: true }];
+    const config = {
+      collections: [
+        { slug: "places", tableName: "dc_places", fields, indexes: declared },
+      ],
+    };
+    const liveWith = (indexes?: typeof declared) =>
+      introspectSpy.mockResolvedValue({
+        tables: [
+          buildDesiredTableFromFields("dc_places", fields, "sqlite", {
+            builtBy: "codeFirst",
+            ...(indexes ? { indexes } : {}),
+          }),
+        ],
+      });
+
+    // An extension schema an earlier test published is process-wide, and a
+    // reload that compiles none reads its loss as a change and calls the
+    // pipeline for that reason alone.
+    beforeEach(() => {
+      clearActiveExtensionSchema();
+    });
+
+    it("sends an index-only edit to the pipeline, carrying the index", async () => {
+      loadConfigSpy.mockResolvedValue({ config });
+      liveWith(undefined);
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // The columns are unchanged, so only the declared index can have sent
+      // this reload to the pipeline.
+      expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+      const args = pipelineApplySpy.mock.calls[0][0] as {
+        desired: { collections: Record<string, { indexes?: unknown }> };
+      };
+      expect(args.desired.collections.places.indexes).toEqual(declared);
+    });
+
+    it("leaves a database that already holds the index alone", async () => {
+      loadConfigSpy.mockResolvedValue({ config });
+      liveWith(declared);
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(pipelineApplySpy).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
    * Collection db options (`idType`, `allowIdOnCreate`) are published when a
    * reload lands, from the reloaded config, and the set in force when it
    * started is back in place when it does not.
