@@ -936,12 +936,49 @@ interface SelectState {
   readonly offset?: number;
 }
 
+/**
+ * An insert statement as the three dialects' Drizzle builders offer it: a
+ * statement to await, and the two ways of having it return what the database
+ * assigned. Each dialect offers one of the two.
+ */
+type AnyInsert = Promise<unknown> & {
+  returning?: (
+    fields: Record<string, unknown>
+  ) => Promise<Array<Record<string, unknown>>>;
+  $returningId?: () => Promise<Array<Record<string, unknown>>>;
+};
+
+/**
+ * Run `statement`, and return the key the database assigned to the row it
+ * inserted, read from that statement's own result.
+ *
+ * PostgreSQL and SQLite return it with `RETURNING`. MySQL has no `RETURNING`;
+ * Drizzle's `$returningId()` reads the insert id the server reports for that
+ * statement, in the reply to it. Either way the key answers this insert, on
+ * the connection that ran it, so concurrent inserts cannot hand back each
+ * other's keys — which is what asking `LAST_INSERT_ID()` or
+ * `last_insert_rowid()` with a second statement would risk, since a pool may
+ * run that statement on another connection.
+ */
+async function insertForAssignedKey(
+  statement: AnyInsert,
+  dialect: SupportedDialect,
+  column: unknown,
+  key: string
+): Promise<unknown> {
+  const rows =
+    dialect === "mysql"
+      ? await statement.$returningId?.()
+      : await statement.returning?.({ [key]: column });
+  return rows?.[0]?.[key];
+}
+
 /** Build the database surface one owner sees. */
 export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
   type AnyDb = {
     select: (...args: unknown[]) => never;
     insert: (table: unknown) => {
-      values: (rows: unknown) => Promise<unknown>;
+      values: (rows: unknown) => AnyInsert;
     };
     update: (table: unknown) => {
       set: (values: unknown) => { where: (c: SQL) => Promise<unknown> };
@@ -1136,14 +1173,9 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
 
     async insertReturning(definition, values) {
       const { table } = resolveTable(definition, deps);
-      // Both checks below are preconditions, so they run BEFORE the insert: a
-      // method that refuses after writing leaves a row behind that the
-      // caller was told was not created.
-      //
-      // Read back by the id just generated, rather than with RETURNING.
-      // MySQL has no RETURNING, and "the last inserted row" is a race under
-      // any concurrency — so the portable path is the only path, on every
-      // dialect, which also keeps the three behaving identically.
+      // A precondition, so it runs BEFORE the insert: a method that refuses
+      // after writing leaves a row behind that the caller was told was not
+      // created.
       const idColumn = definition.columns.find(c => c.primaryKey);
       if (!idColumn) {
         throw NextlyError.internal({
@@ -1154,41 +1186,41 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         });
       }
 
-      // A key the DATABASE assigns cannot be read back this way.
-      //
-      // The read-back is by the id the CALLER now holds, and for `col.serial()`
-      // there is no such id: the value is chosen during the insert, so the
-      // read-back would search for `undefined` and fail after the write.
-      //
-      // Refused rather than papered over with `LAST_INSERT_ID()` /
-      // `last_insert_rowid()` / `RETURNING`: those are three different
-      // mechanisms with three different guarantees, and this surface exists to
-      // behave identically on all three dialects. Returning a wrong row under
-      // pooling would be worse than not offering the method.
-      if (idColumn.kind === "serial") {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: `${definition.name}.insertReturning`,
-              code: "INVALID",
-              message:
-                `"${definition.name}" has a database-assigned key (col.serial()), so insertReturning cannot read the row back — ` +
-                `the value is chosen during the insert and no portable statement returns it on all three dialects. ` +
-                `Use insert() and then select() by a column you set yourself, or declare col.id() if you need the key up front.`,
-            },
-          ],
-        });
-      }
-
       const filled = withGeneratedColumns(definition, values);
-      await (deps.db() as AnyDb)
+      const handle = table as Record<string, unknown>;
+      const statement = (deps.db() as AnyDb)
         .insert(table)
         .values(toColumns(definition, filled));
 
-      const handle = table as Record<string, unknown>;
+      // The row is read back by its key, through the same select every other
+      // read uses, so it comes back typed exactly as one. A key the caller
+      // holds — a `col.id()` it set or `ctx.db` generated — is known before
+      // the insert. A `col.serial()` key is chosen by the database during it,
+      // so it is taken from the insert's own result (`insertForAssignedKey`),
+      // which answers this insert even under concurrency.
+      let key: unknown = filled[idColumn.key];
+      if (idColumn.kind === "serial") {
+        key = await insertForAssignedKey(
+          statement,
+          deps.dialect,
+          handle[idColumn.key],
+          idColumn.key
+        );
+      } else {
+        await statement;
+      }
+      if (key === undefined || key === null) {
+        throw NextlyError.internal({
+          logContext: {
+            reason: "the database reported no key for the inserted row",
+            table: definition.name,
+          },
+        });
+      }
+
       const row = await surface
         .select(definition)
-        .where(eq(handle[idColumn.key] as never, filled[idColumn.key] as never))
+        .where(eq(handle[idColumn.key] as never, key as never))
         .first();
       if (row === null) {
         throw NextlyError.internal({
