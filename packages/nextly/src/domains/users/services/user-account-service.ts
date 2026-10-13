@@ -21,6 +21,7 @@ import type { MinimalUser, UserAccount } from "@nextly/types/auth";
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
+import { isPasswordHash } from "../../../auth/password/index";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
@@ -159,6 +160,26 @@ export class UserAccountService extends BaseService {
     userId: number | string,
     passwordHash: string
   ): Promise<void> {
+    // Before any read: the one password write whose hash comes from outside,
+    // so it must be one. A raw password sent here was stored as given; it is
+    // refused now as invalid input, never echoed or logged, and before the
+    // catch around the write could report it as a database failure. A bcrypt
+    // hash, what core's sign-in verifies; an app with its own hasher sets
+    // passwords through the service, which hashes them with it.
+    if (!isPasswordHash(passwordHash)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "passwordHash",
+            code: "INVALID",
+            message: "Not a password hash.",
+          },
+        ],
+        logContext: { reason: "password-hash-route-not-a-hash", userId },
+      });
+    }
+    const set = passwordColumns(passwordHash);
+
     // Check if user exists. §13.8 + spec note: user existence is sensitive,
     // so the public message stays generic; the id flows through logContext.
     let user;
@@ -184,7 +205,7 @@ export class UserAccountService extends BaseService {
           tx as PasswordWriteTx,
           this.tables,
           this.dialect,
-          { userId, set: passwordColumns(passwordHash) }
+          { userId, set }
         );
       });
     } catch (err) {
@@ -209,6 +230,7 @@ export class UserAccountService extends BaseService {
     userId: number | string,
     passwordHash: string
   ): Promise<boolean> {
+    const set = passwordColumns(passwordHash);
     let changed = 0;
     try {
       await this.withTransaction(async tx => {
@@ -218,7 +240,7 @@ export class UserAccountService extends BaseService {
           this.dialect,
           {
             userId,
-            set: passwordColumns(passwordHash),
+            set,
             unlessDeactivated: true,
           }
         );
