@@ -21,8 +21,18 @@ import { randomUUID } from "node:crypto";
 import { NextlyError } from "../../../errors/nextly-error";
 import { uuidV7 } from "../../../utils/uuid-v7";
 
-/** The id generators a collection may choose between. */
-export type CollectionIdType = "uuid" | "uuidv7";
+/**
+ * The id generators a collection may choose between: one list, which the
+ * type below and the config check (`validateCollectionConfig`) both read.
+ *
+ * There is no `serial`. A collection's id is text, which every relation, API
+ * path and admin screen reads, and a database-assigned integer key belongs on
+ * a table declared with `col.serial()` instead.
+ */
+export const COLLECTION_ID_TYPES = ["uuid", "uuidv7"] as const;
+
+/** One of {@link COLLECTION_ID_TYPES}. */
+export type CollectionIdType = (typeof COLLECTION_ID_TYPES)[number];
 
 /** The per-collection database options this module reads. */
 export interface CollectionDbOptions {
