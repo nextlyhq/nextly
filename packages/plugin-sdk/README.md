@@ -122,7 +122,7 @@ The authoritative ledger of what is `@public` (stable) vs `@experimental` lives 
   (menu/pages/views), `ctx.events` + the event-name constants, the collection
   `HookContext`, and `@nextlyhq/plugin-sdk/testing`. Breaking a `@public` export
   requires a Nextly **major** (D40).
-- **Still `@experimental`** — the raw `ctx.db` escape hatch, `ctx.hooks` plugin
+- **Still `@experimental`** — `ctx.db` (typed) and its `ctx.db.raw` escape hatch, `ctx.hooks` plugin
   registration, filters/actions (D63), `secret()`, `useCan`/`<Can>`, and admin
   dashboard widgets (D22). No compatibility guarantee yet — each graduates once a
   first-party plugin exercises it (D55).

@@ -287,7 +287,7 @@ export { NextlyError } from "nextly";
  * Managed data access (D56) — the `ctx.services.collections` surface: rich
  * queries (filters/sort/pagination/relations via QueryOptions), `count`, and
  * `createMany`, and the batch update `updateMany` takes `BulkUpdateEntry[]`.
- * Aggregations beyond `count` use the raw `ctx.db` escape hatch
+ * Aggregations beyond `count` use the `ctx.db.raw` escape hatch
  * (D33), which stays `@experimental`.
  *
  * @public Graduated in P9 — `plugin-form-builder` depends on it
