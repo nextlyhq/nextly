@@ -35,6 +35,11 @@ judged as a move to another address and refused with `FORBIDDEN`, and the
 unchanged date was judged as a fresh verification, refused for the same reason
 and, on other accounts, restamped as vouched for by the plugin.
 
+An update that carries an account's address unchanged no longer writes it, so a
+stale update cannot put back an address another request has since moved the
+account from. A verification date sent as an ISO string, which the update schema
+accepts, is now stored instead of failing the update.
+
 A stored password value that is not a hash now counts as no password when a
 plugin's update is judged, since it signs nobody in.
 

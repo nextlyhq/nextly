@@ -1664,7 +1664,10 @@ export class UserMutationService extends BaseService {
           }
         }
 
-        if (normalizedNewEmail !== "") updateData.email = normalizedNewEmail;
+        // Written only when it moves. An unchanged address writes nothing, so
+        // a stale full-object update cannot put back an address another
+        // request moved the account from after this read.
+        if (addressMoves) updateData.email = normalizedNewEmail;
       }
 
       if (
@@ -1703,22 +1706,27 @@ export class UserMutationService extends BaseService {
           // writes nothing for it, and keeping the key keeps such an update
           // counting as one.
           updateData.emailVerified = undefined;
-        } else if (
-          changes.emailVerified === null ||
-          !sameVerificationInstant(
-            changes.emailVerified,
-            currentUser.emailVerified
-          )
-        ) {
-          // With how it was verified, in the same statement: whoever is
-          // updating the account is who vouched for the address.
-          Object.assign(
-            updateData,
-            emailVerificationColumns(
-              changes.emailVerified,
-              caller === "plugin" ? "plugin" : "admin"
-            )
-          );
+        } else {
+          // Read as a Date, once: the update schema accepts an ISO string as
+          // well, and the column takes a Date on every dialect.
+          const verifiedAt =
+            changes.emailVerified === null
+              ? null
+              : new Date(changes.emailVerified);
+          if (
+            verifiedAt === null ||
+            !sameVerificationInstant(verifiedAt, currentUser.emailVerified)
+          ) {
+            // With how it was verified, in the same statement: whoever is
+            // updating the account is who vouched for the address.
+            Object.assign(
+              updateData,
+              emailVerificationColumns(
+                verifiedAt,
+                caller === "plugin" ? "plugin" : "admin"
+              )
+            );
+          }
         }
       }
 

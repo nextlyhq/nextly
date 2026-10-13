@@ -86,6 +86,29 @@ async function seedFounder(t: TestNextly): Promise<string> {
   return String(founder.id);
 }
 
+/** An account a login provider's sign-in made, with its id. */
+async function externalAccount(t: TestNextly): Promise<string> {
+  const db = t.adapter.getDrizzle() as unknown as TestDb;
+  const { roles } = getDialectTables();
+  const editor = randomUUID();
+  await db.insert(roles).values({
+    id: editor,
+    name: "editor",
+    slug: "editor",
+    level: 10,
+    isSystem: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  const created = await services(t).users.createExternalUser({
+    email: "external@example.com",
+    name: "External",
+    roleIds: [editor],
+    emailVerifiedAt: new Date(),
+  });
+  return String(created.id);
+}
+
 describe.each(getConfiguredTestDialects())(
   "email_verified_via (%s)",
   (dialect: TestDialect) => {
@@ -202,25 +225,7 @@ describe.each(getConfiguredTestDialects())(
     it("records a login provider's account as external", async () => {
       const t = await boot(dialect);
       await seedFounder(t);
-      const db = t.adapter.getDrizzle() as unknown as TestDb;
-      const { roles } = getDialectTables();
-      const editor = randomUUID();
-      await db.insert(roles).values({
-        id: editor,
-        name: "editor",
-        slug: "editor",
-        level: 10,
-        isSystem: false,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-
-      await services(t).users.createExternalUser({
-        email: "external@example.com",
-        name: "External",
-        roleIds: [editor],
-        emailVerifiedAt: new Date(),
-      });
+      await externalAccount(t);
 
       expect(await verification(t, "external@example.com")).toEqual({
         verified: true,
@@ -277,6 +282,42 @@ describe.each(getConfiguredTestDialects())(
       expect(await verification(t, "pending@example.com")).toEqual({
         verified: false,
         via: null,
+      });
+    });
+
+    it("takes a verification date the admin route sends as a string", async () => {
+      // The update schema accepts an ISO string, and the route passes it on.
+      const t = await boot(dialect);
+      const adminId = await seedFounder(t);
+      const id = await externalAccount(t);
+      const db = t.adapter.getDrizzle() as unknown as TestDb;
+      const { users } = getDialectTables();
+      const [row] = await db.select().from(users).where(eq(users.id, id));
+      const stored = new Date(row?.emailVerified as Date | string);
+      const params = {
+        userId: id,
+        _authenticatedActorType: "user",
+        _authenticatedActorId: adminId,
+      };
+
+      // The stored moment: nothing is verified anew, so the provider still
+      // vouches for the address.
+      await dispatchUser(services(t), "updateUser", params, {
+        name: "Renamed",
+        emailVerified: stored.toISOString(),
+      });
+      expect(await verification(t, "external@example.com")).toEqual({
+        verified: true,
+        via: "external",
+      });
+
+      // Another moment: the administrator verifies it now.
+      await dispatchUser(services(t), "updateUser", params, {
+        emailVerified: "2026-01-02T03:04:05.000Z",
+      });
+      expect(await verification(t, "external@example.com")).toEqual({
+        verified: true,
+        via: "admin",
       });
     });
   }

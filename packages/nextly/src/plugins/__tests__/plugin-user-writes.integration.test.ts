@@ -813,6 +813,35 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    it("writes no address back to an account moved after the update read it", async () => {
+      // A stale full-object update carries the address the plugin read, and
+      // another request moves the account before the write. Written back, that
+      // address would move the account core made without the check a move
+      // gets; unchanged when read, it is not written at all.
+      const { t, pluginUsers, coreUsers } = await boot(dialect);
+      await seedFounder(coreUsers);
+      const id = await externalAccount(t);
+      const { users } = getDialectTables();
+      between.superAdminCheck = {
+        userId: id,
+        run: async () => {
+          await db(t)
+            .update(users)
+            .set({ email: "moved@example.com" })
+            .where(eq(users.id, id));
+        },
+      };
+
+      await pluginUsers.update(
+        id,
+        { name: "Renamed", email: "external@example.com" },
+        CONTEXT
+      );
+
+      expect((await controlColumns(t, id)).email).toBe("moved@example.com");
+      expect((await userRow(t, "moved@example.com"))?.name).toBe("Renamed");
+    });
+
     it("refuses activating an account verified after the update read it", async () => {
       // The update reads the account first, unverified here, and another
       // request verifies it before the write: judged on that first read, the
