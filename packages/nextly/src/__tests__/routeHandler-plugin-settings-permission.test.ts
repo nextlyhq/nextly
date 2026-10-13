@@ -10,6 +10,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 const granted = vi.hoisted(() => new Set<string>());
+/** Whether the caller carries a valid session or key at all. */
+const caller = vi.hoisted(() => ({ signedIn: true }));
+/** How many times a request made the process boot its services. */
+const boots = vi.hoisted(() => ({ count: 0 }));
 /**
  * The two places the gate can find the plugins: the config services were
  * registered with, which exists only once a dispatch has booted them, and the
@@ -33,6 +37,11 @@ vi.mock("../auth/middleware", async importOriginal => {
   const refused = { statusCode: 403, error: "Forbidden" };
   return {
     ...actual,
+    requireAuthentication: vi.fn(async () =>
+      caller.signedIn
+        ? admitted
+        : { statusCode: 401, error: "Authentication required" }
+    ),
     requirePermission: vi.fn(
       async (_req: Request, action: string, resource: string) =>
         granted.has(`${action}-${resource}`) ? admitted : refused
@@ -65,6 +74,7 @@ vi.mock("../route-handler", async importOriginal => ({
     plugins.handler === undefined ? null : { plugins: plugins.handler },
   // A boot registers the plugin list its `setup` transformers leave.
   ensureServicesInitialized: async () => {
+    boots.count += 1;
     if (plugins.booted !== undefined) plugins.registered = plugins.booted;
   },
 }));
@@ -119,6 +129,8 @@ beforeEach(() => {
   plugins.registered = declared();
   plugins.handler = undefined;
   plugins.booted = undefined;
+  caller.signedIn = true;
+  boots.count = 0;
 });
 
 describe("a plugin that names its settings permission", () => {
@@ -205,5 +217,52 @@ describe("on a cold process whose setup transformer changed the permission", () 
 
   it("admits a write from a caller holding the permission the boot resolved", async () => {
     expect(await admits(["manage-pay-settings"], "PATCH")).toBe(true);
+  });
+});
+
+describe("a caller with no session or key, on a cold process", () => {
+  beforeEach(() => {
+    plugins.registered = undefined;
+    plugins.handler = declared();
+    plugins.booted = declared();
+    caller.signedIn = false;
+  });
+
+  it.each(["GET", "PATCH"] as const)(
+    "is refused on a %s before anything boots",
+    async httpMethod => {
+      // A request about to be refused for want of a session must not make the
+      // process start its services, run its migrations or start plugins.
+      const result = await resolveAuthorization(
+        new Request("http://localhost/api/plugins-settings/x", {
+          method: httpMethod,
+        }),
+        "pluginSettings",
+        httpMethod === "GET" ? "getPluginSettings" : "updatePluginSettings",
+        httpMethod === "GET" ? "single" : "update",
+        { plugin: "@acme/pay" },
+        httpMethod
+      );
+      expect(result).toMatchObject({ statusCode: 401 });
+      expect(boots.count).toBe(0);
+    }
+  );
+
+  it("boots once the caller is signed in", async () => {
+    // The control: a gate that never booted would pass the cases above.
+    caller.signedIn = true;
+    granted.clear();
+    granted.add("update-pay-settings");
+    await resolveAuthorization(
+      new Request("http://localhost/api/plugins-settings/x", {
+        method: "PATCH",
+      }),
+      "pluginSettings",
+      "updatePluginSettings",
+      "update",
+      { plugin: "@acme/pay" },
+      "PATCH"
+    );
+    expect(boots.count).toBe(1);
   });
 });

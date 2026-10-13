@@ -929,6 +929,14 @@ async function resolveAuthorization(
     // serve under. Booted, the registered config is the plugin list the
     // dispatch reads; the handler's config stays the fallback for a process
     // that registered without one.
+    //
+    // The caller is authenticated first. A request this gate refuses for want
+    // of a session or key must not make the process boot, run its startup
+    // migrations or start plugins, which is why the dispatch path keeps
+    // authorization ahead of boot too. Authentication itself needs no booted
+    // service; only the permission it is then judged by does.
+    const caller = await requireAuthentication(req);
+    if (isErrorResponse(caller)) return caller;
     await ensureServicesInitialized();
     const write = settingsWritePermission(
       readServiceConfig()?.plugins ?? getHandlerConfig()?.plugins,
