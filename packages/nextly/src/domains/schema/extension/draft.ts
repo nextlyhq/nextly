@@ -266,6 +266,25 @@ export class SchemaDraftStore {
   }
 
   /**
+   * Everything registered so far, as one string two stores can compare: every
+   * table in name order, with its columns, indexes and what was contributed
+   * to it. Two runs of the same hooks over the same input leave equal states
+   * after each hook, which is how a hook whose output changes between builds
+   * is found and named.
+   */
+  state(): string {
+    return JSON.stringify(
+      [...this.tables.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      (_key, value: unknown) =>
+        value instanceof Set
+          ? [...(value as Set<unknown>)].map(String).sort()
+          : typeof value === "bigint"
+            ? `${value.toString()}n`
+            : value
+    );
+  }
+
+  /**
    * Adopted tables: existing tables the app claims for TYPED ACCESS only —
    * never in the desired set, never diffed, never migrated, never dropped.
    * Kept in their own map precisely so no managed-table rule can reach them
