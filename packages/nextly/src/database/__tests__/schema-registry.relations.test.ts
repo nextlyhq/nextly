@@ -288,3 +288,44 @@ describe("SchemaRegistry.assertRelationsResolve", () => {
     );
   });
 });
+
+describe("SchemaRegistry.assertRelationsResolve, after it refuses", () => {
+  function withOneBadEdge() {
+    const registry = makeRegistry();
+    registry.registerDynamicSchema("dc_products", makeDcTable("dc_products"));
+    registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"), [
+      { key: "product", fromColumn: "title", targetTable: "dc_products" },
+      { key: "ghost", fromColumn: "title", targetTable: "dc_prodcuts" },
+    ]);
+    return registry;
+  }
+
+  it("keeps the relations that resolve, so the query path serves them", () => {
+    // Development reports the edge and carries on; every other relation has
+    // to keep working, rather than each query failing on the edge named.
+    const registry = withOneBadEdge();
+    expect(() => registry.assertRelationsResolve()).toThrow(NextlyError);
+
+    const relations = registry.getRelations() as unknown as RelationsShape;
+    expect(Object.keys(relations.dc_posts?.relations ?? {})).toEqual([
+      "product",
+    ]);
+  });
+
+  it("refuses again when asked again, though an assembly is kept", () => {
+    const registry = withOneBadEdge();
+    expect(() => registry.assertRelationsResolve()).toThrow(NextlyError);
+    expect(() => registry.assertRelationsResolve()).toThrow(
+      expect.objectContaining({ code: "NEXTLY_SCHEMA_RELATION_UNRESOLVED" })
+    );
+  });
+
+  it("asks afresh once a registration replaces the assembly", () => {
+    // The table the edge names arrives later, as a migration's Builder table
+    // does in development: the next question finds it.
+    const registry = withOneBadEdge();
+    expect(() => registry.assertRelationsResolve()).toThrow(NextlyError);
+    registry.registerDynamicSchema("dc_prodcuts", makeDcTable("dc_prodcuts"));
+    expect(() => registry.assertRelationsResolve()).not.toThrow();
+  });
+});

@@ -183,6 +183,10 @@ export class SchemaRegistry {
   private dynamicEdges: Map<string, DynamicRelationEdge[]> = new Map();
   // Cached defineRelations output; null = needs rebuild.
   private relationsCache: AnyRelations | null = null;
+  // The edges an assembly left out, keyed by that assembly: a registration
+  // that replaces the cache drops them with it, so nothing has to remember
+  // to clear them beside it.
+  private unresolvedIn = new WeakMap<object, UnresolvedRelationEdge[]>();
 
   constructor(dialect: SupportedDialect) {
     this.dialect = dialect;
@@ -321,17 +325,25 @@ export class SchemaRegistry {
    * does not exist surfaced there — as an internal error, taking every
    * relational query down with it, far from the declaration. Asked by the same
    * assembly `getRelations` runs, so the boot and the query path cannot
-   * disagree about an edge; when every edge resolves the result is kept, and
-   * the first query reuses it.
+   * disagree about an edge; the result is kept, and the first query reuses it.
+   *
+   * Kept even when some edges cannot be resolved, with those left out. Where
+   * the boot refuses, nothing is served from it; where development reports
+   * the edges and carries on, it is what keeps every other relational query
+   * working, rather than each one failing on the edge already named. The
+   * edges left out are remembered against that assembly, so asking again
+   * refuses again until a registration replaces it.
    */
   assertRelationsResolve(): void {
-    if (this.relationsCache) return;
-    const unresolved: UnresolvedRelationEdge[] = [];
-    const relations = this.assembleRelations(edge => {
-      unresolved.push(edge);
-    });
+    if (this.relationsCache === null) {
+      const unresolved: UnresolvedRelationEdge[] = [];
+      this.relationsCache = this.assembleRelations(edge => {
+        unresolved.push(edge);
+      });
+      this.unresolvedIn.set(this.relationsCache, unresolved);
+    }
+    const unresolved = this.unresolvedIn.get(this.relationsCache) ?? [];
     if (unresolved.length > 0) throw unresolvedRelationsError(unresolved);
-    this.relationsCache = relations;
   }
 
   /**

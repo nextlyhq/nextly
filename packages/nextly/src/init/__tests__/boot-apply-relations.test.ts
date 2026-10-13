@@ -61,7 +61,10 @@ vi.mock("../reload-config", () => ({
   },
 }));
 
-import { runBootTimeApplyIfDev } from "../boot-apply";
+import {
+  checkRelationsBeforePlugins,
+  runBootTimeApplyIfDev,
+} from "../boot-apply";
 
 /** A registry holding a declared table whose relation names a misspelled table. */
 function registryWithAMisspelledRelation(): SchemaRegistry {
@@ -129,5 +132,49 @@ describe("the development boot's relation check", () => {
     await expect(runBootTimeApplyIfDev()).rejects.toMatchObject({
       code: "NEXTLY_SCHEMA_RELATION_UNRESOLVED",
     });
+  });
+});
+
+describe("checkRelationsBeforePlugins", () => {
+  it("refuses where the boot refuses", () => {
+    expect(() =>
+      checkRelationsBeforePlugins(registryWithAMisspelledRelation(), {
+        refuse: true,
+        warn: () => {},
+      })
+    ).toThrow(
+      expect.objectContaining({ code: "NEXTLY_SCHEMA_RELATION_UNRESOLVED" })
+    );
+  });
+
+  it("in development reports the relation by name, and leaves the others queryable", () => {
+    // A plugin's `init` runs next and may query relationally: it must reach
+    // the relations that resolve, not fail on the one just reported.
+    const registry = registryWithAMisspelledRelation();
+    registry.registerDynamicSchema(
+      "cf__notes",
+      sqliteTable("cf__notes", { id: text("id").primaryKey() })
+    );
+    const warnings: string[] = [];
+
+    checkRelationsBeforePlugins(registry, {
+      refuse: false,
+      warn: message => warnings.push(message),
+    });
+
+    expect(warnings.join("\n")).toContain('The relation "post" on "cf__refs"');
+    expect(() => registry.getRelations()).not.toThrow();
+    expect(Object.keys(registry.getRelations())).toContain("cf__notes");
+  });
+
+  it("does not swallow anything but an unresolved relation", () => {
+    const failing = {
+      assertRelationsResolve: () => {
+        throw new Error("the registry is broken");
+      },
+    };
+    expect(() =>
+      checkRelationsBeforePlugins(failing, { refuse: false, warn: () => {} })
+    ).toThrow("the registry is broken");
   });
 });

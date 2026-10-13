@@ -145,6 +145,43 @@ async function assertRelationsResolveAfterApply(): Promise<void> {
 }
 
 /**
+ * Ask the schema registry whether every relation resolves, before plugins
+ * initialise: refuse where the boot refuses, and report where development
+ * carries on.
+ *
+ * In development the boot's schema apply runs after this and may register
+ * the table a relation names (a Builder-made one arriving through a
+ * migration), so a relation not resolved yet is reported, not refused, and
+ * the apply asks again (`assertRelationsResolve` above). Either way the
+ * registry keeps the relations that do resolve, so a plugin's `init` that
+ * queries relationally reaches every other relation rather than failing on
+ * the one already named.
+ */
+export function checkRelationsBeforePlugins(
+  registry: Pick<SchemaRegistry, "assertRelationsResolve"> | undefined,
+  how: { refuse: boolean; warn: (message: string) => void }
+): void {
+  if (registry === undefined) return;
+  if (how.refuse) {
+    registry.assertRelationsResolve();
+    return;
+  }
+  try {
+    registry.assertRelationsResolve();
+  } catch (error) {
+    if (
+      !NextlyError.is(error) ||
+      error.code !== "NEXTLY_SCHEMA_RELATION_UNRESOLVED"
+    ) {
+      throw error;
+    }
+    how.warn(
+      `[Nextly] ${describeError(error)} The development boot's schema apply may yet register the table; it asks again once it has run.`
+    );
+  }
+}
+
+/**
  * The error's message, with the detail a `NextlyError` keeps in `logMessage`:
  * its message is the generic public one, which names nothing to fix.
  */

@@ -150,7 +150,7 @@ describe("the boot sequence in registerServices", () => {
     }
     expect(check).toBeLessThan(pluginCall);
     expect(bodyOf("assertBootRelationsResolve")).toContain(
-      "assertRelationsResolve("
+      "checkRelationsBeforePlugins("
     );
   });
 
