@@ -1,8 +1,8 @@
 /**
- * What rolling back a plugin's migration module means, for
- * `migrate:down --plugin`.
+ * What rolling back a plugin's migration module means, for both paths that
+ * do it: `migrate:down --plugin` and `plugins uninstall`.
  *
- * One home, so every rollback path verifies and records a module the same
+ * One home, so both rollback paths verify, read and record a module the same
  * way.
  *
  * @module cli/commands/plugin-module-rollback
@@ -13,6 +13,7 @@ import type { SchemaEventsRepository } from "../../domains/schema/events/schema-
 import {
   assertAppliedUnchanged,
   assertModuleIntact,
+  moduleSql,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { NextlyError } from "../../errors/nextly-error";
@@ -64,6 +65,36 @@ export function verifiedPluginModule(args: {
 }
 
 /**
+ * The DOWN of the module a plugin ledger row names, verified as the module
+ * that was applied (`verifiedPluginModule`) and joined the way the apply path
+ * joins its UP, so the rollback planner splits it into the statements the
+ * module's DOWN holds.
+ */
+export function pluginModuleDown(args: {
+  pluginName: string;
+  migrations: readonly PluginMigration[];
+  /** The ledger key, `plugin:<name>/<module>`. */
+  filename: string;
+  recordedSha: string | null | undefined;
+  dialect: SupportedDialect;
+}): { sql: string; transaction: boolean } {
+  const module = verifiedPluginModule({
+    pluginName: args.pluginName,
+    migrations: args.migrations,
+    // The last slash for the same reason `pluginOfLedgerRow` uses it: a
+    // scoped plugin name carries a slash, and the first one is inside the
+    // NAME.
+    moduleName: args.filename.slice(args.filename.lastIndexOf("/") + 1),
+    filename: args.filename,
+    recordedSha: args.recordedSha,
+  });
+  return {
+    sql: moduleSql(module, args.dialect, "down"),
+    transaction: module.transaction !== false,
+  };
+}
+
+/**
  * Records a rollback whose DOWN failed, under the ledger key the migration is
  * applied under (`ledgerFilename`, the spelling the rolled-back record uses).
  *
@@ -71,8 +102,8 @@ export function verifiedPluginModule(args: {
  * migration's applied state is read from the newest `file_apply` row, and a
  * failed DOWN on PostgreSQL or SQLite was rolled back whole, so the migration
  * is still applied: a `file_apply` row saying `failed` would make every
- * reader take it for pending, and `migrate:down` would pick the migration
- * before it.
+ * reader take it for pending — `migrate:down` would pick the migration before
+ * it, and a retried uninstall would leave it out.
  *
  * On MySQL each DDL statement commits as it runs, so a DOWN that failed part
  * way may have changed the schema; so may a DOWN run outside a transaction,

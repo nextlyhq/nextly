@@ -224,4 +224,45 @@ describe("a plugin added to an existing development database", () => {
 
     expect(Object.values(seen)).toEqual([false]);
   });
+
+  it("does not recreate the tables of a plugin an uninstall removed", async () => {
+    // The uninstalled-plugin refusal promises that a development boot will not
+    // put back what an uninstall deliberately removed. It has to hold before
+    // anything is created, not only by refusing afterwards.
+    const file = join(dir, "nextly.db");
+    const first = await adapterFor(file);
+    await registerServices({
+      adapter: first,
+      plugins: [seedingPlugin(first, {})],
+    } as unknown as Parameters<typeof registerServices>[0]);
+    const [table] = (getActiveExtensionSchema("sqlite")?.specs ?? []).map(
+      spec => spec.name
+    );
+    expect(table).toBeDefined();
+    // What `plugins uninstall` leaves: the table dropped, and the plugin's
+    // owner row marked uninstalled.
+    await first.executeQuery(`DROP TABLE "${table}"`);
+    await new SchemaOwnersRepository(first.getDrizzle(), "sqlite").upsert([
+      {
+        tableName: table,
+        ownerKind: "plugin",
+        ownerId: "@acme/seeding",
+        migratedBy: "plugin:@acme/seeding",
+        ownerVersion: "1.0.0",
+        schemaVersion: null,
+        state: "uninstalled",
+      },
+    ]);
+    await shutdownServices();
+
+    const adapter = await adapterFor(file);
+    await expect(
+      registerServices({
+        adapter,
+        plugins: [seedingPlugin(adapter, {})],
+      } as unknown as Parameters<typeof registerServices>[0])
+    ).rejects.toThrow(/uninstalled/);
+    expect(await adapter.tableExists(table)).toBe(false);
+    await adapter.disconnect();
+  });
 });

@@ -295,8 +295,9 @@ Specific examples:
 Every migration file, plugin module and `-- DOWN` section runs as **one
 transaction on one database connection**, which the runner opens and commits
 itself, unless it is [marked to run outside one](#running-a-file-outside-a-transaction).
-A few kinds of statement cannot live inside that, and `nextly migrate` and
-`migrate:down` refuse the whole file before any of it runs. `migrate --dry-run` and `migrate:down --dry-run` report the same
+A few kinds of statement cannot live inside that, and `nextly migrate`,
+`migrate:down` and `plugins uninstall` refuse the whole file before any of it
+runs. `migrate --dry-run` and `migrate:down --dry-run` report the same
 refusals without executing anything, and `migrate:check` warns about them.
 
 | Statement | What happens | Why |
@@ -343,8 +344,8 @@ migration module says the same with `transaction: false` on the module; see
 [Plugin schema](/docs/plugins/schema).
 
 A marked file's UP and DOWN run **statement by statement**, each committing as
-it runs. `nextly migrate` and `migrate:down` print a line naming the file
-before they run it, and `migrate:status` shows it as
+it runs. `nextly migrate`, `migrate:down` and `plugins uninstall` print a line
+naming the file before they run it, and `migrate:status` shows it as
 `(no transaction)`.
 
 <Callout type="warn">
@@ -672,8 +673,8 @@ re-applies it.
 
 A rollback whose DOWN fails is recorded as a `file_rollback` event, and the
 migration stays **applied**: on PostgreSQL and SQLite the DOWN ran in one
-transaction and was undone, so a later `migrate:down` starts from that same
-migration again. On MySQL each DDL statement commits as
+transaction and was undone, so a later `migrate:down` or `plugins uninstall`
+starts from that same migration again. On MySQL each DDL statement commits as
 it runs, so part of the DOWN may have taken effect; `nextly migrate:status`
 lists every applied migration whose latest rollback failed, and flags the MySQL
 ones, so the schema can be checked before anything is run again.
@@ -716,7 +717,7 @@ recoverable error.
 
 ### Adoption: when the tables are already there
 
-A plugin you added in development has its tables already — dev push
+A plugin you installed in development has its tables already — dev push
 created them. The first `nextly migrate` on a deployment finds them present,
 and that is the ordinary case rather than a failure.
 
@@ -828,7 +829,7 @@ without `CASCADE`.
 
 Development push never drops a plugin-migrated table at all, whatever your
 config says. A plugin removed from config is exactly when its data is most at
-risk, and dropping its tables is a deliberate decision rather than a side
+risk, and that is a decision for `nextly plugins uninstall` rather than a side
 effect of a reload.
 
 <Callout type="warn">
@@ -871,6 +872,7 @@ limits are accepted:
 | Code | Meaning |
 | --- | --- |
 | `PLUGIN_SCHEMA_BEHIND` | The plugin expects a newer schema than the database has. Run `nextly migrate`. |
+| `PLUGIN_SCHEMA_UNINSTALLED` | The plugin was uninstalled but is still in your config. Reinstall it or remove the line. |
 | `PLUGIN_MIGRATIONS_UNAVAILABLE` | A plugin declares tables and ships no migrations to create them. |
 | `MIGRATION_CHECKSUM_MISMATCH` | A migration changed after it was generated or applied. |
 | `DROP_OF_FOREIGN_TABLE` | A migration would drop or rename another owner's table, column, index, foreign key or check, or a plugin migration a table no owner row claims. Nothing was applied. |
@@ -899,3 +901,41 @@ longer ships shows as applied with its file missing.
 The default matters: `migrate:down` picks the newest applied migration of any
 kind, so without the exclusion it would revert a plugin's migration while
 reporting an app rollback.
+
+### Uninstalling
+
+`nextly plugins uninstall <name>` needs the plugin still in your config — its
+DOWN sections are its own code, so a plugin removed from config first cannot
+be uninstalled at all.
+
+It refuses while another enabled plugin depends on it, and refuses a full
+uninstall when any module has no DOWN: running the reversible ones and
+stopping would leave the tables partly existing with no module describing what
+is there. It refuses the same way while the ledger records a module applied
+that the configured version of the plugin no longer ships
+(`logContext.reason` is `module-not-shipped`): configure the version that
+shipped it first. `--keep-data` leaves everything in place and marks the owner
+orphaned. A plugin whose modules `migrate:down --plugin` already rolled back
+can still be uninstalled: only the tables that exist are dropped.
+
+`plugins install` holds the migrate lock from its first migration until
+`onInstall` returns, and `plugins uninstall` from its final decision until the
+owner rows are marked, so neither can interleave with the other or with
+`nextly migrate`. The boot each command makes to run the hook never runs boot
+migrations.
+
+The state is kept on the plugin's owner rows. A plugin that owns no tables has
+none, so nothing records its uninstall: remove it from your config, or it
+initializes again on the next boot.
+
+A full uninstall that would drop tables, or run a DOWN that drops a column,
+lists what it would drop and stops with `PLUGIN_UNINSTALL_UNCONFIRMED` until
+you re-run it with `--yes`. Each module's DOWN is read, judged and run exactly
+as `migrate:down --plugin` runs it, newest first. Tables that a
+development push created, with no applied migration module to undo them, are
+refused with `PLUGIN_UNINSTALL_IRREVERSIBLE` (`logContext.reason` is
+`no-applied-module`): drop them with a migration, or reset the development
+database. Every refusal — these, a dependent plugin, a module that fails its
+checksum, a DOWN that would drop another owner's table — is decided before the
+migrate lock is taken and before `onUninstall` or any DOWN runs, so a refused
+uninstall changes nothing.
