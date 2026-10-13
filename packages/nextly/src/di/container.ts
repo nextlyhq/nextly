@@ -122,14 +122,28 @@ export class Container {
   /**
    * Take back what `detach` moved out, for as long as the code it was moved
    * aside for needs every lookup to find it: the teardown of plugins a
-   * cleared registration left running, which reaches services through this
-   * container however their contexts get there. A name registered here since
-   * keeps its own registration. Each restored singleton is the same instance,
-   * cached in the map it moved with.
+   * cleared registration left running, which reaches some services through
+   * this container itself rather than its contexts' own resolvers. A name
+   * registered here since keeps its own registration. Each restored singleton
+   * is the same instance, cached in the map it moved with. `withdraw` takes
+   * them out again.
    */
   restore(detached: Container): void {
     for (const [name, factory] of detached.factories) {
       if (!this.factories.has(name)) this.factories.set(name, factory);
+    }
+  }
+
+  /**
+   * Take out again what `restore` put back from `detached`, and nothing else:
+   * a name goes only while its registration here is still the one restored
+   * from it. A service registered since, under a new name or over a restored
+   * one, belongs to whoever registered it and stays, which `clear` would not
+   * leave.
+   */
+  withdraw(detached: Container): void {
+    for (const [name, factory] of detached.factories) {
+      if (this.factories.get(name) === factory) this.factories.delete(name);
     }
   }
 }

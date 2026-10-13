@@ -27,4 +27,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A plugin cleared by `clearServices()` now reaches every service it was started with during its teardown, including those its context looks up through the container itself, such as `ctx.services.jobs` and `ctx.audit`. Those found the container empty, so a `destroy` that queued final work or wrote an audit entry failed, or its entry was dropped. A second `clearServices()` before the next registration no longer loses the services that teardown needs.
+A plugin cleared by `clearServices()` now reaches every service it was started with during its teardown, including those its context looks up through the container itself, such as `ctx.services.jobs` and `ctx.audit`. Those found the container empty, so a `destroy` that queued final work or wrote an audit entry failed, or its entry was dropped. A second `clearServices()` before the next registration, or one that arrives while that teardown is still running, no longer takes away the services it needs.
