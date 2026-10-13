@@ -38,6 +38,14 @@ export interface PaymentProviderCapabilities {
    * The ISO 4217 codes it can charge in; omitted when it takes any.
    */
   readonly currencies?: readonly string[];
+  /**
+   * The largest amount it accepts in one payment, in minor units, by
+   * currency (Stripe: 99999999, that is $999,999.99, for USD cards). A
+   * currency left out has no stated limit. Commerce refuses a larger total
+   * before calling the provider, so the buyer gets a clear answer rather than
+   * a provider error part-way through paying.
+   */
+  readonly maxAmounts?: Readonly<Record<string, number>>;
 }
 
 /**
@@ -302,6 +310,82 @@ export function requirePaymentOperation(
   }
 }
 
+/**
+ * Why this provider cannot take a payment of `amount`, or `null` when it can:
+ * a currency it does not charge in, or more than it accepts in one payment.
+ *
+ * The one answer to the question, read by checkout (to tell the buyer before
+ * they pay), by `startProviderPayment`, and by the test provider.
+ *
+ * @experimental
+ */
+export function paymentAmountRefusal(
+  capabilities: PaymentProviderCapabilities,
+  amount: Money
+): "currency" | "above-limit" | null {
+  if (
+    capabilities.currencies &&
+    !capabilities.currencies.includes(amount.currency)
+  ) {
+    return "currency";
+  }
+  const limit = capabilities.maxAmounts?.[amount.currency];
+  return limit !== undefined && amount.amount > limit ? "above-limit" : null;
+}
+
+/**
+ * Refuse a payment the provider cannot take, before anything is sent.
+ *
+ * @experimental
+ * @throws `COMMERCE_UNSUPPORTED_OPERATION` for a currency it does not charge
+ *   in, `COMMERCE_AMOUNT_ABOVE_PROVIDER_LIMIT` for more than it accepts.
+ */
+export function requirePaymentAmount(
+  provider: PaymentProvider,
+  amount: Money
+): void {
+  const refusal = paymentAmountRefusal(provider.capabilities, amount);
+  if (refusal === "currency") {
+    throw commerceError("COMMERCE_UNSUPPORTED_OPERATION", {
+      provider: provider.id,
+      currency: amount.currency,
+    });
+  }
+  if (refusal === "above-limit") {
+    throw commerceError("COMMERCE_AMOUNT_ABOVE_PROVIDER_LIMIT", {
+      provider: provider.id,
+      currency: amount.currency,
+      limit: provider.capabilities.maxAmounts?.[amount.currency],
+    });
+  }
+}
+
+/**
+ * Start a payment with a provider: the way commerce starts every payment.
+ *
+ * Its preconditions run before the provider is called, so a payment it cannot
+ * take (a currency it does not charge in, more than it accepts, a hold it
+ * cannot capture) creates nothing at the provider; its answer is then held to
+ * the contract before anything reads it.
+ *
+ * @experimental
+ */
+export async function startProviderPayment(
+  provider: PaymentProvider,
+  input: StartPaymentInput
+): Promise<ProviderPayment> {
+  if (input.capture === "later") requirePaymentOperation(provider, "capture");
+  requirePaymentAmount(provider, input.amount);
+  return parseProviderAnswer(
+    providerPaymentSchema,
+    await provider.start(input),
+    {
+      provider: provider.id,
+      operation: "start",
+    }
+  );
+}
+
 /** @experimental */
 export const paymentProviderCapabilitiesSchema = z
   .strictObject({
@@ -313,6 +397,9 @@ export const paymentProviderCapabilitiesSchema = z
     currencies: z
       .array(z.string().regex(/^[A-Z]{3}$/))
       .min(1)
+      .optional(),
+    maxAmounts: z
+      .record(z.string().regex(/^[A-Z]{3}$/), z.number().int().positive())
       .optional(),
   })
   .refine(c => c.refund || !c.partialRefund, {

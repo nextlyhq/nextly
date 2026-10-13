@@ -26,7 +26,9 @@ export type CommerceErrorCode =
   /** A webhook whose signature, timestamp or body does not verify. */
   | "COMMERCE_WEBHOOK_INVALID"
   /** An operation the payment's current state does not allow, such as capturing a paid payment. */
-  | "COMMERCE_PAYMENT_STATE";
+  | "COMMERCE_PAYMENT_STATE"
+  /** A payment larger than the provider accepts in one charge. */
+  | "COMMERCE_AMOUNT_ABOVE_PROVIDER_LIMIT";
 
 /**
  * Raise a commerce error.
@@ -61,6 +63,8 @@ const PUBLIC_MESSAGES: Record<CommerceErrorCode, string> = {
     "The operation key was already used for a different request.",
   COMMERCE_WEBHOOK_INVALID: "The webhook could not be verified.",
   COMMERCE_PAYMENT_STATE: "The payment cannot do that in its current state.",
+  COMMERCE_AMOUNT_ABOVE_PROVIDER_LIMIT:
+    "The amount is more than the payment provider accepts in one payment.",
 };
 
 // A provider's broken answer is the server's fault, not the caller's, so it
@@ -78,4 +82,5 @@ const STATUS_CODES: Record<CommerceErrorCode, number> = {
   COMMERCE_OPERATION_KEY_REUSED: 409,
   COMMERCE_WEBHOOK_INVALID: 400,
   COMMERCE_PAYMENT_STATE: 409,
+  COMMERCE_AMOUNT_ABOVE_PROVIDER_LIMIT: 400,
 };

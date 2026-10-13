@@ -330,9 +330,49 @@ export async function paymentProviderContract(
     }
   );
 
-  // The cases below exist only for a provider that declares the operation;
-  // the declaration case above holds it to having the method.
+  // The cases below exist only for a provider that declares the operation or
+  // the limit; the declaration case above holds it to having the method.
   const declared = (await setUp()).p.capabilities;
+  const limit = declared.maxAmounts?.[options.currency];
+  if (limit !== undefined) {
+    add(
+      "starts a payment at its declared limit, and refuses one above it",
+      async () => {
+        const { p } = await setUp();
+        const atLimit = asPayment(
+          await p.start({
+            operationId: unique("op"),
+            reference: unique("pay"),
+            amount: money(limit, options.currency),
+            capture: "now",
+          })
+        );
+        expectContract(
+          atLimit.amount.amount === limit,
+          "a payment at the limit starts"
+        );
+        const reference = unique("pay");
+        const error = await expectRefusal(
+          () =>
+            p.start({
+              operationId: unique("op"),
+              reference,
+              amount: money(limit + 1, options.currency),
+              capture: "now",
+            }),
+          "a payment above the declared limit is refused"
+        );
+        expectContract(
+          NextlyError.isCode(error, "COMMERCE_AMOUNT_ABOVE_PROVIDER_LIMIT"),
+          `the refusal is COMMERCE_AMOUNT_ABOVE_PROVIDER_LIMIT, not ${describeError(error)}`
+        );
+        expectContract(
+          (await p.findByReference({ reference })) === null,
+          "a refused payment leaves nothing at the provider"
+        );
+      }
+    );
+  }
   return cases.concat(optionalCases());
 
   function optionalCases(): ContractCase[] {

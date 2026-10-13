@@ -172,6 +172,16 @@ describe("the payment contract suite catches a broken provider", () => {
     );
   });
 
+  it("fails a provider that declares a limit it does not enforce", async () => {
+    const unlimited = createTestPaymentProvider({
+      capabilities: { maxAmounts: {} },
+    }).provider;
+    const failed = await failingCases(p => ({ ...p, start: unlimited.start }));
+    expect(failed).toContain(
+      "starts a payment at its declared limit, and refuses one above it"
+    );
+  });
+
   it("fails a provider that declares a refund it does not implement", async () => {
     const failed = await failingCases(p => ({
       ...p,

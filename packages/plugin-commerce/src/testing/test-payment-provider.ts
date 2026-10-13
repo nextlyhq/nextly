@@ -4,6 +4,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 import {
+  paymentAmountRefusal,
   providerWebhookEventSchema,
   startPaymentInputSchema,
   type ConfirmPaymentInput,
@@ -88,6 +89,9 @@ const DEFAULT_CAPABILITIES: PaymentProviderCapabilities = {
   refund: true,
   partialRefund: true,
   operationKeyLifetimeMs: 24 * 60 * 60 * 1000,
+  // Stripe's limit for one USD card payment, $999,999.99, so a test meets the
+  // same ceiling a store on Stripe would.
+  maxAmounts: { USD: 99_999_999 },
 };
 
 interface PaymentRecord {
@@ -221,11 +225,17 @@ export function createTestPaymentProvider(
         operation: "capture later",
       });
     }
-    if (
-      capabilities.currencies &&
-      !capabilities.currencies.includes(input.amount.currency)
-    ) {
+    // The same refusal commerce applies before calling a provider, so the test
+    // provider also refuses when it is called directly, as a real one would.
+    const refusal = paymentAmountRefusal(capabilities, input.amount);
+    if (refusal === "currency") {
       throw commerceError("COMMERCE_UNSUPPORTED_OPERATION", {
+        provider: id,
+        currency: input.amount.currency,
+      });
+    }
+    if (refusal === "above-limit") {
+      throw commerceError("COMMERCE_AMOUNT_ABOVE_PROVIDER_LIMIT", {
         provider: id,
         currency: input.amount.currency,
       });
