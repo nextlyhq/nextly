@@ -32,8 +32,12 @@ const silentLogger = {
   error() {},
 };
 
-/** A plugin whose table relates to `targetTable` by its `productId` column. */
-function pluginRelatingTo(targetTable: string) {
+/**
+ * A plugin whose table relates to `targetTable` by its `productId` column, and
+ * whose `init` records that it ran, so a test can see whether the boot reached
+ * plugin initialisation.
+ */
+function pluginRelatingTo(targetTable: string, initialised: string[] = []) {
   const links = defineTable(
     "links",
     { id: col.id(), productId: col.shortText({ nullable: true }) },
@@ -48,6 +52,9 @@ function pluginRelatingTo(targetTable: string) {
     version: "0.0.0",
     nextly: "*",
     contributes: { schema: { prefix: "rt", tables: [links] } },
+    init() {
+      initialised.push(targetTable);
+    },
   });
 }
 
@@ -79,10 +86,14 @@ afterEach(async () => {
 
 describe("a declared table's relation targets, at boot", () => {
   it("boots with a relation to a Builder-made collection (control)", async () => {
+    const initialised: string[] = [];
     current = await createTestNextly({
       adapter: await withBuilderProducts(),
-      plugins: [pluginRelatingTo("dc_products")],
+      plugins: [pluginRelatingTo("dc_products", initialised)],
     });
+    // The fixture's `init` does run on a boot that is not refused, so its
+    // absence in the case below is the refusal's doing.
+    expect(initialised).toEqual(["dc_products"]);
     // Assembled at boot and kept: the relation is there for the first query.
     const registry = container.get<SchemaRegistry>("schemaRegistry");
     expect(
@@ -90,16 +101,20 @@ describe("a declared table's relation targets, at boot", () => {
     ).toBe("dc_products");
   });
 
-  it("refuses to boot with a relation to a table that does not exist, naming it", async () => {
+  it("refuses to boot with a relation to a table that does not exist, naming it, before any plugin's init runs", async () => {
     const adapter = await withBuilderProducts();
+    const initialised: string[] = [];
     await expect(
       createTestNextly({
         adapter,
-        plugins: [pluginRelatingTo("dc_prodcuts")],
+        plugins: [pluginRelatingTo("dc_prodcuts", initialised)],
       })
     ).rejects.toMatchObject({
       code: "NEXTLY_SCHEMA_RELATION_UNRESOLVED",
       logContext: { relations: ["rt__links.product"] },
     });
+    // Refused before plugins initialise: an `init` that queried relationally
+    // would otherwise meet the broken relation first, with no name to fix.
+    expect(initialised).toEqual([]);
   });
 });
