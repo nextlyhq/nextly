@@ -248,6 +248,26 @@ describe("a contributed column's authored key", () => {
     }
   );
 
+  it("is read back under `__proto__` as an own property", async () => {
+    // Assigned into an ordinary object, `__proto__` reached the prototype
+    // setter and the column dropped out of every row.
+    const columns = JSON.parse('{"__proto__": null}') as Record<
+      string,
+      ReturnType<typeof col.text>
+    >;
+    columns.__proto__ = col.text({ nullable: true });
+    const handle = surfaceFor(FX, [], authoredUnder("__proto__")).contributed(
+      "dc_posts",
+      columns
+    );
+
+    const row = (await handle.get("p1")) as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(row, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(row, "__proto__")?.value).toBe(
+      "hello world"
+    );
+  });
+
   it("is refused as `id`, which every row it returns carries as the key", async () => {
     const error = await refusal(() =>
       surfaceFor(FX, [], authoredUnder("id"))

@@ -21,29 +21,7 @@ import { randomUUID } from "node:crypto";
 import { NextlyError } from "../../../errors/nextly-error";
 import { uuidV7 } from "../../../utils/uuid-v7";
 
-/** The id generators a collection may choose between. */
-export type CollectionIdType = "uuid" | "uuidv7";
-
-/** The per-collection database options this module reads. */
-export interface CollectionDbOptions {
-  /**
-   * Which id a create generates. Defaults to `uuid`.
-   *
-   * `uuidv7` is time-ordered, so inserts land at the end of the primary-key
-   * index rather than scattered through it — the reason a large table wants
-   * it. Same 36-character storage either way.
-   */
-  idType?: CollectionIdType;
-  /**
-   * Whether a create may supply its own `id`. Defaults to false.
-   *
-   * False by default because an id the caller chooses is an id the caller can
-   * GUESS: a collection whose rows are addressable by a value an attacker
-   * picked is a different security question from one whose ids are random,
-   * and that has to be opted into rather than inherited.
-   */
-  allowIdOnCreate?: boolean;
-}
+import type { CollectionDbOptions } from "./collection-db-options";
 
 /** Any UUID, as the two generators both produce. */
 const UUID =

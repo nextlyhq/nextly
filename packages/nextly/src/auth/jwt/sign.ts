@@ -31,19 +31,23 @@ export function secretToKey(secret: string): Uint8Array {
  * @param claims - The payload claims (from buildClaims)
  * @param secret - The NEXTLY_SECRET string
  * @param ttlSeconds - Token TTL in seconds (default 900 = 15 minutes)
+ * @param notAfter - The latest moment, epoch ms, the token may be valid; see
+ *   {@link signAccessTokenWithExpiry}.
  * @returns Signed JWT string
  */
 export async function signAccessToken(
   claims: Record<string, unknown>,
   secret: string,
   ttlSeconds: number = 900,
-  purpose: TokenPurpose = "session"
+  purpose: TokenPurpose = "session",
+  notAfter?: number
 ): Promise<string> {
   const { token } = await signAccessTokenWithExpiry(
     claims,
     secret,
     ttlSeconds,
-    purpose
+    purpose,
+    notAfter
   );
   return token;
 }
@@ -62,19 +66,33 @@ export async function signAccessToken(
  * The timestamps are computed once and set explicitly rather than left to a
  * relative expression, so the returned `expiresAt` IS the `exp` claim rather
  * than a parallel calculation that happens to agree.
+ *
+ * `notAfter` (epoch ms) bounds `exp` absolutely: it is the last whole second
+ * at or before that moment when that is sooner than the TTL's end. A session
+ * passes the moment the first of its roles lapses, so its token stops being
+ * accepted no later than that. Bounding here, against the same `issuedAt`,
+ * rather than shortening the TTL beforehand keeps the bound exact: a TTL
+ * worked out from an earlier clock reading moves with the second the token
+ * is then issued in. A bound inside the current second yields a token that
+ * is already expired, which the client refreshes, and the refresh no longer
+ * carries the lapsed role.
  */
 export async function signAccessTokenWithExpiry(
   claims: Record<string, unknown>,
   secret: string,
   ttlSeconds: number = 900,
-  purpose: TokenPurpose = "session"
+  purpose: TokenPurpose = "session",
+  notAfter?: number
 ): Promise<{ token: string; expiresAt: Date }> {
   const key = secretToKey(secret);
   const jti = randomBytes(16).toString("hex");
   // Whole seconds, because that is the resolution `exp` and `iat` are defined
   // at; deriving the Date from the same integer keeps the two exact.
   const issuedAt = Math.floor(Date.now() / 1000);
-  const expiresAt = issuedAt + ttlSeconds;
+  const expiresAt =
+    notAfter === undefined
+      ? issuedAt + ttlSeconds
+      : Math.min(issuedAt + ttlSeconds, Math.floor(notAfter / 1000));
 
   const jwt = new SignJWT(claims)
     .setProtectedHeader({ alg: ALGORITHM, typ: TOKEN_TYP[purpose] })

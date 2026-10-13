@@ -1,5 +1,5 @@
 import { jwtVerify } from "jose";
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 
 import { buildClaims } from "../claims";
 import {
@@ -247,5 +247,98 @@ describe("signAccessTokenWithExpiry", () => {
     // claiming validity the token no longer has.
     expect(payload).toBeNull();
     expect(expiresAt.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+});
+
+/**
+ * A session's token must stop being accepted no later than the first of its
+ * roles lapses: the stateless session readers answer from the token's claims
+ * until it expires. The clock is fixed so the second the token is issued in,
+ * and where the bound falls within it, are chosen rather than raced for.
+ */
+describe("signAccessTokenWithExpiry with a bound", () => {
+  /** A whole second, so offsets within it are exact. */
+  const SECOND = Date.UTC(2026, 9, 13, 12, 0, 0);
+  const claims = buildClaims({
+    userId: "user_123",
+    email: "test@example.com",
+    name: "Test User",
+    image: null,
+    roleIds: ["role_brief"],
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("ends the token at the bound when that is sooner than the TTL", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(SECOND + 400);
+    const notAfter = SECOND + 120_700;
+
+    const { token, expiresAt } = await signAccessTokenWithExpiry(
+      claims,
+      TEST_SECRET,
+      900,
+      "session",
+      notAfter
+    );
+
+    expect(expiresAt.getTime()).toBe(SECOND + 120_000);
+    const { payload } = await jwtVerify(token, secretToKey(TEST_SECRET));
+    expect((payload.exp as number) * 1000).toBeLessThanOrEqual(notAfter);
+  });
+
+  it("keeps the TTL when the bound is later", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(SECOND + 400);
+
+    const { expiresAt } = await signAccessTokenWithExpiry(
+      claims,
+      TEST_SECRET,
+      900,
+      "session",
+      SECOND + 3_600_000
+    );
+
+    expect(expiresAt.getTime()).toBe(SECOND + 900_000);
+  });
+
+  it("gives a token that is refused at once when the bound falls in the current second", async () => {
+    // A floor of one second here signed a token accepted until the next
+    // whole second, past the bound, carrying a role that had lapsed.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(SECOND + 300);
+    const notAfter = SECOND + 800;
+
+    const { token, expiresAt } = await signAccessTokenWithExpiry(
+      claims,
+      TEST_SECRET,
+      900,
+      "session",
+      notAfter
+    );
+
+    expect(expiresAt.getTime()).toBeLessThanOrEqual(notAfter);
+    const result = await verifyAccessToken(token, TEST_SECRET);
+    expect(result).toMatchObject({ valid: false, reason: "expired" });
+  });
+
+  it("gives a token that is refused at once when the bound has passed", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(SECOND + 300);
+    const notAfter = SECOND - 5_000;
+
+    const { token, expiresAt } = await signAccessTokenWithExpiry(
+      claims,
+      TEST_SECRET,
+      900,
+      "session",
+      notAfter
+    );
+
+    expect(expiresAt.getTime()).toBeLessThanOrEqual(notAfter);
+    const result = await verifyAccessToken(token, TEST_SECRET);
+    expect(result).toMatchObject({ valid: false, reason: "expired" });
   });
 });

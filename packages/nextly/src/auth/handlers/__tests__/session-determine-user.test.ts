@@ -65,7 +65,9 @@ function makeDeps(
     refreshTokenTTL: 7 * 24 * 60 * 60,
     devAutoLogin: false,
     findUserByEmail: vi.fn().mockResolvedValue(null),
-    fetchRoleIds: vi.fn().mockResolvedValue([]),
+    fetchSessionRoles: vi
+      .fn()
+      .mockResolvedValue({ roleIds: [], validUntil: undefined }),
     fetchCustomFields: vi.fn().mockResolvedValue({}),
     storeRefreshToken: vi.fn().mockResolvedValue(undefined),
     fetchAccountState: vi.fn().mockResolvedValue(usableState()),

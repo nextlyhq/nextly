@@ -430,6 +430,45 @@ describe("plugins uninstall against a real database", () => {
 
     expect(await ownerStates()).toEqual(["uninstalled"]);
   });
+
+  it("names only the elements on its own tables as dropped with them", async () => {
+    // fx also owns an index on the app's table. The app's own index there is
+    // not dropped by anything, so the confirmation must not list it.
+    const element = {
+      tableName: "app_notes",
+      elementKind: "index" as const,
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active" as const,
+    };
+    await new SchemaOwnersRepository(state.db, "sqlite").upsert([
+      {
+        ...element,
+        elementName: "fx_idx",
+        ownerKind: "plugin",
+        ownerId: PLUGIN,
+        migratedBy: `plugin:${PLUGIN}`,
+      },
+      {
+        ...element,
+        elementName: "app_idx",
+        ownerKind: "app",
+        ownerId: "app",
+        migratedBy: "app",
+      },
+    ]);
+    state.migrations = [init, more];
+    const warn = vi.spyOn(context.logger, "warn");
+
+    await expect(
+      runPluginUninstall(PLUGIN, { keepData: false, yes: false }, context)
+    ).rejects.toMatchObject({ code: "PLUGIN_UNINSTALL_UNCONFIRMED" });
+
+    const warned = warn.mock.calls.map(call => String(call[0])).join("\n");
+    warn.mockRestore();
+    expect(warned).toContain("fx__notes");
+    expect(warned).not.toContain("app_idx");
+  });
 });
 
 describe("migrate:down --plugin against a real database", () => {

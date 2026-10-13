@@ -56,7 +56,7 @@ function makeStubDeps(
     incrementFailedAttempts: unreachable as never,
     lockAccount: unreachable as never,
     resetFailedAttempts: unreachable as never,
-    fetchRoleIds: unreachable as never,
+    fetchSessionRoles: unreachable as never,
     fetchCustomFields: unreachable as never,
     storeRefreshToken: unreachable as never,
     findRefreshTokenByHash: unreachable as never,
