@@ -24,9 +24,14 @@ vi.mock("../../../services/lib/permissions", () => ({
 
 const grants = vi.mocked(hasPermission);
 
+// The service's own database. The check must read the grants there, not
+// through the global container, which such a setup may not have filled, or
+// may have filled for another instance.
+const serviceDb = createMockDb({ rows: [] });
+
 function buildServiceWithoutAccessControl() {
   return new CollectionAccessService(
-    createMockAdapter(createMockDb({ rows: [] })) as never,
+    createMockAdapter(serviceDb) as never,
     silentLogger as never
   );
 }
@@ -50,7 +55,22 @@ describe("checkCollectionAccess with no access-control service", () => {
       });
 
     expect(result?.statusCode).toBe(403);
-    expect(grants).toHaveBeenCalledWith("user-1", "read", "pages", undefined);
+    expect(grants).toHaveBeenCalledWith("user-1", "read", "pages", serviceDb);
+  });
+
+  it("reads the grants inside the caller's transaction when it is in one", async () => {
+    grants.mockResolvedValue(true);
+    const tx = { transaction: "handle" };
+
+    await buildServiceWithoutAccessControl().checkCollectionAccess({
+      collectionName: "pages",
+      operation: "update",
+      user,
+      overrideAccess: false,
+      executor: tx,
+    });
+
+    expect(grants).toHaveBeenCalledWith("user-1", "update", "pages", tx);
   });
 
   it("admits a signed-in caller the database grants admit", async () => {
