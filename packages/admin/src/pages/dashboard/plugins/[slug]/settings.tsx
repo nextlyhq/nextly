@@ -79,21 +79,43 @@ function PluginSettingsGate({
   children: React.ReactNode;
 }) {
   const branding = useBranding();
-  const { isPending } = useBrandingStatus();
-  if (branding?.plugins === undefined) {
-    return isPending ? (
-      <PluginPageLoading label="Loading plugin…" />
-    ) : (
-      <InstalledPluginsUnavailable />
-    );
-  }
-  const permission =
-    pluginAt(branding?.plugins, activeSlug)?.settings?.permission ??
-    "manage-settings";
+  const status = useBrandingStatus();
+  const unresolved = unresolvedPluginList(branding?.plugins, status);
+  if (unresolved) return unresolved;
   return (
-    <PermissionGuard requiredPermission={permission}>
+    <PermissionGuard
+      requiredPermission={settingsPermissionAt(branding?.plugins, activeSlug)}
+    >
       {children}
     </PermissionGuard>
+  );
+}
+
+/**
+ * What the gate shows while there is no plugin list to read, or `undefined`
+ * once there is one.
+ *
+ * Only a request that never answered is an outage. A settled answer for a
+ * project with no plugins carries no list at all, and is read as an empty
+ * one: the plugin is not found, under core's permission.
+ */
+function unresolvedPluginList(
+  plugins: PluginMetadata[] | undefined,
+  status: { isPending: boolean; isUnavailable: boolean }
+): React.ReactElement | undefined {
+  if (plugins !== undefined) return undefined;
+  if (status.isPending) return <PluginPageLoading label="Loading plugin…" />;
+  if (status.isUnavailable) return <InstalledPluginsUnavailable />;
+  return undefined;
+}
+
+/** The permission the plugin's metadata names for its settings, or core's. */
+function settingsPermissionAt(
+  plugins: PluginMetadata[] | undefined,
+  activeSlug: string | undefined
+): string {
+  return (
+    pluginAt(plugins, activeSlug)?.settings?.permission ?? "manage-settings"
   );
 }
 

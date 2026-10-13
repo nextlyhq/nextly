@@ -248,6 +248,18 @@ describe("who may open PluginSettingsPage", () => {
     }
   );
 
+  it("reads a settled answer that carries no plugin list as a project with none", () => {
+    // The admin metadata omits the list for a project with no plugins. That
+    // answer arrived, so it is no outage: the plugin is simply not there.
+    mockBranding = {};
+
+    renderWithProviders(<PluginSettingsPage params={{ slug: "acme-pay" }} />);
+    expect(
+      screen.queryByText("Could not load your installed plugins")
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Plugin not found")).toBeInTheDocument();
+  });
+
   it("waits for the plugin list rather than turning the caller away on the default", () => {
     // Before the list arrives, the page cannot know the plugin keeps its
     // settings to another permission; gated on manage-settings meanwhile, this
