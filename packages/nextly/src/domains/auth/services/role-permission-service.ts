@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, getTableColumns } from "drizzle-orm";
+import { and, eq, getColumns } from "drizzle-orm";
 
 import type {
   RBACDatabaseInstance,
@@ -289,7 +289,7 @@ export class RolePermissionService extends BaseService {
     // for each inserted row, defaults included.
     const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
     const paramsPerRow = Object.keys(
-      getTableColumns(this.tables.rolePermissions)
+      getColumns(this.tables.rolePermissions)
     ).length;
 
     await this.adapter.transaction(async tx => {
