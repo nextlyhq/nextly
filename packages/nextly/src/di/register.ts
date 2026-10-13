@@ -636,6 +636,15 @@ function startRegistrationAttempt(config: NextlyServiceConfig): Promise<void> {
 async function runRegistrationAttempt(
   config: NextlyServiceConfig
 ): Promise<void> {
+  // Plugins an earlier registration started and nobody tore down: the one
+  // `clearServices()` ended, which empties the container but cannot await a
+  // plugin's `destroy`. Their timers and connections are still live, and the
+  // registration below starts a second copy of each plugin beside them. Torn
+  // down here, in reverse, before any plugin initialises again. After a
+  // shutdown or a failed attempt the list is already empty and this runs
+  // nothing. Inside the latch, so a caller waiting on this attempt cannot
+  // start plugins while the old ones are still being destroyed.
+  await destroyRegisteredPlugins();
   try {
     await registerServicesOnce(config);
   } catch (error) {
@@ -4173,6 +4182,10 @@ async function releaseServices(opts: {
  * Clear all registered services. Primarily for testing or re-initialization
  * with different configuration. For production shutdown, prefer
  * `shutdownServices()` so resources are properly released.
+ *
+ * Synchronous, so it cannot await a plugin's `destroy`: the plugins this
+ * registration started keep running until the next `registerServices`, which
+ * tears them down in reverse before it initialises any plugin.
  */
 export function clearServices(): void {
   container.clear();
