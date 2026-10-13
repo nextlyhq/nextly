@@ -101,6 +101,9 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_UI_SCHEMA_INVALID: 400,
   NEXTLY_SCHEMA_SLUG_COLLISION: 409,
   NEXTLY_SCHEMA_RELATION_TARGET_MISSING: 400,
+  // A declared table's relation names a table or column the registry does
+  // not have once every table is registered.
+  NEXTLY_SCHEMA_RELATION_UNRESOLVED: 400,
   // Plugin schema: `contributes.extend` and relations.
   NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN: 400,
   NEXTLY_SCHEMA_EXTEND_FIELD_DUPLICATE: 409,

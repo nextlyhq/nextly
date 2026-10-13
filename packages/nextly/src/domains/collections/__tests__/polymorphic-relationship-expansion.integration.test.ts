@@ -175,6 +175,10 @@ describeEachDialect("polymorphic relationship expansion", dialect => {
         defineCollection({ slug: "posts", fields: [text({ name: "title" })] }),
         defineCollection({
           slug: "pages",
+          // Any caller may read the row, so what the expansion withholds is the
+          // protected FIELD alone. Without a rule a caller holding no grant on
+          // `pages` is refused the whole row, which leaves no field to judge.
+          access: { read: () => true },
           fields: [
             text({ name: "title" }),
             checkbox({ name: "hidden", access: { read: () => false } }),

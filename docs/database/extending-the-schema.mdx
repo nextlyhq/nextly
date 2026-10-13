@@ -221,6 +221,13 @@ column or the key, and must name a column of a table in this schema or of a
 core table; a relation to a collection or single joins its `id` and names no
 `toColumn`.
 
+A relation's target table is checked once every table is registered, at boot:
+a relation to a Builder-made collection resolves, and one naming a table or
+column that does not exist stops the boot with
+`NEXTLY_SCHEMA_RELATION_UNRESOLVED`, naming each such relation, rather than
+failing the first query. In development it is reported once the boot's schema
+apply has run, without stopping the dev server.
+
 Edges register with the schema registry, so `db.query.<table>.findMany({ with })`
 follows them between tables you may reach. An include and a relation filter
 in `where` obey the same rule as `db.query.<table>` itself, at every depth: the
