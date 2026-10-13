@@ -34,8 +34,41 @@ export interface SchemaContribution {
   extend?: readonly SchemaHook[];
 }
 
-function describe(owner: SchemaOwner): string {
+/** How a hook's owner is named wherever a hook is reported. */
+export function describeHookOwner(owner: SchemaOwner): string {
   return owner.kind === "plugin" ? `plugin:${owner.id}` : "app";
+}
+
+/** One hook: whose it is, and its position in that owner's `extend` list. */
+export interface HookPosition {
+  owner: SchemaOwner;
+  position: number;
+}
+
+/**
+ * The error a hook threw, with the hook's owner and position added to what
+ * it already says.
+ *
+ * Its code, messages, public data and status are kept, so a refusal the
+ * draft raised (a duplicate table, a column on a table the owner may not
+ * extend) still reads as that refusal, and a caller asking what kind of error
+ * it is gets the same answer. The draft names the owner in its path but not
+ * the position, and an error the plugin's own code raised names neither.
+ */
+function attributed(error: NextlyError, hook: HookPosition): NextlyError {
+  const owner = describeHookOwner(hook.owner);
+  return new NextlyError({
+    code: error.code,
+    publicMessage: error.publicMessage,
+    ...(error.publicData !== undefined ? { publicData: error.publicData } : {}),
+    ...(error.messageKey !== undefined ? { messageKey: error.messageKey } : {}),
+    logMessage: `Schema hook ${hook.position} of ${owner} failed: ${
+      error.logMessage ?? error.publicMessage
+    }`,
+    logContext: { ...error.logContext, owner, hookIndex: hook.position },
+    statusCode: error.statusCode,
+    cause: error,
+  });
 }
 
 /**
@@ -48,7 +81,8 @@ function describe(owner: SchemaOwner): string {
  */
 async function runContribution(
   store: SchemaDraftStore,
-  contribution: SchemaContribution
+  contribution: SchemaContribution,
+  afterEach: ((hook: HookPosition) => void) | undefined
 ): Promise<void> {
   const draft = createOwnerDraft(store, contribution.owner);
 
@@ -58,22 +92,26 @@ async function runContribution(
 
   const hooks = contribution.extend ?? [];
   for (const [position, hook] of hooks.entries()) {
+    const at = { owner: contribution.owner, position };
     try {
       await hook({ schema: draft, dialect: store.dialect });
     } catch (cause) {
       // Rethrown with attribution: an unannotated failure from inside a hook
       // names a file in somebody else's package and nothing about whose hook
       // it was or which one in the list.
-      if (cause instanceof NextlyError) throw cause;
+      // By its brand, not `instanceof`: a plugin bundling its own copy of
+      // nextly throws errors this copy's constructor did not make.
+      if (NextlyError.is(cause)) throw attributed(cause, at);
       throw NextlyError.internal({
         cause: cause instanceof Error ? cause : undefined,
         logContext: {
           reason: "schema hook failed",
-          owner: describe(contribution.owner),
+          owner: describeHookOwner(contribution.owner),
           hookIndex: position,
         },
       });
     }
+    afterEach?.(at);
   }
 }
 
@@ -83,17 +121,21 @@ async function runContribution(
  * `plugins` must already be topologically sorted — the resolver does that, and
  * re-deriving the order here would be a second implementation of a question
  * already answered.
+ *
+ * `afterEach` is called once each hook has returned, with the hook it
+ * followed, so a caller can read the store as that hook left it.
  */
 export async function runExtensionHooks(
   store: SchemaDraftStore,
   plugins: readonly SchemaContribution[],
-  app?: SchemaContribution
+  app?: SchemaContribution,
+  afterEach?: (hook: HookPosition) => void
 ): Promise<void> {
   for (const plugin of plugins) {
-    await runContribution(store, plugin);
+    await runContribution(store, plugin, afterEach);
   }
   if (app) {
-    await runContribution(store, app);
+    await runContribution(store, app, afterEach);
   }
 }
 

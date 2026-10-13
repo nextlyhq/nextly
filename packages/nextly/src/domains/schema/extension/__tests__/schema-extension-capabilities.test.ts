@@ -6,9 +6,16 @@
  * `schema-extension-capabilities.integration.test.ts`; asserting them here
  * against a fake would be a test of the fake.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import {
+  AFTER_DRIZZLE_REFUSED_CONSTRUCTS,
+  runAfterDrizzle,
+} from "../after-drizzle";
 import {
   buildExtensionSchema,
   type ExtensionSchemaInput,
@@ -24,6 +31,8 @@ import {
   assertMayOverride,
   assertOverrideCompatible,
 } from "../extension-columns";
+
+import { REFUSED_CONSTRUCT_HOOKS } from "./after-drizzle-refused-constructs";
 
 const notes = defineTable(
   "notes",
@@ -424,10 +433,47 @@ describe("enums", () => {
 });
 
 describe("any Drizzle column type", () => {
-  it("the app escape hatch exists and refuses what migrations cannot carry", () => {
-    // Half of this row is delivered: `afterDrizzle` takes any Drizzle column.
-    // The other half is new first-class kinds, such as `serial` below.
-    expect(true).toBe(true);
+  it("the app escape hatch refuses each construct migrations cannot carry", async () => {
+    // `afterDrizzle` takes any Drizzle column; what it refuses is the list
+    // the documentation gives as an exception to the comparison with Payload.
+    for (const [construct, hook] of Object.entries(REFUSED_CONSTRUCT_HOOKS)) {
+      let refused: unknown;
+      try {
+        await runAfterDrizzle({
+          dialect: "postgresql",
+          tables: {},
+          hooks: [hook],
+          owners: new Map([["app_notes", { kind: "app" }]]),
+          protectedTables: new Set(),
+          naming: { coreTableNames: [], pluginPrefixes: [] },
+        });
+      } catch (error) {
+        refused = error;
+      }
+      expect(NextlyError.isValidation(refused), construct).toBe(true);
+      expect(JSON.stringify((refused as NextlyError).publicData)).toContain(
+        construct
+      );
+    }
+  });
+
+  it("documents every construct the escape hatch refuses", () => {
+    const page = readFileSync(
+      fileURLToPath(
+        new URL(
+          "../../../../../../../docs/database/extending-the-schema.mdx",
+          import.meta.url
+        )
+      ),
+      "utf-8"
+    );
+    const section = page.slice(page.indexOf("## The escape hatch"));
+    const escapeHatch = section.slice(0, section.indexOf("\n## ", 1));
+    expect(
+      AFTER_DRIZZLE_REFUSED_CONSTRUCTS.filter(
+        construct => !escapeHatch.includes(construct)
+      )
+    ).toEqual([]);
   });
 
   it("renders each new kind on each dialect", () => {

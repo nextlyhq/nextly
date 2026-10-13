@@ -279,6 +279,9 @@ export async function compileExtensionSchema(
     dialect: input.dialect,
     coreTableNames: CORE_TABLE_NAMES,
     entities,
+    // This schema is pushed, so a hook whose output moves between builds
+    // would plan a change on every push: refused at boot, naming it.
+    refuseNondeterministicHooks: true,
     pluginPrefixes: resolvePrefixes(input.plugins),
     // Who may index whose tables: hard and optional dependencies both count,
     // because both let the resolver order the pair and refuse an

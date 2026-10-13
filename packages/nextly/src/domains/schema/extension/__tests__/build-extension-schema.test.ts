@@ -7,7 +7,7 @@
  * declaration silently does nothing — and nothing fails, which is the worst
  * shape a bug can take here.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
@@ -1174,5 +1174,213 @@ describe("index names", () => {
     expect(
       built.specs.flatMap(spec => (spec.indexes ?? []).map(index => index.name))
     ).toEqual(["idx_a__things_label", "idx_widgets_label"]);
+  });
+});
+
+describe("a hook whose output moves between builds", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** A hook that puts the clock into a column default. */
+  const clockDefault = ({
+    schema,
+  }: {
+    schema: { addTable(table: unknown): void };
+  }) => {
+    schema.addTable(
+      defineTable("stamps", {
+        id: col.id(),
+        at: col.text({ default: String(Date.now()) }),
+      })
+    );
+  };
+
+  /** Each read of the clock a tick later, as two builds a moment apart see it. */
+  const tickingClock = () => {
+    let now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 1));
+  };
+
+  it("is refused, naming its owner and position", async () => {
+    tickingClock();
+    const input = {
+      ...base([
+        {
+          owner: { kind: "plugin", id: "a" },
+          extend: [
+            ({ schema }) => schema.addTable(tableFor("steady")),
+            clockDefault as never,
+          ],
+        },
+      ]),
+      refuseNondeterministicHooks: true,
+    } satisfies ExtensionSchemaInput;
+
+    let refused: unknown;
+    try {
+      await buildExtensionSchema(input);
+    } catch (error) {
+      refused = error;
+    }
+    expect(NextlyError.isValidation(refused)).toBe(true);
+    expect((refused as NextlyError).logContext).toMatchObject({
+      owner: "plugin:a",
+      hookIndex: 1,
+    });
+    expect(JSON.stringify((refused as NextlyError).publicData)).toContain(
+      "Schema hook 1 of plugin:a"
+    );
+  });
+
+  it("is refused when the table that moves is one the app adopts", async () => {
+    // Adopted tables reach the published schema too, so they are compared.
+    tickingClock();
+    let refused: unknown;
+    try {
+      await buildExtensionSchema({
+        ...base([], {
+          owner: { kind: "app" },
+          extend: [
+            ({ schema }) =>
+              schema.adoptTable(
+                defineTable("legacy_stamps", {
+                  id: col.id(),
+                  at: col.text({ default: String(Date.now()) }),
+                })
+              ),
+          ],
+        }),
+        refuseNondeterministicHooks: true,
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(NextlyError.isValidation(refused)).toBe(true);
+    expect((refused as NextlyError).logContext).toMatchObject({
+      owner: "app",
+      hookIndex: 0,
+    });
+  });
+
+  it("builds when every hook declares the same schema twice, running each twice", async () => {
+    // The control: the refusal above is the clock's, not the second run's.
+    let calls = 0;
+    const input = {
+      ...base([], {
+        owner: { kind: "app" },
+        extend: [
+          ({ schema }) => {
+            calls += 1;
+            schema.addTable(tableFor("steady"));
+          },
+        ],
+      }),
+      refuseNondeterministicHooks: true,
+    } satisfies ExtensionSchemaInput;
+
+    const built = await buildExtensionSchema(input);
+
+    expect(built.tables.map(table => table.name)).toContain("steady");
+    expect(calls).toBe(2);
+  });
+
+  it("runs each hook once, and judges nothing, when the caller does not ask", async () => {
+    tickingClock();
+    const built = await buildExtensionSchema(
+      base([
+        { owner: { kind: "plugin", id: "a" }, extend: [clockDefault as never] },
+      ])
+    );
+    expect(built.tables.map(table => table.name)).toContain("a__stamps");
+  });
+});
+
+describe("a NextlyError thrown inside a hook", () => {
+  it("keeps its kind and gains the hook's owner and position", async () => {
+    const input = base([], {
+      owner: { kind: "app" },
+      extend: [
+        ({ schema }) => schema.addTable(tableFor("once")),
+        () => {
+          throw NextlyError.validation({
+            errors: [{ path: "x", code: "INVALID", message: "no" }],
+          });
+        },
+      ],
+    });
+
+    let refused: unknown;
+    try {
+      await buildExtensionSchema(input);
+    } catch (error) {
+      refused = error;
+    }
+    expect(NextlyError.isValidation(refused)).toBe(true);
+    expect((refused as NextlyError).logContext).toMatchObject({
+      owner: "app",
+      hookIndex: 1,
+    });
+  });
+
+  it("recognises one from another copy of nextly by its brand", async () => {
+    // A plugin bundling its own nextly throws errors this copy's constructor
+    // did not make; they carry the shared brand, not this prototype.
+    const foreign = Object.assign(new Error("Validation failed."), {
+      [Symbol.for("nextly/NextlyError")]: true,
+      code: "VALIDATION_ERROR",
+      statusCode: 400,
+      publicMessage: "Validation failed.",
+      publicData: { errors: [{ path: "x", code: "INVALID", message: "no" }] },
+    });
+    expect(foreign instanceof NextlyError).toBe(false);
+
+    let refused: unknown;
+    try {
+      await buildExtensionSchema(
+        base([], {
+          owner: { kind: "app" },
+          extend: [
+            () => {
+              throw foreign;
+            },
+          ],
+        })
+      );
+    } catch (error) {
+      refused = error;
+    }
+    expect((refused as NextlyError).code).toBe("VALIDATION_ERROR");
+    expect((refused as NextlyError).publicData).toEqual(foreign.publicData);
+    expect((refused as NextlyError).logContext).toMatchObject({
+      owner: "app",
+      hookIndex: 0,
+    });
+  });
+
+  it("names the hook when the draft itself refuses what it declared", async () => {
+    // The draft names the owner in its path, never the position: two hooks
+    // adding one table, the second refused.
+    const input = base([
+      {
+        owner: { kind: "plugin", id: "a" },
+        extend: [
+          ({ schema }) => schema.addTable(tableFor("dup")),
+          ({ schema }) => schema.addTable(tableFor("dup")),
+        ],
+      },
+    ]);
+
+    let refused: unknown;
+    try {
+      await buildExtensionSchema(input);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(NextlyError);
+    expect((refused as NextlyError).logContext).toMatchObject({
+      owner: "plugin:a",
+      hookIndex: 1,
+    });
   });
 });
