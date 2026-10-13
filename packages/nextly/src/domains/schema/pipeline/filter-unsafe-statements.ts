@@ -141,8 +141,8 @@ function inferOwnerTableFromObjectName(
  * statements will run on, any statement that drops one is refused, whatever
  * the desired set says. Dev push reconciles what the CONFIG describes, and a
  * plugin removed from config is exactly the moment its tables' data is most
- * at risk — removing its tables is a decision for a migration, not a side
- * effect of a reload. The question is
+ * at risk — removing its tables is a decision for its migrations or
+ * `nextly plugins uninstall`, not a side effect of a reload. The question is
  * answered by `dropsPluginMigratedTable`, the reader the fast path and the
  * migration guard use, so both push routes give it the same answer: that
  * includes withholding a statement the reader cannot read. Absent (or empty)
@@ -209,7 +209,7 @@ function pluginTableVerdict(
     return undefined;
   }
   console.warn(
-    `[Nextly schema] Blocked a statement that drops a table whose owner row names a plugin migration stream, or that the drop reader cannot read: ${stmt}. Plugin tables are removed by the plugin's migrations, never by dev push.`
+    `[Nextly schema] Blocked a statement that drops a table whose owner row names a plugin migration stream, or that the drop reader cannot read: ${stmt}. Plugin tables are removed by the plugin's migrations or \`nextly plugins uninstall\`, never by dev push.`
   );
   return false;
 }

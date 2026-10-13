@@ -19,11 +19,14 @@
  * @module plugins/database/plugin-database
  * @since 1.0.0
  */
-import type { AnyColumn, AnyRelations, SQL } from "drizzle-orm";
-import { eq } from "drizzle-orm";
+import type { AnyColumn, AnyRelations, SQL, Table } from "drizzle-orm";
+import { eq, getColumns, inArray } from "drizzle-orm";
 
+import { isMissingNamedColumnError } from "../../database/missing-column";
 import type { SupportedDialect } from "../../database/schema-registry";
+import { toDrizzleTable } from "../../domains/schema/extension/compile";
 import type {
+  ColumnBuilder,
   GeneratedIdKeys,
   InferInsert,
   InferRow,
@@ -35,8 +38,10 @@ import { uuidV7 } from "../../utils/uuid-v7";
 import { transactionScope } from "../transaction-scope";
 
 import {
+  assertContributedColumnAccess,
   assertTableAccess,
   canAccessTable,
+  type ContributedColumn,
   type TableAccessRules,
 } from "./access";
 
@@ -96,6 +101,16 @@ export interface PluginDatabaseDeps {
    * (see `transactionScope`).
    */
   track?: <R>(work: PromiseLike<R>) => Promise<R>;
+  /**
+   * Columns contributed to tables `ctx.db` has no owner for — entity and
+   * extendable core tables — keyed by table SQL name, with who contributed
+   * each. Read per call. Absent, nothing is reachable through `contributed`:
+   * a surface that cannot say who contributed a column refuses rather than
+   * guesses.
+   */
+  contributions?: () => ReadonlyMap<string, readonly ContributedColumn[]>;
+  /** The runtime Drizzle table of an entity or core table, by SQL name. */
+  entityTable?: (tableName: string) => unknown;
 }
 
 /**
@@ -451,7 +466,8 @@ export type PluginInsert<T> =
 
 /**
  * @experimental `ctx.db`: typed, owner-checked access to the tables a plugin
- * declared and its dependencies' tables, with one behaviour on every dialect. Every method checks the caller's reach before it
+ * declared, its dependencies' tables and the columns it contributed, with one
+ * behaviour on every dialect. Every method checks the caller's reach before it
  * builds a query. The untyped Drizzle builder is at `ctx.db.raw`.
  */
 export interface PluginDatabase {
@@ -470,6 +486,18 @@ export interface PluginDatabase {
     set: Partial<InferInsert<T>>
   ): PortableWhere<number>;
   delete<T extends TableDefinition>(definition: T): PortableWhere<number>;
+  /**
+   * The columns this caller contributed to a table it does not own
+   * (`schema.extendTable(table, { columns })`) — a collection, Single,
+   * field-group or extendable core table, a plugin's table for the app, or a
+   * dependency's table — addressed by the table's SQL name. Pass the same
+   * `columns` object the contribution declared; its keys are the columns read
+   * and written, and each must be one this caller contributed to that table.
+   */
+  contributed<TColumns extends Record<string, ColumnBuilder>>(
+    tableName: string,
+    columns: TColumns
+  ): ContributedColumns<TColumns>;
   /**
    * Run `fn` in one transaction: it commits when `fn` resolves and rolls back
    * when it throws, and what `fn` threw reaches the caller as thrown. `tx` is
@@ -509,6 +537,42 @@ export interface RelationalQuery {
 
 /** The relational-query namespace, keyed by final table name. */
 export type RelationalQueries = Record<string, RelationalQuery>;
+
+/**
+ * A row's key on a table reached through `contributed`: the value of the
+ * table's single-column primary key, whatever that column is called. A
+ * collection, Single, field-group or core table keys rows by a string id; a
+ * plugin's table may key them by a `col.serial()` number.
+ */
+export type ContributedKey = string | number;
+
+/**
+ * A row of contributed columns: the row's key, as `id` whatever the key column
+ * is named, plus the caller's columns.
+ */
+export type ContributedRow<TColumns extends Record<string, ColumnBuilder>> = {
+  id: ContributedKey;
+} & InferRow<TableDefinition<string, TColumns>>;
+
+/**
+ * The columns a caller contributed to one entity or core table, keyed by the
+ * row's id. Reads and writes those columns only: the entity's own columns and
+ * rows belong to the entry API, so there is no insert, no delete and no
+ * free-form predicate here.
+ */
+export interface ContributedColumns<
+  TColumns extends Record<string, ColumnBuilder>,
+> {
+  /** The caller's columns for one row, or `null` when no row has that id. */
+  get(id: ContributedKey): Promise<ContributedRow<TColumns> | null>;
+  /** The caller's columns for each row that exists among `ids`. */
+  getMany(ids: readonly ContributedKey[]): Promise<ContributedRow<TColumns>[]>;
+  /** Write some of the caller's columns on one row; resolves to rows changed. */
+  set(
+    id: ContributedKey,
+    values: Partial<InferInsert<TableDefinition<string, TColumns>>>
+  ): Promise<number>;
+}
 
 /**
  * @experimental The handle `ctx.db.transaction` passes its work: the same
@@ -1054,6 +1118,78 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
       return { where: condition => track(run(condition)) };
     },
 
+    contributed(tableName, columns) {
+      const declared = Object.keys(columns);
+      // Each statement is handed to `track`, as `update` and `delete` are, so
+      // a transaction waits for one its callback started and never awaited.
+      const readMany = async (
+        ids: Parameters<ContributedColumns<typeof columns>["getMany"]>[0]
+      ) => {
+        const reach = contributedReach(tableName, declared, deps);
+        if (ids.length === 0) return [];
+        const fields: Record<string, unknown> = { id: reach.key };
+        for (const granted of reach.columns) {
+          fields[granted.key] = granted.column;
+        }
+        const db = deps.db() as {
+          select: (fields: unknown) => {
+            from: (table: unknown) => {
+              where: (c: SQL) => Promise<unknown>;
+            };
+          };
+        };
+        const rows = await whenColumnsExist(reach, () =>
+          db
+            .select(fields)
+            .from(reach.table)
+            .where(inArray(reach.key as never, [...ids]))
+        );
+        return rows as never;
+      };
+      const write = async (
+        id: Parameters<ContributedColumns<typeof columns>["set"]>[0],
+        values: Parameters<ContributedColumns<typeof columns>["set"]>[1]
+      ): Promise<number> => {
+        const named = Object.entries(values as Record<string, unknown>)
+          .filter(([, value]) => value !== undefined)
+          .map(([key]) => key);
+        if (named.length === 0) {
+          // A write that sets nothing changes nothing, and sends nothing. It
+          // is still judged on the columns the handle was opened for, so a
+          // handle the caller may not use is refused as a read of it is.
+          contributedReach(tableName, declared, deps);
+          return 0;
+        }
+        // The write is judged on what it names, against the same rule the
+        // read's selection meets, before anything is sent.
+        const reach = contributedReach(tableName, named, deps);
+        const assignments: Record<string, unknown> = {};
+        for (const granted of reach.columns) {
+          assignments[granted.property] = (values as Record<string, unknown>)[
+            granted.key
+          ];
+        }
+        const result = await whenColumnsExist(reach, () =>
+          (deps.db() as AnyDb)
+            .update(reach.table)
+            .set(assignments)
+            .where(eq(reach.key as never, id as never))
+        );
+        return affectedRows(result);
+      };
+      // Closure-bound rather than methods reading `this`, so a destructured
+      // `const { get } = ctx.db.contributed(...)` works like the object form.
+      const getMany: ContributedColumns<typeof columns>["getMany"] = ids =>
+        track(readMany(ids));
+      const get: ContributedColumns<typeof columns>["get"] = async id => {
+        const [row] = await getMany([id]);
+        return row ?? null;
+      };
+      const set: ContributedColumns<typeof columns>["set"] = (id, values) =>
+        track(write(id, values));
+      return { get, getMany, set };
+    },
+
     async transaction(fn) {
       return deps.transaction(async tx => {
         // The same surface, reading the transaction's handles. Built rather
@@ -1203,6 +1339,152 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
   };
 
   return surface;
+}
+
+/**
+ * What a contributed-column call may touch: a handle on the table holding the
+ * row's key and the caller's columns among `keys` — or a refusal, before any
+ * query is built.
+ *
+ * Resolved per call, like every other method here, so a reload that removes
+ * a contribution stops it being reachable on the next call.
+ *
+ * The handle is built from the compiled column specs rather than looked up on
+ * the table's runtime definition. A collection's runtime table carries its
+ * contributions, but a core table's is the static one its bundle declares and
+ * carries none, so a lookup there found no column to read. The runtime table
+ * is consulted only for the name of its key. The handle declares nothing but
+ * those columns, so the statements it builds name nothing else.
+ */
+function contributedReach(
+  tableName: string,
+  keys: readonly string[],
+  deps: PluginDatabaseDeps
+): {
+  tableName: string;
+  table: unknown;
+  key: unknown;
+  columns: { key: string; name: string; property: string; column: unknown }[];
+} {
+  const granted = assertContributedColumnAccess(
+    tableName,
+    keys,
+    rulesOf(deps),
+    deps.contributions?.() ?? new Map()
+  );
+  // A row comes back with its key as `id`, so a column the caller authored
+  // under `id` would be overwritten by it in every read.
+  if (granted.some(column => column.key === "id")) {
+    throw NextlyError.invalidInput({
+      message: `A row read through ctx.db.contributed carries its key as "id", so the column contributed to "${tableName}" under the key "id" cannot be reached through it. Declare it under another key.`,
+      logContext: { reason: "contributed-column-keyed-id", table: tableName },
+    });
+  }
+  const runtime = deps.entityTable?.(tableName);
+  if (runtime === undefined || runtime === null) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "contributed table has no runtime table",
+        table: tableName,
+      },
+    });
+  }
+  const primary = Object.values(getColumns(runtime as Table)).find(
+    column => column.primary
+  );
+  if (primary === undefined) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "contributed table has no single-column primary key",
+        table: tableName,
+      },
+    });
+  }
+  const handle = toDrizzleTable(
+    {
+      name: tableName,
+      authored: tableName,
+      owner: { kind: "app" },
+      indexes: [],
+      columns: [
+        {
+          // Declared with the key column's kind so the handle describes the
+          // key as it is. The statements do not depend on it: each driver
+          // sends the parameter untyped and the database compares it with
+          // the column's own type, which a text declaration over an integer
+          // key was measured not to change on SQLite, PostgreSQL or MySQL.
+          key: ROW_KEY_PROPERTY,
+          name: primary.name,
+          kind: primary.dataType.startsWith("number") ? "integer" : "text",
+          nullable: false,
+          primaryKey: true,
+        },
+        // Each under a property of the handle's own, never its authored key:
+        // a column authored under the row key's property would replace the
+        // key on the handle, and every statement would then match rows by
+        // the caller's column instead of by id.
+        ...granted.map((column, at) => ({
+          ...column.spec,
+          key: contributedProperty(at),
+        })),
+      ],
+    },
+    deps.dialect
+  ) as Table;
+  const built = getColumns(handle);
+  return {
+    tableName,
+    table: handle,
+    key: built[ROW_KEY_PROPERTY],
+    columns: granted.map((column, at) => ({
+      key: column.key,
+      name: column.name,
+      property: contributedProperty(at),
+      column: built[contributedProperty(at)],
+    })),
+  };
+}
+
+/**
+ * The properties a contributed-column handle holds its columns under. The
+ * handle is built for one statement and never seen by the caller, so none
+ * is an authored key, and the row key's cannot meet a column's.
+ */
+const ROW_KEY_PROPERTY = "rowKey";
+const contributedProperty = (at: number): string => `column${String(at)}`;
+
+/**
+ * Run a contributed-column statement, naming a column the database does not
+ * have yet rather than surfacing the driver's error.
+ *
+ * A contribution to a core or entity table is created by the app's
+ * migrations, so between declaring it and applying the migration that adds
+ * it, the column is in the compiled schema and not in the database. That is a
+ * state the caller can act on — apply the migration — and it is reported as
+ * one, naming the column and the table.
+ */
+async function whenColumnsExist<T>(
+  reach: { tableName: string; columns: { name: string }[] },
+  run: () => Promise<T>
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    const missing = reach.columns.find(column =>
+      isMissingNamedColumnError(error, column.name)
+    );
+    if (missing === undefined) throw error;
+    throw NextlyError.conflict({
+      reason: "state",
+      message: `The column "${missing.name}" contributed to "${reach.tableName}" is not in the database yet. Apply the app's migration that adds it (\`nextly migrate:create\`, then \`nextly migrate\`).`,
+      cause: error instanceof Error ? error : undefined,
+      logContext: {
+        reason: "contributed-column-not-migrated",
+        table: reach.tableName,
+        column: missing.name,
+      },
+    });
+  }
 }
 
 /**

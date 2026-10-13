@@ -36,11 +36,13 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { LoadConfigResult } from "../cli/utils/config-loader";
+import type { SchemaRegistry } from "../database/schema-registry";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
   PluginMigrationSet,
   pluginMigrationArgs,
 } from "../domains/schema/migrate/plugin/run-plugin-migrations";
+import { NextlyError } from "../errors";
 
 import { reloadDynamicTables } from "./reload-dynamic-tables";
 
@@ -98,8 +100,12 @@ export async function runBootTimeApplyIfDev(opts?: {
     // Step 2: Apply code-first schema changes
     const { reloadNextlyConfig } = await import("./reload-config");
     await reloadNextlyConfig();
+
+    // Step 3: every relation a declared table names resolves, now that the
+    // steps above registered what migrations created.
+    await assertRelationsResolveAfterApply();
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = describeError(err);
     // NOTE: Errors are logged but don't block dev server startup. This is intentional:
     // - Dev boot should remain resilient even if migrations/metadata have issues
     // - The app still works against the live DB schema (code-first edits won't apply)
@@ -119,6 +125,71 @@ export async function runBootTimeApplyIfDev(opts?: {
         `Set NEXTLY_BOOT_APPLY_FAIL_LOUDLY=1 for full error details.`
     );
   }
+}
+
+/**
+ * Ask the schema registry whether every relation a declared table names
+ * resolves.
+ *
+ * Development's place for the check `registerServices` makes everywhere else
+ * (`assertBootRelationsResolve`), which stands aside when this apply runs: a
+ * Builder-made table that arrives through a migration is registered only by
+ * Step 1.6, so asked any earlier a relation to it is refused on every fresh
+ * clone, by a boot that then never reaches the step that would register it.
+ * Reported like every other step here, without stopping the dev server.
+ */
+async function assertRelationsResolveAfterApply(): Promise<void> {
+  const { container } = await import("../di/container");
+  if (!container.has("schemaRegistry")) return;
+  container.get<SchemaRegistry>("schemaRegistry").assertRelationsResolve();
+}
+
+/**
+ * Ask the schema registry whether every relation resolves, before plugins
+ * initialise: refuse where the boot refuses, and report where development
+ * carries on.
+ *
+ * In development the boot's schema apply runs after this and may register
+ * the table a relation names (a Builder-made one arriving through a
+ * migration), so a relation not resolved yet is reported, not refused, and
+ * the apply asks again (`assertRelationsResolve` above). Either way the
+ * registry keeps the relations that do resolve, so a plugin's `init` that
+ * queries relationally reaches every other relation rather than failing on
+ * the one already named.
+ */
+export function checkRelationsBeforePlugins(
+  registry: Pick<SchemaRegistry, "assertRelationsResolve"> | undefined,
+  how: { refuse: boolean; warn: (message: string) => void }
+): void {
+  if (registry === undefined) return;
+  if (how.refuse) {
+    registry.assertRelationsResolve();
+    return;
+  }
+  try {
+    registry.assertRelationsResolve();
+  } catch (error) {
+    if (
+      !NextlyError.is(error) ||
+      error.code !== "NEXTLY_SCHEMA_RELATION_UNRESOLVED"
+    ) {
+      throw error;
+    }
+    how.warn(
+      `[Nextly] ${describeError(error)} The development boot's schema apply may yet register the table; it asks again once it has run.`
+    );
+  }
+}
+
+/**
+ * The error's message, with the detail a `NextlyError` keeps in `logMessage`:
+ * its message is the generic public one, which names nothing to fix.
+ */
+function describeError(err: unknown): string {
+  if (NextlyError.is(err) && err.logMessage !== undefined) {
+    return `${err.message} ${err.logMessage}`;
+  }
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**

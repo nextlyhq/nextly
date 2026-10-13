@@ -43,6 +43,10 @@ async function boot(): Promise<{
     collections: [
       defineCollection({
         slug: "authors",
+        // Any caller may read the row, so what the response withholds is the
+        // protected FIELD alone. Without a rule a caller holding no grant on
+        // `authors` is refused the whole row, which leaves no field to redact.
+        access: { read: () => true },
         fields: [
           text({ name: "name" }),
           checkbox({ name: "suspended", access: { read: () => false } }),
@@ -95,8 +99,11 @@ describe("single write response — related-row field access (integration)", () 
     // into the first hop is only half the answer if it stops there.
     current = await createTestNextly({
       collections: [
+        // Both hops declare a rule any caller passes, so each row is readable
+        // and only the protected field at the far end is withheld.
         defineCollection({
           slug: "orgs",
+          access: { read: () => true },
           fields: [
             text({ name: "name" }),
             checkbox({ name: "blocked", access: { read: () => false } }),
@@ -104,6 +111,7 @@ describe("single write response — related-row field access (integration)", () 
         }),
         defineCollection({
           slug: "authors",
+          access: { read: () => true },
           fields: [
             text({ name: "name" }),
             relationship({ name: "org", relationTo: "orgs" }),

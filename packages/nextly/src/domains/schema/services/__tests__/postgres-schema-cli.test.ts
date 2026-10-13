@@ -27,7 +27,7 @@ afterEach(() => {
 describe("the schema a CLI command resolves in", () => {
   it("refuses a schema other than public when the config is loaded", () => {
     // What `loadConfig` does on every command that reads nextly.config.ts, so
-    // `migrate`, `migrate:create` and `migrate:status` refuse exactly as the
+    // `migrate`, `migrate:create` and `plugins install` refuse exactly as the
     // server does: the push cannot yet create tables anywhere but `public`.
     expect(() =>
       setActivePostgresSchema(resolvePostgresSchema("cms", "postgresql"))

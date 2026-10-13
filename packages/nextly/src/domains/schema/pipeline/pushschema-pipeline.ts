@@ -1298,8 +1298,9 @@ export class PushSchemaPipeline {
         // find; the destructive scan and the lock filter below still apply to
         // both routes.
         // Plugin-migrated tables are never dropped by dev push, whatever the
-        // desired set says: their removal is a migration's decision, not a
-        // reload's side effect. The kit route enforces this inside
+        // desired set says: their removal is a decision for the plugin's
+        // migrations or `nextly plugins uninstall`, not a reload's side
+        // effect. The kit route enforces this inside
         // filterUnsafeStatements; the fast path bypasses that filter (its
         // statements come from approved operations), so it gets the same
         // refusal applied directly to its drops.
