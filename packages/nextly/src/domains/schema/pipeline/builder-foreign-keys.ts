@@ -56,13 +56,20 @@ export function withBuilderForeignKeys(
   const builder = new DynamicCollectionSchemaService(undefined, dialect);
   const created: ForeignKeySpec[] = [];
   for (const field of collection.fields as unknown as FieldDefinition[]) {
-    const fk = builder.relationshipForeignKey(spec.name, field);
-    if (fk === null) continue;
-    const column = lower(fk.columns[0]);
+    // Read first without judging the actions: a relationship whose column
+    // already exists keeps whatever it has, and a combination an older save
+    // accepted (a required relationship that nulls on delete) must not block
+    // every later save of the collection over a key nothing is creating.
+    const described = builder.relationshipForeignKey(spec.name, field, false);
+    if (described === null) continue;
+    const column = lower(described.columns[0]);
     if (!columns.has(column) || liveColumns.has(column) || keyed.has(column)) {
       continue;
     }
-    created.push(fk);
+    // A key this push creates is judged: what a save asks for has to be
+    // possible, exactly as when the Builder creates the table.
+    const fk = builder.relationshipForeignKey(spec.name, field);
+    if (fk !== null) created.push(fk);
   }
 
   return { ...spec, foreignKeys: [...kept, ...created] };

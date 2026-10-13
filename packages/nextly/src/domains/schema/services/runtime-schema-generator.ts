@@ -59,6 +59,7 @@ import {
   blob as sqliteBlob,
 } from "drizzle-orm/sqlite-core";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { sqliteTimestamp } from "../../../schemas/_internal/sqlite-timestamp";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
@@ -433,9 +434,30 @@ function sqliteForeignKeyOf(
       fk.referencesColumns.map(name => [name, sqliteText(name)])
     )
   ) as unknown as Record<string, unknown>;
+  // The built record is keyed by each field's NAME (`leadAuthor`), the spec
+  // names the column (`lead_author`), so a column is found by the SQL name it
+  // was built with. A key whose column is not on the table is refused rather
+  // than handed over as undefined, which drizzle-kit would render as a key
+  // over nothing.
+  const bySqlName = new Map(
+    Object.values(built).map(column => [
+      (column as { name: string }).name,
+      column,
+    ])
+  );
+  const columns = fk.columns.map(name => bySqlName.get(name));
+  if (columns.includes(undefined)) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "sqlite-runtime-foreign-key-column-missing",
+        key: fk.name,
+        columns: fk.columns,
+      },
+    });
+  }
   return sqliteForeignKey({
     name: fk.name,
-    columns: fk.columns.map(name => built[name]),
+    columns,
     foreignColumns: fk.referencesColumns.map(name => referenced[name]),
   } as never)
     .onDelete(fk.onDelete)

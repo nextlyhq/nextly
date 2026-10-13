@@ -55,6 +55,7 @@ import {
 } from "../../schema/services/field-column-descriptor";
 import {
   columnTypeIsIndexable,
+  foreignKeyNameForColumns,
   indexNameForColumn,
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
@@ -568,12 +569,15 @@ export class DynamicCollectionSchemaService {
    * existing table. A many-to-one, one-to-one or one-to-many with a target
    * stores the target's id in a column of its own, keyed to the target table's
    * `id`; a many-to-many lives in a junction table instead. The actions are
-   * the ones `relationOnDelete` and `relationOnUpdate` resolve, refusing the
-   * same impossible pairs, spelled as the diff spells them.
+   * the ones `relationOnDelete` and `relationOnUpdate` resolve, spelled as the
+   * diff spells them. With `refuse` (the default) the same impossible pairs
+   * are refused; a caller only reading what an existing relationship already
+   * is passes `false`, as `relationOnDelete` is read for a stored definition.
    */
   relationshipForeignKey(
     tableName: string,
-    field: FieldDefinition
+    field: FieldDefinition,
+    refuse = true
   ): ForeignKeySpec | null {
     if (field.type !== "relationship" || !field.options?.target) return null;
     // Many-to-one when unstated, as the Builder creates it.
@@ -587,19 +591,29 @@ export class DynamicCollectionSchemaService {
     }
     const column = toSnakeCase(field.name);
     return {
-      name: `fk_${tableName}_${column}`,
+      name: this.relationshipKeyName(tableName, column),
       columns: [column],
       referencesTable: `dc_${field.options.target}`,
       referencesColumns: ["id"],
       // Through the SQL spelling and back, so an action the mapping does not
       // know falls back exactly as the rendered constraint does.
       onDelete: this.mapOnDeleteAction(
-        this.relationOnDelete(field)
+        this.relationOnDelete(field, refuse)
       ).toLowerCase() as ReferentialAction,
       onUpdate: this.mapOnUpdateAction(
-        this.relationOnUpdate(field)
+        this.relationOnUpdate(field, refuse)
       ).toLowerCase() as ReferentialAction,
     };
+  }
+
+  /**
+   * The name of the key this class gives a relationship's column, bounded as
+   * every derived identifier is. `fk_<table>_<column>` unchanged while it
+   * fits; past 63 characters it is shortened with a hash, where MySQL would
+   * refuse it at 65 and PostgreSQL would cut it off at 64.
+   */
+  private relationshipKeyName(tableName: string, column: string): string {
+    return foreignKeyNameForColumns(tableName, [column]);
   }
 
   /**
@@ -1454,7 +1468,7 @@ ${allColumnDefs.join(",\n")}
             const onDelete = this.relationOnDelete(field);
             const onUpdate = this.relationOnUpdate(field);
             statements.push(
-              `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(`fk_${tableName}_${addColName}`)} FOREIGN KEY (${this.quoteIdentifier(addColName)}) REFERENCES ${this.quoteIdentifier(targetTable)}(${this.quoteIdentifier("id")}) ON DELETE ${this.mapOnDeleteAction(onDelete)} ON UPDATE ${this.mapOnUpdateAction(onUpdate)};`
+              `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(this.relationshipKeyName(tableName, addColName))} FOREIGN KEY (${this.quoteIdentifier(addColName)}) REFERENCES ${this.quoteIdentifier(targetTable)}(${this.quoteIdentifier("id")}) ON DELETE ${this.mapOnDeleteAction(onDelete)} ON UPDATE ${this.mapOnUpdateAction(onUpdate)};`
             );
           }
 
@@ -2005,7 +2019,7 @@ ${allColumnDefs.join(",\n")}
     const op = {
       type: "change_foreign_key_action",
       tableName,
-      constraintName: `fk_${tableName}_${columnName}`,
+      constraintName: this.relationshipKeyName(tableName, columnName),
       columnName,
       referencesTable: `dc_${target}`,
       referencesColumn: "id",
@@ -2420,7 +2434,9 @@ ${allColumnDefs.join(",\n")}
       const uniqueName = this.plannedUniqueIndexName(tableName, field);
       if (uniqueName !== null) indexNames.add(uniqueName);
       if (field.type === "relationship" && field.options?.target) {
-        foreignKeysByColumn.set(column, [`fk_${tableName}_${column}`]);
+        foreignKeysByColumn.set(column, [
+          this.relationshipKeyName(tableName, column),
+        ]);
       }
     }
     return { indexNames, foreignKeysByColumn };
