@@ -18,8 +18,8 @@
 //     change_column_default op; we'd rather emit a false-positive op than
 //     silently swallow a real one.
 //
-// MySQL surfaces two more, both reported against the schema this project
-// itself writes:
+// MySQL surfaces more, each reported against the schema this project itself
+// writes:
 //   - `now()` and `CURRENT_TIMESTAMP` are synonyms (in PostgreSQL too), so a
 //     timestamp column reported one way and authored the other looked changed.
 //     They collapse into `now()`, the form already canonical here.
@@ -31,6 +31,9 @@
 //   - A hex string default, `(CONVERT(X'7b7d' USING utf8mb4))`, which is how a
 //     TEXT or JSON column's default is written because MySQL takes only an
 //     expression there, is reported back as `convert(0x7b7d using utf8mb4)`.
+//   - A string default written in parentheses, `('none')`, as drizzle-kit
+//     writes every SQL default, is an expression to MySQL and is reported back
+//     as `(_utf8mb4\'none\')`, where the desired side holds `'none'`.
 //
 // And one both servers share: a NUMERIC column's default is reported in the
 // server's own spelling of the number. PostgreSQL quotes a negative one and
@@ -110,6 +113,10 @@ export function normalizeDefault(
   // Step 3b: MySQL's report of a hex string default, in the one spelling the
   // desired side writes it with.
   normalised = canonicalHexConvert(normalised);
+
+  // Step 3c: MySQL's report of a string default written as an expression,
+  // reduced to the value the literal on the desired side reduces to.
+  normalised = mysqlExpressionString(normalised);
 
   // Step 4: lowercase the built-in keywords, which the dialects report back in
   // whatever case they please — MySQL renders a DATETIME default as
@@ -391,6 +398,31 @@ function isCompleteLiteral(value: string): boolean {
   // Boolean keyword.
   if (value === "true" || value === "false") return true;
   return false;
+}
+
+/**
+ * A string MySQL reports back as an expression: `_utf8mb4\'none\'`.
+ *
+ * A default written in parentheses, `DEFAULT ('none')`, is an expression to
+ * MySQL, and `information_schema` reports it with the charset introducer the
+ * server added and its quotes backslash-escaped. drizzle-kit writes every SQL
+ * default in parentheses, so a string default on a table it creates comes back
+ * like this, while the desired side holds the literal `'none'`. Reduced here to
+ * what `unquoteStringLiteral` reduces that literal to: the bare value, or the
+ * quoted one when the value reads as an expression.
+ *
+ * Only a value holding no backslash and no quote is reduced. Inside one, what
+ * the escapes mean depends on the server's `sql_mode` (`NO_BACKSLASH_ESCAPES`
+ * makes a backslash an ordinary character), so such a value is left as
+ * reported and the diff shows a change rather than guessing.
+ */
+const MYSQL_EXPRESSION_STRING = /^_[a-z0-9]+\\'([^'\\]*)\\'$/i;
+
+function mysqlExpressionString(expr: string): string {
+  const match = expr.trim().match(MYSQL_EXPRESSION_STRING);
+  if (!match) return expr;
+  const value = match[1];
+  return EXPRESSION_SHAPED.test(value) ? `'${value}'` : value;
 }
 
 /**
