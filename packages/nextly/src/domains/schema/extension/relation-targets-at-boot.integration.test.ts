@@ -13,6 +13,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createAdapter } from "../../../database/factory";
+import type { SchemaRegistry } from "../../../database/schema-registry";
+import { container } from "../../../di/container";
 import { ensureFirstRunSetup } from "../../../init/first-run";
 import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
 import { definePlugin } from "../../../plugins/plugin-context";
@@ -56,7 +58,10 @@ function pluginRelatingTo(targetTable: string) {
  */
 async function withBuilderProducts() {
   process.env.DB_DIALECT = "sqlite";
-  const adapter = await createAdapter({ type: "sqlite", memory: true });
+  const adapter = await createAdapter({
+    type: "sqlite",
+    memory: true,
+  } as Parameters<typeof createAdapter>[0]);
   await ensureFirstRunSetup({ adapter, logger: silentLogger });
   await seedBuilderCollection(adapter, {
     slug: "products",
@@ -79,14 +84,9 @@ describe("a declared table's relation targets, at boot", () => {
       plugins: [pluginRelatingTo("dc_products")],
     });
     // Assembled at boot and kept: the relation is there for the first query.
-    const relations = current.getService("schemaRegistry") as {
-      getRelations(): Record<
-        string,
-        { relations: Record<string, { targetTableName?: string }> }
-      >;
-    };
+    const registry = container.get<SchemaRegistry>("schemaRegistry");
     expect(
-      relations.getRelations().rt__links?.relations.product?.targetTableName
+      registry.getRelations().rt__links?.relations.product?.targetTableName
     ).toBe("dc_products");
   });
 
