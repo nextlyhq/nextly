@@ -8,20 +8,28 @@
  * treats one need a faithful copy of the old signer, and it lives here once so
  * every such test presents the same shape: the claims as given, plus the
  * `iat`, `exp` and `jti` the old signer always set.
+ *
+ * Everything that decides what those tokens look like is written out here
+ * rather than imported from the current code: the algorithm, the key the
+ * secret becomes, and the pending marker. The tokens in circulation keep what
+ * they were minted with, so a fixture that followed the current signer or
+ * claims would move with them, and a change that broke real old tokens would
+ * leave these tests passing.
  */
 import { randomBytes } from "node:crypto";
 
 import { SignJWT } from "jose";
 
-import { PENDING_AUTH_TYP } from "../claims";
-import { secretToKey } from "../sign";
-
-/**
- * The algorithm those tokens were signed with, written out rather than taken
- * from the current signer: the tokens in circulation keep the algorithm they
- * were minted with, whatever the signer moves to later.
- */
+/** The algorithm those tokens were signed with. */
 const UNMARKED_ALGORITHM = "HS256";
+
+/** The claim value that marked one of them as a pending-auth token. */
+const UNMARKED_PENDING_MARKER = "pending-auth";
+
+/** The key those tokens were signed with: the secret's UTF-8 bytes. */
+function unmarkedKey(secret: string): Uint8Array {
+  return new TextEncoder().encode(secret);
+}
 
 /** Sign `claims` with a header that names the algorithm and nothing else. */
 export async function signUnmarkedToken(
@@ -35,7 +43,7 @@ export async function signUnmarkedToken(
     .setIssuedAt(issuedAt)
     .setExpirationTime(issuedAt + ttlSeconds)
     .setJti(randomBytes(16).toString("hex"))
-    .sign(secretToKey(secret));
+    .sign(unmarkedKey(secret));
 }
 
 /** The claims the old `mintPendingToken` signed, apart from the pending marker. */
@@ -53,7 +61,7 @@ export function signUnmarkedPendingToken(
   secret: string
 ): Promise<string> {
   return signUnmarkedToken(
-    { typ: PENDING_AUTH_TYP, ...unmarkedPendingClaims(userId) },
+    { typ: UNMARKED_PENDING_MARKER, ...unmarkedPendingClaims(userId) },
     secret
   );
 }

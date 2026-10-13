@@ -297,6 +297,46 @@ describe("normalizeDefault — MySQL equivalences", () => {
     expect(normalizeDefault("now")).toBe("now");
   });
 
+  // A string default written in parentheses, as drizzle-kit writes every SQL
+  // default, is an expression to MySQL, reported with the charset introducer
+  // and backslash-escaped quotes. The literal the desired side holds denotes
+  // the same value.
+  it("reads a string default MySQL reports as an expression as the literal", () => {
+    expect(normalizeDefault("(_utf8mb4\\'none\\')")).toBe(
+      normalizeDefault("'none'")
+    );
+    expect(normalizeDefault("(_latin1\\'draft\\')")).toBe(
+      normalizeDefault("'draft'")
+    );
+    expect(normalizeDefault("(_utf8mb4\\'\\')")).toBe(normalizeDefault("''"));
+    // A different value still differs.
+    expect(normalizeDefault("(_utf8mb4\\'none\\')")).not.toBe(
+      normalizeDefault("'other'")
+    );
+  });
+
+  it("keeps a string that reads as an expression apart from the expression", () => {
+    expect(normalizeDefault("(_utf8mb4\\'now()\\')")).toBe(
+      normalizeDefault("'now()'")
+    );
+    expect(normalizeDefault("(_utf8mb4\\'now()\\')")).not.toBe(
+      normalizeDefault("now()")
+    );
+    expect(normalizeDefault("(_utf8mb4\\'1.5\\')")).toBe(
+      normalizeDefault("'1.5'")
+    );
+  });
+
+  it("leaves a reported string holding an escape as reported", () => {
+    // What the escape means depends on the server's sql_mode, so the value
+    // is not guessed, and the diff shows a change.
+    const reported = "(_utf8mb4\\'it\\\\\\'s\\')";
+    expect(normalizeDefault(reported)).not.toBe(normalizeDefault("'it''s'"));
+    expect(normalizeDefault("_utf8mb4\\'a\\\\b\\'")).toBe(
+      "_utf8mb4\\'a\\\\b\\'"
+    );
+  });
+
   it("reads 1 and 0 as booleans on a boolean column", () => {
     // MySQL booleans ARE tinyint(1), so a boolean default comes back as 1/0
     // where the schema authored true/false.
