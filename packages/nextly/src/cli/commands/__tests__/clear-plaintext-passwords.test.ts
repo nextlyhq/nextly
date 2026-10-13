@@ -56,7 +56,7 @@ describe("users:clear-plaintext-passwords", () => {
     expect(clear).not.toHaveBeenCalled();
     expect(printed.join("\n")).toContain("2 account(s)");
     expect(printed.join("\n")).toContain("Nothing was changed");
-    expect(printed.join("\n")).toContain("passes a passwordHasher");
+    expect(printed.join("\n")).toContain("a passwordHasher to getNextly");
   });
 
   it("refuses --apply without the hasher confirmation, before reading anything", async () => {
@@ -124,6 +124,8 @@ describe("users:clear-plaintext-passwords", () => {
     expect(plainTextPasswordNotice(3)).toContain(
       "nextly users:clear-plaintext-passwords"
     );
-    expect(plainTextPasswordNotice(3)).toContain("passes a passwordHasher");
+    expect(plainTextPasswordNotice(3)).toContain(
+      "a passwordHasher to getNextly"
+    );
   });
 });

@@ -42,7 +42,7 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished).
 - `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
 - `nextly migrate:down` -- `--step <n>` (roll back the last N migrations), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--plugin <name>` (roll back that plugin's modules instead of the app's files), `--force-unlock`.
-- `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions; without it the command only counts them), `--confirm-default-hasher` (required with `--apply`: your statement that the app passes no `passwordHasher` to `getNextly`).
+- `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions; without it the command only counts them), `--confirm-default-hasher` (required with `--apply`: your statement that no stored password was written by a custom `passwordHasher`, now or earlier).
 
 ---
 
@@ -630,7 +630,8 @@ nextly users:clear-plaintext-passwords
 ```
 
 <Callout type="warn">
-If your app passes its own `passwordHasher` to `getNextly`, do not clear these accounts.
+If your app passes, or has ever passed, its own `passwordHasher` to `getNextly`, do not clear
+these accounts.
 The command reads `nextly.config.ts`, not your app's code, so it cannot see that hasher,
 and a hash it wrote in a format the command does not recognise is counted here as
 plain text. Clearing it locks that person out until they reset their password.
@@ -640,7 +641,7 @@ The count never includes a value in a format other password hashers write: a
 modular-crypt string starting with `$` (argon2, scrypt or pbkdf2, for example), or a hex
 salt and digest joined by a colon. Those are left as they are.
 
-To clear them, confirming that your app uses Nextly's own hashing:
+To clear them, confirming that no stored password was written by a custom hasher:
 
 ```bash
 nextly users:clear-plaintext-passwords --apply --confirm-default-hasher

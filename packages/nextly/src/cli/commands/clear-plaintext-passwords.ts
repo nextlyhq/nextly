@@ -24,8 +24,10 @@
  * than in `nextly.config.ts`, so this command cannot see one. A hasher that
  * writes a format the clean-up does not recognise would have its hashes taken
  * for plain text, and clearing them locks those people out. So `--apply` also
- * needs `--confirm-default-hasher`, the operator's statement that the app
- * passes none; without it nothing is written.
+ * needs `--confirm-default-hasher`, the operator's statement that no stored
+ * password was written by a custom hasher, now or earlier: an app that once
+ * passed one and no longer does may still hold its hashes. Without it nothing
+ * is written.
  *
  * @module cli/commands/clear-plaintext-passwords
  */
@@ -48,7 +50,7 @@ const CONFIRM_DEFAULT_HASHER = "--confirm-default-hasher";
 
 /** The warning every count carries, since a custom hasher is invisible here. */
 const CUSTOM_HASHER_WARNING =
-  "If your app passes a passwordHasher to getNextly, these may be its hashes: do not clear them.";
+  "If your app passes, or ever passed, a passwordHasher to getNextly, these may be its hashes: do not clear them.";
 
 /** The clean-up over a CLI connection. */
 export function plainTextPasswordCleanup(
@@ -83,7 +85,7 @@ export async function runClearPlaintextPasswords(
   const { logger } = context;
   if (apply && !confirmedDefaultHasher) {
     logger.error(
-      `Nothing was changed: --apply also needs ${CONFIRM_DEFAULT_HASHER}, your statement that the app passes no passwordHasher to getNextly. A custom hasher's hashes can look like plain text here, and clearing them locks those people out.`
+      `Nothing was changed: --apply also needs ${CONFIRM_DEFAULT_HASHER}, your statement that no stored password was written by a custom passwordHasher, now or earlier. A custom hasher's hashes can look like plain text here, and clearing them locks those people out.`
     );
     return null;
   }
@@ -129,7 +131,7 @@ export function registerClearPlaintextPasswordsCommand(
     )
     .option(
       CONFIRM_DEFAULT_HASHER,
-      "With --apply: state that the app passes no passwordHasher to getNextly",
+      "With --apply: state that no stored password was written by a custom passwordHasher, now or earlier",
       false
     )
     .action(

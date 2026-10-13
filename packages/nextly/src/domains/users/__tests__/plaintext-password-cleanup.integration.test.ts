@@ -7,7 +7,7 @@
  * so what the clean-up ends, and what it leaves, can both be seen.
  */
 import { eq } from "drizzle-orm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { hashPassword } from "../../../auth/password/index";
 import { getDialectTables } from "../../../database/index";
@@ -22,8 +22,52 @@ import { consoleLogger } from "../../../services/shared";
 import type { AuthService } from "../../auth/services/auth-service";
 import { PlainTextPasswordCleanup } from "../services/plaintext-password-cleanup";
 
+/**
+ * Work to run once an account's clearing has begun, before its write: what
+ * another request could commit in that gap. `beforeClear` runs first, given
+ * the account's id; `failSessionEnd` names an account whose sessions cannot be
+ * ended, so the write that clears its value is followed by a failure.
+ */
+const between = vi.hoisted(() => ({
+  beforeClear: undefined as ((userId: string) => Promise<void>) | undefined,
+  failSessionEnd: undefined as string | undefined,
+}));
+
+vi.mock("../services/password-write", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../services/password-write")>();
+  return {
+    ...actual,
+    updateUserEndingSessions: async (
+      ...[tx, tables, dialect, args]: Parameters<
+        typeof actual.updateUserEndingSessions
+      >
+    ) => {
+      await between.beforeClear?.(String(args.userId));
+      if (between.failSessionEnd !== String(args.userId)) {
+        return actual.updateUserEndingSessions(tx, tables, dialect, args);
+      }
+      // The same transaction, whose session delete fails after the update.
+      const failing = new Proxy(tx, {
+        get(target, prop) {
+          if (prop === "delete") {
+            return () => {
+              throw new Error("the sessions could not be ended");
+            };
+          }
+          const value: unknown = Reflect.get(target, prop);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      return actual.updateUserEndingSessions(failing, tables, dialect, args);
+    },
+  };
+});
+
 let current: TestNextly | undefined;
 afterEach(async () => {
+  between.beforeClear = undefined;
+  between.failSessionEnd = undefined;
   await current?.destroy();
   current = undefined;
 });
@@ -49,6 +93,9 @@ interface TestDb {
     };
   };
   insert: (table: unknown) => { values: (v: unknown) => Promise<unknown> };
+  update: (table: unknown) => {
+    set: (v: unknown) => { where: (cond: unknown) => Promise<unknown> };
+  };
 }
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
@@ -190,6 +237,84 @@ describe.each(getConfiguredTestDialects())(
         passwordHash: "",
         sessions: 1,
       });
+    });
+
+    it("leaves an account whose value was replaced after it was found", async () => {
+      // A reset lands between the clean-up finding the account and clearing
+      // it. The new value is a hash someone just chose, and stays, as do the
+      // sessions it came with.
+      const t = await boot(dialect);
+      await seed(t);
+      const replacement = await hashPassword(NEW_PASSWORD);
+      const { users } = getDialectTables();
+      between.beforeClear = async userId => {
+        if (userId !== "user-short") return;
+        await db(t)
+          .update(users)
+          .set({ passwordHash: replacement })
+          .where(eq(users.id, "user-short"));
+      };
+
+      expect(await cleanup(t).clear()).toBe(1);
+
+      expect(await account(t, "short")).toEqual({
+        passwordHash: replacement,
+        sessions: 1,
+      });
+      // The control: the other plain-text account is cleared as usual.
+      expect(await account(t, "colon")).toEqual({
+        passwordHash: null,
+        sessions: 0,
+      });
+    });
+
+    it("keeps an account's value when its sessions cannot be ended", async () => {
+      // The value and the sessions go together or not at all: an account
+      // left signed in with its value gone, or signed out with it kept, is
+      // neither of the states the clean-up promises. On SQLite one connection
+      // serves every query, so only PostgreSQL and MySQL can tell a write made
+      // outside the account's transaction from one made inside it.
+      const t = await boot(dialect);
+      await seed(t);
+      between.failSessionEnd = "user-short";
+
+      await expect(cleanup(t).clear()).rejects.toThrow(
+        "the sessions could not be ended"
+      );
+
+      expect(await account(t, "short")).toEqual({
+        passwordHash: SHORT_PLAIN,
+        sessions: 1,
+      });
+    });
+
+    it("writes no stored value to any output while finding and clearing", async () => {
+      const t = await boot(dialect);
+      await seed(t);
+      const sinks = [
+        vi.spyOn(console, "log"),
+        vi.spyOn(console, "info"),
+        vi.spyOn(console, "warn"),
+        vi.spyOn(console, "error"),
+        vi.spyOn(console, "debug"),
+        vi.spyOn(process.stdout, "write"),
+        vi.spyOn(process.stderr, "write"),
+      ];
+      try {
+        await cleanup(t).find();
+        await cleanup(t).clear();
+        // The control: whatever is written here is captured.
+        console.info("output-is-captured");
+        const written = sinks
+          .flatMap(sink => sink.mock.calls)
+          .map(call => JSON.stringify(call))
+          .join("\n");
+        expect(written).toContain("output-is-captured");
+        expect(written).not.toContain(SHORT_PLAIN);
+        expect(written).not.toContain(COLON_PLAIN);
+      } finally {
+        for (const sink of sinks) sink.mockRestore();
+      }
     });
 
     it("changes nothing on a second run", async () => {
