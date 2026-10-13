@@ -34,6 +34,7 @@ import type {
   DesiredCollection,
   DesiredSchema,
 } from "../domains/schema/pipeline/types";
+import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
 
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
@@ -51,6 +52,38 @@ interface DriftCheckCollection {
   slug: string;
   tableName: string;
   fields: unknown[];
+  status?: boolean;
+  indexes?: DesiredCollection["indexes"];
+}
+
+/** The parts of a config collection the drift check reads. */
+interface ConfigCollectionLike {
+  slug: string;
+  dbName?: string;
+  fields?: unknown[];
+  status?: boolean;
+  indexes?: DesiredCollection["indexes"];
+}
+
+/**
+ * The drift check's input, reduced from the config's collections.
+ *
+ * Every attribute that changes a table travels, or the check compares the
+ * live table against a smaller one: without `status` a collection that turned
+ * Draft/Published on after its table existed never reports the missing status
+ * column, and without `indexes` a declared compound index the database already
+ * holds is counted as drift on every boot.
+ */
+export function driftCheckCollections(
+  collections: readonly ConfigCollectionLike[]
+): DriftCheckCollection[] {
+  return collections.map(c => ({
+    slug: c.slug,
+    tableName: resolveCollectionTableName(c.slug, c.dbName),
+    fields: c.fields ?? [],
+    status: c.status === true,
+    ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),
+  }));
 }
 
 export interface RunDriftCheckDeps {
@@ -93,7 +126,7 @@ export async function runDriftCheck(
   // the boot path responsive without losing the wall-time win over serial.
   const DRIFT_CONCURRENCY = 3;
   const results: Array<
-    { ok: true; opCount: number } | { ok: false; error: string }
+    { ok: true; operations: unknown[] } | { ok: false; error: string }
   > = [];
   let cursor = 0;
   const worker = async () => {
@@ -112,7 +145,7 @@ export async function runDriftCheck(
           db: adapter.getDrizzle(),
           dialect: adapter.dialect,
         });
-        results[myIndex] = { ok: true, opCount: preview.operations.length };
+        results[myIndex] = { ok: true, operations: preview.operations };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.debug?.(
@@ -129,12 +162,22 @@ export async function runDriftCheck(
     )
   );
 
-  let pendingOps = 0;
+  // Counted once each across the previews. Every preview also compares the
+  // tables plugins and the app declare, whichever collection it was asked
+  // about, so an operation on one of those reaches every preview, and summing
+  // would report it once per collection. A diff of the same tables yields the
+  // same operation, so its serialised form identifies it.
+  const pending = new Set<string>();
   let failureCount = 0;
   for (const r of results) {
-    if (r.ok) pendingOps += r.opCount;
-    else failureCount += 1;
+    if (!r.ok) {
+      failureCount += 1;
+      continue;
+    }
+    for (const operation of r.operations)
+      pending.add(JSON.stringify(operation));
   }
+  const pendingOps = pending.size;
 
   // PR 6 review #5: surface aggregate failure count so users notice
   // when drift introspection is broken on most collections.

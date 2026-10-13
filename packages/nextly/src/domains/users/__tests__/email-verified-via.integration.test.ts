@@ -16,6 +16,7 @@ import { getDialectTables } from "../../../database/index";
 import { seedPermissions } from "../../../database/seeders/permissions";
 import { seedSuperAdmin } from "../../../database/seeders/super-admin";
 import { generateSqliteCoreTableStatements } from "../../../database/sqlite-core-tables";
+import { dispatchUser } from "../../../dispatcher/handlers/user-dispatcher";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -70,15 +71,19 @@ async function verification(
   return { verified: Boolean(row.emailVerified), via: row.emailVerifiedVia };
 }
 
-/** An existing account, so the install is not empty. */
-async function seedFounder(t: TestNextly): Promise<void> {
-  await services(t).users.createLocalUser({
+/**
+ * An existing account, so the install is not empty. Its id is returned so a
+ * test can act as this account.
+ */
+async function seedFounder(t: TestNextly): Promise<string> {
+  const founder = await services(t).users.createLocalUser({
     email: "founder@example.com",
     name: "Founder",
     password: PASSWORD,
     isActive: true,
     emailVerification: "admin-vouched",
   });
+  return String(founder.id);
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -88,6 +93,31 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await seedFounder(t);
       expect(await verification(t, "founder@example.com")).toEqual({
+        verified: true,
+        via: "admin",
+      });
+    });
+
+    it("records an account an administrator creates through the admin route as admin", async () => {
+      // The route vouches, not the request. The body names a mode of its own,
+      // as any client could, and the account is still recorded as vouched for
+      // by the administrator: the route sets the mode after the body, so the
+      // body cannot unset it, and without the route's setting the service
+      // would leave the address unproven.
+      const t = await boot(dialect);
+      const adminId = await seedFounder(t);
+      await dispatchUser(
+        services(t),
+        "createLocalUser",
+        { _authenticatedActorType: "user", _authenticatedActorId: adminId },
+        {
+          email: "routed@example.com",
+          name: "Routed",
+          password: PASSWORD,
+          emailVerification: "pending",
+        }
+      );
+      expect(await verification(t, "routed@example.com")).toEqual({
         verified: true,
         via: "admin",
       });

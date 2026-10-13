@@ -1534,10 +1534,12 @@ const MYSQL_BARE_EXPRESSION_DEFAULT = /^current_timestamp(\s*\(\s*\d*\s*\))?$/i;
  * parentheses, so those defaults still rebuild to invalid DDL. The remedy is
  * an unescape whose correctness depends on the server's `sql_mode`
  * (`NO_BACKSLASH_ESCAPES` makes a backslash an ordinary character), which is a
- * decision rather than a mechanical fix. No emitter in this package produces
- * that shape — `quoteExpressionSqlDefault` uses a hex `CONVERT` precisely to avoid
- * guessing the mode — so it is reachable only through a column someone added
- * to a managed table by hand.
+ * decision rather than a mechanical fix. `quoteExpressionSqlDefault` uses a hex
+ * `CONVERT` precisely to avoid guessing the mode, but drizzle-kit writes every
+ * SQL default in parentheses, so a string default on a table it creates
+ * (`DEFAULT ('none')`) is reported in that shape: `_utf8mb4\'none\'`. The diff
+ * reads that as the literal (`normalizeDefault`); a snapshot taken from such a
+ * table still records the reported text.
  */
 function mysqlExpressionDefault(value: string): string {
   const trimmed = value.trim();

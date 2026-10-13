@@ -36,12 +36,8 @@ import { buildNotificationEvent } from "../../../runtime/notifications/build-eve
 import type { MigrationScope } from "../../../runtime/notifications/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
-import {
-  chooseTypeColumns,
-  resolveRegistryNameFromCatalog,
-} from "../../field-groups/storage/resolve-storage-names";
+import { resolveRegistryNameFromCatalog } from "../../field-groups/storage/resolve-storage-names";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
-import { withEntityContributions } from "../extension/entity-contributions";
 import {
   refusingNewDanglingReferences,
   type SqliteForeignKeySession,
@@ -53,7 +49,6 @@ import {
 } from "../ownership/drop-guard";
 import { activePostgresSchema } from "../services/postgres-schema";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
-import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
 import {
   countNulls as countNullsHelper,
@@ -65,9 +60,9 @@ import {
   withoutUnemittableIndexes,
 } from "./ddl-emitter";
 import {
-  buildDesiredTableFromFields,
-  buildDesiredTableFromComponentFields,
-} from "./diff/build-from-fields";
+  buildDesiredSnapshot,
+  desiredSchemaTableNames,
+} from "./desired-snapshot";
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { Operation, NextlySchemaSnapshot, TableSpec } from "./diff/types";
@@ -715,15 +710,9 @@ export class PushSchemaPipeline {
     });
 
     try {
-      const managedTableNames = [
-        ...Object.values(desired.collections).map(c => c.tableName),
-        ...Object.values(desired.singles).map(s => s.tableName),
-        ...Object.values(desired.components).map(c => c.tableName),
-        // Without these the live snapshot omits extension tables, so the
-        // diff compares a declared table against nothing and proposes
-        // creating it on every single apply.
-        ...(extensions?.specs.map(spec => spec.name) ?? []),
-      ];
+      // The entities' tables and the extension's: the set the desired
+      // snapshot below is built over, shared with the schema preview.
+      const managedTableNames = desiredSchemaTableNames(desired, extensions);
 
       // Phase A: our diff. Reuse the cached live snapshot when the outer
       // caller (reload-config.ts) already introspected the exact same
@@ -747,14 +736,6 @@ export class PushSchemaPipeline {
             : await introspectLiveSnapshot(db, dialect, managedTableNames);
       }
 
-      // 🔴 Derived from the snapshot just taken, not from a fresh catalog read.
-      //
-      // That snapshot was introspected over exactly these table names, so it
-      // already carries the columns this needs — and deriving from it guarantees
-      // the desired shape and the live shape are read from ONE observation of
-      // the database. A second read could disagree with the first, and a diff
-      // computed across two disagreeing observations is the one thing this
-      // function must never produce.
       // 🔴 Contained, and its failure means "declare NEITHER registry".
       //
       // The desired schema is what drizzle-kit creates from, so naming the
@@ -769,107 +750,11 @@ export class PushSchemaPipeline {
         getDrizzle: <T>() => db as T,
       }).catch(() => undefined);
 
-      const fieldGroupTypeColumns = chooseTypeColumns(
-        liveSnapshot.tables.map(table => ({
-          table: table.name,
-          columns: table.columns.map(column => column.name),
-        })),
-        Object.values(desired.components).map(c => c.tableName),
-        // MySQL is given the folding setting rather than queried for it. The
-        // names being matched are ones this apply itself asked the server to
-        // describe, so a case-insensitive table match cannot select a different
-        // object than the one requested — while an exact match would miss a
-        // server that reported it folded. Column names fold on MySQL
-        // regardless, which is what the discriminator lookup actually needs.
-        dialect === "mysql"
-          ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
-          : identifierCaseRules({ dialect })
-      );
-
-      // What hooks contributed to each entity table — columns, their
-      // defaults, their enum checks and indexes — applied by the one helper
-      // the app's migration stream applies them with, for all three entity
-      // kinds, so dev push and a generated migration cannot describe the
-      // table differently. Checks are merged over the LIVE table's, so
-      // tracking them does not propose dropping ones this pipeline never
-      // declared.
-      const liveTablesByName = new Map(
-        liveSnapshot.tables.map(table => [table.name, table])
-      );
-      const withContributions = (spec: TableSpec): TableSpec =>
-        withEntityContributions(
-          spec,
-          extensions,
-          liveTablesByName.get(spec.name),
-          dialect
-        );
-
-      const desiredSnapshot: NextlySchemaSnapshot = {
-        tables: [
-          ...Object.values(desired.collections).map(c =>
-            withContributions(
-              buildDesiredTableFromFields(
-                c.tableName,
-                // FieldConfig has the shape buildDesiredTableFromFields expects;
-                // cast through unknown for the structural-vs-nominal type gap.
-                c.fields as unknown as Parameters<
-                  typeof buildDesiredTableFromFields
-                >[1],
-                dialect,
-                // Thread the status flag so the diff includes the status system
-                // column when Draft/Published is enabled. Thread `localized` so a
-                // localized collection's translatable columns are omitted from the
-                // main table's desired snapshot (they live in the companion
-                // `_locales` table) rather than being re-added by the diff.
-                {
-                  builtBy: builtByFor("collection", c.builderOwned),
-                  hasStatus: c.status === true,
-                  localized: c.localized === true,
-                  // Config-declared compound indexes name FIELDS.
-                  indexes: [...(c.indexes ?? [])],
-                }
-              )
-            )
-          ),
-          ...Object.values(desired.singles).map(s =>
-            withContributions(
-              buildDesiredTableFromFields(
-                s.tableName,
-                s.fields as unknown as Parameters<
-                  typeof buildDesiredTableFromFields
-                >[1],
-                dialect,
-                {
-                  builtBy: builtByFor("single", s.builderOwned),
-                  hasStatus: s.status === true,
-                  localized: (s as { localized?: boolean }).localized === true,
-                }
-              )
-            )
-          ),
-          ...Object.values(desired.components).map(c =>
-            withContributions(
-              buildDesiredTableFromComponentFields(
-                c.tableName,
-                c.fields as unknown as Parameters<
-                  typeof buildDesiredTableFromComponentFields
-                >[1],
-                dialect,
-                {
-                  builtBy: builtByFor("fieldGroup", c.builderOwned),
-                  localized: (c as { localized?: boolean }).localized === true,
-                  typeColumn: fieldGroupTypeColumns.get(c.tableName),
-                }
-              )
-            )
-          ),
-          // Already compiled, so they are appended rather than rebuilt: the
-          // spec the diff compares and the Drizzle table drizzle-kit pushes
-          // come from one compiler, and rebuilding either here would make
-          // them two.
-          ...(extensions?.specs ?? []),
-        ],
-      };
+      // The entities' tables with what hooks contributed to them, then the
+      // extension's own tables: built by the one function the schema preview
+      // also builds from, so the preview shows what this apply will do.
+      const { snapshot: desiredSnapshot, fieldGroupTypeColumns } =
+        buildDesiredSnapshot({ desired, dialect, liveSnapshot, extensions });
 
       const allOperations = diffSnapshots(liveSnapshot, desiredSnapshot);
 

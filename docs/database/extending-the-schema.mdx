@@ -87,7 +87,11 @@ const orders = defineTable(
 ```
 
 A foreign key's target must exist when the migration runs; within your own
-bundle, creation order follows declaration. `onDelete` and `onUpdate` take
+bundle, creation order follows declaration. On a fresh database, the first
+boot creates every table before the keys between them, so a key may point at
+a collection's, Single's or field group's table even though those are created
+after yours. If one of those keys cannot be created, the boot stops and names
+the table, the key and its target. `onDelete` and `onUpdate` take
 `"cascade"`, `"set null"`, `"restrict"` or `"no action"` (the default).
 `"set default"` is refused, because MySQL cannot create a key that uses it.
 `"set null"`, on either side, requires every one of the key's columns to be

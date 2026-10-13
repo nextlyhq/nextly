@@ -34,15 +34,12 @@ import {
   defineSingle,
   text,
 } from "../../../config";
-import { createAdapter } from "../../../database/factory";
 import {
   beginI18nTransition,
   forgetI18nTransition,
   readI18nTransitionState,
 } from "../../../domains/i18n/migration/transition-state";
 import { MetaService } from "../../../domains/meta/services/meta-service";
-import { getDialectTables } from "../../../database/index";
-import { SchemaRegistry } from "../../../database/schema-registry";
 import { createLogger } from "../../utils/logger";
 import {
   ensureLocalizedCompanions,
@@ -50,16 +47,18 @@ import {
   syncComponents,
   syncSingles,
 } from "../dev-build";
-import { ensureCoreTables } from "../dev-server";
+import {
+  openSqliteSyncTarget,
+  type SqliteSyncTarget,
+} from "./helpers/sqlite-sync-target";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle/types";
 import type { CLIDatabaseAdapter } from "../../utils/adapter";
 import type { CommandContext } from "../../program";
 import type { LoadConfigResult } from "../../utils/config-loader";
-import type { ResolvedDevOptions } from "../db-sync";
 
 let dir: string;
-let adapter: Awaited<ReturnType<typeof createAdapter>> | undefined;
+let adapter: SqliteSyncTarget["adapter"] | undefined;
 let previousDialect: string | undefined;
 
 beforeEach(() => {
@@ -90,26 +89,10 @@ async function tableExists(name: string): Promise<boolean> {
 /** The command's own sequence, minus the parts that read from disk. */
 async function runSync(config: LoadConfigResult["config"]): Promise<void> {
   process.env.DB_DIALECT = "sqlite";
-  adapter = await createAdapter({
-    type: "sqlite",
-    url: `file:${join(dir, "test.db")}`,
-  } as Parameters<typeof createAdapter>[0]);
-
-  const logger = createLogger({ quiet: true });
-  const options = { cwd: dir, autoSync: true } as ResolvedDevOptions;
-  const context = { logger, options: {}, cwd: dir } as CommandContext;
-  // The real adapter is a DrizzleAdapter; `CLIDatabaseAdapter` declares only the
-  // handful of methods the command signatures need, so the command file converts
-  // between them exactly like this.
-  const cli = adapter as unknown as CLIDatabaseAdapter;
-  const drizzleAdapter = adapter as unknown as DrizzleAdapter;
-
-  // Without a resolver the ORM cannot address `dynamic_collections`, so the sync
-  // fails before it reaches anything this test is about.
-  const registry = new SchemaRegistry("sqlite");
-  registry.registerStaticSchemas(getDialectTables("sqlite"));
-  drizzleAdapter.setTableResolver(registry);
-  await ensureCoreTables(cli, options, context);
+  // Connected and prepared as the command prepares its own connection.
+  const target = await openSqliteSyncTarget(dir);
+  adapter = target.adapter;
+  const { cli, options, context } = target;
 
   const configResult = { config } as LoadConfigResult;
   // Mirrors `runDbSync`: the transition copy runs BEFORE the pushes, while an entity gaining

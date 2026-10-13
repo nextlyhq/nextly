@@ -159,7 +159,7 @@ pnpm install
 pnpm dev          # runs the dev/ playground (next dev) → open /admin
 ```
 
-Editing files under `src/` hot-reloads the playground (the `dev/next.config.ts` transpiles your plugin source). Your plugin's `destroy()` runs on each reload, so clean up subscriptions there.
+Editing files under `src/` hot-reloads the playground (the `dev/next.config.ts` transpiles your plugin source). A hot reload re-runs neither `init()` nor `destroy()`, so restart `pnpm dev` after changing either. `destroy()` runs on shutdown and before services register again: clean up subscriptions and timers there.
 
 > **HMR gotcha:** Nextly's registries (hooks, events, filters) survive hot-reload because they live on `globalThis`. If *you* keep state in a module-scoped singleton, it will be recreated on every reload and your subscriptions lost. Register through `ctx.hooks`/`ctx.events`/`ctx.filters` instead.
 
