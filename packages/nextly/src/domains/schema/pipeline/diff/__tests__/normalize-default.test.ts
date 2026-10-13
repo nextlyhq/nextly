@@ -315,6 +315,16 @@ describe("normalizeDefault — MySQL equivalences", () => {
     );
   });
 
+  it("reads a reported string holding a parenthesis as the literal", () => {
+    // The parenthesis is part of the string. Weighed against the wrapper, an
+    // unbalanced one kept the wrapper on and the value never matched.
+    for (const value of ["a)b", "(x", "x)", ")(", "(x)"]) {
+      expect(normalizeDefault(`(_utf8mb4\\'${value}\\')`), value).toBe(
+        normalizeDefault(`'${value}'`)
+      );
+    }
+  });
+
   it("keeps a string that reads as an expression apart from the expression", () => {
     expect(normalizeDefault("(_utf8mb4\\'now()\\')")).toBe(
       normalizeDefault("'now()'")

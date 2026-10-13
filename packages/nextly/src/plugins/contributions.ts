@@ -648,6 +648,18 @@ export interface PluginContributions {
   settings?: ZodObject<ZodRawShape>;
 
   /**
+   * @experimental The permission an operator needs to change this plugin's
+   * settings, in place of core's `manage-settings`: a payment provider's keys,
+   * say, kept to the roles that handle payments.
+   *
+   * It must be one of this plugin's own `permissions`, so a misspelt name
+   * fails the boot rather than leaving the settings changeable by the
+   * super-admin alone. Holding it also lets an operator read the settings,
+   * without which the page the grant is for would not load.
+   */
+  settingsPermission?: PermissionSlug;
+
+  /**
    * @experimental The audit events this plugin writes, and the metadata keys
    * each may carry.
    *

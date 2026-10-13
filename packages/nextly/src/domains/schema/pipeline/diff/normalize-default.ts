@@ -101,6 +101,12 @@ export function normalizeDefault(
   // Step 2: unwrap a string literal to the value it denotes.
   normalised = unquoteStringLiteral(normalised);
 
+  // Step 2b: MySQL's report of a string default written as an expression,
+  // reduced to the value the literal on the desired side reduces to. Ahead of
+  // step 3, which would count a parenthesis inside the value as syntax and
+  // leave the wrapper on a value such as `a)b`.
+  normalised = mysqlExpressionString(normalised);
+
   // Step 3: drop parentheses that wrap the whole expression. SQLite requires
   // them when a default is an expression (`DEFAULT (unixepoch())`) and then
   // reports the column back through PRAGMA without them, as `unixepoch()`.
@@ -113,10 +119,6 @@ export function normalizeDefault(
   // Step 3b: MySQL's report of a hex string default, in the one spelling the
   // desired side writes it with.
   normalised = canonicalHexConvert(normalised);
-
-  // Step 3c: MySQL's report of a string default written as an expression,
-  // reduced to the value the literal on the desired side reduces to.
-  normalised = mysqlExpressionString(normalised);
 
   // Step 4: lowercase the built-in keywords, which the dialects report back in
   // whatever case they please — MySQL renders a DATETIME default as
@@ -416,12 +418,16 @@ function isCompleteLiteral(value: string): boolean {
  * makes a backslash an ordinary character), so such a value is left as
  * reported and the diff shows a change rather than guessing.
  */
-const MYSQL_EXPRESSION_STRING = /^_[a-z0-9]+\\'([^'\\]*)\\'$/i;
+const MYSQL_EXPRESSION_STRING =
+  /^(?:\(\s*_[a-z0-9]+\\'([^'\\]*)\\'\s*\)|_[a-z0-9]+\\'([^'\\]*)\\')$/i;
 
 function mysqlExpressionString(expr: string): string {
+  // With the one pair of parentheses MySQL reports around it, or without:
+  // the value can hold no quote, so a parenthesis inside it is part of the
+  // string and is not weighed against the wrapper.
   const match = expr.trim().match(MYSQL_EXPRESSION_STRING);
   if (!match) return expr;
-  const value = match[1];
+  const value = match[1] ?? match[2];
   return EXPRESSION_SHAPED.test(value) ? `'${value}'` : value;
 }
 
