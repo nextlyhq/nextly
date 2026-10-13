@@ -10,7 +10,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 const granted = vi.hoisted(() => new Set<string>());
-const plugins = vi.hoisted(() => ({ list: [] as unknown[] }));
+/**
+ * The two places the gate can find the plugins: the config services were
+ * registered with, which exists only once a dispatch has booted them, and the
+ * config the route handlers were created with, which exists from the start.
+ * `undefined` is a source that is not there.
+ */
+const plugins = vi.hoisted(() => ({
+  registered: undefined as unknown[] | undefined,
+  handler: undefined as unknown[] | undefined,
+}));
 
 vi.mock("../auth/middleware", async importOriginal => {
   const actual = await importOriginal<typeof import("../auth/middleware")>();
@@ -42,7 +51,16 @@ vi.mock("../auth/middleware", async importOriginal => {
 
 vi.mock("../dispatcher/dispatcher", async importOriginal => ({
   ...(await importOriginal<typeof import("../dispatcher/dispatcher")>()),
-  readServiceConfig: () => ({ plugins: plugins.list }),
+  readServiceConfig: () =>
+    plugins.registered === undefined
+      ? undefined
+      : { plugins: plugins.registered },
+}));
+
+vi.mock("../route-handler", async importOriginal => ({
+  ...(await importOriginal<typeof import("../route-handler")>()),
+  getHandlerConfig: () =>
+    plugins.handler === undefined ? null : { plugins: plugins.handler },
 }));
 
 import { _resolveAuthorizationForTest as resolveAuthorization } from "../routeHandler";
@@ -70,25 +88,30 @@ async function admits(
   return !("statusCode" in result);
 }
 
+const declared = (): unknown[] => [
+  {
+    name: "@acme/pay",
+    version: "1.0.0",
+    nextly: ">=0.0.1",
+    contributes: {
+      settings,
+      permissions: [{ action: "update", resource: "pay-settings" }],
+      settingsPermission: "update-pay-settings",
+    },
+  },
+  {
+    name: "@acme/plain",
+    version: "1.0.0",
+    nextly: ">=0.0.1",
+    contributes: { settings },
+  },
+];
+
 beforeEach(() => {
-  plugins.list = [
-    {
-      name: "@acme/pay",
-      version: "1.0.0",
-      nextly: ">=0.0.1",
-      contributes: {
-        settings,
-        permissions: [{ action: "update", resource: "pay-settings" }],
-        settingsPermission: "update-pay-settings",
-      },
-    },
-    {
-      name: "@acme/plain",
-      version: "1.0.0",
-      nextly: ">=0.0.1",
-      contributes: { settings },
-    },
-  ];
+  // A booted process whose handlers were created without a config: the
+  // registered config is the only source.
+  plugins.registered = declared();
+  plugins.handler = undefined;
 });
 
 describe("a plugin that names its settings permission", () => {
@@ -120,5 +143,24 @@ describe("a plugin that names none", () => {
     expect(await admits(["update-pay-settings"], "PATCH", "@acme/plain")).toBe(
       false
     );
+  });
+});
+
+describe("on a cold process, before any dispatch has booted services", () => {
+  beforeEach(() => {
+    // The first request: the handlers hold the config, and nothing has been
+    // registered yet.
+    plugins.registered = undefined;
+    plugins.handler = declared();
+  });
+
+  it("admits a write from a caller holding the plugin's permission", async () => {
+    expect(await admits(["update-pay-settings"], "PATCH")).toBe(true);
+  });
+
+  it("refuses a write from a caller holding only manage-settings", async () => {
+    // A gate that found no declaration here fell back to core's permission,
+    // which admits exactly the caller the plugin's own one keeps out.
+    expect(await admits(["manage-settings"], "PATCH")).toBe(false);
   });
 });

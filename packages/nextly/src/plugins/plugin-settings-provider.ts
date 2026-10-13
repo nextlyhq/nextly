@@ -84,7 +84,13 @@ export function createPluginSettings(
  *
  * Through the same service `ctx.settings` uses, so the boot seals with
  * exactly the rules a read or a write would repair by. A plugin that
- * declares no settings, or no secrets, has nothing to seal.
+ * declares no settings has nothing to seal.
+ *
+ * One that declares no secrets is still asked: a past manifest may have
+ * declared some, and what it encrypted stays encrypted until a new value is
+ * written there. Sealed under a secret since rotated, those values have to be
+ * sealed again under the current one before the previous secret is retired,
+ * and the manifest no longer naming them is no reason to skip that.
  */
 export async function sealPluginSettings(
   plugin: PluginDefinition,
@@ -93,7 +99,7 @@ export async function sealPluginSettings(
   adapter?: () => SettingsAdapter
 ): Promise<void> {
   const schema = plugin.contributes?.settings;
-  if (!schema || (plugin.capabilities?.secrets ?? []).length === 0) return;
+  if (!schema) return;
   await settingsService(plugin, schema, db, dialect, adapter).sealStored();
 }
 

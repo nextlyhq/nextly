@@ -17,9 +17,14 @@ import { z } from "zod";
 
 import { clearServices, registerServices } from "../../di/register";
 import { dispatchPluginSettings } from "../../dispatcher/handlers/plugin-settings-dispatcher";
-import type { PluginSettingRow } from "../../domains/plugins/settings-service";
+import {
+  type PluginSettingRow,
+  PluginSettingsService,
+  pluginSettingsSecrets,
+} from "../../domains/plugins/settings-service";
 import { createPluginSettingsStore } from "../../domains/plugins/settings-store";
 import type { ServiceContainer } from "../../services";
+import { _resetEnvCache } from "../../shared/lib/env";
 import { getImageProcessor } from "../../storage/image-processor";
 import { definePlugin, type PluginDefinition } from "../plugin-context";
 import {
@@ -232,6 +237,76 @@ describe.each(getConfiguredTestDialects())(
       // Written again, it is stored as the newer manifest says: in plain text.
       await captured!.set({ apiKey: "now-public-value" });
       expect(await storedText()).toContain("now-public-value");
+    });
+
+    it("refuses to boot a plugin whose settings permission is not one it owns", async () => {
+      // The check runs where the boot knows every entity, before any route can
+      // be gated on the permission; a misspelt name stops the boot there.
+      const plugin = definePlugin({
+        name: NAME,
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          settings: settingsSchema,
+          permissions: [{ action: "update", resource: "secret-settings" }],
+          settingsPermission: "update-unowned-settings",
+        },
+      });
+      await expect(
+        createTestNextly(
+          dialect === "sqlite"
+            ? { plugins: [plugin] }
+            : { dialect, plugins: [plugin] }
+        )
+      ).rejects.toMatchObject({
+        logContext: expect.objectContaining({
+          reason: "settings-permission-undeclared",
+        }),
+      });
+    });
+
+    it("seals again under a rotated secret a value its manifest no longer calls secret, before the plugin starts", async () => {
+      const settings = await boot(dialect, secretSettingsPlugin(["apiKey"]));
+      await settings.set({ apiKey: SECRET });
+      const sealedBefore = (await storedRows()).find(
+        row => row.key === "apiKey"
+      )?.value;
+
+      // The install rotates its secret in the release that also drops the
+      // plugin's last secret declaration. The value stays encrypted under the
+      // previous secret until something seals it again, and once that secret
+      // is retired nothing can.
+      const original = process.env.NEXTLY_SECRET;
+      const rotated = "nextly-test-rotated-secret-at-least-32-chars";
+      process.env.NEXTLY_SECRET_PREVIOUS = original;
+      process.env.NEXTLY_SECRET = rotated;
+      _resetEnvCache();
+      try {
+        await upgrade(secretSettingsPlugin([]));
+      } finally {
+        process.env.NEXTLY_SECRET = original;
+        delete process.env.NEXTLY_SECRET_PREVIOUS;
+        _resetEnvCache();
+      }
+
+      const sealedAfter = (await storedRows()).find(
+        row => row.key === "apiKey"
+      )?.value;
+      expect(sealedAfter).not.toBe(sealedBefore);
+      expect(sealedAfter).not.toContain(SECRET);
+      // Opened with the rotated secret alone, so the previous one can go.
+      const adapter = current!.adapter;
+      const view = await new PluginSettingsService({
+        owner: NAME,
+        schema: settingsSchema,
+        secretPaths: [],
+        store: createPluginSettingsStore(adapter.getDrizzle(), adapter.dialect),
+        secrets: () => pluginSettingsSecrets({ NEXTLY_SECRET: rotated }),
+      }).view();
+      // Exact: a value that cannot be opened is `{ set: true, readable: false }`.
+      expect((view.settings as { apiKey?: unknown }).apiKey).toEqual({
+        set: true,
+      });
     });
   }
 );

@@ -27,7 +27,7 @@ import {
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
 import { resolutionError } from "./resolution-error";
-import { assertSettingsPermissions } from "./settings-permission";
+import { assertSettingsPermissionsGuardSettings } from "./settings-permission";
 import { topoSortPlugins } from "./topo-sort";
 import { assertAdminWidgets } from "./validate-admin-widgets";
 import { assertClientConfigs } from "./validate-client-config";
@@ -145,10 +145,11 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // every emit — the per-plugin bus lets a plugin speak neither for core nor
   // for another plugin. Refused here, the mistake is named at boot.
   assertPluginEventNames(plugins);
-  // A settings permission the plugin does not itself declare leaves its
-  // settings to the super-admin alone, which looks like an ordinary refusal
-  // to everyone else. Refused here, the misspelling is named at boot.
-  assertSettingsPermissions(plugins);
+  // A settings permission with no settings behind it guards nothing, and
+  // reads as though the plugin's credentials were kept to a narrower role.
+  // Whether the permission is the plugin's own is asked once the entities
+  // are known: `assertSettingsPermissionsOwned`, at boot.
+  assertSettingsPermissionsGuardSettings(plugins);
 }
 
 /**

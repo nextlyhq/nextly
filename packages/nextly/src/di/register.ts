@@ -182,6 +182,7 @@ import {
   clearPluginServices,
   registerPluginService,
 } from "../plugins/services/plugin-services-registry";
+import { assertSettingsPermissionsOwned } from "../plugins/settings-permission";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
 import {
   collectWidgetSources,
@@ -809,6 +810,7 @@ async function registerServicesOnce(
     logger: resolvedLogger,
     schemaRegistry,
     transformedConfig,
+    transformedPlugins,
     deferredExtends,
     unresolvedRelations,
     unresolvedPermissions,
@@ -1402,6 +1404,7 @@ interface BuilderReconcileArgs {
   logger: Logger;
   schemaRegistry: SchemaRegistry | undefined;
   transformedConfig: NextlyServiceConfig;
+  transformedPlugins: PluginDefinition[];
   deferredExtends: DeferredExtends;
   unresolvedRelations: ReturnType<typeof collectUnresolvedRelationTargets>;
   unresolvedPermissions: ReturnType<typeof collectUnresolvedPermissionTargets>;
@@ -1759,16 +1762,23 @@ function finalizeBuilderTargets(
   // Settled here, where both halves of the question are answerable, and
   // before any service is registered or any route installed — so a refusal
   // stops the boot rather than being discovered by a request.
-  finalizePermissionTargets(
-    args.unresolvedPermissions,
-    [
-      ...builderCollectionSlugs,
-      ...builderEntities.singles.map(single => single.slug),
-    ],
-    {
-      allowOverride: allowsPluginPermissionOverride(args.transformedConfig),
-      logger: args.logger,
-    }
+  const builderEntitySlugs = [
+    ...builderCollectionSlugs,
+    ...builderEntities.singles.map(single => single.slug),
+  ];
+  finalizePermissionTargets(args.unresolvedPermissions, builderEntitySlugs, {
+    allowOverride: allowsPluginPermissionOverride(args.transformedConfig),
+    logger: args.logger,
+  });
+
+  // A plugin's settings permission has to be one it owns, which is the
+  // collector's answer for the config's entities and the seeder's for the
+  // Builder's — so it is asked here, where both are known, and before any
+  // route can be gated on it.
+  assertSettingsPermissionsOwned(
+    args.transformedPlugins,
+    collectCustomPermissions(args.transformedConfig, args.transformedPlugins),
+    builderEntitySlugs
   );
 }
 
@@ -4088,10 +4098,11 @@ async function initializePlugins(
 
   // Before any `init`: a stored setting the manifest now calls secret, but
   // that was saved while its path was public, is encrypted before this plugin
-  // or any other can run and read, log or back it up. A read or a write would
-  // repair it too, but only once one happens. A failure fails the boot, naming
-  // the plugin: starting it would break the manifest's promise that the value
-  // is not stored as plain text.
+  // or any other can run and read, log or back it up, and one sealed under a
+  // rotated secret is sealed again under the current one. A read or a write
+  // would repair both too, but only once one happens. A failure fails the
+  // boot, naming the plugin: starting it would break the manifest's promise
+  // that the value is not stored as plain text.
   for (const plugin of plugins) {
     if (plugin.enabled === false) continue;
     try {
@@ -4105,7 +4116,7 @@ async function initializePlugins(
         logContext: {
           reason: "plugin-settings-seal-failed",
           plugin: plugin.name,
-          detail: `A secret setting stored in plain text could not be encrypted before the plugin started: ${error instanceof Error ? error.message : String(error)}`,
+          detail: `A stored secret setting could not be sealed under the current secret before the plugin started: ${error instanceof Error ? error.message : String(error)}`,
         },
       });
     }

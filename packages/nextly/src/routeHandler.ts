@@ -919,8 +919,17 @@ async function resolveAuthorization(
     // A plugin may name its own permission for its settings in place of
     // `manage-settings` (`contributes.settingsPermission`), checked at boot to
     // be one it declares.
-    const declared = settingsWritePermission(
-      readServiceConfig()?.plugins,
+    //
+    // Read from the handler's config first: this gate runs before the
+    // dispatch boots services, so on a cold process the registered config does
+    // not exist yet, and reading only that one fell back to `manage-settings`
+    // for the first request — refusing the plugin's own permission and
+    // admitting the one it replaced. The handler's config holds the declared
+    // plugins before boot and the booted ones after it, the same list the
+    // plugin routes are dispatched from. The registered config stays the
+    // fallback for a process whose handlers were given none.
+    const write = settingsWritePermission(
+      getHandlerConfig()?.plugins ?? readServiceConfig()?.plugins,
       routeParams?.plugin
     );
     if (httpMethod === "GET") {
@@ -929,16 +938,14 @@ async function resolveAuthorization(
       return requireAnyPermission(req, [
         { action: "read", resource: "settings" },
         { action: "manage", resource: "settings" },
-        ...(declared ? [declared] : []),
+        write,
       ]);
     }
     // A write to a plugin's configuration is a settings change, so it takes
     // the same permission a settings change takes anywhere else, unless the
     // plugin named its own: then that one alone, so `manage-settings` does
     // not reach settings the plugin kept to a narrower role.
-    return declared
-      ? requirePermission(req, declared.action, declared.resource)
-      : requirePermission(req, "manage", "settings");
+    return requirePermission(req, write.action, write.resource);
   }
 
   // --- Email providers → manage-email-providers ---

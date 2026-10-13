@@ -567,10 +567,12 @@ export const routeConfig: Record<string, RouteConfig> = {
     requiredPermission: "manage-settings",
     section: "plugins",
   },
+  // No fixed permission: a plugin may keep its settings to a permission of
+  // its own, which only its metadata names. The page asks for it, once the
+  // plugin list has arrived; see `PluginSettingsGate`.
   [ROUTES.PLUGIN_SETTINGS]: {
     component: PluginSettingsPage,
     type: "private",
-    requiredPermission: "manage-settings",
     section: "plugins",
   },
 

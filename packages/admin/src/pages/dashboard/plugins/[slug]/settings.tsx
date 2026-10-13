@@ -2,6 +2,7 @@
 
 import type React from "react";
 
+import { PermissionGuard } from "@admin/components/guards/PermissionGuard";
 import { Package } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -9,8 +10,12 @@ import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
+import type { PluginMetadata } from "@admin/types/branding";
 
 interface PluginSettingsPageProps {
   params?: { slug?: string };
@@ -30,19 +35,61 @@ export default function PluginSettingsPage({
 }: PluginSettingsPageProps): React.ReactElement {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer>
-        <PluginSettingsContent activeSlug={params?.slug} />
-      </PageContainer>
+      <PluginSettingsGate activeSlug={params?.slug}>
+        <PageContainer>
+          <PluginSettingsContent activeSlug={params?.slug} />
+        </PageContainer>
+      </PluginSettingsGate>
     </QueryErrorBoundary>
+  );
+}
+
+/** The installed plugin this page's address names, if any. */
+function pluginAt(
+  plugins: PluginMetadata[] | undefined,
+  activeSlug: string | undefined
+): PluginMetadata | undefined {
+  return activeSlug
+    ? plugins?.find(p => pluginSlug(p.name) === activeSlug)
+    : undefined;
+}
+
+/**
+ * Admit only a caller holding the permission a change to this plugin's
+ * settings needs, as the server publishes it in the plugin's metadata.
+ *
+ * Decided here rather than in the route table, which can only name one
+ * permission for every plugin: `manage-settings` there shut out the role a
+ * plugin keeps its settings to, and showed a `manage-settings` holder an
+ * editor whose saves the server refuses. It waits for the plugin list: gated
+ * before it arrives, on the default, a caller holding only the plugin's
+ * permission would be sent away before the page knew what to ask for. A
+ * plugin missing from the list, or a server that does not name the
+ * permission, keeps `manage-settings`.
+ */
+function PluginSettingsGate({
+  activeSlug,
+  children,
+}: {
+  activeSlug?: string;
+  children: React.ReactNode;
+}) {
+  const branding = useBranding();
+  const { isPending } = useBrandingStatus();
+  if (branding?.plugins === undefined && isPending) return null;
+  const permission =
+    pluginAt(branding?.plugins, activeSlug)?.settings?.permission ??
+    "manage-settings";
+  return (
+    <PermissionGuard requiredPermission={permission}>
+      {children}
+    </PermissionGuard>
   );
 }
 
 function PluginSettingsContent({ activeSlug }: { activeSlug?: string }) {
   const branding = useBranding();
-  const plugins = branding?.plugins ?? [];
-  const plugin = activeSlug
-    ? plugins.find(p => pluginSlug(p.name) === activeSlug)
-    : undefined;
+  const plugin = pluginAt(branding?.plugins, activeSlug);
 
   const title = plugin?.appearance?.label ?? plugin?.name;
   // A disabled plugin's settings UI must not load: its behavior is off, so a
