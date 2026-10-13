@@ -5,6 +5,7 @@ import { and, eq, gt, lt, sql } from "drizzle-orm";
 // dependent for this file (see services/lib/permissions.ts header).
 import { getAuthLogger } from "../../../lib/logger";
 import { BaseService } from "../../../services/base-service";
+import { cacheExpiry } from "../../../services/lib/role-assignments";
 import type { Logger } from "../../../services/shared";
 import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 
@@ -115,6 +116,23 @@ export class PermissionCacheService extends BaseService {
     action: string,
     resource: string
   ): Promise<boolean | null> {
+    const decision = await this.getCachedDecision(userId, action, resource);
+    return decision === null ? null : decision.allowed;
+  }
+
+  /**
+   * The cached result together with the moment the row stops being served.
+   *
+   * A row can end before the TTL, at the soonest expiry of a role it was
+   * computed from, so a copy promoted into a faster tier must end no later
+   * than the row did. Promoted with a fresh TTL instead, it served a lapsed
+   * role's answer for up to that TTL after the row itself had stopped.
+   */
+  async getCachedDecision(
+    userId: string,
+    action: string,
+    resource: string
+  ): Promise<{ allowed: boolean; expiresAt: number } | null> {
     if (!userId || !action || !resource) {
       return null;
     }
@@ -161,7 +179,10 @@ export class PermissionCacheService extends BaseService {
         });
       }
 
-      return cached.hasPermission;
+      return {
+        allowed: cached.hasPermission,
+        expiresAt: new Date(cached.expiresAt).getTime(),
+      };
     } catch (error) {
       getAuthLogger()?.log?.("error", {
         category: "auth",
@@ -189,6 +210,10 @@ export class PermissionCacheService extends BaseService {
    * @param resource - Permission resource
    * @param hasPermission - Whether user has the permission
    * @param roleIds - Role IDs involved (for invalidation)
+   * @param validUntil - When the roles it was computed from next change
+   *   (epoch ms). The row ends then if that is sooner than the TTL, since an
+   *   expiry reaches no invalidation and the row would otherwise serve a
+   *   lapsed role's answer for the rest of its life.
    * @returns Promise that resolves when cache is updated
    */
   async setCachedPermission(
@@ -196,7 +221,8 @@ export class PermissionCacheService extends BaseService {
     action: string,
     resource: string,
     hasPermission: boolean,
-    roleIds: string[]
+    roleIds: string[],
+    validUntil?: number
   ): Promise<void> {
     if (!userId || !action || !resource) {
       return;
@@ -205,7 +231,9 @@ export class PermissionCacheService extends BaseService {
     try {
       const { userPermissionCache } = this.tables;
       const cacheKey = `${userId}|${action}|${resource}`;
-      const expiresAt = new Date(Date.now() + this.cacheTtlMs);
+      const expiresAt = new Date(
+        cacheExpiry(Date.now(), this.cacheTtlMs, validUntil)
+      );
 
       await this.db
         .insert(userPermissionCache)

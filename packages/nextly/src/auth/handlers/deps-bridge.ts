@@ -33,6 +33,7 @@ import {
   type PluginContext,
   type PluginDefinition,
 } from "../../plugins/plugin-context";
+import { userRoleAssignmentsInForce } from "../../services/lib/role-assignments";
 import { affectedRowCount } from "../../shared/lib/affected-row-count";
 import { readUnderRowLock, type LockableRead } from "../../shared/lib/row-lock";
 import {
@@ -129,26 +130,25 @@ export function buildAuthRouterDeps(
     },
 
     fetchRoleIds: async (userId: string) => {
-      try {
-        const adapter = getService("adapter");
-        const db = adapter.getDrizzle();
-        const schema = getDialectTables();
-        const { eq, isNull, or, gt } = await import("drizzle-orm");
-        const rows = await db
-          .select({ roleId: schema.userRoles.roleId })
-          .from(schema.userRoles)
-          .where(
-            eq(schema.userRoles.userId, userId),
-            // Only non-expired roles
-            or(
-              isNull(schema.userRoles.expiresAt),
-              gt(schema.userRoles.expiresAt, new Date())
-            )
-          );
-        return rows.map((r: { roleId: string }) => r.roleId);
-      } catch {
-        return [];
-      }
+      // Only the assignments in force: an expired role granted nothing, and
+      // put into the claims it would be handed back to every reader of them
+      // until the token expired. The condition is the one every reader of
+      // `user_roles` that decides access shares.
+      //
+      // Errors propagate, as in fetchAccountState above, so a failed read
+      // refuses the login or refresh. Answered with no roles, it issued a
+      // session whose claims said the person held nothing, which each
+      // refresh repeated, with nothing to say a read had failed.
+      const adapter = getService("adapter");
+      const db = adapter.getDrizzle();
+      const schema = getDialectTables();
+      const rows = await db
+        .select({ roleId: schema.userRoles.roleId })
+        .from(schema.userRoles)
+        .where(
+          userRoleAssignmentsInForce(schema.userRoles, userId, new Date())
+        );
+      return rows.map((r: { roleId: string }) => r.roleId);
     },
 
     fetchCustomFields: async (userId: string) => {
