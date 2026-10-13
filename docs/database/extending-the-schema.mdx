@@ -60,10 +60,11 @@ time it runs, so derive nothing from the clock, a counter or a random value:
 Nextly runs the hooks twice when it builds the schema it pushes or writes into
 a migration, and refuses a hook whose output differs, naming its owner and its
 position, rather than plan a change on every push. The two builds run a moment
-apart, so they catch a counter, a random value or the clock to the
-millisecond; a value that changes only between boots, such as today's date or
-the clock in whole seconds, is not caught yet, and a push would still churn on
-it. A hook that throws is named the same way.
+apart, so they catch a counter or a random value. They usually catch the clock
+to the millisecond too, but not always: a fast hook can run twice within one
+millisecond and read the same time both times. A value that changes only
+between boots, such as today's date or the clock in whole seconds, is not
+caught yet, and a push would still churn on it. A hook that throws is named the same way.
 
 `col.id()` has no database default: the code that inserts a row supplies the
 `id` (any UUID fits; a UUIDv7 keeps new rows in key order), and `InferInsert`

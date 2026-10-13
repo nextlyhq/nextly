@@ -774,10 +774,11 @@ async function runHooksInto(
  * compared after each one: everything before the first difference matched,
  * so that hook is the one whose output moved.
  *
- * Two runs a moment apart see a counter, a random value or a fine-grained
- * clock move; a value that changes only between boots (the date, the clock in
- * whole seconds) reads the same in both, and is not caught here. Catching it
- * needs a comparison that outlives the process.
+ * Two runs a moment apart see a counter or a random value move. A clock read
+ * to the millisecond usually moves too, but both runs can fall within one
+ * millisecond, so it is not guaranteed. A value that changes only between
+ * boots (the date, the clock in whole seconds) reads the same in both, and is
+ * not caught here. Catching it needs a comparison that outlives the process.
  */
 async function refuseNondeterministicHooks(
   input: ExtensionSchemaInput,

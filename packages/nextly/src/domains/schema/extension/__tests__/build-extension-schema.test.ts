@@ -1307,24 +1307,30 @@ describe("a hook whose output moves between builds", () => {
     expect(calls).toBe(1);
   });
 
-  it("accepts one declaration built with its properties in another order", async () => {
-    // The same relation each run, its keys inserted in a different order:
-    // what was declared did not move, so nothing is refused.
-    let run = 0;
-    const entries: [string, unknown][] = [
-      ["name", "author"],
-      ["kind", "one"],
-      ["targetTable", "users"],
-      ["fromColumn", "author_id"],
-    ];
-    const built = await buildExtensionSchema({
+  /** One relation's fields, in the order a hook inserts them. */
+  const authorRelation: [string, unknown][] = [
+    ["name", "author"],
+    ["kind", "one"],
+    ["targetTable", "users"],
+    ["fromColumn", "author_id"],
+  ];
+
+  /**
+   * An app hook declaring `notes` with one relation, built from
+   * `entriesOn(run)` on each run, with the check on.
+   */
+  const notesWithRelation = (
+    entriesOn: (run: number) => [string, unknown][]
+  ) => {
+    const runs = { count: 0 };
+    const input: ExtensionSchemaInput = {
       ...base([], {
         owner: { kind: "app" },
         extend: [
           ({ schema }) => {
-            run += 1;
+            runs.count += 1;
             const relation = Object.fromEntries(
-              run % 2 === 0 ? [...entries].reverse() : entries
+              entriesOn(runs.count)
             ) as unknown as TableRelationInput;
             schema.addTable(
               defineTable(
@@ -1337,9 +1343,49 @@ describe("a hook whose output moves between builds", () => {
         ],
       }),
       refuseNondeterministicHooks: true,
-    });
-    expect(run).toBe(2);
+    };
+    return { input, runs };
+  };
+
+  it("accepts one declaration built with its properties in another order", async () => {
+    // The same relation each run, its keys inserted in a different order:
+    // what was declared did not move, so nothing is refused.
+    const { input, runs } = notesWithRelation(run =>
+      run % 2 === 0 ? [...authorRelation].reverse() : authorRelation
+    );
+    const built = await buildExtensionSchema(input);
+    expect(runs.count).toBe(2);
     expect(built.tables.map(table => table.name)).toContain("notes");
+  });
+
+  it("is refused when a relation's content moves, whatever its key order", async () => {
+    // The control for the case above: the second run renames the relation, so
+    // the comparison must still read what a relation declares, not only its
+    // table and columns.
+    const { input, runs } = notesWithRelation(run =>
+      authorRelation.map(([key, value]): [string, unknown] =>
+        key === "name" && run === 2 ? [key, "writer"] : [key, value]
+      )
+    );
+    let refused: unknown;
+    try {
+      await buildExtensionSchema(input);
+    } catch (error) {
+      refused = error;
+    }
+    expect(runs.count).toBe(2);
+    expect(NextlyError.isValidation(refused)).toBe(true);
+    // This refusal, not another validation error the renamed relation could raise.
+    const errors =
+      (refused as { publicData?: { errors?: { code?: string }[] } })?.publicData
+        ?.errors ?? [];
+    expect(errors.map(error => error.code)).toEqual([
+      "NONDETERMINISTIC_SCHEMA_HOOK",
+    ]);
+    expect((refused as NextlyError).logContext).toMatchObject({
+      owner: "app",
+      hookIndex: 0,
+    });
   });
 });
 
