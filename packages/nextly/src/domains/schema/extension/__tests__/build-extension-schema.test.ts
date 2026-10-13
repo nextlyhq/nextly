@@ -1287,12 +1287,59 @@ describe("a hook whose output moves between builds", () => {
 
   it("runs each hook once, and judges nothing, when the caller does not ask", async () => {
     tickingClock();
+    let calls = 0;
     const built = await buildExtensionSchema(
       base([
-        { owner: { kind: "plugin", id: "a" }, extend: [clockDefault as never] },
+        {
+          owner: { kind: "plugin", id: "a" },
+          extend: [
+            ((args: Parameters<typeof clockDefault>[0]) => {
+              calls += 1;
+              clockDefault(args);
+            }) as never,
+          ],
+        },
       ])
     );
     expect(built.tables.map(table => table.name)).toContain("a__stamps");
+    // Once: a second run whose result is thrown away would still run the
+    // hook's side effects twice.
+    expect(calls).toBe(1);
+  });
+
+  it("accepts one declaration built with its properties in another order", async () => {
+    // The same relation each run, its keys inserted in a different order:
+    // what was declared did not move, so nothing is refused.
+    let run = 0;
+    const entries: [string, unknown][] = [
+      ["name", "author"],
+      ["kind", "one"],
+      ["targetTable", "users"],
+      ["fromColumn", "author_id"],
+    ];
+    const built = await buildExtensionSchema({
+      ...base([], {
+        owner: { kind: "app" },
+        extend: [
+          ({ schema }) => {
+            run += 1;
+            const relation = Object.fromEntries(
+              run % 2 === 0 ? [...entries].reverse() : entries
+            ) as unknown as TableRelationInput;
+            schema.addTable(
+              defineTable(
+                "notes",
+                { id: col.id(), authorId: col.ref("users") },
+                { relations: [relation] }
+              )
+            );
+          },
+        ],
+      }),
+      refuseNondeterministicHooks: true,
+    });
+    expect(run).toBe(2);
+    expect(built.tables.map(table => table.name)).toContain("notes");
   });
 });
 

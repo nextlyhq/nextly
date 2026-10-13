@@ -142,8 +142,7 @@ describe.each(getConfiguredTestDialects())(
       await expectHashed(t, "core@example.com", PASSPHRASE);
     });
 
-    it("hashes it when the Direct API or a plugin creates an account", async () => {
-      // `ctx.services.users` and the Direct API share this service.
+    it("hashes it when the Direct API creates an account", async () => {
       const t = await boot(dialect);
       await seedFounder(t);
       await (t.getService("userService") as UserService).create(
@@ -151,6 +150,20 @@ describe.each(getConfiguredTestDialects())(
         {}
       );
       await expectHashed(t, "direct@example.com", PASSPHRASE);
+    });
+
+    it("hashes it when a plugin creates an account", async () => {
+      // The view `ctx.services.users` hands a plugin, which writes as the
+      // plugin caller: a path of its own through account creation.
+      const t = await boot(dialect);
+      await seedFounder(t);
+      await (t.getService("userService") as UserService)
+        .forPlugins()
+        .create(
+          { email: "plugin@example.com", name: "Plugin", password: PASSPHRASE },
+          {}
+        );
+      await expectHashed(t, "plugin@example.com", PASSPHRASE);
     });
 
     it("hashes it when an administrator creates an account through the admin route", async () => {
@@ -180,10 +193,11 @@ describe.each(getConfiguredTestDialects())(
 
     it("hashes a password shaped exactly like a hash", async () => {
       // A shape test that recognised bcrypt instead would keep this one as
-      // given; whatever a password looks like, it is the password.
+      // given; whatever a password looks like, it is the password. The value
+      // only needs a hash's shape, so it is made at bcrypt's lowest cost and
+      // the case pays for one full-cost hash and two comparisons, not five.
       const t = await boot(dialect);
-      await seedFounder(t);
-      const hashShaped = await hashPassword("something else entirely");
+      const hashShaped = await hashPassword("something else entirely", 4);
       await services(t).users.createLocalUser({
         email: "shaped@example.com",
         name: "Shaped",
@@ -234,8 +248,9 @@ describe.each(getConfiguredTestDialects())(
       expect(await stored(t, "founder@example.com")).toBe(before);
       expect(await signsIn(t, "founder@example.com", OTHER)).toBe(true);
 
-      // The control: a real hash is stored as the hash it is.
-      const hash = await hashPassword(PASSPHRASE);
+      // The control: a real hash is stored as the hash it is. At bcrypt's
+      // lowest cost, since what is under test is the write, not the cost.
+      const hash = await hashPassword(PASSPHRASE, 4);
       await services(t).users.updatePasswordHash(id, hash);
       expect(await stored(t, "founder@example.com")).toBe(hash);
       expect(await signsIn(t, "founder@example.com", PASSPHRASE)).toBe(true);
@@ -246,6 +261,9 @@ describe.each(getConfiguredTestDialects())(
       // in by comparing text would make it a working credential.
       const t = await boot(dialect);
       await seedFounder(t);
+      // The account signs in before its stored value is replaced, so the
+      // refusal below is about that value, not an account that never could.
+      expect(await signsIn(t, "founder@example.com", OTHER)).toBe(true);
       const db = t.adapter.getDrizzle() as unknown as {
         update: (table: unknown) => {
           set: (v: unknown) => { where: (c: unknown) => Promise<unknown> };
@@ -256,6 +274,8 @@ describe.each(getConfiguredTestDialects())(
         .update(users)
         .set({ passwordHash: PASSPHRASE })
         .where(eq(users.email, "founder@example.com"));
+      // The row now holds the password itself, as such a row would.
+      expect(await stored(t, "founder@example.com")).toBe(PASSPHRASE);
 
       expect(await signsIn(t, "founder@example.com", PASSPHRASE)).toBe(false);
     });
