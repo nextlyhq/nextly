@@ -36,10 +36,7 @@ export default definePlugin({
   contributes: {
     settings: z.object({
       providers: z
-        .record(
-          z.string(),
-          z.object({ clientId: z.string(), clientSecret: z.string() })
-        )
+        .record(z.string(), z.object({ clientId: z.string(), clientSecret: z.string() }))
         .default({}),
     }),
   },
