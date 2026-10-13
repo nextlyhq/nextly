@@ -15,7 +15,9 @@
  * - two seeders running at once on a preset that has drifted bring it back to
  *   exactly its set, with no duplicate assignment, touching no row that stays;
  * - two replacements with different sets, run at once, end as exactly one of
- *   them, never a mix of the two.
+ *   them, never a mix of the two;
+ * - on MySQL, whose table has no foreign key, an assignment whose permission
+ *   is gone is removed rather than read through.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it } from "vitest";
@@ -101,6 +103,39 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await assignmentRows(handle, roleId)).toEqual(before);
     });
+
+    // MySQL's table declares no foreign key, so an assignment can outlive its
+    // permission there. The other two remove it with the permission.
+    it.runIf(dialect === "mysql")(
+      "removes an assignment whose permission no longer exists",
+      async () => {
+        handle = await bootSeeded(dialect);
+        const roleId = await adminRoleId(handle);
+        const service = services(handle).rolePermissions;
+        const before = await assignmentRows(handle, roleId);
+        await (handle.adapter as unknown as DrizzleAdapter).insert(
+          "role_permissions",
+          {
+            id: "assignment-of-a-deleted-permission",
+            roleId,
+            permissionId: "a-deleted-permission",
+            createdAt: new Date(),
+          }
+        );
+
+        const listed = await service.listRolePermissions(roleId);
+        expect(listed.map(permission => permission.id).sort()).toEqual(
+          before.map(row => row.permissionId)
+        );
+
+        await service.setRolePermissions(
+          roleId,
+          before.map(row => row.permissionId)
+        );
+
+        expect(await assignmentRows(handle, roleId)).toEqual(before);
+      }
+    );
 
     it("ends as exactly one of two replacements with different sets that run at once", async () => {
       handle = await bootSeeded(dialect);

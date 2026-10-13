@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq } from "drizzle-orm";
+import { and, eq, getTableColumns } from "drizzle-orm";
 
 import type {
   RBACDatabaseInstance,
@@ -274,11 +274,22 @@ export class RolePermissionService extends BaseService {
 
     // Read first, outside any transaction: once a preset has settled, every
     // boot of every instance asks this with nothing to change, and the answer
-    // costs one read rather than a lock and a rewrite.
-    const before = await this.listRolePermissions(roleId);
-    if (sameMembers(new Set(before.map(p => p.id)), desired)) {
-      return before;
+    // costs one read rather than a lock and a rewrite. Compared by the rows'
+    // own permission ids, so an assignment whose permission no longer exists
+    // counts as held and is removed below. MySQL's table declares no foreign
+    // key, so such a row can be there.
+    const before = await this.readAssignments(roleId);
+    if (sameMembers(new Set(before.map(row => row.permissionId)), desired)) {
+      return named(before);
     }
+
+    // Each statement binds no more parameters than the adapter says one query
+    // may: one per id plus the role's for a removal, and up to one per column
+    // for each inserted row, defaults included.
+    const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+    const paramsPerRow = Object.keys(
+      getTableColumns(this.tables.rolePermissions)
+    ).length;
 
     await this.adapter.transaction(async tx => {
       // Serialises writers to this role: a second writer waits, then reads what
@@ -296,30 +307,28 @@ export class RolePermissionService extends BaseService {
       );
 
       const extra = [...held].filter(id => !desired.has(id));
-      if (extra.length > 0) {
+      for (const ids of batches(extra, maxParams - 1)) {
         await tx.delete("role_permissions", {
           and: [
             { column: "roleId", op: "=", value: roleId },
-            { column: "permissionId", op: "IN", value: extra },
+            { column: "permissionId", op: "IN", value: ids },
           ],
         });
       }
 
       const missing = [...desired].filter(id => !held.has(id));
-      if (missing.length > 0) {
-        // Through Drizzle, on this transaction's connection, so the schema's
-        // own defaults apply: SQLite's `created_at` is filled by the table
-        // definition, which an insert by table name leaves as NULL.
-        await tx
-          .getDrizzle<RBACDatabaseInstance>()
-          .insert(this.tables.rolePermissions)
-          .values(
-            missing.map(permissionId => ({
-              id: randomUUID(),
-              roleId,
-              permissionId,
-            }))
-          );
+      // Through Drizzle, on this transaction's connection, so the schema's own
+      // defaults apply: SQLite's `created_at` is filled by the table
+      // definition, which an insert by table name leaves as NULL.
+      const drizzle = tx.getDrizzle<RBACDatabaseInstance>();
+      for (const ids of batches(missing, maxParams / paramsPerRow)) {
+        await drizzle.insert(this.tables.rolePermissions).values(
+          ids.map(permissionId => ({
+            id: randomUUID(),
+            roleId,
+            permissionId,
+          }))
+        );
       }
     });
 
@@ -337,9 +346,12 @@ export class RolePermissionService extends BaseService {
   async listRolePermissions(
     roleId: string
   ): Promise<Array<{ id: string; action: string; resource: string }>> {
-    const rolePermissions = await (
-      this.db as RBACDatabaseInstance
-    ).query.rolePermissions.findMany({
+    return named(await this.readAssignments(roleId));
+  }
+
+  /** The role's assignment rows, each with its permission where one exists. */
+  private async readAssignments(roleId: string): Promise<Assignment[]> {
+    return (this.db as RBACDatabaseInstance).query.rolePermissions.findMany({
       where: { roleId: roleId },
       with: {
         permission: {
@@ -351,13 +363,44 @@ export class RolePermissionService extends BaseService {
         },
       },
     });
-
-    return rolePermissions.map(rp => ({
-      id: rp.permissionId,
-      action: rp.permission!.action,
-      resource: rp.permission!.resource,
-    }));
   }
+}
+
+/** An assignment row, and the permission it names when that still exists. */
+type Assignment = {
+  permissionId: string;
+  permission?: { action: string; resource: string } | null;
+};
+
+/**
+ * The permissions the assignments name. An assignment whose permission is gone
+ * names nothing a caller could act on, so it is left out rather than read
+ * through a missing row.
+ */
+function named(
+  assignments: readonly Assignment[]
+): Array<{ id: string; action: string; resource: string }> {
+  return assignments.flatMap(({ permissionId, permission }) =>
+    permission
+      ? [
+          {
+            id: permissionId,
+            action: permission.action,
+            resource: permission.resource,
+          },
+        ]
+      : []
+  );
+}
+
+/** `items` in runs of at most `size`, and never less than one per run. */
+function batches<T>(items: readonly T[], size: number): T[][] {
+  const step = Math.max(1, Math.floor(size));
+  const runs: T[][] = [];
+  for (let start = 0; start < items.length; start += step) {
+    runs.push(items.slice(start, start + step));
+  }
+  return runs;
 }
 
 /** Whether two sets hold the same members. */

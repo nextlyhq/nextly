@@ -5,25 +5,39 @@
  * `instrumentation.ts` registers services on its first request. That boot has
  * to finish seeding before the request goes on, as the instrumentation boot
  * does, or the first requests on a fresh instance are judged against roles
- * that are still being written.
+ * that are still being written. The same holds when the instrumentation boot
+ * registered the services and is still seeding: this boot then seeds nothing
+ * itself, and waits for that run.
  */
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
 
-let finishSeeding: () => void = () => {};
-const seeding = new Promise<void>(resolve => {
-  finishSeeding = resolve;
-});
-const seedPermissionsAndRolePresets = vi.fn(() => seeding);
+/** A promise that stays pending until its `finish` is called. */
+function pending(): { promise: Promise<void>; finish: () => void } {
+  let finish: () => void = () => {};
+  const promise = new Promise<void>(resolve => {
+    finish = resolve;
+  });
+  return { promise, finish };
+}
+
+let seeding = pending();
+let otherBootSeeding: Promise<void> = Promise.resolve();
+let registered = false;
+const seedPermissionsAndRolePresets = vi.fn(() => seeding.promise);
+const awaitBootSeeding = vi.fn(() => otherBootSeeding);
 
 vi.mock("../../init/seed-permissions", () => ({
   seedPermissionsAndRolePresets,
+  awaitBootSeeding,
   seedAllPermissions: vi.fn(async () => undefined),
 }));
 vi.mock("../../di", () => ({
-  registerServices: vi.fn(async () => undefined),
-  isServicesRegistered: () => false,
+  registerServices: vi.fn(async () => {
+    registered = true;
+  }),
+  isServicesRegistered: () => registered,
   shutdownServices: vi.fn(),
   // Every other post-registration step resolves to nothing: this test is about
   // the order of the seeding and the boot's own return, not what they produce.
@@ -38,22 +52,54 @@ const { ensureServicesInitialized, setHandlerConfig } = await import(
   "../auth-handler"
 );
 
+afterEach(() => {
+  registered = false;
+  seeding = pending();
+  otherBootSeeding = Promise.resolve();
+  vi.clearAllMocks();
+});
+
+/** Whether the boot is still pending once a boot that did not wait would be done. */
+async function stillBooting(booting: { done: boolean }): Promise<boolean> {
+  // Long enough for a boot that did not wait to have finished already.
+  await new Promise(resolve => setTimeout(resolve, 100));
+  return !booting.done;
+}
+
+function boot(): { done: boolean; finished: Promise<void> } {
+  const state = { done: false, finished: Promise.resolve() };
+  state.finished = ensureServicesInitialized().then(() => {
+    state.done = true;
+  });
+  return state;
+}
+
 it("does not finish booting while permissions and roles are still seeding", async () => {
   setHandlerConfig({} as SanitizedNextlyConfig);
 
-  let booted = false;
-  const booting = ensureServicesInitialized().then(() => {
-    booted = true;
-  });
-
+  const booting = boot();
   await vi.waitFor(() =>
     expect(seedPermissionsAndRolePresets).toHaveBeenCalled()
   );
-  // Long enough for a boot that did not wait to have finished already.
-  await new Promise(resolve => setTimeout(resolve, 100));
-  expect(booted).toBe(false);
+  expect(await stillBooting(booting)).toBe(true);
 
-  finishSeeding();
-  await booting;
-  expect(booted).toBe(true);
+  seeding.finish();
+  await booting.finished;
+  expect(booting.done).toBe(true);
+});
+
+it("waits for the seeding of the boot that registered the services", async () => {
+  setHandlerConfig({} as SanitizedNextlyConfig);
+  // The instrumentation boot registered the services and is still seeding.
+  registered = true;
+  const other = pending();
+  otherBootSeeding = other.promise;
+
+  const booting = boot();
+  expect(await stillBooting(booting)).toBe(true);
+  expect(seedPermissionsAndRolePresets).not.toHaveBeenCalled();
+
+  other.finish();
+  await booting.finished;
+  expect(booting.done).toBe(true);
 });

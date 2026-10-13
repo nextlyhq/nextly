@@ -54,7 +54,10 @@ import { driftCheckCollections, runDriftCheck } from "./init/drift-check";
 import type { Nextly } from "./init/nextly-instance";
 import { runPostInitTasks } from "./init/post-init-tasks";
 import { reloadNextlyConfig } from "./init/reload-config";
-import { seedPermissionsAndRolePresets } from "./init/seed-permissions";
+import {
+  awaitBootSeeding,
+  seedPermissionsAndRolePresets,
+} from "./init/seed-permissions";
 // HMR listener primitives (F1 PR 2). Lazy WS setup inside getNextly()
 // detects code-first config edits and flips a reload flag; the next
 // getNextly() call drains the flag, calls reloadNextlyConfig, and then
@@ -393,6 +396,10 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // soon as the database is ready. Each is idempotent and catches its own
         // errors.
         void runPostInitTasks();
+      } else {
+        // Registered by the request-path boot, which may still be seeding: wait
+        // for it, so this boot does not serve before the roles are written.
+        await awaitBootSeeding();
       }
 
       // Get the Direct API instance and build the singleton from it.

@@ -4,8 +4,10 @@
  * A boot has to start before migrations have created the permission and role
  * tables, so that one failure is expected and silent. Swallowing every failure
  * left a site without its preset roles and said nothing about why, so any
- * other failure is logged as an error naming the step, and the steps after it
- * still run.
+ * other failure is logged as an error naming the step. The presets still run
+ * after a failed permission step; plugin roles wait for a boot whose
+ * permissions all seeded. One seeding runs at a time, and a boot can wait for
+ * the one in flight.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -40,7 +42,9 @@ vi.mock("../../di/register", () => ({
 vi.mock("../../database/seeders/role-presets", () => ({ seedRolePresets }));
 vi.mock("../../plugins/roles/seed-roles", () => ({ seedPluginRoles }));
 
-const { seedPermissionsAndRolePresets } = await import("../seed-permissions");
+const { awaitBootSeeding, seedPermissionsAndRolePresets } = await import(
+  "../seed-permissions"
+);
 
 /** What PostgreSQL reports for a table that does not exist. */
 function missingTable(): Error {
@@ -68,7 +72,7 @@ describe("seedPermissionsAndRolePresets", () => {
     expect(error).not.toHaveBeenCalled();
   });
 
-  it("logs any other failure as an error naming the step, and runs the rest", async () => {
+  it("logs any other failure as an error naming the step, and still seeds the presets", async () => {
     seedSystemPermissions.mockRejectedValue(new Error("connection reset"));
 
     await seedPermissionsAndRolePresets();
@@ -77,7 +81,48 @@ describe("seedPermissionsAndRolePresets", () => {
     expect(error.mock.calls[0]?.[0]).toContain("Seeding permissions failed");
     expect(error.mock.calls[0]?.[0]).toContain("connection reset");
     expect(seedRolePresets).toHaveBeenCalled();
-    expect(seedPluginRoles).toHaveBeenCalled();
+  });
+
+  it("creates no plugin role until a boot has seeded every permission", async () => {
+    // A plugin role is created once and never revisited, so one created now
+    // would keep, for good, only the grants this failed step managed to write.
+    seedSystemPermissions.mockRejectedValue(new Error("connection reset"));
+    await seedPermissionsAndRolePresets();
+    expect(seedPluginRoles).not.toHaveBeenCalled();
+
+    seedSystemPermissions.mockResolvedValue({ newPermissionIds: [] });
+    await seedPermissionsAndRolePresets();
+    expect(seedPluginRoles).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs once at a time: a boot arriving mid-seeding joins the run, and waits for it", async () => {
+    let finish: (value: { newPermissionIds: never[] }) => void = () => {};
+    seedSystemPermissions.mockReturnValue(
+      new Promise(resolve => {
+        finish = resolve;
+      })
+    );
+
+    const first = seedPermissionsAndRolePresets();
+    const second = seedPermissionsAndRolePresets();
+    let waited = false;
+    const waiting = awaitBootSeeding().then(() => {
+      waited = true;
+    });
+
+    // Long enough for a wait that did not follow the run to have finished.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(waited).toBe(false);
+
+    finish({ newPermissionIds: [] });
+    await Promise.all([first, second, waiting]);
+    expect(waited).toBe(true);
+    expect(seedSystemPermissions).toHaveBeenCalledTimes(1);
+    expect(seedRolePresets).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not hold a boot up when nothing is seeding", async () => {
+    await expect(awaitBootSeeding()).resolves.toBeUndefined();
   });
 
   it("logs a failure of the role presets or the plugin roles the same way", async () => {

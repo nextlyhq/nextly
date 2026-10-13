@@ -19,7 +19,10 @@ import {
 import type { NextlyServiceConfig } from "../di/register";
 import { awaitBootMigrations } from "../init/boot-migrations-gate";
 import { buildServiceConfig } from "../init/build-service-config";
-import { seedPermissionsAndRolePresets } from "../init/seed-permissions";
+import {
+  awaitBootSeeding,
+  seedPermissionsAndRolePresets,
+} from "../init/seed-permissions";
 import { ensureHmrListener } from "../runtime/hmr-listener";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -358,6 +361,11 @@ export async function ensureServicesInitialized(): Promise<void> {
   });
   _initInFlight = run;
   await run;
+
+  // The pass above seeds only when it registered the services itself. When the
+  // instrumentation boot registered them, it may still be seeding, and this
+  // request must not be judged against roles it is still writing.
+  await awaitBootSeeding();
 
   // After registration, because this is the request path's own gate: a boot on
   // ANOTHER surface may still be waiting on the migrate lock, and this one must
