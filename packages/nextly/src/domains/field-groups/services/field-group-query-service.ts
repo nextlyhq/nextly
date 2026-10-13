@@ -1225,6 +1225,9 @@ export class FieldGroupQueryService extends BaseService {
           authenticatedScope: access.authenticatedScope,
           targetPolicies: access.targetPolicies,
           targetCompanions: access.targetCompanions,
+          // The read's verdicts, so every component instance relating to one
+          // target shares one question rather than asking it afresh.
+          targetVerdicts: access.targetVerdicts,
           withheldByAccess: access.withheldByAccess,
           locale: access.locale,
           status: access.status,

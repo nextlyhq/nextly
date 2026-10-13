@@ -76,6 +76,10 @@ import type {
   WhereFilter,
   ComponentFieldFilter,
 } from "../../../services/collections/query-operators";
+import {
+  readExpansionCaches,
+  type ReadExpansionCaches,
+} from "../../../services/collections/related-row-read-context";
 import type { TrustBound } from "../../../services/collections/trust-grant";
 import {
   assumedBound,
@@ -2365,10 +2369,13 @@ export class CollectionQueryService extends BaseService {
       authenticatedScope?: AuthenticatedScope;
       status?: StatusOption;
     },
-    localeChain: string[] | null
+    localeChain: string[] | null,
+    caches: ReadExpansionCaches
   ): Parameters<CollectionRelationshipService["expandRelationships"]>[3] {
     return {
       depth: params.depth,
+      // The read's caches, shared with the components it populates.
+      ...caches,
       // A related row is redacted by its OWN collection's field rules, for this
       // caller, and that pass is deferred until the document is assembled: run
       // earlier it would hide a denied sibling before the rule that masks on it
@@ -2991,6 +2998,10 @@ export class CollectionQueryService extends BaseService {
         collection as Record<string, unknown>
       );
 
+      // One set for this listing: its relationships and its components serve
+      // the same caller, so a target is judged once across all of them.
+      const caches = readExpansionCaches();
+
       // Use batch expansion to avoid N+1 queries for better scalability
       // Pass depth parameter for relationship population control
       let expandedEntries =
@@ -3000,6 +3011,7 @@ export class CollectionQueryService extends BaseService {
           fields,
           {
             depth: params.depth,
+            ...caches,
             // Expansion spreads whole related rows into these entries, and this
             // collection's field rules say nothing about another collection's
             // fields — so the caller has to reach the related row's own rules.
@@ -3065,11 +3077,10 @@ export class CollectionQueryService extends BaseService {
               // dropping it here would silently restore the full bypass.
               trusted: assumedBound(params.trusted),
               authenticatedScope: params.authenticatedScope,
-              // Shared across every component row this listing expands, so
-              // rows pointing at the same target resolve its policy once.
-              targetPolicies: new Map(),
-              targetCompanions: new Map(),
-              targetVerdicts: new Map(),
+              // Shared across every component row this listing expands, and
+              // with the listing's own relationships, so rows pointing at the
+              // same target resolve its policy and verdict once.
+              ...caches,
               // A relationship inside a component points at a collection whose
               // read rule may filter on one of its own localized fields.
               locale: localeChain?.[0],
@@ -4179,12 +4190,16 @@ export class CollectionQueryService extends BaseService {
         collection as Record<string, unknown>
       );
 
+      // One set for this read: its relationships, its components and its
+      // draft overlay all serve the same caller, so a target is judged once.
+      const caches = readExpansionCaches();
+
       // Expand relationships with depth control
       let expandedEntry = await this.relationshipService.expandRelationships(
         entry,
         params.collectionName,
         fields,
-        this.buildDetailExpansionOptions(params, localeChain)
+        this.buildDetailExpansionOptions(params, localeChain, caches)
       );
 
       // Populate component field data from comp_{slug} tables
@@ -4215,6 +4230,9 @@ export class CollectionQueryService extends BaseService {
             // unchanged; dropping it restores the full bypass silently.
             trusted: assumedBound(params.trusted),
             authenticatedScope: params.authenticatedScope,
+            // The parent's caches, so every component instance relating to a
+            // target the parent already judged asks nothing more.
+            ...caches,
             // As on the list path: a component's relationship reaches a
             // collection that may scope reads by a localized field.
             locale: localeChain?.[0],
@@ -4405,7 +4423,8 @@ export class CollectionQueryService extends BaseService {
             // read does.
             const expandOptions = this.buildDetailExpansionOptions(
               params,
-              localeChain
+              localeChain,
+              caches
             );
             draftEntry = await this.relationshipService.expandRelationships(
               draftEntry,

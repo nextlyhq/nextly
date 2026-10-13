@@ -20,6 +20,7 @@ import { effectiveCallerScope } from "../../../auth/caller-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import type { AccessOperation } from "../../../services/access";
 import { isSuperAdminContext } from "../../../services/access";
+import { hasPermission } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 
@@ -170,14 +171,20 @@ export class CollectionAccessService extends BaseService {
           data: null as unknown as T,
         };
       }
-    } else if (!routeAuthorized && this.rbacAccessControlService && user) {
+    } else if (!routeAuthorized && user) {
       try {
-        const allowed = await this.rbacAccessControlService.checkAccess({
-          userId: user.id,
-          operation,
-          resource: collectionName,
-          executor,
-        });
+        // Without the access-control service, the caller's database grants:
+        // the answer the route gate (`requireCollectionAccess`) and a
+        // relationship's gate give without it. Admitting the caller here
+        // served directly what both of those refuse.
+        const allowed = this.rbacAccessControlService
+          ? await this.rbacAccessControlService.checkAccess({
+              userId: user.id,
+              operation,
+              resource: collectionName,
+              executor,
+            })
+          : await hasPermission(user.id, operation, collectionName, executor);
         if (!allowed) {
           return {
             success: false,

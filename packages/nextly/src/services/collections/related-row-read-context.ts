@@ -176,3 +176,26 @@ export interface RelatedRowReadContext {
    */
   targetVerdicts?: Map<string, Promise<boolean>>;
 }
+
+/** The per-read caches a {@link RelatedRowReadContext} carries. */
+export type ReadExpansionCaches = Required<
+  Pick<
+    RelatedRowReadContext,
+    "targetPolicies" | "targetCompanions" | "targetVerdicts"
+  >
+>;
+
+/**
+ * Fresh caches for one read, to hand to its parent expansion AND every
+ * component it populates. Both serve the same caller under the same bypass,
+ * so a target judged for the parent's relationship is not judged again for a
+ * component's: each component instance building its own caches asked the same
+ * question once per instance.
+ */
+export function readExpansionCaches(): ReadExpansionCaches {
+  return {
+    targetPolicies: new Map(),
+    targetCompanions: new Map(),
+    targetVerdicts: new Map(),
+  };
+}
