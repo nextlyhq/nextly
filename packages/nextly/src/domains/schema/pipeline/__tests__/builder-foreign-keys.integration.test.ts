@@ -106,14 +106,30 @@ const mentorField = (pair: Pair) => ({
     onDelete: "set null",
   },
 });
+/**
+ * A one-to-one to the authors. The Builder's DDL makes its column UNIQUE,
+ * inline, which no spec describes: introspection skips the index backing it.
+ */
+const profileField = (pair: Pair) => ({
+  name: "profile",
+  type: "relationship",
+  options: {
+    target: pair.authorsSlug,
+    relationType: "oneToOne",
+    onDelete: "set null",
+  },
+});
+
 const postFields = (
   pair: Pair,
   score: "text" | "number",
-  withAuthor = true
+  withAuthor = true,
+  withProfile = false
 ) => [
   { name: "title", type: "text" },
   { name: "score", type: score },
   ...(withAuthor ? [authorField(pair)] : []),
+  ...(withProfile ? [profileField(pair)] : []),
 ];
 
 interface Target {
@@ -375,6 +391,172 @@ describe("a Schema Builder collection's foreign keys (sqlite)", () => {
 });
 
 /**
+ * What else a SQLite rebuild of a Builder table would lose: the UNIQUE its own
+ * DDL gives a one-to-one relationship's column, and the triggers an app or a
+ * plugin migration put on it. drizzle-kit rebuilds the table for both changes
+ * below, a relationship added (its key) and a column's type changed, from a
+ * runtime definition that holds neither.
+ */
+describe("what a SQLite rebuild of a Schema Builder table keeps (sqlite)", () => {
+  const pair = pairNamed("brk");
+  let sqlite: Database.Database;
+  let target: Target;
+
+  beforeEach(async () => {
+    clearCachedSnapshot();
+    sqlite = new Database(":memory:");
+    sqlite.pragma("foreign_keys = ON");
+    const db = drizzleSqlite({ client: sqlite });
+    target = { db, dialect: "sqlite" };
+    await freshPushSchema("sqlite", db, getDialectTables("sqlite"));
+  });
+  afterEach(() => {
+    clearCachedSnapshot();
+    sqlite.close();
+  });
+
+  /** Posts with a one-to-one profile, born with or without a lead author. */
+  function createTables(postsBornWithAuthor: boolean) {
+    for (const statement of [
+      ...builderStatements("sqlite", pair.authors, authorFields("text")),
+      ...builderStatements(
+        "sqlite",
+        pair.posts,
+        postFields(pair, "text", postsBornWithAuthor, true)
+      ),
+    ]) {
+      sqlite.exec(statement);
+    }
+    for (const id of ["a1", "a2"]) {
+      sqlite
+        .prepare(
+          `INSERT INTO "${pair.authors}" (id, title, slug, name, rank) VALUES (?, 'A', ?, 'Ada', '1')`
+        )
+        .run(id, id);
+    }
+    insertPost("p1", "a1");
+  }
+
+  function insertPost(id: string, profile: string) {
+    sqlite
+      .prepare(
+        `INSERT INTO "${pair.posts}" (id, title, slug, score, profile) VALUES (?, 'P', ?, '5', ?)`
+      )
+      .run(id, id, profile);
+  }
+
+  /** The table's stored CREATE statement, which a rebuild replaces. */
+  const storedSql = (table: string) =>
+    (
+      sqlite
+        .prepare(
+          `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`
+        )
+        .get(table) as { sql: string }
+    ).sql;
+
+  // Each change, with whether the posts table is born with the lead author
+  // the first one adds.
+  const REBUILDS = [
+    {
+      change: "a relationship added to it",
+      bornWithAuthor: false,
+      desired: () =>
+        desiredFor(
+          pair,
+          authorFields("text"),
+          postFields(pair, "text", true, true)
+        ),
+    },
+    {
+      change: "a column's type changed",
+      bornWithAuthor: true,
+      desired: () =>
+        desiredFor(
+          pair,
+          authorFields("text"),
+          postFields(pair, "number", true, true)
+        ),
+    },
+  ];
+
+  it.each(REBUILDS)(
+    "keeps a one-to-one column unique through a rebuild for $change",
+    async ({ bornWithAuthor, desired }) => {
+      createTables(bornWithAuthor);
+      const before = storedSql(pair.posts);
+
+      const result = await save(target, desired());
+
+      expect(result.error).toBeUndefined();
+      expect(result.success).toBe(true);
+      // The premise: the table was rebuilt, so its definition is drizzle-kit's.
+      expect(storedSql(pair.posts)).not.toBe(before);
+      expect(() => insertPost("p2", "a1")).toThrow(/UNIQUE/);
+      // The control: another author is still accepted.
+      insertPost("p3", "a2");
+      expect(
+        sqlite.prepare(`SELECT id, profile FROM "${pair.posts}"`).all()
+      ).toEqual([
+        { id: "p1", profile: "a1" },
+        { id: "p3", profile: "a2" },
+      ]);
+    }
+  );
+
+  it("changes another table while this one holds a one-to-one, and leaves this one alone", async () => {
+    createTables(true);
+    const authorsBefore = storedSql(pair.authors);
+    const before = storedSql(pair.posts);
+
+    const result = await save(
+      target,
+      desiredFor(
+        pair,
+        authorFields("number"),
+        postFields(pair, "text", true, true)
+      )
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.success).toBe(true);
+    // The authors' rank changed type, so drizzle-kit rebuilt them; the posts,
+    // whose UNIQUE it no longer sees as one to drop, it left as they were.
+    expect(storedSql(pair.authors)).not.toBe(authorsBefore);
+    expect(storedSql(pair.posts)).toBe(before);
+    expect(() => insertPost("p2", "a1")).toThrow(/UNIQUE/);
+  });
+
+  it.each(REBUILDS)(
+    "refuses a rebuild for $change while the table has a trigger, and changes nothing",
+    async ({ bornWithAuthor, desired }) => {
+      createTables(bornWithAuthor);
+      sqlite.exec(
+        `CREATE TRIGGER "${pair.posts}_touch" AFTER INSERT ON "${pair.posts}" ` +
+          `BEGIN UPDATE "${pair.authors}" SET name = 'touched'; END`
+      );
+      const before = storedSql(pair.posts);
+
+      const result = await save(target, desired());
+
+      expect(result.success).toBe(false);
+      expect(result.error?.code).toBe("PRECONDITION_FAILED");
+      expect(result.error?.message).toContain(
+        `rebuilding ${pair.posts} would drop triggers its schema does not track`
+      );
+      expect(storedSql(pair.posts)).toBe(before);
+      expect(
+        sqlite
+          .prepare(
+            `SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?`
+          )
+          .all(pair.posts)
+      ).toEqual([{ name: `${pair.posts}_touch` }]);
+    }
+  );
+});
+
+/**
  * The same added relationship on the server dialects, which take a key with a
  * statement of its own; and the next preview plans nothing for it, so the key
  * the save created is the key the diff expects.
@@ -485,6 +667,53 @@ for (const server of SERVERS) {
         expect(
           preview.operations.filter(op => op.type.endsWith("foreign_key"))
         ).toEqual([]);
+      });
+
+      it("keeps a one-to-one column unique when a relationship is added", async () => {
+        // drizzle-kit takes a save that adds a key on these dialects too, and
+        // its runtime tables declare no UNIQUE; the constraint must survive.
+        await dropTables();
+        for (const statement of [
+          ...builderStatements(
+            server.dialect,
+            pair.authors,
+            authorFields("text")
+          ),
+          ...builderStatements(
+            server.dialect,
+            pair.posts,
+            postFields(pair, "text", false, true)
+          ),
+        ]) {
+          await connection.run(statement);
+        }
+        for (const id of ["a1", "a2"]) {
+          await connection.run(
+            `INSERT INTO ${quote(pair.authors)} (id, title, slug, name, ${quote("rank")}) VALUES ('${id}', 'A', '${id}', 'Ada', '1')`
+          );
+        }
+        const insertPost = (id: string, profile: string) =>
+          connection.run(
+            `INSERT INTO ${quote(pair.posts)} (id, title, slug, score, profile) VALUES ('${id}', 'P', '${id}', '5', '${profile}')`
+          );
+        await insertPost("p1", "a1");
+
+        const result = await save(
+          connection.target,
+          desiredFor(
+            pair,
+            authorFields("text"),
+            postFields(pair, "text", true, true)
+          )
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(result.success).toBe(true);
+        expect(await postKeys(connection.target, pair)).toContainEqual(
+          keyTo(pair)
+        );
+        await expect(insertPost("p2", "a1")).rejects.toThrow();
+        await insertPost("p3", "a2");
       });
     }
   );

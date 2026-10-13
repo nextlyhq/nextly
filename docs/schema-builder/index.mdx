@@ -7,11 +7,11 @@ The **Visual Schema Builder** is Nextly's drag-and-drop schema designer. It prod
 
 The Schema Builder has three variants that share the same canvas, palette, and field editor:
 
-| Variant | Route | Output |
-|---|---|---|
-| Collections Builder | `/admin/builder/collections` | Persists the schema row, writes the entity into the UI-schema manifest (`db.uiSchemaFile`), and writes a Drizzle migration under `db.migrationsDir` (default `./src/db/migrations/`). No TypeScript schema file is written: the runtime builds its Drizzle table from the `dynamic_collections` row instead. |
-| Singles Builder | `/admin/builder/singles` | Persists the schema in the `dynamic_singles` database table and writes the entity into the UI-schema manifest (`db.uiSchemaFile`). No migration file. |
-| Field Groups Builder | `/admin/builder/field-groups` | Persists the field group definition in the database and writes the entity into the UI-schema manifest (`db.uiSchemaFile`). No migration file. |
+| Variant              | Route                         | Output                                                                                                                                                                                                                                                                                                       |
+| -------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Collections Builder  | `/admin/builder/collections`  | Persists the schema row, writes the entity into the UI-schema manifest (`db.uiSchemaFile`), and writes a Drizzle migration under `db.migrationsDir` (default `./src/db/migrations/`). No TypeScript schema file is written: the runtime builds its Drizzle table from the `dynamic_collections` row instead. |
+| Singles Builder      | `/admin/builder/singles`      | Persists the schema in the `dynamic_singles` database table and writes the entity into the UI-schema manifest (`db.uiSchemaFile`). No migration file.                                                                                                                                                        |
+| Field Groups Builder | `/admin/builder/field-groups` | Persists the field group definition in the database and writes the entity into the UI-schema manifest (`db.uiSchemaFile`). No migration file.                                                                                                                                                                |
 
 Create a new entity from any of the three list pages above. Edit an existing entity by appending its slug, e.g. `/admin/builder/collections/posts`.
 
@@ -26,13 +26,13 @@ Each Schema Builder uses a two-column layout:
 
 The field palette groups field types into five categories, in this order:
 
-| Category | Field types in the picker |
-|---|---|
-| Basic | Text, Long text, Editor (rich text), Email, Password, Number |
-| Advanced | Code, Date, Select, Radio, Checkbox, Toggle, JSON, Tags (chips) |
-| Media | Media (upload) |
-| Relational | Relationship |
-| Structured | Repeater, Group, Component |
+| Category   | Field types in the picker                                       |
+| ---------- | --------------------------------------------------------------- |
+| Basic      | Text, Long text, Editor (rich text), Email, Password, Number    |
+| Advanced   | Code, Date, Select, Radio, Checkbox, Toggle, JSON, Tags (chips) |
+| Media      | Media (upload)                                                  |
+| Relational | Relationship                                                    |
+| Structured | Repeater, Group, Component                                      |
 
 This is the picker grouping inside the admin UI. The reference docs in [Fields](/docs/configuration/fields) group fields slightly differently (Basic / Selection / Media / Relationship / Layout / Component / Advanced / Virtual) so the prose can talk about families that don't all map to a single picker tab — for example, the `join` field is a code-first virtual field with no picker entry.
 
@@ -40,12 +40,12 @@ This is the picker grouping inside the admin UI. The reference docs in [Fields](
 
 Click a field on the canvas to slide the field editor over the palette. The editor has four tabs:
 
-| Tab | What you configure |
-|---|---|
-| **General** | Name (auto-derived slug), label, description, default value, and the field's type-specific options (e.g. Select options, Relationship target, Upload MIME pattern). |
-| **Validation** | `required`, plus type-specific rules: `minLength` / `maxLength`, `min` / `max`, `minRows` / `maxRows`, `minChips` / `maxChips`, regex `pattern`, custom `message`. |
-| **Display** | Layout `width` (25% / 33% / 50% / 66% / 75% / 100%), `position` (Main content or Sidebar), `readOnly`, `hidden`, conditional visibility (a per-field condition keyed off another field's value), description, placeholder. |
-| **Advanced** | `unique` constraint, database `index`, and a reserved `localized` flag (not yet wired through to runtime localization). |
+| Tab            | What you configure                                                                                                                                                                                                         |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **General**    | Name (auto-derived slug), label, description, default value, and the field's type-specific options (e.g. Select options, Relationship target, Upload MIME pattern).                                                        |
+| **Validation** | `required`, plus type-specific rules: `minLength` / `maxLength`, `min` / `max`, `minRows` / `maxRows`, `minChips` / `maxChips`, regex `pattern`, custom `message`.                                                         |
+| **Display**    | Layout `width` (25% / 33% / 50% / 66% / 75% / 100%), `position` (Main content or Sidebar), `readOnly`, `hidden`, conditional visibility (a per-field condition keyed off another field's value), description, placeholder. |
+| **Advanced**   | `unique` constraint, database `index`, and a reserved `localized` flag (not yet wired through to runtime localization).                                                                                                    |
 
 Conditional visibility supports type-aware operators (`equals`, `notEquals`, `contains`, `startsWith`, `endsWith`, `isEmpty`, `isNotEmpty`, numeric comparisons, `between`, date `before` / `after`, and boolean `isTrue` / `isNotTrue`).
 
@@ -65,11 +65,20 @@ A one-to-one or many-to-one Relationship field stores the target's id in a
 column of its own, and that column carries a foreign key to the target
 collection, with the field's on-delete and on-update actions. The key is
 created with the collection, or by the save that adds the field to an
-existing one, on PostgreSQL, MySQL and SQLite alike. On SQLite, where a key
-can only be created by rebuilding the table, a save that changes a field's
-type rebuilds the table with every key it holds, and the rows of other
-collections that point at it are kept: no delete action runs during the
-rebuild.
+existing one, on PostgreSQL, MySQL and SQLite alike. A one-to-one field
+created with its collection also makes its column unique, so two entries
+cannot point at the same target, and the column stays unique through every
+later save; one added to an existing collection is not made unique yet.
+
+On SQLite, where a key can only be created by rebuilding the table, a save
+that adds a relationship or changes a field's type rebuilds the table with
+every key it holds, and the rows of other collections that point at it are
+kept: no delete action runs during the rebuild.
+
+A rebuild cannot keep a trigger your app or a plugin migration put on the
+table, so on SQLite a save that would rebuild a table with triggers on it is
+refused, naming the table. Make that change with a migration that recreates
+the table with its triggers (`nextly migrate:create --blank`).
 
 A relationship field added to an existing collection before Nextly created
 keys this way has none, and a later save does not add one, so a database that
@@ -98,16 +107,21 @@ A Component field embeds a reusable field group definition (created via the Fiel
 After save, the new collection appears in the admin sidebar under Collections. The Drizzle migration is written to your `db.migrationsDir`.
 
 <Callout type="warn">
-The Builder writes the `.sql` file **without** the paired `meta/*.snapshot.json` that `nextly migrate:create` produces. `nextly migrate:check` reports an unpaired `.sql` as `MISSING_SNAPSHOT` and exits non-zero, so committing the Builder's migration as-is fails that check. Regenerate the pair with `nextly migrate:create` before committing, and commit the `.sql` and its snapshot together.
+  The Builder writes the `.sql` file **without** the paired
+  `meta/*.snapshot.json` that `nextly migrate:create` produces. `nextly
+  migrate:check` reports an unpaired `.sql` as `MISSING_SNAPSHOT` and exits
+  non-zero, so committing the Builder's migration as-is fails that check.
+  Regenerate the pair with `nextly migrate:create` before committing, and commit
+  the `.sql` and its snapshot together.
 </Callout>
 
 ## Persistence
 
-| Entity | Where it is stored | What gets generated |
-|---|---|---|
-| Collection | `dynamic_collections` table + a migration file on disk | A Drizzle migration in `db.migrationsDir`. No TypeScript schema file: the runtime builds the Drizzle table from the `dynamic_collections` row, so a generated file would only drift from it. |
-| Single | `dynamic_singles` table + the UI-schema manifest (`db.uiSchemaFile`, default `./ui-schema.json`) | No migration file. The schema is regenerated from the database row on each request; the manifest entry is what `migrate:create` reads to carry the entity into a migration. |
-| Component | Database row + the UI-schema manifest (`db.uiSchemaFile`, default `./ui-schema.json`) | No migration file. Stored alongside dynamic singles; the manifest entry is what `migrate:create` reads. |
+| Entity     | Where it is stored                                                                               | What gets generated                                                                                                                                                                          |
+| ---------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Collection | `dynamic_collections` table + a migration file on disk                                           | A Drizzle migration in `db.migrationsDir`. No TypeScript schema file: the runtime builds the Drizzle table from the `dynamic_collections` row, so a generated file would only drift from it. |
+| Single     | `dynamic_singles` table + the UI-schema manifest (`db.uiSchemaFile`, default `./ui-schema.json`) | No migration file. The schema is regenerated from the database row on each request; the manifest entry is what `migrate:create` reads to carry the entity into a migration.                  |
+| Component  | Database row + the UI-schema manifest (`db.uiSchemaFile`, default `./ui-schema.json`)            | No migration file. Stored alongside dynamic singles; the manifest entry is what `migrate:create` reads.                                                                                      |
 
 When you edit and re-save a collection in a way that changes its **data table**, Nextly emits an additive migration (or, when destructive, prompts for confirmation in the toolbar).
 
@@ -131,12 +145,12 @@ See [Branding > Schema Builder visibility](/docs/admin/branding#schema-builder-v
 
 Both approaches produce the same registered entities. Pick by workflow:
 
-| Aspect | Visual Schema Builder | Code-first |
-|---|---|---|
-| Speed to prototype | Drag-and-drop | Write config, run `nextly db:sync` |
-| Source of truth | DB row (Singles / Components) or generated file (Collections) | Hand-written TypeScript file |
-| Lifecycle hooks | Configure in code via `hooks` array | Configure in code via `hooks` array |
-| Team workflow | Editors and non-developers can iterate | Developers own the schema |
+| Aspect             | Visual Schema Builder                                         | Code-first                          |
+| ------------------ | ------------------------------------------------------------- | ----------------------------------- |
+| Speed to prototype | Drag-and-drop                                                 | Write config, run `nextly db:sync`  |
+| Source of truth    | DB row (Singles / Components) or generated file (Collections) | Hand-written TypeScript file        |
+| Lifecycle hooks    | Configure in code via `hooks` array                           | Configure in code via `hooks` array |
+| Team workflow      | Editors and non-developers can iterate                        | Developers own the schema           |
 
 You can mix both — define core collections in code and let editors prototype new ones in the Schema Builder, or vice versa.
 

@@ -16,6 +16,7 @@
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { dropsPluginMigratedTable } from "../ownership/drop-guard";
 
+import type { Operation } from "./diff/types";
 import { isCompanionTable, isManagedTable } from "./managed-tables";
 
 const ORPHAN_DROP_PATTERNS: ReadonlyArray<{
@@ -425,6 +426,66 @@ export function stripKitDropsOfDeclaredConstraints(
     return !isDeclared;
   });
   return { kept, strippedCount };
+}
+
+/**
+ * Remove drizzle-kit's drops of the UNIQUE constraints the live tables hold
+ * that no operation of this apply removes.
+ *
+ * A Schema Builder table gets one inline from its own DDL, on a one-to-one
+ * relationship's column, and the snapshot tracks it only as the live unique
+ * index backing it. The kit's runtime tables carry no constraints on
+ * PostgreSQL, so on any apply it handles the kit reads the constraint as
+ * undeclared and drops it, and the column then takes duplicates. Only this
+ * pipeline's own `drop_index` removes one (a dropped column takes its
+ * constraint with it). SQLite's runtime tables declare theirs instead
+ * (`uniqueColumns`), since a rebuild there recreates the table from them.
+ *
+ * Matched per table, like {@link stripKitDropsOfDeclaredConstraints}; a
+ * statement this does not recognise is KEPT.
+ */
+export function stripKitDropsOfLiveUniqueConstraints(
+  statements: string[],
+  live: NextlyLiveIndexSnapshotLike,
+  ops: readonly Operation[]
+): { kept: string[]; strippedCount: number } {
+  const dropped = new Set(
+    ops.flatMap(op =>
+      op.type === "drop_index"
+        ? [`${op.tableName.toLowerCase()}.${op.index.name.toLowerCase()}`]
+        : []
+    )
+  );
+  const liveUnique = new Set(
+    live.tables.flatMap(table =>
+      (table.indexes ?? [])
+        .filter(index => index.unique)
+        .map(index => `${table.name.toLowerCase()}.${index.name.toLowerCase()}`)
+        .filter(key => !dropped.has(key))
+    )
+  );
+  if (liveUnique.size === 0) return { kept: statements, strippedCount: 0 };
+
+  let strippedCount = 0;
+  const kept = statements.filter(stmt => {
+    const alter = stmt.match(
+      /^ALTER\s+TABLE\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s+DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?["`]?(\w+)["`]?\s*;?\s*$/i
+    );
+    const isLiveUnique =
+      alter !== null &&
+      liveUnique.has(`${alter[1].toLowerCase()}.${alter[2].toLowerCase()}`);
+    if (isLiveUnique) strippedCount++;
+    return !isLiveUnique;
+  });
+  return { kept, strippedCount };
+}
+
+/** The live snapshot slice {@link stripKitDropsOfLiveUniqueConstraints} reads. */
+interface NextlyLiveIndexSnapshotLike {
+  tables: ReadonlyArray<{
+    name: string;
+    indexes?: ReadonlyArray<{ name: string; unique: boolean }>;
+  }>;
 }
 
 /** The snapshot slice {@link stripKitDropsOfDeclaredConstraints} reads. */

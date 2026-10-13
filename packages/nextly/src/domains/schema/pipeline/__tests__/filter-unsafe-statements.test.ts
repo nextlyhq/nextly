@@ -8,6 +8,7 @@ import {
   findUnexpectedDestructiveStatements,
   stripKitDropsOfDeclaredConstraints,
   stripKitDropsOfDeclaredIndexes,
+  stripKitDropsOfLiveUniqueConstraints,
 } from "../filter-unsafe-statements";
 
 afterEach(() => vi.restoreAllMocks());
@@ -345,5 +346,56 @@ describe("DROP SCHEMA", () => {
     ];
     expect(filterUnsafeStatements(kept, ["users"])).toEqual(kept);
     expect(findUnexpectedDestructiveStatements(kept)).toEqual([]);
+  });
+});
+
+describe("stripKitDropsOfLiveUniqueConstraints", () => {
+  // A Builder table whose one-to-one column has the UNIQUE its DDL gives it,
+  // read back as the unique index backing the constraint, beside a plain index.
+  const live = {
+    tables: [
+      {
+        name: "dc_posts",
+        indexes: [
+          { name: "dc_posts_profile_key", unique: true },
+          { name: "idx_dc_posts_profile", unique: false },
+        ],
+      },
+      { name: "dc_authors", indexes: [] },
+    ],
+  };
+  const drop = (table: string, name: string) =>
+    `ALTER TABLE "${table}" DROP CONSTRAINT "${name}";`;
+
+  it("strips the kit's drop of a live unique constraint (PostgreSQL)", () => {
+    const keptOther = `ALTER TABLE "dc_posts" ADD COLUMN "lead_author" text;`;
+    expect(
+      stripKitDropsOfLiveUniqueConstraints(
+        [drop("dc_posts", "dc_posts_profile_key"), keptOther],
+        live,
+        []
+      )
+    ).toEqual({ kept: [keptOther], strippedCount: 1 });
+  });
+
+  it("keeps a drop this apply plans, a non-unique index's, and another table's", () => {
+    const statements = [
+      drop("dc_posts", "dc_posts_profile_key"),
+      drop("dc_posts", "idx_dc_posts_profile"),
+      drop("dc_authors", "dc_posts_profile_key"),
+    ];
+    expect(
+      stripKitDropsOfLiveUniqueConstraints(statements, live, [
+        {
+          type: "drop_index",
+          tableName: "dc_posts",
+          index: {
+            name: "dc_posts_profile_key",
+            columns: ["profile"],
+            unique: true,
+          },
+        },
+      ])
+    ).toEqual({ kept: statements, strippedCount: 0 });
   });
 });
