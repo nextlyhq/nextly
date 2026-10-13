@@ -8,7 +8,8 @@
  * that are still being written. The same holds when the instrumentation boot
  * registered the services and has yet to seed: this boot then seeds nothing
  * itself, and waits for it. And while this boot is between registering the
- * services and seeding, a boot that finds them registered waits for it. The
+ * services and seeding, a boot that finds them registered waits for it,
+ * whether it registers them cold or again after a development config change. The
  * seeding gate here is the real one; only the seeding itself and the boot's
  * other steps are stood in for.
  */
@@ -40,7 +41,9 @@ vi.mock("../../init/seed-permissions", async importOriginal => ({
 vi.mock("../../di", () => ({
   registerServices,
   isServicesRegistered: () => registered,
-  shutdownServices: vi.fn(),
+  shutdownServices: vi.fn(async () => {
+    registered = false;
+  }),
   // The template step is the one between registering and seeding that a test
   // can hold up; every other step resolves to nothing, since this is about the
   // order of the seeding and the boot's own return, not what they produce.
@@ -62,6 +65,7 @@ const { awaitBootSeeding, holdBootSeeding } = await import(
 );
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   registered = false;
   seeding = pending();
   templates = Promise.resolve();
@@ -118,6 +122,33 @@ it("holds the gate from before it registers the services until it has seeded", a
   await vi.waitFor(() => expect(registerServices).toHaveBeenCalled());
 
   // What the instrumentation boot does on finding the services registered.
+  const otherBoot = awaitBootSeeding();
+  expect(await stillPending(otherBoot)).toBe(true);
+
+  slowTemplates.finish();
+  await booting;
+  await otherBoot;
+});
+
+it("holds the gate while it registers the services again after a config change", async () => {
+  // Development re-registers the services when the route config's
+  // `localization` block has moved since they were registered from it.
+  vi.stubEnv("NODE_ENV", "development");
+  vi.stubEnv("NEXTLY_DISABLE_INSTRUMENTATION_WARNING", "1");
+  seeding.finish();
+  setHandlerConfig({} as SanitizedNextlyConfig);
+  await ensureServicesInitialized();
+  setHandlerConfig({
+    localization: { defaultLocale: "en", locales: ["en", "fr"] },
+  } as unknown as SanitizedNextlyConfig);
+  registerServices.mockClear();
+  const slowTemplates = pending();
+  templates = slowTemplates.promise;
+
+  // Torn down, registered again, then held up in the template step.
+  const booting = ensureServicesInitialized();
+  await vi.waitFor(() => expect(registerServices).toHaveBeenCalled());
+
   const otherBoot = awaitBootSeeding();
   expect(await stillPending(otherBoot)).toBe(true);
 

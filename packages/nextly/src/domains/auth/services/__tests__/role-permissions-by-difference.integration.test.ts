@@ -87,15 +87,14 @@ describe.each(getConfiguredTestDialects())(
       const before = await assignmentRows(handle, roleId);
       expect(before.length).toBeGreaterThan(1);
 
-      // One assignment dropped and one added that the database refuses, so the
-      // removal succeeds and the addition fails: the point at which a
-      // delete-then-insert has already emptied the role. The id names no
-      // permission, which PostgreSQL and SQLite refuse on the foreign key, and
-      // is longer than MySQL's 191-character column, which MySQL refuses
-      // because its table declares no foreign key to fail on.
+      // One assignment dropped and one added that names no permission, so the
+      // removal runs and the addition is refused: the point at which a
+      // delete-then-insert has already emptied the role. Refused on MySQL too,
+      // whose table has no foreign key that would refuse it, so a replacement
+      // never reports success for an assignment that grants nothing.
       const desired = [
         ...before.slice(1).map(row => row.permissionId),
-        `no-such-permission-${"x".repeat(200)}`,
+        "no-such-permission",
       ];
       await expect(
         services(handle).rolePermissions.setRolePermissions(roleId, desired)

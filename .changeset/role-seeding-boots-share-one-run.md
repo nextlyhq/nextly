@@ -32,8 +32,9 @@ When one boot finds the services already registered by the other, as when
 `instrumentation.ts` and a first request boot at the same time, it now waits for
 that boot's permission and role seeding rather than serving before the roles are
 written. The registering boot holds that wait from before its services read as
-registered, so the steps it runs before seeding are covered too. Both boots
-share one seeding run per process.
+registered, so the steps it runs before seeding are covered too, and so is a
+development boot that registers the services again after a `localization`
+change. Both boots share one seeding run per process.
 
 A plugin-declared role is created only once a boot has seeded every
 permission. A plugin role is never revisited after it exists, so one created
@@ -45,6 +46,8 @@ logged as an error naming how many.
 
 On MySQL, whose `role_permissions` table has no foreign key, an assignment
 whose permission no longer exists is left out of a role's permission list and
-removed by the next replacement, rather than failing the read. Replacing a
-role's permissions removes and inserts in statements within the adapter's
-parameter limit, however many assignments change.
+removed by the next replacement, rather than failing the read. A replacement
+that adds an id naming no permission is refused on every dialect, MySQL
+included, and leaves the role as it was. Replacing a role's permissions removes
+and inserts in statements within the adapter's parameter limit, however many
+assignments change.

@@ -8,6 +8,7 @@ import type {
   RolePermissionInsertData,
 } from "@nextly/types/rbac-operations";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import {
@@ -317,6 +318,27 @@ export class RolePermissionService extends BaseService {
       }
 
       const missing = [...desired].filter(id => !held.has(id));
+
+      // Every id added has to name a permission. PostgreSQL and SQLite refuse
+      // one that does not through the foreign key; MySQL's table declares
+      // none, so it would keep an assignment that grants nothing, which the
+      // list leaves out, and the replacement would report success. Thrown here,
+      // inside the transaction, so the removal above is undone with it.
+      const known = new Set<string>();
+      for (const ids of batches(missing, maxParams)) {
+        const rows = await tx.select<{ id: string }>("permissions", {
+          columns: ["id"],
+          where: { and: [{ column: "id", op: "IN", value: ids }] },
+        });
+        for (const row of rows) known.add(String(row.id));
+      }
+      const unknown = missing.filter(id => !known.has(id));
+      if (unknown.length > 0) {
+        throw NextlyError.notFound({
+          logContext: { roleId, permissionIds: unknown },
+        });
+      }
+
       // Through Drizzle, on this transaction's connection, so the schema's own
       // defaults apply: SQLite's `created_at` is filled by the table
       // definition, which an insert by table name leaves as NULL.

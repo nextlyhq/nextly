@@ -273,6 +273,21 @@ function localizationBlockChanged(stored: SanitizedNextlyConfig): boolean {
   return _registeredLocalization !== current;
 }
 
+/**
+ * Whether this pass will tear the services down to register them again: in
+ * development, when the stored config's `localization` block has moved. Read
+ * by the pass itself and by the seeding hold taken before it, so the two cannot
+ * disagree about whether the pass registers.
+ */
+function needsLocalizationReregistration(): boolean {
+  return (
+    process.env.NODE_ENV === "development" &&
+    isServicesRegistered() &&
+    _storedConfig !== null &&
+    localizationBlockChanged(_storedConfig)
+  );
+}
+
 // Test seams: the staleness decision is the behavioral contract of the
 // dev-only re-registration in ensureServicesInitialized; exporting these
 // under verbose names keeps the public surface honest while letting unit
@@ -357,11 +372,15 @@ export async function ensureServicesInitialized(): Promise<void> {
   while (_initInFlight) {
     await _initInFlight;
   }
-  // Taken before this pass registers the services, which is when the
-  // instrumentation boot would start finding them registered: it waits on this
-  // hold until the pass has seeded. Released before this boot waits on the gate
-  // itself, so it never waits on its own hold.
-  const releaseSeeding = isServicesRegistered() ? undefined : holdBootSeeding();
+  // Taken before a pass that registers the services, cold or again after a
+  // development config change, which is when the instrumentation boot would
+  // start finding them registered: it waits on this hold until the pass has
+  // seeded. Released before this boot waits on the gate itself, so it never
+  // waits on its own hold.
+  const releaseSeeding =
+    !isServicesRegistered() || needsLocalizationReregistration()
+      ? holdBootSeeding()
+      : undefined;
   const run = initializeServicesOnce().finally(() => {
     if (_initInFlight === run) _initInFlight = null;
   });
@@ -398,12 +417,7 @@ async function initializeServicesOnce(): Promise<void> {
   // differs from the registered one, tear services down so the block below
   // re-registers them with the current config. Gated to development: config
   // modules never hot-change in production.
-  if (
-    process.env.NODE_ENV === "development" &&
-    isServicesRegistered() &&
-    _storedConfig &&
-    localizationBlockChanged(_storedConfig)
-  ) {
+  if (needsLocalizationReregistration()) {
     console.log(
       "[Nextly] `localization` config changed — re-registering services to apply it..."
     );

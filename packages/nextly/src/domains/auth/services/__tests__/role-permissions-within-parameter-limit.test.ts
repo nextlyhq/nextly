@@ -26,6 +26,7 @@ const MAX_PARAMS = 9;
 function standIn(held: Set<string>) {
   const removals: string[][] = [];
   const inserts: number[] = [];
+  const lookups: string[][] = [];
   const read = async () =>
     [...held].map(permissionId => ({
       permissionId,
@@ -33,7 +34,20 @@ function standIn(held: Set<string>) {
     }));
   const tx = {
     lockRow: async () => undefined,
-    select: async () => [...held].map(permissionId => ({ permissionId })),
+    // The role's assignments; or, for `permissions`, every id asked about,
+    // since each names a permission here.
+    select: async (
+      table: string,
+      options: { where: { and: Array<{ column: string; value: unknown }> } }
+    ) => {
+      if (table !== "permissions") {
+        return [...held].map(permissionId => ({ permissionId }));
+      }
+      const ids = options.where.and.find(c => c.column === "id")
+        ?.value as string[];
+      lookups.push(ids);
+      return ids.map(id => ({ id }));
+    },
     delete: async (
       _table: string,
       where: { and: Array<{ column: string; value: unknown }> }
@@ -64,7 +78,7 @@ function standIn(held: Set<string>) {
     adapter as unknown as DrizzleAdapter,
     { debug() {}, info() {}, warn() {}, error() {} }
   );
-  return { service, removals, inserts };
+  return { service, removals, inserts, lookups };
 }
 
 const ids = (count: number) =>
@@ -87,7 +101,7 @@ describe("replacing a role's permissions in bulk", () => {
 
   it("adds a large set in statements within the adapter's limit", async () => {
     const held = new Set<string>();
-    const { service, inserts } = standIn(held);
+    const { service, inserts, lookups } = standIn(held);
 
     await service.setRolePermissions("role-1", ids(50));
 
@@ -97,6 +111,11 @@ describe("replacing a role's permissions in bulk", () => {
     // creation time.
     for (const rows of inserts) {
       expect(rows * 4).toBeLessThanOrEqual(MAX_PARAMS);
+    }
+    // The ids are looked up before they are added, one parameter each.
+    expect(lookups.flat()).toHaveLength(50);
+    for (const run of lookups) {
+      expect(run.length).toBeLessThanOrEqual(MAX_PARAMS);
     }
   });
 });
