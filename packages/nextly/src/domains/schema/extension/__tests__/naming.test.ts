@@ -101,7 +101,7 @@ describe("pluginTableName", () => {
 
   it("refuses a name past the identifier limit", () => {
     expect(refusal(() => pluginTableName("auth", "x".repeat(60)))).toMatch(
-      /at most 63 characters/
+      /at most 63 bytes/
     );
   });
 

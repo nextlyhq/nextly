@@ -185,3 +185,147 @@ describe("SchemaRegistry.getRelations", () => {
     );
   });
 });
+
+describe("SchemaRegistry.assertRelationsResolve", () => {
+  /** The refusal's code and the edges it names, or none when it resolved. */
+  function refusalOf(registry: SchemaRegistry): {
+    code?: string;
+    relations?: unknown;
+    logMessage?: string;
+  } {
+    try {
+      registry.assertRelationsResolve();
+      return {};
+    } catch (error) {
+      expect(error).toBeInstanceOf(NextlyError);
+      const refusal = error as NextlyError;
+      return {
+        code: refusal.code,
+        relations: refusal.logContext?.relations,
+        logMessage: refusal.logMessage,
+      };
+    }
+  }
+
+  it("resolves a relation to a registered Builder-made collection, and keeps the assembly (control)", () => {
+    // A Builder-made collection reaches the registry at runtime, from its
+    // registry row, and no compiler ever sees it: only the registry can say
+    // the relation resolves.
+    const registry = makeRegistry();
+    registry.registerDynamicSchema("dc_products", makeDcTable("dc_products"));
+    registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"), [
+      { key: "product", fromColumn: "title", targetTable: "dc_products" },
+    ]);
+
+    expect(refusalOf(registry)).toEqual({});
+    // Kept, so the first query does not assemble a second time.
+    const assembled = registry.getRelations();
+    expect(assembled.dc_posts?.relations.product?.targetTableName).toBe(
+      "dc_products"
+    );
+    expect(registry.getRelations()).toBe(assembled);
+  });
+
+  it("refuses a relation to a table that is not registered, naming the edge", () => {
+    const registry = makeRegistry();
+    registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"), [
+      { key: "product", fromColumn: "title", targetTable: "dc_prodcuts" },
+    ]);
+    const refusal = refusalOf(registry);
+    expect(refusal.code).toBe("NEXTLY_SCHEMA_RELATION_UNRESOLVED");
+    expect(refusal.relations).toEqual(["dc_posts.product"]);
+    expect(refusal.logMessage).toContain('"dc_prodcuts"');
+  });
+
+  it("refuses a relation joining from a column its own table does not have", () => {
+    const registry = makeRegistry();
+    registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"), [
+      { key: "author", fromColumn: "writerId", targetTable: "users" },
+    ]);
+    const refusal = refusalOf(registry);
+    expect(refusal.relations).toEqual(["dc_posts.author"]);
+    expect(refusal.logMessage).toContain('"writerId"');
+  });
+
+  it("refuses a relation joining to a column its target does not have", () => {
+    const registry = makeRegistry();
+    registry.registerDynamicSchema("dc_authors", makeDcTable("dc_authors"), [
+      {
+        key: "posts",
+        kind: "many",
+        fromColumn: "id",
+        targetTable: "dc_posts",
+        toColumn: "writerId",
+      },
+    ]);
+    registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"));
+    const refusal = refusalOf(registry);
+    expect(refusal.relations).toEqual(["dc_authors.posts"]);
+    expect(refusal.logMessage).toContain('"writerId"');
+    expect(refusal.logMessage).toContain('"dc_posts"');
+  });
+
+  it("names every edge it cannot resolve, not only the first", () => {
+    const registry = makeRegistry();
+    registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"), [
+      { key: "product", fromColumn: "title", targetTable: "dc_prodcuts" },
+      { key: "author", fromColumn: "authorId", targetTable: "users" },
+      { key: "editor", fromColumn: "editorId", targetTable: "users" },
+    ]);
+    expect(refusalOf(registry).relations).toEqual([
+      "dc_posts.product",
+      "dc_posts.editor",
+    ]);
+  });
+
+  it("leaves the query path failing fast as it did, as an internal error", () => {
+    const registry = makeRegistry();
+    registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"), [
+      { key: "product", fromColumn: "title", targetTable: "dc_prodcuts" },
+    ]);
+    expect(() => registry.getRelations()).toThrow(
+      expect.objectContaining({ code: "INTERNAL_ERROR" })
+    );
+  });
+});
+
+describe("SchemaRegistry.assertRelationsResolve, after it refuses", () => {
+  function withOneBadEdge() {
+    const registry = makeRegistry();
+    registry.registerDynamicSchema("dc_products", makeDcTable("dc_products"));
+    registry.registerDynamicSchema("dc_posts", makeDcTable("dc_posts"), [
+      { key: "product", fromColumn: "title", targetTable: "dc_products" },
+      { key: "ghost", fromColumn: "title", targetTable: "dc_prodcuts" },
+    ]);
+    return registry;
+  }
+
+  it("keeps the relations that resolve, so the query path serves them", () => {
+    // Development reports the edge and carries on; every other relation has
+    // to keep working, rather than each query failing on the edge named.
+    const registry = withOneBadEdge();
+    expect(() => registry.assertRelationsResolve()).toThrow(NextlyError);
+
+    const relations = registry.getRelations() as unknown as RelationsShape;
+    expect(Object.keys(relations.dc_posts?.relations ?? {})).toEqual([
+      "product",
+    ]);
+  });
+
+  it("refuses again when asked again, though an assembly is kept", () => {
+    const registry = withOneBadEdge();
+    expect(() => registry.assertRelationsResolve()).toThrow(NextlyError);
+    expect(() => registry.assertRelationsResolve()).toThrow(
+      expect.objectContaining({ code: "NEXTLY_SCHEMA_RELATION_UNRESOLVED" })
+    );
+  });
+
+  it("asks afresh once a registration replaces the assembly", () => {
+    // The table the edge names arrives later, as a migration's Builder table
+    // does in development: the next question finds it.
+    const registry = withOneBadEdge();
+    expect(() => registry.assertRelationsResolve()).toThrow(NextlyError);
+    registry.registerDynamicSchema("dc_prodcuts", makeDcTable("dc_prodcuts"));
+    expect(() => registry.assertRelationsResolve()).not.toThrow();
+  });
+});

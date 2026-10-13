@@ -59,6 +59,31 @@ describe("DSL types", () => {
     }>();
   });
 
+  it("infers the row of every kind the table above leaves out", () => {
+    const wide = defineTable("wide", {
+      id: col.serial(),
+      body: col.longText(),
+      country: col.char(2),
+      externalId: col.uuid({ nullable: true }),
+      rank: col.smallint(),
+      views: col.bigint(),
+      ratio: col.double(),
+      weight: col.real({ nullable: true }),
+      payload: col.bytes(),
+    });
+    expectTypeOf<InferRow<typeof wide>>().toEqualTypeOf<{
+      id: number;
+      body: string;
+      country: string;
+      externalId: string | null;
+      rank: number;
+      views: number;
+      ratio: number;
+      weight: number | null;
+      payload: Uint8Array;
+    }>();
+  });
+
   it("makes defaulted and nullable columns optional on insert", () => {
     expectTypeOf<InferInsert<typeof identities>>().toMatchTypeOf<{
       provider: string;

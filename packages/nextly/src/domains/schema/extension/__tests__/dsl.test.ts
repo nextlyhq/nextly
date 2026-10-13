@@ -201,6 +201,22 @@ describe("defineTable", () => {
     ]);
   });
 
+  it("refuses a column name of 63 characters that is more than 63 bytes, and accepts one of 63 bytes", () => {
+    // PostgreSQL's limit is in bytes, and an accented letter is two of them
+    // in UTF-8: this name is 63 characters and 64 bytes, so PostgreSQL would
+    // keep a shortened name nothing declared.
+    const overByOne = `é${"c".repeat(62)}`;
+    expect(overByOne).toHaveLength(63);
+    expect(
+      validationPaths(() =>
+        defineTable("t", { id: col.id(), [overByOne]: col.text() })
+      )
+    ).toEqual([`t.${overByOne}`]);
+    expect(() =>
+      defineTable("t", { id: col.id(), [`é${"c".repeat(61)}`]: col.text() })
+    ).not.toThrow();
+  });
+
   it("refuses a resolved column name past 63 characters, and accepts 63", () => {
     // PostgreSQL truncates past 63 and MySQL refuses past 64, so only 63 is
     // stored as written everywhere.

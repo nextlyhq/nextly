@@ -75,6 +75,86 @@ interface DynamicEdgeBuilder {
   [tableKey: string]: Record<string, unknown> | DynamicEdgeBuilder["one"];
 }
 
+/** A dynamic edge the registry cannot resolve: its table, its key, and why. */
+export interface UnresolvedRelationEdge {
+  table: string;
+  edge: string;
+  /** Completes "the relation <edge> on <table> …". */
+  problem: string;
+}
+
+/**
+ * One dynamic edge as drizzle's relation, or why it cannot be built.
+ *
+ * Every end is looked up in the namespace the relations are assembled over,
+ * so a table that is not registered, or a column its table does not have, is
+ * found here rather than built into a relation that joins on nothing.
+ */
+function buildDynamicEdge(
+  r: DynamicEdgeBuilder,
+  tableKey: string,
+  edge: DynamicRelationEdge
+): { relation: unknown } | { problem: string } {
+  const fromCols = r[tableKey];
+  const toCols = r[edge.targetTable];
+  const many = edge.kind === "many";
+  const edgeFn = (many ? r.many : r.one)[edge.targetTable];
+  if (!fromCols || !toCols || typeof edgeFn !== "function") {
+    return {
+      problem: `targets the table "${!fromCols ? tableKey : edge.targetTable}", which is not registered`,
+    };
+  }
+  // Only a one-edge may default its target column to `id`: that is the
+  // column a reference points AT. A many-edge's target column is the one
+  // pointing back, which has no default, and substituting `id` would join
+  // the target's key to this table's key.
+  if (many && edge.toColumn === undefined) {
+    return {
+      problem: `is a many relation that names no column on "${edge.targetTable}" pointing back`,
+    };
+  }
+  const toColumn = edge.toColumn ?? "id";
+  const fromCol = fromCols[edge.fromColumn];
+  if (fromCol === undefined) {
+    return {
+      problem: `joins from the column "${edge.fromColumn}", which "${tableKey}" does not have`,
+    };
+  }
+  const toCol = toCols[toColumn];
+  if (toCol === undefined) {
+    return {
+      problem: `joins to the column "${toColumn}", which "${edge.targetTable}" does not have`,
+    };
+  }
+  return { relation: edgeFn({ from: fromCol, to: toCol }) };
+}
+
+/**
+ * The boot's refusal of the edges `assertRelationsResolve` could not resolve.
+ *
+ * In the family of the other schema-configuration refusals: a generic public
+ * message, and each edge named in `logMessage`, which a printed error shows
+ * whole.
+ */
+function unresolvedRelationsError(
+  unresolved: readonly UnresolvedRelationEdge[]
+): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_SCHEMA_RELATION_UNRESOLVED",
+    publicMessage: "Schema configuration is invalid.",
+    logMessage: unresolved
+      .map(
+        edge =>
+          `The relation "${edge.edge}" on "${edge.table}" ${edge.problem}.`
+      )
+      .join("\n"),
+    logContext: {
+      reason: "relation-unresolved",
+      relations: unresolved.map(edge => `${edge.table}.${edge.edge}`),
+    },
+  });
+}
+
 /**
  * The dialect bundle the registry composes relations over: static tables
  * keyed by their EXPORT names, which is how a relation edge names a core
@@ -103,6 +183,10 @@ export class SchemaRegistry {
   private dynamicEdges: Map<string, DynamicRelationEdge[]> = new Map();
   // Cached defineRelations output; null = needs rebuild.
   private relationsCache: AnyRelations | null = null;
+  // The edges an assembly left out, keyed by that assembly: a registration
+  // that replaces the cache drops them with it, so nothing has to remember
+  // to clear them beside it.
+  private unresolvedIn = new WeakMap<object, UnresolvedRelationEdge[]>();
 
   constructor(dialect: SupportedDialect) {
     this.dialect = dialect;
@@ -217,7 +301,58 @@ export class SchemaRegistry {
    */
   getRelations(): AnyRelations {
     if (this.relationsCache) return this.relationsCache;
+    // Fail FAST on malformed registration metadata: the assembled relations
+    // are cached, so a silently-skipped edge (or an edge built from an
+    // undefined column, which drizzle would treat as a bare inference hint
+    // joining on the wrong column) surfaces far away at query time. Boot asks
+    // the same question before anything queries (`assertRelationsResolve`).
+    this.relationsCache = this.assembleRelations(edge => {
+      throw NextlyError.internal({
+        logContext: {
+          reason: `SchemaRegistry: dynamic relation edge "${edge.edge}" on "${edge.table}" ${edge.problem}`,
+        },
+      });
+    });
+    return this.relationsCache;
+  }
 
+  /**
+   * Assemble the relations now, and refuse every edge that cannot be
+   * resolved, naming each.
+   *
+   * For boot, once every table is registered. The assembly otherwise first
+   * runs on the first `db.query`, so a relation naming a table or column that
+   * does not exist surfaced there — as an internal error, taking every
+   * relational query down with it, far from the declaration. Asked by the same
+   * assembly `getRelations` runs, so the boot and the query path cannot
+   * disagree about an edge; the result is kept, and the first query reuses it.
+   *
+   * Kept even when some edges cannot be resolved, with those left out. Where
+   * the boot refuses, nothing is served from it; where development reports
+   * the edges and carries on, it is what keeps every other relational query
+   * working, rather than each one failing on the edge already named. The
+   * edges left out are remembered against that assembly, so asking again
+   * refuses again until a registration replaces it.
+   */
+  assertRelationsResolve(): void {
+    if (this.relationsCache === null) {
+      const unresolved: UnresolvedRelationEdge[] = [];
+      this.relationsCache = this.assembleRelations(edge => {
+        unresolved.push(edge);
+      });
+      this.unresolvedIn.set(this.relationsCache, unresolved);
+    }
+    const unresolved = this.unresolvedIn.get(this.relationsCache) ?? [];
+    if (unresolved.length > 0) throw unresolvedRelationsError(unresolved);
+  }
+
+  /**
+   * The relations config, handing each dynamic edge it cannot resolve to
+   * `onUnresolved` and leaving that edge out.
+   */
+  private assembleRelations(
+    onUnresolved: (edge: UnresolvedRelationEdge) => void
+  ): AnyRelations {
     const { bundle, prebuilt, buildEdges } = this.dialectRelationsSource();
 
     // Only with no dynamic TABLES at all. Keying this on edges returned the
@@ -226,10 +361,7 @@ export class SchemaRegistry {
     // handed, not from the edges — so every runtime-registered table without
     // an edge (a plugin's table, a collection) was simply absent from
     // `db.query`, and `ctx.db.query.<table>` was undefined.
-    if (this.dynamicSchemas.size === 0) {
-      this.relationsCache = prebuilt;
-      return prebuilt;
-    }
+    if (this.dynamicSchemas.size === 0) return prebuilt;
 
     const dynamicTables: Record<string, unknown> = {};
     for (const [key, value] of this.dynamicSchemas) {
@@ -251,60 +383,23 @@ export class SchemaRegistry {
     ) => AnyRelations;
 
     const edgesByTable = this.dynamicEdges;
-    this.relationsCache = defineRelationsDynamic(merged, helper => {
+    return defineRelationsDynamic(merged, helper => {
       const staticEdges = buildEdges(helper);
       const r = helper as DynamicEdgeBuilder;
       const dynamicConfig: Record<string, Record<string, unknown>> = {};
       for (const [tableKey, edges] of edgesByTable) {
         const tableEdges: Record<string, unknown> = {};
         for (const edge of edges) {
-          const fromCols = r[tableKey];
-          const toCols = r[edge.targetTable];
-          const many = edge.kind === "many";
-          const edgeFn = (many ? r.many : r.one)[edge.targetTable];
-          // Fail FAST on malformed registration metadata: the assembled
-          // relations are cached, so a silently-skipped edge (or an edge
-          // built from an undefined column, which drizzle would treat as a
-          // bare inference hint joining on the wrong column) surfaces far
-          // away at query time. Registration is the right place to blow up.
-          if (!fromCols || !toCols || typeof edgeFn !== "function") {
-            throw NextlyError.internal({
-              logContext: {
-                reason:
-                  `SchemaRegistry: dynamic relation edge "${edge.key}" on ` +
-                  `"${tableKey}" references unknown table ` +
-                  `"${!fromCols ? tableKey : edge.targetTable}" — the ` +
-                  `table must be registered before edges that use it`,
-              },
+          const built = buildDynamicEdge(r, tableKey, edge);
+          if ("problem" in built) {
+            onUnresolved({
+              table: tableKey,
+              edge: edge.key,
+              problem: built.problem,
             });
+            continue;
           }
-          // Only a one-edge may default its target column to `id`: that is
-          // the column a reference points AT. A many-edge's target column is
-          // the one pointing back, which has no default, and substituting
-          // `id` would join the target's key to this table's key.
-          if (many && edge.toColumn === undefined) {
-            throw NextlyError.internal({
-              logContext: {
-                reason:
-                  `SchemaRegistry: dynamic many-edge "${edge.key}" on ` +
-                  `"${tableKey}" names no target column`,
-              },
-            });
-          }
-          const toColumn = edge.toColumn ?? "id";
-          const fromCol = fromCols[edge.fromColumn];
-          const toCol = toCols[toColumn];
-          if (fromCol === undefined || toCol === undefined) {
-            throw NextlyError.internal({
-              logContext: {
-                reason:
-                  `SchemaRegistry: dynamic relation edge "${edge.key}" on ` +
-                  `"${tableKey}" references unknown column ` +
-                  `"${fromCol === undefined ? edge.fromColumn : toColumn}"`,
-              },
-            });
-          }
-          tableEdges[edge.key] = edgeFn({ from: fromCol, to: toCol });
+          tableEdges[edge.key] = built.relation;
         }
         if (Object.keys(tableEdges).length > 0) {
           dynamicConfig[tableKey] = tableEdges;
@@ -312,7 +407,6 @@ export class SchemaRegistry {
       }
       return { ...staticEdges, ...dynamicConfig };
     });
-    return this.relationsCache;
   }
 
   private dialectRelationsSource(): {

@@ -207,7 +207,7 @@ export function migrationChecksum(content: MigrationContent): string {
  * transaction bracket for the refusal to name.
  *
  * Every guard over a module reads this list, and every path that runs one —
- * the apply and `migrate:down --plugin` — runs it.
+ * the apply, `migrate:down --plugin`, `plugins uninstall` — runs it.
  */
 export function pluginModuleStatements(
   migration: Pick<PluginMigration, "dialects" | "transaction">,

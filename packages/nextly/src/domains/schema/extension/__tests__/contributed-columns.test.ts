@@ -6,7 +6,7 @@
  * column was validated, marked hidden, recorded per element, collected into
  * `entityColumns`, and then read by nothing: absent from every `TableSpec`,
  * so the desired snapshot never proposed creating it, and absent from every
- * runtime table, so no query could have used it if it had existed.
+ * runtime table, so `ctx.db.contributed` could not have used it if it had existed.
  *
  * The draft test states the contract this file enforces: "the column reaches
  * the runtime table (so push and SQLite rebuilds keep it) and is marked
@@ -87,7 +87,7 @@ describe("a column contributed to an entity table", () => {
     expect(spec.columns.map(c => c.name)).toContain("search_vector");
   });
 
-  it("reaches the entity's RUNTIME table, so a query can read it", async () => {
+  it("reaches the entity's RUNTIME table, so ctx.db.contributed can read it", async () => {
     const schema = await buildExtensionSchema(addsSearchVector);
     setActiveExtensionSchema("postgresql", schema);
 

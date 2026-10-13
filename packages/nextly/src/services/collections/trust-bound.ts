@@ -74,6 +74,46 @@ export function callerId(access: RelatedRowReadContext): string | undefined {
   return undefined;
 }
 
+/**
+ * Whether the read has an identity a grant can belong to: a signed-in user, or
+ * an API key. A visitor has neither.
+ */
+export function hasCallerIdentity(access: RelatedRowReadContext): boolean {
+  return (
+    callerId(access) !== undefined ||
+    access.authenticatedScope?.actorType === "apiKey"
+  );
+}
+
+/**
+ * Whether a read holding NO bypass may populate a row of a system resource
+ * (`media`, `users`, `roles`, `permissions`).
+ *
+ * The question its direct read asks: a session caller's `read-<resource>`
+ * grant (super-admin authority included), or a key's own scope, through the
+ * one gate the system readers share. Without it the row is withheld, so a key
+ * or a person refused `users` by name no longer reads a post's author through
+ * its relationship.
+ *
+ * A visitor is left as before. There is no route a visitor can read a system
+ * resource through that asks a grant: their direct reads are the Direct API's
+ * and the plugin services', which return media rows without one, and pages
+ * served to the public embed the media they reference. Holding visitors to a
+ * grant no visitor can hold would empty those pages without matching any
+ * direct read they can make.
+ */
+export async function identifiedCallerMayRead(
+  access: RelatedRowReadContext,
+  resource: string
+): Promise<boolean> {
+  if (!hasCallerIdentity(access)) return true;
+  return canReadSystemResource(
+    resource,
+    callerId(access),
+    access.authenticatedScope
+  );
+}
+
 /** A media row without the columns a refused target must not disclose. */
 function withoutInternalMediaColumns(
   row: Record<string, unknown>
@@ -86,25 +126,39 @@ function withoutInternalMediaColumns(
 }
 
 /**
- * Media rows as the read's trust bound allows them.
+ * Media rows as this read may populate them.
  *
  * Upload expansion reads the media table directly, so it is never reached by
- * the per-target decision the relationship fetches make and needs its own. A
- * read holding no bypass, or holding one that did not refuse media, gets the
- * rows whole; a refused target falls back to the caller's own `read-media`
- * grant, and without it the internal columns come off.
+ * the per-target decision the relationship fetches make and needs its own.
+ *
+ * - A read holding a bypass keeps its answer: rows whole where its bound
+ *   reaches media; where the bound refused media, the caller's own
+ *   `read-media` grant, and without it the internal columns come off, since a
+ *   page served to the public still renders the files it embeds.
+ * - A read that enforces nothing, an internal one naming no caller, gets the
+ *   rows whole, as it gets every related target.
+ * - Any other read is judged by {@link identifiedCallerMayRead}: a signed-in
+ *   user or a key without `read-media` gets none of them. Withheld rows are
+ *   dropped, which leaves an upload field as it leaves one whose media no
+ *   longer exists, so a refusal cannot be told from a missing file.
  */
 export async function applyMediaTrustBound(
   records: Record<string, unknown>[],
   access: RelatedRowReadContext
 ): Promise<Record<string, unknown>[]> {
-  if (!boundRefuses(access, MEDIA_TARGET)) return records;
-  const readable = await canReadSystemResource(
-    MEDIA_TARGET,
-    callerId(access),
-    access.authenticatedScope
-  );
-  return readable ? records : records.map(withoutInternalMediaColumns);
+  if (access.overrideAccess === true) {
+    if (!boundRefuses(access, MEDIA_TARGET)) return records;
+    const readable = await canReadSystemResource(
+      MEDIA_TARGET,
+      callerId(access),
+      access.authenticatedScope
+    );
+    return readable ? records : records.map(withoutInternalMediaColumns);
+  }
+  if (!access.enforceCollectionAccess && !access.enforceFieldAccess) {
+    return records;
+  }
+  return (await identifiedCallerMayRead(access, MEDIA_TARGET)) ? records : [];
 }
 
 /**

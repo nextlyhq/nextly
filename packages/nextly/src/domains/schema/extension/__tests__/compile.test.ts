@@ -1167,7 +1167,7 @@ describe("an index declaration", () => {
       { indexes: [{ columns: ["email"], name }] }
     );
     expect(refusal(() => toTableSpec(table as never, "postgresql"))).toMatch(
-      /at most 63 characters/
+      /at most 63 bytes/
     );
   });
 });
