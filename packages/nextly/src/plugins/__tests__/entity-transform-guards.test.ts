@@ -94,6 +94,27 @@ describe("a transform that mutates instead of returning", () => {
   });
 });
 
+describe("a Date in the entity a transform receives", () => {
+  it("is a copy, so mutating it leaves the app's config as it was", () => {
+    const at = new Date(0);
+    const posts = {
+      slug: "posts",
+      kind: "collection" as const,
+      definition: { slug: "posts", fields: [{ name: "at", defaultValue: at }] },
+    };
+    runEntityTransforms([posts], [
+      contribution(definition => {
+        const field = (definition as { fields: { defaultValue: Date }[] })
+          .fields[0];
+        field.defaultValue.setTime(5);
+        return definition;
+      }),
+    ] as never);
+
+    expect(at.getTime()).toBe(0);
+  });
+});
+
 describe("a transform that renames the entity", () => {
   it("is refused, naming the slug it tried to become", () => {
     // Collisions are validated BEFORE transforms run, so renaming `posts` to

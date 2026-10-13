@@ -6,7 +6,7 @@
  * can remove the presented row in that time: an administrator ending the
  * account's sessions (a deactivation or a new password deletes every row),
  * and a second request rotating the same token. Each case runs that other
- * actor from inside `fetchRoleIds`, which is inside that window, against the
+ * actor from inside `fetchSessionRoles`, which is inside that window, against the
  * real deps-bridge and database.
  *
  * Run on every configured dialect: on PostgreSQL and MySQL the row lock the
@@ -109,13 +109,13 @@ function depsRunningDuringRotation(t: TestNextly, during: () => Promise<void>) {
   const deps = buildAuthRouterDeps(
     t.getService as unknown as (name: string) => unknown
   );
-  const fetchRoleIds = deps.fetchRoleIds;
+  const fetchSessionRoles = deps.fetchSessionRoles;
   let pending: (() => Promise<void>) | undefined = during;
-  deps.fetchRoleIds = async userId => {
+  deps.fetchSessionRoles = async userId => {
     const run = pending;
     pending = undefined;
     await run?.();
-    return fetchRoleIds(userId);
+    return fetchSessionRoles(userId);
   };
   return deps;
 }

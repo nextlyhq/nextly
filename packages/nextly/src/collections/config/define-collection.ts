@@ -34,7 +34,7 @@
 import type { BeforeOperationHandler, HookHandler } from "@nextly/hooks/types";
 
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
-import type { CollectionDbOptions } from "../../domains/collections/services/collection-id";
+import type { CollectionDbOptions } from "../../domains/collections/services/collection-db-options";
 import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { WebhookEventType } from "../../domains/webhooks/types";

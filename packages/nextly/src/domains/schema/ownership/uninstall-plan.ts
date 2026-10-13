@@ -23,6 +23,12 @@ export interface UninstallInput {
   pluginName: string;
   /** Enabled plugins and what each declares a dependency on. */
   enabled: ReadonlyArray<{ name: string; dependsOn: readonly string[] }>;
+  /**
+   * Disabled plugins and their REQUIRED dependencies. A disabled plugin
+   * still takes part in schema ordering, so one that requires this plugin
+   * fails the boot once this plugin is removed from the config.
+   */
+  disabled?: ReadonlyArray<{ name: string; requires: readonly string[] }>;
   /** This plugin's owner rows. */
   owned: readonly OwnerRecord[];
   /**
@@ -114,19 +120,25 @@ export function planUninstall(input: UninstallInput): UninstallPlan {
  * the tables exist.
  */
 function assertNoEnabledDependents(input: UninstallInput): void {
-  const dependents = input.enabled
-    .filter(
-      plugin =>
-        plugin.name !== input.pluginName &&
-        plugin.dependsOn.includes(input.pluginName)
-    )
+  const dependents = [
+    ...input.enabled.filter(plugin =>
+      plugin.dependsOn.includes(input.pluginName)
+    ),
+    // Disabling a dependent does not free its dependency: the uninstall
+    // could not then be finished, since the line it says to remove is one
+    // the disabled plugin's required `dependsOn` still needs.
+    ...(input.disabled ?? []).filter(plugin =>
+      plugin.requires.includes(input.pluginName)
+    ),
+  ]
+    .filter(plugin => plugin.name !== input.pluginName)
     .map(plugin => plugin.name);
 
   if (dependents.length === 0) return;
 
   throw new NextlyError({
     code: "PLUGIN_HAS_DEPENDENTS",
-    publicMessage: `"${input.pluginName}" cannot be uninstalled while ${dependents.map(d => `"${d}"`).join(", ")} ${dependents.length === 1 ? "depends" : "depend"} on it. Uninstall ${dependents.length === 1 ? "it" : "those"} first, or disable ${dependents.length === 1 ? "it" : "them"}.`,
+    publicMessage: `"${input.pluginName}" cannot be uninstalled while ${dependents.map(d => `"${d}"`).join(", ")} ${dependents.length === 1 ? "depends" : "depend"} on it. Uninstall ${dependents.length === 1 ? "it" : "those"} first, or remove ${dependents.length === 1 ? "it" : "them"} from the config.`,
     logContext: { plugin: input.pluginName, dependents },
   });
 }
