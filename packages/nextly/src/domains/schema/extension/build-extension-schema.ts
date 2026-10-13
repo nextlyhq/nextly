@@ -118,6 +118,13 @@ export interface ExtensionSchema {
   adopted: Record<string, unknown>;
   /** Adopted tables' relation edges, for registry registration. */
   adoptedRelations: Map<string, DynamicRelationEdge[]>;
+  /**
+   * The code-first collections', Singles' and field groups' tables this
+   * schema was compiled against. Seeded from the config, so a Builder-made
+   * table is never among them. A boot creates these after first-run, so a
+   * foreign key to one is added once they exist.
+   */
+  codeFirstTables: ReadonlySet<string>;
   /** Stable hash of the compiled output, for caches. */
   fingerprint: string;
 }
@@ -858,6 +865,7 @@ export async function buildExtensionSchema(
     adopted,
     /** Adopted tables' relation edges, for registry registration. */
     adoptedRelations,
+    codeFirstTables: new Set(input.entities.map(entity => entity.name)),
     fingerprint: fingerprintOf(specs, entityIndexes, entityColumns),
   };
 }

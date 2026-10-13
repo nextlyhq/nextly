@@ -757,8 +757,10 @@ async function registerServicesOnce(
     resolvedLogger
   );
 
-  const { registry: schemaRegistry, freshInstall } =
-    await initializeSchemaRegistry(adapter, bootExtensionSchema);
+  const schemaRegistry = await initializeSchemaRegistry(
+    adapter,
+    bootExtensionSchema
+  );
 
   // Publish the webhook recording policy from the config INDEPENDENTLY of the
   // schema registry. `registerConfigTablesInResolver` (below) only runs when the
@@ -854,18 +856,7 @@ async function registerServicesOnce(
 
   registerDomainServices(ctx);
 
-  const createdCodeFirstTables = await syncCodeFirstEntities(
-    adapter,
-    resolvedLogger,
-    transformedConfig
-  );
-
-  await checkFreshInstallForeignKeys(
-    adapter,
-    bootExtensionSchema,
-    freshInstall,
-    createdCodeFirstTables
-  );
+  await syncCodeFirstEntities(adapter, resolvedLogger, transformedConfig);
 
   await runBootMigrations(config, transformedConfig, deferredExtends, {
     adapter,
@@ -884,6 +875,8 @@ async function registerServicesOnce(
     resolvedLogger,
     bootExtensionSchema
   );
+
+  await checkForeignKeysToCodeFirstTables(adapter, bootExtensionSchema);
 
   // ----------------------------------------
   // Layer 7: Initialize Plugins
@@ -1828,15 +1821,12 @@ function registerBootMediaStorage(
  * Each sync registers its entities and gathers the tables they are
  * missing; `createMissingCodeFirstTables` (Layer 6.1) then creates all of
  * them in one pipeline apply, once every registry row exists.
- *
- * Returns the tables it set out to create, whether or not the apply managed
- * to: the fresh-install check asks after the keys pointing at exactly these.
  */
 async function syncCodeFirstEntities(
   adapter: DrizzleAdapter,
   logger: Logger,
   transformedConfig: NextlyServiceConfig
-): Promise<ReadonlySet<string>> {
+): Promise<void> {
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections
   // ----------------------------------------
@@ -1873,40 +1863,6 @@ async function syncCodeFirstEntities(
   // Layer 6.1: Create the missing code-first tables
   // ----------------------------------------
   await createMissingCodeFirstTables(adapter, logger, bootTableWork);
-
-  const { collections, singles, components } = bootTableWork.desired;
-  return new Set(
-    [
-      ...Object.values(collections),
-      ...Object.values(singles),
-      ...Object.values(components),
-    ].map(entity => entity.tableName)
-  );
-}
-
-/**
- * Layer 6.2: a fresh install's foreign keys to code-first tables.
- *
- * First-run creates the extension tables before any code-first table exists,
- * and the code-first apply above adds their keys to the tables it creates. Run
- * straight after it, before migrations or any plugin, so an install whose keys
- * could not be created stops here, naming each, rather than serving tables
- * that accept rows pointing at nothing. See `assertFreshInstallForeignKeys`
- * for what is asked and why only on a fresh install.
- */
-async function checkFreshInstallForeignKeys(
-  adapter: DrizzleAdapter,
-  bootExtensionSchema: ExtensionSchema | undefined,
-  freshInstall: boolean,
-  createdTables: ReadonlySet<string>
-): Promise<void> {
-  if (!freshInstall || bootExtensionSchema === undefined) return;
-  const { assertFreshInstallForeignKeys } = await import("../init/first-run");
-  await assertFreshInstallForeignKeys({
-    adapter,
-    specs: bootExtensionSchema.specs,
-    createdTables,
-  });
 }
 
 /**
@@ -2013,6 +1969,34 @@ async function prepareExtensionTablesForInit(
       error: m => logger.error?.(m),
     },
     extensionSchema: bootExtensionSchema,
+  });
+}
+
+/**
+ * Layer 6.95: extension tables' foreign keys to code-first tables, before any
+ * plugin initialises.
+ *
+ * First-run creates the extension tables before any code-first table exists,
+ * and the apply that creates the code-first tables adds these keys. Asked
+ * after every step that could still add one — that apply, boot migrations, and
+ * in development the reconcile just above — and before anything uses the
+ * tables, so a key that is still missing stops the boot rather than letting
+ * the table accept rows pointing at nothing. See
+ * `assertForeignKeysToCodeFirstTables` for what is asked, and why on every
+ * boot.
+ */
+async function checkForeignKeysToCodeFirstTables(
+  adapter: DrizzleAdapter,
+  bootExtensionSchema: ExtensionSchema | undefined
+): Promise<void> {
+  if (bootExtensionSchema === undefined) return;
+  const { assertForeignKeysToCodeFirstTables } = await import(
+    "../init/first-run"
+  );
+  await assertForeignKeysToCodeFirstTables({
+    adapter,
+    specs: bootExtensionSchema.specs,
+    codeFirstTables: bootExtensionSchema.codeFirstTables,
   });
 }
 
@@ -2344,18 +2328,11 @@ async function resolveAdapter(
  * Static tables come from compile-time Drizzle schema definitions.
  * Dynamic tables come from the `dynamic_collections`, `dynamic_singles`,
  * and `dynamic_components` DB tables and are generated at runtime.
- *
- * Also says whether first-run setup created this database's tables, which
- * decides whether the boot checks a fresh install's foreign keys once the
- * code-first tables exist (`checkFreshInstallForeignKeys`). Reported even when
- * the registry itself could not be built, since the tables were created
- * either way.
  */
 async function initializeSchemaRegistry(
   adapter: DrizzleAdapter,
   extensionSchema?: ExtensionSchema
-): Promise<{ registry: SchemaRegistry | undefined; freshInstall: boolean }> {
-  let freshInstall = false;
+): Promise<SchemaRegistry | undefined> {
   try {
     const { SchemaRegistry } = await import("../database/schema-registry");
     const { getDialectTables } = await import("../database/index");
@@ -2389,7 +2366,7 @@ async function initializeSchemaRegistry(
       // initializeSchemaRegistry doesn't have resolvedLogger in scope;
       // console is the right fallback because first-run is a one-time
       // user-visible event and the boot logger wiring isn't done yet.
-      const firstRun = await ensureFirstRunSetup({
+      await ensureFirstRunSetup({
         adapter,
         extensionSchema,
         logger: {
@@ -2399,7 +2376,6 @@ async function initializeSchemaRegistry(
           error: msg => console.error(msg),
         },
       });
-      freshInstall = firstRun.ranSetup;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(
@@ -2583,11 +2559,11 @@ async function initializeSchemaRegistry(
       }
     }
 
-    return { registry, freshInstall };
+    return registry;
   } catch {
     // SchemaRegistry setup failed entirely — adapter falls back to
     // executeQuery for basic operations.
-    return { registry: undefined, freshInstall };
+    return undefined;
   }
 }
 
