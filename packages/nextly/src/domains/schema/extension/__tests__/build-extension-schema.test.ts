@@ -1293,9 +1293,9 @@ describe("a hook whose output moves between builds", () => {
         {
           owner: { kind: "plugin", id: "a" },
           extend: [
-            (args => {
+            ((args: Parameters<typeof clockDefault>[0]) => {
               calls += 1;
-              (clockDefault as (a: unknown) => void)(args);
+              clockDefault(args);
             }) as never,
           ],
         },
