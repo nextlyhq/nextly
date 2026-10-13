@@ -280,7 +280,8 @@ function moduleBudget(limit: number | undefined): number {
  * after an applied one (the shape `migrate:down` records) means the module is
  * not applied, however many older applied rows exist. It is read through
  * `newestEventsByFilename`, the one helper every ledger reader shares, so a
- * run, its preview and `migrate:down` cannot disagree about the same rows.
+ * run, its preview, `migrate:down` and `plugins uninstall` cannot disagree
+ * about the same rows.
  */
 export function appliedPluginShas(
   rows: readonly SchemaEventRow[]

@@ -117,10 +117,16 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
-  // Plugin schema migrations. All 409: each is a state
+  // Plugin schema lifecycle. All 409: each is a state
   // the database and the config disagree about, which retrying cannot change
   // and an operator command resolves.
+  PLUGIN_DEPENDENCY_NOT_INSTALLED: 409,
+  PLUGIN_HAS_DEPENDENTS: 409,
+  PLUGIN_UNINSTALL_IRREVERSIBLE: 409,
+  // A full uninstall that would drop tables, run without `--yes`.
+  PLUGIN_UNINSTALL_UNCONFIRMED: 409,
   PLUGIN_SCHEMA_BEHIND: 409,
+  PLUGIN_SCHEMA_UNINSTALLED: 409,
   PLUGIN_SCHEMA_VERSION_NOT_ADVANCED: 409,
   // A generated plugin migration that would drop a table or column the
   // plugin's earlier modules created: a rename comes out as a drop and an add.

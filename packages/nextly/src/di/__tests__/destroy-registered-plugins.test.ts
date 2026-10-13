@@ -1,5 +1,5 @@
 // Plugin teardown has one implementation, shared by `shutdownServices` and
-// any one-shot command that still needs the connection afterwards.
+// the `plugins install|uninstall` command, which cannot disconnect.
 //
 // What it has to get right: destroy() in REVERSE init order, one plugin's
 // failure isolated from the rest, and nothing destroyed twice.
