@@ -69,7 +69,10 @@ import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
 } from "../../schema/services/field-column-descriptor";
-import { uniquenessCanBeAnIndex } from "../../schema/services/index-name";
+import {
+  MAX_INDEX_NAME_LENGTH,
+  uniquenessCanBeAnIndex,
+} from "../../schema/services/index-name";
 import {
   isPluginDataField,
   pluginStorageFieldType,
@@ -1288,13 +1291,15 @@ export class FieldGroupSchemaService {
  * suffix moves this bound with it instead of leaving a number behind that used to be right.
  */
 /**
- * The longest identifier every supported dialect stores intact.
+ * The longest identifier every supported dialect stores intact, in UTF-8 bytes.
  *
  * PostgreSQL's 63 rather than MySQL's 64 because it is the tighter budget AND its failure is the
  * worse one: PostgreSQL does not reject an over-long identifier, it silently TRUNCATES it, leaving
- * an object under a name nothing else can address.
+ * an object under a name nothing else can address. Its limit is in bytes, so a name is measured
+ * with `identifierBytes`. The schema's own bound, rather than a second 63, so field groups and
+ * every other derived name are held to one limit.
  */
-export const MAX_IDENTIFIER_LENGTH = 63;
+export const MAX_IDENTIFIER_LENGTH = MAX_INDEX_NAME_LENGTH;
 
 export const MAX_FIELD_GROUP_SLUG_LENGTH =
   MAX_IDENTIFIER_LENGTH -

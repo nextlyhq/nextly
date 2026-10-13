@@ -95,18 +95,18 @@ export function hasCallerIdentity(access: RelatedRowReadContext): boolean {
  * or a person refused `users` by name no longer reads a post's author through
  * its relationship.
  *
- * A visitor is left as before. There is no route a visitor can read a system
- * resource through that asks a grant: their direct reads are the Direct API's
- * and the plugin services', which return media rows without one, and pages
- * served to the public embed the media they reference. Holding visitors to a
- * grant no visitor can hold would empty those pages without matching any
- * direct read they can make.
+ * A visitor keeps media and nothing else. Pages served to the public embed
+ * the images they reference, and a media row describes a file already served
+ * to them; holding visitors to a grant none can hold would empty those pages.
+ * No visitor reads any other system resource directly, and a user row carries
+ * a person's address, so a related row of one is withheld from a visitor
+ * rather than handed out because no grant was asked.
  */
 export async function identifiedCallerMayRead(
   access: RelatedRowReadContext,
   resource: string
 ): Promise<boolean> {
-  if (!hasCallerIdentity(access)) return true;
+  if (!hasCallerIdentity(access)) return resource === MEDIA_TARGET;
   return canReadSystemResource(
     resource,
     callerId(access),

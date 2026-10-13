@@ -42,6 +42,7 @@ import type {
 } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
+import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
 import { assertNotDiverged } from "./assert-not-diverged";
@@ -945,7 +946,11 @@ export class FieldGroupMetadataService {
       names.push(`${input.tableName}${STORAGE_FORMAT.companionSuffix}`);
     }
 
-    const tooLong = names.filter(name => name.length > MAX_IDENTIFIER_LENGTH);
+    // In UTF-8 bytes, as PostgreSQL counts: a name of letters outside ASCII can be well within 63
+    // characters and still past 63 bytes, and PostgreSQL would keep only the first 63 of them.
+    const tooLong = names.filter(
+      name => identifierBytes(name) > MAX_IDENTIFIER_LENGTH
+    );
     if (tooLong.length === 0) return;
 
     throw NextlyError.validation({
@@ -954,7 +959,7 @@ export class FieldGroupMetadataService {
         code: "IDENTIFIER_TOO_LONG",
         // The offending NAME, not just its length: a slug, a field name and the index derived from
         // both all reach this, and the caller cannot otherwise tell which to shorten.
-        message: `Generated database identifier "${name}" is ${name.length} characters; the limit is ${MAX_IDENTIFIER_LENGTH}. Shorten the field group's slug or the field name it derives from.`,
+        message: `Generated database identifier "${name}" is ${identifierBytes(name)} bytes once encoded as UTF-8; the limit is ${MAX_IDENTIFIER_LENGTH} (${MAX_IDENTIFIER_LENGTH} characters of plain ASCII). Shorten the field group's slug or the field name it derives from.`,
       })),
     });
   }

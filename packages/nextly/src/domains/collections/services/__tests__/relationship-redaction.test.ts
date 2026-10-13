@@ -23,6 +23,17 @@ import {
 import { CollectionRelationshipService } from "../collection-relationship-service";
 import { TRUSTS_EVERY_COLLECTION } from "../../../../services/collections/trust-grant";
 
+// Every caller here may read the related row, since what is under test is
+// what is stripped from it. No access-control service is registered in this
+// suite, so the row gate asks the caller's database grants, as a direct read
+// does; they hold the grant.
+vi.mock("../../../../services/lib/permissions", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../../services/lib/permissions")
+  >()),
+  hasPermission: vi.fn().mockResolvedValue(true),
+}));
+
 // getSystemEntityTable() resolves the users table via env.DB_DIALECT (not the
 // adapter); sqlite needs no DATABASE_URL, so it validates cleanly in a unit
 // test while still exposing a users table with a password_hash column.
@@ -138,10 +149,30 @@ describe("relationship expansion secret redaction", () => {
     expect(related).toBeNull();
   });
 
-  it("still returns a system-entity row for a caller with no bypass", async () => {
+  it("still returns a system-entity row to a caller with no bypass who holds the grant", async () => {
     // The positive control, and it is load-bearing: without it the check above
     // passes for a change that withholds system entities from EVERY enforced
-    // read, which is every ordinary page that populates an author.
+    // read. A key's own scope answers for it, with no bypass in play.
+    const service = new CollectionRelationshipService(
+      adapterReturning({ id: "u1", email: "a@b.co" }),
+      silentLogger(),
+      {} as never,
+      {} as never
+    );
+
+    const related = await service.fetchRelatedEntry("users", "u1", {
+      enforceCollectionAccess: true,
+      overrideAccess: false,
+      trusted: () => false,
+      authenticatedScope: { actorType: "apiKey", permissions: ["read-users"] },
+    } as never);
+
+    expect(related).toMatchObject({ id: "u1", email: "a@b.co" });
+  });
+
+  it("withholds a related user from a visitor", async () => {
+    // No visitor reads a user row directly, and one carries a person's
+    // address, so an enforced read with no caller gets no populated user.
     const service = new CollectionRelationshipService(
       adapterReturning({ id: "u1", email: "a@b.co" }),
       silentLogger(),
@@ -155,7 +186,7 @@ describe("relationship expansion secret redaction", () => {
       trusted: () => false,
     } as never);
 
-    expect(related).toMatchObject({ id: "u1", email: "a@b.co" });
+    expect(related).toBeNull();
   });
 
   it("strips the users password hash from an expanded system-entity relation", async () => {

@@ -1293,6 +1293,12 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         const scope = transactionScope("ctx.db.transaction");
         const scoped = createPluginDatabase({
           ...deps,
+          // Read through rather than copied: the spread above reads a getter
+          // once, and a reload that commits while this transaction runs
+          // changes the dependencies its operations may reach.
+          get dependsOn() {
+            return deps.dependsOn;
+          },
           db: () => {
             scope.assertOpen();
             return tx.db;
