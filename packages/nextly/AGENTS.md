@@ -45,11 +45,11 @@ inside `packages/nextly`.
   a hand-assembled literal is how two doors came to answer one key differently.
 - A collection whose code-defined `access` says nothing about an operation
   falls through to DB permissions; a caller with no matching grant is refused.
-  A rule that throws denies. Relationship expansion (`judgeTarget`) puts the
-  same question to a populated TARGET: a session caller reading a target with
-  no read rule needs a grant on it, and a scoped key needs `read-<target>` in
-  its own scope before the target's rule is read. A row refused by name is
-  withheld from a relationship too, not merely hidden from the direct read.
+  A rule that throws denies. Relationship expansion (`judgeTarget`) asks a
+  populated TARGET the same: no read rule means a person needs a grant, and a
+  key needs `read-<target>` in its own scope before any rule; `users` and
+  media need `read-users` / `read-media` of a person or key, not of visitors.
+  A row refused by name is withheld from a relationship too.
 - FIELD-level rules are different: they run whenever `overrideAccess` is
   false, user or not. "Which fields may this writer set" has a perfectly good
   answer for nobody, and treating absence of a user as trust let an anonymous
