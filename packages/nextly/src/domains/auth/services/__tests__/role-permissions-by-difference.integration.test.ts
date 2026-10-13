@@ -13,7 +13,9 @@
  * - two seeders running at once on settled presets change nothing at all, the
  *   rows' own ids included;
  * - two seeders running at once on a preset that has drifted bring it back to
- *   exactly its set, with no duplicate assignment.
+ *   exactly its set, with no duplicate assignment, touching no row that stays;
+ * - two replacements with different sets, run at once, end as exactly one of
+ *   them, never a mix of the two.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it } from "vitest";
@@ -98,6 +100,34 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toThrow();
 
       expect(await assignmentRows(handle, roleId)).toEqual(before);
+    });
+
+    it("ends as exactly one of two replacements with different sets that run at once", async () => {
+      handle = await bootSeeded(dialect);
+      const roleId = await adminRoleId(handle);
+      const service = services(handle).rolePermissions;
+      const all = (await assignmentRows(handle, roleId)).map(
+        row => row.permissionId
+      );
+      // Each target drops a different assignment. Without the lock on the
+      // role, both would read the same set and delete from it, and the role
+      // would end with both dropped: a set neither replacement asked for.
+      const first = all.filter((_, index) => index !== 0);
+      const second = all.filter((_, index) => index !== 1);
+
+      // Several rounds, because two writers meet in the gap only when their
+      // reads land before either commits.
+      for (let round = 0; round < 5; round++) {
+        await service.setRolePermissions(roleId, all);
+        await Promise.all([
+          service.setRolePermissions(roleId, first),
+          service.setRolePermissions(roleId, second),
+        ]);
+        const after = (await assignmentRows(handle, roleId)).map(
+          row => row.permissionId
+        );
+        expect([first, second]).toContainEqual(after);
+      }
     });
 
     it("changes nothing when two seeders run at once on settled presets", async () => {
