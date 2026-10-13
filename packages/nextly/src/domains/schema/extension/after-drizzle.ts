@@ -53,6 +53,32 @@ interface TableConfigShape {
   primaryKeys?: unknown[];
 }
 
+/**
+ * Every construct the hook refuses because Nextly's schema model cannot carry
+ * it, spelled as each refusal names it.
+ *
+ * The one list: each refusal of a construct takes its name from here (the
+ * type below admits no other), the documentation lists every entry, and the
+ * parity suite refuses each one, so a construct cannot be refused without
+ * being documented and tested, or documented without being refused.
+ */
+export const AFTER_DRIZZLE_REFUSED_CONSTRUCTS = [
+  "a partial index",
+  "an expression index",
+  "a column-level unique constraint",
+  "a generated column",
+  "an identity column",
+  "an enum column",
+  "a check constraint",
+  "a foreign key",
+  "a table-level unique constraint",
+  "a composite primary key",
+] as const;
+
+/** One construct the hook refuses. */
+export type AfterDrizzleRefusedConstruct =
+  (typeof AFTER_DRIZZLE_REFUSED_CONSTRUCTS)[number];
+
 function refuse(table: string, construct: string, remedy: string): never {
   throw NextlyError.validation({
     errors: [
@@ -63,6 +89,15 @@ function refuse(table: string, construct: string, remedy: string): never {
       },
     ],
   });
+}
+
+/** A construct from the list, refused the way every refusal is. */
+function refuseConstruct(
+  table: string,
+  construct: AfterDrizzleRefusedConstruct,
+  remedy: string
+): never {
+  return refuse(table, construct, remedy);
 }
 
 /** The table's config, read with the accessor for its dialect. */
@@ -97,7 +132,7 @@ function readConfig(
  */
 function unconvertibleIndex(
   entry: unknown
-): { reason: string; remedy: string } | null {
+): { reason: AfterDrizzleRefusedConstruct; remedy: string } | null {
   if (typeof entry !== "object" || entry === null) return null;
   const config = (entry as { config?: unknown }).config;
   if (typeof config !== "object" || config === null) return null;
@@ -106,7 +141,8 @@ function unconvertibleIndex(
   if (where !== undefined && where !== null) {
     return {
       reason: "a partial index",
-      remedy: "Partial indexes arrive in a later release.",
+      remedy:
+        "Partial indexes are refused on every dialect, because MySQL cannot build one; index the column whole.",
     };
   }
   // An index whose columns do not resolve to names is an expression index.
@@ -121,7 +157,7 @@ function unconvertibleIndex(
   if (!named) {
     return {
       reason: "an expression index",
-      remedy: "Index a column instead.",
+      remedy: "Declare it in `indexes` on `defineTable`, with its expression.",
     };
   }
   return null;
@@ -139,28 +175,36 @@ function assertColumnsConvertible(table: Table, name: string): void {
       enumValues?: unknown;
     };
     if (shape.isUnique === true) {
-      refuse(
+      refuseConstruct(
         name,
         "a column-level unique constraint",
         "Declare a unique index instead, which the diff engine can reconcile."
       );
     }
     if (shape.generated !== undefined && shape.generated !== null) {
-      refuse(name, "a generated column", "Compute the value on write.");
+      refuseConstruct(
+        name,
+        "a generated column",
+        "Compute the value on write."
+      );
     }
     if (
       shape.generatedIdentity !== undefined &&
       shape.generatedIdentity !== null
     ) {
-      refuse(name, "an identity column", "Use a generated id instead.");
+      refuseConstruct(
+        name,
+        "an identity column",
+        "Use a generated id instead."
+      );
     }
     if (Array.isArray(shape.enumValues) && shape.enumValues.length > 0) {
       // A native enum's introspected type is the enum NAME, so the desired
       // and live sides would never agree on the column's type.
-      refuse(
+      refuseConstruct(
         name,
         "an enum column",
-        "Use a text column and validate the values."
+        "Declare it with `col.enum()`, which every dialect enforces with a check."
       );
     }
   }
@@ -175,18 +219,20 @@ function assertColumnsConvertible(table: Table, name: string): void {
  */
 const UNCONVERTIBLE_TABLE_PARTS: ReadonlyArray<{
   read: (config: TableConfigShape) => unknown[];
-  construct: string;
+  construct: AfterDrizzleRefusedConstruct;
   remedy: string;
 }> = [
   {
     read: config => config.checks ?? [],
     construct: "a check constraint",
-    remedy: "Validate the value before writing it.",
+    remedy:
+      "Declare it in `checks` on `defineTable`, which every dialect creates.",
   },
   {
     read: config => config.foreignKeys ?? [],
     construct: "a foreign key",
-    remedy: "References are recorded but not constrained in this release.",
+    remedy:
+      "Declare it in `foreignKeys` on `defineTable`, which every dialect creates.",
   },
   {
     read: config => config.uniqueConstraints ?? [],
@@ -225,11 +271,11 @@ function assertTableConvertible(
       assertExplicitIdentifier(indexName, `db.schema.afterDrizzle.${name}`);
     }
     const problem = unconvertibleIndex(entry);
-    if (problem) refuse(name, problem.reason, problem.remedy);
+    if (problem) refuseConstruct(name, problem.reason, problem.remedy);
   }
   for (const part of UNCONVERTIBLE_TABLE_PARTS) {
     if (part.read(config).length > 0) {
-      refuse(name, part.construct, part.remedy);
+      refuseConstruct(name, part.construct, part.remedy);
     }
   }
 }

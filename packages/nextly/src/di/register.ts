@@ -537,9 +537,23 @@ const globalForReg = globalThis as unknown as {
   /**
    * Where the started plugins' contexts look their services up. The live
    * container while they run; after `clearServices()`, the registrations it
-   * moved aside, until their teardown at the next registration.
+   * moved aside, for good: a callback a failed `destroy` left running keeps
+   * reaching the services its plugin was started with, never a later
+   * registration's.
    */
   __nextly_pluginServiceContainer?: { container: Container };
+  /**
+   * The registrations `clearServices()` moved aside while plugins it left
+   * running still had to be torn down, held until that teardown runs at the
+   * next registration.
+   */
+  __nextly_clearedServices?: Container;
+  /**
+   * The same registrations while that teardown runs, restored into the
+   * container, so a `clearServices()` arriving while a `destroy` awaits puts
+   * them back for the rest of it.
+   */
+  __nextly_servicesInTeardown?: Container;
   /**
    * The registry `registerServices` actually registered into. A caller may
    * supply its own, and clearing the process-global one would leave that
@@ -680,7 +694,29 @@ async function runRegistrationAttempt(
   // shutdown or a failed attempt the list is already empty and this runs
   // nothing. Inside the latch, so a caller waiting on this attempt cannot
   // start plugins while the old ones are still being destroyed.
-  await destroyRegisteredPlugins();
+  //
+  // With the services they were started with back in the container for the
+  // length of it: `clearServices()` emptied the container, and some of what
+  // a context offers reads the container itself rather than the context's
+  // own resolvers, the jobs behind `ctx.services.jobs` and the audit writer.
+  // Recorded as in use while the teardown runs, so a clear arriving while a
+  // `destroy` awaits leaves them for the rest of it. Only those are taken out
+  // again before this registration fills the container: a service someone
+  // registered after the clear is theirs, for this registration to find.
+  const cleared = globalForReg.__nextly_clearedServices;
+  globalForReg.__nextly_clearedServices = undefined;
+  if (cleared !== undefined) {
+    container.restore(cleared);
+    globalForReg.__nextly_servicesInTeardown = cleared;
+  }
+  try {
+    await destroyRegisteredPlugins();
+  } finally {
+    if (cleared !== undefined) {
+      globalForReg.__nextly_servicesInTeardown = undefined;
+      container.withdraw(cleared);
+    }
+  }
   try {
     await registerServicesOnce(config);
   } catch (error) {
@@ -3931,12 +3967,12 @@ async function initializePlugins(
    * lookups here would undo that.
    */
   // The container a plugin context looks its services up in, boxed so
-  // `clearServices()` can re-point it. That call empties the container at
-  // once, while the plugins it leaves running are torn down only when the
-  // next registration starts: a `destroy` reaching for the adapter, as
-  // `ctx.db.transaction` does on SQLite, found nothing there and failed
-  // half-way. Boxed per registration, so a later one never re-points this
-  // registration's plugins, nor this one later ones.
+  // `clearServices()` can re-point it at the registrations it moves aside.
+  // Boxed per registration, so a later one never re-points this
+  // registration's plugins, nor this one later ones: a timer a failed
+  // `destroy` left running resolves the services its plugin was started
+  // with, never the next registration's. What a context reaches through the
+  // container itself is put back for the teardown by `runRegistrationAttempt`.
   const services: { container: Container } = { container };
   globalForReg.__nextly_pluginServiceContainer = services;
 
@@ -4350,8 +4386,9 @@ export function getInitializedPluginContext(
 export async function destroyRegisteredPlugins(): Promise<void> {
   const teardown = globalForReg.__nextly_pluginTeardown ?? [];
   globalForReg.__nextly_pluginTeardown = undefined;
-  // Released after the loop: the destroys below still resolve through it,
-  // and once they are done nothing started from it is left to.
+  // Released after the loop, so no later `clearServices()` re-points the
+  // contexts of plugins already torn down: whatever they left running keeps
+  // the services it was started with.
   const services = globalForReg.__nextly_pluginServiceContainer;
   for (let i = teardown.length - 1; i >= 0; i--) {
     const { plugin, context } = teardown[i];
@@ -4430,12 +4467,25 @@ async function releaseServices(opts: {
 export function clearServices(): void {
   // Plugins still running are torn down at the next registration, and their
   // `destroy` may still need the services they were started with: those move
-  // aside for them rather than vanish. Either way the container is empty now.
-  const services = globalForReg.__nextly_pluginServiceContainer;
-  if ((globalForReg.__nextly_pluginTeardown ?? []).length > 0 && services) {
-    services.container = container.detach();
+  // aside for them rather than vanish, their contexts re-pointed at them for
+  // good and `runRegistrationAttempt` putting them back in the container for
+  // the teardown. Moved once: a second clear before that registration finds
+  // the live container already empty, and moving that aside would lose the
+  // first. Either way the container is empty now, but for a teardown already
+  // running: what it restored goes back in, since a `destroy` still awaiting
+  // reads the container after this returns.
+  if (
+    (globalForReg.__nextly_pluginTeardown ?? []).length > 0 &&
+    globalForReg.__nextly_clearedServices === undefined
+  ) {
+    const cleared = container.detach();
+    globalForReg.__nextly_clearedServices = cleared;
+    const services = globalForReg.__nextly_pluginServiceContainer;
+    if (services) services.container = cleared;
   } else {
     container.clear();
+    const inTeardown = globalForReg.__nextly_servicesInTeardown;
+    if (inTeardown !== undefined) container.restore(inTeardown);
   }
   // Clear the process-global recording policy alongside the container so a
   // re-initialization does not inherit a prior config's opt-outs.

@@ -1,7 +1,7 @@
 {
   "coverage": {
     "pages": 72,
-    "samples": 421,
+    "samples": 422,
     "compiled": 260
   },
   "samplesPerPage": {
@@ -58,7 +58,7 @@
       "compiled": 3
     },
     "docs/database/extending-the-schema.mdx": {
-      "samples": 10,
+      "samples": 11,
       "compiled": 5
     },
     "docs/database/mysql.mdx": {

@@ -310,6 +310,33 @@ describe("a create whose generated names would not fit is refused", () => {
     expect(entityStatements(adapter)).toEqual([]);
   });
 
+  it("counts bytes, not characters, as PostgreSQL does", async () => {
+    // Twenty-eight accented letters are 28 characters and 56 bytes, so the field's index,
+    // `idx_comp_hero_<28 é>`, is 42 characters and 70 bytes: inside a character count, and past
+    // the 63 bytes PostgreSQL keeps of a name.
+    const registry = registryDouble();
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup({
+        ...INPUT,
+        fields: [{ name: "é".repeat(28), type: "text", index: true }],
+      })
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            code: "IDENTIFIER_TOO_LONG",
+            message: expect.stringContaining("70 bytes"),
+          }),
+        ],
+      },
+    });
+
+    expect(entityStatements(adapter)).toEqual([]);
+  });
+
   it("does not count an index the renderer never emits", async () => {
     // 🔴 A localized field's column lives in the companion, so the main table gets no index for it
     // and no such name is ever generated. Rejecting this request would refuse a VALID create over an
