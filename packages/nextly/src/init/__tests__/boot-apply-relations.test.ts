@@ -122,6 +122,10 @@ describe("the development boot's relation check", () => {
     const reported = warn.mock.calls.map(call => String(call[0])).join("\n");
     expect(reported).toContain('The relation "post" on "cf__refs"');
     expect(reported).toContain('"dc_psots"');
+    // Rendered by the shared operator view of an error, which carries the
+    // code and the log context a terminal reader searches by.
+    expect(reported).toContain("[NEXTLY_SCHEMA_RELATION_UNRESOLVED]");
+    expect(reported).toContain('"relations":["cf__refs.post"]');
   });
 
   it("throws the refusal when asked to fail loudly", async () => {
@@ -163,6 +167,9 @@ describe("checkRelationsBeforePlugins", () => {
     });
 
     expect(warnings.join("\n")).toContain('The relation "post" on "cf__refs"');
+    expect(warnings.join("\n")).toContain(
+      "[NEXTLY_SCHEMA_RELATION_UNRESOLVED]"
+    );
     expect(() => registry.getRelations()).not.toThrow();
     expect(Object.keys(registry.getRelations())).toContain("cf__notes");
   });

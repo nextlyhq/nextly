@@ -5,7 +5,7 @@
  * custom fields, runs `customizeClaims` and signs. A deactivation or a new
  * password committed there deletes every refresh row the account holds — and
  * a row written after it would survive the revocation it was meant to end.
- * Each case runs the revocation from inside `fetchRoleIds`, which is inside
+ * Each case runs the revocation from inside `fetchSessionRoles`, which is inside
  * that window, against the real deps-bridge and database.
  *
  * Run on every configured dialect: on PostgreSQL and MySQL the row lock the
@@ -125,13 +125,13 @@ function bridge(t: TestNextly) {
 /** The real bridge, with `during` run once inside the mint's reads. */
 function depsRunningDuringMint(t: TestNextly, during: () => Promise<void>) {
   const deps = bridge(t);
-  const fetchRoleIds = deps.fetchRoleIds;
+  const fetchSessionRoles = deps.fetchSessionRoles;
   let pending: (() => Promise<void>) | undefined = during;
-  deps.fetchRoleIds = async userId => {
+  deps.fetchSessionRoles = async userId => {
     const run = pending;
     pending = undefined;
     await run?.();
-    return fetchRoleIds(userId);
+    return fetchSessionRoles(userId);
   };
   return deps;
 }

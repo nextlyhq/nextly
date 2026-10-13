@@ -944,11 +944,16 @@ function checkedEntry(
  * relations, and a copy taken here would name the tables of a schema that has
  * since been replaced.
  *
- * `has` and `ownKeys` answer for the same rule, so enumerating the namespace
- * does not advertise a table a call would refuse — except where a property is
- * non-configurable, which a Proxy may not hide. Drizzle builds these as plain
- * assignments, so that branch is a guard against a future shape, not a hole
- * in the current one.
+ * The Proxy's target is an empty object of its own, never Drizzle's
+ * namespace. Every reflective operation a Proxy does not trap is forwarded to
+ * its target, so with the namespace as the target a descriptor lookup
+ * (`Object.getOwnPropertyDescriptor(ctx.db.query, "users").value`) handed
+ * back the raw entry for any table, and an assignment replaced an entry in the
+ * namespace core itself queries through. Forwarded to an empty object, an
+ * untrapped operation reaches nothing. `get`, `has`, `ownKeys` and
+ * `getOwnPropertyDescriptor` read the namespace and answer for the same rule,
+ * so neither reading nor enumerating it names a table a call would refuse,
+ * and the only value any of them hands out for a table is its checked entry.
  *
  * The root check alone would judge only the table a query STARTS from, so the
  * entry handed back judges every table its config reaches as well — see
@@ -960,34 +965,47 @@ function ownedQueries(
   namespace: RelationalQueries,
   deps: PluginDatabaseDeps
 ): RelationalQueries {
-  const hideable = (target: RelationalQueries, key: string): boolean => {
-    if (!Object.hasOwn(target, key)) return false;
-    const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
-    return descriptor?.configurable !== false;
-  };
+  const isEntry = (property: string | symbol): property is string =>
+    typeof property === "string" && Object.hasOwn(namespace, property);
+  const shell: RelationalQueries = {};
 
-  return new Proxy(namespace, {
+  return new Proxy(shell, {
     get(target, property, receiver) {
-      if (typeof property === "string" && Object.hasOwn(target, property)) {
+      if (isEntry(property)) {
         assertTableAccess(property, rulesOf(deps));
         return checkedEntry(property, deps);
       }
+      // A symbol names no table, so it is read where it was set: on the
+      // namespace. Every string key that is not an entry goes to the shell.
+      if (typeof property === "symbol") return Reflect.get(namespace, property);
       return Reflect.get(target, property, receiver);
     },
     has(target, property) {
-      if (typeof property === "string" && hideable(target, property)) {
-        return canAccessTable(property, rulesOf(deps));
-      }
+      if (isEntry(property)) return canAccessTable(property, rulesOf(deps));
       return Reflect.has(target, property);
     },
-    ownKeys(target) {
+    ownKeys() {
       const rules = rulesOf(deps);
-      return Reflect.ownKeys(target).filter(
-        key =>
-          typeof key !== "string" ||
-          !hideable(target, key) ||
-          canAccessTable(key, rules)
-      );
+      return Object.keys(namespace).filter(key => canAccessTable(key, rules));
+    },
+    getOwnPropertyDescriptor(_target, property) {
+      if (!isEntry(property) || !canAccessTable(property, rulesOf(deps))) {
+        return undefined;
+      }
+      // Configurable, as a Proxy must report a property its target does not
+      // hold; the value is the checked entry, as `get` hands out.
+      return {
+        value: checkedEntry(property, deps),
+        writable: false,
+        enumerable: true,
+        configurable: true,
+      };
+    },
+    // Nothing is added to the namespace through it: an assignment would only
+    // ever reach the shell, and a property defined there would be one the
+    // traps above do not answer for.
+    defineProperty() {
+      return false;
     },
   });
 }

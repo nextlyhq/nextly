@@ -50,6 +50,11 @@ import {
 } from "../../domains/collections/services/collection-id";
 import { setInitializedPlugins } from "../../plugins/initialized-plugins";
 import { createPluginContext } from "../../plugins/plugin-context";
+import {
+  clearPluginDependencies,
+  currentDependencies,
+  publishPluginDependencies,
+} from "../../plugins/plugin-dependencies";
 
 import type { BuildDesiredTableOptions } from "../../domains/schema/pipeline/diff/build-from-fields";
 import type {
@@ -1670,6 +1675,55 @@ describe("reloadNextlyConfig", () => {
       // The posts table is unchanged, so only the recompiled schema can have
       // sent this reload to the pipeline.
       expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    });
+
+    describe("the plugins each plugin depends on", () => {
+      // Built once, at `init`, a plugin's `ctx.db` reads the dependencies it
+      // may reach through from what the config in force declares.
+      const reader = (dependsOn?: Record<string, string>) =>
+        ({
+          name: "@acme/reader",
+          version: "1.0.0",
+          ...(dependsOn ? { dependsOn } : {}),
+        }) as never;
+
+      beforeEach(() => {
+        // As the boot published them: the reader depends on the local plugin.
+        publishPluginDependencies([reader({ "@acme/local": "*" })]);
+        return () => clearPluginDependencies();
+      });
+
+      it("are republished when the reload lands", async () => {
+        loadConfigSpy.mockResolvedValue({
+          config: {
+            ...withPluginTable,
+            plugins: [...withPluginTable.plugins, reader()],
+          },
+        });
+        unchangedPosts();
+
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver: buildResolver() });
+
+        expect([
+          ...currentDependencies(reader({ "@acme/local": "*" })),
+        ]).toEqual([]);
+      });
+
+      it("are left as they were when the reload does not land", async () => {
+        loadConfigSpy.mockResolvedValue({
+          config: {
+            ...withPluginTable,
+            plugins: [...withPluginTable.plugins, reader()],
+          },
+        });
+        introspectSpy.mockRejectedValue(new Error("connection refused"));
+
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver: buildResolver() });
+
+        expect([...currentDependencies(reader())]).toEqual(["@acme/local"]);
+      });
     });
 
     it("is put back when the reload does not land", async () => {

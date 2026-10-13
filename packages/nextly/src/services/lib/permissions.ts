@@ -33,6 +33,13 @@ import {
   refreshEpoch,
   stampIsCurrent,
 } from "./rbac-epoch";
+import {
+  cacheExpiry,
+  roleAssignmentInForce,
+  soonestExpiry,
+  userRoleAssignmentsInForce,
+  type ResolvedRoles,
+} from "./role-assignments";
 
 if (typeof window !== "undefined") {
   throw new Error(
@@ -109,13 +116,13 @@ const CACHE_TTL_SECONDS = parseInt(
   10
 );
 
-// Lazy-load dialect tables to ensure correct tables are used
-let _dialectTables: ReturnType<typeof getDialectTables> | null = null;
+// The configured dialect's tables, looked up on each use. Kept for the whole
+// process, the first dialect's definitions answered for every later one, and
+// a comparison against a timestamp column then bound the value the first
+// dialect's column type expects: a role's expiry compared as SQLite's integer
+// seconds on PostgreSQL. The lookup only picks one of three schema objects.
 function getTablesLazy() {
-  if (!_dialectTables) {
-    _dialectTables = getDialectTables();
-  }
-  return _dialectTables;
+  return getDialectTables();
 }
 
 /**
@@ -144,10 +151,19 @@ function storeSharedDecision(
     allowed: boolean;
     roleIds: string[];
     resolvedUnder: string;
+    /** When the roles it was computed from next change; see `resolveRoles`. */
+    validUntil: number | undefined;
   }
 ): void {
-  const { userId, action, resource, allowed, roleIds, resolvedUnder } =
-    decision;
+  const {
+    userId,
+    action,
+    resource,
+    allowed,
+    roleIds,
+    resolvedUnder,
+    validUntil,
+  } = decision;
   void (async () => {
     try {
       await service.setCachedPermission(
@@ -155,7 +171,8 @@ function storeSharedDecision(
         action,
         resource,
         allowed,
-        roleIds
+        roleIds,
+        validUntil
       );
       // Forced, not throttled. This is the one place the interval must not
       // apply: the window being closed is the upsert's own flight time, and a
@@ -275,7 +292,9 @@ class PermissionChecker {
 
     // Tier 3: Fresh computation (~10ms)
     try {
-      const roleIds = await this.getAllRoleIdsForUser(userId, executor);
+      // With the moment the answer stops holding, so no tier below serves it
+      // past the expiry of a role it was computed from.
+      const { roleIds, validUntil } = await this.resolveRoles(userId, executor);
 
       if (roleIds.size === 0) {
         // Cache tiers are populated only for pooled (committed-view) checks; an
@@ -297,6 +316,7 @@ class PermissionChecker {
               allowed: false,
               roleIds: [],
               resolvedUnder,
+              validUntil,
             });
           }
         }
@@ -316,7 +336,7 @@ class PermissionChecker {
         !executor && resolvedUnderCurrentRevision(resolvedUnder);
       if (cacheable) {
         this.memo.set(key, allowed);
-        setCacheEntry(key, allowed, userId, Array.from(roleIds));
+        setCacheEntry(key, allowed, userId, Array.from(roleIds), validUntil);
       }
 
       // Async write to DB cache (don't block response). Skipped under a
@@ -337,6 +357,7 @@ class PermissionChecker {
           allowed,
           roleIds: Array.from(roleIds),
           resolvedUnder,
+          validUntil,
         });
       }
 
@@ -394,7 +415,7 @@ class PermissionChecker {
     const { userId, action, resource } = check;
 
     try {
-      const dbCached = await this.cacheService.getCachedPermission(
+      const stored = await this.cacheService.getCachedDecision(
         userId,
         action,
         resource
@@ -410,13 +431,14 @@ class PermissionChecker {
       // `createTestNextly` — the table is created and a write followed by a
       // read returns null — so no test can reach this branch. The predicate
       // it uses is covered; this call site is not.
-      if (dbCached === null || !resolvedUnderCurrentRevision(resolvedUnder)) {
+      if (stored === null || !resolvedUnderCurrentRevision(resolvedUnder)) {
         return undefined;
       }
-      // Cache hit - promote to tier 1
-      this.memo.set(key, dbCached);
-      setCacheEntry(key, dbCached, userId, []);
-      return dbCached;
+      // Cache hit - promote to tier 1, ending no later than the stored row
+      // does: the row may end early, at the expiry of a role it came from.
+      this.memo.set(key, stored.allowed);
+      setCacheEntry(key, stored.allowed, userId, [], stored.expiresAt);
+      return stored.allowed;
     } catch (error) {
       // Log but don't fail - fall through to fresh computation
       getAuthLogger()?.log?.("warn", {
@@ -460,8 +482,25 @@ class PermissionChecker {
     // Optional transaction-bound executor; see `hasPermission`.
     executor?: unknown
   ): Promise<Set<string>> {
-    const direct = await this.getDirectRoleIds(userId, executor);
-    if (direct.size === 0) return direct;
+    return (await this.resolveRoles(userId, executor)).roleIds;
+  }
+
+  /**
+   * The roles a user holds now, inherited ones included, and until when that
+   * answer holds: the soonest expiry among the assignments it came from.
+   * Inheritance adds no expiry of its own, so the direct assignments decide
+   * it. Anything cached from these roles is served no longer than that.
+   */
+  async resolveRoles(
+    userId: string,
+    // Optional transaction-bound executor; see `hasPermission`.
+    executor?: unknown
+  ): Promise<ResolvedRoles> {
+    const { roleIds: direct, validUntil } = await this.getDirectRoleAssignments(
+      userId,
+      executor
+    );
+    if (direct.size === 0) return { roleIds: direct, validUntil };
 
     const all = new Set<string>(direct);
     const queue: string[] = Array.from(direct);
@@ -503,23 +542,31 @@ class PermissionChecker {
         break;
       }
     }
-    return all;
+    return { roleIds: all, validUntil };
   }
 
-  private async getDirectRoleIds(
+  /**
+   * The user's role assignments in force now, and the soonest expiry among
+   * them. A lapsed assignment grants nothing, so it is left out here, where
+   * every permission and super-admin decision starts.
+   */
+  private async getDirectRoleAssignments(
     userId: string,
     // Optional transaction-bound executor; see `hasPermission`.
     executor?: unknown
-  ): Promise<Set<string>> {
+  ): Promise<ResolvedRoles> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { userRoles } = this.t as any;
-    const rows = await rbacQuery(executor)
-      .select({ roleId: userRoles.roleId })
+    const rows = (await rbacQuery(executor)
+      .select({ roleId: userRoles.roleId, expiresAt: userRoles.expiresAt })
       .from(userRoles)
-      .where(eq(userRoles.userId, userId));
-    return new Set(
-      (rows as Array<{ roleId: string }>).map(r => String(r.roleId))
-    );
+      .where(
+        userRoleAssignmentsInForce(userRoles, userId, new Date())
+      )) as Array<{ roleId: string; expiresAt: Date | null }>;
+    return {
+      roleIds: new Set(rows.map(r => String(r.roleId))),
+      validUntil: soonestExpiry(rows),
+    };
   }
 
   private async roleSetHasPermission(
@@ -631,7 +678,11 @@ function setCacheEntry(
   key: string,
   value: boolean,
   userId: string,
-  roleIds: string[]
+  roleIds: string[],
+  // When the answer stops holding, if sooner than the TTL: the soonest expiry
+  // of a role it came from, or the expiry of the stored row it was promoted
+  // from. Without it an entry outlived that expiry by up to a whole TTL.
+  validUntil?: number
 ) {
   // simple eviction of oldest
   if (cache.size >= cacheMaxEntries) {
@@ -640,7 +691,7 @@ function setCacheEntry(
   }
   cache.set(key, {
     value,
-    expiresAt: Date.now() + cacheTtlMs,
+    expiresAt: cacheExpiry(Date.now(), cacheTtlMs, validUntil),
     epoch: currentEpoch(),
   });
   const roleSet = new Set(roleIds);
@@ -674,6 +725,18 @@ export async function hasPermission(
     });
     return false;
   }
+}
+
+/**
+ * The roles a user holds now, inherited ones included, and until when that
+ * answer holds. For a cache built from a user's roles outside this module, an
+ * API key's grants among them, which must end at the soonest expiry too.
+ */
+export async function resolveUserRoles(
+  userId: string,
+  executor?: unknown
+): Promise<ResolvedRoles> {
+  return new PermissionChecker().resolveRoles(userId, executor);
 }
 
 export async function hasAnyPermission(
@@ -1235,7 +1298,9 @@ async function decideSuperAdmin(
   resolvedUnder: ReturnType<typeof currentEpoch>
 ): Promise<boolean> {
   const checker = new PermissionChecker();
-  const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
+  // With the moment the answer stops holding, so the cache below never
+  // serves super-admin authority past the expiry of the role that gave it.
+  const { roleIds, validUntil } = await checker.resolveRoles(userId, executor);
 
   // One decision, asked once: an executor-backed result reflects an
   // uncommitted transaction, and a result whose rows were invalidated while
@@ -1274,7 +1339,7 @@ async function decideSuperAdmin(
   if (cacheable()) {
     superAdminCache.set(userId, {
       value: result,
-      expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
+      expiresAt: cacheExpiry(Date.now(), SUPER_ADMIN_CACHE_TTL_MS, validUntil),
       epoch: currentEpoch(),
     });
 
@@ -1320,7 +1385,9 @@ export async function hasSuperAdminExcluding(
 
     const superAdminRoleId = superAdminRole[0]!.id;
 
-    // Check if any other user holds the super-admin role
+    // Check if any other user holds the super-admin role. Held means in force
+    // now: an expired assignment grants nothing, so it cannot be the one that
+    // keeps the site administrable once this user's role is removed.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const otherSuperAdmins = await (getDb() as any)
       .select({ userId: userRoles.userId })
@@ -1328,7 +1395,8 @@ export async function hasSuperAdminExcluding(
       .where(
         and(
           eq(userRoles.roleId, superAdminRoleId),
-          ne(userRoles.userId, excludeUserId)
+          ne(userRoles.userId, excludeUserId),
+          roleAssignmentInForce(userRoles, new Date())
         )
       )
       .limit(1);

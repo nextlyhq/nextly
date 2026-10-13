@@ -41,7 +41,9 @@ function makeDeps(authRateLimit?: { store?: unknown }) {
     refreshTokenTTL: 604800,
     trustProxy: false,
     trustedProxyIps: [],
-    fetchRoleIds: vi.fn().mockResolvedValue(["editor"]),
+    fetchSessionRoles: vi
+      .fn()
+      .mockResolvedValue({ roleIds: ["editor"], validUntil: undefined }),
     fetchCustomFields: vi.fn().mockResolvedValue({}),
     storeRefreshToken: vi.fn().mockResolvedValue(undefined),
     authHooks: new AuthHookRegistry(),

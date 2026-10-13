@@ -1,17 +1,20 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, not } from "drizzle-orm";
 
 import type {
   RBACDatabaseInstance,
   UserRoleInsertData,
-  UserRoleSelectResult,
 } from "@nextly/types/rbac-operations";
 
 import { getDialectTables } from "../../../database";
 import { BaseService } from "../../../services/base-service";
 import { invalidatePermissionCache } from "../../../services/lib/permissions";
+import {
+  roleAssignmentInForce,
+  userRoleAssignmentsInForce,
+} from "../../../services/lib/role-assignments";
 import type { Logger } from "../../../services/shared";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
@@ -84,14 +87,25 @@ export class UserRoleService extends BaseService {
         return { success: false, statusCode: 404, message: "Role not found" };
       }
 
-      const existingUserRole = await (
-        this.db as RBACDatabaseInstance
-      ).query.userRoles.findFirst({
-        where: { userId: userId, roleId: roleId },
-        columns: { id: true },
-      });
+      // "Already assigned" means held now. An assignment that has lapsed grants
+      // nothing, so answering 409 for it left the role impossible to give
+      // again while every check refused it.
+      const { userRoles } = this.tables;
+      // One moment for the check and the replacement below, so the row this
+      // request found lapsed is the row it replaces.
+      const now = new Date();
+      const held = await this.db
+        .select({ id: userRoles.id })
+        .from(userRoles)
+        .where(
+          and(
+            userRoleAssignmentsInForce(userRoles, userId, now),
+            eq(userRoles.roleId, roleId)
+          )
+        )
+        .limit(1);
 
-      if (existingUserRole) {
+      if (held.length > 0) {
         return {
           success: false,
           statusCode: 409,
@@ -110,6 +124,22 @@ export class UserRoleService extends BaseService {
       // made while another request's transaction is open would run inside it
       // and be undone by its rollback.
       await serializeOnSqlite(this.adapter, async () => {
+        // A lapsed assignment of this role is replaced rather than kept beside
+        // the new one, since one pair holds one row. Only a lapsed one: the
+        // check above is a read, and on PostgreSQL and MySQL another request
+        // can grant the role between it and this delete. Deleting every row
+        // for the pair removed that completed grant and put this request's
+        // expiry in its place; now it stands, and the pair's unique index
+        // keeps the insert below from adding a second row beside it.
+        await (this.db as RBACDatabaseInstance)
+          .delete(userRoles)
+          .where(
+            and(
+              eq(userRoles.userId, userId),
+              eq(userRoles.roleId, roleId),
+              not(roleAssignmentInForce(userRoles, now))
+            )
+          );
         const insert = (this.db as RBACDatabaseInstance)
           .insert(this.tables.userRoles)
           .values(userRoleData);
@@ -216,10 +246,13 @@ export class UserRoleService extends BaseService {
   ): Promise<boolean> {
     const db = tx as typeof this.db;
     const { roles, userRoles } = this.tables;
+    // Compared against the roles held now. A lapsed assignment counted as
+    // held made re-granting that role look like no change, so nothing was
+    // written and the role stayed lapsed while the caller believed it given.
     const current = await db
       .select({ roleId: userRoles.roleId })
       .from(userRoles)
-      .where(eq(userRoles.userId, userId));
+      .where(userRoleAssignmentsInForce(userRoles, userId, new Date()));
     const requested = new Set(roleIds);
     const held = new Set(
       (current as Array<{ roleId: unknown }>).map(row => String(row.roleId))
@@ -263,45 +296,37 @@ export class UserRoleService extends BaseService {
   }
 
   /**
-   * List all role IDs assigned to a user.
+   * List the role IDs a user holds now: assignments with no expiry, or one
+   * still ahead. A lapsed assignment grants nothing, so listing it would say
+   * the user holds a role that no check gives them.
    *
    * @param userId - User ID to list roles for
    * @returns Array of role IDs
    */
   async listUserRoles(userId: string): Promise<string[]> {
-    const userRoles = await (
-      this.db as RBACDatabaseInstance
-    ).query.userRoles.findMany({
-      where: { userId: userId },
-      columns: {
-        roleId: true,
-      },
-    });
-    return userRoles.map((ur: UserRoleSelectResult) => String(ur.roleId));
+    const { userRoles } = this.tables;
+    const rows = await this.db
+      .select({ roleId: userRoles.roleId })
+      .from(userRoles)
+      .where(userRoleAssignmentsInForce(userRoles, userId, new Date()));
+    return (rows as Array<{ roleId: unknown }>).map(row => String(row.roleId));
   }
 
   /**
-   * List all role names assigned to a user.
+   * List the names of the roles a user holds now, on the same terms as
+   * {@link listUserRoles}.
    *
    * @param userId - User ID to list role names for
    * @returns Array of role names
    */
   async listUserRoleNames(userId: string): Promise<string[]> {
-    const userRoles = await (
-      this.db as RBACDatabaseInstance
-    ).query.userRoles.findMany({
-      where: { userId: userId },
-      with: {
-        role: {
-          columns: {
-            name: true,
-          },
-        },
-      },
-    });
-    return (userRoles as Array<{ role?: { name?: string } | null }>).map(ur =>
-      String(ur.role?.name ?? "")
-    );
+    const { roles, userRoles } = this.tables;
+    const rows = await this.db
+      .select({ name: roles.name })
+      .from(userRoles)
+      .innerJoin(roles, eq(userRoles.roleId, roles.id))
+      .where(userRoleAssignmentsInForce(userRoles, userId, new Date()));
+    return (rows as Array<{ name: string | null }>).map(row => row.name ?? "");
   }
 
   /**
