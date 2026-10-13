@@ -608,5 +608,134 @@ describe.each(getConfiguredTestDialects())(
       expect(after.email).toBe("owner@example.com");
       expect(after.passwordHash).not.toBe(before.passwordHash);
     });
+
+    // The account core makes for a person another system verified is active,
+    // verified and has no password, and core makes it only from a login
+    // plugin's hand-off. A plugin cannot create an account without a
+    // password, so the one it could turn into that account is one core made
+    // without one: an administrator's invite. Each case below takes the last
+    // step to that account, from either end, and expects it refused.
+
+    /** An administrator's invite: no password, and not verified. */
+    async function adminInvite(
+      t: TestNextly,
+      isActive: boolean
+    ): Promise<string> {
+      const created = await new ServiceContainer(
+        t.adapter
+      ).users.createLocalUser({
+        email: "invited@example.com",
+        name: "Invited",
+        isActive,
+      });
+      return String(created.id);
+    }
+
+    it("refuses verifying an active account that has no password, changing nothing", async () => {
+      const { t, pluginUsers, coreUsers } = await boot(dialect);
+      await seedFounder(coreUsers);
+      const id = await adminInvite(t, true);
+      const before = await controlColumns(t, id);
+      expect(before).toMatchObject({
+        isActive: true,
+        emailVerified: false,
+        passwordHash: null,
+      });
+
+      await expect(
+        pluginUsers.update(id, { emailVerified: new Date() }, CONTEXT)
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+      expect(await controlColumns(t, id)).toEqual(before);
+    });
+
+    it("refuses activating a verified account that has no password, changing nothing", async () => {
+      const { t, pluginUsers, coreUsers } = await boot(dialect);
+      await seedFounder(coreUsers);
+      // The other order: verifying the invite while it is inactive is
+      // allowed, since an inactive account signs nobody in.
+      const id = await adminInvite(t, false);
+      await pluginUsers.update(id, { emailVerified: new Date() }, CONTEXT);
+      const before = await controlColumns(t, id);
+      expect(before).toMatchObject({
+        isActive: false,
+        emailVerified: true,
+        passwordHash: null,
+      });
+
+      await expect(
+        pluginUsers.update(id, { isActive: true }, CONTEXT)
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+      expect(await controlColumns(t, id)).toEqual(before);
+    });
+
+    it("refuses activating and verifying in one update, changing nothing", async () => {
+      const { t, pluginUsers, coreUsers } = await boot(dialect);
+      await seedFounder(coreUsers);
+      const id = await adminInvite(t, false);
+      const before = await controlColumns(t, id);
+
+      await expect(
+        pluginUsers.update(
+          id,
+          { isActive: true, emailVerified: new Date() },
+          CONTEXT
+        )
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+      expect(await controlColumns(t, id)).toEqual(before);
+    });
+
+    /** An account core made, as it does for an externally verified person. */
+    async function externalAccount(t: TestNextly): Promise<string> {
+      const editor = await makeRole(t, "editor");
+      const created = await new ServiceContainer(
+        t.adapter
+      ).users.createExternalUser(
+        {
+          email: "external@example.com",
+          name: "External",
+          roleIds: [editor],
+          emailVerifiedAt: new Date(),
+        },
+        { user: undefined } as never
+      );
+      return String(created.id);
+    }
+
+    it("still lets a plugin edit, deactivate and set a password on an account core made", async () => {
+      // The control: refusing every plugin write to such an account would
+      // pass every refusal above.
+      const { t, pluginUsers, coreUsers } = await boot(dialect);
+      await seedFounder(coreUsers);
+      const id = await externalAccount(t);
+
+      await pluginUsers.update(id, { name: "Renamed" }, CONTEXT);
+      await pluginUsers.update(id, { password: "Passw0rd!long" }, CONTEXT);
+      await pluginUsers.update(id, { isActive: false }, CONTEXT);
+
+      const row = await controlColumns(t, id);
+      expect(row.passwordHash).not.toBeNull();
+      expect(row.isActive).toBe(false);
+      expect((await userRow(t, "external@example.com"))?.name).toBe("Renamed");
+    });
+
+    it("refuses reactivating an account core made, and core still reactivates it", async () => {
+      const { t, pluginUsers, coreUsers } = await boot(dialect);
+      await seedFounder(coreUsers);
+      const id = await externalAccount(t);
+      await pluginUsers.update(id, { isActive: false }, CONTEXT);
+
+      await expect(
+        pluginUsers.update(id, { isActive: true }, CONTEXT)
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect((await controlColumns(t, id)).isActive).toBe(false);
+
+      // The control: the admin reactivates its accounts through the same
+      // write.
+      await coreUsers.update(id, { isActive: true }, CONTEXT);
+      expect((await controlColumns(t, id)).isActive).toBe(true);
+    });
   }
 );
