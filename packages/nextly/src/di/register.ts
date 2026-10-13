@@ -885,6 +885,8 @@ async function registerServicesOnce(
     bootExtensionSchema
   );
 
+  assertBootRelationsResolve(schemaRegistry);
+
   // ----------------------------------------
   // Layer 7: Initialize Plugins
   // ----------------------------------------
@@ -2014,6 +2016,30 @@ async function prepareExtensionTablesForInit(
     },
     extensionSchema: bootExtensionSchema,
   });
+}
+
+/**
+ * Layer 6.95: every relation a declared table names resolves, before any
+ * plugin initialises.
+ *
+ * The registry otherwise assembles relations on the first `db.query`, so a
+ * relation naming a table or column that does not exist surfaced there, as an
+ * internal error that took every relational query down with it. By now every
+ * table is registered: Builder-made ones on the registry's first load,
+ * extension tables and field groups beside them, code-first ones by their
+ * sync, and what boot migrations created by their reload. So a relation to a
+ * Builder-made collection resolves, and a misspelled one stops the boot,
+ * naming each.
+ *
+ * Not when the development boot apply runs: a Builder-made table arriving
+ * through a migration is registered only by that apply, after this returns,
+ * so it asks the same question there (`runBootTimeApplyIfDev`).
+ */
+function assertBootRelationsResolve(
+  schemaRegistry: SchemaRegistry | undefined
+): void {
+  if (bootApplyEnabled()) return;
+  schemaRegistry?.assertRelationsResolve();
 }
 
 /**
