@@ -186,12 +186,19 @@ nextly plugins uninstall <name>              # onUninstall, then every module's 
 nextly plugins uninstall <name> --keep-data  # onUninstall only; the tables stay, orphaned
 ```
 
-Install refuses while a plugin it depends on is not installed
-(`PLUGIN_DEPENDENCY_NOT_INSTALLED`). Uninstall refuses while another enabled plugin
-depends on it (`PLUGIN_HAS_DEPENDENTS`) or when a module has no DOWN
+Install refuses while a plugin it depends on is not installed: its modules are not
+all applied, it was uninstalled, or it declares `onInstall` and `nextly plugins
+install` has not run it (`PLUGIN_DEPENDENCY_NOT_INSTALLED`). It holds the migrate
+lock from its first module through `onInstall`. Uninstall refuses while another
+enabled plugin depends on it (`PLUGIN_HAS_DEPENDENTS`), when a module has no DOWN, or
+when the database holds a module the configured version no longer ships
 (`PLUGIN_UNINSTALL_IRREVERSIBLE`), and asks for `--yes` before dropping anything
-(`PLUGIN_UNINSTALL_UNCONFIRMED`). Every refusal comes before anything runs. After a
-full uninstall the boot refuses the plugin while it is still listed
+(`PLUGIN_UNINSTALL_UNCONFIRMED`). Every refusal comes before anything runs. Once
+`migrate:down --plugin` has rolled back every module, uninstall has no DOWN left to
+run and just records the plugin uninstalled.
+
+Both commands record the plugin's state, including for a plugin that owns no table.
+After a full uninstall the boot refuses the plugin while it is still listed
 (`PLUGIN_SCHEMA_UNINSTALLED`): remove it from the config, or install it again. See
 [Uninstalling](/docs/guides/production-migrations#uninstalling) for the rules.
 

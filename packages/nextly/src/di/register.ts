@@ -1984,9 +1984,28 @@ async function assertBootPluginSchemaVersions(
         adapterDrizzleDb,
         adapter.dialect
       ).read();
-      return new Set(
+      const uninstalled = new Set(
         rows.filter(row => row.state === "uninstalled").map(row => row.ownerId)
       );
+      // And every plugin whose own recorded state is `uninstalled`: a plugin
+      // that owns no table has no owner row to carry it, and was initialised
+      // again by the next boot as though its uninstall had never happened.
+      // Read only once the ledger exists — a database that has never
+      // migrated has no lifecycle to read.
+      if (await adapter.tableExists("nextly_schema_events")) {
+        const [{ SchemaEventsRepository }, { readPluginLifecycle }] =
+          await Promise.all([
+            import("../domains/schema/events/schema-events-repository"),
+            import("../domains/schema/ownership/plugin-lifecycle-state"),
+          ]);
+        const states = await readPluginLifecycle(
+          new SchemaEventsRepository(adapterDrizzleDb, adapter.dialect)
+        );
+        for (const [plugin, state] of states) {
+          if (state === "uninstalled") uninstalled.add(plugin);
+        }
+      }
+      return uninstalled;
     },
     registryExists: async () => {
       const { schemaOwnersTableExists } = await import(

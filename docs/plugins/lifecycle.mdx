@@ -146,9 +146,10 @@ export default definePlugin({
 `nextly plugins install <name>` applies the plugin's pending migration modules and then
 calls `onInstall`; `nextly plugins uninstall <name>` calls `onUninstall` and then runs
 the DOWN of each applied module, newest first. Each boots the app from your config to
-build the hook's context, and only when the plugin declares the hook. Write both so
-they can run again: an install that failed part-way is repaired by running it again,
-which calls `onInstall` again.
+build the hook's context, and only when the plugin declares the hook; that boot never
+runs migrations, whatever `db.runMigrationsOnBoot` says. Write both so they can run
+again: an install that failed part-way is repaired by running it again, which calls
+`onInstall` again.
 
 ## Inspecting
 

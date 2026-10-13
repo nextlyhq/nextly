@@ -32,6 +32,7 @@ import type {
   InferRow,
   TableDefinition,
 } from "../../domains/schema/extension/dsl";
+import { CONTRIBUTED_ROW_KEY } from "../../domains/schema/extension/extension-columns";
 import type { SchemaOwner } from "../../domains/schema/extension/types";
 import { NextlyError } from "../../errors/nextly-error";
 import { uuidV7 } from "../../utils/uuid-v7";
@@ -1153,6 +1154,11 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         const named = Object.entries(values as Record<string, unknown>)
           .filter(([, value]) => value !== undefined)
           .map(([key]) => key);
+        // A write that sets nothing changes nothing, and says so: no rows
+        // changed. A plugin building its values conditionally makes this call
+        // in the ordinary course, and judging it as a selection read it as a
+        // failure to name a column. Nothing is sent and nothing is reached.
+        if (named.length === 0) return 0;
         // The write is judged on what it names, against the same rule the
         // read's selection meets, before anything is sent.
         const reach = contributedReach(tableName, named, deps);
@@ -1423,10 +1429,11 @@ function contributedReach(
 }
 
 /**
- * The property the row's key is held under on a contributed-column handle,
- * spelled so no authored column key can collide with it.
+ * The property the row's key is held under on a contributed-column handle.
+ * Any string can be an authored key, so a collision is refused where the
+ * column is contributed (`assertContributedKeyFree`), not avoided by spelling.
  */
-const ROW_KEY_PROPERTY = "__nextlyRowKey";
+const ROW_KEY_PROPERTY = CONTRIBUTED_ROW_KEY;
 
 /**
  * Run a contributed-column statement, naming a column the database does not

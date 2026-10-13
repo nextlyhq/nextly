@@ -23,6 +23,11 @@ import {
   qualifiedFilename,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import {
+  readPluginLifecycle,
+  recordPluginLifecycle,
+  type PluginLifecycleState,
+} from "../../domains/schema/ownership/plugin-lifecycle-state";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import type { CommandContext } from "../program";
@@ -40,6 +45,7 @@ import {
 import {
   runPluginInstallCommand,
   runPluginUninstallCommand,
+  unshippedModules,
   type LifecyclePlugin,
   type PreparedModuleDown,
 } from "./plugin-lifecycle";
@@ -74,6 +80,9 @@ function toLifecyclePlugins(
     requires: Object.keys(plugin.dependsOn ?? {}),
     optionallyRequires: Object.keys(plugin.optionalDependsOn ?? {}),
     declaredModules: pluginModules(plugin).map(module => module.name),
+    hasInstallHook: plugin.onInstall !== undefined,
+    // Filled from the ledger by `refreshPlan`, like `modules`.
+    unshippedModules: [],
     modules: pluginModules(plugin).map(module => ({
       name: module.name,
       // A module with no DOWN on the live dialect cannot be undone. Checked
@@ -158,7 +167,13 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const applied = await readAppliedModules();
     for (const plugin of plugins) {
       const source = definitions.find(d => d.name === plugin.name);
-      const modules = (source ? pluginModules(source) : []).filter(module =>
+      const declared = source ? pluginModules(source) : [];
+      plugin.unshippedModules = unshippedModules(
+        plugin.name,
+        declared.map(module => module.name),
+        applied
+      );
+      const modules = declared.filter(module =>
         applied.has(qualifiedFilename(plugin.name, module.name))
       );
       plugin.modules = modules.map(module => ({
@@ -322,12 +337,13 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       }
     );
     if (!outcome.ran) {
-      throw new NextlyError({
-        code: "CONFLICT",
-        publicMessage:
+      // Through the factory, which takes CONFLICT's status from the one table
+      // that maps codes to statuses.
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
           `Another migration is holding the migrate lock, so ${notRun}. ` +
           "Nothing was changed — re-run once it finishes.",
-        statusCode: 409,
         logContext: { ...logContext, reason: outcome.reason },
       });
     }
@@ -444,24 +460,19 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       logger: { warn: m => context.logger.warn(m) },
     });
 
-    // Refused rather than swallowed when the lock was held throughout: the
-    // command goes on to record the plugin active, and doing that over
-    // migrations that never ran would report work that was not done.
-    await withLockOrRefuse(
-      () =>
-        runPluginPhase({
-          extensionSchema,
-          dialect,
-          db: drizzleAdapter.getDrizzle(),
-          adapter,
-          migrationsDir: config.db?.migrationsDir ?? "./src/db/migrations",
-          logger: context.logger,
-          pluginsWithMigrations: new Set([plugin.name]),
-          pluginMigrationSets,
-        }),
-      `${plugin.name}'s migrations were not applied`,
-      { plugin: plugin.name }
-    );
+    // Under the lock the install already holds (`underMigrateLock`), from
+    // these modules through the owner rows and `onInstall`. Taking the lock
+    // again here would wait on the install itself.
+    await runPluginPhase({
+      extensionSchema,
+      dialect,
+      db: drizzleAdapter.getDrizzle(),
+      adapter,
+      migrationsDir: config.db?.migrationsDir ?? "./src/db/migrations",
+      logger: context.logger,
+      pluginsWithMigrations: new Set([plugin.name]),
+      pluginMigrationSets,
+    });
   };
 
   /**
@@ -513,10 +524,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     // would otherwise destroy that owner's plugins and clear its container on
     // the way out of the refusal.
     if (isServicesRegistered()) {
-      throw new NextlyError({
-        code: "CONFLICT",
-        publicMessage: `Services are already registered in this process, so ${plugin.name}'s ${hook} was not run.`,
-        statusCode: 409,
+      throw NextlyError.conflict({
+        reason: "state",
+        message: `Services are already registered in this process, so ${plugin.name}'s ${hook} was not run.`,
         logContext: { plugin: plugin.name, hook },
       });
     }
@@ -527,21 +537,32 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // that throws after that point leaves their `init()` work running with
       // the registered flag never set — and a `registerServices` outside the
       // `try` skipped the cleanup exactly then.
-      await registerServices(
-        buildServiceConfig({
-          // The config as the app wrote it. The boot runs every `setup`
-          // transformer and contribution fold itself; booting from the
-          // loader's `config`, which holds their result, ran each twice, so
-          // a transformer that adds a plugin or a collection added it again.
-          config: appConfig,
-          // The grants the loader read before any `setup` transformer ran.
-          pluginConsent,
-          adapter: drizzleAdapter,
-          imageProcessor: getImageProcessor(),
-          hookRegistry: getHookRegistry(),
-          logger: context.logger,
-        })
-      );
+      const serviceConfig = buildServiceConfig({
+        // The config as the app wrote it. The boot runs every `setup`
+        // transformer and contribution fold itself; booting from the
+        // loader's `config`, which holds their result, ran each twice, so
+        // a transformer that adds a plugin or a collection added it again.
+        config: appConfig,
+        // The grants the loader read before any `setup` transformer ran.
+        pluginConsent,
+        adapter: drizzleAdapter,
+        imageProcessor: getImageProcessor(),
+        hookRegistry: getHookRegistry(),
+        logger: context.logger,
+      });
+      await registerServices({
+        ...serviceConfig,
+        // Never a migrating boot, whatever the app sets. This boot exists to
+        // build a hook's context, inside a command that decides itself what
+        // migrates: an uninstall holds the migrate lock while it runs, so a
+        // boot taking it again waited on itself (PostgreSQL) or on another
+        // pooled connection (MySQL), and on SQLite, where the lock is a no-op,
+        // it could apply a module after the uninstall had fixed which modules
+        // to roll back. The boot migrates only with `runMigrationsOnBoot`.
+        ...(serviceConfig.db
+          ? { db: { ...serviceConfig.db, runMigrationsOnBoot: false } }
+          : {}),
+      });
       const pluginContext = getInitializedPluginContext(plugin.name);
       if (pluginContext === undefined) {
         // Registered, but this plugin was not among the initialized ones —
@@ -584,10 +605,28 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     }
   };
 
+  /** Which of these tables the database still has. */
+  const liveTables = async (tables: readonly string[]): Promise<string[]> => {
+    const live: string[] = [];
+    for (const table of tables) {
+      if (await drizzleAdapter.tableExists(table)) live.push(table);
+    }
+    return live;
+  };
+
+  const lifecycleEvents = () =>
+    new SchemaEventsRepository(drizzleAdapter.getDrizzle(), dialect);
+
   return {
     adapter,
     dialect,
     applyMigrations,
+    liveTables,
+    readLifecycleStates: () => readPluginLifecycle(lifecycleEvents()),
+    recordLifecycleState: (
+      plugin: LifecyclePlugin,
+      state: PluginLifecycleState
+    ) => recordPluginLifecycle(lifecycleEvents(), plugin.name, state),
     // Read PER ACCESS, never captured. The same cast `migrate` makes —
     // `CLIDatabaseAdapter` is deliberately connect/disconnect/dialect, and the
     // Drizzle handle underneath it is what any command touching data needs —

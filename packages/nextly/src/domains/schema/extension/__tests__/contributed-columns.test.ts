@@ -33,6 +33,7 @@ import { toColumnSpec } from "../compile";
 import type { SchemaHook } from "../draft";
 import { col } from "../dsl";
 import { withEntityContributions } from "../entity-contributions";
+import { CONTRIBUTED_ROW_KEY } from "../extension-columns";
 
 function input(extend: readonly SchemaHook[]): ExtensionSchemaInput {
   return {
@@ -277,4 +278,31 @@ describe("a defaulted column contributed to an entity table", () => {
       }
     }
   );
+});
+
+describe("a contributed column keyed as the contributed handle's row key", () => {
+  it("is refused where it is contributed, naming the key", async () => {
+    // The handle `ctx.db.contributed` returns stores columns by their keys
+    // beside the row key; one under the same key replaced it, and every read
+    // and write through the handle then matched rows by the wrong column.
+    await expect(
+      buildExtensionSchema(
+        input([
+          ({ schema }) => {
+            schema.extendTable("dc_posts", {
+              columns: { [CONTRIBUTED_ROW_KEY]: col.text({ nullable: true }) },
+            });
+          },
+        ])
+      )
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            message: expect.stringContaining(CONTRIBUTED_ROW_KEY),
+          }),
+        ],
+      },
+    });
+  });
 });

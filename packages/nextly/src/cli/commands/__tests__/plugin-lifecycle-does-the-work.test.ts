@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   runPluginInstallCommand,
   runPluginUninstallCommand,
+  unshippedModules,
   type LifecyclePlugin,
   type PluginLifecycleDeps,
 } from "../plugin-lifecycle";
@@ -30,6 +31,8 @@ const plugin: LifecyclePlugin = {
   requires: [],
   optionallyRequires: [],
   declaredModules: ["0001_init", "0002_more"],
+  hasInstallHook: true,
+  unshippedModules: [],
   modules: [
     { name: "0001_init", reversible: true },
     { name: "0002_more", reversible: true },
@@ -74,6 +77,10 @@ function deps(over: Partial<PluginLifecycleDeps> = {}): PluginLifecycleDeps {
     underMigrateLock: async <T>(work: () => Promise<T>) => work(),
     runLifecycleHook: vi.fn(async () => {}),
     readAppliedModules: vi.fn(async () => new Set<string>()),
+    // Every table the owner rows name is still there, unless a test says not.
+    liveTables: vi.fn(async (tables: readonly string[]) => [...tables]),
+    readLifecycleStates: vi.fn(async () => new Map()),
+    recordLifecycleState: vi.fn(async () => {}),
     ...over,
   };
 }
@@ -127,6 +134,8 @@ describe("plugins install over a dependency that is not installed", () => {
     requires: [],
     optionallyRequires: [],
     declaredModules: ["0001_core"],
+    hasInstallHook: false,
+    unshippedModules: [],
     modules: [],
   };
 
@@ -312,6 +321,24 @@ describe("plugins uninstall", () => {
     // Migrations first (the hook reads the plugin's own tables), then the
     // state reset, and only then the boot that would have rejected it.
     expect(order).toEqual(["migrations", "state:active", "hook"]);
+  });
+
+  it("says boot will refuse only after an uninstall that leaves it refusing", async () => {
+    // Boot refuses a configured plugin left `uninstalled`; one uninstalled with
+    // --keep-data is left `orphaned` and still boots. Told otherwise, an
+    // operator deletes the config line in a hurry for no reason.
+    const said = async (keepData: boolean): Promise<string> => {
+      logger.info.mockClear();
+      await runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData, yes: true },
+        deps()
+      );
+      return logger.info.mock.calls.map(c => String(c[0])).join("\n");
+    };
+
+    expect(await said(false)).toContain("boot will refuse to start");
+    expect(await said(true)).not.toContain("boot will refuse to start");
   });
 
   it("reports the statement count it actually ran", async () => {
@@ -514,5 +541,206 @@ describe("plugins uninstall decides before it takes the lock", () => {
         c => (c as unknown as [unknown, { moduleName: string }])[1].moduleName
       )
     ).toEqual(["0002_more", "0001_init"]);
+  });
+});
+
+/** An owner registry over one table row of `@acme/fx`, recording state writes. */
+function registryWith(state: string, writes: string[]) {
+  const row = {
+    tableName: "fx__notes",
+    elementKind: "table",
+    elementName: "",
+    ownerKind: "plugin",
+    ownerId: "@acme/fx",
+    migratedBy: "plugin:@acme/fx",
+    ownerVersion: null,
+    schemaVersion: null,
+    state,
+  };
+  return {
+    select: () => ({
+      from: () => Object.assign([row], { where: () => [row] }),
+    }),
+    update: () => ({
+      set: (values: { state?: string }) => ({
+        where: () => {
+          writes.push(`state:${values.state ?? "?"}`);
+          return Promise.resolve();
+        },
+      }),
+    }),
+    insert: () => ({ values: () => Promise.resolve() }),
+  };
+}
+
+describe("plugins install holds the migrate lock", () => {
+  it("from the first module through onInstall", async () => {
+    // Released between the modules and the owner rows, an uninstall could
+    // roll the modules down in the gap, and the install then marked the rows
+    // active again over dropped tables.
+    const order: string[] = [];
+    await runPluginInstallCommand(
+      "@acme/fx",
+      deps({
+        underMigrateLock: async <T>(work: () => Promise<T>) => {
+          order.push("lock");
+          const result = await work();
+          order.push("unlock");
+          return result;
+        },
+        applyMigrations: vi.fn(async () => {
+          order.push("migrations");
+        }),
+        recordLifecycleState: vi.fn(async () => {
+          order.push("recorded");
+        }),
+        runLifecycleHook: vi.fn(async () => {
+          order.push("hook");
+        }),
+      })
+    );
+
+    expect(order).toEqual(["lock", "migrations", "recorded", "hook", "unlock"]);
+  });
+
+  it("checks the dependencies again once it holds the lock", async () => {
+    // Read before the lock as well, so a refusal takes none; read again under
+    // it, where the answer holds until the install is done.
+    const readAppliedModules = vi.fn(async () => new Set<string>());
+    await runPluginInstallCommand("@acme/fx", deps({ readAppliedModules }));
+    expect(readAppliedModules).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("plugins install and uninstall record the plugin's own state", () => {
+  it("records it installed, before the hook boots", async () => {
+    // A reinstall boots for the hook; recorded after, boot would still read
+    // the plugin uninstalled and refuse it.
+    const recordLifecycleState = vi.fn(async () => {});
+    await runPluginInstallCommand("@acme/fx", deps({ recordLifecycleState }));
+    expect(recordLifecycleState).toHaveBeenCalledWith(plugin, "installed");
+  });
+
+  it("records an uninstall for a plugin that owns no table", async () => {
+    // No owner row to carry it, so the state set on the rows went nowhere
+    // and the next boot initialised the plugin again.
+    const recordLifecycleState = vi.fn(async () => {});
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: true },
+      deps({ recordLifecycleState })
+    );
+    expect(recordLifecycleState).toHaveBeenCalledWith(plugin, "uninstalled");
+  });
+
+  it("records an uninstall with --keep-data as orphaned", async () => {
+    const recordLifecycleState = vi.fn(async () => {});
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: true, yes: true },
+      deps({ recordLifecycleState })
+    );
+    expect(recordLifecycleState).toHaveBeenCalledWith(plugin, "orphaned");
+  });
+});
+
+describe("plugins uninstall over a module the plugin no longer ships", () => {
+  it("refuses before the hook or any DOWN runs, naming the module", async () => {
+    // Skipped, the module's schema, data and applied row stayed while the
+    // plugin was recorded uninstalled.
+    const runLifecycleHook = vi.fn(async () => {});
+    const runDown = vi.fn(async () => 1);
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: true },
+        deps({
+          plugins: [{ ...plugin, unshippedModules: ["0000_legacy"] }],
+          runLifecycleHook,
+          runDown,
+        })
+      )
+    ).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      publicMessage: expect.stringContaining("0000_legacy"),
+    });
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+    expect(runDown).not.toHaveBeenCalled();
+  });
+});
+
+describe("plugins uninstall after its modules were rolled back", () => {
+  // `migrate:down --plugin` rolled back every module: no applied module is
+  // left, and the owner rows remain as history naming a table the DOWN
+  // dropped.
+  const rolledBack = { ...plugin, modules: [] };
+
+  it("finishes, recording the state, when the tables are gone", async () => {
+    const writes: string[] = [];
+    const recordLifecycleState = vi.fn(async () => {});
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false },
+      deps({
+        db: registryWith("active", writes) as never,
+        plugins: [rolledBack],
+        liveTables: vi.fn(async () => []),
+        recordLifecycleState,
+      })
+    );
+    // Nothing left to drop, so nothing to confirm either.
+    expect(writes).toEqual(["state:uninstalled"]);
+    expect(recordLifecycleState).toHaveBeenCalledWith(
+      rolledBack,
+      "uninstalled"
+    );
+  });
+
+  it("still refuses when a table is there and nothing can undo it", async () => {
+    // The control: a development push's table, which no applied module made.
+    const writes: string[] = [];
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: true },
+        deps({
+          db: registryWith("active", writes) as never,
+          plugins: [rolledBack],
+        })
+      )
+    ).rejects.toMatchObject({ code: "PLUGIN_UNINSTALL_IRREVERSIBLE" });
+    expect(writes).toEqual([]);
+  });
+});
+
+describe("unshippedModules", () => {
+  const applied = new Set([
+    "plugin:@acme/fx/0001_init",
+    "plugin:@acme/fx/0000_legacy",
+    "plugin:@acme/fx-extra/0001_init",
+    "plugin:@acme/other/0009_x",
+  ]);
+
+  it("names an applied module the plugin no longer declares", () => {
+    expect(unshippedModules("@acme/fx", ["0001_init"], applied)).toEqual([
+      "0000_legacy",
+    ]);
+  });
+
+  it("names none when every applied module is declared", () => {
+    // The control: a helper that named every applied module passes the case
+    // above too.
+    expect(
+      unshippedModules("@acme/fx", ["0000_legacy", "0001_init"], applied)
+    ).toEqual([]);
+  });
+
+  it("never claims another plugin's modules, whatever its name begins with", () => {
+    expect(
+      unshippedModules("@acme/fx", ["0001_init", "0000_legacy"], applied)
+    ).toEqual([]);
+    expect(unshippedModules("@acme/fx-extra", [], applied)).toEqual([
+      "0001_init",
+    ]);
   });
 });

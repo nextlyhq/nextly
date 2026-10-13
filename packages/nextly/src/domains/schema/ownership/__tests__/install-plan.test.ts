@@ -25,6 +25,7 @@ function plugin(
     requires: [],
     optionallyRequires: [],
     declaredModules: [],
+    hasInstallHook: false,
     ...over,
   };
 }
@@ -51,6 +52,7 @@ const input = (
   ],
   appliedFilenames: new Set(["plugin:auth/001_init", "plugin:auth/002_more"]),
   owners: [ownerRow("auth", "active")],
+  lifecycle: new Map(),
   ...over,
 });
 
@@ -63,6 +65,51 @@ function refusal(run: () => unknown): NextlyError {
   }
   throw new Error("expected a refusal, and the install was allowed");
 }
+
+describe("a dependency's own recorded lifecycle state", () => {
+  // `sso` requires `notify`, which owns no table and declares no module: the
+  // owner rows and the ledger's modules say nothing about it either way.
+  const schemaless = (
+    over: Partial<InstallCandidate> = {},
+    lifecycle: InstallDependencyInput["lifecycle"] = new Map()
+  ) =>
+    missingDependencies(
+      input({
+        configured: [
+          plugin("sso", { requires: ["notify"] }),
+          plugin("notify", over),
+        ],
+        appliedFilenames: new Set(),
+        owners: [],
+        lifecycle,
+      })
+    );
+
+  it("refuses one recorded uninstalled though it owns no table", () => {
+    expect(schemaless({}, new Map([["notify", "uninstalled"]]))).toEqual([
+      { name: "notify", reason: "uninstalled" },
+    ]);
+  });
+
+  it("refuses one with an onInstall the install command never ran", () => {
+    // Nothing else records that its onInstall ran: only that command runs it.
+    expect(schemaless({ hasInstallHook: true })).toEqual([
+      { name: "notify", reason: "never-installed" },
+    ]);
+  });
+
+  it("allows one with an onInstall once it is recorded installed", () => {
+    // The control for the case above.
+    expect(
+      schemaless({ hasInstallHook: true }, new Map([["notify", "installed"]]))
+    ).toEqual([]);
+  });
+
+  it("allows one with nothing to install", () => {
+    // No module and no onInstall: there is no install that could be missing.
+    expect(schemaless()).toEqual([]);
+  });
+});
 
 describe("missingDependencies", () => {
   it("allows a dependency whose modules are all applied and rows active", () => {

@@ -125,3 +125,88 @@ describe("a transform that renames the entity", () => {
     expect((result[0].definition as { label?: string }).label).toBe("Posts");
   });
 });
+
+describe("a transform whose result has no usable slug", () => {
+  it.each([
+    [
+      "with the slug removed",
+      (definition: unknown) => {
+        const { slug: _slug, ...rest } = definition as { slug: string };
+        return rest;
+      },
+    ],
+    [
+      "with the slug undefined",
+      (definition: unknown) => ({
+        ...(definition as object),
+        slug: undefined,
+      }),
+    ],
+    [
+      "with a number for a slug",
+      (definition: unknown) => ({
+        ...(definition as object),
+        slug: 42,
+      }),
+    ],
+  ])("is refused %s", (_label, transform) => {
+    // Accepted, the definition went on into the registries and the schema
+    // pipeline naming no entity, or the wrong kind of one.
+    const message = refusalOf(() =>
+      runEntityTransforms([entity("posts", [])], [
+        contribution(transform),
+      ] as never)
+    );
+
+    expect(message).toMatch(/not rename|remapEntities/i);
+  });
+});
+
+describe("a disabled plugin's transform", () => {
+  it("keeps behaviour it replaced with a plain value", () => {
+    // A string where an object of components was removes the components as
+    // surely as deleting the key, and a disabled plugin contributes no
+    // behaviour, so the components stay.
+    const Field = () => null;
+    const posts = entity("posts", []);
+    (posts.definition as Record<string, unknown>).admin = {
+      components: { Field },
+    };
+
+    const result = runEntityTransforms([posts], [
+      {
+        ...contribution(definition => ({
+          ...(definition as object),
+          admin: { components: "none" },
+        })),
+        disabled: true,
+      },
+    ] as never);
+
+    expect(
+      (result[0].definition as { admin: { components: unknown } }).admin
+        .components
+    ).toEqual({ Field });
+  });
+
+  it("still applies a plain value that replaced a plain value", () => {
+    // The control: keeping every replaced value would pass the case above
+    // while freezing the storage a disabled plugin is still allowed to shape.
+    const posts = entity("posts", []);
+    (posts.definition as Record<string, unknown>).admin = { group: "Old" };
+
+    const result = runEntityTransforms([posts], [
+      {
+        ...contribution(definition => ({
+          ...(definition as object),
+          admin: { group: "New" },
+        })),
+        disabled: true,
+      },
+    ] as never);
+
+    expect(
+      (result[0].definition as { admin: { group: string } }).admin.group
+    ).toBe("New");
+  });
+});

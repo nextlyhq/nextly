@@ -28,6 +28,7 @@ import type { TableRelationInput, ColumnBuilder, TableDefinition } from "./dsl";
 import { defineTable } from "./dsl";
 import {
   assertAddableToExistingRows,
+  assertContributedKeyFree,
   assertMayAddColumns,
   EXTENDABLE_CORE_TABLES,
   type ExtensionTarget,
@@ -506,6 +507,7 @@ function addColumns(
     // caller is declaring right now is empty by construction, so requiring a
     // default there would be a rule with no failure to prevent.
     if (onSomeoneElsesTable) {
+      assertContributedKeyFree(column.key, table.name);
       assertForeignColumnAllowed(column, table.name, scope);
     }
     // Who contributed it, on EVERY table the caller does not own — an entity

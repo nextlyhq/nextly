@@ -231,19 +231,22 @@ function assertSlugKept(
   path: string,
   slug: string
 ): void {
-  if (
-    typeof returned !== "string" ||
-    typeof declared !== "string" ||
-    returned === declared
-  ) {
-    return;
-  }
+  // Equal or refused. A result with no slug, or one that is not a string, is
+  // as much a different entity as one renamed: it went on into the registries
+  // and the schema pipeline with nothing there to say which entity it was.
+  if (returned === declared) return;
+  const got =
+    typeof returned === "string"
+      ? `slug "${returned}"`
+      : returned === undefined
+        ? "no slug"
+        : `a ${typeof returned} slug`;
   throw NextlyError.validation({
     errors: [
       {
         path,
         code: "INVALID",
-        message: `Transform of "${slug}" returned a definition with slug "${returned}". A transform may reshape an entity but not rename it — slug collisions are validated before transforms run, and later transforms still target the declared slug. Use remapEntities to rename.`,
+        message: `Transform of "${slug}" returned a definition with ${got}. A transform may reshape an entity but not rename it — slug collisions are validated before transforms run, and later transforms still target the declared slug. Return the definition with its slug unchanged; use remapEntities to rename.`,
       },
     ],
   });
@@ -346,8 +349,18 @@ function mergeBehaviour(before: unknown, after: unknown): unknown {
     return isFunctionList(before) ? before : DROP;
   }
   if (Array.isArray(after)) return mergeArray(before, after);
-  if (!isContainer(after)) return after;
+  if (!isContainer(after)) return plainValueOver(before, after);
   return mergeRecord(isRecord(before) ? before : {}, after);
+}
+
+/**
+ * A plain value in place of `before`. In place of one that held behaviour — a
+ * string where an object of components was — it removes that behaviour as
+ * surely as deleting the key would, which `restoreRemovedBehaviour` puts
+ * back, so the value that held it is kept here too.
+ */
+function plainValueOver(before: unknown, after: unknown): unknown {
+  return holdsFunction(before) ? before : after;
 }
 
 /** `after`'s elements, each merged with the one it replaced in `before`. */

@@ -40,6 +40,28 @@ import type { SchemaOwner } from "./types";
  * broke RBAC would fail open, and one that broke the ledger would leave a
  * database nobody could migrate.
  */
+/**
+ * The property a contributed-columns handle (`ctx.db.contributed`) keeps a
+ * row's key under, beside the contributed columns, which it stores by their
+ * authored keys. A contributed column under this key would replace the row
+ * key in the handle, and every read and write through it would match rows by
+ * that column instead: the wrong rows, or none.
+ */
+export const CONTRIBUTED_ROW_KEY = "__nextlyRowKey";
+
+/**
+ * Refuse a contributed column whose key is the handle's row key, at the
+ * declaration, where every other contribution rule is decided, rather than
+ * at the first read through it.
+ */
+export function assertContributedKeyFree(key: string, tableName: string): void {
+  if (key !== CONTRIBUTED_ROW_KEY) return;
+  refuse(
+    tableName,
+    `A column contributed to "${tableName}" may not be keyed "${CONTRIBUTED_ROW_KEY}": that key holds the row's key in the handle ctx.db.contributed returns. Choose another key.`
+  );
+}
+
 export const EXTENDABLE_CORE_TABLES: ReadonlySet<string> = new Set([
   "users",
   "media",

@@ -59,6 +59,12 @@ vi.mock("../../../domains/schema/events/schema-events-repository", () => ({
     listFileApplies() {
       return Promise.resolve([]);
     }
+    listPluginLifecycle() {
+      return Promise.resolve([]);
+    }
+    insertEvent() {
+      return Promise.resolve("event");
+    }
   },
 }));
 
@@ -90,7 +96,10 @@ vi.mock("../../../di/register", async importOriginal => ({
 vi.mock("../../../init/build-service-config", () => ({
   buildServiceConfig: (options: { config: unknown }) => {
     state.bootedFrom.push(options.config);
-    return {};
+    // An app that opts into migrations on boot: the hook's boot must not.
+    return {
+      db: { migrationsDir: "./migrations", runMigrationsOnBoot: true },
+    };
   },
 }));
 vi.mock("../../../storage/image-processor", () => ({
@@ -188,5 +197,20 @@ describe("the lifecycle hook's boot", () => {
 
     expect(state.bootedFrom).toHaveLength(1);
     expect(state.bootedFrom[0]).toBe(state.appConfig);
+  });
+
+  it("never migrates, though the app opts into migrations on boot", async () => {
+    // A boot migrates only with `db.runMigrationsOnBoot`. Inside an uninstall
+    // it would take the migrate lock the command already holds, and on SQLite
+    // could apply a module after the rollback list was fixed.
+    await runPluginInstall("@acme/fx", {}, context);
+
+    const booted = registerServices.mock.calls[0]?.[0] as {
+      db?: { runMigrationsOnBoot?: boolean; migrationsDir?: string };
+    };
+    expect(booted.db).toEqual({
+      migrationsDir: "./migrations",
+      runMigrationsOnBoot: false,
+    });
   });
 });

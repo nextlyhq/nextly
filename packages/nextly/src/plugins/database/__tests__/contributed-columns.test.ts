@@ -203,6 +203,17 @@ describe("a plugin's own contributed column", () => {
     });
   });
 
+  it("changes nothing, and says so, for a write that sets no value", async () => {
+    // A plugin building its values conditionally sends an empty write in the
+    // ordinary course; it was refused as a failure to name a column.
+    const writer = surfaceFor(FX).contributed("dc_posts", fxColumns);
+    await expect(writer.set("p1", {})).resolves.toBe(0);
+    await expect(writer.set("p1", { searchVector: undefined })).resolves.toBe(
+      0
+    );
+    expect(stored("p1")).toMatchObject({ search_vector: "hello world" });
+  });
+
   it("is read and written inside a transaction", async () => {
     const surface = surfaceFor(FX);
     const read = await surface.transaction(async tx => {

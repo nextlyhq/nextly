@@ -20,6 +20,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { qualifiedFilename } from "../migrate/plugin/plugin-migration";
 
 import type { OwnerRecord } from "./owner-registry";
+import type { PluginLifecycleState } from "./plugin-lifecycle-state";
 
 /** What the check needs about one configured plugin. */
 export interface InstallCandidate {
@@ -30,6 +31,11 @@ export interface InstallCandidate {
   optionallyRequires: readonly string[];
   /** Every migration module the plugin declares, applied or not. */
   declaredModules: readonly string[];
+  /**
+   * Whether it declares `onInstall`. Its install is then more than its
+   * modules, and has happened only once `nextly plugins install` recorded it.
+   */
+  hasInstallHook: boolean;
 }
 
 export interface InstallDependencyInput {
@@ -44,13 +50,20 @@ export interface InstallDependencyInput {
   appliedFilenames: ReadonlySet<string>;
   /** Owner rows; only the dependencies' rows are consulted. */
   owners: readonly OwnerRecord[];
+  /**
+   * Each plugin's newest recorded lifecycle state (`readPluginLifecycle`);
+   * a plugin with none was never installed or uninstalled through the
+   * commands.
+   */
+  lifecycle: ReadonlyMap<string, PluginLifecycleState>;
 }
 
 /** Why a dependency does not count as installed. */
 export type MissingDependency =
   | { name: string; reason: "not-configured" }
   | { name: string; reason: "pending-modules"; pending: string[] }
-  | { name: string; reason: "uninstalled" };
+  | { name: string; reason: "uninstalled" }
+  | { name: string; reason: "never-installed" };
 
 /**
  * The target's dependencies that are not installed on this database, in
@@ -117,10 +130,22 @@ function notInstalledReason(
   // `--keep-data`: its tables survive, but its `onUninstall` has run, so
   // whatever its install set up outside those tables may be gone — the same
   // reason a fully uninstalled one is refused.
-  const uninstalled = input.owners.some(
-    row => row.ownerId === candidate.name && row.state !== "active"
-  );
+  // The same question asked of the plugin's own recorded state, which is the
+  // only record a plugin that owns no table has.
+  const recorded = input.lifecycle.get(candidate.name);
+  const uninstalled =
+    recorded === "uninstalled" ||
+    recorded === "orphaned" ||
+    input.owners.some(
+      row => row.ownerId === candidate.name && row.state !== "active"
+    );
   if (uninstalled) return { name: candidate.name, reason: "uninstalled" };
+  // A dependency whose install is more than its modules: applied modules say
+  // nothing about whether its `onInstall` ran, and only the install command
+  // runs it, so only that command's record says it did.
+  if (candidate.hasInstallHook && recorded !== "installed") {
+    return { name: candidate.name, reason: "never-installed" };
+  }
   return undefined;
 }
 
@@ -133,6 +158,8 @@ function describeMissing(dep: MissingDependency): string {
       return `  - "${dep.name}": its migration(s) ${dep.pending.join(", ")} ${dep.pending.length === 1 ? "is" : "are"} not applied — ${install}`;
     case "uninstalled":
       return `  - "${dep.name}": it was uninstalled — ${install}`;
+    case "never-installed":
+      return `  - "${dep.name}": its install, which runs its onInstall, has not run on this database — ${install}`;
   }
 }
 

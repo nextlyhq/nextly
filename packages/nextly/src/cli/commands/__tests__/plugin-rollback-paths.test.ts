@@ -463,10 +463,12 @@ describe("the lifecycle commands while another process holds the migrate lock", 
     state.migrations = [init, more, extra];
     state.lockHeld = true;
 
+    // The whole install is refused, not just its modules: it holds the lock
+    // from the first module through onInstall, so it takes the lock first.
     await expect(runPluginInstall(PLUGIN, {}, context)).rejects.toMatchObject({
       code: "CONFLICT",
       publicMessage: expect.stringContaining(
-        `Another migration is holding the migrate lock, so ${PLUGIN}'s migrations were not applied.`
+        "Another migration is holding the migrate lock, so nothing was run."
       ),
     });
     expect(tables()).not.toContain("fx__extra");
