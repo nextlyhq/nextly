@@ -27,7 +27,7 @@ This page covers the common deploy patterns. Pick whichever fits your stack.
 | `nextly migrate:resolve` | Recovery: mark a file applied/rolled-back or clean up a failed attempt without running SQL. See [Recovering from a failed migration](#recovering-from-a-failed-migration). |
 | `nextly migrate:fresh` | Wipes all tables and re-applies every migration. Local-dev only. Confirmation required. |
 | `nextly migrate:down` | Rolls back the most-recently-applied migration(s) using their `-- DOWN` section. CLI-only; never runs on boot. See [Rolling back a migration](#rolling-back-a-migration). |
-| `nextly users:clear-plaintext-passwords` | Finds accounts an earlier release left holding a password stored as typed and, with `--apply`, clears it and ends their sessions. Previews by default. See [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed). |
+| `nextly users:clear-plaintext-passwords` | Finds accounts an earlier release left holding a password stored as typed and, with `--apply --confirm-default-hasher`, clears it and ends their sessions. Previews by default. See [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed). |
 
 Global flags inherited from the root `nextly` command: `--config <path>` (custom `nextly.config.ts` path), `--cwd <path>`, `--verbose`, `-q/--quiet`.
 
@@ -42,7 +42,7 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished).
 - `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
 - `nextly migrate:down` -- `--step <n>` (roll back the last N migrations), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--plugin <name>` (roll back that plugin's modules instead of the app's files), `--force-unlock`.
-- `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions; without it the command only counts them).
+- `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions; without it the command only counts them), `--confirm-default-hasher` (required with `--apply`: your statement that the app passes no `passwordHasher` to `getNextly`).
 
 ---
 
@@ -629,11 +629,24 @@ see how many your database holds, without changing anything:
 nextly users:clear-plaintext-passwords
 ```
 
-To clear them:
+<Callout type="warn">
+If your app passes its own `passwordHasher` to `getNextly`, do not clear these accounts.
+The command reads `nextly.config.ts`, not your app's code, so it cannot see that hasher,
+and a hash it wrote in a format the command does not recognise is counted here as
+plain text. Clearing it locks that person out until they reset their password.
+</Callout>
+
+The count never includes a value in a format other password hashers write: a
+modular-crypt string starting with `$` (argon2, scrypt or pbkdf2, for example), or a hex
+salt and digest joined by a colon. Those are left as they are.
+
+To clear them, confirming that your app uses Nextly's own hashing:
 
 ```bash
-nextly users:clear-plaintext-passwords --apply
+nextly users:clear-plaintext-passwords --apply --confirm-default-hasher
 ```
+
+Without `--confirm-default-hasher`, `--apply` changes nothing and exits with an error.
 
 For each such account it removes the stored value and ends every session the account
 holds. It prints only counts, never an address or a value, and a second run finds nothing

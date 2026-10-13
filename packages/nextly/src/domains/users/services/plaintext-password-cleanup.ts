@@ -13,6 +13,16 @@
  * to apply, and counted by `nextly migrate`. Never run at boot: it changes
  * stored credentials, so an operator runs it.
  *
+ * Not every value that is not core's hash is plain text. An app can pass its
+ * own `passwordHasher` to `getNextly`, and the account creation that kept raw
+ * values was written to accept a hash made elsewhere; either may have stored a
+ * hash in another format, which an app's hasher can still sign people in with.
+ * So a value in a format such hashers write is never cleared: a modular-crypt
+ * string (`$` and an algorithm id, as argon2, scrypt and pbkdf2 libraries
+ * write) or a hex salt and digest joined by a colon. A raw password that
+ * happens to take one of those shapes is left in place, which the preview
+ * still cannot see; one taken for plain text would lock its owner out.
+ *
  * @module domains/users/services/plaintext-password-cleanup
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -29,6 +39,17 @@ import {
 
 /** Rows read per page while looking, so a large table is never read whole. */
 const PAGE_SIZE = 500;
+
+/** A hex salt and a hex digest joined by a colon, as scrypt libraries write. */
+const HEX_SALT_AND_DIGEST = /^[0-9a-f]{16,}:[0-9a-f]{32,}$/i;
+
+/**
+ * Whether a stored value is in a format another password hasher writes, and
+ * so is never taken for plain text. See the module comment.
+ */
+export function isOtherHasherFormat(value: string): boolean {
+  return value.startsWith("$") || HEX_SALT_AND_DIGEST.test(value);
+}
 
 /** An account holding a stored password that is not a hash, and that value. */
 interface Candidate {
@@ -54,7 +75,8 @@ export class PlainTextPasswordCleanup extends BaseService {
   }
 
   /**
-   * The ids of the accounts whose stored password is set but is not a hash.
+   * The ids of the accounts whose stored password is set but is neither a
+   * hash nor in another hasher's format.
    *
    * Each value is read only to be tested, by the same test sign-in uses, and
    * is never returned, printed or logged.
@@ -96,7 +118,10 @@ export class PlainTextPasswordCleanup extends BaseService {
     return changed;
   }
 
-  /** Every account holding a non-hash password value, read a page at a time. */
+  /**
+   * Every account holding a password value that is neither core's hash nor in
+   * another hasher's format, read a page at a time.
+   */
   private async candidates(): Promise<Candidate[]> {
     const { users } = this.tables;
     const db = this.db as unknown as UsersPageReader;
@@ -114,7 +139,11 @@ export class PlainTextPasswordCleanup extends BaseService {
         .orderBy(asc(users.id))
         .limit(PAGE_SIZE);
       for (const row of page) {
-        if (typeof row.value === "string" && !isPasswordHash(row.value)) {
+        if (
+          typeof row.value === "string" &&
+          !isPasswordHash(row.value) &&
+          !isOtherHasherFormat(row.value)
+        ) {
           found.push({ id: String(row.id), value: row.value });
         }
       }

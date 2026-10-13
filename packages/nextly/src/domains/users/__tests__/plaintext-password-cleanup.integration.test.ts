@@ -31,6 +31,11 @@ afterEach(async () => {
 const SHORT_PLAIN = "hunter2-as-typed";
 const COLON_PLAIN = "Correct-Horse:Battery-Staple:2026-Phrase";
 const NEW_PASSWORD = "Str0ng-P@ssw0rd!";
+// What other password hashers write: an app's own `passwordHasher`, or a hash
+// made elsewhere that account creation once accepted. Neither is plain text.
+const MODULAR_CRYPT =
+  "$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaA";
+const HEX_SALT_AND_DIGEST = `${"a1".repeat(16)}:${"9f".repeat(64)}`;
 
 interface TestDb {
   select: () => {
@@ -63,6 +68,8 @@ async function seed(t: TestNextly): Promise<Record<string, string | null>> {
     hashed: await hashPassword(NEW_PASSWORD),
     short: SHORT_PLAIN,
     colon: COLON_PLAIN,
+    argon2: MODULAR_CRYPT,
+    scrypt: HEX_SALT_AND_DIGEST,
     none: null,
   };
   for (const [kind, passwordHash] of Object.entries(stored)) {
@@ -133,12 +140,14 @@ async function signInError(
 describe.each(getConfiguredTestDialects())(
   "clearing passwords stored as given (%s)",
   (dialect: TestDialect) => {
-    it("finds only the accounts whose stored password is not a hash, by id", async () => {
+    it("finds only the accounts whose stored password is plain text, by id", async () => {
       const t = await boot(dialect);
       await seed(t);
 
       const found = await cleanup(t).find();
 
+      // Not core's hash, nor in another hasher's format. The colon value is
+      // the one account creation kept as given, and is found.
       expect([...found].sort()).toEqual(["user-colon", "user-short"]);
       // Ids only: no stored value comes back from the read.
       const output = JSON.stringify(found);
@@ -158,12 +167,14 @@ describe.each(getConfiguredTestDialects())(
           sessions: 0,
         });
       }
-      // The controls: a hash and an account with no password are untouched,
-      // and keep their sessions.
-      expect(await account(t, "hashed")).toEqual({
-        passwordHash: stored.hashed,
-        sessions: 1,
-      });
+      // The controls: a hash, another hasher's hashes and an account with no
+      // password are untouched, and keep their sessions.
+      for (const kind of ["hashed", "argon2", "scrypt"]) {
+        expect(await account(t, kind)).toEqual({
+          passwordHash: stored[kind],
+          sessions: 1,
+        });
+      }
       expect(await account(t, "none")).toEqual({
         passwordHash: null,
         sessions: 1,

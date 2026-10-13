@@ -49,22 +49,32 @@ beforeEach(() => {
 });
 
 describe("users:clear-plaintext-passwords", () => {
-  it("only counts without --apply", async () => {
+  it("only counts without --apply, and warns about an app's own hasher", async () => {
     expect(await runClearPlaintextPasswords(false, context)).toBe(2);
     expect(clear).not.toHaveBeenCalled();
     expect(printed.join("\n")).toContain("2 account(s)");
     expect(printed.join("\n")).toContain("Nothing was changed");
+    expect(printed.join("\n")).toContain("passes a passwordHasher");
   });
 
-  it("clears with --apply", async () => {
-    expect(await runClearPlaintextPasswords(true, context)).toBe(2);
+  it("refuses --apply without the hasher confirmation, before reading anything", async () => {
+    // The app's own hasher is invisible to the CLI, and its hashes can look
+    // like plain text; clearing them locks people out.
+    expect(await runClearPlaintextPasswords(true, context)).toBeNull();
+    expect(clear).not.toHaveBeenCalled();
+    expect(find).not.toHaveBeenCalled();
+    expect(printed.join("\n")).toContain("--confirm-default-hasher");
+  });
+
+  it("clears with --apply and the hasher confirmation", async () => {
+    expect(await runClearPlaintextPasswords(true, context, true)).toBe(2);
     expect(clear).toHaveBeenCalledTimes(1);
     expect(printed.join("\n")).toContain("Cleared the stored password of 2");
   });
 
   it("prints counts, never an account", async () => {
     await runClearPlaintextPasswords(false, context);
-    await runClearPlaintextPasswords(true, context);
+    await runClearPlaintextPasswords(true, context, true);
     expect(printed.join("\n")).not.toContain("user-a");
   });
 
@@ -72,7 +82,7 @@ describe("users:clear-plaintext-passwords", () => {
     find.mockResolvedValue([]);
     clear.mockResolvedValue(0);
     await runClearPlaintextPasswords(false, context);
-    await runClearPlaintextPasswords(true, context);
+    await runClearPlaintextPasswords(true, context, true);
     expect(
       printed.filter(m => m.includes("No account holds a password"))
     ).toHaveLength(2);
@@ -83,5 +93,6 @@ describe("users:clear-plaintext-passwords", () => {
     expect(plainTextPasswordNotice(3)).toContain(
       "nextly users:clear-plaintext-passwords"
     );
+    expect(plainTextPasswordNotice(3)).toContain("passes a passwordHasher");
   });
 });

@@ -18,6 +18,15 @@
  * `nextly migrate` prints the same count, read-only, and names this command,
  * so an install that holds such accounts hears about it on its next migrate.
  *
+ * ## `--apply` needs the operator's word on the hasher
+ *
+ * An app may pass its own `passwordHasher` to `getNextly`, in its code rather
+ * than in `nextly.config.ts`, so this command cannot see one. A hasher that
+ * writes a format the clean-up does not recognise would have its hashes taken
+ * for plain text, and clearing them locks those people out. So `--apply` also
+ * needs `--confirm-default-hasher`, the operator's statement that the app
+ * passes none; without it nothing is written.
+ *
  * @module cli/commands/clear-plaintext-passwords
  */
 
@@ -35,6 +44,12 @@ import { withAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
 export const CLEAR_PLAINTEXT_PASSWORDS_COMMAND =
   "users:clear-plaintext-passwords";
 
+const CONFIRM_DEFAULT_HASHER = "--confirm-default-hasher";
+
+/** The warning every count carries, since a custom hasher is invisible here. */
+const CUSTOM_HASHER_WARNING =
+  "If your app passes a passwordHasher to getNextly, these may be its hashes: do not clear them.";
+
 /** The clean-up over a CLI connection. */
 export function plainTextPasswordCleanup(
   adapter: CLIDatabaseAdapter
@@ -51,19 +66,27 @@ export function plainTextPasswordCleanup(
  */
 export function plainTextPasswordNotice(count: number): string | null {
   if (count === 0) return null;
-  return `${String(count)} account(s) hold a password stored as given. Run \`nextly ${CLEAR_PLAINTEXT_PASSWORDS_COMMAND}\` to review them, and add --apply to clear them and end their sessions.`;
+  return `${String(count)} account(s) hold a password stored as given. Run \`nextly ${CLEAR_PLAINTEXT_PASSWORDS_COMMAND}\` to review them. ${CUSTOM_HASHER_WARNING}`;
 }
 
 /**
  * Preview, or clear with `apply`; returns how many accounts were found, or
- * changed. The connection refuses a missing or unusable database setting
- * itself, before anything is read.
+ * changed, or `null` when an apply was refused for want of the operator's
+ * confirmation, before any connection is made. The connection refuses a
+ * missing or unusable database setting itself, before anything is read.
  */
 export async function runClearPlaintextPasswords(
   apply: boolean,
-  context: CommandContext
-): Promise<number> {
+  context: CommandContext,
+  confirmedDefaultHasher = false
+): Promise<number | null> {
   const { logger } = context;
+  if (apply && !confirmedDefaultHasher) {
+    logger.error(
+      `Nothing was changed: --apply also needs ${CONFIRM_DEFAULT_HASHER}, your statement that the app passes no passwordHasher to getNextly. A custom hasher's hashes can look like plain text here, and clearing them locks those people out.`
+    );
+    return null;
+  }
   logger.keyValue("Mode", apply ? "apply" : "preview (nothing is written)");
   logger.newline();
 
@@ -81,7 +104,7 @@ export async function runClearPlaintextPasswords(
         );
       } else {
         logger.warn(
-          `${String(count)} account(s) hold a password stored as given. Nothing was changed; run again with --apply to clear them and end their sessions.`
+          `${String(count)} account(s) hold a password stored as given. Nothing was changed; run again with --apply ${CONFIRM_DEFAULT_HASHER} to clear them and end their sessions. ${CUSTOM_HASHER_WARNING}`
         );
       }
       return count;
@@ -104,14 +127,27 @@ export function registerClearPlaintextPasswordsCommand(
       "Clear the values (without this, the command only previews)",
       false
     )
-    .action(async (cmdOptions: { apply?: boolean }, cmd: Command) => {
-      const context = createContext(cmd.optsWithGlobals());
-      await runClearPlaintextPasswords(
-        cmdOptions.apply === true,
-        context
-      ).catch((error: unknown) => {
-        context.logger.error(describeError(error));
-        process.exit(1);
-      });
-    });
+    .option(
+      CONFIRM_DEFAULT_HASHER,
+      "With --apply: state that the app passes no passwordHasher to getNextly",
+      false
+    )
+    .action(
+      async (
+        cmdOptions: { apply?: boolean; confirmDefaultHasher?: boolean },
+        cmd: Command
+      ) => {
+        const context = createContext(cmd.optsWithGlobals());
+        const result = await runClearPlaintextPasswords(
+          cmdOptions.apply === true,
+          context,
+          cmdOptions.confirmDefaultHasher === true
+        ).catch((error: unknown) => {
+          context.logger.error(describeError(error));
+          process.exit(1);
+        });
+        // A refused apply wrote nothing, and says so with its exit status.
+        if (result === null) process.exit(1);
+      }
+    );
 }

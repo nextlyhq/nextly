@@ -33,7 +33,11 @@ given when an account was created, or any value sent to `PATCH /api/users/:id/pa
 Such a value never let anyone sign in, but it is readable in the database and its backups.
 
 Run the command once after upgrading. Without flags it only counts the affected accounts;
-with `--apply` it clears each stored value and ends that account's sessions, printing only
-a count. `nextly migrate` now prints the same count and names the command, and changes
+with `--apply --confirm-default-hasher` it clears each stored value and ends that account's
+sessions, printing only a count. `--apply` alone changes nothing: the second flag is your
+statement that the app passes no `passwordHasher` to `getNextly`, since the command cannot
+see one and would take a custom hasher's hashes for plain text. Values in a format other
+hashers write (a `$`-prefixed modular-crypt string, or a hex salt and digest joined by a
+colon) are never counted or cleared. `nextly migrate` now prints the same count and names the command, and changes
 nothing itself. People whose password was cleared are refused at sign-in exactly as
 before, and set a new password with Forgot password, or an administrator sets one.
