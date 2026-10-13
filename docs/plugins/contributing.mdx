@@ -60,7 +60,7 @@ A good Nextly plugin:
       wiring (e.g. a Next.js rewrite or middleware).
 - [ ] **Is tested** with `createTestNextly`, including a real-Postgres test for anything
       writing typed/system columns.
-- [ ] **Cleans up in `destroy()`** (subscriptions, timers) so HMR/teardown is leak-free.
+- [ ] **Cleans up in `destroy()`** (subscriptions, timers), so a shutdown, a re-registration or a test's teardown leaves nothing running.
 
 ## Contribute a plugin to the Nextly repo
 
