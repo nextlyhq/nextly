@@ -96,6 +96,7 @@
     "RESEND_USER_AGENT", // Resend email provider: User-Agent some proxies filter on
     "DATABASE_URL",
     "DB_DIALECT",
+    "NEXT_PHASE", // nextly boot: a production build seeds no permissions or roles
     "GITHUB_ACTOR", // nextly migrate: appliedBy actor in CI
     "USER", // nextly migrate: appliedBy actor on dev laptops
     "DEBUG",

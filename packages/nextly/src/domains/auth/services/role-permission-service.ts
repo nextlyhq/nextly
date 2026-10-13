@@ -250,9 +250,17 @@ export class RolePermissionService extends BaseService {
   /**
    * Bulk-set (replace) all permissions for a role.
    *
-   * Deletes all existing role-permission assignments for the role, then inserts
-   * new assignments for each provided permission ID. This is an atomic replacement:
-   * the caller passes the desired final set of permission IDs.
+   * Writes only the difference — the assignments the role holds that are not in
+   * `permissionIds` are removed, the ones it lacks are added — in ONE transaction,
+   * under a lock on the role's row. An assignment that stays is never touched.
+   *
+   * Replacing the whole set as a delete and then an insert, outside a
+   * transaction, left the role with no permissions whenever anything stopped
+   * between the two: an insert that failed, or a serverless instance frozen after
+   * its first response while boot seeding was still running. Every instance ran
+   * that replacement on every cold start, so concurrent starts rewrote the same
+   * rows against each other. Here, an unchanged set is answered by a read alone,
+   * with no write and no lock, and a change either lands whole or not at all.
    *
    * @param roleId - Role ID to set permissions for
    * @param permissionIds - The complete desired set of permission IDs
@@ -262,28 +270,58 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     permissionIds: string[]
   ): Promise<Array<{ id: string; action: string; resource: string }>> {
-    await (this.db as RBACDatabaseInstance)
-      .delete(this.tables.rolePermissions)
-      .where(eq(this.tables.rolePermissions.roleId, roleId));
+    const desired = new Set(permissionIds);
 
-    // Skip if empty — role ends up with no permissions
-    if (permissionIds.length > 0) {
-      const rows = permissionIds.map(permissionId => ({
-        id: randomUUID(),
-        roleId,
-        permissionId,
-      }));
-      const insert = (this.db as RBACDatabaseInstance)
-        .insert(this.tables.rolePermissions)
-        .values(rows);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- onConflictDoNothing is PG/SQLite only, runtime check needed
-      if (typeof (insert as any).onConflictDoNothing === "function") {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (insert as any).onConflictDoNothing();
-      } else {
-        await insert;
-      }
+    // Read first, outside any transaction: once a preset has settled, every
+    // boot of every instance asks this with nothing to change, and the answer
+    // costs one read rather than a lock and a rewrite.
+    const before = await this.listRolePermissions(roleId);
+    if (sameMembers(new Set(before.map(p => p.id)), desired)) {
+      return before;
     }
+
+    await this.adapter.transaction(async tx => {
+      // Serialises writers to this role: a second writer waits, then reads what
+      // the first committed and applies only what is still different. Columns
+      // are named as the schema declares them, which is how the adapter reads a
+      // where clause and returns a row.
+      await tx.lockRow("roles", roleId);
+      const held = new Set(
+        (
+          await tx.select<{ permissionId: string }>("role_permissions", {
+            columns: ["permissionId"],
+            where: this.whereEq("roleId", roleId),
+          })
+        ).map(row => String(row.permissionId))
+      );
+
+      const extra = [...held].filter(id => !desired.has(id));
+      if (extra.length > 0) {
+        await tx.delete("role_permissions", {
+          and: [
+            { column: "roleId", op: "=", value: roleId },
+            { column: "permissionId", op: "IN", value: extra },
+          ],
+        });
+      }
+
+      const missing = [...desired].filter(id => !held.has(id));
+      if (missing.length > 0) {
+        // Through Drizzle, on this transaction's connection, so the schema's
+        // own defaults apply: SQLite's `created_at` is filled by the table
+        // definition, which an insert by table name leaves as NULL.
+        await tx
+          .getDrizzle<RBACDatabaseInstance>()
+          .insert(this.tables.rolePermissions)
+          .values(
+            missing.map(permissionId => ({
+              id: randomUUID(),
+              roleId,
+              permissionId,
+            }))
+          );
+      }
+    });
 
     await invalidatePermissionCache({ roleId });
 
@@ -320,4 +358,11 @@ export class RolePermissionService extends BaseService {
       resource: rp.permission!.resource,
     }));
   }
+}
+
+/** Whether two sets hold the same members. */
+function sameMembers(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const member of a) if (!b.has(member)) return false;
+  return true;
 }

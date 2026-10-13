@@ -15,10 +15,6 @@ import {
 import { getService } from "../di/register";
 import { warnAboutUnusableProviders } from "../domains/email/boot-check";
 import { getEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
-import { collectRoles } from "../plugins/roles/collect-roles";
-import { seedPluginRoles } from "../plugins/roles/seed-roles";
-
-import { seedPermissionsAndRolePresets } from "./seed-permissions";
 
 /**
  * Run idempotent post-initialization tasks after services are registered.
@@ -26,7 +22,10 @@ import { seedPermissionsAndRolePresets } from "./seed-permissions";
  * - Seeds built-in email templates (welcome, password-reset, email-verification, layout)
  * - Syncs code-defined user fields into `user_field_definitions` (when service exists)
  * - Loads merged fields (code + UI) into `UserExtSchemaService` for consumers
- * - Seeds system, collection, and single permissions
+ *
+ * Permission and role seeding is not here: the boot waits for it
+ * (`seedPermissionsAndRolePresets`), because a role's permissions must not be
+ * left half-written by an instance frozen after its first response.
  *
  * All operations are idempotent and safe to run on every startup.
  * Failures are caught and logged — they should never prevent Nextly from starting.
@@ -80,35 +79,6 @@ export async function runPostInitTasks(): Promise<void> {
     }
   } catch {
     // Silently skip — userExtSchemaService may not be registered
-  }
-
-  // Seed system + collection + single + plugin custom permissions (idempotent).
-  // Ensures CRUD permissions exist for every collection (4 each) and single (2 each),
-  // plus all system resource permissions and plugin-declared custom permissions
-  // (D36). New permissions are auto-assigned to super_admin.
-  // Permissions, then the preset roles that cover them. One call rather than
-  // two, because the request-path boot has to leave the same rows behind and a
-  // second list of steps is how the two drift -- see `seed-permissions`. Presets
-  // re-resolve every boot rather than once: each is a predicate, so a collection
-  // added since last boot is covered without anyone editing a role, and they are
-  // never assigned to anyone — defining a role is not granting it.
-  await seedPermissionsAndRolePresets();
-
-  // Seed plugin/app-declared role bundles (D67) AFTER permissions exist, so each
-  // role's permission slugs resolve to ids. Idempotent by slug; roles are
-  // never auto-assigned to users (define, don't grant — D36). Collision
-  // validation already ran at boot (registerServices).
-  try {
-    const config = getService("config");
-    const adapter = getService("adapter");
-    const logger = getService("logger");
-    await seedPluginRoles(
-      adapter,
-      collectRoles(config, config.plugins ?? []),
-      logger
-    );
-  } catch {
-    // Silently skip — roles/permissions tables may not exist yet.
   }
 
   // Rewrite timestamps an older SQLite writer stored as text. Runs once and
