@@ -911,8 +911,22 @@ be uninstalled at all.
 It refuses while another enabled plugin depends on it, and refuses a full
 uninstall when any module has no DOWN: running the reversible ones and
 stopping would leave the tables partly existing with no module describing what
-is there. `--keep-data` leaves everything in place and marks the owner
-orphaned.
+is there. It refuses the same way while the ledger records a module applied
+that the configured version of the plugin no longer ships
+(`logContext.reason` is `module-not-shipped`): configure the version that
+shipped it first. `--keep-data` leaves everything in place and marks the owner
+orphaned. A plugin whose modules `migrate:down --plugin` already rolled back
+can still be uninstalled: only the tables that exist are dropped.
+
+`plugins install` holds the migrate lock from its first migration until
+`onInstall` returns, and `plugins uninstall` from its final decision until the
+owner rows are marked, so neither can interleave with the other or with
+`nextly migrate`. The boot each command makes to run the hook never runs boot
+migrations.
+
+The state is kept on the plugin's owner rows. A plugin that owns no tables has
+none, so nothing records its uninstall: remove it from your config, or it
+initializes again on the next boot.
 
 A full uninstall that would drop tables, or run a DOWN that drops a column,
 lists what it would drop and stops with `PLUGIN_UNINSTALL_UNCONFIRMED` until

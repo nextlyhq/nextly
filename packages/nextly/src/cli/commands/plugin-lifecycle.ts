@@ -54,6 +54,12 @@ export interface LifecyclePlugin {
    * can be undone. Uninstall runs DOWN for these and nothing else.
    */
   modules: { name: string; reversible: boolean }[];
+  /**
+   * Modules the ledger records as applied that the configured definition no
+   * longer ships, renamed or removed in a later version. Their DOWN cannot be
+   * read, so a full uninstall refuses while any remain.
+   */
+  unshippedModules: string[];
 }
 
 /**
@@ -140,6 +146,8 @@ export interface PluginLifecycleDeps {
    * it before anything runs.
    */
   readAppliedModules: () => Promise<ReadonlySet<string>>;
+  /** Which of the named tables exist in the database now. */
+  liveTables: (tables: readonly string[]) => Promise<ReadonlySet<string>>;
 }
 
 function find(plugins: LifecyclePlugin[], name: string): LifecyclePlugin {
@@ -162,74 +170,82 @@ function find(plugins: LifecyclePlugin[], name: string): LifecyclePlugin {
  * A second install re-runs `onInstall` alone, which is why that hook is
  * documented as idempotent — an operator repairing a half-finished install
  * should not have to reason about whether it is safe to repeat.
+ *
+ * The whole state change runs under one migrate lock, as an uninstall does:
+ * the modules, the owner rows going back to `active`, and `onInstall`. With
+ * the lock released between them, an uninstall could roll the new modules
+ * back and mark the plugin uninstalled, and the install would then mark it
+ * active again and report tables that were gone.
  */
 export async function runPluginInstallCommand(
   name: string,
   deps: PluginLifecycleDeps
 ): Promise<void> {
   const plugin = find(deps.plugins, name);
-  const registry = createOwnerRegistry(
-    new SchemaOwnersRepository(deps.db, deps.dialect)
-  );
-
   deps.logger.info(`Installing ${plugin.name}@${plugin.version}...`);
 
-  // Every dependency installed, or nothing runs.
-  //
-  // Applying this plugin's modules, activating its owner rows and running its
-  // `onInstall` all assume what its dependencies' installs provide — their
-  // tables AND whatever their own `onInstall` set up. Nothing downstream
-  // checks that: this plugin's SQL fails only if it happens to reference a
-  // dependency table, and otherwise the install succeeds without its
-  // prerequisite. So it is refused up front, naming each missing dependency
-  // and the command that installs it — the mirror of uninstall refusing while
-  // an enabled dependent remains.
-  //
-  // Checked before the migrate lock rather than under it, because holding the
-  // lock here would not make the result any more true by the time it matters:
-  // the lock is released after this plugin's modules apply, before its owner
-  // rows and `onInstall`, so a concurrent change could land after the check
-  // either way. The change that would turn a passing check false is a
-  // dependency's uninstall, and that refuses while this plugin is configured,
-  // enabled and depends on it. A disabled plugin gets no such protection;
-  // the opposite race — a dependency finishing its install just after this
-  // read — only produces a refusal that a re-run clears.
+  // Refused before the lock, so an install that cannot proceed makes no
+  // other migration wait, and decided again under it, where it holds.
+  await assertInstallable(plugin, deps);
+  const owned = await deps.underMigrateLock(async () => {
+    await assertInstallable(plugin, deps);
+
+    // BEFORE the hook, because `onInstall` is documented as running against
+    // the plugin's own tables: a hook that seeds a row cannot do it into a
+    // table no migration has created yet. The phase reports its own
+    // applied/adopted counts — this command does not restate them, because a
+    // second count is a second thing that can be wrong.
+    await deps.applyMigrations(plugin);
+
+    // The owner rows go back to `active` BEFORE the hook, not after.
+    //
+    // A REINSTALL is what makes the order load-bearing. After a full
+    // uninstall the rows survive marked `uninstalled`, and the boot check
+    // refuses an `uninstalled` owner that is still listed in config —
+    // deliberately, since that state means "its tables were dropped".
+    // `runLifecycleHook` boots the runtime to build the plugin's context, so
+    // with the reset after the hook, a reinstall of a plugin declaring
+    // `onInstall` could never complete: boot rejected the plugin the install
+    // was in the middle of restoring.
+    const registry = createOwnerRegistry(
+      new SchemaOwnersRepository(deps.db, deps.dialect)
+    );
+    const rows = await registry.listByOwner(plugin.name);
+    if (rows.length > 0) {
+      await registry.setState(plugin.name, "active");
+    }
+
+    await deps.runLifecycleHook(plugin, "onInstall", { keepData: false });
+    return rows;
+  });
+
+  deps.logger.success(
+    `${plugin.name} installed (${String(owned.length)} table(s) recorded).`
+  );
+}
+
+/**
+ * Every dependency installed, or nothing runs.
+ *
+ * Applying this plugin's modules, activating its owner rows and running its
+ * `onInstall` all assume what its dependencies' installs provide — their
+ * tables AND whatever their own `onInstall` set up. Nothing downstream
+ * checks that: this plugin's SQL fails only if it happens to reference a
+ * dependency table, and otherwise the install succeeds without its
+ * prerequisite. So it is refused up front, naming each missing dependency and
+ * the command that installs it — the mirror of uninstall refusing while an
+ * enabled dependent remains.
+ */
+async function assertInstallable(
+  plugin: LifecyclePlugin,
+  deps: PluginLifecycleDeps
+): Promise<void> {
   assertDependenciesInstalled({
     pluginName: plugin.name,
     configured: deps.plugins,
     appliedFilenames: await deps.readAppliedModules(),
     owners: await new SchemaOwnersRepository(deps.db, deps.dialect).read(),
   });
-
-  // BEFORE the hook, because `onInstall` is documented as running against the
-  // plugin's own tables: a hook that seeds a row cannot do it into a table no
-  // migration has created yet. The phase reports its own applied/adopted
-  // counts — this command does not restate them, because a second count is a
-  // second thing that can be wrong.
-  await deps.applyMigrations(plugin);
-
-  // The owner rows go back to `active` BEFORE the hook, not after.
-  //
-  // A REINSTALL is what makes the order load-bearing. After a full uninstall
-  // the rows survive marked `uninstalled`, and the boot check refuses an
-  // `uninstalled` owner that is still listed in config — deliberately, since
-  // that state means "its tables were dropped". `runLifecycleHook` boots the
-  // runtime to build the plugin's context, so with the reset after the hook, a
-  // reinstall of a plugin declaring `onInstall` could never complete: boot
-  // rejected the plugin the install was in the middle of restoring.
-  //
-  // Migrations still run first, which is the order that matters for the hook's
-  // own contract — it reads the plugin's tables, and they have to exist.
-  const owned = await registry.listByOwner(plugin.name);
-  if (owned.length > 0) {
-    await registry.setState(plugin.name, "active");
-  }
-
-  await deps.runLifecycleHook(plugin, "onInstall", { keepData: false });
-
-  deps.logger.success(
-    `${plugin.name} installed (${String(owned.length)} table(s) recorded).`
-  );
 }
 
 /** What an uninstall that passed every refusal will do. */
@@ -238,6 +254,8 @@ interface UninstallDecision {
   plan: UninstallPlan;
   /** The modules' DOWNs, newest first, each already verified and judged. */
   downs: PreparedModuleDown[];
+  /** Whether the plugin has owner rows for its final state to be written on. */
+  recorded: boolean;
 }
 
 /**
@@ -278,7 +296,16 @@ async function decideUninstall(
   const plugin = find(deps.plugins, name);
   const repository = new SchemaOwnersRepository(deps.db, deps.dialect);
   const registry = createOwnerRegistry(repository);
-  const owned = await registry.listByOwner(plugin.name);
+  const recordedRows = await registry.listByOwner(plugin.name);
+  // Planned over the tables that exist. An owner row outlives its table when
+  // `migrate:down --plugin` rolled the module back — the row stays as
+  // ownership history — and planning over it read every such database as
+  // one whose tables a development push made, refusing the uninstall for
+  // good.
+  const live = await deps.liveTables([
+    ...new Set(recordedRows.map(row => row.tableName)),
+  ]);
+  const owned = recordedRows.filter(row => live.has(row.tableName));
   // Element rows on this plugin's tables that somebody else owns — they go
   // with the table on a full uninstall, and the confirmation names them.
   const foreignElements = (
@@ -296,6 +323,7 @@ async function decideUninstall(
     owned,
     foreignElements,
     modules: plugin.modules,
+    unshipped: plugin.unshippedModules,
     keepData: opts.keepData,
   };
 
@@ -313,7 +341,7 @@ async function decideUninstall(
 
   if (!opts.yes) assertNothingLostUnconfirmed(plugin, plan, downs, deps);
 
-  return { plugin, plan, downs };
+  return { plugin, plan, downs, recorded: recordedRows.length > 0 };
 }
 
 /**
@@ -404,7 +432,7 @@ function warnList(
 
 /** Runs a decided uninstall: the hook, the DOWNs, the owner state. */
 async function executeUninstall(
-  { plugin, plan, downs }: UninstallDecision,
+  { plugin, plan, downs, recorded }: UninstallDecision,
   opts: { keepData: boolean },
   deps: PluginLifecycleDeps
 ): Promise<void> {
@@ -432,9 +460,25 @@ async function executeUninstall(
       ? `${plugin.name} uninstalled; its tables were kept and are now orphaned.`
       : `${plugin.name} uninstalled and its tables dropped.`
   );
-  // Said every time, because until the line is gone the boot check refuses to
-  // start — and an operator who does not know that reads it as a broken app.
-  deps.logger.info(
-    `Remove "${plugin.name}" from your config to finish. Until you do, boot will refuse to start.`
-  );
+  deps.logger.info(finishInstruction(plugin.name, plan.finalState, recorded));
+}
+
+/**
+ * What the operator does next, which depends on what the boot will make of
+ * the plugin still being configured. Only `uninstalled` owner rows make it
+ * refuse: an orphaned plugin boots, and a plugin with no owner rows has
+ * nothing to carry the state, so it boots and initializes again.
+ */
+function finishInstruction(
+  name: string,
+  finalState: UninstallPlan["finalState"],
+  recorded: boolean
+): string {
+  if (!recorded) {
+    return `Remove "${name}" from your config to finish. It owns no schema, so nothing records it as uninstalled: until the line is gone, it loads on every boot.`;
+  }
+  if (finalState === "uninstalled") {
+    return `Remove "${name}" from your config to finish. Until you do, boot will refuse to start.`;
+  }
+  return `Remove "${name}" from your config to finish. Until you do, it loads on every boot over the tables it left.`;
 }

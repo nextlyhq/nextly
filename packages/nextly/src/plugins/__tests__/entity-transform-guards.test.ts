@@ -112,6 +112,40 @@ describe("a transform that renames the entity", () => {
     expect(message).toMatch(/not rename|remapEntities/i);
   });
 
+  it.each([
+    [
+      "has no slug",
+      (definition: unknown) => {
+        const { slug: _dropped, ...rest } = definition as { slug: string };
+        return rest;
+      },
+    ],
+    [
+      "sets the slug to undefined",
+      (definition: unknown) => ({
+        ...(definition as object),
+        slug: undefined,
+      }),
+    ],
+    [
+      "sets a non-string slug",
+      (definition: unknown) => ({
+        ...(definition as object),
+        slug: 7,
+      }),
+    ],
+  ])("is refused when the definition it returns %s", (_case, change) => {
+    // The registries and the schema pipeline key every entity by its slug, so
+    // a definition without the declared one is not the entity at all.
+    const message = refusalOf(() =>
+      runEntityTransforms([entity("posts", [])], [
+        contribution(change),
+      ] as never)
+    );
+
+    expect(message).toContain('keep its slug "posts"');
+  });
+
   it("allows a definition that keeps its slug", () => {
     // The control: reshaping is the whole point of the hook.
     const result = runEntityTransforms([entity("posts", [])], [

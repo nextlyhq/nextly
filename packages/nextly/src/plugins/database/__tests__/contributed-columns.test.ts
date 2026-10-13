@@ -113,7 +113,14 @@ afterEach(() => {
   sqlite.close();
 });
 
-function surfaceFor(owner: SchemaOwner, dependsOn: string[] = []) {
+function surfaceFor(
+  owner: SchemaOwner,
+  dependsOn: string[] = [],
+  contributions: ReadonlyMap<
+    string,
+    readonly ContributedColumn[]
+  > = CONTRIBUTIONS
+) {
   const db = drizzle({ client: sqlite, relations });
   return createPluginDatabase({
     dialect: "sqlite",
@@ -141,7 +148,7 @@ function surfaceFor(owner: SchemaOwner, dependsOn: string[] = []) {
         throw error;
       }
     },
-    contributions: () => CONTRIBUTIONS,
+    contributions: () => contributions,
     entityTable: name =>
       ({ dc_posts: posts, fx__notes: fxNotes, fx__counters: fxCounters })[name],
   });
@@ -214,6 +221,59 @@ describe("a plugin's own contributed column", () => {
 
     expect(read).toEqual({ id: "p1", searchVector: "in tx" });
     expect(stored("p1").search_vector).toBe("in tx");
+  });
+});
+
+describe("a contributed column's authored key", () => {
+  // The column fx contributed, authored under a key a handle could use for
+  // its own properties.
+  const authoredUnder = (key: string) =>
+    new Map([["dc_posts", [contribution("search_vector", key, FX)]]]);
+
+  it.each(["rowKey", "column0", "__nextlyRowKey"])(
+    "never stands in for the row's key, even as %s",
+    async key => {
+      // Held under its authored key, a column could replace the handle's
+      // row key, and every statement then matched rows by the caller's
+      // column instead of by id.
+      const columns = { [key]: col.text({ nullable: true }) };
+      const handle = surfaceFor(FX, [], authoredUnder(key)).contributed(
+        "dc_posts",
+        columns
+      );
+
+      expect(await handle.set("p2", { [key]: "written" })).toBe(1);
+      expect(stored("p1").search_vector).toBe("hello world");
+      expect(await handle.get("p2")).toEqual({ id: "p2", [key]: "written" });
+    }
+  );
+
+  it("is refused as `id`, which every row it returns carries as the key", async () => {
+    const error = await refusal(() =>
+      surfaceFor(FX, [], authoredUnder("id"))
+        .contributed("dc_posts", { id: col.text({ nullable: true }) })
+        .get("p1")
+    );
+    expect(error).toMatchObject({
+      logContext: { reason: "contributed-column-keyed-id" },
+    });
+  });
+});
+
+describe("a contributed write that sets nothing", () => {
+  it("changes nothing and reports no rows", async () => {
+    const handle = surfaceFor(FX).contributed("dc_posts", fxColumns);
+    expect(await handle.set("p1", {})).toBe(0);
+    expect(await handle.set("p1", { searchVector: undefined })).toBe(0);
+    expect(stored("p1").search_vector).toBe("hello world");
+  });
+
+  it("is still refused on a column the caller did not contribute", async () => {
+    // Nothing is sent, but the handle is judged as a read of it would be.
+    const error = await refusal(() =>
+      surfaceFor(FX).contributed("dc_posts", otherColumns).set("p1", {})
+    );
+    expect(error).toBeInstanceOf(NextlyError);
   });
 });
 

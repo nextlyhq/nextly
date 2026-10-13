@@ -586,7 +586,5 @@ prefixes (`hook-point-reserved`), outside the plugin's slug
 plugins install` calls `onInstall` after the plugin's migrations, and `nextly
 plugins uninstall` calls `onUninstall` before its DOWN migrations, with
 `{ keepData }`. Write both so they can run again: an install can be retried
-after a failure part-way through.
-There are no install or uninstall hooks yet: they arrive with the install
-command that calls them. Do one-time setup in `init`, written so running it on
-every boot is harmless.
+after a failure part-way through. Work that must happen on every start, rather
+than once per install, belongs in `init`.

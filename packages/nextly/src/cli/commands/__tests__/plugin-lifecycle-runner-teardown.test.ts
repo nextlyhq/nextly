@@ -187,6 +187,21 @@ describe("the lifecycle hook's boot", () => {
     await runPluginInstall("@acme/fx", {}, context);
 
     expect(state.bootedFrom).toHaveLength(1);
-    expect(state.bootedFrom[0]).toBe(state.appConfig);
+    const booted = state.bootedFrom[0] as typeof state.appConfig;
+    // The app's own plugin list, not the loaded config's copy of it.
+    expect(booted.plugins).toBe(state.appConfig.plugins);
+    expect(booted.plugins).not.toBe(state.loadedConfig.plugins);
+  });
+
+  it("does not run boot migrations", async () => {
+    // The hook runs inside the command's migrate lock. A boot that migrated
+    // would wait on that lock itself, or on SQLite apply a module after the
+    // uninstall had fixed which ones to undo.
+    await runPluginInstall("@acme/fx", {}, context);
+
+    expect(state.bootedFrom[0]).toEqual({
+      ...state.appConfig,
+      db: { ...state.appConfig.db, runMigrationsOnBoot: false },
+    });
   });
 });

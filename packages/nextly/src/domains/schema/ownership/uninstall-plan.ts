@@ -34,6 +34,11 @@ export interface UninstallInput {
   foreignElements?: readonly OwnerRecord[];
   /** Each module's name and whether it has DOWN statements, in apply order. */
   modules: ReadonlyArray<{ name: string; reversible: boolean }>;
+  /**
+   * Applied modules the plugin's configured definition no longer ships, so
+   * their DOWN cannot be read.
+   */
+  unshipped?: readonly string[];
   keepData: boolean;
 }
 
@@ -74,6 +79,7 @@ export function planUninstall(input: UninstallInput): UninstallPlan {
     };
   }
 
+  assertEveryAppliedModuleShipped(input);
   assertEveryModuleReversible(input);
 
   // Reverse apply order: a later module may depend on what an earlier one
@@ -122,6 +128,28 @@ function assertNoEnabledDependents(input: UninstallInput): void {
     code: "PLUGIN_HAS_DEPENDENTS",
     publicMessage: `"${input.pluginName}" cannot be uninstalled while ${dependents.map(d => `"${d}"`).join(", ")} ${dependents.length === 1 ? "depends" : "depend"} on it. Uninstall ${dependents.length === 1 ? "it" : "those"} first, or disable ${dependents.length === 1 ? "it" : "them"}.`,
     logContext: { plugin: input.pluginName, dependents },
+  });
+}
+
+/**
+ * Refuse a full uninstall while an applied module is no longer shipped.
+ *
+ * Its DOWN lives in the version of the plugin that shipped it. Undoing the
+ * modules that remain and marking the plugin uninstalled would leave that
+ * module's schema, data and applied ledger row in place, under a plugin the
+ * boot then treats as gone.
+ */
+function assertEveryAppliedModuleShipped(input: UninstallInput): void {
+  const unshipped = input.unshipped ?? [];
+  if (unshipped.length === 0) return;
+  throw new NextlyError({
+    code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+    publicMessage: `"${input.pluginName}" has applied migrations its configured version no longer ships (${unshipped.join(", ")}), so they cannot be undone. Configure the version that shipped them and uninstall again, or use --keep-data to leave its tables in place.`,
+    logContext: {
+      plugin: input.pluginName,
+      reason: "module-not-shipped",
+      modules: [...unshipped],
+    },
   });
 }
 

@@ -174,6 +174,16 @@ async function failedRollbacks(): Promise<string[]> {
     .map(row => row.filename ?? "");
 }
 
+/** The distinct states of the plugin's owner rows. */
+async function ownerStates(): Promise<string[]> {
+  const rows = await new SchemaOwnersRepository(state.db, "sqlite").read();
+  return [
+    ...new Set(
+      rows.filter(row => row.ownerId === PLUGIN).map(row => row.state)
+    ),
+  ];
+}
+
 /**
  * Applies both modules as `migrate` would leave them: their UP run, an
  * applied ledger row carrying each module's checksum, owner rows for the
@@ -393,6 +403,33 @@ describe("plugins uninstall against a real database", () => {
     await expect(uninstall()).rejects.toThrow(/fx__missing/);
     expect(tables()).toEqual(expect.arrayContaining(["fx__notes", "fx__tags"]));
   });
+
+  it("refuses while an applied module is no longer shipped, before anything runs", async () => {
+    // 0002 is applied, and the configured version ships only 0001. Undoing
+    // 0001 and recording the plugin uninstalled would leave 0002's table,
+    // column and applied ledger row behind.
+    state.migrations = [init];
+
+    await expect(uninstall()).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "module-not-shipped", modules: ["0002_more"] },
+    });
+    expect(tables()).toEqual(expect.arrayContaining(["fx__notes", "fx__tags"]));
+    expect(await ownerStates()).toEqual(["active"]);
+  });
+
+  it("completes after migrate:down --plugin rolled every module back", async () => {
+    // The owner rows outlive the tables as ownership history. Read as tables
+    // still to drop, with no applied module to drop them, they refused the
+    // uninstall as a development push's.
+    state.migrations = [init, more];
+    await rollBack(2);
+    expect(tables()).not.toContain("fx__notes");
+
+    await uninstall();
+
+    expect(await ownerStates()).toEqual(["uninstalled"]);
+  });
 });
 
 describe("migrate:down --plugin against a real database", () => {
@@ -466,7 +503,7 @@ describe("the lifecycle commands while another process holds the migrate lock", 
     await expect(runPluginInstall(PLUGIN, {}, context)).rejects.toMatchObject({
       code: "CONFLICT",
       publicMessage: expect.stringContaining(
-        `Another migration is holding the migrate lock, so ${PLUGIN}'s migrations were not applied.`
+        "Another migration is holding the migrate lock, so nothing was run."
       ),
     });
     expect(tables()).not.toContain("fx__extra");

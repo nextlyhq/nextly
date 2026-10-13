@@ -231,19 +231,22 @@ function assertSlugKept(
   path: string,
   slug: string
 ): void {
-  if (
-    typeof returned !== "string" ||
-    typeof declared !== "string" ||
-    returned === declared
-  ) {
-    return;
-  }
+  if (returned === declared) return;
+  // A definition with no slug, or a slug that is not a string, is not the
+  // entity at all: the registries and the schema pipeline key every entity
+  // by it, so it is refused like a rename rather than passed on.
+  const returnedSlug =
+    typeof returned === "string"
+      ? `slug "${returned}"`
+      : returned === undefined
+        ? "no slug"
+        : `a ${typeof returned} slug`;
   throw NextlyError.validation({
     errors: [
       {
         path,
         code: "INVALID",
-        message: `Transform of "${slug}" returned a definition with slug "${returned}". A transform may reshape an entity but not rename it — slug collisions are validated before transforms run, and later transforms still target the declared slug. Use remapEntities to rename.`,
+        message: `Transform of "${slug}" returned a definition with ${returnedSlug}. A transform may reshape an entity but not rename it — keep its slug "${String(declared)}": slug collisions are validated before transforms run, and later transforms still target the declared slug. Use remapEntities to rename.`,
       },
     ],
   });
@@ -339,15 +342,49 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function mergeBehaviour(before: unknown, after: unknown): unknown {
+  const decided = behaviourVerdict(before, after);
+  if (decided !== UNDECIDED) return decided;
+  if (Array.isArray(after)) return mergeArray(before, after);
+  if (!isContainer(after)) return after;
+  return mergeRecord(isRecord(before) ? before : {}, after);
+}
+
+/** `behaviourVerdict` found no behaviour to decide on: the values merge. */
+const UNDECIDED = Symbol("undecided");
+
+/**
+ * What a position holding behaviour becomes, decided whole: a function, a
+ * hook list, or a value of another kind put where `before` held behaviour
+ * all keep `before`'s (or drop what `after` added). `UNDECIDED` when neither
+ * side holds behaviour there, and the two merge element by element.
+ */
+function behaviourVerdict(before: unknown, after: unknown): unknown {
   if (typeof after === "function") {
     return typeof before === "function" ? before : DROP;
   }
   if (isFunctionList(after) || isFunctionList(before)) {
     return isFunctionList(before) ? before : DROP;
   }
-  if (Array.isArray(after)) return mergeArray(before, after);
-  if (!isContainer(after)) return after;
-  return mergeRecord(isRecord(before) ? before : {}, after);
+  if (replacesBehaviourWhole(before, after)) return before;
+  return UNDECIDED;
+}
+
+/** A function, an array, a plain object, or any other value. */
+function kindOf(value: unknown): "function" | "array" | "record" | "value" {
+  if (typeof value === "function") return "function";
+  if (Array.isArray(value)) return "array";
+  return isRecord(value) ? "record" : "value";
+}
+
+/**
+ * Whether `after` is a value of another kind put where `before` held
+ * behaviour: a function default replaced by a constant, a components map by
+ * a string, a list of field objects by a map. Nothing in `after` pairs with
+ * what `before` held, so merging the two would keep none of it; `before` is
+ * kept whole instead.
+ */
+function replacesBehaviourWhole(before: unknown, after: unknown): boolean {
+  return kindOf(before) !== kindOf(after) && holdsFunction(before);
 }
 
 /** `after`'s elements, each merged with the one it replaced in `before`. */

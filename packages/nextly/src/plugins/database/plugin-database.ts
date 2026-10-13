@@ -1153,12 +1153,19 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         const named = Object.entries(values as Record<string, unknown>)
           .filter(([, value]) => value !== undefined)
           .map(([key]) => key);
+        if (named.length === 0) {
+          // A write that sets nothing changes nothing, and sends nothing. It
+          // is still judged on the columns the handle was opened for, so a
+          // handle the caller may not use is refused as a read of it is.
+          contributedReach(tableName, declared, deps);
+          return 0;
+        }
         // The write is judged on what it names, against the same rule the
         // read's selection meets, before anything is sent.
         const reach = contributedReach(tableName, named, deps);
         const assignments: Record<string, unknown> = {};
         for (const granted of reach.columns) {
-          assignments[granted.key] = (values as Record<string, unknown>)[
+          assignments[granted.property] = (values as Record<string, unknown>)[
             granted.key
           ];
         }
@@ -1357,7 +1364,7 @@ function contributedReach(
   tableName: string;
   table: unknown;
   key: unknown;
-  columns: { key: string; name: string; column: unknown }[];
+  columns: { key: string; name: string; property: string; column: unknown }[];
 } {
   const granted = assertContributedColumnAccess(
     tableName,
@@ -1365,6 +1372,14 @@ function contributedReach(
     rulesOf(deps),
     deps.contributions?.() ?? new Map()
   );
+  // A row comes back with its key as `id`, so a column the caller authored
+  // under `id` would be overwritten by it in every read.
+  if (granted.some(column => column.key === "id")) {
+    throw NextlyError.invalidInput({
+      message: `A row read through ctx.db.contributed carries its key as "id", so the column contributed to "${tableName}" under the key "id" cannot be reached through it. Declare it under another key.`,
+      logContext: { reason: "contributed-column-keyed-id", table: tableName },
+    });
+  }
   const runtime = deps.entityTable?.(tableName);
   if (runtime === undefined || runtime === null) {
     throw NextlyError.internal({
@@ -1404,7 +1419,14 @@ function contributedReach(
           nullable: false,
           primaryKey: true,
         },
-        ...granted.map(column => column.spec),
+        // Each under a property of the handle's own, never its authored key:
+        // a column authored under the row key's property would replace the
+        // key on the handle, and every statement would then match rows by
+        // the caller's column instead of by id.
+        ...granted.map((column, at) => ({
+          ...column.spec,
+          key: contributedProperty(at),
+        })),
       ],
     },
     deps.dialect
@@ -1414,19 +1436,22 @@ function contributedReach(
     tableName,
     table: handle,
     key: built[ROW_KEY_PROPERTY],
-    columns: granted.map(column => ({
+    columns: granted.map((column, at) => ({
       key: column.key,
       name: column.name,
-      column: built[column.spec.key],
+      property: contributedProperty(at),
+      column: built[contributedProperty(at)],
     })),
   };
 }
 
 /**
- * The property the row's key is held under on a contributed-column handle,
- * spelled so no authored column key can collide with it.
+ * The properties a contributed-column handle holds its columns under. The
+ * handle is built for one statement and never seen by the caller, so none
+ * is an authored key, and the row key's cannot meet a column's.
  */
-const ROW_KEY_PROPERTY = "__nextlyRowKey";
+const ROW_KEY_PROPERTY = "rowKey";
+const contributedProperty = (at: number): string => `column${String(at)}`;
 
 /**
  * Run a contributed-column statement, naming a column the database does not

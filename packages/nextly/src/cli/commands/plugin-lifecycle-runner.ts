@@ -12,6 +12,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { SupportedDialect } from "../../database/schema-registry";
+import { pluginOfLedgerRow } from "../../domains/schema/events/ledger-scope";
 import {
   appliedFilenames,
   newestEventsByFilename,
@@ -80,6 +81,7 @@ function toLifecyclePlugins(
       // per dialect below, where the dialect is known.
       reversible: true,
     })),
+    unshippedModules: [],
   }));
 }
 
@@ -168,6 +170,14 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         // entries split to nothing.
         reversible: pluginModuleDownStatements(module, dialect).length > 0,
       }));
+      // Applied modules the configured definition no longer ships: their
+      // DOWN is nowhere to be read, so leaving them out would undo the rest
+      // and report a full uninstall over their schema and ledger rows.
+      const shipped = new Set(modules.map(module => module.name));
+      plugin.unshippedModules = [...applied]
+        .filter(filename => pluginOfLedgerRow(filename) === plugin.name)
+        .map(filename => filename.slice(filename.lastIndexOf("/") + 1))
+        .filter(moduleName => !shipped.has(moduleName));
     }
   };
 
@@ -327,7 +337,6 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         publicMessage:
           `Another migration is holding the migrate lock, so ${notRun}. ` +
           "Nothing was changed — re-run once it finishes.",
-        statusCode: 409,
         logContext: { ...logContext, reason: outcome.reason },
       });
     }
@@ -360,10 +369,14 @@ async function connect(options: RunnerOptions, context: CommandContext) {
   /**
    * Apply this plugin's pending modules, through the phase `migrate` uses.
    *
-   * Not a second implementation: `runPluginPhase` owns the lock, the ledger,
-   * the drop guard and the owner records, and an install that applied modules
-   * its own way would record them differently from every later `migrate`.
-   * Scoped to the one plugin being installed, which is the only difference.
+   * Not a second implementation: `runPluginPhase` owns the ledger, the drop
+   * guard and the owner records, and an install that applied modules its own
+   * way would record them differently from every later `migrate`. Scoped to
+   * the one plugin being installed, which is the only difference.
+   *
+   * The caller holds the migrate lock (`underMigrateLock`), as `migrateCore`
+   * does around the same phase: install keeps it from before the modules
+   * apply until after `onInstall`, so an uninstall cannot run in between.
    */
   const applyMigrations = async (plugin: LifecyclePlugin): Promise<void> => {
     const definition = definitions.find(d => d.name === plugin.name);
@@ -373,22 +386,6 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const { pluginMigrationSetsFrom } = await import(
       "../../domains/schema/migrate/plugin/run-plugin-migrations"
     );
-    // Under the SAME lock `migrate` takes, for the same reason.
-    //
-    // `runPluginPhase` is normally reached from inside `migrateCore`'s
-    // `withMigrateLock`; calling it directly took none, so an install racing a
-    // `migrate` run — or a second install — could have both processes read the
-    // module as unapplied and execute its DDL. The loser then fails on objects
-    // that already exist, and on MySQL, where DDL is not transactional, the
-    // earlier statements of its module are already committed and cannot be
-    // rolled back.
-    //
-    // `mode: "wait"` rather than fail-fast: an operator running `plugins
-    // install` while boot migrations happen to be running wants it to proceed
-    // once they finish, not to be told to try again.
-    // Read from the definition, so it is computed before the lock rather than
-    // inside it: holding a database lock over work that touches no database
-    // just makes every other process wait longer.
     // The plugin AND the dependencies it declares.
     //
     // `pluginMigrationSetsFrom` topologically sorts what it is given and
@@ -444,24 +441,32 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       logger: { warn: m => context.logger.warn(m) },
     });
 
-    // Refused rather than swallowed when the lock was held throughout: the
-    // command goes on to record the plugin active, and doing that over
-    // migrations that never ran would report work that was not done.
-    await withLockOrRefuse(
-      () =>
-        runPluginPhase({
-          extensionSchema,
-          dialect,
-          db: drizzleAdapter.getDrizzle(),
-          adapter,
-          migrationsDir: config.db?.migrationsDir ?? "./src/db/migrations",
-          logger: context.logger,
-          pluginsWithMigrations: new Set([plugin.name]),
-          pluginMigrationSets,
-        }),
-      `${plugin.name}'s migrations were not applied`,
-      { plugin: plugin.name }
+    await runPluginPhase({
+      extensionSchema,
+      dialect,
+      db: drizzleAdapter.getDrizzle(),
+      adapter,
+      migrationsDir: config.db?.migrationsDir ?? "./src/db/migrations",
+      logger: context.logger,
+      pluginsWithMigrations: new Set([plugin.name]),
+      pluginMigrationSets,
+    });
+  };
+
+  /**
+   * Which of `tables` exist now. An owner row outlives its table when
+   * `migrate:down --plugin` rolled the module back: the row is kept as
+   * ownership history, and the table is gone.
+   */
+  const liveTables = async (
+    tables: readonly string[]
+  ): Promise<ReadonlySet<string>> => {
+    const present = await Promise.all(
+      tables.map(async table =>
+        (await drizzleAdapter.tableExists(table)) ? table : undefined
+      )
     );
+    return new Set(present.filter(table => table !== undefined));
   };
 
   /**
@@ -516,7 +521,6 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       throw new NextlyError({
         code: "CONFLICT",
         publicMessage: `Services are already registered in this process, so ${plugin.name}'s ${hook} was not run.`,
-        statusCode: 409,
         logContext: { plugin: plugin.name, hook },
       });
     }
@@ -533,7 +537,15 @@ async function connect(options: RunnerOptions, context: CommandContext) {
           // transformer and contribution fold itself; booting from the
           // loader's `config`, which holds their result, ran each twice, so
           // a transformer that adds a plugin or a collection added it again.
-          config: appConfig,
+          //
+          // Boot migrations off: the hook runs inside the command's migrate
+          // lock, so a boot that migrated would wait on that lock itself,
+          // and on SQLite, whose lock holds nothing back, it could apply a
+          // module after the uninstall had fixed which ones to undo.
+          config: {
+            ...appConfig,
+            db: { ...appConfig.db, runMigrationsOnBoot: false },
+          },
           // The grants the loader read before any `setup` transformer ran.
           pluginConsent,
           adapter: drizzleAdapter,
@@ -600,6 +612,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     definitions,
     refreshPlan,
     readAppliedModules,
+    liveTables,
     runLifecycleHook,
     migrationsDir: config.db?.migrationsDir,
     logger: context.logger,

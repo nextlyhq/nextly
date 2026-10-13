@@ -923,6 +923,41 @@ describe("applyPluginSchemaContributions (behaviour a disabled plugin's transfor
     expect(forms.access?.read).toBe(readRule);
   });
 
+  it("keeps a function-bearing value it replaced with a value of another kind", () => {
+    // A components map turned into a string: nothing in the string pairs with
+    // the function the map held, so merging them kept none of it.
+    const Field = (): null => null;
+    const forms = applyPluginSchemaContributions(cfg({ collections: [] }), [
+      plugin("plugin-a", {
+        collections: [
+          {
+            slug: "a-forms",
+            fields: [{ name: "title", type: "text" }],
+            admin: { components: { Field } },
+          } as unknown as CollectionConfig,
+        ],
+      }),
+      plugin(
+        "plugin-b",
+        {
+          transforms: [
+            {
+              target: "a-forms",
+              transform: entity => ({
+                ...entity,
+                admin: { components: "none" },
+              }),
+            },
+          ],
+        },
+        false
+      ),
+    ]).collections?.[0] as unknown as {
+      admin: { components: unknown };
+    };
+    expect(forms.admin.components).toEqual({ Field });
+  });
+
   it("adds no field access rule, boolean or function", () => {
     const forms = disabledTransform(entity => ({
       ...entity,
