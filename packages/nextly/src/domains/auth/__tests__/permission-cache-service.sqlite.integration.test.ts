@@ -182,4 +182,54 @@ describe("PermissionCacheService — SQLite real-driver integration", () => {
       /SQLite3 can only bind/
     );
   });
+
+  // A stored answer computed from a role that expires must end no later than
+  // that expiry: nothing runs when a role lapses, so the row is the only thing
+  // that can stop serving it. These go through the real write, with the TTL at
+  // 60 seconds, so the TTL alone would keep each row for a minute.
+  it("does not serve a row whose role lapsed before it was written", async () => {
+    await cacheService.setCachedPermission(
+      "user-3",
+      "read",
+      "posts",
+      true,
+      ["r1"],
+      Date.now() - 1000
+    );
+
+    expect(
+      await cacheService.getCachedPermission("user-3", "read", "posts")
+    ).toBeNull();
+  });
+
+  it("ends a row at a sooner role expiry, and at the TTL without one", async () => {
+    const soon = Date.now() + 10_000;
+    await cacheService.setCachedPermission(
+      "user-4",
+      "read",
+      "posts",
+      true,
+      ["r1"],
+      soon
+    );
+    const capped = await cacheService.getCachedDecision(
+      "user-4",
+      "read",
+      "posts"
+    );
+    expect(capped?.allowed).toBe(true);
+    expect(capped?.expiresAt).toBeLessThanOrEqual(soon);
+
+    // The control: with no expiry to respect, the TTL decides, and the row
+    // outlives the expiry the first one was held to.
+    await cacheService.setCachedPermission("user-5", "read", "posts", true, [
+      "r1",
+    ]);
+    const uncapped = await cacheService.getCachedDecision(
+      "user-5",
+      "read",
+      "posts"
+    );
+    expect(uncapped?.expiresAt).toBeGreaterThan(soon);
+  });
 });
