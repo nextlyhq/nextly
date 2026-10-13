@@ -459,7 +459,7 @@ return ctx.auth.completeLogin(user.id, {
 });
 ```
 
-Also `ctx.auth.currentUser(request)` and `ctx.auth.verifyCsrf(request)`. `currentUser` answers `null` to a POST, PUT, PATCH or DELETE whose `Origin` (or, without one, `Referer`) is neither your site nor an allowed origin, or that names no origin, as it does to a request with no session. `verifyCsrf` accepts the token in the `x-csrf-token` header or as `csrfToken` in a JSON body; it reads at most 64 KB of a body looking for it, and refuses a larger one with `reason: "body-too-large"`, so a large request sends the token in the header.
+Also `ctx.auth.currentUser(request)` and `ctx.auth.verifyCsrf(request)`. `currentUser` answers `null` to a POST, PUT, PATCH or DELETE whose `Origin` (or, without one, `Referer`) is neither your site nor an allowed origin, or that names no origin, as it does to a request with no session; when that request carried the session cookie, the route records a `csrf-failed` audit event. `verifyCsrf` accepts the token in the `x-csrf-token` header or as `csrfToken` in a JSON body; it reads at most 64 KB of a body looking for it, and refuses a larger one with `reason: "body-too-large"`, so a large request sends the token in the header.
 
 ### `ctx.filters.decide`
 
