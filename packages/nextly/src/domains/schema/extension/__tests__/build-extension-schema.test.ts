@@ -1316,13 +1316,17 @@ describe("a hook whose output moves between builds", () => {
   ];
 
   /**
-   * An app hook declaring `notes` with one relation, built from
-   * `entriesOn(run)` on each run, with the check on.
+   * An app hook declaring `notes` with the `author` relation built from
+   * `entriesOn(run)` on each run, with the check on. `editorId` carries the
+   * implied `editor` edge, so every run declares the same two relation names
+   * whatever `author` points at.
    */
   const notesWithRelation = (
     entriesOn: (run: number) => [string, unknown][]
   ) => {
     const runs = { count: 0 };
+    // Each run's table as declared, so a test can check what moved.
+    const declared: { relations: readonly { name: string }[] }[] = [];
     const input: ExtensionSchemaInput = {
       ...base([], {
         owner: { kind: "app" },
@@ -1332,19 +1336,23 @@ describe("a hook whose output moves between builds", () => {
             const relation = Object.fromEntries(
               entriesOn(runs.count)
             ) as unknown as TableRelationInput;
-            schema.addTable(
-              defineTable(
-                "notes",
-                { id: col.id(), authorId: col.ref("users") },
-                { relations: [relation] }
-              )
+            const notes = defineTable(
+              "notes",
+              {
+                id: col.id(),
+                authorId: col.ref("users"),
+                editorId: col.ref("users"),
+              },
+              { relations: [relation] }
             );
+            declared.push(notes);
+            schema.addTable(notes);
           },
         ],
       }),
       refuseNondeterministicHooks: true,
     };
-    return { input, runs };
+    return { input, runs, declared };
   };
 
   it("accepts one declaration built with its properties in another order", async () => {
@@ -1359,12 +1367,13 @@ describe("a hook whose output moves between builds", () => {
   });
 
   it("is refused when a relation's content moves, whatever its key order", async () => {
-    // The control for the case above: the second run renames the relation, so
-    // the comparison must still read what a relation declares, not only its
-    // table and columns.
-    const { input, runs } = notesWithRelation(run =>
+    // The control for the case above: the second run points `author` at
+    // another column. Its name and the table's relation count stay the same,
+    // so only a comparison that reads what a relation declares tells the two
+    // runs apart.
+    const { input, runs, declared } = notesWithRelation(run =>
       authorRelation.map(([key, value]): [string, unknown] =>
-        key === "name" && run === 2 ? [key, "writer"] : [key, value]
+        key === "fromColumn" && run === 2 ? [key, "editor_id"] : [key, value]
       )
     );
     let refused: unknown;
@@ -1374,8 +1383,15 @@ describe("a hook whose output moves between builds", () => {
       refused = error;
     }
     expect(runs.count).toBe(2);
+    // The premise: both runs declare the same relations by name and number.
+    expect(
+      declared.map(table => table.relations.map(relation => relation.name))
+    ).toEqual([
+      ["author", "editor"],
+      ["author", "editor"],
+    ]);
     expect(NextlyError.isValidation(refused)).toBe(true);
-    // This refusal, not another validation error the renamed relation could raise.
+    // This refusal, not another validation error the moved relation could raise.
     const errors =
       (refused as { publicData?: { errors?: { code?: string }[] } })?.publicData
         ?.errors ?? [];
