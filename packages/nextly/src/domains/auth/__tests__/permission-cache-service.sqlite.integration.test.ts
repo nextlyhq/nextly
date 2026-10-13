@@ -19,7 +19,10 @@ import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { PermissionCacheService } from "../services/permission-cache-service";
+import {
+  cacheRowId,
+  PermissionCacheService,
+} from "../services/permission-cache-service";
 
 // Minimal stand-in for `Logger` — we only need `.log` to be callable so the
 // service's auth-logger fallback path doesn't blow up. Body is intentionally
@@ -101,7 +104,8 @@ describe("PermissionCacheService — SQLite real-driver integration", () => {
     // the service's setCachedPermission so this test isolates the read
     // path. expires_at is stored as epoch seconds to match Drizzle's
     // `integer mode:"timestamp"` on-disk format.
-    const cacheKey = "user-1|read|users";
+    // Under the id the service files a decision under.
+    const cacheKey = cacheRowId("user-1", "read", "users");
     const futureSeconds = Math.floor(Date.now() / 1000) + 3600;
     sqlite
       .prepare(
@@ -130,7 +134,7 @@ describe("PermissionCacheService — SQLite real-driver integration", () => {
   });
 
   it("returns null for a stale cache row (expires_at in the past)", async () => {
-    const cacheKey = "user-2|read|users";
+    const cacheKey = cacheRowId("user-2", "read", "users");
     const pastSeconds = Math.floor(Date.now() / 1000) - 3600;
     sqlite
       .prepare(
@@ -181,5 +185,55 @@ describe("PermissionCacheService — SQLite real-driver integration", () => {
     expect(String((cause as Error | undefined)?.message ?? thrown)).toMatch(
       /SQLite3 can only bind/
     );
+  });
+
+  // A stored answer computed from a role that expires must end no later than
+  // that expiry: nothing runs when a role lapses, so the row is the only thing
+  // that can stop serving it. These go through the real write, with the TTL at
+  // 60 seconds, so the TTL alone would keep each row for a minute.
+  it("does not serve a row whose role lapsed before it was written", async () => {
+    await cacheService.setCachedPermission(
+      "user-3",
+      "read",
+      "posts",
+      true,
+      ["r1"],
+      Date.now() - 1000
+    );
+
+    expect(
+      await cacheService.getCachedPermission("user-3", "read", "posts")
+    ).toBeNull();
+  });
+
+  it("ends a row at a sooner role expiry, and at the TTL without one", async () => {
+    const soon = Date.now() + 10_000;
+    await cacheService.setCachedPermission(
+      "user-4",
+      "read",
+      "posts",
+      true,
+      ["r1"],
+      soon
+    );
+    const capped = await cacheService.getCachedDecision(
+      "user-4",
+      "read",
+      "posts"
+    );
+    expect(capped?.allowed).toBe(true);
+    expect(capped?.expiresAt).toBeLessThanOrEqual(soon);
+
+    // The control: with no expiry to respect, the TTL decides, and the row
+    // outlives the expiry the first one was held to.
+    await cacheService.setCachedPermission("user-5", "read", "posts", true, [
+      "r1",
+    ]);
+    const uncapped = await cacheService.getCachedDecision(
+      "user-5",
+      "read",
+      "posts"
+    );
+    expect(uncapped?.expiresAt).toBeGreaterThan(soon);
   });
 });

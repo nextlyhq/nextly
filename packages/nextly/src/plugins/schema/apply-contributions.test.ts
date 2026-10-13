@@ -958,6 +958,23 @@ describe("applyPluginSchemaContributions (behaviour a disabled plugin's transfor
     expect(forms.admin.components).toEqual({ Field });
   });
 
+  it("keeps a key named `access` in ordinary data, such as a JSON default", () => {
+    // Only the entity's and its fields' `access` are access rules. A JSON
+    // default's `access` is data, and the structure a disabled transform
+    // writes stands.
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        {
+          name: "title",
+          type: "text",
+          defaultValue: { access: "public", n: 2 },
+        },
+      ],
+    }));
+    expect(forms.fields[0]?.defaultValue).toEqual({ access: "public", n: 2 });
+  });
+
   it("adds no field access rule, boolean or function", () => {
     const forms = disabledTransform(entity => ({
       ...entity,

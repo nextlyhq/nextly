@@ -200,6 +200,53 @@ describe("index naming", () => {
     );
     expect(long.length).toBeLessThanOrEqual(63);
   });
+
+  it("refuses two tables whose compound index names meet once cut to 63 bytes, naming both", async () => {
+    // A compound name keeps its readable prefix and ends in a digest of the
+    // column list, so two tables sharing the first 51 bytes of their names
+    // and indexing the same columns meet in one name. The derivation stays as
+    // it is, since a changed one would rename every long index a database
+    // already holds. The schema refuses the pair instead, on every dialect,
+    // and an explicit `name` on either index resolves it.
+    const indexed = (name: string) =>
+      defineTable(
+        name,
+        { id: col.id(), x: col.shortText(), y: col.shortText() },
+        { indexes: [{ columns: ["x", "y"] }] }
+      );
+    const first = `${"é".repeat(24)}a`;
+    const second = `${"é".repeat(24)}b`;
+    // The fixture reaches the case: both derive one name.
+    expect(indexNameForColumns(`fx__${first}`, ["x", "y"], false)).toBe(
+      indexNameForColumns(`fx__${second}`, ["x", "y"], false)
+    );
+
+    for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
+      await expect(
+        buildExtensionSchema({
+          dialect,
+          coreTableNames: [],
+          entities: [],
+          pluginPrefixes: new Map([["fx", "fx"]]),
+          plugins: [
+            {
+              owner: { kind: "plugin" as const, id: "fx" },
+              tables: [indexed(first), indexed(second)],
+            },
+          ],
+        })
+      ).rejects.toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: `fx__${second}.indexes`,
+              message: expect.stringContaining(`one on "fx__${first}"`),
+            }),
+          ],
+        },
+      });
+    }
+  });
 });
 
 describe("defaults", () => {

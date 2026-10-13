@@ -8,6 +8,7 @@ import type { ChallengeRegistry } from "../pipeline/challenge";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import type { AuthStrategy } from "../pipeline/types";
 import type { AccountState } from "../session/account-state";
+import type { SessionRoles } from "../session/session-roles";
 
 import { handleAcceptInvite } from "./accept-invite";
 import { handleAuthUi, type AuthUiMeta } from "./auth-ui";
@@ -163,7 +164,8 @@ export interface AuthRouterDeps {
   lockAccount: (userId: string, lockedUntil: Date) => Promise<void>;
   resetFailedAttempts: (userId: string) => Promise<void>;
 
-  fetchRoleIds: (userId: string) => Promise<string[]>;
+  /** The roles in force, and when the first of them lapses; see `SessionRoles`. */
+  fetchSessionRoles: (userId: string) => Promise<SessionRoles>;
   fetchCustomFields: (userId: string) => Promise<Record<string, unknown>>;
 
   storeRefreshToken: (record: RefreshTokenRecord) => Promise<void>;

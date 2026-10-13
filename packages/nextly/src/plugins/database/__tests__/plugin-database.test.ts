@@ -18,6 +18,7 @@ import { uuidV7Timestamp } from "../../../utils/uuid-v7";
 import {
   createPluginDatabase,
   type PluginTransaction,
+  type RelationalQuery,
 } from "../plugin-database";
 
 const notes = defineTable("notes", {
@@ -219,18 +220,55 @@ describe("a col.serial() key", () => {
     expect(updated).toEqual([]);
   });
 
-  it("refuses insertReturning BEFORE writing the row", async () => {
-    // The key is chosen during the insert, so there is nothing to read the
-    // row back by. Refusing after the insert left a row behind that the
-    // caller was told had not been created.
-    const { surface, inserted } = serialHarness();
-    await expect(
-      surface.insertReturning(counters, { label: "a" } as never)
-    ).rejects.toSatisfy(
-      error => NextlyError.is(error) && error.code === "VALIDATION_ERROR"
-    );
-    expect(inserted).toEqual([]);
-  });
+  it.each([
+    ["postgresql", "returning"],
+    ["sqlite", "returning"],
+    ["mysql", "$returningId"],
+  ] as const)(
+    "insertReturning asks the insert itself for the key on %s, through %s",
+    async (dialect, asked) => {
+      // The key is chosen during the insert, so it is read from that
+      // statement's own result: RETURNING where the dialect has it, and on
+      // MySQL the insert id the server reports for the statement. A second
+      // statement asking for "the last id" could be answered by another
+      // pooled connection. The database here reports no key, so the call
+      // stops before any read-back and the asking is all there is to see.
+      const calls: string[] = [];
+      const statement = Object.assign(Promise.resolve(), {
+        returning: (fields: Record<string, unknown>) => {
+          calls.push(`returning:${Object.keys(fields).join(",")}`);
+          return Promise.resolve([{}]);
+        },
+        $returningId: () => {
+          calls.push("$returningId");
+          return Promise.resolve([{}]);
+        },
+      });
+      const db = { insert: () => ({ values: () => statement }) };
+      const surface = createPluginDatabase({
+        dialect,
+        owner: OWNER,
+        dependsOn: new Set(),
+        owners: () => new Map([["fx__counters", OWNER]]),
+        tables: () => ({ fx__counters: { name: "fx__counters" } }),
+        tableList: () => [
+          { name: "fx__counters", authored: "counters", owner: OWNER },
+        ],
+        db: () => db,
+        relationalDb: () => db,
+        transaction: fn => fn({ db, relationalDb: db }),
+      });
+
+      await expect(
+        surface.insertReturning(counters, { label: "a" } as never)
+      ).rejects.toSatisfy(
+        error => NextlyError.is(error) && error.code === "INTERNAL_ERROR"
+      );
+      expect(calls).toEqual([
+        asked === "returning" ? "returning:seq" : "$returningId",
+      ]);
+    }
+  );
 
   it("treats an undefined value as omitted, on insert and update", async () => {
     // The control. A refusal keyed on the property being PRESENT would pass
@@ -739,7 +777,7 @@ describe("relational queries", () => {
       transaction: fn => fn({ db: relational, relationalDb: relational }),
     });
 
-    return { surface, answered };
+    return { surface, answered, relational };
   }
 
   it("answers for a table this owner owns", async () => {
@@ -803,6 +841,58 @@ describe("relational queries", () => {
     expect(Object.keys(surface.query)).toEqual(["fx__notes"]);
     expect("users" in surface.query).toBe(false);
     expect("fx__notes" in surface.query).toBe(true);
+  });
+
+  describe("reached by reflection rather than by name", () => {
+    it("hands out no descriptor for a table it would refuse", async () => {
+      // A descriptor lookup the namespace did not answer for went to Drizzle's
+      // own, whose value is the raw entry: a read of a core table, or another
+      // plugin's, past every check.
+      const { surface, answered } = queryHarness();
+      for (const table of ["users", "other__invoices"]) {
+        const descriptor = Object.getOwnPropertyDescriptor(
+          surface.query,
+          table
+        );
+        expect(descriptor).toBeUndefined();
+        await (descriptor?.value as RelationalQuery | undefined)?.findMany();
+      }
+      expect(answered).toEqual([]);
+    });
+
+    it("hands out the checked entry, never Drizzle's, for a table it allows", async () => {
+      const { surface, answered, relational } = queryHarness();
+      const value: unknown = Object.getOwnPropertyDescriptor(
+        surface.query,
+        "fx__notes"
+      )?.value;
+      expect(value).not.toBe(relational.query.fx__notes);
+      await (value as RelationalQuery).findMany();
+      expect(answered).toEqual(["fx__notes"]);
+    });
+
+    it("copies out only the tables it allows, and only their checked entries", () => {
+      const { surface, relational } = queryHarness();
+      const copy = { ...surface.query };
+      expect(Object.keys(copy)).toEqual(["fx__notes"]);
+      expect(copy.fx__notes).not.toBe(relational.query.fx__notes);
+      expect(
+        Object.keys(Object.getOwnPropertyDescriptors(surface.query))
+      ).toEqual(["fx__notes"]);
+    });
+
+    it("refuses an assignment, which reached the namespace core queries through", () => {
+      const { surface, relational } = queryHarness();
+      const original = relational.query.users;
+      const replacement = {
+        findMany: async () => [],
+        findFirst: async () => null,
+      };
+      expect(() => {
+        (surface.query as Record<string, unknown>).users = replacement;
+      }).toThrow(TypeError);
+      expect(relational.query.users).toBe(original);
+    });
   });
 });
 

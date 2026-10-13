@@ -24,6 +24,10 @@
  * ```
  */
 
+import {
+  COLLECTION_DB_OPTION_NAMES,
+  COLLECTION_ID_TYPES,
+} from "../../domains/collections/services/collection-db-options";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
@@ -59,6 +63,7 @@ import {
   validateSlugShared,
   validateAccessShared,
 } from "../../shared/base-validator";
+import { isPlainObject } from "../../shared/lib/plain-copy";
 // RESERVED_SLUGS and SQL_RESERVED_KEYWORDS used to live in this file. They
 // moved to shared/sql-reserved.ts to break a circular dependency with
 // base-validator. Imported here for local use in RESERVED_SLUGS_SET below
@@ -140,7 +145,12 @@ export type ValidationErrorCode =
   | "INDEX_FIELDS_REQUIRED"
   | "INDEX_FIELDS_EMPTY"
   | "INDEX_FIELD_UNKNOWN"
-  | "INDEX_NAME_INVALID";
+  | "INDEX_NAME_INVALID"
+  // Database option errors
+  | "DB_OPTIONS_INVALID_TYPE"
+  | "DB_OPTION_UNKNOWN"
+  | "DB_ID_TYPE_INVALID"
+  | "DB_ALLOW_ID_ON_CREATE_INVALID";
 
 /**
  * A single validation error with path and context.
@@ -627,6 +637,73 @@ function validateAccess(access: unknown, errors: ValidationError[]): void {
   validateAccessShared(access, ["create", "read", "update", "delete"], errors);
 }
 
+/**
+ * Validates the collection's `db` options where they are written.
+ *
+ * The write path reads them leniently: an `idType` it does not recognise
+ * generates UUIDv4 ids, and an `allowIdOnCreate` that is not `true` discards
+ * every id a caller supplies, and it reads no other name at all. Unchecked, a
+ * misspelt value or a misspelt name would be ignored in silence. `serial`
+ * gets its own message because it is the value a config carried over from
+ * Payload holds, and it is deliberately not offered.
+ */
+function validateDbOptions(db: unknown, errors: ValidationError[]): void {
+  if (db === undefined) return;
+  if (!isPlainObject(db)) {
+    errors.push({
+      path: "db",
+      code: "DB_OPTIONS_INVALID_TYPE",
+      message: "Collection db options must be an object.",
+    });
+    return;
+  }
+  errors.push(...unknownDbOptionErrors(db));
+  const offered: readonly unknown[] = COLLECTION_ID_TYPES;
+  if (db.idType !== undefined && !offered.includes(db.idType)) {
+    errors.push({
+      path: "db.idType",
+      code: "DB_ID_TYPE_INVALID",
+      message: idTypeRefusal(db.idType),
+    });
+  }
+  if (
+    db.allowIdOnCreate !== undefined &&
+    typeof db.allowIdOnCreate !== "boolean"
+  ) {
+    errors.push({
+      path: "db.allowIdOnCreate",
+      code: "DB_ALLOW_ID_ON_CREATE_INVALID",
+      message: "db.allowIdOnCreate must be true or false.",
+    });
+  }
+}
+
+/** A refusal for each name in `db` that is not an option. */
+function unknownDbOptionErrors(db: Record<string, unknown>): ValidationError[] {
+  const known: readonly string[] = COLLECTION_DB_OPTION_NAMES;
+  const names = COLLECTION_DB_OPTION_NAMES.map(name => `"${name}"`).join(", ");
+  return Object.keys(db)
+    .filter(name => !known.includes(name))
+    .map(name => ({
+      path: `db.${name}`,
+      code: "DB_OPTION_UNKNOWN" as const,
+      message: `"${name}" is not a collection db option; the options are ${names}.`,
+    }));
+}
+
+/** Why an `idType` outside the offered set is refused, and what to use. */
+function idTypeRefusal(idType: unknown): string {
+  const choices = COLLECTION_ID_TYPES.map(t => `"${t}"`).join(" or ");
+  if (idType === "serial") {
+    return `db.idType "serial" is not offered: a collection's id is text, which every relation and API path reads. For a sequential number, such as an order number, declare a table keyed by col.serial(). Use ${choices} here.`;
+  }
+  // A string is shown in quotes; anything else by its kind, which cannot
+  // throw the way serialising a bigint would.
+  const shown =
+    typeof idType === "string" ? `"${idType}"` : `a ${typeof idType}`;
+  return `db.idType must be ${choices}; got ${shown}.`;
+}
+
 // ============================================================
 // Main Validation Function
 // ============================================================
@@ -637,8 +714,8 @@ function validateAccess(access: unknown, errors: ValidationError[]): void {
  * Performs comprehensive validation including slug format/reserved names,
  * SQL keyword blocking, recursive field validation, select options,
  * relationship targets (optionally cross-checked against known collection
- * slugs), duplicate detection, access function types, and index
- * configuration validation.
+ * slugs), duplicate detection, access function types, index
+ * configuration validation, and the `db` options.
  *
  * @param config - The collection configuration to validate
  * @param allCollectionSlugs - Optional array of all collection slugs for relationship validation
@@ -686,6 +763,8 @@ export function validateCollectionConfig(
   );
 
   validateAccess(config.access, errors);
+
+  validateDbOptions(config.db, errors);
 
   return {
     valid: errors.length === 0,

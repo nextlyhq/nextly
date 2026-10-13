@@ -26,6 +26,7 @@ import {
 } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
+import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners";
 import type { CommandContext } from "../program";
 import { createCliAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
@@ -109,6 +110,28 @@ export function pluginModuleDownStatements(
   return pluginModuleStatements(module, dialect, "down");
 }
 
+/**
+ * Refuse a database `nextly migrate` has not yet set up.
+ *
+ * Both commands read the migration ledger and record into the owner
+ * registry, and `nextly migrate` creates both. Without them, an install would
+ * fail on a missing table part way through, after deciding nothing useful.
+ */
+async function assertMigrated(adapter: DrizzleAdapter): Promise<void> {
+  const required = ["nextly_schema_events", SCHEMA_OWNERS_TABLE];
+  const present = await Promise.all(
+    required.map(table => adapter.tableExists(table))
+  );
+  const missing = required.filter((_, at) => !present[at]);
+  if (missing.length === 0) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message:
+      'This database has not been migrated yet. Run "nextly migrate" before installing or uninstalling a plugin.',
+    logContext: { reason: "database-not-migrated", missing },
+  });
+}
+
 async function connect(options: RunnerOptions, context: CommandContext) {
   const { config, appConfig, pluginConsent } = await loadConfig({
     configPath: options.config,
@@ -181,7 +204,16 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     }
   };
 
-  await refreshPlan();
+  // `connect` hands the adapter back only once it has finished, so what
+  // throws before then disconnects it here; the callers' `finally` never
+  // sees it.
+  try {
+    await assertMigrated(adapter as unknown as DrizzleAdapter);
+    await refreshPlan();
+  } catch (error) {
+    await adapter.disconnect();
+    throw error;
+  }
 
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
 

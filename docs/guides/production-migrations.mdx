@@ -908,7 +908,8 @@ reporting an app rollback.
 DOWN sections are its own code, so a plugin removed from config first cannot
 be uninstalled at all.
 
-It refuses while another enabled plugin depends on it, and refuses a full
+It refuses while another enabled plugin depends on it, or a disabled one
+requires it, and refuses a full
 uninstall when any module has no DOWN: running the reversible ones and
 stopping would leave the tables partly existing with no module describing what
 is there. It refuses the same way while the ledger records a module applied
@@ -916,7 +917,10 @@ that the configured version of the plugin no longer ships
 (`logContext.reason` is `module-not-shipped`): configure the version that
 shipped it first. `--keep-data` leaves everything in place and marks the owner
 orphaned. A plugin whose modules `migrate:down --plugin` already rolled back
-can still be uninstalled: only the tables that exist are dropped.
+can still be uninstalled: only the tables that exist are dropped. A DOWN that
+leaves one of the plugin's tables in place stops the uninstall before the
+plugin is recorded as uninstalled (`logContext.reason` is
+`tables-left-by-down`).
 
 `plugins install` holds the migrate lock from its first migration until
 `onInstall` returns, and `plugins uninstall` from its final decision until the

@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { publishHookPoints } from "./hook-points";
 import type { CompleteLoginDeps } from "../auth/plugin-auth-api";
+import { clearActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
+import { col, defineTable } from "../domains/schema/extension/dsl";
+import { compileAndPublishExtensionSchema } from "../domains/schema/extension/publish";
+import { NextlyError } from "../errors/nextly-error";
 import { EventBus } from "../events/event-bus";
 
 import { getCoreVersion } from "./core-version";
@@ -11,6 +15,10 @@ import {
 } from "./plugin-auth-provider";
 import type { PluginGrants } from "./plugin-consent";
 import { createPluginContext } from "./plugin-context";
+import {
+  clearPluginDependencies,
+  publishPluginDependencies,
+} from "./plugin-dependencies";
 
 /** Marks which handle a relational namespace came from, past the owner check. */
 const ORIGIN = Symbol("origin");
@@ -442,6 +450,53 @@ describe("ctx.db.raw.transaction", () => {
     });
     expect(calls).toEqual(["adapter.transaction", "db.update"]);
   });
+
+  describe("a method taken off the handle and called after the transaction", () => {
+    const finished = {
+      logContext: expect.objectContaining({
+        reason: "plugin-transaction-finished",
+      }),
+    };
+
+    it.each([
+      ["PostgreSQL", "postgresql", {}, "tx.insert"],
+      // The handle there is the database's only connection, so a statement
+      // started through it runs outside any transaction.
+      ["SQLite", "sqlite", {}, "db.insert"],
+      [
+        "PostgreSQL, with rawSql",
+        "postgresql",
+        { db: { rawSql: true } },
+        "tx.insert",
+      ],
+    ] as const)(
+      "is refused on %s, and starts nothing",
+      async (_label, dialect, capabilities, statement) => {
+        const { ctx, calls } = contextOn(dialect, capabilities);
+        let insert: ((table: unknown) => unknown) | undefined;
+        await ctx.db.raw.transaction(async tx => {
+          // Read while the transaction is open, which is allowed; the read
+          // alone starts nothing.
+          insert = tx.insert as (table: unknown) => unknown;
+        });
+        expect(() => insert?.({})).toThrow(
+          expect.objectContaining(finished) as unknown as Error
+        );
+        expect(calls).not.toContain(statement);
+      }
+    );
+
+    it("still runs when it is called inside the callback", async () => {
+      // The control: a wrapper that refused every call would pass the case
+      // above.
+      const { ctx, calls } = contextOn("postgresql");
+      await ctx.db.raw.transaction(async tx => {
+        const insert = tx.insert;
+        insert({} as never);
+      });
+      expect(calls).toEqual(["db.transaction", "tx.insert"]);
+    });
+  });
 });
 
 describe("ctx.auth in a plugin's context", () => {
@@ -561,5 +616,59 @@ describe("ctx.db relational queries", () => {
     const { ctx, built } = makeCtx(undefined, () => ({ id: "r1" }));
     await ctx.db.transaction(async () => undefined);
     expect(built).toEqual([]);
+  });
+});
+
+/**
+ * Which other plugins' tables `ctx.db` lets a plugin reach. The context is
+ * built once, at `init`, and a config reload never runs `init` again, so what
+ * it grants by has to be read from the config in force, not kept from boot.
+ */
+describe("the plugins ctx.db lets a plugin reach", () => {
+  const notes = defineTable("notes", { id: col.id() });
+  const owner = {
+    name: "@acme/local",
+    version: "1.0.0",
+    nextly: "*",
+    contributes: { schema: { tables: [notes] } },
+  };
+  const reader = (dependsOn?: Record<string, string>) => ({
+    name: "@acme/reader",
+    version: "1.0.0",
+    nextly: "*",
+    ...(dependsOn ? { dependsOn } : {}),
+  });
+
+  afterEach(() => {
+    clearActiveExtensionSchema();
+    clearPluginDependencies();
+  });
+
+  /** A context built for a reader that depends on the owner, as at boot. */
+  async function bootedReader() {
+    await compileAndPublishExtensionSchema({
+      dialect: "postgresql",
+      plugins: [owner as never],
+      config: {},
+      logger: { warn: () => undefined },
+    });
+    const booted = reader({ "@acme/local": "*" });
+    publishPluginDependencies([owner as never, booted as never]);
+    const { ctx } = makeCtx(booted);
+    // The control: the dependency it booted with does reach the table.
+    expect(() => ctx.db.table(notes)).not.toThrow();
+    return ctx;
+  }
+
+  it("stops reaching a plugin the reloaded config no longer depends on", async () => {
+    const ctx = await bootedReader();
+    publishPluginDependencies([owner as never, reader() as never]);
+    expect(() => ctx.db.table(notes)).toThrow(NextlyError);
+  });
+
+  it("reaches nothing of another plugin's once the config no longer lists it", async () => {
+    const ctx = await bootedReader();
+    publishPluginDependencies([owner as never]);
+    expect(() => ctx.db.table(notes)).toThrow(NextlyError);
   });
 });

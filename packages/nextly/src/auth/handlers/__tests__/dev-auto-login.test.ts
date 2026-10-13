@@ -44,7 +44,9 @@ function makeDeps(
     refreshTokenTTL: 7 * 24 * 60 * 60,
     devAutoLogin: { email: "dev@nextly.local", password: "dev" },
     findUserByEmail: vi.fn().mockResolvedValue(makeFakeUser()),
-    fetchRoleIds: vi.fn().mockResolvedValue([]),
+    fetchSessionRoles: vi
+      .fn()
+      .mockResolvedValue({ roleIds: [], validUntil: undefined }),
     fetchCustomFields: vi.fn().mockResolvedValue({}),
     storeRefreshToken: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -233,7 +235,9 @@ describe("handleSession dev-auto-login", () => {
       expect(setCookies).toMatch(/nextly[._-]session\b/i);
       expect(setCookies).toMatch(/nextly[._-]refresh\b/i);
 
-      const body = (await res.json()) as { user: { id: string; email: string } };
+      const body = (await res.json()) as {
+        user: { id: string; email: string };
+      };
       expect(body.user.id).toBe("user-fresh");
       expect(body.user.email).toBe("dev@nextly.local");
     });
@@ -244,7 +248,10 @@ describe("handleSession dev-auto-login", () => {
       process.env.NODE_ENV = "development";
 
       const { handleSession: handle } = await import("../session");
-      const res = await handle(makeRequest(), makeDeps({ devAutoLogin: false }));
+      const res = await handle(
+        makeRequest(),
+        makeDeps({ devAutoLogin: false })
+      );
 
       expect(res.status).toBe(401);
     });
