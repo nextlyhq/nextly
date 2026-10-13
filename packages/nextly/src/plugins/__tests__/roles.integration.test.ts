@@ -2,16 +2,16 @@
  * C3 / D67 — plugin-contributed role bundles, end-to-end.
  *
  * A plugin declares a custom permission + a role bundling it; after
- * `runPostInitTasks()` (which seeds permissions then roles), the role exists in
+ * `seedPermissionsAndRolePresets()` (which the boot runs: permissions, then roles), the role exists in
  * the DB with the resolved permission, and re-seeding is idempotent.
  *
- * The harness doesn't auto-run post-init, so the test invokes it explicitly.
+ * The harness doesn't run the boot's seeding, so the test invokes it explicitly.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ServiceContainer } from "../../services/index";
-import { runPostInitTasks } from "../../init/post-init-tasks";
+import { seedPermissionsAndRolePresets } from "../../init/seed-permissions";
 import { definePlugin } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
 
@@ -41,7 +41,7 @@ const rolePlugin = () =>
 describe("plugin role bundles", () => {
   it("seeds a contributed role with its resolved permission", async () => {
     current = await createTestNextly({ plugins: [rolePlugin()] });
-    await runPostInitTasks();
+    await seedPermissionsAndRolePresets();
 
     const c = new ServiceContainer(
       current.adapter as unknown as DrizzleAdapter
@@ -57,8 +57,8 @@ describe("plugin role bundles", () => {
 
   it("is idempotent across re-seed (no duplicate, no throw)", async () => {
     current = await createTestNextly({ plugins: [rolePlugin()] });
-    await runPostInitTasks();
-    await runPostInitTasks();
+    await seedPermissionsAndRolePresets();
+    await seedPermissionsAndRolePresets();
 
     const c = new ServiceContainer(
       current.adapter as unknown as DrizzleAdapter

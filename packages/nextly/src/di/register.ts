@@ -189,6 +189,7 @@ import {
   clearPluginServices,
   registerPluginService,
 } from "../plugins/services/plugin-services-registry";
+import { assertSettingsPermissionsOwned } from "../plugins/settings-permission";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
 import {
   collectWidgetSources,
@@ -242,7 +243,11 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { UserConfig } from "../users/config/types";
 import { readProxyTrustSettings } from "../utils/proxy-trust";
 
-import { container, type Container } from "./container";
+import {
+  container,
+  type Container,
+  type RestoredRegistrations,
+} from "./container";
 import {
   type LoadedBuilderEntity,
   loadBuilderEntities,
@@ -549,11 +554,15 @@ const globalForReg = globalThis as unknown as {
    */
   __nextly_clearedServices?: Container;
   /**
-   * The same registrations while that teardown runs, restored into the
-   * container, so a `clearServices()` arriving while a `destroy` awaits puts
-   * them back for the rest of it.
+   * The same registrations while that teardown runs, with the entries they
+   * were restored into the container as, so a `clearServices()` arriving
+   * while a `destroy` awaits puts them back for the rest of it, and the
+   * teardown takes out exactly what is there when it ends.
    */
-  __nextly_servicesInTeardown?: Container;
+  __nextly_servicesInTeardown?: {
+    cleared: Container;
+    restored: RestoredRegistrations;
+  };
   /**
    * The registry `registerServices` actually registered into. A caller may
    * supply its own, and clearing the process-global one would leave that
@@ -706,16 +715,17 @@ async function runRegistrationAttempt(
   const cleared = globalForReg.__nextly_clearedServices;
   globalForReg.__nextly_clearedServices = undefined;
   if (cleared !== undefined) {
-    container.restore(cleared);
-    globalForReg.__nextly_servicesInTeardown = cleared;
+    globalForReg.__nextly_servicesInTeardown = {
+      cleared,
+      restored: container.restore(cleared),
+    };
   }
   try {
     await destroyRegisteredPlugins();
   } finally {
-    if (cleared !== undefined) {
-      globalForReg.__nextly_servicesInTeardown = undefined;
-      container.withdraw(cleared);
-    }
+    const inTeardown = globalForReg.__nextly_servicesInTeardown;
+    globalForReg.__nextly_servicesInTeardown = undefined;
+    if (inTeardown !== undefined) container.withdraw(inTeardown.restored);
   }
   try {
     await registerServicesOnce(config);
@@ -855,6 +865,7 @@ async function registerServicesOnce(
     logger: resolvedLogger,
     schemaRegistry,
     transformedConfig,
+    transformedPlugins,
     deferredExtends,
     unresolvedRelations,
     unresolvedPermissions,
@@ -1157,7 +1168,17 @@ function validateBootContributions(
 
   // Fail fast on invalid plugin-declared custom permissions. Validation
   // only here; the list is re-derived + seeded in runPostInitTasks.
-  collectCustomPermissions(transformedConfig, transformedPlugins);
+  //
+  // A plugin's settings permission is checked against the same list now,
+  // before the adapter connects, so a misspelt or foreign one stops the boot
+  // before first-run setup writes any schema. Only the Schema Builder's
+  // entities are unknown here; `reconcileBuilderTargets` asks again once
+  // they are loaded, for a lifecycle permission on one of them.
+  assertSettingsPermissionsOwned(
+    transformedPlugins,
+    collectCustomPermissions(transformedConfig, transformedPlugins),
+    []
+  );
 
   // The half of that check the config cannot answer. A CRUD action on a
   // resource the config does not define may name a Schema Builder collection,
@@ -1450,6 +1471,7 @@ interface BuilderReconcileArgs {
   logger: Logger;
   schemaRegistry: SchemaRegistry | undefined;
   transformedConfig: NextlyServiceConfig;
+  transformedPlugins: PluginDefinition[];
   deferredExtends: DeferredExtends;
   unresolvedRelations: ReturnType<typeof collectUnresolvedRelationTargets>;
   unresolvedPermissions: ReturnType<typeof collectUnresolvedPermissionTargets>;
@@ -1480,6 +1502,17 @@ async function reconcileBuilderTargets(
   const builderEntities = await loadBuilderEntities(adapter);
 
   assertRegisteredKeepTheirKind(transformedConfig, builderEntities);
+
+  // A plugin's settings permission has to be one it owns, which is the
+  // collector's answer for the config's entities and the seeder's for the
+  // Builder's — so it is asked as soon as both are known, and before anything
+  // below writes a registry row or runs DDL for a configuration this would
+  // refuse.
+  assertSettingsPermissionsOwned(
+    args.transformedPlugins,
+    collectCustomPermissions(transformedConfig, args.transformedPlugins),
+    builderEntitySlugsOf(builderEntities)
+  );
 
   // 🔴 One slug belongs to one KIND, and this is the first point in the boot
   // that can see both sides of it: the fold refused a plugin taking a slug
@@ -1809,15 +1842,20 @@ function finalizeBuilderTargets(
   // stops the boot rather than being discovered by a request.
   finalizePermissionTargets(
     args.unresolvedPermissions,
-    [
-      ...builderCollectionSlugs,
-      ...builderEntities.singles.map(single => single.slug),
-    ],
+    builderEntitySlugsOf(builderEntities),
     {
       allowOverride: allowsPluginPermissionOverride(args.transformedConfig),
       logger: args.logger,
     }
   );
+}
+
+/** The slugs of the Builder's collections and Singles, the entities a permission can name. */
+function builderEntitySlugsOf(builderEntities: BuilderEntities): string[] {
+  return [
+    ...builderEntities.collections.map(collection => collection.slug),
+    ...builderEntities.singles.map(single => single.slug),
+  ];
 }
 
 /**
@@ -4184,12 +4222,17 @@ async function initializePlugins(
 
   // Before any `init`: a stored setting the manifest now calls secret, but
   // that was saved while its path was public, is encrypted before this plugin
-  // or any other can run and read, log or back it up. A read or a write would
-  // repair it too, but only once one happens. A failure fails the boot, naming
-  // the plugin: starting it would break the manifest's promise that the value
-  // is not stored as plain text.
+  // or any other can run and read, log or back it up, and one sealed under a
+  // rotated secret is sealed again under the current one. A read or a write
+  // would repair both too, but only once one happens. A failure fails the
+  // boot, naming the plugin: starting it would break the manifest's promise
+  // that the value is not stored as plain text.
+  //
+  // A disabled plugin is sealed too. Sealing runs none of its code, only the
+  // settings service over its stored rows, and skipping it left its values
+  // under the secret a rotation retires: once that secret was removed they
+  // could not be read when the plugin was enabled again.
   for (const plugin of plugins) {
-    if (plugin.enabled === false) continue;
     try {
       await sealPluginSettings(plugin, adapterDrizzleDb, dialect, () =>
         container.get<AdapterTransactions>("adapter")
@@ -4201,7 +4244,7 @@ async function initializePlugins(
         logContext: {
           reason: "plugin-settings-seal-failed",
           plugin: plugin.name,
-          detail: `A secret setting stored in plain text could not be encrypted before the plugin started: ${error instanceof Error ? error.message : String(error)}`,
+          detail: `A stored secret setting could not be sealed under the current secret before the plugin started: ${error instanceof Error ? error.message : String(error)}`,
         },
       });
     }
@@ -4485,7 +4528,9 @@ export function clearServices(): void {
   } else {
     container.clear();
     const inTeardown = globalForReg.__nextly_servicesInTeardown;
-    if (inTeardown !== undefined) container.restore(inTeardown);
+    if (inTeardown !== undefined) {
+      inTeardown.restored = container.restore(inTeardown.cleared);
+    }
   }
   // Clear the process-global recording policy alongside the container so a
   // re-initialization does not inherit a prior config's opt-outs.

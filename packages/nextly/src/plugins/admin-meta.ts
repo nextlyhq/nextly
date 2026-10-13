@@ -28,6 +28,7 @@ import type {
 import { pluginAdminSlug } from "./plugin-slug";
 import { collectPluginRoutes } from "./routes/collect-routes";
 import { isRouteError } from "./routes/route-error";
+import { settingsPermissionOf } from "./settings-permission";
 import { validatedAdminWidgets } from "./validate-admin-widgets";
 import { validatedClientConfig } from "./validate-client-config";
 import { validatePluginMenus } from "./validate-menus";
@@ -108,8 +109,12 @@ export interface PluginAdminMeta {
   menu?: PluginMenuItem[];
   /** Custom admin pages — present only for enabled plugins. */
   pages?: PluginAdminPage[];
-  /** Settings UI — present only for enabled plugins. */
-  settings?: { component: string };
+  /**
+   * Settings UI — present only for enabled plugins. `permission` is the one a
+   * change to the plugin's settings needs, which the settings page asks for:
+   * the plugin's own `settingsPermission`, or `manage-settings`.
+   */
+  settings?: { component: string; permission: string };
   /** Admin header-slot component — present only for enabled plugins. */
   headerSlot?: string;
   /** Header customization — present only for enabled plugins. */
@@ -399,7 +404,14 @@ export function buildPluginAdminMeta(
         );
       }
       if (admin.pages && admin.pages.length > 0) meta.pages = admin.pages;
-      if (admin.settings) meta.settings = admin.settings;
+      // With the permission the request gate asks for, from the same function,
+      // so the page gate is derived from it rather than decided again.
+      if (admin.settings) {
+        meta.settings = {
+          ...admin.settings,
+          permission: settingsPermissionOf(plugin),
+        };
+      }
       // Header customization. `header.slot` supersedes the
       // deprecated top-level `headerSlot`; keep `meta.headerSlot` mirrored for
       // back-compat.

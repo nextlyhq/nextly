@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { NextlyError } from "../../errors/nextly-error";
+import { collectCustomPermissions } from "../permissions/collect-permissions";
 import type { PluginDefinition } from "../plugin-context";
 import { assertPluginManifests } from "../resolve";
-import { settingsWritePermission } from "../settings-permission";
+import {
+  assertSettingsPermissionsOwned,
+  settingsWritePermission,
+} from "../settings-permission";
 
 function plugin(
   contributes: PluginDefinition["contributes"]
@@ -32,18 +36,39 @@ function reasonOf(fn: () => unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * The ownership check as the boot runs it: over what the collector keeps from
+ * the config, with the Schema Builder's entity slugs beside it.
+ */
+function ownershipVerdict(
+  plugins: PluginDefinition[],
+  {
+    collections = [] as string[],
+    builder = [] as string[],
+  }: { collections?: string[]; builder?: string[] } = {}
+): string | undefined {
+  return reasonOf(() =>
+    assertSettingsPermissionsOwned(
+      plugins,
+      collectCustomPermissions(
+        { collections: collections.map(slug => ({ slug })) },
+        plugins
+      ),
+      builder
+    )
+  );
+}
+
 describe("a plugin's settings permission at boot", () => {
   it("accepts one of the plugin's own permissions", () => {
     expect(
-      reasonOf(() =>
-        assertPluginManifests([
-          plugin({
-            settings,
-            permissions: OWN,
-            settingsPermission: "update-pay-settings",
-          }),
-        ])
-      )
+      ownershipVerdict([
+        plugin({
+          settings,
+          permissions: OWN,
+          settingsPermission: "update-pay-settings",
+        }),
+      ])
     ).toBeUndefined();
   });
 
@@ -51,30 +76,92 @@ describe("a plugin's settings permission at boot", () => {
     // A misspelling: it boots, and then nobody but the super-admin can ever
     // change the settings.
     expect(
-      reasonOf(() =>
-        assertPluginManifests([
-          plugin({
-            settings,
-            permissions: OWN,
-            settingsPermission: "update-payment-settings",
-          }),
-        ])
-      )
+      ownershipVerdict([
+        plugin({
+          settings,
+          permissions: OWN,
+          settingsPermission: "update-payment-settings",
+        }),
+      ])
     ).toBe("settings-permission-undeclared");
   });
 
   it("refuses core's permission named there too", () => {
     // Not the plugin's own: leaving the field out already means it.
     expect(
-      reasonOf(() =>
-        assertPluginManifests([
+      ownershipVerdict([
+        plugin({
+          settings,
+          permissions: OWN,
+          settingsPermission: "manage-settings",
+        }),
+      ])
+    ).toBe("settings-permission-undeclared");
+  });
+
+  it("refuses a publish permission it declares on a collection, which the seeder owns", () => {
+    // The plugin declares it, so a check of the manifest passes it — but the
+    // collector drops it as the collection's own publish permission, which
+    // every content publisher holds.
+    expect(
+      ownershipVerdict(
+        [
           plugin({
             settings,
-            permissions: OWN,
-            settingsPermission: "manage-settings",
+            permissions: [{ action: "publish", resource: "posts" }],
+            settingsPermission: "publish-posts",
           }),
-        ])
+        ],
+        { collections: ["posts"] }
       )
+    ).toBe("settings-permission-undeclared");
+  });
+
+  it("refuses the same on a Schema Builder collection, which only the database knows", () => {
+    // The collector cannot see this entity and keeps the declaration; the
+    // seeder then hands the row back to the presets.
+    expect(
+      ownershipVerdict(
+        [
+          plugin({
+            settings,
+            permissions: [{ action: "publish", resource: "reports" }],
+            settingsPermission: "publish-reports",
+          }),
+        ],
+        { builder: ["reports"] }
+      )
+    ).toBe("settings-permission-undeclared");
+  });
+
+  it("accepts a publish permission on a resource that is no entity", () => {
+    // The control for the two above: the action alone is not what refuses
+    // them, the entity is.
+    expect(
+      ownershipVerdict(
+        [
+          plugin({
+            settings,
+            permissions: [{ action: "publish", resource: "pay-reports" }],
+            settingsPermission: "publish-pay-reports",
+          }),
+        ],
+        { collections: ["posts"], builder: ["reports"] }
+      )
+    ).toBeUndefined();
+  });
+
+  it("refuses another plugin's permission", () => {
+    const other = {
+      ...plugin({ permissions: OWN }),
+      name: "@acme/other",
+    } as PluginDefinition;
+    // `@acme/other` owns `update-pay-settings`; `@acme/pay` names it.
+    expect(
+      ownershipVerdict([
+        other,
+        plugin({ settings, settingsPermission: "update-pay-settings" }),
+      ])
     ).toBe("settings-permission-undeclared");
   });
 
@@ -108,7 +195,10 @@ describe("settingsWritePermission", () => {
     });
   });
 
-  it("is nothing for another plugin, so core's permission applies", () => {
-    expect(settingsWritePermission(plugins, "@acme/other")).toBeUndefined();
+  it("is core's permission for another plugin", () => {
+    expect(settingsWritePermission(plugins, "@acme/other")).toEqual({
+      action: "manage",
+      resource: "settings",
+    });
   });
 });
