@@ -108,6 +108,7 @@ import {
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
+import { readServiceConfig } from "./dispatcher/dispatcher";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
 import { publishableWidgets } from "./domains/widgets/publish";
@@ -140,6 +141,7 @@ import {
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
 import type { PluginRouteMount } from "./plugins/routes/route-types";
 import { pluginRouteBootDecision } from "./plugins/routes/should-register";
+import { settingsWritePermission } from "./plugins/settings-permission";
 import { assertAdminWidgets } from "./plugins/validate-admin-widgets";
 import { assertClientConfigs } from "./plugins/validate-client-config";
 import {
@@ -914,15 +916,29 @@ async function resolveAuthorization(
   // every settings administrator got a 403 and only the super-admin bypass
   // could use the API at all.
   if (service === "pluginSettings") {
+    // A plugin may name its own permission for its settings in place of
+    // `manage-settings` (`contributes.settingsPermission`), checked at boot to
+    // be one it declares.
+    const declared = settingsWritePermission(
+      readServiceConfig()?.plugins,
+      routeParams?.plugin
+    );
     if (httpMethod === "GET") {
+      // Whoever may change the settings may also read them: a grant of the
+      // plugin's permission alone would otherwise open a page that cannot load.
       return requireAnyPermission(req, [
         { action: "read", resource: "settings" },
         { action: "manage", resource: "settings" },
+        ...(declared ? [declared] : []),
       ]);
     }
     // A write to a plugin's configuration is a settings change, so it takes
-    // the same permission a settings change takes anywhere else.
-    return requirePermission(req, "manage", "settings");
+    // the same permission a settings change takes anywhere else, unless the
+    // plugin named its own: then that one alone, so `manage-settings` does
+    // not reach settings the plugin kept to a narrower role.
+    return declared
+      ? requirePermission(req, declared.action, declared.resource)
+      : requirePermission(req, "manage", "settings");
   }
 
   // --- Email providers → manage-email-providers ---
@@ -1061,6 +1077,13 @@ async function resolveAuthorization(
   const action = getActionFromMethod(httpMethod);
   return requirePermission(req, action, service);
 }
+
+/**
+ * The permission gate, reachable without a session or a database: what it
+ * asks of a caller is the decision under test, and the checks it delegates
+ * to are covered where they are defined.
+ */
+export const _resolveAuthorizationForTest = resolveAuthorization;
 
 // ============================================================================
 // Service Request Handler

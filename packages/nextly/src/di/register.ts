@@ -144,6 +144,7 @@ import type {
   PluginServiceName,
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
+import { sealPluginSettings } from "../plugins/plugin-settings-provider";
 import { resolvePlugins, resolveTransformedPlugins } from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import {
@@ -3947,6 +3948,31 @@ async function initializePlugins(
     const declaredEvents = plugin.contributes?.events?.map(e => e.name) ?? [];
     if (declaredEvents.length > 0) {
       getEventBus().registerDeclaredEvents(declaredEvents);
+    }
+  }
+
+  // Before any `init`: a stored setting the manifest now calls secret, but
+  // that was saved while its path was public, is encrypted before this plugin
+  // or any other can run and read, log or back it up. A read or a write would
+  // repair it too, but only once one happens. A failure fails the boot, naming
+  // the plugin: starting it would break the manifest's promise that the value
+  // is not stored as plain text.
+  for (const plugin of plugins) {
+    if (plugin.enabled === false) continue;
+    try {
+      await sealPluginSettings(plugin, adapterDrizzleDb, dialect, () =>
+        container.get<AdapterTransactions>("adapter")
+      );
+    } catch (error) {
+      await destroyInitializedPlugins();
+      throw NextlyError.internal({
+        ...(error instanceof Error ? { cause: error } : {}),
+        logContext: {
+          reason: "plugin-settings-seal-failed",
+          plugin: plugin.name,
+          detail: `A secret setting stored in plain text could not be encrypted before the plugin started: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      });
     }
   }
 
