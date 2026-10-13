@@ -1436,6 +1436,17 @@ async function reconcileBuilderTargets(
 
   assertRegisteredKeepTheirKind(transformedConfig, builderEntities);
 
+  // A plugin's settings permission has to be one it owns, which is the
+  // collector's answer for the config's entities and the seeder's for the
+  // Builder's — so it is asked as soon as both are known, and before anything
+  // below writes a registry row or runs DDL for a configuration this would
+  // refuse.
+  assertSettingsPermissionsOwned(
+    args.transformedPlugins,
+    collectCustomPermissions(transformedConfig, args.transformedPlugins),
+    builderEntitySlugsOf(builderEntities)
+  );
+
   // 🔴 One slug belongs to one KIND, and this is the first point in the boot
   // that can see both sides of it: the fold refused a plugin taking a slug
   // the config's own entities hold, but the Builder's entities live in the
@@ -1762,24 +1773,22 @@ function finalizeBuilderTargets(
   // Settled here, where both halves of the question are answerable, and
   // before any service is registered or any route installed — so a refusal
   // stops the boot rather than being discovered by a request.
-  const builderEntitySlugs = [
-    ...builderCollectionSlugs,
+  finalizePermissionTargets(
+    args.unresolvedPermissions,
+    builderEntitySlugsOf(builderEntities),
+    {
+      allowOverride: allowsPluginPermissionOverride(args.transformedConfig),
+      logger: args.logger,
+    }
+  );
+}
+
+/** The slugs of the Builder's collections and Singles, the entities a permission can name. */
+function builderEntitySlugsOf(builderEntities: BuilderEntities): string[] {
+  return [
+    ...builderEntities.collections.map(collection => collection.slug),
     ...builderEntities.singles.map(single => single.slug),
   ];
-  finalizePermissionTargets(args.unresolvedPermissions, builderEntitySlugs, {
-    allowOverride: allowsPluginPermissionOverride(args.transformedConfig),
-    logger: args.logger,
-  });
-
-  // A plugin's settings permission has to be one it owns, which is the
-  // collector's answer for the config's entities and the seeder's for the
-  // Builder's — so it is asked here, where both are known, and before any
-  // route can be gated on it.
-  assertSettingsPermissionsOwned(
-    args.transformedPlugins,
-    collectCustomPermissions(args.transformedConfig, args.transformedPlugins),
-    builderEntitySlugs
-  );
 }
 
 /**
@@ -4103,8 +4112,12 @@ async function initializePlugins(
   // would repair both too, but only once one happens. A failure fails the
   // boot, naming the plugin: starting it would break the manifest's promise
   // that the value is not stored as plain text.
+  //
+  // A disabled plugin is sealed too. Sealing runs none of its code, only the
+  // settings service over its stored rows, and skipping it left its values
+  // under the secret a rotation retires: once that secret was removed they
+  // could not be read when the plugin was enabled again.
   for (const plugin of plugins) {
-    if (plugin.enabled === false) continue;
     try {
       await sealPluginSettings(plugin, adapterDrizzleDb, dialect, () =>
         container.get<AdapterTransactions>("adapter")

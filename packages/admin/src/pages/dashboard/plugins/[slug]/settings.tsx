@@ -17,6 +17,9 @@ import {
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { PluginMetadata } from "@admin/types/branding";
 
+import { InstalledPluginsUnavailable } from "../components/InstalledPluginsUnavailable";
+import { PluginPageLoading } from "../components/PluginPageLoading";
+
 interface PluginSettingsPageProps {
   params?: { slug?: string };
 }
@@ -61,11 +64,12 @@ function pluginAt(
  * Decided here rather than in the route table, which can only name one
  * permission for every plugin: `manage-settings` there shut out the role a
  * plugin keeps its settings to, and showed a `manage-settings` holder an
- * editor whose saves the server refuses. It waits for the plugin list: gated
- * before it arrives, on the default, a caller holding only the plugin's
- * permission would be sent away before the page knew what to ask for. A
- * plugin missing from the list, or a server that does not name the
- * permission, keeps `manage-settings`.
+ * editor whose saves the server refuses. It never gates on a default it
+ * merely assumed: while the plugin list is loading it waits, and when the list
+ * never arrived it says so, since either way the page cannot know what to ask
+ * for, and the default would send away the plugin's own role and admit the one
+ * it replaced. A plugin missing from a list that did arrive, or a server that
+ * does not name the permission, keeps `manage-settings`.
  */
 function PluginSettingsGate({
   activeSlug,
@@ -76,7 +80,13 @@ function PluginSettingsGate({
 }) {
   const branding = useBranding();
   const { isPending } = useBrandingStatus();
-  if (branding?.plugins === undefined && isPending) return null;
+  if (branding?.plugins === undefined) {
+    return isPending ? (
+      <PluginPageLoading label="Loading plugin…" />
+    ) : (
+      <InstalledPluginsUnavailable />
+    );
+  }
   const permission =
     pluginAt(branding?.plugins, activeSlug)?.settings?.permission ??
     "manage-settings";

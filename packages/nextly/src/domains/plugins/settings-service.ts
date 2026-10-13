@@ -688,10 +688,12 @@ export class PluginSettingsService {
           : leaf,
       [row.key]
     );
+    const stored = JSON.stringify(sealed);
+    this.assertFits(row.key, stored);
     return {
       owner: this.deps.owner,
       key: row.key,
-      value: JSON.stringify(sealed),
+      value: stored,
       isSecret: true,
       updatedAt: new Date(),
       updatedBy: opts?.actorUserId ?? null,
@@ -933,9 +935,27 @@ export class PluginSettingsService {
           )
         : value
     );
-    // One bound for all three dialects. MySQL's column holds 16 MB and the
-    // others are unbounded, so without it a value saved fine on one install
-    // and failed — or was truncated — on another.
+    this.assertFits(key, stored);
+    return {
+      owner: this.deps.owner,
+      key,
+      value: stored,
+      isSecret: holdsSecret,
+      updatedAt: new Date(),
+      updatedBy: opts?.actorUserId ?? null,
+    };
+  }
+
+  /**
+   * Refuse a stored value larger than any settings row may hold.
+   *
+   * One bound for all three dialects. MySQL's column holds 16 MB and the
+   * others are unbounded, so without it a value saved fine on one install and
+   * failed — or was truncated — on another. Asked of every row this service
+   * writes, a repair's included: sealing adds to a value's size, and a row
+   * stored past the bound refuses every later write of its key.
+   */
+  private assertFits(key: string, stored: string): void {
     if (Buffer.byteLength(stored, "utf8") > MAX_SETTING_BYTES) {
       throw this.invalid([
         {
@@ -945,14 +965,6 @@ export class PluginSettingsService {
         },
       ]);
     }
-    return {
-      owner: this.deps.owner,
-      key,
-      value: stored,
-      isSecret: holdsSecret,
-      updatedAt: new Date(),
-      updatedBy: opts?.actorUserId ?? null,
-    };
   }
 
   /** The refusal for a settings value that cannot live in a settings row. */

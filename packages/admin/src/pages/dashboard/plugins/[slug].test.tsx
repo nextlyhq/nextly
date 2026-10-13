@@ -13,11 +13,12 @@ let mockBranding: AdminBranding | undefined;
 // Settled with an answer unless a case says otherwise: most cases here are
 // about a plugin the branding payload already carries.
 let mockBrandingPending = false;
+let mockBrandingUnavailable = false;
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
   useBrandingStatus: () => ({
     isPending: mockBrandingPending,
-    isUnavailable: false,
+    isUnavailable: mockBrandingUnavailable,
   }),
 }));
 
@@ -48,6 +49,7 @@ afterEach(() => {
 beforeEach(() => {
   mockBranding = undefined;
   mockBrandingPending = false;
+  mockBrandingUnavailable = false;
   navigateTo.mockClear();
   // Core's settings permission, which every case below that is not about
   // who may open the page needs to open it.
@@ -223,6 +225,28 @@ describe("who may open PluginSettingsPage", () => {
     expect(screen.queryByText("pay settings panel")).not.toBeInTheDocument();
     expect(navigateTo).toHaveBeenCalledWith("/admin");
   });
+
+  it.each([
+    ["the plugin's own permission", "update-pay-settings"],
+    ["only manage-settings", "manage-settings"],
+  ])(
+    "says the plugin list could not load, to a caller holding %s, rather than gate on a guess",
+    (_label, grant) => {
+      // Gated on the default when the list never arrived, the page sent the
+      // plugin's own role away and showed a manage-settings holder an editor
+      // whose saves the server refuses.
+      held.clear();
+      held.add(grant);
+      mockBrandingUnavailable = true;
+
+      renderWithProviders(<PluginSettingsPage params={{ slug: "acme-pay" }} />);
+      expect(
+        screen.getByText("Could not load your installed plugins")
+      ).toBeInTheDocument();
+      expect(navigateTo).not.toHaveBeenCalled();
+      expect(screen.queryByText("pay settings panel")).not.toBeInTheDocument();
+    }
+  );
 
   it("waits for the plugin list rather than turning the caller away on the default", () => {
     // Before the list arrives, the page cannot know the plugin keeps its

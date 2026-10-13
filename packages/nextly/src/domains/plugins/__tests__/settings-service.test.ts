@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import {
+  MAX_SETTING_BYTES,
   PluginSettingsService,
   type PluginSettingRow,
   type PluginSettingsStore,
@@ -1877,6 +1878,31 @@ describe("sealing stored secrets before the plugin runs", () => {
       clientId: "g",
       clientSecret: { set: true, readable: false },
     });
+  });
+
+  it("refuses to store a repair that seals a row past the size a setting may hold", async () => {
+    // Beside a value no key can open, the row is repaired from its stored
+    // form; sealing a large plain-text leaf there grows it, and a row stored
+    // past the bound would refuse every later write of its key.
+    const large = "x".repeat(200 * 1024);
+    const store = memoryStore();
+    await service(store, [KEY_B]).set({
+      providers: { google: { clientId: large, clientSecret: SECRET_VALUE } },
+    });
+    const before = store.rows.find(r => r.key === "providers")?.value;
+    // The premise: stored, it fits.
+    expect(Buffer.byteLength(before ?? "", "utf8")).toBeLessThan(
+      MAX_SETTING_BYTES
+    );
+
+    await expect(
+      service(store, [KEY_A], NEWLY_SECRET).sealStored()
+    ).rejects.toMatchObject({
+      publicData: expect.objectContaining({
+        errors: [expect.objectContaining({ code: "TOO_LARGE" })],
+      }),
+    });
+    expect(store.rows.find(r => r.key === "providers")?.value).toBe(before);
   });
 
   it("throws when the encrypted value cannot be stored", async () => {
