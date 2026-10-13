@@ -1123,7 +1123,17 @@ function validateBootContributions(
 
   // Fail fast on invalid plugin-declared custom permissions. Validation
   // only here; the list is re-derived + seeded in runPostInitTasks.
-  collectCustomPermissions(transformedConfig, transformedPlugins);
+  //
+  // A plugin's settings permission is checked against the same list now,
+  // before the adapter connects, so a misspelt or foreign one stops the boot
+  // before first-run setup writes any schema. Only the Schema Builder's
+  // entities are unknown here; `reconcileBuilderTargets` asks again once
+  // they are loaded, for a lifecycle permission on one of them.
+  assertSettingsPermissionsOwned(
+    transformedPlugins,
+    collectCustomPermissions(transformedConfig, transformedPlugins),
+    []
+  );
 
   // The half of that check the config cannot answer. A CRUD action on a
   // resource the config does not define may name a Schema Builder collection,

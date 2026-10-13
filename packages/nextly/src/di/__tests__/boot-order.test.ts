@@ -220,3 +220,20 @@ describe("the settings permission check in the Builder reconcile", () => {
     expect(checked).toBeLessThan(written);
   });
 });
+
+describe("the settings permission check before the adapter connects", () => {
+  it("refuses an unowned settings permission before first-run setup can write schema", () => {
+    // A misspelt or foreign permission is known from the config alone, so it
+    // stops the boot in the pre-connection validation, before
+    // `initializeSchemaRegistry` runs first-run setup on a fresh database.
+    expect(bodyOf("validateBootContributions")).toContain(
+      "assertSettingsPermissionsOwned("
+    );
+    const phase = bodyOf("registerServicesOnce");
+    const validated = phase.indexOf("validateBootContributions(");
+    const schemaSetup = phase.indexOf("initializeSchemaRegistry(");
+    expect(validated).toBeGreaterThan(-1);
+    expect(schemaSetup).toBeGreaterThan(-1);
+    expect(validated).toBeLessThan(schemaSetup);
+  });
+});

@@ -27,11 +27,4 @@
 "@nextlyhq/ui": patch
 ---
 
-Hold a plugin's own settings permission everywhere it applies, and seal every stored secret the boot can.
-
-- The settings gate reads the plugin's `settingsPermission` from the route handlers' config, so the first request on a cold process no longer falls back to `manage-settings`.
-- `settingsPermission` must be a permission the plugin owns as the permission collector keeps it. A `publish` or `unpublish` declared on a collection or Single, which is that entity's own publish permission, is refused at boot, for a Schema Builder entity too, before the boot writes any Builder row, and by the CLI commands as well.
-- The admin's plugin settings page asks for the plugin's settings permission, which the plugin metadata now publishes as `settings.permission`, rather than always `manage-settings`.
-- The boot re-seals a value encrypted under a rotated secret even when the plugin no longer declares any secrets, and for a disabled plugin too.
-- A stored value holding a secret no configured key can open no longer keeps a newly secret sibling in plain text: the sibling is sealed, and the unreadable secret is kept as stored, within the size a setting may hold.
-- The admin's plugin settings page says the plugin list could not load, rather than gating on `manage-settings`, when the admin metadata never arrives.
+A plugin's own `settingsPermission` now governs its settings everywhere: on the first request after a cold start, on the admin's settings page, and in CLI commands. It must be a permission the plugin owns, and a collection's publish permission no longer qualifies. After a `NEXTLY_SECRET` rotation, the boot re-seals every plugin's stored secrets under the new secret, including those of a disabled plugin and of one that no longer declares secrets or settings, so the previous secret can then be removed.

@@ -329,6 +329,20 @@ describe.each(getConfiguredTestDialects())(
       expect(atInit).toEqual({ set: true });
     });
 
+    it("seals again under a rotated secret the values of a plugin that no longer declares settings", async () => {
+      // A version that drops its settings schema in the release that rotates
+      // the secret leaves its rows under the secret being retired; a later
+      // version reading them again would find them unreadable.
+      const settings = await boot(dialect, secretSettingsPlugin(["apiKey"]));
+      await settings.set({ apiKey: SECRET });
+
+      await upgradeAcrossRotation(
+        definePlugin({ name: NAME, version: "2.0.0", nextly: ">=0.0.0" })
+      );
+
+      expect(await apiKeyUnderRotatedSecretAlone()).toEqual({ set: true });
+    });
+
     it("seals again under a rotated secret the values of a plugin disabled at that boot", async () => {
       // A disabled plugin runs no code, but its stored values are still sealed
       // under the secret the rotation retires; left there, they could not be
