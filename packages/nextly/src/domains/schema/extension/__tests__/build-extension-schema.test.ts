@@ -1233,6 +1233,36 @@ describe("a hook whose output moves between builds", () => {
     );
   });
 
+  it("is refused when the table that moves is one the app adopts", async () => {
+    // Adopted tables reach the published schema too, so they are compared.
+    tickingClock();
+    let refused: unknown;
+    try {
+      await buildExtensionSchema({
+        ...base([], {
+          owner: { kind: "app" },
+          extend: [
+            ({ schema }) =>
+              schema.adoptTable(
+                defineTable("legacy_stamps", {
+                  id: col.id(),
+                  at: col.text({ default: String(Date.now()) }),
+                })
+              ),
+          ],
+        }),
+        refuseNondeterministicHooks: true,
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(NextlyError.isValidation(refused)).toBe(true);
+    expect((refused as NextlyError).logContext).toMatchObject({
+      owner: "app",
+      hookIndex: 0,
+    });
+  });
+
   it("builds when every hook declares the same schema twice, running each twice", async () => {
     // The control: the refusal above is the clock's, not the second run's.
     let calls = 0;
@@ -1290,6 +1320,41 @@ describe("a NextlyError thrown inside a hook", () => {
     expect((refused as NextlyError).logContext).toMatchObject({
       owner: "app",
       hookIndex: 1,
+    });
+  });
+
+  it("recognises one from another copy of nextly by its brand", async () => {
+    // A plugin bundling its own nextly throws errors this copy's constructor
+    // did not make; they carry the shared brand, not this prototype.
+    const foreign = Object.assign(new Error("Validation failed."), {
+      [Symbol.for("nextly/NextlyError")]: true,
+      code: "VALIDATION_ERROR",
+      statusCode: 400,
+      publicMessage: "Validation failed.",
+      publicData: { errors: [{ path: "x", code: "INVALID", message: "no" }] },
+    });
+    expect(foreign instanceof NextlyError).toBe(false);
+
+    let refused: unknown;
+    try {
+      await buildExtensionSchema(
+        base([], {
+          owner: { kind: "app" },
+          extend: [
+            () => {
+              throw foreign;
+            },
+          ],
+        })
+      );
+    } catch (error) {
+      refused = error;
+    }
+    expect((refused as NextlyError).code).toBe("VALIDATION_ERROR");
+    expect((refused as NextlyError).publicData).toEqual(foreign.publicData);
+    expect((refused as NextlyError).logContext).toMatchObject({
+      owner: "app",
+      hookIndex: 0,
     });
   });
 

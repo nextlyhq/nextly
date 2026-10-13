@@ -267,14 +267,22 @@ export class SchemaDraftStore {
 
   /**
    * Everything registered so far, as one string two stores can compare: every
-   * table in name order, with its columns, indexes and what was contributed
-   * to it. Two runs of the same hooks over the same input leave equal states
+   * table and every adopted table in name order, with its columns, indexes
+   * and what was contributed to it. Two runs of the same hooks over the same input leave equal states
    * after each hook, which is how a hook whose output changes between builds
    * is found and named.
    */
   state(): string {
+    const byName = (a: DraftTable, b: DraftTable) =>
+      a.name.localeCompare(b.name);
     return JSON.stringify(
-      [...this.tables.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      {
+        tables: [...this.tables.values()].sort(byName),
+        // Adopted tables too: they reach the published schema as typed
+        // access and relations, so one that moves between builds moves what
+        // the runtime serves.
+        adopted: [...this.adopted.values()].sort(byName),
+      },
       (_key, value: unknown) =>
         value instanceof Set
           ? [...(value as Set<unknown>)].map(String).sort()

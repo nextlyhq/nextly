@@ -99,7 +99,9 @@ async function runContribution(
       // Rethrown with attribution: an unannotated failure from inside a hook
       // names a file in somebody else's package and nothing about whose hook
       // it was or which one in the list.
-      if (cause instanceof NextlyError) throw attributed(cause, at);
+      // By its brand, not `instanceof`: a plugin bundling its own copy of
+      // nextly throws errors this copy's constructor did not make.
+      if (NextlyError.is(cause)) throw attributed(cause, at);
       throw NextlyError.internal({
         cause: cause instanceof Error ? cause : undefined,
         logContext: {
