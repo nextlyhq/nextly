@@ -57,6 +57,7 @@ import {
   noopPromptDispatcher,
   noopRenameDetector,
 } from "../pushschema-pipeline-stubs";
+import { RegexRenameDetector } from "../rename-detector";
 import type { DesiredSchema } from "../types";
 
 /** Two Builder collections: authors, and posts that point at them. */
@@ -117,6 +118,21 @@ const profileField = (pair: Pair) => ({
     target: pair.authorsSlug,
     relationType: "oneToOne",
     onDelete: "set null",
+  },
+});
+
+/** The posts' profile as some other relationship: many-to-one, or renamed. */
+const profileAs = (
+  pair: Pair,
+  overrides: { name?: string; relationType?: string }
+) => ({
+  ...profileField(pair),
+  ...(overrides.name !== undefined ? { name: overrides.name } : {}),
+  options: {
+    ...profileField(pair).options,
+    ...(overrides.relationType !== undefined
+      ? { relationType: overrides.relationType }
+      : {}),
   },
 });
 
@@ -184,13 +200,32 @@ function desiredFor(
   };
 }
 
-/** One Schema Builder save, as the Builder's save applies it. */
-function save(target: Target, desired: DesiredSchema) {
+/**
+ * One Schema Builder save, as the Builder's save applies it. With
+ * `confirmRenames`, a dropped column and an added one of the same type are
+ * paired as a rename and the author confirms it, as the Builder's prompt does.
+ */
+function save(
+  target: Target,
+  desired: DesiredSchema,
+  { confirmRenames = false }: { confirmRenames?: boolean } = {}
+) {
   return new PushSchemaPipeline({
     executor: new DrizzleStatementExecutor(target.dialect, target.db),
-    renameDetector: noopRenameDetector,
+    renameDetector: confirmRenames
+      ? new RegexRenameDetector()
+      : noopRenameDetector,
     classifier: noopClassifier,
-    promptDispatcher: noopPromptDispatcher,
+    promptDispatcher: confirmRenames
+      ? {
+          dispatch: ({ candidates }) =>
+            Promise.resolve({
+              confirmedRenames: [...candidates],
+              resolutions: [],
+              proceed: true,
+            }),
+        }
+      : noopPromptDispatcher,
     preRenameExecutor: noopPreRenameExecutor,
     preCleanupExecutor: noopPreCleanupExecutor,
     migrationJournal: noopMigrationJournal,
@@ -554,6 +589,94 @@ describe("what a SQLite rebuild of a Schema Builder table keeps (sqlite)", () =>
       ).toEqual([{ name: `${pair.posts}_touch` }]);
     }
   );
+
+  it("lets a one-to-one changed to many-to-one take duplicates once its table is rebuilt", async () => {
+    createTables(true);
+    const before = storedSql(pair.posts);
+
+    const result = await save(
+      target,
+      desiredFor(pair, authorFields("text"), [
+        ...postFields(pair, "number", true),
+        profileAs(pair, { relationType: "manyToOne" }),
+      ])
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.success).toBe(true);
+    expect(storedSql(pair.posts)).not.toBe(before);
+    // The cardinality the author asked for: two posts may share a profile.
+    insertPost("p2", "a1");
+  });
+
+  it("keeps a renamed one-to-one column unique through a rebuild", async () => {
+    createTables(true);
+    sqlite.exec(`DROP TRIGGER IF EXISTS "${pair.posts}_touch"`);
+
+    const result = await save(
+      target,
+      desiredFor(pair, authorFields("text"), [
+        ...postFields(pair, "number", true),
+        profileAs(pair, { name: "mainProfile" }),
+      ]),
+      { confirmRenames: true }
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.success).toBe(true);
+    const columns = (
+      sqlite
+        .prepare(`SELECT name FROM pragma_table_info(?)`)
+        .all(pair.posts) as Array<{ name: string }>
+    ).map(column => column.name);
+    // The premise: the column was renamed, not dropped and re-added.
+    expect(columns).toContain("main_profile");
+    expect(columns).not.toContain("profile");
+    expect(
+      sqlite.prepare(`SELECT id, main_profile FROM "${pair.posts}"`).all()
+    ).toEqual([{ id: "p1", main_profile: "a1" }]);
+    expect(() =>
+      sqlite
+        .prepare(
+          `INSERT INTO "${pair.posts}" (id, title, slug, score, main_profile) VALUES ('p2', 'P', 'p2', 5, 'a1')`
+        )
+        .run()
+    ).toThrow(/UNIQUE/);
+  });
+
+  it("refuses a rename and a rebuild of a table with a trigger before the rename runs", async () => {
+    // The trigger refusal reads every table this apply approves a rebuild of
+    // before anything writes: a check made once drizzle-kit's statements are
+    // known would come after the rename had already landed, untransacted.
+    // The authors: a plain column renamed and another's type changed, so no
+    // key or check changes and only the type change approves the rebuild.
+    createTables(true);
+    sqlite.exec(
+      `CREATE TRIGGER "${pair.authors}_touch" AFTER INSERT ON "${pair.authors}" ` +
+        `BEGIN UPDATE "${pair.posts}" SET title = 'touched'; END`
+    );
+    const before = storedSql(pair.authors);
+
+    const result = await save(
+      target,
+      desiredFor(
+        pair,
+        [
+          { name: "fullName", type: "text" },
+          { name: "rank", type: "number" },
+        ],
+        postFields(pair, "text", true, true)
+      ),
+      { confirmRenames: true }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain(
+      `rebuilding ${pair.authors} would drop triggers its schema does not track`
+    );
+    // Nothing ran: not the rename, not the rebuild.
+    expect(storedSql(pair.authors)).toBe(before);
+  });
 });
 
 /**
@@ -715,6 +838,51 @@ for (const server of SERVERS) {
         await expect(insertPost("p2", "a1")).rejects.toThrow();
         await insertPost("p3", "a2");
       });
+
+      // PostgreSQL only: on MySQL drizzle-kit never drops a live UNIQUE, so a
+      // one-to-one changed to many-to-one keeps it there whatever this keeps;
+      // nothing plans its removal on any dialect yet.
+      it.skipIf(server.dialect === "mysql")(
+        "lets a one-to-one changed to many-to-one take duplicates when a relationship is added",
+        async () => {
+          await dropTables();
+          for (const statement of [
+            ...builderStatements(
+              server.dialect,
+              pair.authors,
+              authorFields("text")
+            ),
+            ...builderStatements(
+              server.dialect,
+              pair.posts,
+              postFields(pair, "text", false, true)
+            ),
+          ]) {
+            await connection.run(statement);
+          }
+          await connection.run(
+            `INSERT INTO ${quote(pair.authors)} (id, title, slug, name, ${quote("rank")}) VALUES ('a1', 'A', 'a1', 'Ada', '1')`
+          );
+          const insertPost = (id: string) =>
+            connection.run(
+              `INSERT INTO ${quote(pair.posts)} (id, title, slug, score, profile) VALUES ('${id}', 'P', '${id}', '5', 'a1')`
+            );
+          await insertPost("p1");
+
+          const result = await save(
+            connection.target,
+            desiredFor(pair, authorFields("text"), [
+              ...postFields(pair, "text", true),
+              profileAs(pair, { relationType: "manyToOne" }),
+            ])
+          );
+
+          expect(result.error).toBeUndefined();
+          expect(result.success).toBe(true);
+          // The cardinality the author asked for: two posts may share a profile.
+          await insertPost("p2");
+        }
+      );
     }
   );
 }

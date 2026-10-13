@@ -350,52 +350,33 @@ describe("DROP SCHEMA", () => {
 });
 
 describe("stripKitDropsOfLiveUniqueConstraints", () => {
-  // A Builder table whose one-to-one column has the UNIQUE its DDL gives it,
-  // read back as the unique index backing the constraint, beside a plain index.
-  const live = {
-    tables: [
-      {
-        name: "dc_posts",
-        indexes: [
-          { name: "dc_posts_profile_key", unique: true },
-          { name: "idx_dc_posts_profile", unique: false },
-        ],
-      },
-      { name: "dc_authors", indexes: [] },
-    ],
-  };
-  const drop = (table: string, name: string) =>
-    `ALTER TABLE "${table}" DROP CONSTRAINT "${name}";`;
+  // What `liveUniqueConstraintsToKeep` decided to keep: a Builder one-to-one's
+  // UNIQUE, under PostgreSQL's constraint name and MySQL's index name.
+  const keep = new Set(["dc_posts.dc_posts_profile_key", "dc_posts.profile"]);
 
-  it("strips the kit's drop of a live unique constraint (PostgreSQL)", () => {
-    const keptOther = `ALTER TABLE "dc_posts" ADD COLUMN "lead_author" text;`;
+  it("strips the kit's drop of a kept constraint, in either spelling", () => {
+    const other = `ALTER TABLE "dc_posts" ADD COLUMN "lead_author" text;`;
     expect(
       stripKitDropsOfLiveUniqueConstraints(
-        [drop("dc_posts", "dc_posts_profile_key"), keptOther],
-        live,
-        []
+        [
+          `ALTER TABLE "dc_posts" DROP CONSTRAINT "dc_posts_profile_key";`,
+          "DROP INDEX `profile` ON `dc_posts`;",
+          other,
+        ],
+        keep
       )
-    ).toEqual({ kept: [keptOther], strippedCount: 1 });
+    ).toEqual({ kept: [other], strippedCount: 2 });
   });
 
-  it("keeps a drop this apply plans, a non-unique index's, and another table's", () => {
+  it("keeps a drop of anything not kept, and the same name on another table", () => {
     const statements = [
-      drop("dc_posts", "dc_posts_profile_key"),
-      drop("dc_posts", "idx_dc_posts_profile"),
-      drop("dc_authors", "dc_posts_profile_key"),
+      `ALTER TABLE "dc_posts" DROP CONSTRAINT "idx_dc_posts_profile";`,
+      "DROP INDEX `profile` ON `dc_authors`;",
+      `ALTER TABLE "dc_authors" DROP CONSTRAINT "dc_posts_profile_key";`,
     ];
-    expect(
-      stripKitDropsOfLiveUniqueConstraints(statements, live, [
-        {
-          type: "drop_index",
-          tableName: "dc_posts",
-          index: {
-            name: "dc_posts_profile_key",
-            columns: ["profile"],
-            unique: true,
-          },
-        },
-      ])
-    ).toEqual({ kept: statements, strippedCount: 0 });
+    expect(stripKitDropsOfLiveUniqueConstraints(statements, keep)).toEqual({
+      kept: statements,
+      strippedCount: 0,
+    });
   });
 });
