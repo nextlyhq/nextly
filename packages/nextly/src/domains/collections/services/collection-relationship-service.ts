@@ -36,6 +36,7 @@ import {
   applyMediaTrustBound,
   boundRefuses,
   callerId,
+  identifiedCallerMayRead,
 } from "../../../services/collections/trust-bound";
 import type { TrustBound } from "../../../services/collections/trust-grant";
 import {
@@ -1562,25 +1563,26 @@ export class CollectionRelationshipService extends BaseService {
     }
     if (trustsTarget(access, targetCollection)) return true;
     if (isSystemEntity(targetCollection)) {
-      // A system entity carries no stored collection rules, so the enforced
-      // path below has nothing to evaluate: its secrets are stripped by name
-      // during redaction and the row is returned. That is what a direct read
-      // gives a caller holding no bypass, and an enforced read keeps it.
+      // A system entity carries no stored collection rules, so the dynamic
+      // path below has nothing to evaluate. A direct read of `users` requires
+      // the `read-users` grant, and with no stored policy to fall back on, that
+      // grant IS the whole rule; its secrets are stripped by name during
+      // redaction for whoever may read it.
       //
-      // A caller that holds a bypass and REFUSED this target asked for the
-      // opposite. The bound means "read this as the caller would", and a direct
-      // read of `users` requires the `read-users` grant; with no stored policy
-      // to fall back on, that grant IS the whole rule. So the refusal is
-      // honoured by asking whether this caller holds it — the same question the
-      // refused DYNAMIC targets below are put to, rather than an assumption
-      // about who is asking. A route serving the public holds no grant and its
-      // refused rows stay withheld.
-      if (!boundRefuses(access, targetCollection)) return true;
-      return canReadSystemResource(
-        targetCollection.toLowerCase(),
-        callerId(access),
-        access.authenticatedScope
-      );
+      // A caller that holds a bypass and REFUSED this target asked to be read
+      // as the caller would: the grant decides, and a route serving the public
+      // holds none, so its refused rows stay withheld.
+      if (boundRefuses(access, targetCollection)) {
+        return canReadSystemResource(
+          targetCollection.toLowerCase(),
+          callerId(access),
+          access.authenticatedScope
+        );
+      }
+      // A read holding no bypass is asked what its direct read asks. Answered
+      // "yes" for everyone before, which let a key or a person refused `users`
+      // by name read a post's author through the relationship.
+      return identifiedCallerMayRead(access, targetCollection.toLowerCase());
     }
 
     const accessService = this.resolveAccessService();
@@ -1738,10 +1740,9 @@ export class CollectionRelationshipService extends BaseService {
    * — makes the same row vanish from a relationship that the caller can read
    * directly, which reports as a ghost.
    *
-   * An absent rule ADMITS. That is the same default a rule-less collection has
-   * always had here, and it is what keeps expansion working for the ordinary
-   * collection that declares no access at all; a rule that throws denies, so a
-   * broken one fails closed.
+   * An absent rule decides nothing on its own: a key answers to its grant
+   * alone, and a person to their database grants, as each one's direct read
+   * does. A rule that throws denies, so a broken one fails closed.
    *
    * An ANONYMOUS caller is judged too, by the same question a direct anonymous
    * read of the target asks: the rule, handed a real anonymous context. The
