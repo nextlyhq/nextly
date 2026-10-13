@@ -90,11 +90,13 @@ export function getPluginAuthApi(): PluginAuthApi {
  * - The plugin must declare `capabilities.auth.login`. Without it, any
  *   installed plugin could sign anyone in from any route it mounts, and the
  *   manifest review would show nothing.
- * - The strategy name must begin with the plugin's own slug and a colon. The
- *   audit rows record the strategy, and it travels in the pending token
- *   through a second factor, so this is what says WHICH plugin signed someone
- *   in. It also means a plugin cannot record its login as `password`, which
- *   both disguised it and switched the password lockout back on.
+ * - The strategy name must be the plugin's own slug, a colon, and a name for
+ *   the method. The audit rows record the strategy, and it travels in the
+ *   pending token through a second factor, so this is what says WHICH plugin
+ *   signed someone in, and how. It also means a plugin cannot record its login
+ *   as `password`, which both disguised it and switched the password lockout
+ *   back on. A bare `slug:` names the plugin but no method, so a plugin with
+ *   two ways in could not be told apart on the rows; it is refused too.
  *
  * Built per context and cheap: the shared instance is looked up on each call,
  * so a config reload that rebuilds it is picked up.
@@ -119,16 +121,21 @@ export function getPluginAuthApiFor(plugin: PluginDefinition): PluginAuthApi {
           },
         });
       }
+      // Longer than the prefix as well as starting with it: the part after
+      // the colon is the method's name, and an empty one is no name. What the
+      // name may contain is the shared rule's, applied once the call reaches
+      // the shared instance.
       if (
         typeof opts?.strategy !== "string" ||
-        !opts.strategy.startsWith(prefix)
+        !opts.strategy.startsWith(prefix) ||
+        opts.strategy.length === prefix.length
       ) {
         throw NextlyError.validation({
           errors: [
             {
               path: "strategy",
               code: "INVALID",
-              message: `A plugin's strategy name must begin with "${prefix}".`,
+              message: `A plugin's strategy name must be "${prefix}" followed by a name for the method.`,
             },
           ],
           logContext: { plugin: plugin.name },

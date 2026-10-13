@@ -1,9 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { publishHookPoints } from "./hook-points";
+import type { CompleteLoginDeps } from "../auth/plugin-auth-api";
 import { EventBus } from "../events/event-bus";
 
 import { getCoreVersion } from "./core-version";
+import {
+  resetPluginAuthApi,
+  setPluginAuthDepsResolver,
+} from "./plugin-auth-provider";
 import type { PluginGrants } from "./plugin-consent";
 import { createPluginContext } from "./plugin-context";
 
@@ -456,6 +461,58 @@ describe("ctx.auth in a plugin's context", () => {
       logContext: expect.objectContaining({
         reason: "plugin-login-undeclared",
       }),
+    });
+  });
+
+  describe("with two plugins that may both finish logins", () => {
+    afterEach(() => {
+      resetPluginAuthApi();
+    });
+
+    const declaringLogin = (name: string) => ({
+      name,
+      version: "1.0.0",
+      nextly: "*",
+      capabilities: { auth: { login: true } },
+    });
+    const login = (
+      ctx: ReturnType<typeof makeCtx>["ctx"],
+      strategy: string
+    ): Promise<Response> =>
+      ctx.auth.completeLogin("u1", {
+        request: new Request("http://localhost/x"),
+        strategy,
+      });
+
+    it("binds each context's completeLogin to its own plugin alone", async () => {
+      // `acme` is a string prefix of `acme-google`, the near miss: a check on
+      // the slug without its colon would let `acme` sign people in as
+      // `acme-google`. The deps answer every login that gets through with
+      // "no such user", which is enough to show the call reached the shared
+      // login rather than being refused at the plugin's door.
+      setPluginAuthDepsResolver(
+        () =>
+          ({
+            secret: "test-secret-that-is-at-least-32-characters-long!!",
+            findUserById: async () => null,
+            auditLog: { write: async () => undefined },
+            trustProxy: false,
+            trustedProxyIps: [],
+          }) as unknown as CompleteLoginDeps
+      );
+      const acme = makeCtx(declaringLogin("acme")).ctx;
+      const acmeGoogle = makeCtx(declaringLogin("@acme/google")).ctx;
+
+      await expect(login(acme, "acme-google:google")).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+      await expect(login(acmeGoogle, "acme:google")).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+      // The controls: each one's own strategy gets through, so the refusals
+      // above are about whose strategy it is, not a door that is shut.
+      expect((await login(acme, "acme:google")).status).toBe(302);
+      expect((await login(acmeGoogle, "acme-google:google")).status).toBe(302);
     });
   });
 });

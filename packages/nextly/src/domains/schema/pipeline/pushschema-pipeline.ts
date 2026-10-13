@@ -863,7 +863,8 @@ export class PushSchemaPipeline {
             patchedDesired,
             dialect,
             fieldGroupTypeColumns,
-            fieldGroupRegistryTable
+            fieldGroupRegistryTable,
+            desiredSnapshot
           );
 
       // Scope drizzleSchema down to the table(s) actually touched by
@@ -1535,9 +1536,14 @@ export class PushSchemaPipeline {
     desired: DesiredSchema,
     dialect: SupportedDialect,
     typeColumns: Map<string, string>,
-    fieldGroupRegistryTable: string | undefined
+    fieldGroupRegistryTable: string | undefined,
+    /** The snapshot the diff compared, whose foreign keys SQLite's tables declare. */
+    desiredSnapshot: NextlySchemaSnapshot
   ): Record<string, unknown> {
     const out: Record<string, unknown> = {};
+    const foreignKeysOf = (tableName: string) =>
+      desiredSnapshot.tables.find(table => table.name === tableName)
+        ?.foreignKeys;
 
     // Phase 6 follow-up (2026-05-01): include Nextly's system tables in
     // the schema handed to drizzle-kit. Without this, drizzle-kit's
@@ -1595,6 +1601,10 @@ export class PushSchemaPipeline {
           builtBy: builtByFor("collection", c.builderOwned),
           status: c.status === true,
           localized: (c as { localized?: boolean }).localized === true,
+          // The keys the diff compared, so a table drizzle-kit rebuilds on
+          // SQLite keeps them and the kit sees no key it would drop. Read on
+          // SQLite only; the other dialects add keys with statements.
+          foreignKeys: foreignKeysOf(c.tableName),
         }
       );
       out[c.tableName] = table;
@@ -1798,9 +1808,10 @@ function sqliteSessionOf(db: unknown): SqliteForeignKeySession {
  *
  * The kit rebuilds a table whose checks or foreign keys change
  * (`sqliteRebuiltTables`) from the runtime Drizzle tables, and those carry
- * only what the schema tracks. A Schema Builder table can hold a
- * relationship's foreign key or a validation check the schema never
- * describes, and a rebuild would drop it without a word. Counted against the
+ * only what the schema tracks. A table can hold a foreign key or a check
+ * the schema never describes (a code-first table given one by hand, a
+ * Builder table's validation check; a Builder table's keys are tracked, by
+ * `withBuilderForeignKeys`), and a rebuild would drop it without a word. Counted against the
  * live table by `untrackedConstraintCounts`, the rule a migration's rebuild
  * guard applies, so the two routes cannot disagree about what would be lost.
  */

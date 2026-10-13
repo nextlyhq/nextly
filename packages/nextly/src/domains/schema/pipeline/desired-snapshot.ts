@@ -19,6 +19,7 @@ import type { ExtensionSchema } from "../extension/build-extension-schema";
 import { withEntityContributions } from "../extension/entity-contributions";
 import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
+import { withBuilderForeignKeys } from "./builder-foreign-keys";
 import { desiredCollectionTable } from "./desired-collection-table";
 import {
   buildDesiredTableFromComponentFields,
@@ -112,8 +113,18 @@ export function buildDesiredSnapshot(args: {
 
   const snapshot: NextlySchemaSnapshot = {
     tables: [
+      // A Schema Builder collection's table also carries its foreign keys:
+      // the ones its live table holds and the key of a relationship this
+      // push adds.
       ...Object.values(desired.collections).map(c =>
-        withContributions(desiredCollectionTable(c, dialect))
+        withContributions(
+          withBuilderForeignKeys(
+            desiredCollectionTable(c, dialect),
+            c,
+            liveTablesByName.get(c.tableName),
+            dialect
+          )
+        )
       ),
       ...Object.values(desired.singles).map(s =>
         withContributions(

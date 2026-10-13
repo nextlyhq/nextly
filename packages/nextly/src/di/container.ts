@@ -41,11 +41,15 @@ export class Container {
    * Register a factory that creates a singleton instance (lazily initialized).
    */
   registerSingleton<T>(name: string, factory: Factory<T>): this {
+    // The map, not `this`: after `detach` the registration lives in another
+    // container, and its instance has to be cached there, beside the
+    // factories it moved with, rather than in the emptied one.
+    const singletons = this.singletons;
     this.factories.set(name, () => {
-      if (!this.singletons.has(name)) {
-        this.singletons.set(name, factory());
+      if (!singletons.has(name)) {
+        singletons.set(name, factory());
       }
-      return this.singletons.get(name);
+      return singletons.get(name);
     });
     return this;
   }
@@ -95,6 +99,24 @@ export class Container {
   clear(): void {
     this.singletons.clear();
     this.factories.clear();
+  }
+
+  /**
+   * Move every registration, and every instance already built, into a new
+   * container, and leave this one empty, as `clear` would.
+   *
+   * For code that must go on reaching the services it was started with after
+   * the container has been emptied for someone else: a plugin whose teardown
+   * runs only once the next registration begins. The moved singletons are the
+   * same instances, so a connection opened before is the one used after.
+   */
+  detach(): Container {
+    const detached = new Container(this.parent);
+    detached.singletons = this.singletons;
+    detached.factories = this.factories;
+    this.singletons = new Map();
+    this.factories = new Map();
+    return detached;
   }
 }
 

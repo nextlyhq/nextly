@@ -174,14 +174,15 @@ blocks an external login throws a typed 4xx `NextlyError` (for example
 What is not a login outcome is thrown to the calling route instead: an untyped
 or 5xx error, an `afterAuthenticate` hook returning another account, and a
 plugin calling `completeLogin` without `capabilities.auth.login` or with a
-strategy name that does not begin with its own slug.
+strategy name that is not its own slug, a colon and a name for the method.
 
 Strategies remain app-level: they live in `defineConfig({ auth: { strategies } })`
 rather than in a plugin. A plugin that finishes logins with `completeLogin`
 does add a way in, which is why it must declare `capabilities.auth.login` —
 `nextly plugins info` shows it, and without it `completeLogin` refuses — and
-why its strategy names must begin with its own slug (`acme-google-auth:`), so
-every audit row names the plugin that signed someone in.
+why its strategy names must be its own slug, a colon and a name for the
+method (`acme-google-auth:google`), so every audit row names the plugin that
+signed someone in and how. A bare `acme-google-auth:` is refused.
 
 ## Worked example: TOTP two-factor (a challenge)
 

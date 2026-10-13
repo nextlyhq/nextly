@@ -643,13 +643,9 @@ export class PluginSettingsService {
     const rewritten = stored
       .filter(
         row =>
-          row.key !== OWNER_LOCK_KEY &&
           !Object.hasOwn(patch, row.key) &&
-          !decoded.unreadableKeys.has(row.key) &&
           Object.hasOwn(decoded.values, row.key) &&
-          (decoded.staleKeys.has(row.key) ||
-            (!row.isSecret &&
-              topLevelKeyHoldsSecret(row.key, this.deps.secretPaths)))
+          this.owesRepair(row, decoded)
       )
       .map(row =>
         this.rowFor(
@@ -760,7 +756,12 @@ export class PluginSettingsService {
     const rows = Object.keys(patch).map(key =>
       patch[key] === null || !Object.hasOwn(parsed.data, key)
         ? this.removedRow(key, opts)
-        : this.rowFor(key, parsed.data[key], opts, decoded.sealedPaths.get(key))
+        : this.rowFor(
+            key,
+            parsed.data[key],
+            opts,
+            sealedPathsKept(decoded.sealedPaths.get(key), patch[key])
+          )
     );
     // Compared on the DECODED values: the stored text of a secret changes on
     // every write, since each seal draws a fresh IV, so comparing rows would
@@ -895,6 +896,58 @@ export class PluginSettingsService {
   }
 
   /**
+   * Encrypt every stored value the current manifest calls secret that is
+   * still held in plain text, and re-seal any opened with a retired
+   * generation, before the plugin runs.
+   *
+   * A read or a write repairs the same rows, but only when one happens: a
+   * plugin whose manifest newly marks a path secret could otherwise run, and
+   * be backed up, with the credential in plain text until someone touched its
+   * settings. Unlike the repair a read makes, a failure here is thrown: the
+   * caller is starting the plugin, and the manifest's promise is that this
+   * value is not stored as plain text by then.
+   */
+  async sealStored(): Promise<void> {
+    const rows = await this.deps.store.read(this.deps.owner);
+    const decoded = this.decodeRows(rows);
+    if (!rows.some(row => this.owesRepair(row, decoded))) return;
+    await this.deps.store.mutate(
+      this.deps.owner,
+      [],
+      stored => this.rowsForUpdate(stored, {}, undefined).rows
+    );
+  }
+
+  /**
+   * Whether a stored row has to be written again for its secrets to be what
+   * the manifest and the rotation say: opened with a retired generation, or
+   * holding a value at a path the manifest calls secret in plain text.
+   *
+   * One answer for the read's repair, the write's and the boot's, which
+   * asked it separately and missed the same case: a path newly marked
+   * secret INSIDE a row already stored as secret. That row's other leaves
+   * are encrypted, so "the row is secret" read as "the row is sealed" while
+   * the new path's value stayed plain text. A value no configured generation
+   * can open is left alone: it is encrypted already, and writing it again
+   * needs the key nobody has.
+   */
+  private owesRepair(row: PluginSettingRow, decoded: DecodedSettings): boolean {
+    if (row.key === OWNER_LOCK_KEY || decoded.unreadableKeys.has(row.key)) {
+      return false;
+    }
+    if (decoded.staleKeys.has(row.key)) return true;
+    if (!row.isSecret) {
+      return topLevelKeyHoldsSecret(row.key, this.deps.secretPaths);
+    }
+    return holdsPlaintextSecret(
+      decoded.values[row.key],
+      row.key,
+      this.deps.secretPaths,
+      decoded.sealedPaths.get(row.key) ?? []
+    );
+  }
+
+  /**
    * The stored settings, decoded, after any repair a read owes them.
    *
    * Two repairs, both through the store's serialized mutation so they race
@@ -907,15 +960,7 @@ export class PluginSettingsService {
   private async readStored(): Promise<DecodedSettings> {
     const rows = await this.deps.store.read(this.deps.owner);
     const decoded = this.decodeRows(rows);
-    const needsRepair = rows.some(
-      row =>
-        row.key !== OWNER_LOCK_KEY &&
-        !decoded.unreadableKeys.has(row.key) &&
-        (decoded.staleKeys.has(row.key) ||
-          (!row.isSecret &&
-            topLevelKeyHoldsSecret(row.key, this.deps.secretPaths)))
-    );
-    if (needsRepair) {
+    if (rows.some(row => this.owesRepair(row, decoded))) {
       await this.deps.store
         .mutate(
           this.deps.owner,
@@ -1099,6 +1144,53 @@ export class PluginSettingsService {
       path
     );
   }
+}
+
+/**
+ * The leaves a write keeps sealed that the manifest may no longer name: each
+ * stored encrypted, except those the patch writes a new value to.
+ *
+ * A path the manifest stopped calling secret stays encrypted and unreturned
+ * until a new value is written to it, and is stored as the manifest says from
+ * then on. Re-sealing the new value as well kept it hidden from the admin for
+ * good. A sealed leaf the patch does not reach keeps its seal: a write of its
+ * sibling is not a new value for it. A path the manifest does call secret is
+ * sealed regardless, by the encryption that follows the manifest.
+ */
+function sealedPathsKept(
+  sealed: readonly string[][] | undefined,
+  written: unknown
+): string[][] {
+  return (sealed ?? []).filter(
+    path => valueAtPath(written, path.slice(1)) === undefined
+  );
+}
+
+/**
+ * Whether a stored secret row holds, at a path the manifest calls secret, a
+ * string that was not stored encrypted. `sealed` lists the leaves that were,
+ * as the decode found them.
+ */
+function holdsPlaintextSecret(
+  value: unknown,
+  key: string,
+  secretPaths: readonly string[],
+  sealed: readonly string[][]
+): boolean {
+  const sealedAt = new Set(sealed.map(path => path.join(".")));
+  let found = false;
+  mapSecrets(
+    value,
+    secretPaths,
+    (secret, at) => {
+      if (typeof secret === "string" && !sealedAt.has(at.join("."))) {
+        found = true;
+      }
+      return secret;
+    },
+    [key]
+  );
+  return found;
 }
 
 /** Copy into `target` every member of `source` that `target` lacks, at any depth. */
