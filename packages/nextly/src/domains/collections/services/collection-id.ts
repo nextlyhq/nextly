@@ -21,39 +21,7 @@ import { randomUUID } from "node:crypto";
 import { NextlyError } from "../../../errors/nextly-error";
 import { uuidV7 } from "../../../utils/uuid-v7";
 
-/**
- * The id generators a collection may choose between: one list, which the
- * type below and the config check (`validateCollectionConfig`) both read.
- *
- * There is no `serial`. A collection's id is text, which every relation, API
- * path and admin screen reads, and a database-assigned integer key belongs on
- * a table declared with `col.serial()` instead.
- */
-export const COLLECTION_ID_TYPES = ["uuid", "uuidv7"] as const;
-
-/** One of {@link COLLECTION_ID_TYPES}. */
-export type CollectionIdType = (typeof COLLECTION_ID_TYPES)[number];
-
-/** The per-collection database options this module reads. */
-export interface CollectionDbOptions {
-  /**
-   * Which id a create generates. Defaults to `uuid`.
-   *
-   * `uuidv7` is time-ordered, so inserts land at the end of the primary-key
-   * index rather than scattered through it — the reason a large table wants
-   * it. Same 36-character storage either way.
-   */
-  idType?: CollectionIdType;
-  /**
-   * Whether a create may supply its own `id`. Defaults to false.
-   *
-   * False by default because an id the caller chooses is an id the caller can
-   * GUESS: a collection whose rows are addressable by a value an attacker
-   * picked is a different security question from one whose ids are random,
-   * and that has to be opted into rather than inherited.
-   */
-  allowIdOnCreate?: boolean;
-}
+import type { CollectionDbOptions } from "./collection-db-options";
 
 /** Any UUID, as the two generators both produce. */
 const UUID =

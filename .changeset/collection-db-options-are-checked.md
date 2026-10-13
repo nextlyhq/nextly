@@ -30,9 +30,10 @@
 A collection's `db` options are now checked where the collection is defined.
 Before, an `idType` the write path did not recognise gave UUIDv4 ids in
 silence, and an `allowIdOnCreate` that was not `true` discarded every id a
-caller supplied. Now an `idType` other than `uuid` or `uuidv7`, an
-`allowIdOnCreate` that is not a boolean, and `db` options that are not an
-object are refused, naming the option.
+caller supplied, and any other name in `db` was not read at all. Now an
+`idType` other than `uuid` or `uuidv7`, an `allowIdOnCreate` that is not a
+boolean, a name that is not an option (a misspelling such as `idTyp`), and
+`db` options that are not an object are refused, naming the option.
 
 `serial`, which a config carried over from Payload may hold, is refused with
 its own message: a collection's id is text, which every relation and API path

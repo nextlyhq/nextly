@@ -24,7 +24,10 @@
  * ```
  */
 
-import { COLLECTION_ID_TYPES } from "../../domains/collections/services/collection-id";
+import {
+  COLLECTION_DB_OPTION_NAMES,
+  COLLECTION_ID_TYPES,
+} from "../../domains/collections/services/collection-db-options";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
@@ -145,6 +148,7 @@ export type ValidationErrorCode =
   | "INDEX_NAME_INVALID"
   // Database option errors
   | "DB_OPTIONS_INVALID_TYPE"
+  | "DB_OPTION_UNKNOWN"
   | "DB_ID_TYPE_INVALID"
   | "DB_ALLOW_ID_ON_CREATE_INVALID";
 
@@ -638,9 +642,10 @@ function validateAccess(access: unknown, errors: ValidationError[]): void {
  *
  * The write path reads them leniently: an `idType` it does not recognise
  * generates UUIDv4 ids, and an `allowIdOnCreate` that is not `true` discards
- * every id a caller supplies. Unchecked, a misspelt option would be ignored in
- * silence. `serial` gets its own message because it is the value a config
- * carried over from Payload holds, and it is deliberately not offered.
+ * every id a caller supplies, and it reads no other name at all. Unchecked, a
+ * misspelt value or a misspelt name would be ignored in silence. `serial`
+ * gets its own message because it is the value a config carried over from
+ * Payload holds, and it is deliberately not offered.
  */
 function validateDbOptions(db: unknown, errors: ValidationError[]): void {
   if (db === undefined) return;
@@ -652,6 +657,7 @@ function validateDbOptions(db: unknown, errors: ValidationError[]): void {
     });
     return;
   }
+  errors.push(...unknownDbOptionErrors(db));
   const offered: readonly unknown[] = COLLECTION_ID_TYPES;
   if (db.idType !== undefined && !offered.includes(db.idType)) {
     errors.push({
@@ -670,6 +676,19 @@ function validateDbOptions(db: unknown, errors: ValidationError[]): void {
       message: "db.allowIdOnCreate must be true or false.",
     });
   }
+}
+
+/** A refusal for each name in `db` that is not an option. */
+function unknownDbOptionErrors(db: Record<string, unknown>): ValidationError[] {
+  const known: readonly string[] = COLLECTION_DB_OPTION_NAMES;
+  const names = COLLECTION_DB_OPTION_NAMES.map(name => `"${name}"`).join(", ");
+  return Object.keys(db)
+    .filter(name => !known.includes(name))
+    .map(name => ({
+      path: `db.${name}`,
+      code: "DB_OPTION_UNKNOWN" as const,
+      message: `"${name}" is not a collection db option; the options are ${names}.`,
+    }));
 }
 
 /** Why an `idType` outside the offered set is refused, and what to use. */

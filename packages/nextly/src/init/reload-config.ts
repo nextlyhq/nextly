@@ -27,8 +27,8 @@ import { type SQL } from "drizzle-orm";
 
 import type { CollectionHooks } from "../collections/config/define-collection";
 import { type ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
+import type { CollectionDbOptions } from "../domains/collections/services/collection-db-options";
 import {
-  type CollectionDbOptions,
   publishCollectionDbOptions,
   publishedCollectionDbOptions,
 } from "../domains/collections/services/collection-id";

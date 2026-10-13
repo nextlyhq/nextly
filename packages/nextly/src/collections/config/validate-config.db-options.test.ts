@@ -65,6 +65,22 @@ describe("validateCollectionConfig: db options", () => {
     ]);
   });
 
+  it("refuses a name that is not an option, a misspelling included", () => {
+    // The write path reads `idType` and `allowIdOnCreate` alone, so either
+    // name misspelt would leave the option at its default in silence.
+    expect(errorsFor({ idTyp: "uuidv7", allowIDOnCreate: true })).toEqual([
+      expect.objectContaining({
+        path: "db.idTyp",
+        code: "DB_OPTION_UNKNOWN",
+        message: expect.stringContaining('"idType", "allowIdOnCreate"'),
+      }),
+      expect.objectContaining({
+        path: "db.allowIDOnCreate",
+        code: "DB_OPTION_UNKNOWN",
+      }),
+    ]);
+  });
+
   it("refuses db options that are not an object", () => {
     expect(errorsFor("uuidv7")).toEqual([
       expect.objectContaining({ path: "db", code: "DB_OPTIONS_INVALID_TYPE" }),
