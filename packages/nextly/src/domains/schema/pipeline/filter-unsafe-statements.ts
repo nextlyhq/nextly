@@ -407,24 +407,45 @@ export function stripKitDropsOfDeclaredConstraints(
 
   let strippedCount = 0;
   const kept = statements.filter(stmt => {
-    const alter = stmt.match(
-      /^ALTER\s+TABLE\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s+DROP\s+(?:CONSTRAINT|FOREIGN\s+KEY|CHECK)\s+(?:IF\s+EXISTS\s+)?["`]?(\w+)["`]?\s*;?\s*$/i
-    );
-    const index = alter
-      ? null
-      : stmt.match(
-          /^DROP\s+INDEX\s+["`]?(\w+)["`]?\s+ON\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s*;?\s*$/i
-        );
-    const isDeclared = alter
-      ? declared.has(`${alter[1].toLowerCase()}.${alter[2].toLowerCase()}`)
-      : index !== null &&
-        foreignKeyNames.has(
-          `${index[2].toLowerCase()}.${index[1].toLowerCase()}`
-        );
+    const drop = constraintDropOf(stmt);
+    const isDeclared =
+      drop !== null &&
+      (drop.form === "alter" ? declared : foreignKeyNames).has(drop.key);
     if (isDeclared) strippedCount++;
     return !isDeclared;
   });
   return { kept, strippedCount };
+}
+
+/**
+ * The `table.name` key, lower-cased, of a drizzle-kit drop of a constraint or
+ * of an index, in the spelling it came in: PostgreSQL's and MySQL's `ALTER
+ * TABLE ... DROP CONSTRAINT | FOREIGN KEY | CHECK` (`alter`), and MySQL's
+ * `DROP INDEX ... ON` (`index`). `null` for any other statement, which
+ * every strip keeps. One reading, shared by every strip, so they cannot
+ * disagree about what a statement drops.
+ */
+function constraintDropOf(
+  stmt: string
+): { key: string; form: "alter" | "index" } | null {
+  const alter = stmt.match(
+    /^ALTER\s+TABLE\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s+DROP\s+(?:CONSTRAINT|FOREIGN\s+KEY|CHECK)\s+(?:IF\s+EXISTS\s+)?["`]?(\w+)["`]?\s*;?\s*$/i
+  );
+  if (alter) {
+    return {
+      key: `${alter[1].toLowerCase()}.${alter[2].toLowerCase()}`,
+      form: "alter",
+    };
+  }
+  const index = stmt.match(
+    /^DROP\s+INDEX\s+["`]?(\w+)["`]?\s+ON\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s*;?\s*$/i
+  );
+  return index
+    ? {
+        key: `${index[2].toLowerCase()}.${index[1].toLowerCase()}`,
+        form: "index",
+      }
+    : null;
 }
 
 /**
@@ -454,20 +475,8 @@ export function stripKitDropsOfLiveUniqueConstraints(
 
   let strippedCount = 0;
   const kept = statements.filter(stmt => {
-    const alter = stmt.match(
-      /^ALTER\s+TABLE\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s+DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?["`]?(\w+)["`]?\s*;?\s*$/i
-    );
-    const index = alter
-      ? null
-      : stmt.match(
-          /^DROP\s+INDEX\s+["`]?(\w+)["`]?\s+ON\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s*;?\s*$/i
-        );
-    const key = alter
-      ? `${alter[1].toLowerCase()}.${alter[2].toLowerCase()}`
-      : index
-        ? `${index[2].toLowerCase()}.${index[1].toLowerCase()}`
-        : null;
-    const isKept = key !== null && keep.has(key);
+    const drop = constraintDropOf(stmt);
+    const isKept = drop !== null && keep.has(drop.key);
     if (isKept) strippedCount++;
     return !isKept;
   });
