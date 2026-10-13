@@ -558,6 +558,10 @@ describe("CollectionEntryService — Query Contracts", () => {
         status: undefined,
         user: undefined,
         overrideAccess: undefined,
+        // The listing's caches, which its components share.
+        targetPolicies: expect.any(Map),
+        targetCompanions: expect.any(Map),
+        targetVerdicts: expect.any(Map),
       });
     });
 
@@ -576,6 +580,9 @@ describe("CollectionEntryService — Query Contracts", () => {
         fieldAccessStage: "assembled",
         user: undefined,
         overrideAccess: undefined,
+        targetPolicies: expect.any(Map),
+        targetCompanions: expect.any(Map),
+        targetVerdicts: expect.any(Map),
       });
     });
 
