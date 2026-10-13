@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { commerceError } from "../errors";
+import { currencyCodeSchema } from "../money/currency";
 import { moneySchema, type Money } from "../money/money";
 
 import { operationIdSchema, type OperationId } from "./operation";
@@ -57,6 +58,9 @@ export interface PaymentProviderCapabilities {
  * - `authorised`: money held, not captured (only with `captureLater`).
  * - `paid`: captured.
  * - `failed`, `cancelled`: over, nothing captured.
+ *
+ * Only a `paid` payment has anything captured, and it always has some; an
+ * answer whose status and amounts disagree is refused.
  *
  * Refunds are not a payment state: they are counted in `amountRefunded`, and
  * commerce derives "partially refunded" or "refunded" from the amounts.
@@ -394,12 +398,9 @@ export const paymentProviderCapabilitiesSchema = z
     refund: z.boolean(),
     partialRefund: z.boolean(),
     operationKeyLifetimeMs: z.number().int().positive(),
-    currencies: z
-      .array(z.string().regex(/^[A-Z]{3}$/))
-      .min(1)
-      .optional(),
+    currencies: z.array(currencyCodeSchema).min(1).optional(),
     maxAmounts: z
-      .record(z.string().regex(/^[A-Z]{3}$/), z.number().int().positive())
+      .record(currencyCodeSchema, z.number().int().positive())
       .optional(),
   })
   .refine(c => c.refund || !c.partialRefund, {
@@ -469,8 +470,8 @@ const statusSchema = z.enum([
 
 /**
  * A provider's payment as commerce accepts it: every amount valid and in one
- * currency, and nothing refunded beyond what was captured, nor captured beyond
- * the amount.
+ * currency, nothing refunded beyond what was captured, nor captured beyond
+ * the amount, and money captured exactly when the payment is paid.
  *
  * @experimental
  */
@@ -498,7 +499,10 @@ export const providerPaymentSchema = z
       p.amountRefunded.amount >= 0 &&
       p.amountRefunded.amount <= p.amountCaptured.amount,
     { message: "0 <= refunded <= captured <= amount" }
-  );
+  )
+  .refine(p => (p.status === "paid") === p.amountCaptured.amount > 0, {
+    message: "a paid payment has money captured, and no other has any",
+  });
 
 /** @experimental */
 export const providerRefundSchema = z.strictObject({

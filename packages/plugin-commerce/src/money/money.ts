@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { commerceError } from "../errors";
 
-import { assertCurrency, isCurrencyCode } from "./currency";
+import { assertCurrency, currencyCodeSchema } from "./currency";
 
 /**
  * An amount of money: a whole number of the currency's minor unit (cents for
@@ -58,9 +58,7 @@ export const moneySchema = z
     amount: z.number().refine(Number.isSafeInteger, {
       message: "an amount is a safe whole number of minor units",
     }),
-    currency: z.string().refine(isCurrencyCode, {
-      message: "a currency is an ISO 4217 sales currency code",
-    }),
+    currency: currencyCodeSchema,
   })
   .transform(value => money(value.amount, value.currency));
 
@@ -107,14 +105,38 @@ export function multiply(m: Money, factor: number): Money {
  * The total of a list of amounts, all in `currency`. An empty list is zero.
  *
  * The currency is named rather than read from the first item, so an empty
- * list still has one.
+ * list still has one. The running total is exact (BigInt) and only the final
+ * one must fit a safe integer, so the answer does not depend on the order of
+ * the list.
  *
  * @experimental
+ * @throws `COMMERCE_CURRENCY_MISMATCH`, or `COMMERCE_INVALID_AMOUNT` when the
+ *   total leaves the safe-integer range.
  */
 export function sum(currency: string, amounts: readonly Money[]): Money {
-  let total = money(0, currency);
-  for (const m of amounts) total = add(total, m);
-  return total;
+  const zero = money(0, currency);
+  let total = 0n;
+  for (const m of amounts) {
+    assertSameCurrency(zero, m);
+    total += BigInt(m.amount);
+  }
+  return moneyFromExact(total, currency);
+}
+
+/**
+ * An amount computed exactly in BigInt, refused when it is outside the
+ * safe-integer range, where a `number` could no longer hold it exactly.
+ *
+ * @throws `COMMERCE_INVALID_AMOUNT`
+ */
+export function moneyFromExact(minor: bigint, currency: string): Money {
+  if (
+    minor > BigInt(Number.MAX_SAFE_INTEGER) ||
+    minor < BigInt(Number.MIN_SAFE_INTEGER)
+  ) {
+    throw commerceError("COMMERCE_INVALID_AMOUNT", { reason: "out of range" });
+  }
+  return money(Number(minor), currency);
 }
 
 /**

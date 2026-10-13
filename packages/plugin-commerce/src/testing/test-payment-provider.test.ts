@@ -1,6 +1,7 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
+import { assertPaymentProvider } from "../contracts/payment-provider";
 import { money } from "../money/money";
 
 import {
@@ -20,6 +21,15 @@ async function codeOf(
 ): Promise<string | undefined> {
   try {
     await body();
+  } catch (error) {
+    return NextlyError.is(error) ? String(error.code) : "not a NextlyError";
+  }
+  return undefined;
+}
+
+function syncCodeOf(body: () => unknown): string | undefined {
+  try {
+    body();
   } catch (error) {
     return NextlyError.is(error) ? String(error.code) : "not a NextlyError";
   }
@@ -70,7 +80,81 @@ describe("the test payment provider", () => {
     });
     expect(processing.status).toBe("processing");
     expect(processing.amountCaptured.amount).toBe(0);
-    expect(control.settle(providerReference, "paid").status).toBe("paid");
+    expect(control.settle(providerReference, "succeeded").status).toBe("paid");
+  });
+
+  it("holds a settled bank debit for capture when the payment captures later", async () => {
+    const { provider, control } = createTestPaymentProvider();
+    const { providerReference } = await provider.start({
+      operationId: "op-1",
+      reference: "p-1",
+      amount: money(1000, "USD"),
+      capture: "later",
+    });
+    await provider.confirm({
+      operationId: "op-2",
+      providerReference,
+      paymentMethod: TEST_PAYMENT_METHODS.processing,
+    });
+    const settled = control.settle(providerReference, "succeeded");
+    expect(settled.status).toBe("authorised");
+    expect(settled.amountCaptured.amount).toBe(0);
+    const captured = await present(provider.capture)({
+      operationId: "op-3",
+      providerReference,
+    });
+    expect(captured.status).toBe("paid");
+    expect(captured.amountCaptured.amount).toBe(1000);
+  });
+
+  it("refuses a malformed operation key on every changing call, and changes nothing", async () => {
+    const { provider, control } = createTestPaymentProvider();
+    const { providerReference } = await provider.start({
+      operationId: "op-1",
+      reference: "p-1",
+      amount: money(1000, "USD"),
+      capture: "later",
+    });
+    for (const operationId of ["", "has space", "x".repeat(256)]) {
+      expect(
+        await codeOf(() =>
+          provider.confirm({
+            operationId,
+            providerReference,
+            paymentMethod: TEST_PAYMENT_METHODS.succeeds,
+          })
+        )
+      ).toBe("COMMERCE_INVALID_OPERATION_ID");
+      expect(
+        await codeOf(() =>
+          present(provider.cancel)({ operationId, providerReference })
+        )
+      ).toBe("COMMERCE_INVALID_OPERATION_ID");
+    }
+    expect(control.payments()[0].status).toBe("pending");
+  });
+
+  it("completes a partial override into a declaration commerce accepts", () => {
+    // Turning refunds off turns partial refunds off with them, unless the
+    // caller says otherwise.
+    const { provider } = createTestPaymentProvider({
+      capabilities: { refund: false },
+    });
+    expect(provider.capabilities.partialRefund).toBe(false);
+    expect(() => assertPaymentProvider(provider)).not.toThrow();
+  });
+
+  it("refuses an override commerce would refuse, when it is made", () => {
+    for (const options of [
+      { capabilities: { operationKeyLifetimeMs: 0 } },
+      { capabilities: { refund: false, partialRefund: true } },
+      { capabilities: { currencies: ["USX"] } },
+      { id: "Test Provider" },
+    ]) {
+      expect(syncCodeOf(() => createTestPaymentProvider(options))).toBe(
+        "COMMERCE_PROVIDER_CONTRACT"
+      );
+    }
   });
 
   it("refuses a webhook signed too long ago, even with a valid signature", async () => {

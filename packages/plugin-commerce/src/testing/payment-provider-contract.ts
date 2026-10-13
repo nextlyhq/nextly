@@ -212,16 +212,22 @@ export async function paymentProviderContract(
         amount,
         capture: "now" as const,
       };
-      await p.start(request); // the answer is lost
+      // The answer commerce never saw is kept here, so the repeat and the
+      // lookup can both be held to the payment the first call made.
+      const lost = asPayment(await p.start(request));
       const repeated = asPayment(await p.start(request));
+      expectContract(
+        repeated.providerReference === lost.providerReference,
+        "the repeated start returns the first payment, not a second one"
+      );
       const found = await p.findByReference({ reference });
       expectContract(
         found !== null,
         "the payment whose answer was lost is found by reference"
       );
       expectContract(
-        asPayment(found).providerReference === repeated.providerReference,
-        "the repeated start returns the first payment, not a second one"
+        asPayment(found).providerReference === lost.providerReference,
+        "the payment found by reference is the one the first start made"
       );
     }
   );
@@ -235,11 +241,12 @@ export async function paymentProviderContract(
       amount,
       capture: "now",
     });
+    const reference = unique("pay");
     const error = await expectRefusal(
       () =>
         p.start({
           operationId,
-          reference: unique("pay"),
+          reference,
           amount: money(options.amount + 2, options.currency),
           capture: "now",
         }),
@@ -248,6 +255,10 @@ export async function paymentProviderContract(
     expectContract(
       NextlyError.isCode(error, "COMMERCE_OPERATION_KEY_REUSED"),
       `the refusal is COMMERCE_OPERATION_KEY_REUSED, not ${describeError(error)}`
+    );
+    expectContract(
+      (await p.findByReference({ reference })) === null,
+      "a refused request leaves nothing at the provider"
     );
   });
 
@@ -465,8 +476,14 @@ export async function paymentProviderContract(
         await call(p, "refund", request); // the answer is lost
         const repeated = asRefund(await call(p, "refund", request));
         expectContract(
-          repeated.reference === reference,
-          "the refund keeps commerce's reference"
+          repeated.reference === reference &&
+            repeated.providerReference === payment.providerReference,
+          "the refund keeps commerce's reference and names its payment"
+        );
+        expectContract(
+          repeated.amount.amount === refundAmount.amount &&
+            repeated.amount.currency === refundAmount.currency,
+          `the refund is for the amount asked (${repeated.amount.amount} answered, ${refundAmount.amount} asked)`
         );
         const read = asPayment(
           await p.read({ providerReference: payment.providerReference })

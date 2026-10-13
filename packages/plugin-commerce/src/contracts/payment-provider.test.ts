@@ -132,6 +132,29 @@ describe("a provider's declaration", () => {
       "COMMERCE_PROVIDER_CONTRACT"
     );
   });
+
+  it("refuses a currency no amount could be in: a typo, or a code that is not a sales currency", () => {
+    const { provider } = createTestPaymentProvider();
+    const declaring = (
+      capabilities: Partial<PaymentProvider["capabilities"]>
+    ) => ({
+      ...provider,
+      capabilities: { ...provider.capabilities, ...capabilities },
+    });
+    for (const currencies of [["USX"], ["XXX"], ["USD", "CLF"]]) {
+      expect(
+        codeOf(() => assertPaymentProvider(declaring({ currencies })))
+      ).toBe("COMMERCE_PROVIDER_CONTRACT");
+    }
+    expect(
+      codeOf(() =>
+        assertPaymentProvider(declaring({ maxAmounts: { XXX: 100 } }))
+      )
+    ).toBe("COMMERCE_PROVIDER_CONTRACT");
+    expect(() =>
+      assertPaymentProvider(declaring({ currencies: ["USD", "JPY"] }))
+    ).not.toThrow();
+  });
 });
 
 describe("a provider's answer", () => {
@@ -151,6 +174,16 @@ describe("a provider's answer", () => {
         operation: "read",
       }).amountCaptured.amount
     ).toBe(1000);
+    const nothingCaptured = { amount: 0, currency: "USD" };
+    for (const status of ["pending", "authorised", "failed"] as const) {
+      expect(
+        parseProviderAnswer(
+          providerPaymentSchema,
+          { ...valid, status, amountCaptured: nothingCaptured },
+          { provider: "x", operation: "read" }
+        ).status
+      ).toBe(status);
+    }
   });
 
   it("is refused when it refunds more than it captured, mixes currencies or floats an amount", () => {
@@ -159,6 +192,19 @@ describe("a provider's answer", () => {
       { ...valid, amountCaptured: { amount: 1000, currency: "EUR" } },
       { ...valid, amount: { amount: 10.5, currency: "USD" } },
       { ...valid, status: "refunded" },
+      // A status and amounts that contradict each other: paid is captured,
+      // and nothing else has captured anything.
+      { ...valid, amountCaptured: { amount: 0, currency: "USD" } },
+      ...(
+        [
+          "pending",
+          "requires_action",
+          "processing",
+          "authorised",
+          "failed",
+          "cancelled",
+        ] as const
+      ).map(status => ({ ...valid, status })),
     ];
     for (const answer of refusals) {
       expect(

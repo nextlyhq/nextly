@@ -1,7 +1,7 @@
 import { commerceError } from "../errors";
 
 import { minorUnits } from "./currency";
-import { assertMoney, money, type Money } from "./money";
+import { assertMoney, moneyFromExact, type Money } from "./money";
 
 /**
  * Write an amount in major units, as a decimal string with exactly the
@@ -52,14 +52,7 @@ export function fromDecimalString(value: string, currency: string): Money {
     });
   }
   // BigInt keeps every digit exact however long the string; the result is
-  // then checked against the safe-integer range by `money()`.
+  // then checked against the safe-integer range.
   const minor = BigInt(`${whole}${fraction.padEnd(places, "0")}`);
-  const signed = sign === "-" ? -minor : minor;
-  if (
-    signed > BigInt(Number.MAX_SAFE_INTEGER) ||
-    signed < BigInt(Number.MIN_SAFE_INTEGER)
-  ) {
-    throw commerceError("COMMERCE_INVALID_AMOUNT", { reason: "out of range" });
-  }
-  return money(Number(signed), currency);
+  return moneyFromExact(sign === "-" ? -minor : minor, currency);
 }

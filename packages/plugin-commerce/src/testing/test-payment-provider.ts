@@ -3,7 +3,9 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
+import { assertOperationId } from "../contracts/operation";
 import {
+  assertPaymentProvider,
   paymentAmountRefusal,
   providerWebhookEventSchema,
   startPaymentInputSchema,
@@ -45,7 +47,11 @@ export const TEST_PAYMENT_METHODS = {
 export interface TestPaymentProviderOptions {
   /** The provider's id. Defaults to "test". */
   readonly id?: string;
-  /** Capabilities to change from the defaults, which offer everything. */
+  /**
+   * Capabilities to change from the defaults, which offer everything. Turning
+   * `refund` off turns `partialRefund` off too, unless it is given. A result
+   * commerce would refuse is refused here, when the provider is made.
+   */
   readonly capabilities?: Partial<PaymentProviderCapabilities>;
   /** The webhook signing secret. Defaults to a random one per provider. */
   readonly webhookSecret?: string;
@@ -70,10 +76,14 @@ export interface TestPaymentProviderControl {
   payments(): readonly ProviderPayment[];
   /** Every refund the provider holds, oldest first. */
   refunds(): readonly ProviderRefund[];
-  /** End a `processing` payment the way the bank later would. */
+  /**
+   * End a `processing` payment the way the bank later would. Success makes it
+   * paid, or authorised for a payment that captures later, which then waits
+   * for `capture` like any other hold.
+   */
   settle(
     providerReference: string,
-    outcome: "paid" | "failed"
+    outcome: "succeeded" | "failed"
   ): ProviderPayment;
 }
 
@@ -131,8 +141,10 @@ export function createTestPaymentProvider(
   options: TestPaymentProviderOptions = {}
 ): { provider: PaymentProvider; control: TestPaymentProviderControl } {
   const id = options.id ?? "test";
+  const refundOn = options.capabilities?.refund ?? DEFAULT_CAPABILITIES.refund;
   const capabilities: PaymentProviderCapabilities = {
     ...DEFAULT_CAPABILITIES,
+    partialRefund: refundOn && DEFAULT_CAPABILITIES.partialRefund,
     ...options.capabilities,
   };
   const secret = options.webhookSecret ?? randomBytes(32).toString("hex");
@@ -146,11 +158,14 @@ export function createTestPaymentProvider(
 
   // Runs `perform` once per operation key within the key's lifetime, and
   // answers a repeat with a copy of the first result, as the contract asks.
+  // Every changing call comes through here, so a malformed key is refused
+  // before anything changes, whichever operation carries it.
   function once<T>(
     operation: string,
     input: { readonly operationId: string },
     perform: () => T
   ): T {
+    assertOperationId(input.operationId);
     const fingerprint = `${operation}:${stableStringify(input)}`;
     const seen = keys.get(input.operationId);
     if (seen && now() - seen.at < capabilities.operationKeyLifetimeMs) {
@@ -268,12 +283,7 @@ export function createTestPaymentProvider(
         : undefined);
     switch (method) {
       case TEST_PAYMENT_METHODS.succeeds:
-        if (p.capture === "now") {
-          p.status = "paid";
-          p.captured = p.amount;
-        } else {
-          p.status = "authorised";
-        }
+        succeed(p);
         break;
       case TEST_PAYMENT_METHODS.declines:
         p.status = "failed";
@@ -297,6 +307,17 @@ export function createTestPaymentProvider(
         });
     }
     return view(p);
+  }
+
+  // Money arriving at the provider: taken at once, or held when the payment
+  // captures later. Confirming and a bank's later settlement both end here.
+  function succeed(p: PaymentRecord): void {
+    if (p.capture === "now") {
+      p.status = "paid";
+      p.captured = p.amount;
+    } else {
+      p.status = "authorised";
+    }
   }
 
   function capture(input: PaymentOperationInput): ProviderPayment {
@@ -474,9 +495,8 @@ export function createTestPaymentProvider(
     settle(providerReference, outcome) {
       const p = record(providerReference);
       requireStatus(p, ["processing"], "settle");
-      if (outcome === "paid") {
-        p.status = "paid";
-        p.captured = p.amount;
+      if (outcome === "succeeded") {
+        succeed(p);
       } else {
         p.status = "failed";
         p.failureCode = "debit_returned";
@@ -485,6 +505,9 @@ export function createTestPaymentProvider(
     },
   };
 
+  // The reference provider is never one commerce would refuse, so an
+  // override that makes it so fails here rather than in the test using it.
+  assertPaymentProvider(provider);
   return { provider, control };
 }
 

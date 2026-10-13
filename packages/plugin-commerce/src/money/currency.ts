@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { commerceError } from "../errors";
 
 /**
@@ -111,6 +113,14 @@ export function isCurrencyCode(code: unknown): code is string {
     engineCurrencyCodes().has(code)
   );
 }
+
+/**
+ * A currency code arriving from outside, held to `isCurrencyCode`: an
+ * amount's currency and a provider's declared currencies are one test.
+ */
+export const currencyCodeSchema = z.string().refine(isCurrencyCode, {
+  message: "a currency is an ISO 4217 sales currency code",
+});
 
 /**
  * The number of decimal places in `currency`'s minor unit: 2 for USD (cents),

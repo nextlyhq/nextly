@@ -7,7 +7,11 @@ import type {
 import { money } from "../money/money";
 
 import { catalogueSourceContract } from "./catalogue-source-contract";
-import { runContractCases, type ContractCase } from "./contract-case";
+import {
+  ContractViolation,
+  runContractCases,
+  type ContractCase,
+} from "./contract-case";
 import { createInMemoryCatalogueSource } from "./in-memory-catalogue-source";
 
 const items: CatalogueItem[] = [
@@ -56,6 +60,21 @@ describe("the catalogue contract suite against the in-memory source", async () =
     const names = cases.map(c => c.name).join("\n");
     expect(names).toMatch(/lists every item/);
     expect(names).toMatch(/records a stock report once/);
+  });
+});
+
+describe("the catalogue contract suite's options", () => {
+  it("refuses a source that hears stock reports but names no counted item to watch", async () => {
+    // Without one, a report applied twice is invisible: only the listener's
+    // own confirmation could be checked.
+    await expect(
+      catalogueSourceContract({
+        currency: "USD",
+        fixtures: { listed: "drill-press", unknown: "no-such-item" },
+        create: () =>
+          createInMemoryCatalogueSource({ currency: "USD", items }).source,
+      })
+    ).rejects.toBeInstanceOf(ContractViolation);
   });
 });
 
@@ -134,6 +153,17 @@ describe("the catalogue contract suite catches a broken source", () => {
         },
       };
     });
+    expect(failed).toContain("lists every item a page at a time, each once");
+  });
+
+  it("fails a source whose listing leaves items out", async () => {
+    const failed = await failingCases(s => ({
+      ...s,
+      list: async () => ({
+        items: await s.find({ references: ["drill-press"] }),
+        nextCursor: null,
+      }),
+    }));
     expect(failed).toContain("lists every item a page at a time, each once");
   });
 

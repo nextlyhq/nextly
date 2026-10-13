@@ -32,8 +32,10 @@ export interface CatalogueSourceContractOptions {
     /** A reference the source does not know. */
     readonly unknown: string;
     /**
-     * A counted or one-off item with stock, for a source whose own stock
-     * figure goes down when a sale is reported to it.
+     * A counted or one-off item with stock left, whose figure goes down when a
+     * sale is reported. Required when the source hears stock reports: it is
+     * how the suite sees a repeated report applied once, which the
+     * listener's own confirmation cannot show.
      */
     readonly soldFrom?: string;
   };
@@ -53,6 +55,8 @@ export interface CatalogueSourceContractOptions {
  * retry; the source must record it once.
  *
  * @experimental
+ * @throws `ContractViolation` for a source that hears stock reports when
+ *   `fixtures.soldFrom` is not given.
  */
 export async function catalogueSourceContract(
   options: CatalogueSourceContractOptions
@@ -179,27 +183,38 @@ export async function catalogueSourceContract(
         if (cursor === null) break;
       }
       expectContract(cursor === null, "the listing ends");
-      expectContract(
-        seen.has(fixtures.listed),
-        "the listing includes the listed item"
-      );
+      const known = [fixtures.listed, fixtures.onRequest, fixtures.soldFrom];
+      for (const reference of known) {
+        if (reference === undefined) continue;
+        expectContract(
+          seen.has(reference),
+          `the listing includes ${reference}`
+        );
+      }
     });
   }
 
   if (probe.stock) {
+    const soldFrom = fixtures.soldFrom;
+    if (soldFrom === undefined) {
+      throw new ContractViolation(
+        "a source that hears stock reports needs fixtures.soldFrom, an item whose stock a sale lowers"
+      );
+    }
     add(
       "records a stock report once when its answer is lost and it is repeated",
       async source => {
         const stock = source.stock;
         expectContract(stock !== undefined, "the source hears stock reports");
-        const reference = fixtures.soldFrom ?? fixtures.listed;
-        const before = fixtures.soldFrom
-          ? await available(source, reference)
-          : undefined;
+        const before = await available(source, soldFrom);
+        expectContract(
+          before > 0,
+          `the fixture item ${soldFrom} has stock left`
+        );
         const report = {
           operationId: unique("op"),
           kind: "sale" as const,
-          reference,
+          reference: soldFrom,
           quantity: 1,
           orderReference: unique("order"),
         };
@@ -217,13 +232,11 @@ export async function catalogueSourceContract(
           unknown.recorded === false,
           "a report never made is not confirmed"
         );
-        if (before !== undefined) {
-          const after = await available(source, reference);
-          expectContract(
-            after === Math.max(0, before - 1),
-            `a sale reported twice lowers stock once (${before} before, ${after} after)`
-          );
-        }
+        const after = await available(source, soldFrom);
+        expectContract(
+          after === before - 1,
+          `a sale reported twice lowers stock once (${before} before, ${after} after)`
+        );
       }
     );
 

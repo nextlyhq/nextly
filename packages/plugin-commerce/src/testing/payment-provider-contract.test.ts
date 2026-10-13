@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { PaymentProvider } from "../contracts/payment-provider";
+import { commerceError } from "../errors";
+import { money } from "../money/money";
 
 import { runContractCases, type ContractCase } from "./contract-case";
 import { paymentProviderContract } from "./payment-provider-contract";
@@ -74,6 +76,79 @@ describe("the payment contract suite catches a broken provider", () => {
     });
     expect(failed).toContain(
       "starts once when the answer to a start is lost and the start is repeated"
+    );
+  });
+
+  it("fails a provider that starts a second payment and finds the latest one by reference", async () => {
+    // Finding the newest match hides the orphaned first payment from a check
+    // that only compares the repeat with what is found.
+    const failed = await failingCases(p => {
+      let n = 0;
+      const latest = new Map<string, string>();
+      return {
+        ...p,
+        start: async input => {
+          const started = await p.start({
+            ...input,
+            operationId: `${input.operationId}-${++n}`,
+          });
+          latest.set(input.reference, started.providerReference);
+          return started;
+        },
+        findByReference: async input => {
+          const providerReference = latest.get(input.reference);
+          return providerReference === undefined
+            ? null
+            : p.read({ providerReference });
+        },
+      };
+    });
+    expect(failed).toContain(
+      "starts once when the answer to a start is lost and the start is repeated"
+    );
+  });
+
+  it("fails a provider that refuses a reused key only after starting the payment", async () => {
+    const failed = await failingCases(p => {
+      const requests = new Map<string, string>();
+      let n = 0;
+      return {
+        ...p,
+        start: async input => {
+          const request = `${input.reference}:${input.amount.amount}`;
+          const seen = requests.get(input.operationId);
+          requests.set(input.operationId, request);
+          if (seen !== undefined && seen !== request) {
+            await p.start({ ...input, operationId: `late-${++n}` });
+            throw commerceError("COMMERCE_OPERATION_KEY_REUSED");
+          }
+          return p.start(input);
+        },
+      };
+    });
+    expect(failed).toContain(
+      "refuses an operation key reused for a different request"
+    );
+  });
+
+  it("fails a provider whose refund answer misstates the amount refunded", async () => {
+    const failed = await failingCases(p => {
+      const refund = p.refund;
+      return {
+        ...p,
+        refund: refund
+          ? async input => {
+              const made = await refund(input);
+              return {
+                ...made,
+                amount: money(made.amount.amount + 1, made.amount.currency),
+              };
+            }
+          : undefined,
+      };
+    });
+    expect(failed).toContain(
+      "refunds once when the answer to a refund is lost, and finds the refund by commerce's reference"
     );
   });
 

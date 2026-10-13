@@ -102,6 +102,16 @@ describe("money", () => {
     );
   });
 
+  it("sums to any total in the safe range, whatever the order of the parts", () => {
+    const max = Number.MAX_SAFE_INTEGER;
+    const parts = [money(max, "USD"), money(1, "USD"), money(-1, "USD")];
+    expect(sum("USD", parts)).toEqual(money(max, "USD"));
+    expect(sum("USD", [...parts].reverse())).toEqual(money(max, "USD"));
+    expect(codeOf(() => sum("USD", parts.slice(0, 2)))).toBe(
+      "COMMERCE_INVALID_AMOUNT"
+    );
+  });
+
   it("refuses a fractional factor rather than rounding it", () => {
     expect(codeOf(() => multiply(money(999, "USD"), 0.5))).toBe(
       "COMMERCE_INVALID_AMOUNT"
