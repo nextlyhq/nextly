@@ -195,7 +195,7 @@ function invokeTransform(
     // the guard this comment promises, silently absent exactly where it
     // matters most.
     return transform.transform(
-      copyPlainValues(entity.definition, { freeze: true })
+      copyPlainValues(entity.definition, { freeze: true, copyInstances: true })
     );
   } catch (cause) {
     if (cause instanceof NextlyError) throw cause;
@@ -327,7 +327,7 @@ function withBehaviourOf(
   before: Record<string, unknown>,
   after: Record<string, unknown>
 ): Record<string, unknown> {
-  const merged = mergeBehaviour(before, after);
+  const merged = mergeBehaviour(before, after, "node");
   return isRecord(merged) ? merged : before;
 }
 
@@ -341,12 +341,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return isContainer(value) && !Array.isArray(value);
 }
 
-function mergeBehaviour(before: unknown, after: unknown): unknown {
+/**
+ * Where a value sits in the entity's schema: `node` is the entity or one of
+ * its fields, where `access` is an access rule; `nodes` is a `fields` or
+ * `blocks` list of them; `data` is anything else, where a key named
+ * `access` is ordinary data, such as a JSON default's.
+ */
+type SchemaPosition = "node" | "nodes" | "data";
+
+/** The keys under a schema node that hold more schema nodes. */
+const NODE_LIST_KEYS: ReadonlySet<string> = new Set(["fields", "blocks"]);
+
+function mergeBehaviour(
+  before: unknown,
+  after: unknown,
+  at: SchemaPosition
+): unknown {
   const decided = behaviourVerdict(before, after);
   if (decided !== UNDECIDED) return decided;
-  if (Array.isArray(after)) return mergeArray(before, after);
+  if (Array.isArray(after)) return mergeArray(before, after, at);
   if (!isContainer(after)) return after;
-  return mergeRecord(isRecord(before) ? before : {}, after);
+  return mergeRecord(isRecord(before) ? before : {}, after, at);
 }
 
 /** `behaviourVerdict` found no behaviour to decide on: the values merge. */
@@ -388,27 +403,39 @@ function replacesBehaviourWhole(before: unknown, after: unknown): boolean {
 }
 
 /** `after`'s elements, each merged with the one it replaced in `before`. */
-function mergeArray(before: unknown, after: readonly unknown[]): unknown[] {
+function mergeArray(
+  before: unknown,
+  after: readonly unknown[],
+  at: SchemaPosition
+): unknown[] {
   const previous = Array.isArray(before) ? before : [];
+  const element: SchemaPosition = at === "nodes" ? "node" : "data";
   return after
     .map((item, index) =>
-      mergeBehaviour(counterpart(previous, item, index), item)
+      mergeBehaviour(counterpart(previous, item, index), item, element)
     )
     .filter(item => item !== DROP);
 }
 
-/** `after`'s keys merged with `previous`'s, `access` taken from `previous`. */
+/**
+ * `after`'s keys merged with `previous`'s. On a schema node, `access` is
+ * taken from `previous`; anywhere else it merges like any other key.
+ */
 function mergeRecord(
   previous: Record<string, unknown>,
-  after: Record<string, unknown>
+  after: Record<string, unknown>,
+  at: SchemaPosition
 ): Record<string, unknown> {
+  const rules = at === "node";
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(after)) {
-    if (key === "access") continue;
-    const merged = mergeBehaviour(previous[key], value);
+    if (rules && key === "access") continue;
+    const child: SchemaPosition =
+      rules && NODE_LIST_KEYS.has(key) ? "nodes" : "data";
+    const merged = mergeBehaviour(previous[key], value, child);
     if (merged !== DROP) out[key] = merged;
   }
-  if (previous.access !== undefined) out.access = previous.access;
+  if (rules && previous.access !== undefined) out.access = previous.access;
   restoreRemovedBehaviour(previous, out);
   return out;
 }

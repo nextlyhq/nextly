@@ -76,6 +76,28 @@ describe("dependents", () => {
   });
 });
 
+describe("disabled dependents", () => {
+  it("refuses while a disabled plugin still REQUIRES this one", () => {
+    // A disabled plugin still takes part in schema ordering: with this one
+    // removed from the config, its required `dependsOn` fails the boot.
+    expect(
+      refusal(() =>
+        planUninstall(
+          input({ disabled: [{ name: "reports", requires: ["auth"] }] })
+        )
+      ).code
+    ).toBe("PLUGIN_HAS_DEPENDENTS");
+  });
+
+  it("allows one that depends on it only optionally", () => {
+    // The control: an optional dependency missing is not a boot failure.
+    expect(
+      planUninstall(input({ disabled: [{ name: "reports", requires: [] }] }))
+        .finalState
+    ).toBe("uninstalled");
+  });
+});
+
 describe("--keep-data", () => {
   it("keeps the tables and marks the owner orphaned", () => {
     const plan = planUninstall(input({ keepData: true }));

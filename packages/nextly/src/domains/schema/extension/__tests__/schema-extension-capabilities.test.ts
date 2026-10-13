@@ -817,6 +817,29 @@ describe("collection id type", () => {
     expect(generateEntryId({}).length).toBe(36);
     expect(generateEntryId({ idType: "uuidv7" }).length).toBe(36);
   });
+
+  it("is a recorded exception for serial: refused where the collection is defined, naming col.serial()", async () => {
+    const { validateCollectionConfig } = await import(
+      "../../../../collections/config/validate-config"
+    );
+
+    // Payload's `idType: "serial"` makes integer keys. Here a collection's id
+    // stays text, which every relation and API path reads, so the value is
+    // refused rather than read as the default; a sequential number belongs on
+    // a table keyed by `col.serial()`.
+    const { errors } = validateCollectionConfig({
+      slug: "orders",
+      fields: [],
+      db: { idType: "serial" as unknown as "uuid" },
+    });
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        path: "db.idType",
+        code: "DB_ID_TYPE_INVALID",
+        message: expect.stringContaining("col.serial()"),
+      })
+    );
+  });
 });
 
 describe("client-supplied id on create", () => {

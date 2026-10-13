@@ -219,8 +219,15 @@ export async function runPluginInstallCommand(
     return rows;
   });
 
+  // Tables, not owner rows: a plugin's element rows (a column or index on
+  // another owner's table) and its tables' own element rows are rows too.
+  const tables = new Set(
+    owned
+      .filter(row => (row.elementKind ?? "table") === "table")
+      .map(row => row.tableName)
+  );
   deps.logger.success(
-    `${plugin.name} installed (${String(owned.length)} table(s) recorded).`
+    `${plugin.name} installed (${String(tables.size)} table(s) recorded).`
   );
 }
 
@@ -308,8 +315,14 @@ async function decideUninstall(
   const owned = recordedRows.filter(row => live.has(row.tableName));
   // Element rows on this plugin's tables that somebody else owns — they go
   // with the table on a full uninstall, and the confirmation names them.
+  // Read from the tables the plugin OWNS: an element it added to another
+  // owner's table puts that table in `owned` too, and its other
+  // contributors' elements there are not dropped with anything.
+  const ownTables = owned
+    .filter(row => (row.elementKind ?? "table") === "table")
+    .map(row => row.tableName);
   const foreignElements = (
-    await repository.read([...new Set(owned.map(row => row.tableName))])
+    await repository.read([...new Set(ownTables)])
   ).filter(
     row =>
       (row.elementKind ?? "table") !== "table" && row.ownerId !== plugin.name
@@ -320,6 +333,9 @@ async function decideUninstall(
     enabled: deps.plugins
       .filter(p => p.enabled)
       .map(p => ({ name: p.name, dependsOn: p.dependsOn })),
+    disabled: deps.plugins
+      .filter(p => !p.enabled)
+      .map(p => ({ name: p.name, requires: p.requires })),
     owned,
     foreignElements,
     modules: plugin.modules,
@@ -452,6 +468,7 @@ async function executeUninstall(
       `Reverted ${down.moduleName} (${String(executed)} statement(s))`
     );
   }
+  await assertTablesDropped(plugin, plan, deps);
 
   await registry.setState(plugin.name, plan.finalState);
 
@@ -461,6 +478,31 @@ async function executeUninstall(
       : `${plugin.name} uninstalled and its tables dropped.`
   );
   deps.logger.info(finishInstruction(plugin.name, plan.finalState, recorded));
+}
+
+/**
+ * Refuse to record a full uninstall while a table it was to drop still
+ * exists: a DOWN that dropped one of the two tables its UP created ran
+ * without error, and recording the plugin uninstalled would leave the other,
+ * and its data, under a plugin the boot then treats as gone.
+ */
+async function assertTablesDropped(
+  plugin: LifecyclePlugin,
+  plan: UninstallPlan,
+  deps: Pick<PluginLifecycleDeps, "liveTables">
+): Promise<void> {
+  if (plan.finalState !== "uninstalled") return;
+  const left = [...(await deps.liveTables(plan.tablesDropped))];
+  if (left.length === 0) return;
+  throw new NextlyError({
+    code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+    publicMessage: `${plugin.name}'s DOWN migrations ran but left ${left.join(", ")} in place, so it was not recorded as uninstalled. Drop ${left.length === 1 ? "that table" : "those tables"} with a migration, or fix the plugin's DOWN.`,
+    logContext: {
+      plugin: plugin.name,
+      reason: "tables-left-by-down",
+      tables: left,
+    },
+  });
 }
 
 /**

@@ -69,8 +69,10 @@ import { BaseService } from "../../../services/base-service";
 import {
   isSuperAdmin,
   listRoleSlugsForUserOrRefuse,
+  resolveUserRoles,
 } from "../../../services/lib/permissions";
 import { refreshEpoch, stampIsCurrent } from "../../../services/lib/rbac-epoch";
+import { userRoleAssignmentsInForce } from "../../../services/lib/role-assignments";
 import type { Logger } from "../../../services/shared";
 import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
 
@@ -283,9 +285,41 @@ const _apiKeyPermissionsCache = new Map<
      * elsewhere and was not.
      */
     revision: string;
+    /**
+     * When the owner's role assignments behind these grants next lapse (epoch
+     * ms), if any of them expires. An expiry reaches no invalidation, so the
+     * entry is not served past it: a key whose owner's role had just lapsed
+     * kept that role's grants for up to the rest of the TTL.
+     */
+    validUntil: number | undefined;
   }
 >();
 const _PERMISSIONS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/** One key's cached grants, as {@link _apiKeyPermissionsCache} holds them. */
+type KeyGrantsEntry = NonNullable<
+  ReturnType<(typeof _apiKeyPermissionsCache)["get"]>
+>;
+
+/**
+ * Whether a key's cached grants may still be served at `now`.
+ *
+ * The revision is asked through the shared predicate, not by comparing the
+ * stamp. A match means nothing while this process holds invalidations the
+ * shared row has not accepted: the value being matched against is then one no
+ * other instance has seen, so a revocation made here keeps answering from
+ * this copy for the whole window. The permission tiers ask the same question.
+ *
+ * Then the entry's age, and the owner's next role expiry, which ends it early
+ * because nothing else runs when a role lapses.
+ */
+function keyGrantsServable(entry: KeyGrantsEntry, now: number): boolean {
+  return (
+    stampIsCurrent(entry.revision) &&
+    now - entry.cachedAt < _PERMISSIONS_CACHE_TTL_MS &&
+    (entry.validUntil === undefined || now < entry.validUntil)
+  );
+}
 
 /**
  * One key's grants, in both spellings a permission is written in.
@@ -775,21 +809,14 @@ export class ApiKeyService extends BaseService {
     const now = Date.now();
 
     const cached = _apiKeyPermissionsCache.get(cacheKey);
-    if (
-      cached &&
-      // Asked through the shared predicate, not by comparing the stamp. A
-      // match means nothing while this process holds invalidations the shared
-      // row has not accepted: the value being matched against is then one no
-      // other instance has seen, so a revocation made here keeps answering
-      // from this copy for the whole window. The permission tiers ask the same
-      // question and this one was not.
-      stampIsCurrent(cached.revision) &&
-      now - cached.cachedAt < _PERMISSIONS_CACHE_TTL_MS
-    ) {
+    if (cached && keyGrantsServable(cached, now)) {
       return cached.grants;
     }
 
     let rows: GrantedPermission[];
+    // A role-based key holds its role directly, not through an assignment that
+    // can lapse, so only a user-based key's entry has an end of this kind.
+    let validUntil: number | undefined;
 
     if (tokenType === "role-based") {
       // Guard: referenced role was deleted via onDelete: "set null"
@@ -813,6 +840,11 @@ export class ApiKeyService extends BaseService {
       // one is the session bypass's own question, asked of its own resolver:
       // a role that inherits super-admin answers yes there, so it answers yes
       // here, where a direct read of `user_roles` said no.
+      //
+      // The owner's next role expiry is read BEFORE the grants. Read after, a
+      // role lapsing between the two reads would leave its grants in the entry
+      // and its expiry out of it, and the entry would outlive the role.
+      validUntil = (await resolveUserRoles(userId)).validUntil;
       const all = (await isSuperAdmin(userId))
         ? await this.resolveCataloguePermissionRows()
         : await this.resolveUserPermissionRows(userId);
@@ -839,6 +871,7 @@ export class ApiKeyService extends BaseService {
       grants,
       cachedAt: now,
       revision: resolvedUnder,
+      validUntil,
     });
     return grants;
   }
@@ -962,7 +995,11 @@ export class ApiKeyService extends BaseService {
         this.permissionsTable,
         eq(this.rolePermissionsTable.permissionId, this.permissionsTable.id)
       )
-      .where(eq(this.userRolesTable.userId, userId));
+      // Only the owner's assignments in force: a lapsed role grants a key
+      // nothing, as it grants its owner nothing.
+      .where(
+        userRoleAssignmentsInForce(this.userRolesTable, userId, new Date())
+      );
 
     return rows as GrantedPermission[];
   }
@@ -1119,10 +1156,14 @@ export class ApiKeyService extends BaseService {
     // said no to such a creator while every other gate said yes.
     if (await isSuperAdmin(creatorId)) return;
 
+    // The roles the creator holds now: a lapsed one sets no ceiling to mint
+    // a key under.
     const creatorRoleRows = await this.db
       .select({ roleId: this.userRolesTable.roleId })
       .from(this.userRolesTable)
-      .where(eq(this.userRolesTable.userId, creatorId));
+      .where(
+        userRoleAssignmentsInForce(this.userRolesTable, creatorId, new Date())
+      );
 
     const creatorRoleIds = (creatorRoleRows as Array<{ roleId: string }>).map(
       r => r.roleId

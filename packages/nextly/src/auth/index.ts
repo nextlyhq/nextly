@@ -70,6 +70,7 @@ export type { AuthRouterDeps } from "./handlers/router";
 // too. Experimental with it.
 export type { CredentialUserRow } from "./credentials/verify-credentials";
 export type { AccountState } from "./session/account-state";
+export type { SessionRoles } from "./session/session-roles";
 export type {
   SessionRowTransaction,
   WithSessionRowTransaction,
