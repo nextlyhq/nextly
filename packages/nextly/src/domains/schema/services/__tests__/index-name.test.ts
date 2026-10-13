@@ -13,6 +13,7 @@ import {
   checkConstraintName,
   columnTypeIsIndexable,
   foreignKeyNameForColumns,
+  identifierBytes,
   indexNameForColumn,
   indexNameForColumns,
   MAX_INDEX_NAME_LENGTH,
@@ -183,5 +184,37 @@ describe("constraint names", () => {
     expect(boundedIdentifier("x".repeat(63))).toBe("x".repeat(63));
     expect(boundedIdentifier("x".repeat(64))).toHaveLength(63);
     expect(boundedIdentifier("x".repeat(64))).not.toBe("x".repeat(63));
+  });
+});
+
+describe("names with letters outside ASCII", () => {
+  it("shorten a name past 63 bytes even when it is fewer than 63 characters", () => {
+    // 30 accented letters are 30 characters and 60 bytes, so the key's name
+    // is 42 characters and 72 bytes: within a character count, and past
+    // PostgreSQL's limit, which is in bytes.
+    const name = foreignKeyNameForColumns("é".repeat(30), ["owner_id"]);
+    expect(identifierBytes(name)).toBeLessThanOrEqual(MAX_INDEX_NAME_LENGTH);
+    expect(name).toMatch(/^fk_é+_[0-9a-z]{7}$/);
+  });
+
+  it("cut between characters, never inside one", () => {
+    // Four bytes each, and two UTF-16 units: a cut by units or bytes alone
+    // can land inside one, leaving half a character that encodes as U+FFFD.
+    // The leading "a" puts the cut off the four-byte boundaries, so a cut by
+    // bytes would land inside a character rather than happen to miss one.
+    const name = checkConstraintName(`a${"😀".repeat(20)}`, "x");
+    expect(identifierBytes(name)).toBeLessThanOrEqual(MAX_INDEX_NAME_LENGTH);
+    // No lone surrogate: one would not survive encoding unchanged.
+    expect(new TextDecoder().decode(new TextEncoder().encode(name))).toBe(name);
+    // And no replacement character: what is kept is the name's own start.
+    const kept = name.slice(0, name.lastIndexOf("_"));
+    expect(`ck_a${"😀".repeat(20)}_x`.startsWith(kept)).toBe(true);
+    expect(kept).not.toContain("�");
+  });
+
+  it("keep two long names apart that share their first 63 bytes", () => {
+    const a = foreignKeyNameForColumns("é".repeat(30), ["a"]);
+    const b = foreignKeyNameForColumns("é".repeat(30), ["b"]);
+    expect(a).not.toBe(b);
   });
 });

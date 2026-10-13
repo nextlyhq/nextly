@@ -113,3 +113,33 @@ describe("copyPlainValues", () => {
     });
   });
 });
+
+describe("copyPlainValues with copyInstances", () => {
+  it("copies a Date, Map and Set, so mutating the copy leaves the original", () => {
+    // Freezing cannot protect them: `setTime`, `set` and `add` reach state
+    // `Object.freeze` does not.
+    const original = {
+      at: new Date(0),
+      byKey: new Map([["a", { n: 1 }]]),
+      tags: new Set(["x"]),
+    };
+    const copy = copyPlainValues(original, {
+      freeze: true,
+      copyInstances: true,
+    });
+
+    copy.at.setTime(5);
+    copy.byKey.set("b", { n: 2 });
+    copy.tags.add("y");
+
+    expect(original.at.getTime()).toBe(0);
+    expect([...original.byKey.keys()]).toEqual(["a"]);
+    expect([...original.tags]).toEqual(["x"]);
+  });
+
+  it("keeps them by reference without the option", () => {
+    // The control: the default copy shares them, as documented.
+    const at = new Date(0);
+    expect(copyPlainValues({ at }).at).toBe(at);
+  });
+});

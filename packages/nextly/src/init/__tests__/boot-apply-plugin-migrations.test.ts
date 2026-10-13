@@ -58,11 +58,17 @@ vi.mock("../../cli/commands/migrate", () => ({ migrateCore }));
 vi.mock("../../cli/utils/adapter", () => ({
   validateDatabaseEnv: () => ({ valid: true, errors: [] }),
 }));
+/** The registry the apply asks about relations once it has reloaded. */
+const schemaRegistry = { assertRelationsResolve: () => {} };
 vi.mock("../../di/container", () => ({
   container: {
     has: () => true,
     get: (name: string) =>
-      name === "permissionSeedService" ? permissionSeedService : appAdapter,
+      name === "permissionSeedService"
+        ? permissionSeedService
+        : name === "schemaRegistry"
+          ? schemaRegistry
+          : appAdapter,
   },
 }));
 vi.mock("../../domains/schema/migrate/resolved-schema", () => ({

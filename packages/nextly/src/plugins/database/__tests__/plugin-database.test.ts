@@ -219,18 +219,55 @@ describe("a col.serial() key", () => {
     expect(updated).toEqual([]);
   });
 
-  it("refuses insertReturning BEFORE writing the row", async () => {
-    // The key is chosen during the insert, so there is nothing to read the
-    // row back by. Refusing after the insert left a row behind that the
-    // caller was told had not been created.
-    const { surface, inserted } = serialHarness();
-    await expect(
-      surface.insertReturning(counters, { label: "a" } as never)
-    ).rejects.toSatisfy(
-      error => NextlyError.is(error) && error.code === "VALIDATION_ERROR"
-    );
-    expect(inserted).toEqual([]);
-  });
+  it.each([
+    ["postgresql", "returning"],
+    ["sqlite", "returning"],
+    ["mysql", "$returningId"],
+  ] as const)(
+    "insertReturning asks the insert itself for the key on %s, through %s",
+    async (dialect, asked) => {
+      // The key is chosen during the insert, so it is read from that
+      // statement's own result: RETURNING where the dialect has it, and on
+      // MySQL the insert id the server reports for the statement. A second
+      // statement asking for "the last id" could be answered by another
+      // pooled connection. The database here reports no key, so the call
+      // stops before any read-back and the asking is all there is to see.
+      const calls: string[] = [];
+      const statement = Object.assign(Promise.resolve(), {
+        returning: (fields: Record<string, unknown>) => {
+          calls.push(`returning:${Object.keys(fields).join(",")}`);
+          return Promise.resolve([{}]);
+        },
+        $returningId: () => {
+          calls.push("$returningId");
+          return Promise.resolve([{}]);
+        },
+      });
+      const db = { insert: () => ({ values: () => statement }) };
+      const surface = createPluginDatabase({
+        dialect,
+        owner: OWNER,
+        dependsOn: new Set(),
+        owners: () => new Map([["fx__counters", OWNER]]),
+        tables: () => ({ fx__counters: { name: "fx__counters" } }),
+        tableList: () => [
+          { name: "fx__counters", authored: "counters", owner: OWNER },
+        ],
+        db: () => db,
+        relationalDb: () => db,
+        transaction: fn => fn({ db, relationalDb: db }),
+      });
+
+      await expect(
+        surface.insertReturning(counters, { label: "a" } as never)
+      ).rejects.toSatisfy(
+        error => NextlyError.is(error) && error.code === "INTERNAL_ERROR"
+      );
+      expect(calls).toEqual([
+        asked === "returning" ? "returning:seq" : "$returningId",
+      ]);
+    }
+  );
 
   it("treats an undefined value as omitted, on insert and update", async () => {
     // The control. A refusal keyed on the property being PRESENT would pass

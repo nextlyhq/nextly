@@ -47,6 +47,34 @@ export const Posts = defineCollection({
 `true` means anyone, including unauthenticated readers. A function receives the request
 context and decides.
 
+A collection whose `access` says nothing about an operation falls back to grants: a
+signed-in user needs `read-posts` to read `posts`.
+
+## Related rows
+
+A populated relationship is read with the same check as reading the related collection
+directly. Reading `posts` at a depth that populates `author` returns the author only to a
+caller who could read that `users` row by name:
+
+- **The related collection declares `access.read`:** that rule decides, for signed-in users
+  and visitors alike. No per-collection grant is needed.
+- **It declares no read rule:** a signed-in user needs `read-<collection>`, as they would to
+  read it directly.
+- **An API key** always needs `read-<collection>` in its own grants, and then the collection's
+  rule if it has one. A key granted only `read-posts` does not see populated authors.
+- **`users` and media** have no rules of their own, so the grant decides: a signed-in user or
+  an API key needs `read-users` to see a populated user and `read-media` to see an upload's
+  media row. Visitors keep both, as their own reads of them ask no grant.
+
+This holds at every depth, inside groups and repeaters, for each collection of a polymorphic
+relationship separately, on a Single, and for the entry a create or an update returns.
+
+A related row the caller may not read comes back exactly as a reference to a row that no
+longer exists would: the stored id for a single relationship, left out of a list, `null` for
+an upload. The rest of the response is served. A read made with `overrideAccess`, including
+one that runs as the system, keeps populating related rows; a route that names its trusted
+collections keeps populating those.
+
 ## Field-level access
 
 Any field takes its own `access`, with separate `create`, `read` and `update` rules:

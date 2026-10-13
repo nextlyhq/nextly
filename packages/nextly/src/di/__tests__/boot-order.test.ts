@@ -130,6 +130,31 @@ describe("the boot sequence in registerServices", () => {
   });
 
   /**
+   * Relations are asked of the registry once every table that registers
+   * during the boot is in it — Builder-made ones and extension tables on its
+   * first load, the code-first ones by their sync, what boot migrations
+   * created by their reload — and before a plugin's `init` can query through
+   * them.
+   */
+  it("asks whether every relation resolves once the tables are registered, before plugins", () => {
+    const check = boot.indexOf("assertBootRelationsResolve(");
+    expect(check).toBeGreaterThan(-1);
+    for (const step of [
+      "await initializeSchemaRegistry(",
+      "await syncCodeFirstEntities(",
+      "await runBootMigrations(",
+      "await prepareExtensionTablesForInit(",
+    ]) {
+      expect(boot.indexOf(step), step).toBeGreaterThan(-1);
+      expect(boot.indexOf(step), step).toBeLessThan(check);
+    }
+    expect(check).toBeLessThan(pluginCall);
+    expect(bodyOf("assertBootRelationsResolve")).toContain(
+      "checkRelationsBeforePlugins("
+    );
+  });
+
+  /**
    * First-run setup runs inside `initializeSchemaRegistry` and decides what to
    * create by introspecting the ACTIVE PostgreSQL schema. Published after it,
    * a boot into a new schema introspected `public` instead — and when `public`

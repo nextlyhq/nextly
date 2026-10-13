@@ -902,6 +902,44 @@ describe("types without codegen, refusing unrepresentable schema", () => {
   });
 });
 
+describe("a plugin changing another plugin's entities", () => {
+  it("transforms an entity it does not own", async () => {
+    // The gap `contributes.extend` could not close: adding fields to another
+    // plugin's collection was always possible, CHANGING one was not, because
+    // `setup(config)` runs before plugin schema contributions are merged and
+    // never sees them.
+    const { runEntityTransforms } = await import(
+      "../../../../plugins/entity-transforms"
+    );
+
+    const out = runEntityTransforms(
+      [
+        {
+          slug: "posts",
+          kind: "collection",
+          definition: { slug: "posts", access: { read: "public" } },
+        },
+      ],
+      [
+        {
+          source: "plugin:fx",
+          transforms: [
+            {
+              target: "posts",
+              transform: entity => ({ ...entity, access: { read: "admin" } }),
+            },
+          ],
+        },
+      ]
+    );
+
+    expect(out[0]?.definition).toEqual({
+      slug: "posts",
+      access: { read: "admin" },
+    });
+  });
+});
+
 describe("a plugin adding fields to another plugin's collections", () => {
   it("is delivered by contributes.extend", () => {
     // `apply-contributions.ts` already searches the MERGED collections,
