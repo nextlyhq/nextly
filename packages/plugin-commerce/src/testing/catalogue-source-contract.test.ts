@@ -215,6 +215,72 @@ describe("the catalogue contract suite catches a broken source", () => {
     );
   });
 
+  it("fails a source that applies a repeated hold and a repeated release twice", async () => {
+    // Its own figure moves with every delivery, so a doubled hold and a doubled
+    // release still cancel out: only a look after each repeat can catch it.
+    const failed = await failingCases(s => {
+      const stock = s.stock;
+      if (!stock) return s;
+      const moved = new Map<string, number>();
+      return {
+        ...s,
+        find: async input =>
+          (await s.find(input)).map(item =>
+            item.stock.kind === "counted"
+              ? {
+                  ...item,
+                  stock: {
+                    kind: "counted" as const,
+                    available:
+                      item.stock.available + (moved.get(item.reference) ?? 0),
+                  },
+                }
+              : item
+          ),
+        stock: {
+          report: async input => {
+            const step =
+              input.kind === "hold"
+                ? -input.quantity
+                : input.kind === "release"
+                  ? input.quantity
+                  : 0;
+            moved.set(
+              input.reference,
+              (moved.get(input.reference) ?? 0) + step
+            );
+            return stock.report(input);
+          },
+          confirm: input => stock.confirm(input),
+        },
+      };
+    });
+    expect(failed).toContain(
+      "records a hold and its release once each when their answers are lost and they are repeated"
+    );
+  });
+
+  it("fails a source that quotes a negative price", async () => {
+    const failed = await failingCases(s => ({
+      ...s,
+      price: async input =>
+        (await s.price(input)).map(line =>
+          line.found && line.price.kind === "listed"
+            ? {
+                ...line,
+                price: {
+                  kind: "listed" as const,
+                  unitPrice: money(-line.price.unitPrice.amount, "USD"),
+                },
+              }
+            : line
+        ),
+    }));
+    expect(failed).toContain(
+      "prices lines for checkout, one answer per line in the order asked"
+    );
+  });
+
   it("fails a source that drops every release report", async () => {
     const failed = await failingCases(s => {
       const stock = s.stock;

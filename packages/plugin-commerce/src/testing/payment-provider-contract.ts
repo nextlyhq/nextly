@@ -356,6 +356,18 @@ export async function paymentProviderContract(
         NextlyError.isCode(tampered, "COMMERCE_WEBHOOK_INVALID"),
         `a tampered webhook is refused as COMMERCE_WEBHOOK_INVALID, not ${describeError(tampered)}`
       );
+      const forged = await expectRefusal(
+        () =>
+          p.verifyWebhook({
+            rawBody: signed.rawBody,
+            headers: tamperHeaders(signed.headers),
+          }),
+        "a webhook whose signature was changed is refused"
+      );
+      expectContract(
+        NextlyError.isCode(forged, "COMMERCE_WEBHOOK_INVALID"),
+        `a changed signature is refused as COMMERCE_WEBHOOK_INVALID, not ${describeError(forged)}`
+      );
       const unsigned = await expectRefusal(
         () => p.verifyWebhook({ rawBody: signed.rawBody, headers: {} }),
         "a webhook without its signature is refused"
@@ -635,6 +647,30 @@ async function call<K extends OptionalOperation>(
  */
 function tamper(rawBody: string): string {
   return `${rawBody.slice(0, -1)} ${rawBody.slice(-1)}`;
+}
+
+/**
+ * Change the last character of every header while keeping its form (a hex
+ * digit stays a hex digit), so the signature no longer matches the body that
+ * is still exactly as signed: only a check of the signature itself can refuse
+ * it, not a check that the header is present or well formed.
+ */
+function tamperHeaders(
+  headers: Readonly<Record<string, string>>
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => {
+      const last = value.slice(-1);
+      const swapped = /[0-9a-f]/i.test(last)
+        ? last === "0"
+          ? "1"
+          : "0"
+        : last === "x"
+          ? "y"
+          : "x";
+      return [name, `${value.slice(0, -1)}${swapped}`];
+    })
+  );
 }
 
 function issues(

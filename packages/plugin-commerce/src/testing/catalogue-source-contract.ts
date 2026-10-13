@@ -271,7 +271,15 @@ export async function catalogueSourceContract(
         };
         for (const report of [hold, release]) {
           await stock.report(report); // the answer is lost
+          const once = await available(source, soldFrom);
           await stock.report(report);
+          const repeated = await available(source, soldFrom);
+          // Looked at after each repeat, not only at the end, where a hold and
+          // a release each applied twice would still cancel out.
+          expectContract(
+            repeated === once,
+            `the repeated ${report.kind} changed nothing (${once} after the first, ${repeated} after the repeat)`
+          );
           expectContract(
             (await stock.confirm({ operationId: report.operationId })).recorded,
             `the ${report.kind} is confirmed`

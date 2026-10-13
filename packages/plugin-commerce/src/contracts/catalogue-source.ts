@@ -140,7 +140,14 @@ export interface CatalogueSource {
 }
 
 const priceSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("listed"), unitPrice: moneySchema }),
+  z.strictObject({
+    kind: z.literal("listed"),
+    // Money may be negative in arithmetic, but a price commerce charges from
+    // is not: a negative one would take money off an order's total.
+    unitPrice: moneySchema.refine(m => m.amount >= 0, {
+      message: "a listed price is not negative",
+    }),
+  }),
   z.strictObject({ kind: z.literal("on-request") }),
 ]);
 

@@ -9,6 +9,7 @@ import { paymentProviderContract } from "./payment-provider-contract";
 import {
   createTestPaymentProvider,
   TEST_PAYMENT_METHODS,
+  TEST_SIGNATURE_HEADER,
   type TestPaymentProviderOptions,
 } from "./test-payment-provider";
 
@@ -171,6 +172,32 @@ describe("the payment contract suite catches a broken provider", () => {
     }));
     expect(failed).toContain(
       "charges once when the answer to a confirm is lost and the confirm is repeated"
+    );
+  });
+
+  it("fails a provider that checks a signature is present but not that it is right", async () => {
+    // It refuses a missing header and a body that is not canonical JSON, so
+    // only a changed signature over an unchanged body can catch it.
+    const failed = await failingCases(p => ({
+      ...p,
+      verifyWebhook: async input => {
+        if (!input.headers[TEST_SIGNATURE_HEADER]) {
+          throw commerceError("COMMERCE_WEBHOOK_INVALID");
+        }
+        const body = JSON.parse(input.rawBody) as {
+          eventId: string;
+          type: "payment.updated";
+          providerReference: string | null;
+          occurredAt: string;
+        };
+        if (JSON.stringify(body) !== input.rawBody) {
+          throw commerceError("COMMERCE_WEBHOOK_INVALID");
+        }
+        return body;
+      },
+    }));
+    expect(failed).toContain(
+      "verifies a signed webhook, and refuses a tampered or unsigned one"
     );
   });
 
