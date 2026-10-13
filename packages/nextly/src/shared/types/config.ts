@@ -171,6 +171,29 @@ export interface DatabaseConfig {
    * @default 900
    */
   migrateLockTtlSeconds?: number;
+
+  /**
+   * @experimental Plugins allowed the live database handle, by name.
+   *
+   * A plugin that declares `capabilities.db.rawSql` gets the live Drizzle
+   * instance at `ctx.db.raw`, which reaches every table, the users table's
+   * password hashes among them. Declaring it is not enough: the app lists the
+   * plugin here too, and an enabled plugin that declares it without being
+   * listed refuses the boot, naming the line to add. Every other plugin gets
+   * the restricted builder at `ctx.db.raw` and typed access to its own tables
+   * at `ctx.db`.
+   *
+   * Not a sandbox: a plugin is trusted code, and its own code can still reach
+   * core's internals. The listing keeps the grant in the app's code review,
+   * so a plugin update cannot add it quietly.
+   *
+   * @default []
+   * @example
+   * ```ts
+   * db: { rawSqlPlugins: ["@acme/nextly-reports"] }
+   * ```
+   */
+  rawSqlPlugins?: readonly string[];
 }
 
 // ============================================================
@@ -906,6 +929,7 @@ export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
   uiSchemaFile: "./ui-schema.json",
   runMigrationsOnBoot: false,
   migrateLockTtlSeconds: 900,
+  rawSqlPlugins: [],
 };
 
 /**
@@ -1042,6 +1066,11 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       migrateLockTtlSeconds:
         config.db?.migrateLockTtlSeconds ??
         DEFAULT_DB_CONFIG.migrateLockTtlSeconds,
+      // Copied, so the sanitized config never shares the app's or the
+      // default's array, and frozen: the boot and the CLI read the app's
+      // grants from here, and plugin code that could add a name to this list
+      // would grant itself on the next read.
+      rawSqlPlugins: Object.freeze([...(config.db?.rawSqlPlugins ?? [])]),
     },
     rateLimit,
     apiKeys,

@@ -1,6 +1,6 @@
 /**
- * Declaring database tables from a plugin, and the migration modules that
- * carry them to production.
+ * Declaring database tables from a plugin, the migration modules that carry
+ * them to production, and the typed handle that reads and writes them.
  *
  * Re-exported from core rather than re-declared, for the same reason `db.ts`
  * re-exports the query operators: the DSL's output is compiled by core, and a
@@ -14,7 +14,12 @@
  *   tables through it (see STABILITY.md).
  * @module schema
  */
-export { col, defineTable, migrationChecksum } from "nextly/schema-extension";
+export {
+  col,
+  defineTable,
+  isUniqueViolation,
+  migrationChecksum,
+} from "nextly/schema-extension";
 export type {
   ColumnBuilder,
   ContributedElements,
@@ -26,8 +31,13 @@ export type {
   ExtensionTable,
   InferInsert,
   InferRow,
+  PluginDatabase,
+  PluginInsert,
   PluginMigration,
   PluginMigrationSnapshot,
+  PluginTransaction,
+  PortableSelect,
+  PortableWhere,
   SchemaDraft,
   SchemaHook,
   SchemaOwner,

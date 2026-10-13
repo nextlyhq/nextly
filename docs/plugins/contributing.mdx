@@ -49,7 +49,7 @@ A good Nextly plugin:
       `definePlugin` (`peerDependencies` for `nextly`/`@nextlyhq/admin`/`react`).
 - [ ] **Declares, never grants, permissions** (define-but-never-grant, D36) and gates
       routes/UI with `requiredPermission`.
-- [ ] **Uses `ctx.services`, not raw `ctx.db`**, so its data is managed, secure, and
+- [ ] **Uses `ctx.services`, not `ctx.db.raw`**, so its data is managed, secure, and
       prunable — and picks `{ as: "system" }` vs `{ as: "user" }` deliberately.
 - [ ] **Contributes schema through `contributes`** (not hand-rolled DDL) so provenance
       tracking and `nextly prune` clean it up on uninstall (D14).

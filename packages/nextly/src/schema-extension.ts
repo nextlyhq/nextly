@@ -30,6 +30,13 @@ export type {
 } from "./domains/schema/extension/types";
 export type { DrizzleSchemaHook } from "./domains/schema/extension/after-drizzle";
 export type {
+  PluginDatabase,
+  PluginInsert,
+  PluginTransaction,
+  PortableSelect,
+  PortableWhere,
+} from "./plugins/database/plugin-database";
+export type {
   DialectStatements,
   PluginMigration,
   PluginMigrationSnapshot,
@@ -41,3 +48,4 @@ export type { ContributedElements } from "./domains/schema/pipeline/diff/types";
 // A value, not a type: a hand-written module computes its checksum rather
 // than pasting one, so it cannot drift into the state the checksum detects.
 export { migrationChecksum } from "./domains/schema/migrate/plugin/plugin-migration";
+export { isUniqueViolation } from "./database/errors";

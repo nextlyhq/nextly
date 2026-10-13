@@ -3,8 +3,8 @@ title: Data access (ctx.services)
 description: Read and write data from a plugin through the managed, secure-by-default service layer — queries, bulk operations, and system elevation.
 ---
 
-`ctx.services` is the **managed** data path for plugins. Prefer it over the raw
-`ctx.db` escape hatch: it enforces validation, hooks, events, and RBAC, and it stays
+`ctx.services` is the **managed** data path for plugins. Prefer it over the unmanaged
+`ctx.db` surface: it enforces validation, hooks, events, and RBAC, and it stays
 portable across database dialects. It is `@public` and semver-protected (D56).
 
 ```ts
@@ -111,14 +111,29 @@ read and is refused on a write, and a selector is refused on both.
 | `createMany(slug, rows, opts?)` | Bulk insert → `BatchOperationResult`. |
 | `updateMany(slug, entries, opts?)` | Bulk update, one `{ id, data }` per row → `BatchOperationResult`. |
 
-`ctx.services` also exposes `users`, `media`, and `email` services.
+It also has `createCollection`, `listCollections`, `getCollection`,
+`updateCollection`, `deleteCollection`, `warmLocalizedReadiness`, and the
+[transaction methods](#collection-transactions).
 
-`ctx.services.users` may create and update accounts, but not decide who administers the
-site. It refuses, with `NextlyError` code `FORBIDDEN`, to create an install's first
-account (core makes that one super-admin), to give a role that reaches `super-admin`
-(directly or by inheritance) on create or update, and to change the password, email,
-activation, email verification or roles of an account that reaches `super-admin`, or to
-delete one. An address it marks verified is recorded as verified by `plugin`.
+## Each service is a facade
+
+Every service reaches your plugin as a frozen facade: an object holding only
+the methods meant for plugins, each calling the service's own method. The
+service's database adapter, Drizzle handle, sub-services and logger are not on
+it, so a plugin cannot reach the database through a service except by calling
+its methods.
+
+| Service | Type | Methods |
+|---|---|---|
+| `collections` | `PluginCollectionService` | the methods above |
+| `users` | `PluginUserService` | `create`, `findById`, `listUsersByIds`, `findByEmail`, `listUsers`, `update`, `delete`, `authenticate`, `changePassword`, `hasPassword`, `updateProfile` |
+| `media` | `PluginMediaService` | `upload`, `findById`, `listMedia`, `update`, `delete`, `bulkUpload`, `bulkDelete`, `moveToFolder`, `getStorageType`, `hasStorage`, `createFolder`, `findFolderById`, `listRootFolders`, `listSubfolders`, `getFolderContents`, `updateFolder`, `deleteFolder`, `isImage`, `validateImage`, `getImageDimensions` |
+| `email` | `PluginEmailService` | `send`, `sendWithTemplate`, `sendPasswordResetEmail`, `sendEmailVerificationEmail`, `sendWelcomeEmail`, `isConfigured`, `canSendTemplate` |
+| `versions` | `PluginVersionsService` | `list`, `get`, `setLabel`, `deleteWorkingDraft`, `autosave`, `getAutosave`, `pendingEditRows` |
+
+`ctx.services` also has `singles` (the declared Singles), `jobs` (queue
+background work) and `plugins` (services other plugins contribute). The
+service types are `@experimental` and exported from `@nextlyhq/plugin-sdk`.
 
 ## Querying (D56)
 
@@ -238,22 +253,121 @@ if (warnings) {
 
 `deleteEntry` reports `item` as `{ id }`, since there is no row left to return.
 
+## Collection transactions
+
+`collections.withTransaction` runs its work in one transaction, and the
+`*InTransaction` methods write inside it. The work receives a
+`PluginCollectionTransaction`, an opaque token: pass it as the first argument
+of `createEntryInTransaction`, `updateEntryInTransaction` or
+`deleteEntryInTransaction`, which take the same arguments as `createEntry`,
+`updateEntry` and `deleteEntry` after it, `ServiceOpts` included.
+The token carries nothing else, so it cannot run SQL. Any other value passed
+where the token goes is rejected with `VALIDATION_ERROR`
+(`logContext.reason` is `plugin-transaction-token-unknown`).
+
+The token works only while the work runs. Kept and passed to an
+`*InTransaction` method after the work has settled, it is refused with
+`VALIDATION_ERROR` (`logContext.reason` is `plugin-transaction-finished`).
+A write the work started without awaiting is finished inside the transaction
+before it commits, and if it fails the transaction rolls back and
+`withTransaction` rejects with that failure (or with the work's own error, if
+the work threw). Await each write anyway, so the work sees its result.
+
+```ts
+await ctx.services.collections.warmLocalizedReadiness("orders");
+await ctx.services.collections.withTransaction(async tx => {
+  const order = await ctx.services.collections.createEntryInTransaction(
+    tx,
+    "orders",
+    { total: 40 },
+    { as: "user", user: ctx.user ?? undefined }
+  );
+  await ctx.services.collections.updateEntryInTransaction(
+    tx,
+    "orders",
+    order.id,
+    { status: "placed" },
+    { as: "user", user: ctx.user ?? undefined }
+  );
+});
+```
+
+The `*InTransaction` methods resolve `ServiceOpts` exactly as the access
+methods above do, so a transaction is no way around the access check: an
+`overrideAccess` key or a caller's `roles` passed to them are not read, and the
+caller's roles are looked up. They return the row itself
+(`deleteEntryInTransaction` returns nothing) rather than the
+`{ message, item, warnings? }` envelope.
+
+`ctx.services.users` may create and update accounts, but not decide who administers the
+site. It refuses, with `NextlyError` code `FORBIDDEN`, to create an install's first
+account (core makes that one super-admin), to give a role that reaches `super-admin`
+(directly or by inheritance) on create or update, and to change the password, email,
+activation, email verification or roles of an account that reaches `super-admin`, or to
+delete one. An address it marks verified is recorded as verified by `plugin`.
+
 ## When to drop to `ctx.db`
 
-`ctx.db` (raw Drizzle) is the **`@experimental`** escape hatch — unmanaged: it bypasses
-validation, hooks, RBAC, and events, and you own dialect portability. Reach for it only
-for things the services layer doesn't cover yet (aggregations beyond `count`). If you
-find yourself needing it often, that's a signal worth raising — the goal (D56) is that
-most plugins never touch it.
+`ctx.db` is the **`@experimental`** database surface — unmanaged: it bypasses
+validation, hooks, RBAC, and events. Reach for it only for things the services
+layer doesn't cover yet (aggregations beyond `count`), or for the tables your
+plugin declared itself. If you find yourself needing it often, that's a signal
+worth raising — the goal (D56) is that most plugins never touch it.
 
-It is Drizzle's fluent API for the configured dialect: `select`, `insert`,
-`update`, `delete`, and `transaction(async tx => { ... })`, which commits the
-work as one unit and rolls it back if the work throws, on every dialect and
-with or without `rawSql`. Inside it, write through `tx`. Without `rawSql`, `tx`
-has no nested `transaction`; with it, `tx` is the live handle and its
-`transaction` nests as a savepoint. Another service or `ctx.settings` called
-there runs on its own connection on PostgreSQL and MySQL, outside the
-transaction, and commits on its own.
+It comes in two layers:
+
+- **`ctx.db`** is typed and owner-checked: `select`, `insert`,
+  `insertReturning`, `update`, `delete`, `table`, `query` and `transaction`,
+  over the tables your plugin declared and its dependencies' tables. It
+  behaves the same on every dialect,
+  and a table your plugin may not reach is refused before a query is built,
+  and checked again when the query runs: a `ctx.db.query.<table>` entry or a
+  `select`, `update` or `delete` builder kept across a schema reload cannot
+  reach a table your plugin no longer may. A `select` builder is immutable:
+  `where`, `orderBy`, `limit` and `offset` each return a new builder and leave
+  the one they were called on as it was, and `first()` runs the query without
+  changing its builder, so one base builder can be narrowed several ways. See
+  [Tables of your own](/docs/plugins/schema#tables-of-your-own).
+- **`ctx.db.raw`** is Drizzle's fluent builder for the configured dialect —
+  `select`, `insert`, `update`, `delete` — plus `transaction`, with no owner
+  check, and you own dialect portability. It has no `execute`, `run` or
+  `query`. If your plugin declares `capabilities.db.rawSql` **and** the app
+  lists it in `db: { rawSqlPlugins: [...] }`, `ctx.db.raw` is the live Drizzle
+  instance instead, `execute` and `run` included. A plugin that declares
+  `rawSql` without being listed stops the boot. The grant is decided once,
+  when the boot resolves the plugin list: setting `capabilities.db.rawSql`
+  on a definition afterwards grants nothing. See
+  [Raw SQL](/docs/plugins/security#raw-sql).
+
+Both `transaction`s commit the work as one unit and roll it back if the work
+throws, on every dialect. Inside one, write through `tx`:
+
+- `ctx.db.transaction(async tx => { ... })` hands `tx` the same typed surface,
+  bound to the transaction's connection. `tx` has no `transaction` in its
+  type, and calling one anyway rejects with a `NextlyError`, code
+  `INVALID_INPUT` (`logContext.reason` is `nested-plugin-transaction`),
+  rather than opening a second transaction on another connection. Do the
+  nested work in the same callback, through `tx`.
+- `ctx.db.raw.transaction(async tx => { ... })` hands `tx` the fluent builder,
+  without a nested `transaction`. With `rawSql` listed, `tx` is the live handle
+  and its `transaction` nests as a savepoint.
+
+`tx` works only while the callback runs. Kept and called after the callback
+has settled, it is refused with `VALIDATION_ERROR` (`logContext.reason` is
+`plugin-transaction-finished`) rather than running outside the transaction.
+
+In `ctx.db.transaction`, a statement the callback started without awaiting is
+finished inside the transaction before it commits; if one fails, the
+transaction rolls back and rejects with that failure (or with the callback's
+own error, if the callback threw). In `ctx.db.raw.transaction`, awaiting each
+Drizzle statement before the callback returns is yours to do: a kept `tx` is
+refused, but a Drizzle builder made inside the callback carries the
+transaction's connection with it, so one awaited after the callback has
+settled runs outside the transaction.
+
+Another service or `ctx.settings` called inside a transaction runs on its own
+connection on PostgreSQL and MySQL, outside the transaction, and commits on its
+own.
 
 On SQLite the transaction holds the database's only connection until it ends. A
 service or `ctx.settings` called inside joins it as a savepoint, and its rows
@@ -284,11 +398,11 @@ transaction: every later transaction waits, and other requests' writes land in
 it without ever committing, so a restart loses them. Start shared work before
 the transactions that wait on it, or outside the transaction.
 
-There is no relational `query` namespace: the one that used to exist named a
-few core tables, so it could never answer about a plugin's own tables.
+Relational queries are on the typed surface, `ctx.db.query.<table>.findMany({ with })`,
+and reach only the tables `ctx.db` may reach. `ctx.db.raw` has no `query`
+namespace.
 
-Without `capabilities.db.rawSql` the handle has no `execute` or `run`; with it,
-`ctx.db` is the live Drizzle instance. The capability is a declaration a
-reviewer can read, not an enforced boundary: plugins run as trusted code.
+`capabilities.db.rawSql` and the app's `db.rawSqlPlugins` listing are a grant
+a reviewer can read, not an enforced boundary: plugins run as trusted code.
 
 See also: [Permissions](/docs/plugins/permissions) · [HTTP routes](/docs/plugins/routes).

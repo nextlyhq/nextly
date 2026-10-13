@@ -101,7 +101,8 @@ export default defineConfig({
   plus imperative **`setup` → `init` → `destroy`** lifecycle functions. All plugins'
   `setup`s run before any `init`; load order is a topological sort over `dependsOn`.
 - **`ctx` (in `init`/`destroy`)** gives you: `services` (managed, secure-by-default
-  data access — pass `{ as: "system" }` to elevate), `db` (raw Drizzle escape hatch),
+  data access — pass `{ as: "system" }` to elevate), `db` (typed, owner-checked access to your own tables;
+  `db.raw` is the Drizzle builder),
   `hooks` (in-transaction, modify/abort), `events` (post-commit, observe-only),
   `filters`/`actions` (typed seams), `self` (your entities' resolved slugs after any
   host `.rename()`), `logger`, `config`, and `nextlyVersion`.
@@ -121,7 +122,7 @@ The authoritative ledger of what is `@public` (stable) vs `@experimental` lives 
   (menu/pages/views), `ctx.events` + the event-name constants, the collection
   `HookContext`, and `@nextlyhq/plugin-sdk/testing`. Breaking a `@public` export
   requires a Nextly **major** (D40).
-- **Still `@experimental`** — the raw `ctx.db` escape hatch, `ctx.hooks` plugin
+- **Still `@experimental`** — `ctx.db` (typed) and its `ctx.db.raw` escape hatch, `ctx.hooks` plugin
   registration, filters/actions (D63), `secret()`, `useCan`/`<Can>`, and admin
   dashboard widgets (D22). No compatibility guarantee yet — each graduates once a
   first-party plugin exercises it (D55).

@@ -16,13 +16,7 @@ import {
 } from "../../plugins/plugin-options";
 
 import { defineOwnProperty } from "./own-property";
-
-/** Whether a value is a `{}` literal, as opposed to a Date, class instance, or null. */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object") return false;
-  const proto: unknown = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
-}
+import { isPlainObject } from "./plain-copy";
 
 /**
  * Rebuild a value so a validator holding it cannot reach the schema through it.

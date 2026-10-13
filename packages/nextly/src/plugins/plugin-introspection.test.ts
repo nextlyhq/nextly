@@ -6,6 +6,7 @@ import {
   type PluginMigration,
 } from "../domains/schema/migrate/plugin/plugin-migration";
 
+import { NO_PLUGIN_CONSENT } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { collectPluginInfo, findPluginInfo } from "./plugin-introspection";
 
@@ -86,6 +87,7 @@ describe("collectPluginInfo", () => {
   it("summarizes a plugin's contributions without running it", () => {
     const infos = collectPluginInfo(cfg(), [basePlugin(), fbPlugin()], {
       coreVersion: "1.0.0",
+      consent: NO_PLUGIN_CONSENT,
     });
     expect(infos).toHaveLength(2);
 
@@ -115,6 +117,7 @@ describe("collectPluginInfo", () => {
     };
     const infos = collectPluginInfo(cfg(), [basePlugin(), versioned], {
       coreVersion: "1.0.0",
+      consent: NO_PLUGIN_CONSENT,
     });
     expect(
       findPluginInfo(infos, "@nextlyhq/plugin-form-builder")!.manifest
@@ -129,7 +132,7 @@ describe("collectPluginInfo", () => {
     const infos = collectPluginInfo(
       cfg(),
       [basePlugin(), fbPlugin({ enabled: false })],
-      { coreVersion: "1.0.0" }
+      { coreVersion: "1.0.0", consent: NO_PLUGIN_CONSENT }
     );
     const fb = findPluginInfo(infos, "@nextlyhq/plugin-form-builder")!;
     expect(fb.enabled).toBe(false);
@@ -145,6 +148,7 @@ describe("collectPluginInfo", () => {
   it("findPluginInfo matches by exact name", () => {
     const infos = collectPluginInfo(cfg(), [basePlugin(), fbPlugin()], {
       coreVersion: "1.0.0",
+      consent: NO_PLUGIN_CONSENT,
     });
     expect(
       findPluginInfo(infos, "@nextlyhq/plugin-form-builder")?.version

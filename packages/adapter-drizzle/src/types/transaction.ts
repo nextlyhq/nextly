@@ -4,7 +4,7 @@
  * @packageDocumentation
  */
 
-import type { SQL } from "drizzle-orm";
+import type { AnyRelations, SQL } from "drizzle-orm";
 
 import type { SqlParam } from "./core";
 import type {
@@ -82,6 +82,22 @@ export interface TransactionContext {
    * @returns Array of result rows
    */
   execute<T = unknown>(sql: string, params?: SqlParam[]): Promise<T[]>;
+
+  /**
+   * An instance bound to the SAME transaction client with the relational
+   * query API (`db.query.*`) enabled — the transaction's counterpart of
+   * `getDrizzle(relations)`.
+   *
+   * The `getDrizzle()` instance has an empty `query` namespace, so a
+   * relational read inside the transaction needs this one; the pooled
+   * `getDrizzle(relations)` would read on a different connection and miss the
+   * transaction's uncommitted writes. Memoized per relations object, as
+   * `getDrizzle` is, so repeated calls with an unchanged config share one
+   * instance.
+   *
+   * @param relations - drizzle v1 relations config (defineRelations output)
+   */
+  drizzleWithRelations<T = unknown>(relations: AnyRelations): T;
 
   /**
    * Run a Drizzle-built statement within the transaction, for its effect.

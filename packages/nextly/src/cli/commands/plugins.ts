@@ -133,14 +133,16 @@ export function renderPluginInfo(
 async function loadPluginInfos(
   options: PluginsCommandOptions
 ): Promise<PluginInfo[]> {
-  const { config } = await loadConfig({
+  const { config, pluginConsent } = await loadConfig({
     configPath: options.config,
     cwd: options.cwd,
   });
+  // The grants as the app wrote them, read by the loader before any `setup`
+  // transformer ran, rather than derived again from the transformed config.
   return collectPluginInfo(
     config as unknown as NextlyServiceConfig,
     config.plugins ?? [],
-    { coreVersion: getCoreVersion() }
+    { coreVersion: getCoreVersion(), consent: pluginConsent }
   );
 }
 

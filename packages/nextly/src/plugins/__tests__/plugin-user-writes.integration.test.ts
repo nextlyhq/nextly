@@ -23,7 +23,7 @@ import { NextlyError } from "../../errors";
 import { ServiceContainer } from "../../services/index";
 import { consoleLogger } from "../../services/shared";
 import type { UserService } from "../../services/users/user-service";
-import { definePlugin } from "../plugin-context";
+import { definePlugin, type PluginUserService } from "../plugin-context";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -96,10 +96,10 @@ interface TestDb {
 /** Boot with a plugin that declares nothing, and return its user service. */
 async function boot(dialect: TestDialect): Promise<{
   t: TestNextly;
-  pluginUsers: UserService;
+  pluginUsers: PluginUserService;
   coreUsers: UserService;
 }> {
-  let pluginUsers: UserService | undefined;
+  let pluginUsers: PluginUserService | undefined;
   const plugin = definePlugin({
     name: "@test/user-writes",
     version: "1.0.0",
