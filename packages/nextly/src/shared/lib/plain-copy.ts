@@ -104,6 +104,13 @@ export type FrozenValue<V> = 0 extends 1 & V
 export interface PlainCopyOptions {
   /** Freeze every object and array the copy builds. Default false. */
   freeze?: boolean;
+  /**
+   * Copy `Date`, `Map` and `Set` instances too, rather than keep them by
+   * reference. Freezing cannot protect one — `setTime`, `set` and `add`
+   * reach internal state `Object.freeze` does not — so code that must not
+   * reach the original through them is handed copies. Default false.
+   */
+  copyInstances?: boolean;
 }
 
 /**
@@ -122,6 +129,9 @@ export function copyPlainValues<T>(
   const finish = <C extends object>(built: C): C =>
     options.freeze ? Object.freeze(built) : built;
   const copy = (current: unknown): unknown => {
+    if (options.copyInstances === true && isCopiedInstance(current)) {
+      return copies.get(current) ?? copyInstance(current, copies, copy);
+    }
     if (!Array.isArray(current) && !isPlainObject(current)) return current;
     const seen = copies.get(current);
     if (seen !== undefined) return seen;
@@ -130,6 +140,40 @@ export function copyPlainValues<T>(
       : finish(copyRecord(current, copies, copy));
   };
   return copy(value) as T;
+}
+
+/** The instances `copyInstances` copies. */
+type CopiedInstance = Date | Map<unknown, unknown> | Set<unknown>;
+
+function isCopiedInstance(value: unknown): value is CopiedInstance {
+  return value instanceof Date || value instanceof Map || value instanceof Set;
+}
+
+/**
+ * A new `Date`, `Map` or `Set` holding what `source` holds, a collection's
+ * entries each passed through `copy`. Recorded in `copies` first, as the
+ * other copiers are.
+ */
+function copyInstance(
+  source: CopiedInstance,
+  copies: Map<object, unknown>,
+  copy: (current: unknown) => unknown
+): CopiedInstance {
+  if (source instanceof Date) {
+    const date = new Date(source.getTime());
+    copies.set(source, date);
+    return date;
+  }
+  if (source instanceof Map) {
+    const map = new Map<unknown, unknown>();
+    copies.set(source, map);
+    for (const [key, value] of source) map.set(copy(key), copy(value));
+    return map;
+  }
+  const set = new Set<unknown>();
+  copies.set(source, set);
+  for (const item of source) set.add(copy(item));
+  return set;
 }
 
 /**

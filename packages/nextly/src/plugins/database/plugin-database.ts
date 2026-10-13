@@ -1127,9 +1127,13 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
       ) => {
         const reach = contributedReach(tableName, declared, deps);
         if (ids.length === 0) return [];
+        // Selected under the handle's own property names, then copied onto
+        // the authored keys as own properties: a key such as `__proto__`,
+        // assigned into an ordinary object, reaches the prototype setter and
+        // the column silently drops out of the row.
         const fields: Record<string, unknown> = { id: reach.key };
         for (const granted of reach.columns) {
-          fields[granted.key] = granted.column;
+          fields[granted.property] = granted.column;
         }
         const db = deps.db() as {
           select: (fields: unknown) => {
@@ -1144,7 +1148,9 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
             .from(reach.table)
             .where(inArray(reach.key as never, [...ids]))
         );
-        return rows as never;
+        return (rows as Record<string, unknown>[]).map(row =>
+          authoredRow(row, reach.columns)
+        ) as never;
       };
       const write = async (
         id: Parameters<ContributedColumns<typeof columns>["set"]>[0],
@@ -1443,6 +1449,26 @@ function contributedReach(
       column: built[contributedProperty(at)],
     })),
   };
+}
+
+/**
+ * A row selected under a handle's property names, keyed as its caller
+ * authored the columns, each defined as an own property.
+ */
+function authoredRow(
+  row: Record<string, unknown>,
+  columns: readonly { key: string; property: string }[]
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { id: row.id };
+  for (const column of columns) {
+    Object.defineProperty(out, column.key, {
+      value: row[column.property],
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return out;
 }
 
 /**
