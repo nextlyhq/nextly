@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../errors/nextly-error";
 import { FilterRegistry } from "../../filters/filter-registry";
+import { FilterSeams } from "../../filters/seams";
 import { collectHookPoints, createPayloadChecker } from "../hook-points";
 import type { PluginDefinition } from "../plugin-context";
 
@@ -65,23 +66,75 @@ describe("collectHookPoints", () => {
   });
 
   it("refuses a collision, naming both owners", () => {
+    // Two package names that collapse to one slug, so each point passes its
+    // own plugin's prefix rule and only the collision check can refuse it.
+    // Points are collected before duplicate slugs are refused, so this is the
+    // refusal such a pair actually meets at boot.
     const err = (() => {
       try {
         collectHookPoints([
-          plugin("@acme/auth", [{ name: "shared.point", kind: "filter" }], {
-            name: "@acme/auth",
-          }),
-          plugin("@acme/auth-two", [{ name: "shared.point", kind: "filter" }]),
+          plugin("@acme/auth", [{ name: "acme-auth.profile", kind: "filter" }]),
+          plugin("acme-auth", [{ name: "acme-auth.profile", kind: "action" }]),
         ]);
       } catch (e) {
         return e as NextlyError;
       }
       return undefined;
     })();
-    // Both are needed: with one named, the reader has to go and find the other.
     expect((err?.logContext as { reason?: string }).reason).toBe(
-      "hook-point-outside-prefix"
+      "hook-point-collision"
     );
+    // Both are needed: with one named, the reader has to go and find the other.
+    expect((err?.logContext as { owners?: string[] }).owners).toEqual([
+      "@acme/auth",
+      "acme-auth",
+    ]);
+  });
+
+  // Each of core's seams, declared by the one plugin whose slug would let it
+  // past the prefix rule: `email` declaring `email.beforeSend`. Only the
+  // reservation can refuse these. Taken from `FilterSeams` itself, so a seam
+  // core adds later is covered without editing this list.
+  it.each(Object.values(FilterSeams))(
+    "refuses core's seam %s, naming the plugin and the point",
+    seam => {
+      const slug = seam.slice(0, seam.indexOf("."));
+      const err = (() => {
+        try {
+          collectHookPoints([plugin(slug, [{ name: seam, kind: "filter" }])]);
+        } catch (e) {
+          return e as NextlyError;
+        }
+        return undefined;
+      })();
+      expect(err?.logContext).toMatchObject({
+        reason: "hook-point-reserved",
+        plugin: slug,
+        hookPoint: seam,
+      });
+    }
+  );
+
+  it("refuses a new point under a prefix core uses for its seams", () => {
+    // Not one of today's seams, but the prefix is core's: a seam core adds
+    // there later would otherwise meet a plugin already holding its name.
+    expect(
+      reasonOf(() =>
+        collectHookPoints([
+          plugin("email", [{ name: "email.digest", kind: "action" }]),
+        ])
+      )
+    ).toBe("hook-point-reserved");
+  });
+
+  it("accepts a slug that only begins with a core prefix's word", () => {
+    // The control for the two tests above: `emailer.sent` shares its first
+    // five letters with `email.`, and is the plugin's own namespace, not
+    // core's. A rule that matched the word without its dot would refuse it.
+    const points = collectHookPoints([
+      plugin("emailer", [{ name: "emailer.sent", kind: "action" }]),
+    ]);
+    expect(points.get("emailer.sent")?.owner).toBe("emailer");
   });
 
   it("ignores a disabled plugin's declarations", () => {
