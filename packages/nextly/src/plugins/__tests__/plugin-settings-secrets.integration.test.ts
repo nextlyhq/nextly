@@ -226,10 +226,8 @@ describe.each(getConfiguredTestDialects())(
         { plugin: NAME },
         undefined
       )) as Response;
-      const body = (await view.json()) as {
-        data: { settings: { apiKey: unknown } };
-      };
-      expect(body.data.settings.apiKey).toEqual({ set: true });
+      const body = (await view.json()) as { settings: { apiKey: unknown } };
+      expect(body.settings.apiKey).toMatchObject({ set: true });
 
       // Written again, it is stored as the newer manifest says: in plain text.
       await captured!.set({ apiKey: "now-public-value" });

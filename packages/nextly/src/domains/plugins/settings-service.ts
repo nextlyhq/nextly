@@ -756,7 +756,12 @@ export class PluginSettingsService {
     const rows = Object.keys(patch).map(key =>
       patch[key] === null || !Object.hasOwn(parsed.data, key)
         ? this.removedRow(key, opts)
-        : this.rowFor(key, parsed.data[key], opts, decoded.sealedPaths.get(key))
+        : this.rowFor(
+            key,
+            parsed.data[key],
+            opts,
+            sealedPathsKept(decoded.sealedPaths.get(key), patch[key])
+          )
     );
     // Compared on the DECODED values: the stored text of a secret changes on
     // every write, since each seal draws a fresh IV, so comparing rows would
@@ -1139,6 +1144,26 @@ export class PluginSettingsService {
       path
     );
   }
+}
+
+/**
+ * The leaves a write keeps sealed that the manifest may no longer name: each
+ * stored encrypted, except those the patch writes a new value to.
+ *
+ * A path the manifest stopped calling secret stays encrypted and unreturned
+ * until a new value is written to it, and is stored as the manifest says from
+ * then on. Re-sealing the new value as well kept it hidden from the admin for
+ * good. A sealed leaf the patch does not reach keeps its seal: a write of its
+ * sibling is not a new value for it. A path the manifest does call secret is
+ * sealed regardless, by the encryption that follows the manifest.
+ */
+function sealedPathsKept(
+  sealed: readonly string[][] | undefined,
+  written: unknown
+): string[][] {
+  return (sealed ?? []).filter(
+    path => valueAtPath(written, path.slice(1)) === undefined
+  );
 }
 
 /**

@@ -1804,3 +1804,45 @@ describe("sealing stored secrets before the plugin runs", () => {
     ).rejects.toThrow("database unavailable");
   });
 });
+
+describe("a value written to a path no longer secret", () => {
+  it("is stored as the newer manifest says, and shown to the admin", async () => {
+    // Encrypted and unreturned only until a new value is written to the path:
+    // re-sealing the new value too kept it hidden from the admin for good,
+    // though the manifest calls it public.
+    const store = memoryStore();
+    await service(store, [KEY_A], ["clientSecret"]).set({
+      clientSecret: SECRET_VALUE,
+    });
+
+    const newer = service(store, [KEY_A], []);
+    await newer.set({ clientSecret: "now-public-value" });
+
+    const row = store.rows.find(r => r.key === "clientSecret");
+    expect(row?.value).toContain("now-public-value");
+    expect((await newer.view()).settings).toMatchObject({
+      clientSecret: "now-public-value",
+    });
+  });
+
+  it("keeps a sealed leaf the write did not touch sealed", async () => {
+    // The control: dropping every sealed path of a key the patch names would
+    // pass the case above while opening up `github`'s secret, which nobody
+    // wrote again.
+    const store = memoryStore();
+    await service(store, [KEY_A], ["providers.*.clientSecret"]).set({
+      providers: {
+        google: { clientId: "g", clientSecret: SECRET_VALUE },
+        github: { clientId: "h", clientSecret: ROTATED_SECRET_VALUE },
+      },
+    });
+
+    await service(store, [KEY_A], []).set({
+      providers: { google: { clientId: "g", clientSecret: "google-public" } },
+    });
+
+    const value = store.rows.find(r => r.key === "providers")?.value ?? "";
+    expect(value).toContain("google-public");
+    expect(value).not.toContain(ROTATED_SECRET_VALUE);
+  });
+});
