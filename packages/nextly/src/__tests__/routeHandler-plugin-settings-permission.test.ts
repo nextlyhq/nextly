@@ -19,6 +19,8 @@ const granted = vi.hoisted(() => new Set<string>());
 const plugins = vi.hoisted(() => ({
   registered: undefined as unknown[] | undefined,
   handler: undefined as unknown[] | undefined,
+  /** What a boot registers, once one runs; none until a case says so. */
+  booted: undefined as unknown[] | undefined,
 }));
 
 vi.mock("../auth/middleware", async importOriginal => {
@@ -61,6 +63,10 @@ vi.mock("../route-handler", async importOriginal => ({
   ...(await importOriginal<typeof import("../route-handler")>()),
   getHandlerConfig: () =>
     plugins.handler === undefined ? null : { plugins: plugins.handler },
+  // A boot registers the plugin list its `setup` transformers leave.
+  ensureServicesInitialized: async () => {
+    if (plugins.booted !== undefined) plugins.registered = plugins.booted;
+  },
 }));
 
 import { _resolveAuthorizationForTest as resolveAuthorization } from "../routeHandler";
@@ -112,6 +118,7 @@ beforeEach(() => {
   // registered config is the only source.
   plugins.registered = declared();
   plugins.handler = undefined;
+  plugins.booted = undefined;
 });
 
 describe("a plugin that names its settings permission", () => {
@@ -149,9 +156,10 @@ describe("a plugin that names none", () => {
 describe("on a cold process, before any dispatch has booted services", () => {
   beforeEach(() => {
     // The first request: the handlers hold the config, and nothing has been
-    // registered yet.
+    // registered until the boot runs.
     plugins.registered = undefined;
     plugins.handler = declared();
+    plugins.booted = declared();
   });
 
   it("admits a write from a caller holding the plugin's permission", async () => {
@@ -162,5 +170,40 @@ describe("on a cold process, before any dispatch has booted services", () => {
     // A gate that found no declaration here fell back to core's permission,
     // which admits exactly the caller the plugin's own one keeps out.
     expect(await admits(["manage-settings"], "PATCH")).toBe(false);
+  });
+});
+
+describe("on a cold process whose setup transformer changed the permission", () => {
+  beforeEach(() => {
+    // Declared with one permission; a `setup` transformer leaves the plugin
+    // naming another, which is the one the dispatch then serves under.
+    plugins.registered = undefined;
+    plugins.handler = declared();
+    plugins.booted = declared().map(plugin => {
+      const definition = plugin as {
+        name: string;
+        contributes?: Record<string, unknown>;
+      };
+      return definition.name === "@acme/pay"
+        ? {
+            ...definition,
+            contributes: {
+              ...definition.contributes,
+              permissions: [{ action: "manage", resource: "pay-settings" }],
+              settingsPermission: "manage-pay-settings",
+            },
+          }
+        : definition;
+    });
+  });
+
+  it("refuses a write from a caller holding only the permission as declared", async () => {
+    // Judged against the declared list, this first write passed, and the
+    // dispatch then performed it under a permission the caller did not hold.
+    expect(await admits(["update-pay-settings"], "PATCH")).toBe(false);
+  });
+
+  it("admits a write from a caller holding the permission the boot resolved", async () => {
+    expect(await admits(["manage-pay-settings"], "PATCH")).toBe(true);
   });
 });

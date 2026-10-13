@@ -920,16 +920,18 @@ async function resolveAuthorization(
     // `manage-settings` (`contributes.settingsPermission`), checked at boot to
     // be one it declares.
     //
-    // Read from the handler's config first: this gate runs before the
-    // dispatch boots services, so on a cold process the registered config does
-    // not exist yet, and reading only that one fell back to `manage-settings`
-    // for the first request — refusing the plugin's own permission and
-    // admitting the one it replaced. The handler's config holds the declared
-    // plugins before boot and the booted ones after it, the same list the
-    // plugin routes are dispatched from. The registered config stays the
-    // fallback for a process whose handlers were given none.
+    // Services are booted before the declaration is read, as the dispatch
+    // after this gate boots them anyway. On a cold process neither config
+    // answered for the boot: the registered one did not exist yet, and the
+    // handler's still held the plugins as declared, before a `setup`
+    // transformer could change one's `settingsPermission`. Either way the
+    // first request was judged against a permission the dispatch would not
+    // serve under. Booted, the registered config is the plugin list the
+    // dispatch reads; the handler's config stays the fallback for a process
+    // that registered without one.
+    await ensureServicesInitialized();
     const write = settingsWritePermission(
-      getHandlerConfig()?.plugins ?? readServiceConfig()?.plugins,
+      readServiceConfig()?.plugins ?? getHandlerConfig()?.plugins,
       routeParams?.plugin
     );
     if (httpMethod === "GET") {
