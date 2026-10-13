@@ -101,6 +101,10 @@ describe("users:clear-plaintext-passwords", () => {
     expect(await runClearPlaintextPasswords(true, context, true)).toBe(2);
     expect(clear).toHaveBeenCalledTimes(1);
     expect(printed.join("\n")).toContain("Cleared the stored password of 2");
+    // Renewal ends at once; a token already issued lasts until it expires.
+    expect(printed.join("\n")).toContain(
+      "an access token already issued stays valid until it expires"
+    );
   });
 
   it("prints counts, never an account", async () => {

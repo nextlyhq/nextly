@@ -102,7 +102,7 @@ export async function runClearPlaintextPasswords(
         logger.success("No account holds a password stored as given.");
       } else if (apply) {
         logger.success(
-          `Cleared the stored password of ${String(count)} account(s) and ended their sessions. Each person sets a new password through a password reset, or an administrator sets one.`
+          `Cleared the stored password of ${String(count)} account(s) and ended their sessions: none can be renewed, and an access token already issued stays valid until it expires (fifteen minutes by default). Each person sets a new password through a password reset, or an administrator sets one.`
         );
       } else {
         logger.warn(

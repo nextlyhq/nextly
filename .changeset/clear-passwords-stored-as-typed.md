@@ -33,7 +33,8 @@ passwords as typed instead of hashing them (32 characters or more containing a c
 given when an account was created, or any value sent to `PATCH /api/users/:id/password`).
 Such a value never let anyone sign in, but it is readable in the database and its backups.
 
-Run the command once after upgrading. Without flags it only counts the affected accounts;
+Run the command once the upgraded version serves every instance, since an old instance
+can still store a password as typed. Without flags it only counts the affected accounts;
 with `--apply --confirm-default-hasher` it clears each stored value and ends that account's
 sessions, printing only a count: none can be renewed, and an access token already issued
 lasts until it expires, within fifteen minutes by default. `--apply` alone changes nothing: the second flag is your

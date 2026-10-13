@@ -642,6 +642,11 @@ scrypt or pbkdf2 string in the modular-crypt form their libraries write (such as
 `$argon2id$v=19$m=…,t=…,p=…$salt$hash`), or a hex salt and digest joined by a colon. Those
 are left as they are. A value that only starts with `$` is not one of them, and is counted.
 
+Clear them only once the upgraded version serves every instance, with no instance of the
+old one left running. An old instance can still store a password as typed, and one stored
+after the command has passed its account stays until the command runs again. If you can't
+be sure, run it again after the rollout.
+
 To clear them, confirming that no stored password was written by a custom hasher:
 
 ```bash
