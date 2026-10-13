@@ -1715,14 +1715,17 @@ export class UserMutationService extends BaseService {
       const hasFieldUpdates = Object.keys(updateData).length > 0;
 
       // A plugin may not turn the account into an externally verified
-      // identity's (active, verified, no password); see the method. Asked in
-      // the transaction below, holding the account's row, before the write.
-      // Only activating or verifying can bring an account into that shape (a
-      // password takes it out), so no other update pays for the locking read.
+      // identity's (active, verified, no password), nor move one to another
+      // address; see the method. Asked in the transaction below, holding the
+      // account's row, before the write. Activating or verifying can bring an
+      // account into that shape, and an address change keeps it there under
+      // an address no provider asserted; a password takes it out. No other
+      // update pays for the locking read.
       const guardsExternalIdentity =
         caller === "plugin" &&
         (updateData.isActive !== undefined ||
-          updateData.emailVerified !== undefined);
+          updateData.emailVerified !== undefined ||
+          updateData.email !== undefined);
 
       // 2b) Extract custom field values from changes (only fields present in payload)
       const hasExt = this.hasCustomFields();
@@ -2125,8 +2128,10 @@ export class UserMutationService extends BaseService {
    * by verifying an active invite say, would mint one outside that hand-off.
    * Judged on the account the write leaves: one already in that shape, made
    * by a login plugin's sign-in, still takes a plugin's other edits, and may
-   * be deactivated or given a password, but not re-verified or reactivated,
-   * which would restate on the plugin's word what the provider asserted.
+   * be deactivated or given a password, but not re-verified, reactivated or
+   * moved to another address while it stays in that shape. Each would
+   * restate on the plugin's word what the provider asserted; a new address
+   * kept verified is one a login plugin's sign-in could then be matched to.
    *
    * Asked inside the write's transaction, before the write, holding the
    * account's row on PostgreSQL and MySQL as the super-admin check beside it

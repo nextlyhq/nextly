@@ -34,5 +34,6 @@ system has verified: active, verified and without a password. Through
 activating a verified one that has none, both at once, or reactivating one core made for
 a verified person. Core makes those accounts only when one of the app's login plugins
 hands it a sign-in. Such an account still takes a plugin's other edits, and a plugin may
-deactivate it or give it a password. An active account with no password that is not
+deactivate it or give it a password, but may not move it to another address unless the
+same write gives it a password. An active account with no password that is not
 verified stays allowed.

@@ -721,6 +721,47 @@ describe.each(getConfiguredTestDialects())(
       expect((await userRow(t, "external@example.com"))?.name).toBe("Renamed");
     });
 
+    it("refuses moving an account core made to another address, unless it gets a password", async () => {
+      // Kept verified under an address no provider asserted, the account is
+      // one a login plugin's sign-in could be matched to by that address.
+      const { t, pluginUsers, coreUsers } = await boot(dialect);
+      await seedFounder(coreUsers);
+      const id = await externalAccount(t);
+
+      await expect(
+        pluginUsers.update(id, { email: "elsewhere@example.com" }, CONTEXT)
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect((await controlColumns(t, id)).email).toBe("external@example.com");
+
+      // The controls: with a password in the same write the account leaves
+      // that shape, so the move is allowed; and core moves it either way.
+      await pluginUsers.update(
+        id,
+        { email: "moved@example.com", password: "Passw0rd!long" },
+        CONTEXT
+      );
+      expect((await controlColumns(t, id)).email).toBe("moved@example.com");
+      const other = await new ServiceContainer(
+        t.adapter
+      ).users.createExternalUser(
+        {
+          email: "second@example.com",
+          name: "Second",
+          roleIds: [await makeRole(t, "author")],
+          emailVerifiedAt: new Date(),
+        },
+        { user: undefined } as never
+      );
+      await coreUsers.update(
+        String(other.id),
+        { email: "core-moved@example.com" },
+        CONTEXT
+      );
+      expect((await controlColumns(t, String(other.id))).email).toBe(
+        "core-moved@example.com"
+      );
+    });
+
     it("refuses reactivating an account core made, and core still reactivates it", async () => {
       const { t, pluginUsers, coreUsers } = await boot(dialect);
       await seedFounder(coreUsers);
