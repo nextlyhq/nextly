@@ -197,12 +197,14 @@ function storeSharedDecision(
 
 class PermissionChecker {
   private memo = new Map<string, boolean>();
-  private t = getTablesLazy();
+  private t: ReturnType<typeof getTablesLazy>;
   private cacheService: PermissionCacheService | null = null;
 
-  constructor() {
-    // Refresh tables reference in case it wasn't initialized yet
-    this.t = getTablesLazy();
+  constructor(dialect?: string) {
+    // The tables of the dialect the reads run on: the caller's, when it reads
+    // through a database of its own, whose dialect the process's setting need
+    // not name; the configured one otherwise.
+    this.t = dialect ? getDialectTables(dialect) : getTablesLazy();
 
     // Initialize DB cache service if enabled
     if (CACHE_ENABLED) {
@@ -710,10 +712,13 @@ export async function hasPermission(
   resource: string,
   // Optional transaction-bound executor so the reads run on the caller's
   // transaction connection instead of the pool; see the checker method above.
-  executor?: unknown
+  executor?: unknown,
+  // The dialect `executor` reads, when the caller holds its own database.
+  // Absent, the process's configured dialect, which names the global one.
+  dialect?: string
 ): Promise<boolean> {
   try {
-    const checker = new PermissionChecker();
+    const checker = new PermissionChecker(dialect);
     return await checker.hasPermission(userId, action, resource, executor);
   } catch {
     getAuthLogger()?.log?.("error", {

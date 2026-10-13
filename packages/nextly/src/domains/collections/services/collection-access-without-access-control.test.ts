@@ -55,7 +55,13 @@ describe("checkCollectionAccess with no access-control service", () => {
       });
 
     expect(result?.statusCode).toBe(403);
-    expect(grants).toHaveBeenCalledWith("user-1", "read", "pages", serviceDb);
+    expect(grants).toHaveBeenCalledWith(
+      "user-1",
+      "read",
+      "pages",
+      serviceDb,
+      "postgresql"
+    );
   });
 
   it("reads the grants inside the caller's transaction when it is in one", async () => {
@@ -70,7 +76,13 @@ describe("checkCollectionAccess with no access-control service", () => {
       executor: tx,
     });
 
-    expect(grants).toHaveBeenCalledWith("user-1", "update", "pages", tx);
+    expect(grants).toHaveBeenCalledWith(
+      "user-1",
+      "update",
+      "pages",
+      tx,
+      "postgresql"
+    );
   });
 
   it("admits a signed-in caller the database grants admit", async () => {

@@ -184,15 +184,17 @@ export class CollectionAccessService extends BaseService {
               resource: collectionName,
               executor,
             })
-          : // On this service's own database. Without an executor the
-            // check reads through the global container, which a setup with
-            // no access-control service may not have filled, or may have
-            // filled for another instance.
+          : // On this service's own database, with its dialect's tables.
+            // Without them the check reads through the global container and
+            // the process's configured dialect, which a setup with no
+            // access-control service may not have set, or may have set for
+            // another instance.
             await hasPermission(
               user.id,
               operation,
               collectionName,
-              executor ?? this.db
+              executor ?? this.db,
+              this.dialect
             );
         if (!allowed) {
           return {

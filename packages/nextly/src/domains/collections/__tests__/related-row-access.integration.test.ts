@@ -41,8 +41,11 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { consoleLogger } from "../../../services/shared";
+import { _resetEnvCache } from "../../../shared/lib/env";
 import type { TrustBound } from "../../../services/collections/trust-grant";
 import { ApiKeyService } from "../../auth/services/api-key-service";
+import { CollectionAccessService } from "../services/collection-access-service";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -514,6 +517,48 @@ describe.each(getConfiguredTestDialects())(
           }
         } finally {
           checks.mockRestore();
+        }
+      });
+
+      it("reads the Direct API gate's fallback grants on its own database, whatever dialect the process names", async () => {
+        // An embedder's gate, built on its adapter with no access-control
+        // service, in a process whose configured dialect names another
+        // database: the real grant lookup runs on the gate's own tables.
+        const fx = await boot(dialect);
+        const gate = new CollectionAccessService(fx.t.adapter, consoleLogger);
+        const configured = {
+          dialect: process.env.DB_DIALECT,
+          url: process.env.DATABASE_URL,
+        };
+        process.env.DB_DIALECT = dialect === "sqlite" ? "postgresql" : "sqlite";
+        // PostgreSQL's settings need a URL to validate; nothing connects to it.
+        if (dialect === "sqlite") {
+          process.env.DATABASE_URL = "postgres://unused@localhost:1/unused";
+        }
+        _resetEnvCache();
+        try {
+          // The instrument: the process now names another dialect's tables.
+          expect(getDialectTables()).not.toBe(getDialectTables(dialect));
+          const ask = (id: string) =>
+            gate.checkCollectionAccess({
+              collectionName: "pages",
+              operation: "read",
+              user: { id },
+              overrideAccess: false,
+            });
+          // The caller holding `read-pages` is served...
+          expect(await ask(fx.pageReader)).toBeNull();
+          // ...and the control, a caller without it, is refused.
+          expect((await ask(fx.stranger))?.statusCode).toBe(403);
+        } finally {
+          for (const [name, value] of [
+            ["DB_DIALECT", configured.dialect],
+            ["DATABASE_URL", configured.url],
+          ] as const) {
+            if (value === undefined) delete process.env[name];
+            else process.env[name] = value;
+          }
+          _resetEnvCache();
         }
       });
 
