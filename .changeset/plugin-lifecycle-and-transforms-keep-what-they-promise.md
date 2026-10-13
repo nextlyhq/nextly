@@ -40,6 +40,11 @@ promise in more cases.
   recorded as finished.** It stops with `PLUGIN_UNINSTALL_IRREVERSIBLE`
   (`tables-left-by-down`) and names the table, instead of marking the plugin
   uninstalled over it.
+- **`nextly plugins install` and `uninstall` refuse a database `nextly
+migrate` has not set up yet**, naming the command to run, instead of
+  failing on a missing table part way through; the connection is released
+  either way. Install's summary counts the tables it recorded, not owner
+  rows.
 - **The uninstall confirmation lists only elements on tables the plugin
   owns**, not other contributors' elements on a table it added an index to.
 - **A transform receives copies of `Date`, `Map` and `Set` values**, so

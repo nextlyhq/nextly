@@ -219,8 +219,15 @@ export async function runPluginInstallCommand(
     return rows;
   });
 
+  // Tables, not owner rows: a plugin's element rows (a column or index on
+  // another owner's table) and its tables' own element rows are rows too.
+  const tables = new Set(
+    owned
+      .filter(row => (row.elementKind ?? "table") === "table")
+      .map(row => row.tableName)
+  );
   deps.logger.success(
-    `${plugin.name} installed (${String(owned.length)} table(s) recorded).`
+    `${plugin.name} installed (${String(tables.size)} table(s) recorded).`
   );
 }
 

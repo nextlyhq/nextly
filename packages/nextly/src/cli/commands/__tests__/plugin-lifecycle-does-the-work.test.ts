@@ -263,6 +263,57 @@ describe("plugins uninstall over a DOWN that leaves a table", () => {
   });
 });
 
+describe("what install reports", () => {
+  it("counts tables, not owner rows", async () => {
+    // One table, with an index row on it and a column the plugin added to
+    // another owner's table: three rows, one table.
+    const base = {
+      ownerKind: "plugin",
+      ownerId: "@acme/fx",
+      migratedBy: "plugin:@acme/fx",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active",
+    };
+    const rows = [
+      {
+        ...base,
+        tableName: "fx__notes",
+        elementKind: "table",
+        elementName: "",
+      },
+      {
+        ...base,
+        tableName: "fx__notes",
+        elementKind: "index",
+        elementName: "i",
+      },
+      {
+        ...base,
+        tableName: "dc_posts",
+        elementKind: "column",
+        elementName: "c",
+      },
+    ];
+    const success = vi.fn();
+    await runPluginInstallCommand(
+      "@acme/fx",
+      deps({
+        logger: { ...logger, success } as never,
+        db: {
+          select: () => ({
+            from: () => Object.assign(rows, { where: () => rows }),
+          }),
+          update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+        } as never,
+      })
+    );
+    expect(success).toHaveBeenCalledWith(
+      "@acme/fx installed (1 table(s) recorded)."
+    );
+  });
+});
+
 describe("plugins install over a dependency that is not installed", () => {
   // `@acme/fx` requires `@acme/core`, which declares a module the ledger does
   // not show applied: its install never happened on this database.
