@@ -268,9 +268,13 @@ export class SchemaDraftStore {
   /**
    * Everything registered so far, as one string two stores can compare: every
    * table and every adopted table in name order, with its columns, indexes
-   * and what was contributed to it. Two runs of the same hooks over the same input leave equal states
-   * after each hook, which is how a hook whose output changes between builds
-   * is found and named.
+   * and what was contributed to it. Two runs of the same hooks over the same
+   * input leave equal states after each hook, which is how a hook whose
+   * output changes between builds is found and named.
+   *
+   * Canonical, so only a difference in what was declared counts: an object's
+   * keys are sorted at every depth, since two runs may build one declaration
+   * with its properties in a different order, and a set is a sorted list.
    */
   state(): string {
     const byName = (a: DraftTable, b: DraftTable) =>
@@ -283,12 +287,22 @@ export class SchemaDraftStore {
         // the runtime serves.
         adopted: [...this.adopted.values()].sort(byName),
       },
-      (_key, value: unknown) =>
-        value instanceof Set
-          ? [...(value as Set<unknown>)].map(String).sort()
-          : typeof value === "bigint"
-            ? `${value.toString()}n`
-            : value
+      (_key, value: unknown) => {
+        if (value instanceof Set) {
+          return [...(value as Set<unknown>)].map(String).sort();
+        }
+        if (typeof value === "bigint") return `${value.toString()}n`;
+        if (
+          typeof value === "object" &&
+          value !== null &&
+          !Array.isArray(value)
+        ) {
+          return Object.fromEntries(
+            Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+          );
+        }
+        return value;
+      }
     );
   }
 
