@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { hashPassword } from "../../../auth/password/index";
 import { getDialectTables } from "../../../database/index";
 import { generateSqliteCoreTableStatements } from "../../../database/sqlite-core-tables";
+import { describeError } from "../../../errors/index";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -26,11 +27,13 @@ import { PlainTextPasswordCleanup } from "../services/plaintext-password-cleanup
  * Work to run once an account's clearing has begun, before its write: what
  * another request could commit in that gap. `beforeClear` runs first, given
  * the account's id; `failSessionEnd` names an account whose sessions cannot be
- * ended, so the write that clears its value is followed by a failure.
+ * ended, so the write that clears its value is followed by a failure, and the
+ * failure's message, which can quote the statement's parameters as a
+ * driver's does.
  */
 const between = vi.hoisted(() => ({
   beforeClear: undefined as ((userId: string) => Promise<void>) | undefined,
-  failSessionEnd: undefined as string | undefined,
+  failSessionEnd: undefined as { userId: string; message: string } | undefined,
 }));
 
 vi.mock("../services/password-write", async importOriginal => {
@@ -44,7 +47,8 @@ vi.mock("../services/password-write", async importOriginal => {
       >
     ) => {
       await between.beforeClear?.(String(args.userId));
-      if (between.failSessionEnd !== String(args.userId)) {
+      const failure = between.failSessionEnd;
+      if (failure?.userId !== String(args.userId)) {
         return actual.updateUserEndingSessions(tx, tables, dialect, args);
       }
       // The same transaction, whose session delete fails after the update.
@@ -52,7 +56,7 @@ vi.mock("../services/password-write", async importOriginal => {
         get(target, prop) {
           if (prop === "delete") {
             return () => {
-              throw new Error("the sessions could not be ended");
+              throw new Error(failure.message);
             };
           }
           const value: unknown = Reflect.get(target, prop);
@@ -75,6 +79,19 @@ afterEach(async () => {
 const SHORT_PLAIN = "hunter2-as-typed";
 const COLON_PLAIN = "Correct-Horse:Battery-Staple:2026-Phrase";
 const NEW_PASSWORD = "Str0ng-P@ssw0rd!";
+// Plain text that only starts like a modular-crypt string: typed as given,
+// and cleared like any other.
+const DOLLAR_PLAIN = "$hunter2-as-typed";
+const DOLLAR_PHRASE = "$Correct-Horse:Battery-Staple:2026-Phrase";
+const NOT_ARGON2 = "$argon2id$not-a-hash";
+const PLAIN_VALUES = [
+  SHORT_PLAIN,
+  COLON_PLAIN,
+  DOLLAR_PLAIN,
+  DOLLAR_PHRASE,
+  NOT_ARGON2,
+];
+const PLAIN_KINDS = ["short", "colon", "dollar", "dollarphrase", "fakeargon2"];
 // What other password hashers write: an app's own `passwordHasher`, or a hash
 // made elsewhere that account creation once accepted. Neither is plain text.
 const MODULAR_CRYPT = {
@@ -120,6 +137,9 @@ async function seed(t: TestNextly): Promise<Record<string, string | null>> {
     hashed: await hashPassword(NEW_PASSWORD),
     short: SHORT_PLAIN,
     colon: COLON_PLAIN,
+    dollar: DOLLAR_PLAIN,
+    dollarphrase: DOLLAR_PHRASE,
+    fakeargon2: NOT_ARGON2,
     ...MODULAR_CRYPT,
     hexpair: HEX_SALT_AND_DIGEST,
     none: null,
@@ -202,20 +222,21 @@ describe.each(getConfiguredTestDialects())(
 
       // Not core's hash, nor in another hasher's format. The colon value is
       // the one account creation kept as given, and is found.
-      expect([...found].sort()).toEqual(["user-colon", "user-short"]);
+      expect([...found].sort()).toEqual(
+        PLAIN_KINDS.map(kind => `user-${kind}`).sort()
+      );
       // Ids only: no stored value comes back from the read.
       const output = JSON.stringify(found);
-      expect(output).not.toContain(SHORT_PLAIN);
-      expect(output).not.toContain(COLON_PLAIN);
+      for (const value of PLAIN_VALUES) expect(output).not.toContain(value);
     });
 
     it("clears those values and ends their sessions, leaving every other account as it was", async () => {
       const t = await boot(dialect);
       const stored = await seed(t);
 
-      expect(await cleanup(t).clear()).toBe(2);
+      expect(await cleanup(t).clear()).toBe(PLAIN_KINDS.length);
 
-      for (const kind of ["short", "colon"]) {
+      for (const kind of PLAIN_KINDS) {
         expect(await account(t, kind)).toEqual({
           passwordHash: null,
           sessions: 0,
@@ -255,7 +276,7 @@ describe.each(getConfiguredTestDialects())(
           .where(eq(users.id, "user-short"));
       };
 
-      expect(await cleanup(t).clear()).toBe(1);
+      expect(await cleanup(t).clear()).toBe(PLAIN_KINDS.length - 1);
 
       expect(await account(t, "short")).toEqual({
         passwordHash: replacement,
@@ -276,11 +297,24 @@ describe.each(getConfiguredTestDialects())(
       // outside the account's transaction from one made inside it.
       const t = await boot(dialect);
       await seed(t);
-      between.failSessionEnd = "user-short";
+      // A driver's message for a failed statement quotes its parameters, and
+      // the clearing statement's include the value being cleared.
+      between.failSessionEnd = {
+        userId: "user-short",
+        message: `Failed query: delete from refresh_tokens; params: ${SHORT_PLAIN}`,
+      };
 
-      await expect(cleanup(t).clear()).rejects.toThrow(
-        "the sessions could not be ended"
-      );
+      const error = await cleanup(t)
+        .clear()
+        .then(
+          () => null,
+          (failure: unknown) => failure
+        );
+
+      expect(error).toMatchObject({ code: "INTERNAL_ERROR" });
+      // Reported by account and kind, never by the driver's text.
+      expect(describeError(error)).not.toContain(SHORT_PLAIN);
+      expect(JSON.stringify(error)).not.toContain(SHORT_PLAIN);
 
       expect(await account(t, "short")).toEqual({
         passwordHash: SHORT_PLAIN,
@@ -310,11 +344,40 @@ describe.each(getConfiguredTestDialects())(
           .map(call => JSON.stringify(call))
           .join("\n");
         expect(written).toContain("output-is-captured");
-        expect(written).not.toContain(SHORT_PLAIN);
-        expect(written).not.toContain(COLON_PLAIN);
+        for (const value of PLAIN_VALUES) {
+          expect(written).not.toContain(value);
+        }
       } finally {
         for (const sink of sinks) sink.mockRestore();
       }
+    });
+
+    it("clears each page before it reads the next", async () => {
+      // So no more than a page of values is held at once. The tell: an
+      // account that gains a plain-text value after the clean-up began, on a
+      // later page, is cleared too; reading every page first would miss it.
+      const t = await boot(dialect);
+      await seed(t);
+      const { users } = getDialectTables();
+      let added = false;
+      between.beforeClear = async () => {
+        if (added) return;
+        added = true;
+        await db(t).insert(users).values({
+          id: "user-zzz",
+          email: "zzz@example.com",
+          name: "zzz",
+          passwordHash: "late-plain-value",
+          isActive: true,
+          emailVerified: new Date(),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      };
+
+      await new PlainTextPasswordCleanup(t.adapter, consoleLogger, 2).clear();
+
+      expect((await account(t, "zzz")).passwordHash).toBeNull();
     });
 
     it("changes nothing on a second run", async () => {

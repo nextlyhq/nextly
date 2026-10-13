@@ -35,10 +35,12 @@ Such a value never let anyone sign in, but it is readable in the database and it
 
 Run the command once after upgrading. Without flags it only counts the affected accounts;
 with `--apply --confirm-default-hasher` it clears each stored value and ends that account's
-sessions, printing only a count. `--apply` alone changes nothing: the second flag is your
+sessions, printing only a count: none can be renewed, and an access token already issued
+lasts until it expires, within fifteen minutes by default. `--apply` alone changes nothing: the second flag is your
 statement that no stored password was written by a custom `passwordHasher`, now or earlier,
 since the command cannot see one and would take its hashes for plain text. Values in a format other
-hashers write (a `$`-prefixed modular-crypt string, or a hex salt and digest joined by a
-colon) are never counted or cleared. `nextly migrate` now prints the same count and names the command, and changes
+hashers write (an argon2, scrypt or pbkdf2 string in the modular-crypt form their libraries
+write, or a hex salt and digest joined by a colon) are never counted or cleared; a value that
+only starts with `$` is. `nextly migrate` now prints the same count and names the command, and changes
 nothing itself. People whose password was cleared are refused at sign-in exactly as
 before, and set a new password with Forgot password, or an administrator sets one.

@@ -17,11 +17,13 @@
  * own `passwordHasher` to `getNextly`, and the account creation that kept raw
  * values was written to accept a hash made elsewhere; either may have stored a
  * hash in another format, which an app's hasher can still sign people in with.
- * So a value in a format such hashers write is never cleared: a modular-crypt
- * string (`$` and an algorithm id, as argon2, scrypt and pbkdf2 libraries
- * write) or a hex salt and digest joined by a colon. A raw password that
- * happens to take one of those shapes is left in place, which the preview
- * still cannot see; one taken for plain text would lock its owner out.
+ * So a value in a format such hashers write is never cleared: an argon2,
+ * scrypt or pbkdf2 string in the modular-crypt form their libraries write,
+ * with that format's fields and alphabet, or a hex salt and digest joined by a
+ * colon. A value that only starts with `$` is not one of them. A raw password
+ * that happens to take one of those shapes is left in place, which the
+ * preview still cannot see; one taken for plain text would lock its owner
+ * out.
  *
  * @module domains/users/services/plaintext-password-cleanup
  */
@@ -29,6 +31,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, asc, eq, gt, isNotNull } from "drizzle-orm";
 
 import { isPasswordHash } from "../../../auth/password/index";
+import { NextlyError } from "../../../errors/nextly-error";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 
@@ -40,6 +43,22 @@ import {
 /** Rows read per page while looking, so a large table is never read whole. */
 const PAGE_SIZE = 500;
 
+/** A salt or digest field of a modular-crypt string: base64, `.` for `+`. */
+const B64 = "[A-Za-z0-9+/.]+={0,2}";
+
+/**
+ * The modular-crypt forms argon2, scrypt and pbkdf2 libraries write, each with
+ * its own fields: argon2's version and cost, scrypt's cost, pbkdf2's rounds,
+ * then a salt and a digest.
+ */
+const MODULAR_CRYPT = [
+  new RegExp(
+    `^\\$argon2(?:id|i|d)\\$v=\\d+\\$m=\\d+,t=\\d+,p=\\d+\\$${B64}\\$${B64}$`
+  ),
+  new RegExp(`^\\$scrypt\\$ln=\\d+,r=\\d+,p=\\d+\\$${B64}\\$${B64}$`),
+  new RegExp(`^\\$pbkdf2(?:-sha(?:1|256|512))?\\$\\d+\\$${B64}\\$${B64}$`),
+];
+
 /** A hex salt and a hex digest joined by a colon, as scrypt libraries write. */
 const HEX_SALT_AND_DIGEST = /^[0-9a-f]{16,}:[0-9a-f]{32,}$/i;
 
@@ -48,7 +67,10 @@ const HEX_SALT_AND_DIGEST = /^[0-9a-f]{16,}:[0-9a-f]{32,}$/i;
  * so is never taken for plain text. See the module comment.
  */
 export function isOtherHasherFormat(value: string): boolean {
-  return value.startsWith("$") || HEX_SALT_AND_DIGEST.test(value);
+  return (
+    MODULAR_CRYPT.some(format => format.test(value)) ||
+    HEX_SALT_AND_DIGEST.test(value)
+  );
 }
 
 /** An account holding a stored password that is not a hash, and that value. */
@@ -70,7 +92,12 @@ interface UsersPageReader {
 }
 
 export class PlainTextPasswordCleanup extends BaseService {
-  constructor(adapter: DrizzleAdapter, logger: Logger) {
+  constructor(
+    adapter: DrizzleAdapter,
+    logger: Logger,
+    // Rows read per page; smaller only where a test needs several pages.
+    private readonly pageSize = PAGE_SIZE
+  ) {
     super(adapter, logger);
   }
 
@@ -82,7 +109,11 @@ export class PlainTextPasswordCleanup extends BaseService {
    * is never returned, printed or logged.
    */
   async find(): Promise<string[]> {
-    return (await this.candidates()).map(candidate => candidate.id);
+    const ids: string[] = [];
+    for await (const page of this.candidatePages()) {
+      for (const candidate of page) ids.push(candidate.id);
+    }
+    return ids;
   }
 
   /**
@@ -92,40 +123,62 @@ export class PlainTextPasswordCleanup extends BaseService {
    *
    * Each account is cleared in its own transaction, and only while it still
    * holds the value that was found: a password set in between, by a reset or
-   * an administrator, is a hash and stays.
+   * an administrator, is a hash and stays. Each page is cleared before the
+   * next is read, so no more than one page of values is held at once.
+   *
+   * Its refresh tokens go in the same transaction, so the account's sessions
+   * cannot be renewed. An access token already issued is not stored, and
+   * stays valid until it expires (fifteen minutes by default).
    */
   async clear(): Promise<number> {
     const { users } = this.tables;
     let changed = 0;
-    for (const candidate of await this.candidates()) {
-      const now = new Date();
-      await this.withTransaction(async tx => {
-        changed += await updateUserEndingSessions(
-          tx as PasswordWriteTx,
-          this.tables,
-          this.dialect,
-          {
-            userId: candidate.id,
-            // Moving the password version ends the access tokens issued
-            // before, as any password write does; the refresh tokens go in
-            // the same transaction.
-            set: { passwordHash: null, passwordUpdatedAt: now, updatedAt: now },
-            when: eq(users.passwordHash, candidate.value),
-          }
-        );
-      });
+    for await (const page of this.candidatePages()) {
+      for (const candidate of page) {
+        const now = new Date();
+        try {
+          await this.withTransaction(async tx => {
+            changed += await updateUserEndingSessions(
+              tx as PasswordWriteTx,
+              this.tables,
+              this.dialect,
+              {
+                userId: candidate.id,
+                // Moving the password version refuses a sign-in or refresh
+                // already under way with the old credentials.
+                set: {
+                  passwordHash: null,
+                  passwordUpdatedAt: now,
+                  updatedAt: now,
+                },
+                when: eq(users.passwordHash, candidate.value),
+              }
+            );
+          });
+        } catch (error) {
+          // The database's error can quote the statement's parameters, and
+          // one of them is the value being cleared, so it is reported by
+          // account and kind, never by its text or its cause.
+          throw NextlyError.internal({
+            logContext: {
+              reason: "plaintext-password-clear-failed",
+              userId: candidate.id,
+              errorName: error instanceof Error ? error.name : typeof error,
+            },
+          });
+        }
+      }
     }
     return changed;
   }
 
   /**
-   * Every account holding a password value that is neither core's hash nor in
-   * another hasher's format, read a page at a time.
+   * The accounts holding a password value that is neither core's hash nor in
+   * another hasher's format, a page at a time.
    */
-  private async candidates(): Promise<Candidate[]> {
+  private async *candidatePages(): AsyncGenerator<Candidate[]> {
     const { users } = this.tables;
     const db = this.db as unknown as UsersPageReader;
-    const found: Candidate[] = [];
     let after: string | undefined;
     for (;;) {
       const page = await db
@@ -137,7 +190,8 @@ export class PlainTextPasswordCleanup extends BaseService {
             : and(isNotNull(users.passwordHash), gt(users.id, after))
         )
         .orderBy(asc(users.id))
-        .limit(PAGE_SIZE);
+        .limit(this.pageSize);
+      const found: Candidate[] = [];
       for (const row of page) {
         // An empty value is no password, as null is: there is nothing to
         // clear, and ending its sessions would sign out an account that signs
@@ -151,7 +205,8 @@ export class PlainTextPasswordCleanup extends BaseService {
           found.push({ id: String(row.id), value: row.value });
         }
       }
-      if (page.length < PAGE_SIZE) return found;
+      yield found;
+      if (page.length < this.pageSize) return;
       after = String(page[page.length - 1].id);
     }
   }
