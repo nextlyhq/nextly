@@ -453,6 +453,30 @@ export function referenceTableStub(
 }
 
 /**
+ * A declared column's Drizzle builder, before its declared modifiers.
+ *
+ * The field builder's, but for `json` on SQLite. There the field builder makes
+ * a plain text column, because a collection serializes its JSON fields itself
+ * before every write. A plugin writes its own table through `ctx.db` and hands
+ * Drizzle the value as it is, which a plain text column passes to the driver
+ * unserialized (better-sqlite3 refuses an object) and reads back as a string.
+ * In JSON mode Drizzle serializes on the way in and parses on the way out, as
+ * PostgreSQL's `jsonb` and MySQL's `json` columns already do, so the value
+ * reads back as the type `InferRow` gives it. The column is `text` either
+ * way, so the table the database holds is unchanged.
+ */
+function declaredColumn(
+  column: ExtensionColumn,
+  dialect: SupportedDialect
+): unknown {
+  if (dialect === "sqlite" && column.kind === "json") {
+    const json = text(column.name, { mode: "json" });
+    return column.nullable ? json : json.notNull();
+  }
+  return buildUserDrizzleColumn(toColumnDescriptor(column, dialect), dialect);
+}
+
+/**
  * The Drizzle table the runtime queries through.
  *
  * Columns, with their key and defaults. No indexes — see the module note — and
@@ -487,7 +511,7 @@ export function toDrizzleTable(
   const columns: Record<string, unknown> = {};
   for (const column of table.columns) {
     columns[column.key] = withDeclaredModifiers(
-      buildUserDrizzleColumn(toColumnDescriptor(column, dialect), dialect),
+      declaredColumn(column, dialect),
       column,
       dialect
     );

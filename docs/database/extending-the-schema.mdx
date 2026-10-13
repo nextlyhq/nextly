@@ -117,10 +117,12 @@ predicate would enforce it over rows you did not intend, so an index carrying
 `where` fails when the table is registered.
 
 An explicit index or foreign key `name` is used exactly as written, so it may
-be at most 63 characters, and so may a column's SQL name (the snake-cased key:
-`ownerAccountId` is `owner_account_id`): PostgreSQL cuts a longer name short
-and MySQL refuses one past 64. Derived names (and every check name, which is
-`ck_<table>_<name>`) are shortened with a hash when they would be longer. A
+be at most 63 bytes once encoded as UTF-8, and so may a column's SQL name (the
+snake-cased key: `ownerAccountId` is `owner_account_id`) and a table's name:
+PostgreSQL cuts a longer name short and MySQL refuses one past 64 characters.
+That is 63 characters of plain ASCII, and fewer for letters outside it: `é` is
+two bytes. Derived names (and every check name, which is `ck_<table>_<name>`)
+are shortened with a hash when they would be longer. A
 foreign key's name, written or derived, must also be unique across the
 tables plugins and the app declare, as MySQL requires of a database, and so
 must a check's, including the one an enum column implies. An index's must be
