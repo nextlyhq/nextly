@@ -35,6 +35,8 @@ Phase order:
 
 1. **`contributes`** is read first (without running your plugin) — the host folds your
    schema, permissions, routes, and admin contributions into the merged config.
+   `contributes.transforms` run once everything is merged, so they can change entities
+   other plugins declared (see [Change entities you don't own](/docs/plugins/schema#change-entities-you-dont-own)).
 2. **`setup(config)`** runs for **every** plugin before any `init` — so a plugin can
    adjust config that a later plugin's `init` relies on.
 3. **`init(ctx)`** runs once services are live. This is where you do runtime work.
@@ -113,8 +115,40 @@ integrator turn a plugin's behavior off without a destructive schema change.
 definePlugin({ name: "@acme/nextly-plugin-thing", version: "1.0.0", nextly: ">=0.0.2-alpha.63", enabled: false });
 ```
 
-To actually remove a plugin's tables and data, remove it from the config and run
-`nextly prune` — see [Schema & data lifecycle](/docs/plugins/schema#uninstalling--data-cleanup).
+To actually remove a plugin's tables and data, run `nextly plugins uninstall <name>`
+while it is still in the config, then remove it — see
+[Schema & data lifecycle](/docs/plugins/schema#uninstalling--data-cleanup).
+
+## Install and uninstall hooks
+
+`onInstall` and `onUninstall` (`@experimental`) are for work that belongs to installing
+or removing the plugin rather than to every start: seeding a row, registering with an
+external service, deregistering from it. They never run at boot.
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+
+export default definePlugin({
+  name: "@acme/nextly-plugin-thing",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.63",
+  async onInstall(ctx) {
+    // After the plugin's migrations, so its tables exist.
+    ctx.logger.info("installed");
+  },
+  async onUninstall(ctx, { keepData }) {
+    // Before its DOWN migrations, so its tables are still readable.
+    ctx.logger.info(keepData ? "uninstalled, data kept" : "uninstalled");
+  },
+});
+```
+
+`nextly plugins install <name>` applies the plugin's pending migration modules and then
+calls `onInstall`; `nextly plugins uninstall <name>` calls `onUninstall` and then runs
+the DOWN of each applied module, newest first. Each boots the app from your config to
+build the hook's context, and only when the plugin declares the hook. Write both so
+they can run again: an install that failed part-way is repaired by running it again,
+which calls `onInstall` again.
 
 ## Inspecting
 

@@ -40,6 +40,10 @@ async function boot(): Promise<{
     collections: [
       defineCollection({
         slug: "authors",
+        // Any caller may read the row, so what the response withholds is the
+        // protected FIELD alone. Without a rule a caller holding no grant on
+        // `authors` is refused the whole row, which leaves no field to redact.
+        access: { read: () => true },
         fields: [
           text({ name: "name" }),
           checkbox({ name: "suspended", access: { read: () => false } }),

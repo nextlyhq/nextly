@@ -125,7 +125,10 @@ import {
 import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
-import { bootApplyEnabled } from "../init/boot-apply";
+import {
+  bootApplyEnabled,
+  checkRelationsBeforePlugins,
+} from "../init/boot-apply";
 import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
 import { unwrittenSlugs } from "../init/sync-outcome";
@@ -884,6 +887,8 @@ async function registerServicesOnce(
   );
 
   await checkForeignKeysToCodeFirstTables(adapter, bootExtensionSchema);
+
+  assertBootRelationsResolve(schemaRegistry, resolvedLogger);
 
   // ----------------------------------------
   // Layer 7: Initialize Plugins
@@ -1907,7 +1912,8 @@ async function runBootMigrations(
  * fail its first query, far from any mention of migrations — so the boot
  * refuses here, naming the command that fixes it. Production refuses;
  * development logs, because dev push reconciles the schema on every reload
- * and a behind state there resolves itself moments later.
+ * and a behind state there resolves itself moments later. A plugin that was
+ * uninstalled and is still configured is refused in every environment.
  */
 async function assertBootPluginSchemaVersions(
   transformedConfig: NextlyServiceConfig,
@@ -1938,6 +1944,24 @@ async function assertBootPluginSchemaVersions(
         adapter.dialect
       ).listFileApplies(),
     ledgerExists: () => adapter.tableExists("nextly_schema_events"),
+    readUninstalled: async () => {
+      const { SchemaOwnersRepository } = await import(
+        "../domains/schema/ownership/schema-owners-repository"
+      );
+      const rows = await new SchemaOwnersRepository(
+        adapterDrizzleDb,
+        adapter.dialect
+      ).read();
+      return new Set(
+        rows.filter(row => row.state === "uninstalled").map(row => row.ownerId)
+      );
+    },
+    registryExists: async () => {
+      const { schemaOwnersTableExists } = await import(
+        "../domains/schema/ownership/schema-owners-repository"
+      );
+      return schemaOwnersTableExists(adapter);
+    },
     production: process.env.NODE_ENV === "production",
     warn: m => logger.warn?.(m),
   });
@@ -2004,6 +2028,35 @@ async function checkForeignKeysToCodeFirstTables(
     adapter,
     specs: bootExtensionSchema.specs,
     codeFirstTables: bootExtensionSchema.codeFirstTables,
+  });
+}
+
+/**
+ * Layer 6.96: every relation a declared table names resolves, before any
+ * plugin initialises.
+ *
+ * The registry otherwise assembles relations on the first `db.query`, so a
+ * relation naming a table or column that does not exist surfaced there, as an
+ * internal error that took every relational query down with it. By now every
+ * table is registered: Builder-made ones on the registry's first load,
+ * extension tables and field groups beside them, code-first ones by their
+ * sync, and what boot migrations created by their reload. So a relation to a
+ * Builder-made collection resolves, and a misspelled one stops the boot,
+ * naming each.
+ *
+ * When the development boot apply runs, it is reported instead: a Builder-made
+ * table arriving through a migration is registered only by that apply, after
+ * this returns, and the apply asks again (`runBootTimeApplyIfDev`). The
+ * relations that resolve are kept either way, so a plugin's `init` can query
+ * them. See `checkRelationsBeforePlugins`.
+ */
+function assertBootRelationsResolve(
+  schemaRegistry: SchemaRegistry | undefined,
+  logger: Logger
+): void {
+  checkRelationsBeforePlugins(schemaRegistry, {
+    refuse: !bootApplyEnabled(),
+    warn: message => logger.warn?.(message),
   });
 }
 
@@ -4247,12 +4300,33 @@ function clearActiveHookRegistry(): void {
 }
 
 /**
+ * The booted context of one initialized plugin, or undefined if it has none.
+ *
+ * `initializePlugins` already builds every plugin's context and keeps it for
+ * reverse-order destroy; this hands the same object out by name, for
+ * `nextly plugins install|uninstall`, which runs a plugin's `onInstall` /
+ * `onUninstall` against a real context.
+ *
+ * Not a second boot path: the caller must have registered services already,
+ * and this reads what that registration produced.
+ */
+export function getInitializedPluginContext(
+  name: string
+): PluginContext | undefined {
+  return globalForReg.__nextly_pluginTeardown?.find(
+    entry => entry.plugin.name === name
+  )?.context;
+}
+
+/**
  * Run the registered plugins' `destroy()`, in REVERSE init order (mirror of
  * setup→init), without touching the connection.
  *
  * The one implementation of plugin teardown: `shutdownServices` runs it before
- * it disconnects, and a one-shot command still using the adapter can run it
- * on its own, without the disconnect. Without it, whatever `init()` started —
+ * it disconnects, and `nextly plugins install|uninstall` runs it on its own —
+ * that command is still using the adapter and, on MySQL, holding a
+ * connection-bound migrate lock, so the disconnect is exactly what it cannot
+ * have. Without it, whatever `init()` started —
  * a timer, a watcher, a subscription — kept running in a one-shot process that
  * had finished its work, and could keep that process alive.
  *

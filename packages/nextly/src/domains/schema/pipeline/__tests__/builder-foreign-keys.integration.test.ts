@@ -73,9 +73,13 @@ const pairNamed = (stem: string): Pair => ({
   posts: `dc_${stem}_posts`,
 });
 
-/** A many-to-one to the authors, deleted with its author. */
+/**
+ * A many-to-one to the authors, deleted with its author. Named in camelCase,
+ * so its column (`lead_author`) is not spelled like the field: the runtime
+ * table keys its columns by field name and the spec by column name.
+ */
 const authorField = (pair: Pair) => ({
-  name: "author",
+  name: "leadAuthor",
   type: "relationship",
   options: {
     target: pair.authorsSlug,
@@ -186,7 +190,7 @@ async function postKeys(target: Target, pair: Pair) {
 }
 
 const keyTo = (pair: Pair) => ({
-  columns: ["author"],
+  columns: ["lead_author"],
   referencesTable: pair.authors,
   onDelete: "cascade",
 });
@@ -230,7 +234,7 @@ describe("a Schema Builder collection's foreign keys (sqlite)", () => {
       .run();
     sqlite
       .prepare(
-        `INSERT INTO "${pair.posts}" (id, title, slug, score, author) VALUES ('p1', 'P', 'p', '5', 'a1')`
+        `INSERT INTO "${pair.posts}" (id, title, slug, score, lead_author) VALUES ('p1', 'P', 'p', '5', 'a1')`
       )
       .run();
   }
@@ -277,8 +281,8 @@ describe("a Schema Builder collection's foreign keys (sqlite)", () => {
     expect(columnType(pair.authors, "rank")).not.toBe("text");
     // No delete action fired: the child row survived the parent's rebuild.
     expect(
-      sqlite.prepare(`SELECT id, author FROM "${pair.posts}"`).all()
-    ).toEqual([{ id: "p1", author: "a1" }]);
+      sqlite.prepare(`SELECT id, lead_author FROM "${pair.posts}"`).all()
+    ).toEqual([{ id: "p1", lead_author: "a1" }]);
     expect(await postKeys(target, pair)).toEqual([keyTo(pair)]);
     expect(sqlite.prepare(`PRAGMA foreign_key_check`).all()).toEqual([]);
   });
@@ -304,7 +308,7 @@ describe("a Schema Builder collection's foreign keys (sqlite)", () => {
     expect(() =>
       sqlite
         .prepare(
-          `INSERT INTO "${pair.posts}" (id, title, slug, score, author) VALUES ('p2', 'Q', 'q', 1, 'nobody')`
+          `INSERT INTO "${pair.posts}" (id, title, slug, score, lead_author) VALUES ('p2', 'Q', 'q', 1, 'nobody')`
         )
         .run()
     ).toThrow(/FOREIGN KEY/);
@@ -412,7 +416,7 @@ for (const server of SERVERS) {
         // Enforced: a post naming no author is refused.
         await expect(
           connection.run(
-            `INSERT INTO ${quote(pair.posts)} (id, title, slug, score, author) VALUES ('p2', 'Q', 'q', '1', 'nobody')`
+            `INSERT INTO ${quote(pair.posts)} (id, title, slug, score, lead_author) VALUES ('p2', 'Q', 'q', '1', 'nobody')`
           )
         ).rejects.toThrow();
         // And the next diff expects exactly that key.
