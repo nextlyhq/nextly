@@ -48,7 +48,7 @@ vi.mock("../../init", () => ({ getCachedNextly }));
 import { COOKIE_NAMES } from "../../auth/cookies/cookie-config";
 import {
   signUnmarkedPendingToken,
-  signUnmarkedToken,
+  signUnmarkedPendingTokenWithoutMarker,
 } from "../../auth/jwt/__tests__/unmarked-tokens";
 import { mintPendingToken } from "../../auth/pipeline/pending-token";
 import { GET } from "../auth-state";
@@ -104,7 +104,7 @@ describe("GET /api/auth/state and pending tokens minted before tokens named thei
     // refusal comes from that claim rather than from the cookie, the
     // signature or the absent header. It holds only while unmarked tokens are
     // accepted, and goes when that allowance ends.
-    const unmarked = await signUnmarkedToken({ sub: "u1" }, SECRET);
+    const unmarked = await signUnmarkedPendingTokenWithoutMarker("u1", SECRET);
 
     const res = await GET(withAccessCookie(unmarked));
 

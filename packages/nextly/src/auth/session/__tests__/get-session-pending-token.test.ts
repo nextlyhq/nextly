@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import { COOKIE_NAMES } from "../../cookies/cookie-config";
 import {
   signUnmarkedPendingToken,
-  signUnmarkedToken,
+  signUnmarkedPendingTokenWithoutMarker,
 } from "../../jwt/__tests__/unmarked-tokens";
 import { signAccessToken } from "../../jwt/sign";
 import { mintPendingToken } from "../../pipeline/pending-token";
@@ -55,10 +55,7 @@ describe("getSession and pending tokens minted before tokens named their purpose
     // refusal comes from that claim rather than from the cookie, the
     // signature or the absent header. It holds only while unmarked tokens are
     // accepted, and goes when that allowance ends.
-    const unmarked = await signUnmarkedToken(
-      { sub: "u1", email: "a@b.c", name: "A", image: null, roleIds: [] },
-      secret
-    );
+    const unmarked = await signUnmarkedPendingTokenWithoutMarker("u1", secret);
     const res = await getSession(withAccessCookie(unmarked), secret);
     expect(res.authenticated).toBe(true);
   });

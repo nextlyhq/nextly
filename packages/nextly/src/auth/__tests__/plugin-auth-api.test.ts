@@ -4,7 +4,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { fakeSessionRows } from "../handlers/__tests__/session-row-fake";
 import {
   signUnmarkedPendingToken,
-  signUnmarkedToken,
+  signUnmarkedPendingTokenWithoutMarker,
 } from "../jwt/__tests__/unmarked-tokens";
 import { AuthHookRegistry } from "../pipeline/hooks";
 import {
@@ -531,14 +531,16 @@ describe("ctx.auth.currentUser", () => {
       // the refusal comes from that claim rather than from the cookie, the
       // signature or the absent header. It holds only while unmarked tokens
       // are accepted, and goes when that allowance ends.
-      const unmarked = await signUnmarkedToken(
-        { sub: "u1", email: "a@b.c" },
+      const unmarked = await signUnmarkedPendingTokenWithoutMarker(
+        "u1",
         SECRET
       );
 
-      expect(
-        await api(makeDeps()).currentUser(withSessionCookie(unmarked))
-      ).toEqual({ id: "u1", email: "a@b.c" });
+      // The old pending claims carry no address, so the user is told by id.
+      const user = await api(makeDeps()).currentUser(
+        withSessionCookie(unmarked)
+      );
+      expect(user?.id).toBe("u1");
     });
   });
 });

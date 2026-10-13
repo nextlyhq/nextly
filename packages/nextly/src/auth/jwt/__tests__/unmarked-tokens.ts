@@ -14,7 +14,14 @@ import { randomBytes } from "node:crypto";
 import { SignJWT } from "jose";
 
 import { PENDING_AUTH_TYP } from "../claims";
-import { ALGORITHM, secretToKey } from "../sign";
+import { secretToKey } from "../sign";
+
+/**
+ * The algorithm those tokens were signed with, written out rather than taken
+ * from the current signer: the tokens in circulation keep the algorithm they
+ * were minted with, whatever the signer moves to later.
+ */
+const UNMARKED_ALGORITHM = "HS256";
 
 /** Sign `claims` with a header that names the algorithm and nothing else. */
 export async function signUnmarkedToken(
@@ -24,11 +31,16 @@ export async function signUnmarkedToken(
 ): Promise<string> {
   const issuedAt = Math.floor(Date.now() / 1000);
   return new SignJWT(claims)
-    .setProtectedHeader({ alg: ALGORITHM })
+    .setProtectedHeader({ alg: UNMARKED_ALGORITHM })
     .setIssuedAt(issuedAt)
     .setExpirationTime(issuedAt + ttlSeconds)
     .setJti(randomBytes(16).toString("hex"))
     .sign(secretToKey(secret));
+}
+
+/** The claims the old `mintPendingToken` signed, apart from the pending marker. */
+function unmarkedPendingClaims(userId: string): Record<string, unknown> {
+  return { sub: userId, challengeId: "totp", attempts: 0 };
 }
 
 /**
@@ -41,7 +53,19 @@ export function signUnmarkedPendingToken(
   secret: string
 ): Promise<string> {
   return signUnmarkedToken(
-    { typ: PENDING_AUTH_TYP, sub: userId, challengeId: "totp", attempts: 0 },
+    { typ: PENDING_AUTH_TYP, ...unmarkedPendingClaims(userId) },
     secret
   );
+}
+
+/**
+ * The control for {@link signUnmarkedPendingToken}: the very same claims with
+ * the pending marker left out. A reader that refuses the one and accepts the
+ * other can only be telling them apart by that marker.
+ */
+export function signUnmarkedPendingTokenWithoutMarker(
+  userId: string,
+  secret: string
+): Promise<string> {
+  return signUnmarkedToken(unmarkedPendingClaims(userId), secret);
 }
