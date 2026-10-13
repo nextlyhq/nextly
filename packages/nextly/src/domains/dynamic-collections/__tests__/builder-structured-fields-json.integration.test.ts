@@ -163,7 +163,7 @@ describe.skipIf(!MYSQL.url)(
   }
 );
 
-describe.each(["sqlite", ...getConfiguredTestDialects()] as const)(
+describe.each(getConfiguredTestDialects())(
   "a Builder single's repeater and group keep their values (%s)",
   dialect => {
     let handle: TestNextly | undefined;
