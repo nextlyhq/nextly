@@ -70,6 +70,12 @@ export type { AuthRouterDeps } from "./handlers/router";
 // too. Experimental with it.
 export type { CredentialUserRow } from "./credentials/verify-credentials";
 export type { AccountState } from "./session/account-state";
+// The two-factor marks core supplies as `spentChallenges`, for a caller that
+// assembles the deps itself and wants single use on every instance.
+export {
+  databaseSpentChallenges,
+  type SpentChallenges,
+} from "./pipeline/spent-challenges";
 export type { SessionRoles } from "./session/session-roles";
 export type {
   SessionRowTransaction,

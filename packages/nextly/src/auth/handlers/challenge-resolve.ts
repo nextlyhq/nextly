@@ -23,7 +23,10 @@ import {
   verifyPendingToken,
   MUST_CHANGE_PASSWORD_CHALLENGE,
 } from "../pipeline/pending-token";
-import type { SpentChallenges } from "../pipeline/spent-challenges";
+import {
+  SPENT_MARK_GRACE_MS,
+  type SpentChallenges,
+} from "../pipeline/spent-challenges";
 
 import { limitStoreChallengeBudget } from "./challenge-budget";
 import {
@@ -92,8 +95,11 @@ export interface ChallengeResolveDeps extends IssueSessionDeps {
   /**
    * The flows a correct answer has settled, kept in the database so a
    * challenge is answered once on every instance, whatever the limit store.
+   * Core always supplies it. Absent, from deps assembled by hand, the marks
+   * are kept in the rate-limit store as they used to be, so single use holds
+   * across instances only where that store is shared.
    */
-  spentChallenges: SpentChallenges;
+  spentChallenges?: SpentChallenges;
   allowedOrigins: string[];
   loginStallTimeMs: number;
   auditLog: AuditLogWriter;
@@ -366,6 +372,32 @@ async function peekAttempts(
   }
 }
 
+/** What reaching the marks needs, whether core supplied them or not. */
+type SpentChallengesDeps = Pick<
+  ChallengeResolveDeps,
+  "spentChallenges" | "authRateLimit" | "challengeTokenTTL"
+>;
+
+/**
+ * The marks of settled flows: the database's, or, for deps assembled
+ * without them, marks kept in the rate-limit store as they used to be, one
+ * count under the mark that only the first spend can take.
+ */
+function spentChallengesOf(deps: SpentChallengesDeps): SpentChallenges {
+  if (deps.spentChallenges) return deps.spentChallenges;
+  const windowMs = deps.challengeTokenTTL * 1000 + SPENT_MARK_GRACE_MS;
+  const limiter = async () => {
+    const { authRateLimiter } = await import("../middleware/rate-limiter");
+    return authRateLimiter(deps.authRateLimit?.store);
+  };
+  return {
+    isSpent: async mark =>
+      ((await (await limiter()).peek(`spent:${mark}`, windowMs)) ?? 0) >= 1,
+    spend: async mark =>
+      (await (await limiter()).check(`spent:${mark}`, 1, windowMs)).allowed,
+  };
+}
+
 /**
  * Whether a flow is over before any answer it presents is examined: its
  * attempt budget is spent, or a correct answer already settled it. Unknown
@@ -373,14 +405,14 @@ async function peekAttempts(
  * path asks again before it examines anything.
  */
 export async function challengeFlowOver(
-  deps: AttemptCounterDeps & Pick<ChallengeResolveDeps, "spentChallenges">,
+  deps: AttemptCounterDeps & SpentChallengesDeps,
   pending: PendingFlow
 ): Promise<boolean> {
   const keys = challengeFlowKeys(deps.secret, pending);
   const count = await peekAttempts(deps, keys.budget);
   if (count !== undefined && count >= deps.maxChallengeAttempts) return true;
   try {
-    return await deps.spentChallenges.isSpent(keys.mark);
+    return await spentChallengesOf(deps).isSpent(keys.mark);
   } catch {
     return false;
   }
@@ -395,11 +427,11 @@ export async function challengeFlowOver(
  * is plugin code that may act on what it is given.
  */
 async function refuseIfFlowSettled(
-  deps: Pick<ChallengeResolveDeps, "secret" | "spentChallenges">,
+  deps: Pick<ChallengeResolveDeps, "secret"> & SpentChallengesDeps,
   pending: PendingFlow
 ): Promise<void> {
   const { mark } = challengeFlowKeys(deps.secret, pending);
-  if (await deps.spentChallenges.isSpent(mark)) {
+  if (await spentChallengesOf(deps).isSpent(mark)) {
     throw NextlyError.invalidCredentials({
       logContext: { reason: auditReason("challenge-flow-settled") },
     });
@@ -418,14 +450,19 @@ async function refuseIfFlowSettled(
  * continues; the other is refused here.
  */
 async function settleChallengeFlow(
-  deps: Pick<ChallengeResolveDeps, "secret" | "spentChallenges">,
-  pending: PendingFlow
+  deps: Pick<ChallengeResolveDeps, "secret" | "maxChallengeAttempts"> &
+    SpentChallengesDeps,
+  pending: PendingFlow & { attempts: number }
 ): Promise<void> {
+  // The flow's lifetime again, now that the resolver has run: an answer let
+  // through just before the end may only reach this after it, and a flow
+  // past its end never settles, whatever its answer.
+  refuseIfFlowExhausted(pending, deps);
   const { mark } = challengeFlowKeys(deps.secret, pending);
-  // Kept until the flow can no longer be answered at all; a token with no
-  // signed lifetime was refused before the answer was examined.
+  // The token's end; the marks are kept a grace past it, so every answer let
+  // through before the end meets this one.
   const expiresAt = (pending.flowExpiresAt ?? 0) * 1000;
-  if (!(await deps.spentChallenges.spend(mark, expiresAt))) {
+  if (!(await spentChallengesOf(deps).spend(mark, expiresAt))) {
     throw NextlyError.invalidCredentials({
       logContext: { reason: auditReason("challenge-flow-settled") },
     });

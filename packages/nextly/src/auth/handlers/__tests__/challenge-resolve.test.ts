@@ -1137,6 +1137,54 @@ describe("a pending token after its challenge succeeded", () => {
   });
 });
 
+describe("settling a flow", () => {
+  it("refuses a correct answer its resolver finished after the flow's end, minting no session", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
+    try {
+      const deps = makeDeps();
+      deps.challengeRegistry = new ChallengeRegistry();
+      deps.challengeRegistry.add({
+        id: "totp",
+        // Right, but answered once the flow's five minutes are over.
+        resolve: async () => {
+          vi.setSystemTime(Date.now() + 301_000);
+          return { ok: true };
+        },
+      });
+      const pendingToken = await mint({ userId: "u1", challengeId: "totp" });
+
+      const res = await handleChallengeResolve(
+        makeRequest({ pendingToken, response: { code: "123456" } }),
+        deps
+      );
+
+      expect(res.status).toBe(401);
+      expect(deps.sessionRows.committed).toHaveLength(0);
+      expect(deps.spentChallenges.marks.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps single use, in the rate-limit store, for deps assembled without the database's marks", async () => {
+    const { spentChallenges: _unused, ...deps } = makeDeps();
+    const pendingToken = await mint({ userId: "u1", challengeId: "totp" });
+
+    const first = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+    const replay = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(401);
+    expect(deps.sessionRows.committed).toHaveLength(1);
+  });
+});
+
 describe("the reserved challenge id", () => {
   it("refuses a plugin challenge registered as core's password-change step", () => {
     // Set-initial-password accepts any pending token carrying this id, so a

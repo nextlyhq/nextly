@@ -119,8 +119,13 @@ export interface AuthRouterDeps {
    * is counted when no store of the earlier contract is configured.
    */
   limitStore?: LimitStore;
-  /** The two-factor flows a correct answer has settled, kept in the database. */
-  spentChallenges: SpentChallenges;
+  /**
+   * The two-factor flows a correct answer has settled, kept in the database.
+   * Core always supplies it (`databaseSpentChallenges`). Absent, the marks
+   * are kept in the rate-limit store as they used to be, so single use holds
+   * across instances only where that store is shared.
+   */
+  spentChallenges?: SpentChallenges;
   /**
    * Writer for security-sensitive auth events. Handlers call
    * `auditLog.write(...)` on failed CSRF, failed login, password change,

@@ -34,6 +34,7 @@ import { mintPendingToken } from "../../pipeline/pending-token";
 import type { AccountState } from "../../session/account-state";
 import {
   databaseSpentChallenges,
+  SPENT_MARK_GRACE_MS,
   sweepSpentChallenges,
 } from "../../pipeline/spent-challenges";
 import { handleChallengeResolve } from "../challenge-resolve";
@@ -302,7 +303,7 @@ describeEachDialect("a two-factor challenge on one database", dialect => {
     expect(rows).not.toContain(userId);
   });
 
-  it("sweeps a mark once its pending token has expired, and keeps one still live", async () => {
+  it("sweeps a mark once its pending token ended a grace ago, and keeps one still inside it", async () => {
     const marks = databaseSpentChallenges(current.adapter as never);
     const now = Date.now();
     const expired = `${randomUUID().replaceAll("-", "")}`.padEnd(64, "0");
@@ -310,11 +311,27 @@ describeEachDialect("a two-factor challenge on one database", dialect => {
     await marks.spend(expired, now + 60_000);
     await marks.spend(live, now + 10 * 60_000);
 
-    // Five minutes on: the first token's lifetime has ended, the second's not.
-    await sweepSpentChallenges(current.adapter as never, now + 5 * 60_000);
+    // The grace past the first token's end, plus five minutes: the first
+    // mark guards nothing now, while the second's token ended only just
+    // inside the grace.
+    await sweepSpentChallenges(
+      current.adapter as never,
+      now + 60_000 + SPENT_MARK_GRACE_MS + 5 * 60_000
+    );
 
     expect(await marks.isSpent(expired)).toBe(false);
     expect(await marks.isSpent(live)).toBe(true);
+  });
+
+  it("keeps a mark written after its token's end, so a second answer let through before the end is still refused", async () => {
+    const marks = databaseSpentChallenges(current.adapter as never);
+    const mark = `${randomUUID().replaceAll("-", "")}`.padEnd(64, "2");
+    // Both answers were let through before the token's end, a second ago,
+    // and reach the mark only now.
+    const ended = Date.now() - 1000;
+
+    expect(await marks.spend(mark, ended)).toBe(true);
+    expect(await marks.spend(mark, ended)).toBe(false);
   });
 
   it("refuses an answer with one to try again shortly while the budget's store is away, and examines answers again once it is back", async () => {
