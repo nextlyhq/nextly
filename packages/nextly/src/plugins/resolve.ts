@@ -13,6 +13,7 @@ import { isReservedEventName } from "../events/event-bus";
 
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
+import { assertLimitRules } from "./limits/limit-rules";
 import {
   assertConsentDeclaredBeforeSetup,
   assertPluginConsent,
@@ -100,6 +101,9 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // otherwise surface as a route that refuses everyone, and recognition runs
   // long after this with only the kind's name to go on.
   publishPrincipalKinds(collectPrincipalKinds(plugins));
+  // Limit rules, for the same reason: a rule outside its bounds would
+  // otherwise surface as an error inside the work it was meant to guard.
+  assertLimitRules(plugins);
   // Audit kinds, for the reason hook point names are checked above: a kind
   // outside the plugin's prefix used to be dropped where it was collected, so
   // the application booted with `ctx.audit` present and every write of that
