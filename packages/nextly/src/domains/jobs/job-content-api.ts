@@ -96,6 +96,10 @@ const JOB_OWNED_ACCESS_OPTIONS = [
   "enforceFieldAccess",
   "fieldAccessUser",
   "frameworkFilter",
+  // A plugin-defined person carries authority as a user does, and a job runs
+  // as the owner it was queued with: job code naming a person would act as
+  // someone the job was never given.
+  "principal",
   // A job runs on nobody's request. Cleared rather than forwarded so job code
   // cannot hand a hook a request it did not receive: `ctx.req.http` is what a
   // rate limit or a honeypot reads to decide it is looking at a visitor, and a

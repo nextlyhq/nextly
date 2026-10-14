@@ -82,6 +82,7 @@ import { installLegacyFieldGroupsNamespaceGuard } from "./legacy-field-groups-na
 import * as authNs from "./namespaces/auth";
 import * as collectionsNs from "./namespaces/collections";
 import type { NextlyContext } from "./namespaces/context";
+import { runAsCaller } from "./namespaces/helpers";
 import {
   createAccessNamespace,
   createApiKeysNamespace,
@@ -504,7 +505,9 @@ export class Nextly implements NextlyContext {
   find<TSlug extends CollectionSlug>(
     args: FindArgs<TSlug>
   ): Promise<ListResult<RowFromCollectionSlug<TSlug>>> {
-    return collectionsNs.find(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.find(this, callArgs)
+    );
   }
 
   /**
@@ -514,7 +517,9 @@ export class Nextly implements NextlyContext {
   findByID<TSlug extends CollectionSlug>(
     args: FindByIDArgs<TSlug>
   ): Promise<RowFromCollectionSlug<TSlug> | null> {
-    return collectionsNs.findByID(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.findByID(this, callArgs)
+    );
   }
 
   /**
@@ -525,7 +530,9 @@ export class Nextly implements NextlyContext {
   create<TSlug extends CollectionSlug>(
     args: CreateArgs<TSlug>
   ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
-    return collectionsNs.create(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.create(this, callArgs)
+    );
   }
 
   /**
@@ -536,7 +543,9 @@ export class Nextly implements NextlyContext {
   update<TSlug extends CollectionSlug>(
     args: UpdateArgs<TSlug>
   ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
-    return collectionsNs.update(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.update(this, callArgs)
+    );
   }
 
   /**
@@ -549,7 +558,9 @@ export class Nextly implements NextlyContext {
   delete<TSlug extends CollectionSlug = CollectionSlug>(
     args: DeleteArgs<TSlug>
   ): Promise<MutationResult<{ id: string }> | DeleteResult> {
-    return collectionsNs.deleteEntry(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.deleteEntry(this, callArgs)
+    );
   }
 
   /**
@@ -557,7 +568,9 @@ export class Nextly implements NextlyContext {
    *
    */
   count(args: CountArgs): Promise<CountResult> {
-    return collectionsNs.count(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.count(this, callArgs)
+    );
   }
 
   /**
@@ -567,17 +580,23 @@ export class Nextly implements NextlyContext {
    * counted, because both resolve that row set through one pipeline.
    */
   group(args: GroupArgs): Promise<GroupResult> {
-    return collectionsNs.group(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.group(this, callArgs)
+    );
   }
 
   /** How many documents fall in each interval of a recent window. */
   timeseries(args: TimeseriesArgs): Promise<TimeseriesResult> {
-    return collectionsNs.timeseries(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.timeseries(this, callArgs)
+    );
   }
 
   /** Bulk-delete multiple documents by IDs (partial success pattern). */
   bulkDelete(args: BulkDeleteArgs): Promise<BulkOperationResult> {
-    return collectionsNs.bulkDelete(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.bulkDelete(this, callArgs)
+    );
   }
 
   /**
@@ -588,14 +607,18 @@ export class Nextly implements NextlyContext {
   duplicate<TSlug extends CollectionSlug>(
     args: DuplicateArgs<TSlug>
   ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
-    return collectionsNs.duplicate(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.duplicate(this, callArgs)
+    );
   }
 
   /** Get a Single (global) document by slug. */
   findSingle<TSlug extends SingleSlug>(
     args: FindSingleArgs<TSlug>
   ): Promise<RowFromSingleSlug<TSlug>> {
-    return singlesNs.findSingle(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      singlesNs.findSingle(this, callArgs)
+    );
   }
 
   /**
@@ -608,12 +631,16 @@ export class Nextly implements NextlyContext {
   updateSingle<TSlug extends SingleSlug>(
     args: UpdateSingleArgs<TSlug>
   ): Promise<MutationResult<RowFromSingleSlug<TSlug>>> {
-    return singlesNs.updateSingle(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      singlesNs.updateSingle(this, callArgs)
+    );
   }
 
   /** Fetch the content of every registered Single. */
   findSingles(args: FindSinglesArgs = {}): Promise<SingleListResult> {
-    return singlesNs.findSingles(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      singlesNs.findSingles(this, callArgs)
+    );
   }
 
   /** Verify credentials and return a signed session token. */
@@ -850,6 +877,8 @@ export const nextly = {
   principals: {
     fromRequest: (request: Request, kind: string) =>
       requireNextly().principals.fromRequest(request, kind),
+    byId: (kind: string, id: string) =>
+      requireNextly().principals.byId(kind, id),
   },
 
   releases: {

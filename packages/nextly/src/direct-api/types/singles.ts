@@ -7,7 +7,12 @@
  * @packageDocumentation
  */
 
-import type { DirectAPIConfig, PopulateOptions, SingleSlug } from "./shared";
+import type {
+  DirectAPIConfig,
+  PopulateOptions,
+  RunAsPrincipal,
+  SingleSlug,
+} from "./shared";
 
 /**
  * Arguments for retrieving a single document.
@@ -21,7 +26,8 @@ import type { DirectAPIConfig, PopulateOptions, SingleSlug } from "./shared";
  * ```
  */
 export interface FindSingleArgs<TSlug extends SingleSlug = SingleSlug>
-  extends DirectAPIConfig {
+  extends DirectAPIConfig,
+    RunAsPrincipal {
   /** Single slug (required) */
   slug: TSlug;
 
@@ -77,7 +83,8 @@ export interface FindSingleArgs<TSlug extends SingleSlug = SingleSlug>
  * ```
  */
 export interface UpdateSingleArgs<TSlug extends SingleSlug = SingleSlug>
-  extends DirectAPIConfig {
+  extends DirectAPIConfig,
+    RunAsPrincipal {
   /** Single slug (required) */
   slug: TSlug;
 
@@ -166,7 +173,7 @@ export interface SingleDefinition {
  * const settingsSingles = await nextly.findSingles({ search: 'settings' });
  * ```
  */
-export interface FindSinglesArgs extends DirectAPIConfig {
+export interface FindSinglesArgs extends DirectAPIConfig, RunAsPrincipal {
   /** Filter by source type */
   source?: "code" | "ui" | "built-in";
 

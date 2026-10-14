@@ -11,6 +11,7 @@ import type { PaginationMeta } from "../../api/response-shapes";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { HookWarning } from "../../hooks/side-effect-warnings";
 import type { RichTextOutputFormat } from "../../lib/rich-text-html";
+import type { Principal } from "../../plugins/principals/types";
 import type { TrustBound } from "../../services/collections/trust-grant";
 
 import type { FormsConfig } from "./forms";
@@ -369,6 +370,30 @@ export interface RequestContext {
   fallbackLocale?: string | false;
   /** Transaction context for database operations */
   transactionID?: string;
+}
+
+/**
+ * @experimental Running a collection or Single operation as a plugin-defined
+ * signed-in person, rather than as staff or as the server.
+ *
+ * Accepted by the operations that decide access through a collection's or a
+ * Single's code-defined rules: `find`, `findByID`, `create`, `update`,
+ * `delete`, `count`, `group`, `timeseries`, `bulkDelete`, `duplicate`,
+ * `findSingle`, `updateSingle` and `findSingles`.
+ */
+export interface RunAsPrincipal {
+  /**
+   * The person this operation is made as, as `nextly.principals.fromRequest`
+   * or `byId` returned them.
+   *
+   * Access rules always apply: a rule that names the person, or one set to
+   * `true`, is the only way in, and database permissions and the
+   * super-admin bypass never do. The call is refused, and runs nothing, when
+   * it also sets `overrideAccess: true` or `trusted`, names a `user`, a
+   * `fieldAccessUser` or an API key's `actor`, or names a person core did
+   * not make.
+   */
+  principal?: Principal;
 }
 
 /**

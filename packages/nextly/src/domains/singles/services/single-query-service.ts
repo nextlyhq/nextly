@@ -24,6 +24,7 @@ import {
   apiKeyWriteAllowed,
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
+import { currentPrincipal } from "../../../auth/principal-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
@@ -288,6 +289,28 @@ export async function checkSingleAccess(params: {
 
   if (overrideAccess) {
     return null;
+  }
+
+  // A call made as a plugin-defined person: the Single's code-defined rule is
+  // the whole decision, through the same check the collection gate asks.
+  // Every path below is a staff, API-key or anonymous path, and none of them
+  // may apply to a person.
+  const principal = currentPrincipal();
+  if (principal !== null) {
+    const allowed =
+      rbacAccessControlService !== undefined &&
+      (await rbacAccessControlService.checkPrincipalCodeAccess({
+        operation,
+        resource: slug,
+        principal,
+      }));
+    return allowed
+      ? null
+      : {
+          success: false,
+          statusCode: 403,
+          message: `Access denied: insufficient permissions for ${operation} on single "${slug}"`,
+        };
   }
 
   // Super-admins bypass the RBAC gate on every transport — EXCEPT via a

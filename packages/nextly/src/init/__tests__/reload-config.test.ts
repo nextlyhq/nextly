@@ -1683,6 +1683,29 @@ describe("reloadNextlyConfig", () => {
       expect(getPrincipalKind("accounts:member")).toBeUndefined();
     });
 
+    it("keeps the previous kinds while the reload is still running", async () => {
+      // Requests are served while a reload runs. Seen from inside it, after
+      // the new config has been read, the kinds in force are still the old
+      // ones: no route reaches a resolver the reload has not committed.
+      let midReload: { account: boolean; member: boolean } | undefined;
+      introspectSpy.mockImplementation(async () => {
+        midReload = {
+          account: getPrincipalKind("accounts:account") !== undefined,
+          member: getPrincipalKind("accounts:member") !== undefined,
+        };
+        return liveSnapshot("dc_posts", [
+          ...reservedColumns("dc_posts"),
+          { name: "body", type: "text", nullable: true },
+        ]);
+      });
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(midReload).toEqual({ account: true, member: false });
+      // The control: the same reload installs the new kinds once it lands.
+      expect(getPrincipalKind("accounts:member")).toBeDefined();
+    });
+
     it("keeps the new kinds when the reload lands", async () => {
       // The control: a restore that ran on every reload would pass the case
       // above as well.

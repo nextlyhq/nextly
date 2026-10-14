@@ -17,7 +17,9 @@ import {
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
+import { currentPrincipal } from "../../../auth/principal-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import type { Principal } from "../../../plugins/principals/types";
 import type { AccessOperation } from "../../../services/access";
 import { isSuperAdminContext } from "../../../services/access";
 import { hasPermission } from "../../../services/lib/permissions";
@@ -98,6 +100,16 @@ export class CollectionAccessService extends BaseService {
     // Trusted-server / system write: bypass all access control checks.
     if (overrideAccess) {
       return null;
+    }
+
+    // A call made as a plugin-defined person, decided here and nowhere below.
+    // Every path below is a staff or API-key path, and none of them may apply
+    // to a person: no super-admin bypass, no database permission, no key's
+    // grants, and no anonymous fall-through to the public default. A person is
+    // admitted only by the collection's code-defined rule.
+    const principal = currentPrincipal();
+    if (principal !== null) {
+      return this.checkPrincipalAccess<T>(principal, collectionName, operation);
     }
 
     // The scope the request arrived with, when this caller did not name one.
@@ -270,5 +282,31 @@ export class CollectionAccessService extends BaseService {
     // which consult the registered access functions), so there is nothing
     // further to ask here.
     return null;
+  }
+
+  /**
+   * The gate for a call made as a plugin-defined person: the access-control
+   * service's one decision for a person (`checkPrincipalCodeAccess`), or a
+   * refusal when there is no such service and so no rule to consult.
+   */
+  private async checkPrincipalAccess<T>(
+    principal: Principal,
+    collectionName: string,
+    operation: AccessOperation
+  ): Promise<CollectionServiceResult<T> | null> {
+    const allowed =
+      this.rbacAccessControlService !== undefined &&
+      (await this.rbacAccessControlService.checkPrincipalCodeAccess({
+        operation,
+        resource: collectionName,
+        principal,
+      }));
+    if (allowed) return null;
+    return {
+      success: false,
+      statusCode: 403,
+      message: `Access denied: insufficient permissions for ${operation} on ${collectionName}`,
+      data: null as unknown as T,
+    };
   }
 }

@@ -29,9 +29,14 @@ export type PrincipalAttributes = Record<string, PrincipalAttributeValue>;
  * `interface` has no index signature and is never assignable to a record:
  * `interface Account { verified: boolean }` would otherwise be refused as a
  * kind's attributes although every one of them is allowed.
+ *
+ * Every key is REQUIRED here (`-?`), so an optional attribute such as
+ * `plan?: string` does not satisfy it: a declared attribute always has a
+ * value or `null`, and an optional one would let a resolver leave it out
+ * while the person's type still claimed it.
  */
 export type PrincipalAttributesOf<A> = {
-  [K in keyof A]: PrincipalAttributeValue;
+  [K in keyof A]-?: PrincipalAttributeValue;
 };
 
 /**
@@ -173,6 +178,13 @@ export interface NextlyPrincipals {
    * resolver at most once per request, whoever asks.
    */
   fromRequest(request: Request, kind: string): Promise<Principal | null>;
+  /**
+   * The person of `kind` with this id, through the kind's `lookup`, for
+   * running as them without a request; `null` when the plugin returns
+   * nobody for the id. Throws when the kind has no lookup. The answer is
+   * checked as a resolver's is.
+   */
+  byId(kind: string, id: string): Promise<Principal | null>;
 }
 
 /**
@@ -186,4 +198,9 @@ export interface PluginPrincipalsApi {
    * the same kind.
    */
   fromRequest(request: Request, name: string): Promise<Principal | null>;
+  /**
+   * The person of the plugin's kind `name` with this id, through the kind's
+   * `lookup`, or `null`. Throws when the kind has no lookup.
+   */
+  byId(name: string, id: string): Promise<Principal | null>;
 }

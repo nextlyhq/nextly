@@ -10,9 +10,11 @@
  */
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import { currentPrincipal, runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
+import { assertRunnableAsPrincipal } from "../../plugins/principals/run-as";
 import type { TrustBound } from "../../services/collections/trust-grant";
 import type { RequestContext } from "../../shared/types/index";
 import type {
@@ -21,6 +23,7 @@ import type {
   ListResult,
   Permission,
   Role,
+  RunAsPrincipal,
   SingleDefinition,
   UserContext,
 } from "../types/index";
@@ -35,10 +38,81 @@ export function mergeConfig<T extends DirectAPIConfig>(
   defaultConfig: DirectAPIConfig,
   args: T
 ): T & DirectAPIConfig {
+  refuseStrayPrincipal(args);
   return {
     ...defaultConfig,
     ...args,
   };
+}
+
+/**
+ * Refuse a person named on an operation that cannot run as one.
+ *
+ * Only the collection and Single operations decide access through code
+ * rules, and only they open the person's frame ({@link runAsCaller}), so a
+ * person named anywhere outside that frame was named on some other
+ * operation. Every other operation that takes a caller defaults to running as
+ * the server, and a person named there and quietly ignored would turn "as
+ * this visitor" into "as the server". Asked where those operations read their
+ * options, which every one of them does, so a new operation cannot forget it.
+ * A nested collection read inside a person's operation names the same person
+ * and runs inside the same frame, so it passes.
+ */
+function refuseStrayPrincipal(args: object): void {
+  const named = (args as RunAsPrincipal).principal;
+  if (named !== undefined && named !== currentPrincipal()) {
+    throw NextlyError.invalidInput({
+      message:
+        "This operation cannot be made as a signed-in person; only collection and Single operations can.",
+      logContext: { reason: "principal-call-refused" },
+    });
+  }
+}
+
+/**
+ * Run one collection or Single operation as the caller it names.
+ *
+ * A call naming a plugin-defined person runs inside that person's frame
+ * (`auth/principal-scope`), so every access decision, field rule and hook
+ * the operation reaches sees the person, however many hops it takes to get
+ * there. It runs under access rules: `overrideAccess` is set to `false`
+ * for it, which replaces the instance default of `true` rather than
+ * inheriting it, and a call that asks to skip the rules, or that also names a
+ * staff user or an API key, is refused before anything runs.
+ *
+ * A call naming no person opens a frame with none, so it never inherits the
+ * person of an operation that set it going, such as a hook's own call.
+ *
+ * Async, so a refusal reaches the caller as a rejected promise like every
+ * other failure of the operation, never as a throw from the call itself.
+ */
+export async function runAsCaller<
+  A extends DirectAPIConfig & RunAsPrincipal,
+  R,
+>(
+  defaultConfig: DirectAPIConfig,
+  args: A,
+  operation: (args: A) => Promise<R>
+): Promise<R> {
+  const { principal } = args;
+  if (principal === undefined) {
+    return runAsPrincipal(null, () => operation(args));
+  }
+  return runAsPrincipal(principal, () => {
+    // Checked inside the person's frame so the options read through
+    // `mergeConfig` like any operation's. Nothing has run when it refuses.
+    const config = mergeConfig(defaultConfig, args);
+    assertRunnableAsPrincipal(principal, {
+      user: config.user,
+      fieldAccessUser: config.fieldAccessUser,
+      actor: config.actor,
+      trusted: config.trusted,
+      // The call's own setting, never the instance default of `true`, which
+      // a call made as a person replaces rather than asks for.
+      overrideAccess: args.overrideAccess,
+    });
+    return operation({ ...args, overrideAccess: false });
+  });
 }
 
 /**
@@ -140,9 +214,9 @@ export function accessOptions(config: DirectAPIConfig): AccessOptions {
  * takes it as `actor` and translates it itself.
  */
 export function callerAccess(
-  config: DirectAPIConfig
+  config: DirectAPIConfig & RunAsPrincipal
 ): Pick<
-  DirectAPIConfig,
+  DirectAPIConfig & RunAsPrincipal,
   | "user"
   | "overrideAccess"
   | "enforceFieldAccess"
@@ -150,9 +224,14 @@ export function callerAccess(
   | "trusted"
   | "actor"
   | "request"
+  | "principal"
 > {
   return {
     user: config.user,
+    // A nested call opens its own frame from what it is handed, so the person
+    // travels with it: dropped, the readback of a person's write would run as
+    // nobody, and a rule-less collection admits nobody to its public default.
+    principal: config.principal,
     overrideAccess: config.overrideAccess,
     // Carried for the same reason as `trusted` below: a nested call that omits
     // it re-enters `mergeConfig` and takes the instance default, which is
@@ -182,6 +261,7 @@ export function callerAccess(
  * aren't available in a Direct API context.
  */
 export function createRequestContext(args: DirectAPIConfig): RequestContext {
+  refuseStrayPrincipal(args);
   if (!args.user) {
     return { locale: args.locale };
   }
