@@ -10,17 +10,23 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { knownBrowsers, pendingAddressChanges } from "../schema/tables";
+import {
+  accounts,
+  knownBrowsers,
+  pendingAddressChanges,
+} from "../schema/tables";
 import { accountById, writeAtVersion } from "../storage/accounts";
 import { makeAccount, TEST_PASSWORD } from "../test-support/accounts";
 import { bootAccounts } from "../test-support/boot";
 import { flowDeps } from "../test-support/flow-deps";
+import { commitBeforeFirstRead } from "../test-support/race";
 
 import { changePassword } from "./change-password";
 import { completePasswordReset } from "./reset";
 import { requestPasswordReset } from "./reset-request";
 import { sessionAccount, signOut } from "./sessions";
 import { signIn, type SignInResult } from "./sign-in";
+import { runStaffAction } from "./staff-actions";
 
 const NEW_PASSWORD = "a brand new passphrase";
 const HOUR = 60 * 60 * 1000;
@@ -193,6 +199,30 @@ describe.each(getConfiguredTestDialects())(
         status: "changed",
       });
       expect((await accountById(db, id))?.resetRequiredAt).toBeNull();
+    });
+
+    it("signs out a holder whose session staff ended between its two reads, changing nothing", async () => {
+      const { db, deps, id, browser } = await boot();
+      const { session } = await browser();
+      // Staff end the account's sessions after the session is read and
+      // before the account is: the account read carries the moved version.
+      const raced = {
+        ...deps,
+        db: commitBeforeFirstRead(deps.db, accounts, () =>
+          runStaffAction(deps, "end-sessions", id)
+        ),
+      };
+
+      expect(
+        await changePassword(raced, {
+          sessionToken: session.token,
+          currentPassword: TEST_PASSWORD,
+          newPassword: NEW_PASSWORD,
+          client: null,
+          knownTokens: [],
+        })
+      ).toEqual({ status: "signed-out" });
+      expect((await accountById(db, id))?.passwordChangedAt).toBeNull();
     });
 
     it("refuses a new password the rules refuse, and a session that has ended", async () => {

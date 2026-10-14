@@ -11,7 +11,10 @@ import {
 /**
  * The holder a request's session names, for a change only the holder may
  * make: the live session and its account, or null when the session has
- * ended or its account is deactivated.
+ * ended or its account is deactivated. The session is read again after the
+ * account, so a change that ended it and moved the version between the two
+ * reads is seen: the account is never paired with a session that the
+ * version it carries has already ended.
  */
 export async function sessionHolder(
   deps: Pick<FlowDeps, "db" | "core" | "now">,
@@ -24,10 +27,10 @@ export async function sessionHolder(
   );
   if (session === null) return null;
   const account = await accountById(deps.db, session.accountId);
+  if (account === null || account.deactivatedAt !== null) return null;
+  const still = await liveSession(deps.db, session.tokenHash, deps.now());
 
-  return account === null || account.deactivatedAt !== null
-    ? null
-    : { session, account };
+  return still === null ? null : { session: still, account };
 }
 
 /**
