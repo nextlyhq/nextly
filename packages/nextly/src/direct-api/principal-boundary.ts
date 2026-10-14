@@ -13,6 +13,7 @@
  *
  * @module direct-api/principal-boundary
  */
+import { runAsPrincipal } from "../auth/principal-scope";
 import { NextlyError } from "../errors/nextly-error";
 
 /** The `Nextly` methods that run as the person a call names. */
@@ -53,6 +54,11 @@ function refusal(operation: string): NextlyError {
  * `method` refusing any call that names a person. Refused as a rejected
  * promise, as every Direct API failure reaches its caller, and before the
  * method runs at all.
+ *
+ * A call that names none runs as no person, even from inside a person's
+ * operation, as a person-capable method naming none does: a hook's call
+ * would otherwise inherit the person, and the services it reaches would
+ * judge it as them, through an operation that cannot be made as one.
  */
 function refusingPrincipal(
   method: (...args: unknown[]) => unknown,
@@ -62,8 +68,16 @@ function refusingPrincipal(
   return (...args: unknown[]) =>
     namesPrincipal(args)
       ? Promise.reject(refusal(operation))
-      : method.apply(self, args);
+      : runAsPrincipal(null, () => method.apply(self, args));
 }
+
+/**
+ * Members the boundary leaves as they are. `plugins` hands out the services
+ * plugins contribute: their own code, whose arguments mean whatever the plugin
+ * says. A service taking `{ principal }` is passing a person to its own
+ * logic, not asking core to run as one, so it is not refused.
+ */
+const UNGUARDED: ReadonlySet<string> = new Set(["plugins"]);
 
 /** Whether `value` is a namespace: a plain object the instance hands out. */
 function isNamespace(value: unknown): value is Record<string, unknown> {
@@ -110,8 +124,11 @@ function guardNamespace(
  * as they are, and every other method and namespace refusing `principal`.
  *
  * Methods run with the guarded instance as `this`, so one method calling
- * another is held to the same boundary. Services the instance exposes are
- * class instances, not namespaces, and pass through untouched.
+ * another is held to the same boundary. A namespace is a plain object the
+ * constructor assigns to the instance itself; the services the instance
+ * exposes are read through getters on its class, and pass through untouched
+ * whatever their shape, so a person's operation keeps its frame through the
+ * service it runs on.
  */
 export function guardPrincipalOperations<T extends object>(instance: T): T {
   const namespaces = new WeakMap<object, Record<string, unknown>>();
@@ -119,6 +136,7 @@ export function guardPrincipalOperations<T extends object>(instance: T): T {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver) as unknown;
       const name = String(prop);
+      if (UNGUARDED.has(name)) return value;
       if (typeof value === "function") {
         return PERSON_OPERATIONS.has(name)
           ? value
@@ -128,7 +146,9 @@ export function guardPrincipalOperations<T extends object>(instance: T): T {
               name
             );
       }
-      if (isNamespace(value)) return guardNamespace(value, name, namespaces);
+      if (isNamespace(value) && Object.hasOwn(target, prop)) {
+        return guardNamespace(value, name, namespaces);
+      }
       return value;
     },
   });
