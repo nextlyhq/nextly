@@ -20,9 +20,10 @@ export interface PasswordHelper {
   hash(password: string): Promise<string>;
   /**
    * False on a mismatch, a malformed hash or one the helper did not write;
-   * never throws for any of them. With null, spends a real verification's
-   * time against a decoy and answers false, so an unknown address costs what
-   * a known one does.
+   * never throws for any of them. Verifies a hash written at the helper's
+   * own earlier settings. With null, spends a real verification's time
+   * against a decoy and answers false, so an unknown address costs what a
+   * known one does.
    */
   verify(password: string, hash: string | null): Promise<boolean>;
   /** True for any string that is not a hash at today's algorithm and setting. */
@@ -178,7 +179,7 @@ export type LimitRule =
 export interface LimitTarget {
   /** A rule this plugin declared. */
   rule: string;
-  /** Any non-empty string the plugin chooses, at most 512 characters. */
+  /** Any non-empty string the plugin chooses, at most 512 characters; a longer one throws. */
   key: string;
 }
 
