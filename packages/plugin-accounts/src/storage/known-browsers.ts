@@ -1,9 +1,10 @@
-import { and, asc, eq, inArray, lte, ne } from "@nextlyhq/plugin-sdk/db";
+import { and, asc, eq, inArray, lte } from "@nextlyhq/plugin-sdk/db";
 import type { InferRow } from "@nextlyhq/plugin-sdk/schema";
 
 import { knownBrowsers } from "../schema/tables";
 
 import type { AccountsDb } from "./accounts";
+import { accountRowsExcept } from "./filters";
 
 /** A browser known to an account, as its row holds it: never the token, only its hash. */
 export type KnownBrowserRow = InferRow<typeof knownBrowsers>;
@@ -166,15 +167,7 @@ export async function forgetBrowsers(
   options: { except?: string } = {}
 ): Promise<number> {
   const columns = db.table(knownBrowsers);
-  const condition =
-    options.except === undefined
-      ? eq(columns.accountId, accountId)
-      : and(
-          eq(columns.accountId, accountId),
-          ne(columns.tokenHash, options.except)
-        );
-  if (condition === undefined)
-    throw new TypeError("The filter lost its account.");
+  const condition = accountRowsExcept(columns, accountId, options.except);
 
   return db.delete(knownBrowsers).where(condition);
 }
