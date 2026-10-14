@@ -146,8 +146,9 @@ write. A page that writes with its own `fetch` leaves `csrf` unset, or fetches
 `/admin/api/auth/csrf` and sends the token as `x-csrf-token`.
 
 On a public route, `csrf: true` also checks the origin of a write no session
-authenticates, without asking it for a token; only a caller sending an
-`Authorization: Bearer` token is exempt. Set it on a public route that browsers
+authenticates, without asking it for a token; only such a write that sends an
+`Authorization: Bearer` token is exempt. A write a session authenticates is
+checked as the session's, whatever header it carries. Set it on a public route that browsers
 write to, above all one that keeps its own cookie for anonymous visitors, such as
 a guest cart. A route for webhooks or other server callers leaves `csrf` unset.
 See [Which callers each `csrf` setting checks](/docs/plugins/security#which-callers-each-csrf-setting-checks)

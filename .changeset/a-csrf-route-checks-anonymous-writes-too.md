@@ -39,7 +39,9 @@ authenticates nobody, so its caller is checked the same way, and is no longer
 asked for a token it could not hold.
 
 Only an `Authorization: Bearer` token, with the scheme in any case, now exempts
-a request from the check, whether or not the token is a valid key. Any other
+a request no session authenticates from the check, whether or not the token is
+a valid key. A request a session authenticates is checked as the session's,
+whatever header it also carries. Any other
 scheme, such as the Basic, Digest, Negotiate or NTLM credentials a browser
 attaches on its own, no longer does.
 

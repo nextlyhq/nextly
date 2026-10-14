@@ -232,9 +232,11 @@ send `Origin` (or `Referer`) on cross-site writes, so a forged request is
 refused, while a same-origin write passes without sending a token. This is
 the origin half of what core's `/auth/*` routes check. Declare
 `csrf: true` to require a double-submit CSRF token as well, the protection
-core's `/auth/*` routes take. A caller with an API key (`Authorization:
-Bearer`) is never checked: a browser cannot attach one cross-site, so there
-is no cross-site request to forge, and an API-key caller needs no opt-out. On
+core's `/auth/*` routes take. A request with an API key (`Authorization:
+Bearer`) is not checked unless a session also authenticates it: a browser
+cannot attach the key cross-site, so there is no cross-site request to forge,
+and an API-key caller needs no opt-out. A request that carries both a key and
+a session cookie that authenticates is checked as the session's. On
 a public route, `csrf: true` checks anonymous callers too (below).
 `csrf: false` makes a route refuse every unsafe request the session cookie
 authenticates, from any origin, so it takes writes only from callers with
@@ -270,8 +272,9 @@ the cross-site write it refuses.
 Declare `csrf: true` on a public route that browsers write to, and always on
 one that keeps its own cookie for anonymous visitors, such as a guest cart's
 id: a browser sends that cookie on a cross-site form post just as it sends the
-session cookie. Such a route checks every unsafe request except a `Bearer`
-caller's, anonymous ones included, before the handler runs. `csrf: false`
+session cookie. Such a route checks every unsafe request, anonymous ones
+included, before the handler runs, except one carrying a `Bearer` token that
+no session authenticates. `csrf: false`
 cannot be combined with `public: true`: boot refuses such a route, naming the
 plugin and the route. `ctx.auth.verifyCsrf` remains the tool when the check
 must stay conditional inside the handler instead.
@@ -301,7 +304,8 @@ For a POST, PUT, PATCH or DELETE; a GET is never checked.
   answers them 401 first. A session cookie that is expired or malformed
   authenticates nobody, so its caller is anonymous, and is not asked for a
   token either.
-- **Only `Bearer`** exempts a caller, matched in any case (`bearer` too), and
+- **Only `Bearer`** exempts a caller no session authenticates, matched in
+  any case (`bearer` too), and
   whether or not the token is a valid key. Any other `Authorization` scheme
   (Basic, Digest, Negotiate, NTLM, or one of your own) does not: a browser
   attaches the HTTP authentication schemes by itself, cross-site included,
