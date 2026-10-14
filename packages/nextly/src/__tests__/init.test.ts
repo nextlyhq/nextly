@@ -226,6 +226,7 @@ describe("init - Nextly API", () => {
       "mediaService",
       "meta",
       "permissions",
+      "principals",
       "register",
       "releases",
       "resetPassword",

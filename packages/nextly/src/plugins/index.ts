@@ -114,3 +114,20 @@ export type {
   Middleware,
   RouteMethod,
 } from "./routes/route-types";
+
+// Plugin-defined kinds of signed-in person: `contributes.principals`, a
+// route's `principal`, `ctx.principals` and `nextly.principals`.
+export type {
+  NextlyPrincipals,
+  PluginPrincipalsApi,
+  PluginRoutePrincipal,
+  Principal,
+  PrincipalAttributeDescriptors,
+  PrincipalAttributes,
+  PrincipalAttributeType,
+  PrincipalAttributeTypeOf,
+  PrincipalAttributeValue,
+  PrincipalKindDefinition,
+  PrincipalRecord,
+  PrincipalRef,
+} from "./principals/types";

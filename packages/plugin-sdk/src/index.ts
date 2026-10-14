@@ -170,6 +170,31 @@ export type {
 } from "nextly";
 
 /**
+ * Kinds of signed-in person a plugin defines: a shop's customers, a site's
+ * members, anyone who signs in without being staff.
+ * @experimental `PrincipalKindDefinition` (`contributes.principals`) with its
+ *   attribute and record types; `PluginRoutePrincipal` (a route's
+ *   `principal`); `Principal`, the person core hands to `ctx.principal`;
+ *   `PrincipalRef`, a person named by kind and id; `PluginPrincipalsApi`
+ *   (`ctx.principals`) and `NextlyPrincipals` (`nextly.principals`). Meant to
+ *   become stable once the feature is complete (see STABILITY.md).
+ */
+export type {
+  NextlyPrincipals,
+  PluginPrincipalsApi,
+  PluginRoutePrincipal,
+  Principal,
+  PrincipalAttributeDescriptors,
+  PrincipalAttributes,
+  PrincipalAttributeType,
+  PrincipalAttributeTypeOf,
+  PrincipalAttributeValue,
+  PrincipalKindDefinition,
+  PrincipalRecord,
+  PrincipalRef,
+} from "nextly";
+
+/**
  * The database handles a plugin receives: `ctx.db` is a `PluginDatabase`
  * with a `raw` member that is a `PluginRawDatabase`.
  * @experimental `PluginDatabase` — typed, owner-checked access to the tables
