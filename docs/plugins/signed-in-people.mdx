@@ -26,13 +26,18 @@ Such a person:
 ```ts
 import { definePlugin, type PrincipalKindDefinition } from "@nextlyhq/plugin-sdk";
 
+// Your plugin's own session reader: whatever your sign-in stored.
+declare function readMySession(
+  request: Request
+): Promise<{ accountId: string; verified: boolean; plan: string | null } | null>;
+
 type Account = { verified: boolean; plan: string | null };
 
 const account: PrincipalKindDefinition<Account> = {
   name: "account",
   attributes: { verified: "boolean", plan: "string" },
   async resolve(request) {
-    const session = await readMySession(request); // your plugin's own session
+    const session = await readMySession(request);
     if (!session) return null;
     return {
       id: session.accountId,
@@ -43,7 +48,8 @@ const account: PrincipalKindDefinition<Account> = {
 
 export default definePlugin({
   name: "@acme/accounts",
-  // ...
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.63",
   contributes: { principals: [account] },
 });
 ```
