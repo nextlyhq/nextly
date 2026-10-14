@@ -65,6 +65,14 @@ function refusingPrincipal(
       : method.apply(self, args);
 }
 
+/**
+ * Members the boundary leaves as they are. `plugins` hands out the services
+ * plugins contribute: their own code, whose arguments mean whatever the plugin
+ * says. A service taking `{ principal }` is passing a person to its own
+ * logic, not asking core to run as one, so it is not refused.
+ */
+const UNGUARDED: ReadonlySet<string> = new Set(["plugins"]);
+
 /** Whether `value` is a namespace: a plain object the instance hands out. */
 function isNamespace(value: unknown): value is Record<string, unknown> {
   return (
@@ -119,6 +127,7 @@ export function guardPrincipalOperations<T extends object>(instance: T): T {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver) as unknown;
       const name = String(prop);
+      if (UNGUARDED.has(name)) return value;
       if (typeof value === "function") {
         return PERSON_OPERATIONS.has(name)
           ? value

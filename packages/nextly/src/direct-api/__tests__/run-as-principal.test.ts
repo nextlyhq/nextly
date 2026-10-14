@@ -6,7 +6,23 @@
  * the frame from inside the mocked service: the service is where every access
  * decision below it reads the person from.
  */
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// A plugin's services, as `nextly.plugins` hands them out.
+const pluginServices = vi.hoisted(() => ({
+  shop: {
+    orders: {
+      placeOrder: async (args: { principal: unknown }) =>
+        args.principal !== undefined,
+    },
+  },
+}));
+vi.mock("../../plugins/services/plugin-services-registry", async original => ({
+  ...(await original<
+    typeof import("../../plugins/services/plugin-services-registry")
+  >()),
+  buildPluginServicesNamespace: () => pluginServices,
+}));
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { currentPrincipal, runAsPrincipal } from "../../auth/principal-scope";
@@ -194,5 +210,15 @@ describe("a Direct API call made as a person", () => {
     await expect(
       folders.create({ name: "x", principal: person })
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("leaves a plugin's own services alone", async () => {
+    // A service is the plugin's code; `{ principal }` there is its own
+    // argument, not a request to run as a person.
+    const plugins = (nextly as unknown as { plugins: typeof pluginServices })
+      .plugins;
+    await expect(
+      plugins.shop.orders.placeOrder({ principal: person })
+    ).resolves.toBe(true);
   });
 });
