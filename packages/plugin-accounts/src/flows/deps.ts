@@ -5,6 +5,7 @@ import type { AccountsSettings } from "../settings";
 import type { SessionLimits } from "../storage/sessions";
 
 import type { AccountsMail } from "./mail";
+import type { PasswordPacer } from "./pacer";
 
 /** What every flow is given: the plugin's database, core's helpers, the site's settings, mail and a clock. */
 export interface FlowDeps {
@@ -13,6 +14,8 @@ export interface FlowDeps {
   readonly core: AccountsCore;
   readonly settings: AccountsSettings;
   readonly mail: AccountsMail;
+  /** Password checks, timed, and waits as long as one takes. */
+  readonly pacer: PasswordPacer;
   readonly logger: {
     warn(message: string, context?: Record<string, unknown>): void;
   };

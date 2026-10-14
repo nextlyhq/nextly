@@ -15,7 +15,16 @@ export const LIMIT_RULES = {
   resendAddress: "resend-address",
   /** Requests that send an email, of every kind together, per client. */
   emailClient: "email-client",
+  /** Failed sign-ins per address. */
+  signInAddress: "sign-in-address",
+  /** Failed or refused sign-ins per client. */
+  signInClient: "sign-in-client",
 } as const;
+
+/** The waits after the free attempts: 1, 2, 4, 8, 16 and 32 seconds, then 60 every time. */
+const SIGN_IN_WAITS_MS = [1, 2, 4, 8, 16, 32, 60].map(
+  seconds => seconds * 1000
+);
 
 /**
  * Per address, for each kind of request that sends an email: 3 in 15
@@ -58,5 +67,21 @@ export function accountsLimitRules(
     [LIMIT_RULES.signUpAddress]: PER_ADDRESS,
     [LIMIT_RULES.resendAddress]: PER_ADDRESS,
     [LIMIT_RULES.emailClient]: PER_CLIENT,
+    // 5 failures in a row for an address run free, then the waits, until a
+    // sign-in succeeds, a reset completes, or 24 hours pass without one.
+    [LIMIT_RULES.signInAddress]: {
+      type: "backoff",
+      free: 5,
+      waitsMs: SIGN_IN_WAITS_MS,
+      forgetAfterMs: DAY_MS,
+    },
+    // A client's 20th failed or refused sign-in starts the same waits, until
+    // 15 minutes pass without either from it.
+    [LIMIT_RULES.signInClient]: {
+      type: "backoff",
+      free: 20,
+      waitsMs: SIGN_IN_WAITS_MS,
+      forgetAfterMs: 15 * MINUTE_MS,
+    },
   };
 }

@@ -81,6 +81,16 @@ export async function chargeKnownBrowser(
   return false;
 }
 
+/** A known browser by its row's id, or null when it is gone. */
+export async function knownBrowserById(
+  db: AccountsDb,
+  id: string
+): Promise<KnownBrowserRow | null> {
+  const columns = db.table(knownBrowsers);
+
+  return db.select(knownBrowsers).where(eq(columns.id, id)).first();
+}
+
 /** Records a failed password check through a token, which a capped token's own wait runs from. */
 export async function recordFailedCheck(
   db: AccountsDb,

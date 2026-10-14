@@ -163,3 +163,49 @@ export async function deleteStaleUnverified(
 
   return ids.filter(id => !keptIds.has(id));
 }
+
+/** How many times a counter re-reads a count another request moved first, before giving up. */
+const COUNT_RETRIES = 50;
+
+/**
+ * Counts a failed password check toward the account's failures in a row, by
+ * compare-and-set so no two failures at once are counted as one, and marks
+ * the account as needing a reset when the count reaches `threshold`.
+ * Answers the count, or null for an account no longer there.
+ */
+export async function recordFailedPassword(
+  db: AccountsDb,
+  id: string,
+  now: Date,
+  threshold: number
+): Promise<{ failuresInARow: number; resetRequired: boolean } | null> {
+  const columns = db.table(accounts);
+  for (let attempt = 0; attempt < COUNT_RETRIES; attempt += 1) {
+    const current = await db.select(accounts).where(eq(columns.id, id)).first();
+    if (current === null) return null;
+    const next = current.failuresInARow + 1;
+    const unchanged = and(
+      eq(columns.id, id),
+      eq(columns.failuresInARow, current.failuresInARow)
+    );
+    if (unchanged === undefined)
+      throw new TypeError("The count lost its compare.");
+    const reachesReset = next >= threshold && current.resetRequiredAt === null;
+    const written = await db
+      .update(
+        accounts,
+        reachesReset
+          ? { failuresInARow: next, resetRequiredAt: now }
+          : { failuresInARow: next }
+      )
+      .where(unchanged);
+    if (written === 1)
+      return {
+        failuresInARow: next,
+        resetRequired: next >= threshold || current.resetRequiredAt !== null,
+      };
+  }
+  throw new Error(
+    "The failure count kept moving: too many failed checks at once for one account."
+  );
+}
