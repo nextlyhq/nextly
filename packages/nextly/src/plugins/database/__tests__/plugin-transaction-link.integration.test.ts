@@ -93,6 +93,45 @@ describe.each(getConfiguredTestDialects())(
       expect(await stored("link-committed")).toBe(true);
     });
 
+    /** Linked work that waits a moment before it writes, as slow work would. */
+    function writeLater(
+      tx: PluginTransaction,
+      key: string,
+      fail?: Error
+    ): Promise<unknown> {
+      return linkedTransaction(tx, "test.write").run(async adapterTx => {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        await adapterTx.insert("nextly_meta", {
+          key,
+          value: null,
+          updatedAt: new Date(),
+        });
+        if (fail) throw fail;
+      });
+    }
+
+    it("waits for linked work the callback started and did not await", async () => {
+      const ctx = await boot();
+      await ctx.db.transaction(async tx => {
+        // Started, not awaited: the callback settles first.
+        void writeLater(tx, "link-unawaited").catch(() => undefined);
+      });
+      expect(await stored("link-unawaited")).toBe(true);
+    });
+
+    it("rolls back when linked work the callback did not await fails", async () => {
+      const ctx = await boot();
+      const failure = new Error("the core write failed after inserting");
+      await expect(
+        ctx.db.transaction(async tx => {
+          void writeLater(tx, "link-unawaited-failed", failure).catch(
+            () => undefined
+          );
+        })
+      ).rejects.toBe(failure);
+      expect(await stored("link-unawaited-failed")).toBe(false);
+    });
+
     it("refuses a handle whose transaction has finished, and writes nothing", async () => {
       const ctx = await boot();
       let kept: PluginTransaction | undefined;

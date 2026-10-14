@@ -1344,7 +1344,7 @@ function buildPluginDatabase(
           get relationalDb() {
             return tx.drizzleWithRelations(relations());
           },
-          adapterTx: tx,
+          adapterTx: asTransactionContext(tx),
         });
       const transactions = adapter();
       return runAdapterTransaction(
@@ -1392,12 +1392,30 @@ export interface AdapterTransactions extends AfterCommitAdapter {
   getDrizzle: <D = unknown>(relations?: AnyRelations) => D;
 }
 
+/** The Drizzle handles bound to one transaction's connection. */
+export interface AdapterTransactionHandles {
+  getDrizzle: <D = unknown>() => D;
+  drizzleWithRelations: <D = unknown>(relations: AnyRelations) => D;
+}
+
 /**
- * The adapter's own transaction context: the Drizzle handles bound to the
- * transaction's connection, and the adapter's methods on that connection,
- * which core code a plugin passes its transaction to writes through.
+ * The transaction's full adapter context when the adapter handed one, which
+ * every adapter core ships does; undefined for one that supplies only the two
+ * Drizzle handles this resolver's contract asks for. Core code a plugin passes
+ * its transaction to writes through it (`plugin-transaction-link`), and with
+ * none it refuses rather than writes outside the transaction.
  */
-export type AdapterTransactionHandles = TransactionContext;
+function asTransactionContext(
+  tx: AdapterTransactionHandles
+): TransactionContext | undefined {
+  const candidate = tx as Partial<TransactionContext>;
+  return typeof candidate.insert === "function" &&
+    typeof candidate.select === "function" &&
+    typeof candidate.updateCount === "function" &&
+    typeof candidate.delete === "function"
+    ? (tx as TransactionContext)
+    : undefined;
+}
 
 /**
  * @experimental The handle a plugin receives as `ctx.db.raw`: Drizzle's fluent
