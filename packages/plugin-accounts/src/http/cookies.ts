@@ -11,6 +11,8 @@ const BASE_NAMES = {
   knownBrowsers: "nx-account-known",
   /** Ties a pending sign-up to the browser that made it. */
   signUp: "nx-account-signup",
+  /** The plugin's own CSRF token, which a write sends back in a header. */
+  csrf: "nx-account-csrf",
 } as const;
 
 export type CookieKind = keyof typeof BASE_NAMES;
