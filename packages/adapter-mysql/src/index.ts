@@ -484,6 +484,18 @@ export class MySqlAdapter extends DrizzleAdapter {
     work: (tx: TransactionContext) => Promise<T>,
     options?: TransactionOptions
   ): Promise<T> {
+    // The calling flow's open transaction from BEGIN until COMMIT or ROLLBACK
+    // has run, for `transactionOpenInFlow`.
+    return this.runInFlowTransaction(() =>
+      this.runTransactionAttempts(work, options)
+    );
+  }
+
+  /** The attempts `transaction` makes, each on a connection of its own. */
+  private async runTransactionAttempts<T>(
+    work: (tx: TransactionContext) => Promise<T>,
+    options?: TransactionOptions
+  ): Promise<T> {
     const pool = this.ensurePool();
     const maxAttempts = (options?.retryCount ?? 0) + 1;
     const retryDelayMs = options?.retryDelayMs ?? 100;
@@ -655,12 +667,13 @@ export class MySqlAdapter extends DrizzleAdapter {
     // The pre-v1 `mode` option no longer exists.
     const client = (pool as unknown as { pool: CallbackPool }).pool;
     if (!relations) {
-      this.drizzleBare ??= drizzle({ client });
+      // Its `transaction` counts for `transactionOpenInFlow`, as the adapter's does.
+      this.drizzleBare ??= this.trackFlowTransactions(drizzle({ client }));
       return this.drizzleBare as T;
     }
     let cached = this.drizzleByRelations.get(relations);
     if (!cached) {
-      cached = drizzle({ client, relations });
+      cached = this.trackFlowTransactions(drizzle({ client, relations }));
       this.drizzleByRelations.set(relations, cached);
     }
     return cached as T;
