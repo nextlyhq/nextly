@@ -680,6 +680,25 @@ describe("giving back and forgetting", () => {
     expect((await signIn()).status).toBe("refused");
   });
 
+  it("lifts the wait once a later count, released first, no longer stands", async () => {
+    const { limits } = setup();
+    const signIn = (enforce = true) =>
+      limits.reserve([{ rule: "signin", key: "c", count: "always", enforce }]);
+    for (let attempt = 0; attempt < 19; attempt += 1) await signIn();
+    const earlier = await signIn(); // the 20th: sets the wait
+    const later = await signIn(false); // admitted unenforced, counted during it
+    if (earlier.status !== "admitted" || later.status !== "admitted") {
+      throw new Error("not admitted");
+    }
+
+    // Both succeed; the later one is given back first.
+    await limits.release(later.reservation);
+    await limits.release(earlier.reservation);
+
+    // Back to 19 counted, as if neither attempt had counted: no wait.
+    expect((await signIn()).status).toBe("admitted");
+  });
+
   it("forgets a key's count on reset", async () => {
     const { limits } = setup();
     for (let attempt = 0; attempt < 3; attempt += 1) {
