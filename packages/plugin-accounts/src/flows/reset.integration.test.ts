@@ -167,8 +167,12 @@ describe.each(getConfiguredTestDialects())(
       const id = await makeAccount(deps, "dana@example.com", {
         verified: false,
       });
+      const checked = {
+        id,
+        securityVersion: (await accountById(db, id))?.securityVersion ?? -1,
+      };
       for (let n = 0; n < 10; n += 1)
-        await recordFailedPassword(db, id, deps.now(), 10);
+        await recordFailedPassword(db, checked, deps.now(), 10);
 
       await completePasswordReset(deps, {
         token: await resetLink("dana@example.com"),

@@ -213,22 +213,29 @@ const COUNT_RETRIES = 50;
 /**
  * Counts a failed password check toward the account's failures in a row, by
  * compare-and-set so no two failures at once are counted as one, and marks
- * the account as needing a reset when the count reaches `threshold`.
- * Answers the count, or null for an account no longer there.
+ * the account as needing a reset when the count reaches `threshold`. The
+ * check was made against the password at `account.securityVersion`, so it
+ * counts only while the account is still at that version: a failure against
+ * a password a reset or a change has since replaced says nothing about the
+ * new one, and is dropped. Answers the count, or null for an account no
+ * longer there or no longer at that version.
  */
 export async function recordFailedPassword(
   db: AccountsDb,
-  id: string,
+  account: Pick<AccountRow, "id" | "securityVersion">,
   now: Date,
   threshold: number
 ): Promise<{ failuresInARow: number; resetRequired: boolean } | null> {
   const columns = db.table(accounts);
+  const { id } = account;
   for (let attempt = 0; attempt < COUNT_RETRIES; attempt += 1) {
     const current = await db.select(accounts).where(eq(columns.id, id)).first();
-    if (current === null) return null;
+    if (current === null || current.securityVersion !== account.securityVersion)
+      return null;
     const next = current.failuresInARow + 1;
     const unchanged = and(
       eq(columns.id, id),
+      eq(columns.securityVersion, account.securityVersion),
       eq(columns.failuresInARow, current.failuresInARow)
     );
     if (unchanged === undefined)

@@ -275,7 +275,7 @@ async function passwordProven(
     return true;
   const counted = await recordFailedPassword(
     deps.db,
-    account.id,
+    account,
     now,
     deps.settings.failuresBeforeReset
   );

@@ -380,8 +380,12 @@ describe.each(getConfiguredTestDialects())(
       const { knownBrowserToken } = signedIn(
         await attempt("dana@example.com", PASSWORD)
       );
+      const checked = {
+        id,
+        securityVersion: (await accountById(db, id))?.securityVersion ?? -1,
+      };
       for (let n = 0; n < 10; n += 1)
-        await recordFailedPassword(db, id, deps.now(), 10);
+        await recordFailedPassword(db, checked, deps.now(), 10);
       expect((await accountById(db, id))?.resetRequiredAt).toBeInstanceOf(Date);
 
       expect(
@@ -484,6 +488,32 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (await accountByAddress(db, "dana@example.com"))?.lastSignedInAt
       ).toBeNull();
+    });
+
+    it("drops a wrong password checked against a password a reset replaced while it ran", async () => {
+      const { db, deps, account } = await boot();
+      const id = await account("dana@example.com");
+      const raced = {
+        ...deps,
+        pacer: {
+          ...deps.pacer,
+          verify: async (password: string, hash: string | null) => {
+            const fresh = await accountById(db, id);
+            if (fresh !== null)
+              await writeAtVersion(db, fresh, {}, { endsSessions: true });
+            return deps.pacer.verify(password, hash);
+          },
+        },
+      };
+
+      expect(
+        await signIn(raced, {
+          address: "dana@example.com",
+          password: "not the password",
+          client: null,
+        })
+      ).toMatchObject({ reason: "wrong-credentials" });
+      expect((await accountById(db, id))?.failuresInARow).toBe(0);
     });
 
     it("refuses while the limit store does not answer", async () => {
