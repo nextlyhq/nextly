@@ -14,12 +14,27 @@ export interface FlowDeps {
   readonly core: AccountsCore;
   readonly settings: AccountsSettings;
   readonly mail: AccountsMail;
+  /** What the flows tell other plugins, best-effort, after their work commits. */
+  readonly events: AccountsEvents;
   /** Password checks, timed, and waits as long as one takes. */
   readonly pacer: PasswordPacer;
   readonly logger: {
     warn(message: string, context?: Record<string, unknown>): void;
   };
   readonly now: () => Date;
+}
+
+/** The events the flows emit, with what each carries. */
+export interface AccountsEventPayloads {
+  /** An account is gone: other plugins remove or anonymise what they hold for it. */
+  "account.deleted": { accountId: string };
+}
+
+export interface AccountsEvents {
+  emit<K extends keyof AccountsEventPayloads>(
+    name: K,
+    payload: AccountsEventPayloads[K]
+  ): void;
 }
 
 export const MINUTE = 60_000;

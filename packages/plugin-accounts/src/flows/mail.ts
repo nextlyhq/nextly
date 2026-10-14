@@ -68,6 +68,12 @@ export type AccountsEmail =
       newAddress: string;
     }
   | {
+      /** The holder deleted the account. */
+      kind: "account-deleted";
+      accountId: string;
+      to: string;
+    }
+  | {
       /** The account's password changed, by a reset or by its holder. */
       kind: "password-changed";
       accountId: string;

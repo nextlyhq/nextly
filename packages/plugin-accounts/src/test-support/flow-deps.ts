@@ -23,18 +23,22 @@ export function flowDeps(
   warnings: string[];
   /** How many password checks ran, and how many refusals waited a check's time instead. */
   pacing: { checks: number; waits: number };
+  /** Every event the flows emitted, in order. */
+  emitted: Array<{ name: string; payload: unknown }>;
 } {
   const settings = resolveAccountsSettings({ origin: TEST_ORIGIN, ...options });
   const core = fakeAccountsCore({ rules: accountsLimitRules(settings) });
   const mail = new FakeAccountsMail();
   const warnings: string[] = [];
   const pacing = { checks: 0, waits: 0 };
+  const emitted: Array<{ name: string; payload: unknown }> = [];
   const deps: FlowDeps = {
     db: core.watch(ctx.db),
     dialect: ctx.dialect,
     core,
     settings,
     mail,
+    events: { emit: (name, payload) => void emitted.push({ name, payload }) },
     pacer: {
       verify: (password, hash) => {
         pacing.checks += 1;
@@ -49,5 +53,5 @@ export function flowDeps(
     now: () => new Date(core.clock.now()),
   };
 
-  return { deps, core, mail, warnings, pacing };
+  return { deps, core, mail, warnings, pacing, emitted };
 }
