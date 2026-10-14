@@ -38,6 +38,11 @@ export interface CatalogueSourceContractOptions {
      * listener's own confirmation cannot show.
      */
     readonly soldFrom?: string;
+    /**
+     * An item made to order or on backorder, for a source that sells any: it
+     * holds no stock and caps each line instead.
+     */
+    readonly toOrder?: string;
   };
 }
 
@@ -155,6 +160,36 @@ export async function catalogueSourceContract(
       }
     }
   );
+
+  const toOrder = fixtures.toOrder;
+  if (toOrder !== undefined) {
+    add(
+      "reports an item sold to order, with the most a line may ask for",
+      async source => {
+        const [item] = (await source.find({ references: [toOrder] })).map(
+          asItem
+        );
+        expectContract(
+          item !== undefined,
+          `the fixture item ${toOrder} exists`
+        );
+        expectContract(
+          item.stock.kind === "to-order" && item.stock.maxPerLine > 0,
+          `${toOrder} is sold to order with a per-line cap, not ${item.stock.kind}`
+        );
+        const [line] = (
+          await source.price({
+            currency: options.currency,
+            lines: [{ reference: toOrder, quantity: 1 }],
+          })
+        ).map(asLine);
+        expectContract(
+          line.found && line.stock.kind === "to-order",
+          "pricing reports the same kind as finding"
+        );
+      }
+    );
+  }
 
   const probe = await options.create();
 
@@ -348,11 +383,12 @@ async function available(
 ): Promise<number> {
   const [item] = (await source.find({ references: [reference] })).map(asItem);
   expectContract(item !== undefined, `the fixture item ${reference} exists`);
+  const { stock } = item;
   expectContract(
-    item.stock.kind !== "untracked",
+    stock.kind === "counted" || stock.kind === "one-off",
     `the fixture item ${reference} has counted stock`
   );
-  return item.stock.available;
+  return stock.available;
 }
 
 function asItem(answer: unknown): CatalogueItem {

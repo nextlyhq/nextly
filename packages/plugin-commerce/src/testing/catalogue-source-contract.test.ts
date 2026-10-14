@@ -35,6 +35,12 @@ const items: CatalogueItem[] = [
     price: { kind: "on-request" },
     stock: { kind: "untracked" },
   },
+  {
+    reference: "made-to-order-bench",
+    name: "Made-to-order bench",
+    price: { kind: "listed", unitPrice: money(45_000, "USD") },
+    stock: { kind: "to-order", maxPerLine: 99 },
+  },
 ];
 
 function suiteFor(
@@ -47,6 +53,7 @@ function suiteFor(
       onRequest: "custom-rig",
       unknown: "no-such-item",
       soldFrom: "drill-press",
+      toOrder: "made-to-order-bench",
     },
     create: () =>
       breakIt(createInMemoryCatalogueSource({ currency: "USD", items }).source),
@@ -173,14 +180,17 @@ describe("the catalogue contract suite catches a broken source", () => {
     const failed = await failingCases(s => {
       const list = s.list;
       if (!list) return s;
+      // Each page after the first starts again with the last item of the page
+      // before it, as a cursor taken one place too early would.
+      let last: CatalogueItem | undefined;
       return {
         ...s,
         list: async input => {
           const page = await list(input);
-          return {
-            ...page,
-            items: [...page.items, ...page.items].slice(0, input.limit),
-          };
+          const items =
+            input.cursor && last ? [last, ...page.items] : page.items;
+          last = page.items.at(-1);
+          return { ...page, items: items.slice(0, input.limit) };
         },
       };
     });
@@ -212,6 +222,30 @@ describe("the catalogue contract suite catches a broken source", () => {
     });
     expect(failed).toContain(
       "refuses a stock report that reuses another report's operation id"
+    );
+  });
+
+  it("fails a source that reports an item sold to order as untracked", async () => {
+    const failed = await failingCases(s => {
+      const untrack = (
+        stock: CatalogueItem["stock"]
+      ): CatalogueItem["stock"] =>
+        stock.kind === "to-order" ? { kind: "untracked" } : stock;
+      return {
+        ...s,
+        find: async input =>
+          (await s.find(input)).map(item => ({
+            ...item,
+            stock: untrack(item.stock),
+          })),
+        price: async input =>
+          (await s.price(input)).map(line =>
+            line.found ? { ...line, stock: untrack(line.stock) } : line
+          ),
+      };
+    });
+    expect(failed).toContain(
+      "reports an item sold to order, with the most a line may ask for"
     );
   });
 

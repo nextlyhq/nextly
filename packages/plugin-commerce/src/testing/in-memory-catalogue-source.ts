@@ -64,7 +64,15 @@ export function createInMemoryCatalogueSource(
 
   function adjustForSale(report: StockReport): void {
     const item = items.get(report.reference);
-    if (!item || item.stock.kind === "untracked") return;
+    // Neither is counted: an untracked item is commerce's to count, and an
+    // item sold to order has no stock to lower.
+    if (
+      !item ||
+      item.stock.kind === "untracked" ||
+      item.stock.kind === "to-order"
+    ) {
+      return;
+    }
     // A sale already happened by the time it is reported, so the count stops
     // at zero rather than refusing a report commerce cannot take back.
     const available = Math.max(0, item.stock.available - report.quantity);
