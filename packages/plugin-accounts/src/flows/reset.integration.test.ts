@@ -11,6 +11,8 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { AccountsOptions } from "../settings";
+
 import {
   knownBrowsers,
   pendingAddressChanges,
@@ -46,10 +48,10 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    async function boot() {
+    async function boot(options: Partial<AccountsOptions> = {}) {
       const booted = await bootAccounts(dialect);
       current = booted.nextly;
-      const made = flowDeps(booted.ctx);
+      const made = flowDeps(booted.ctx, options);
       const resetLink = async (address: string) => {
         await requestPasswordReset(made.deps, { address, client: null });
         const email = made.mail.ofKind("reset-password").at(-1);
@@ -234,6 +236,26 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await completePasswordReset(deps, { token, password: NEW_PASSWORD })
       ).toMatchObject({ status: "reset" });
+    });
+
+    it("counts each breached-password lookup against the account, so one link cannot ask the source without limit", async () => {
+      const { core, deps, resetLink } = await boot({
+        breachedPasswordCheck: true,
+      });
+      await makeAccount(deps, "dana@example.com");
+      const token = await resetLink("dana@example.com");
+      core.passwords.breached.add("a breached passphrase");
+
+      for (let n = 0; n < 10; n += 1)
+        expect(
+          await completePasswordReset(deps, {
+            token,
+            password: "a breached passphrase",
+          })
+        ).toEqual({ status: "refused", reason: "breached" });
+      expect(
+        await completePasswordReset(deps, { token, password: NEW_PASSWORD })
+      ).toMatchObject({ status: "refused", reason: "too-many-requests" });
     });
 
     it("writes nothing when a change that ends sessions commits while it runs, and keeps the link", async () => {

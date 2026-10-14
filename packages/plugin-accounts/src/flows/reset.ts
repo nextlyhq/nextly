@@ -8,9 +8,8 @@ import type { FlowDeps } from "./deps";
 import { validTokens } from "./known-tokens";
 import { linkedAccount } from "./linked-account";
 import {
-  breachedPasswordRefusal,
-  localPasswordRefusal,
-  type NewPasswordRefusal,
+  accountPasswordRefusal,
+  type AccountPasswordRefusal,
 } from "./new-password";
 import { PURPOSES } from "./purposes";
 
@@ -21,7 +20,7 @@ export type ResetResult =
       status: "refused";
       reason: "invalid" | "expired" | "spent" | "deactivated" | "try-again";
     }
-  | { status: "refused"; reason: NewPasswordRefusal };
+  | AccountPasswordRefusal;
 
 /** Ends the reset's transaction with this answer, rolling it back. */
 class Refusal extends Error {
@@ -53,10 +52,12 @@ export async function completePasswordReset(
   if (account.deactivatedAt !== null)
     return { status: "refused", reason: "deactivated" };
 
-  const refusal =
-    (await localPasswordRefusal(deps, input.password)) ??
-    (await breachedPasswordRefusal(deps, input.password));
-  if (refusal !== null) return { status: "refused", reason: refusal };
+  const refusal = await accountPasswordRefusal(
+    deps,
+    account.id,
+    input.password
+  );
+  if (refusal !== null) return refusal;
   const passwordHash = await core.passwords.hash(input.password);
 
   const now = deps.now();

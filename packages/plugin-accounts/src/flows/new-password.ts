@@ -1,3 +1,4 @@
+import { LIMIT_RULES } from "../core/limit-rules";
 import type { PasswordCheck } from "../core/ports";
 
 import type { FlowDeps } from "./deps";
@@ -50,4 +51,43 @@ export async function breachedPasswordRefusal(
   }
 
   return null;
+}
+
+/** Why an account's new password was refused: a rule it broke, or its lookup not counted. */
+export type AccountPasswordRefusal =
+  | { status: "refused"; reason: NewPasswordRefusal }
+  | { status: "refused"; reason: "too-many-requests"; retryAfterMs: number }
+  | { status: "refused"; reason: "try-again" };
+
+/**
+ * An existing account's new password, in a reset or a change, against the
+ * site's rules: the local ones first, then, where the site checks breached
+ * passwords, the source, once the lookup is counted against the account.
+ * Neither a reset link nor a signed-in session is spent by a refused
+ * password, so without the count one of them could make the site ask the
+ * source without limit. Null when it passes.
+ */
+export async function accountPasswordRefusal(
+  deps: Pick<FlowDeps, "core" | "settings" | "logger">,
+  accountId: string,
+  password: string
+): Promise<AccountPasswordRefusal | null> {
+  const local = await localPasswordRefusal(deps, password);
+  if (local !== null) return { status: "refused", reason: local };
+  if (deps.settings.breachedPasswordCheck) {
+    const counted = await deps.core.limits.reserve([
+      { rule: LIMIT_RULES.newPasswordAccount, key: accountId },
+    ]);
+    if (counted.status === "unavailable")
+      return { status: "refused", reason: "try-again" };
+    if (counted.status === "refused")
+      return {
+        status: "refused",
+        reason: "too-many-requests",
+        retryAfterMs: counted.retryAfterMs,
+      };
+  }
+  const breached = await breachedPasswordRefusal(deps, password);
+
+  return breached === null ? null : { status: "refused", reason: breached };
 }

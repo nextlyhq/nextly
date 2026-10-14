@@ -29,6 +29,8 @@ export const LIMIT_RULES = {
   signInAddress: "sign-in-address",
   /** Failed or refused sign-ins per client. */
   signInClient: "sign-in-client",
+  /** Breached-password lookups for a new password per account, in a reset or a change. */
+  newPasswordAccount: "new-password-account",
 } as const;
 
 /** The waits after the free attempts: 1, 2, 4, 8, 16 and 32 seconds, then 60 every time. */
@@ -110,6 +112,16 @@ export function accountsLimitRules(
       free: 20,
       waitsMs: SIGN_IN_WAITS_MS,
       forgetAfterMs: 15 * MINUTE_MS,
+    },
+    // A new password asked of the breached-password source: 10 in 15
+    // minutes and 30 a day per account, so one reset link or one session
+    // never makes the site ask the source without limit.
+    [LIMIT_RULES.newPasswordAccount]: {
+      type: "window",
+      windows: [
+        { max: 10, perMs: 15 * MINUTE_MS },
+        { max: 30, perMs: DAY_MS },
+      ],
     },
   };
 }
