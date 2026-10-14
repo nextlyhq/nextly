@@ -17,11 +17,12 @@ import { getTableName, type AnyRelations, type Table } from "drizzle-orm";
 
 import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import type { CollectionConfig } from "../collections/config/define-collection";
-import type { NextlyServiceConfig } from "../di/register";
+import { getService, type NextlyServiceConfig } from "../di/register";
 import {
   createJobsNamespace,
   type JobsNamespace,
 } from "../direct-api/namespaces/jobs";
+import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
   ExtensionColumn,
@@ -81,6 +82,10 @@ import type { PluginSinglesService } from "./plugin-singles";
 import { isInPluginNamespace } from "./plugin-slug";
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi } from "./principals/types";
+import {
+  createOneTimeSecrets,
+  type OneTimeSecrets,
+} from "./security/one-time-secrets";
 import {
   createOpaqueSecrets,
   type OpaqueSecrets,
@@ -649,6 +654,8 @@ export interface PluginSecurityApi {
   readonly passwords: PasswordHelper;
   /** Random secrets for the plugin's own records, with a stable hash. */
   readonly opaque: OpaqueSecrets;
+  /** One-purpose links and codes, spent once. */
+  readonly secrets: OneTimeSecrets;
 }
 
 /** @experimental Writing one plugin's declared audit events. */
@@ -2002,6 +2009,14 @@ export function createPluginContext(
         logger,
       }),
       opaque: createOpaqueSecrets(),
+      // Kept within this plugin's name. The adapter is read from the container
+      // per call, as the context can be built before the database connects;
+      // the install's secrets are read per call so a rotation applies at once.
+      secrets: createOneTimeSecrets({
+        owner: plugin?.name ?? "nextly",
+        adapter: () => getService("adapter"),
+        secrets: () => pluginSettingsSecrets(env),
+      }),
     },
     // Present only when the plugin declared a settings schema: without one
     // there is nothing to validate a write against, and an untyped bag is

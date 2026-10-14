@@ -41,6 +41,7 @@ import type {
   WhereClause,
 } from "@nextlyhq/adapter-drizzle/types";
 
+import { safeCode } from "../../database/errors";
 import { NextlyError } from "../../errors/nextly-error";
 import { ONE_TIME_SECRETS_TABLE } from "../../schemas/one-time-secrets";
 import { assertNoOpenTransaction } from "../../shared/lib/open-transaction";
@@ -100,7 +101,10 @@ export interface OneTimeSecrets {
   ): Promise<{ code: string; expiresAt: Date }>;
 
   /** Reads without spending, for a page that shows what a link will do. */
-  peekToken(input: { purpose: string; token: string }): Promise<
+  peekToken(input: {
+    purpose: string;
+    token: string;
+  }): Promise<
     | { ok: true; subject: string; data: SecretData | null; expiresAt: Date }
     | { ok: false; reason: "invalid" | "expired" | "spent" }
   >;
@@ -121,7 +125,11 @@ export interface OneTimeSecrets {
    * the transaction that applies its effect; if that transaction fails, the
    * code stays spent and the visitor asks for a new one.
    */
-  consumeCode(input: { purpose: string; subject: string; code: string }): Promise<
+  consumeCode(input: {
+    purpose: string;
+    subject: string;
+    code: string;
+  }): Promise<
     | { ok: true; data: SecretData | null }
     | { ok: false; reason: "wrong"; triesLeft: number }
     | { ok: false; reason: "none" | "expired" | "spent" }
@@ -195,8 +203,12 @@ export function createOneTimeSecrets(
   };
   const tokenHashes = (purpose: string, token: string): string[] =>
     keys().map(key => hmac(key, ["token", owner, purpose, token]));
-  const codeHash = (key: Buffer, purpose: string, subject: string, code: string) =>
-    hmac(key, ["code", owner, purpose, subject, code]);
+  const codeHash = (
+    key: Buffer,
+    purpose: string,
+    subject: string,
+    code: string
+  ) => hmac(key, ["code", owner, purpose, subject, code]);
   const liveKeyFor = (purpose: string, subject: string): string =>
     createHash("sha256")
       .update([owner, purpose, subject].join("\u0000"), "utf8")
@@ -236,7 +248,11 @@ export function createOneTimeSecrets(
         and: [
           ...ownerWhere(purpose),
           { column: "kind", op: "=", value: "token" },
-          { column: "secretHash", op: "IN", value: tokenHashes(purpose, token) },
+          {
+            column: "secretHash",
+            op: "IN",
+            value: tokenHashes(purpose, token),
+          },
         ],
       },
     });
@@ -271,7 +287,12 @@ export function createOneTimeSecrets(
           purpose,
           subject,
           kind: "token",
-          secretHash: hmac(current ?? secretKey(""), ["token", owner, purpose, token]),
+          secretHash: hmac(current ?? secretKey(""), [
+            "token",
+            owner,
+            purpose,
+            token,
+          ]),
           liveKey: null,
           data,
           expiresAt,
@@ -299,7 +320,8 @@ export function createOneTimeSecrets(
         BOUNDS.maxWrongTries
       );
       const digits = input.digits ?? 6;
-      if (!DIGITS.has(digits)) throw invalid("digits", "digits must be 6, 7 or 8.");
+      if (!DIGITS.has(digits))
+        throw invalid("digits", "digits must be 6, 7 or 8.");
       const data = serialiseData(input.data);
       const code = String(randomInt(0, 10 ** digits)).padStart(digits, "0");
       const liveKey = liveKeyFor(purpose, subject);
@@ -322,7 +344,12 @@ export function createOneTimeSecrets(
           purpose,
           subject,
           kind: "code",
-          secretHash: codeHash(current ?? secretKey(""), purpose, subject, code),
+          secretHash: codeHash(
+            current ?? secretKey(""),
+            purpose,
+            subject,
+            code
+          ),
           liveKey,
           data,
           expiresAt,
@@ -343,14 +370,15 @@ export function createOneTimeSecrets(
         return { code, expiresAt };
       }
       // Two mints at once for one subject: the second insert meets the
-      // first's live key once the first commits. Run again, it voids that code
-      // and takes the key, so exactly one code is live after both.
+      // first's live key once the first commits, or the database ends one of
+      // the two as a deadlock (MySQL does). Run again, it voids that code and
+      // takes the key, so exactly one code is live after both.
       for (let attempt = 0; ; attempt++) {
         try {
           const expiresAt = await write("secrets.mintCode", undefined, mint);
           return { code, expiresAt };
         } catch (error) {
-          if (attempt >= 3 || !isUniqueViolation(error)) throw error;
+          if (attempt >= 3 || !lostRace(error)) throw error;
         }
       }
     },
@@ -428,7 +456,11 @@ export function createOneTimeSecrets(
             right
               ? { spentAt: at, liveKey: null }
               : row.wrongTries + 1 >= max
-                ? { wrongTries: row.wrongTries + 1, voidedAt: at, liveKey: null }
+                ? {
+                    wrongTries: row.wrongTries + 1,
+                    voidedAt: at,
+                    liveKey: null,
+                  }
                 : { wrongTries: row.wrongTries + 1 },
             {
               and: [
@@ -499,12 +531,32 @@ function subjectWhere(
     and: [
       { column: "owner", op: "=", value: owner },
       { column: "subject", op: "=", value: subject },
-      ...(purposes ? [{ column: "purpose", op: "IN" as const, value: [...purposes] }] : []),
+      ...(purposes
+        ? [{ column: "purpose", op: "IN" as const, value: [...purposes] }]
+        : []),
       ...(kind ? [{ column: "kind", op: "=" as const, value: kind }] : []),
       { column: "spentAt", op: "IS NULL" },
       { column: "voidedAt", op: "IS NULL" },
     ],
   };
+}
+
+/** Codes a database gives a transaction it ended to resolve a race. */
+const RACE_CODES = new Set(["40P01", "40001", "1213", "ER_LOCK_DEADLOCK"]);
+
+/**
+ * Whether the error is a transaction losing a race that running it again
+ * resolves: a unique violation, a deadlock or a serialization failure,
+ * anywhere in its cause chain.
+ */
+function lostRace(error: unknown): boolean {
+  if (isUniqueViolation(error)) return true;
+  for (let link = error, depth = 0; link != null && depth < 8; depth++) {
+    const code = safeCode(link);
+    if (code !== undefined && RACE_CODES.has(code)) return true;
+    link = link instanceof Error ? link.cause : undefined;
+  }
+  return false;
 }
 
 /** Why a token row would be refused now, or null when it would be accepted. */
@@ -531,11 +583,15 @@ function secretKey(secret: string): Buffer {
 
 /** HMAC-SHA-256 of the parts, NUL-separated (no part may contain NUL), in hex. */
 function hmac(key: Buffer, parts: readonly string[]): string {
-  return createHmac("sha256", key).update(parts.join("\u0000"), "utf8").digest("hex");
+  return createHmac("sha256", key)
+    .update(parts.join("\u0000"), "utf8")
+    .digest("hex");
 }
 
 function sameHex(a: string, b: string): boolean {
-  return a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  return (
+    a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
+  );
 }
 
 function invalid(path: string, message: string): NextlyError {
@@ -572,7 +628,11 @@ function checkWhole(
   value: number,
   bound: { readonly lowest: number; readonly highest: number }
 ): number {
-  if (Number.isInteger(value) && value >= bound.lowest && value <= bound.highest) {
+  if (
+    Number.isInteger(value) &&
+    value >= bound.lowest &&
+    value <= bound.highest
+  ) {
     return value;
   }
   throw invalid(
