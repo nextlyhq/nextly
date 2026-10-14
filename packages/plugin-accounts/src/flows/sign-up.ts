@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   accountByAddress,
   createAccount,
+  deleteUnverifiedAccount,
   normaliseAddress,
   type AccountRow,
 } from "../storage/accounts";
@@ -21,7 +22,11 @@ import {
   type NewPasswordRefusal,
 } from "./new-password";
 import { PURPOSES } from "./purposes";
-import { mintVerification, queueVerification } from "./verification-email";
+import {
+  mintVerification,
+  mintWhileUnverified,
+  queueVerification,
+} from "./verification-email";
 
 /** Why a sign-up was refused, said to the visitor. */
 export type SignUpRefusal =
@@ -125,9 +130,27 @@ async function createAndMint(
     );
     return { account: created.account, verification, browser };
   });
-  await queueVerification(deps, minted.account, minted.verification);
+  try {
+    await queueVerification(deps, minted.account, minted.verification);
+  } catch (error) {
+    await undoSignUp(deps, minted.account.id);
+    throw error;
+  }
 
   return accepted(minted.browser);
+}
+
+/**
+ * Undoes a sign-up whose verification email could not be queued: its
+ * secrets voided and the account deleted while still unverified, so the
+ * visitor's retry starts again as a first sign-up, with a browser that is
+ * bound to it, rather than as a sign-up for a taken address.
+ */
+async function undoSignUp(deps: FlowDeps, accountId: string): Promise<void> {
+  await deps.db.transaction(async tx => {
+    await deps.core.secrets.voidFor({ subject: accountId }, { tx });
+    await deleteUnverifiedAccount(tx, accountId);
+  });
 }
 
 /**
@@ -149,10 +172,9 @@ async function answerTaken(
   const existing = await accountByAddress(deps.db, address);
   const kept = await keptBinding(deps, existing, browserToken);
   if (existing !== null && kept !== null) {
-    const verification = await deps.db.transaction(tx =>
-      mintVerification(deps, tx, existing.id)
-    );
-    await queueVerification(deps, existing, verification);
+    const verification = await mintWhileUnverified(deps, existing);
+    if (verification !== null)
+      await queueVerification(deps, existing, verification);
     return accepted(kept);
   }
 

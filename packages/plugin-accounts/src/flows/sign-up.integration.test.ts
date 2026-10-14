@@ -116,6 +116,29 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(mail.queued)).not.toContain("evil.example.com");
     });
 
+    it("undoes a sign-up whose verification email could not be queued, so a retry is a first sign-up", async () => {
+      const { ctx, deps, mail } = await boot();
+      const queueDown = {
+        ...deps,
+        mail: {
+          queue: () => Promise.reject(new Error("the job queue is down")),
+        },
+      };
+      const input = {
+        name: "Dana Reyes",
+        address: "dana@example.com",
+        password: "a long passphrase",
+        client: null,
+      };
+
+      await expect(signUp(queueDown, input)).rejects.toThrow(
+        "the job queue is down"
+      );
+      expect(await accountByAddress(ctx.db, "dana@example.com")).toBeNull();
+      expect(await signUp(deps, input)).toMatchObject({ status: "accepted" });
+      expect(mail.queued.map(email => email.kind)).toEqual(["verify-address"]);
+    });
+
     it("ties the browser that signed up to the new account", async () => {
       const { ctx, deps, core } = await boot();
       const answer = accepted(await signUp(deps, dana));
