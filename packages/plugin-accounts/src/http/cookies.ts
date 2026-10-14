@@ -1,7 +1,5 @@
+import { TOKENS_PER_COOKIE } from "../flows/known-tokens";
 import type { AccountsSettings } from "../settings";
-
-/** The most known-browser tokens one cookie holds; the oldest is dropped first. */
-const TOKENS_PER_COOKIE = 10;
 
 /** The plugin's cookies, never named as the admin's are. */
 const BASE_NAMES = {

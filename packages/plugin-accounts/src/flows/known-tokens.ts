@@ -5,8 +5,12 @@ import {
 
 import type { FlowDeps } from "./deps";
 
-/** The most known-browser tokens one cookie holds; any past them are ignored. */
-const TOKENS_PER_COOKIE = 10;
+/**
+ * The most known-browser tokens one cookie holds, the newest last: the
+ * cookie keeps that many, and a request's tokens past them, the oldest
+ * first, are ignored.
+ */
+export const TOKENS_PER_COOKIE = 10;
 
 /** A known-browser token a request carries, with the row it names. */
 export interface ValidToken {
@@ -25,7 +29,7 @@ export async function validTokens(
 ): Promise<ValidToken[]> {
   const byHash = new Map(
     tokens
-      .slice(0, TOKENS_PER_COOKIE)
+      .slice(-TOKENS_PER_COOKIE)
       .map(token => [deps.core.opaque.hash(token), token])
   );
   const rows = await liveKnownBrowsers(
