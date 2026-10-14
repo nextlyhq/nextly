@@ -158,9 +158,18 @@ interface WrittenRow {
   generation: string;
 }
 
-/** The id an entry's row is stored under: its key's SHA-256, in hex. */
-function rowId(key: string): string {
-  return createHash("sha256").update(key, "utf8").digest("hex");
+/**
+ * The id an entry's row is stored under: the SHA-256, in hex, of its
+ * generation and its key. With the generation in it, two generations' entries
+ * for one key are two rows: during a rolling rotation the instances of each
+ * count apart, rather than overwriting each other's live count.
+ */
+function rowId(generation: string, key: string): string {
+  return createHash("sha256")
+    .update(generation, "utf8")
+    .update("\u0000")
+    .update(key, "utf8")
+    .digest("hex");
 }
 
 /**
@@ -325,6 +334,16 @@ export function createDatabaseLimitStore(
       );
     for (const counter of counters) {
       await inOwnTransaction(async db => {
+        // The counter first, locked, so an instance of that generation that
+        // writes its first entry meanwhile is either counted below or waits
+        // for this to finish; never counted out of a live counter.
+        const [held] = await locked(
+          db
+            .select<{ id: string }>({ id: table.id })
+            .from(table)
+            .where(eq(table.id, counter.id))
+        );
+        if (held === undefined) return;
         const [left] = await db
           .select<{ rows: number }>({ rows: count() })
           .from(table)
@@ -606,7 +625,7 @@ export function createDatabaseLimitStore(
     // In sorted order, the order every update and sweep takes rows in.
     const keyOf = new Map(
       keys
-        .map(key => [rowId(key), key] as const)
+        .map(key => [rowId(generation, key), key] as const)
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     );
     return inOwnTransaction(async db => {
@@ -666,7 +685,7 @@ export function createDatabaseLimitStore(
 
     async read(keys) {
       const named = checkLimitKeys(keys);
-      const keyOf = new Map(named.map(key => [rowId(key), key]));
+      const keyOf = new Map(named.map(key => [rowId(generation, key), key]));
       try {
         // No recount and no sweep from a read: a read may be made inside
         // the caller's transaction, and must write nothing.
