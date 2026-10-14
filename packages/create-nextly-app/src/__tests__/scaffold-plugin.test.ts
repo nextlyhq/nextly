@@ -300,18 +300,8 @@ describe("a plugin scaffold runs as created", () => {
     expect(suite).not.toContain(".findById(");
   });
 
-  // devAutoLogin only signs in a user that exists, so the playground seeds the
-  // one dev/nextly.config.ts names, and only under `next dev`.
-  it("seeds the auto-login user under next dev only", async () => {
-    const instrumentation = await read("dev/instrumentation.ts");
-    const devConfig = await read("dev/nextly.config.ts");
-    expect(instrumentation).toContain("seedSuperAdmin");
-    expect(instrumentation).toContain('process.env.NODE_ENV === "development"');
-    for (const credential of ['"dev@nextly.local"', '"DevPassword123!"']) {
-      expect(instrumentation).toContain(credential);
-      expect(devConfig).toContain(credential);
-    }
-  });
+  // The playground's start-up hook, which creates the auto-login user, is run
+  // rather than read in plugin-playground-seed.test.ts.
 });
 
 /*
