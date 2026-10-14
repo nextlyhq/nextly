@@ -16,6 +16,7 @@ import {
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { beginSessionConsultation } from "../../auth/plugin-auth-api";
+import { getSession } from "../../auth/session/get-session";
 import { NextlyError } from "../../errors/nextly-error";
 import { runWithRequestScope } from "../../hooks/request-scope";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
@@ -121,10 +122,10 @@ async function resolvePluginRouteAuth(
       caller: null,
       principal: null,
       // No credential resolved anyone on a public route, and a handler may
-      // still resolve the session cookie through ctx.auth.currentUser — so the
-      // session cookie itself is what decides, not the presence of any
-      // cookie at all.
-      credential: publicCallerCredential(req),
+      // still resolve the session cookie through ctx.auth.currentUser — so
+      // whether that cookie authenticates is what decides, not the presence
+      // of it or of any other cookie.
+      credential: publicCallerCredential(req, await sessionAuthenticates(req)),
     };
   }
 
@@ -141,6 +142,19 @@ async function resolvePluginRouteAuth(
     return { error: toNextlyAuthError(authResult) };
   }
   return authenticatedCaller(authResult);
+}
+
+/**
+ * Whether the request's session cookie authenticates anyone.
+ *
+ * Through `getSession` with the secret `requireAuthentication` and
+ * `ctx.auth.currentUser` verify it with, so a public route's caller counts as
+ * signed in exactly when its handler would see a user. An expired or malformed
+ * cookie authenticates nobody, and its caller is anonymous.
+ */
+async function sessionAuthenticates(req: Request): Promise<boolean> {
+  const { env } = await import("../../lib/env");
+  return (await getSession(req, env.NEXTLY_SECRET || "")).authenticated;
 }
 
 /**
