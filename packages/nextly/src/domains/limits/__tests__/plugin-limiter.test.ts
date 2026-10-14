@@ -664,6 +664,22 @@ describe("giving back and forgetting", () => {
     expect(await at()).toMatchObject({ status: "refused" });
   });
 
+  it("keeps the wait a released count set when another attempt was counted after it", async () => {
+    const { limits } = setup();
+    const signIn = () =>
+      limits.reserve([{ rule: "signin", key: "c", count: "always" }]);
+    for (let attempt = 0; attempt < 19; attempt += 1) await signIn();
+    const success = await signIn(); // the 20th: sets the wait
+    if (success.status !== "admitted") throw new Error("not admitted");
+    await signIn(); // the 21st, counted during the wait
+
+    await limits.release(success.reservation);
+
+    // 20 attempts still counted: had the success never counted, the 21st
+    // would have set a wait of its own.
+    expect((await signIn()).status).toBe("refused");
+  });
+
   it("forgets a key's count on reset", async () => {
     const { limits } = setup();
     for (let attempt = 0; attempt < 3; attempt += 1) {

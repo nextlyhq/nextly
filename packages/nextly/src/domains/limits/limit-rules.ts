@@ -392,8 +392,10 @@ export function countAttempt(
  * holds no such count (never counted here, or already given back).
  *
  * A backoff count given back also lifts the wait it set, but only while that
- * wait is still the one in force: a wait set by a later attempt, or in force
- * before, is never moved.
+ * wait is still the one in force and nothing has been counted since: a wait
+ * set by a later attempt, or in force before, is never moved, and a count made
+ * after the released one keeps the wait, since had the released attempt never
+ * counted, that later one would have set a wait of its own.
  */
 export function releaseAttempt(
   rule: LimitRule,
@@ -415,7 +417,7 @@ export function releaseAttempt(
   }
   if (rule.type === "backoff" && state.kind === "backoff") {
     if (!state.reservations.includes(id)) return undefined;
-    const lifts = state.waitSetBy === id;
+    const lifts = state.waitSetBy === id && state.reservations.at(-1) === id;
     return {
       ...state,
       count: Math.max(0, state.count - 1),
