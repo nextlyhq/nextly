@@ -5,5 +5,6 @@
  */
 import migration0 from "./20261014_081712_081_create_carts";
 import migration1 from "./20261014_095849_966_create_orders";
+import migration2 from "./20261014_131952_270_key_provider_references";
 
-export const migrations = [migration0, migration1];
+export const migrations = [migration0, migration1, migration2];

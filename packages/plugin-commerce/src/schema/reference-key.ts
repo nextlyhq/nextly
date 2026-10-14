@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 
 /**
- * The key a stored catalogue reference is found and kept unique by: the
- * reference's SHA-256, in hex.
+ * The key a stored outside identifier (a catalogue's reference, a payment
+ * provider's own reference) is found and kept unique by: its SHA-256, in hex.
  *
  * A database compares text by its collation, and MySQL's default collation
  * takes two strings that differ only in case, in accents or in trailing
@@ -15,4 +15,17 @@ import { createHash } from "node:crypto";
  */
 export function referenceKey(reference: string): string {
   return createHash("sha256").update(reference, "utf8").digest("hex");
+}
+
+/**
+ * The key a provider's reference is kept unique by: the account it was issued
+ * in and the reference, taken together and exactly. Two accounts at one
+ * provider may issue the same reference, and account ids may differ only in
+ * case, which MySQL's default collation would take as one.
+ */
+export function providerReferenceKey(
+  account: string,
+  providerReference: string
+): string {
+  return referenceKey(JSON.stringify([account, providerReference]));
 }

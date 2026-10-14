@@ -1,8 +1,8 @@
 {
   "coverage": {
-    "pages": 74,
-    "samples": 427,
-    "compiled": 265
+    "pages": 75,
+    "samples": 431,
+    "compiled": 266
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -199,6 +199,10 @@
     },
     "docs/plugins/services.mdx": {
       "samples": 8,
+      "compiled": 1
+    },
+    "docs/plugins/signed-in-people.mdx": {
+      "samples": 4,
       "compiled": 1
     },
     "docs/plugins/testing.mdx": {
