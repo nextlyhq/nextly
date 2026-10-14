@@ -70,9 +70,13 @@ async function startPayment(
   const { payment, email } = pending;
 
   const amount = money(payment.chargeAmount, payment.chargeCurrency);
+  // The first attempt always calls: no call has been made yet, so there is
+  // nothing to look up, and the first attempt's moment is stored to the
+  // second, which could otherwise read as older than a short key lifetime.
   const withinKeyLifetime =
+    item.attempt === 1 ||
     deps.now().getTime() - item.firstAttemptAt.getTime() <
-    provider.capabilities.operationKeyLifetimeMs;
+      provider.capabilities.operationKeyLifetimeMs;
   const answer = withinKeyLifetime
     ? await startProviderPayment(provider, {
         operationId: payment.startOperationId,

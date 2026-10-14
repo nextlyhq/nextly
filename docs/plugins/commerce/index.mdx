@@ -110,7 +110,8 @@ Checkout is two steps, both read from the cart cookie, never from ids the browse
 
 A cart becomes one order. Completing it again, because a response was lost or a button was
 pressed twice, answers the same order and starts no second payment, and the cart then shows
-empty. Order numbers are whole numbers from 1, in the order checkouts commit.
+empty. Order numbers are whole numbers counting up from 1, never two alike; a checkout
+that fails partway can leave a number unused.
 
 An unpaid order holds its stock, and records a deadline `unpaidOrderMinutes` after it is
 placed. **Not in this release:** giving up an order past its deadline, which releases its
@@ -190,10 +191,11 @@ take the same token. A plugin reaches them all through its own context with
 
 Besides core's `VALIDATION_ERROR` and `CSRF_FAILED`, checkout answers these:
 
-| Code                               | Status | When                                           |
-| ---------------------------------- | ------ | ---------------------------------------------- |
-| `COMMERCE_CART_EMPTY`              | 409    | There is no cart, or nothing in it             |
-| `COMMERCE_QUOTE_CHANGED`           | 409    | The cart or a price changed since the quote    |
-| `COMMERCE_OUT_OF_STOCK`            | 409    | An item no longer has the stock asked for      |
-| `COMMERCE_JOBS_NOT_RUNNING`        | 503    | Commerce's jobs have not run recently, or ever |
-| `COMMERCE_PAYMENTS_NOT_CONFIGURED` | 500    | The store has no `payments` provider           |
+| Code                               | Status | When                                                   |
+| ---------------------------------- | ------ | ------------------------------------------------------ |
+| `COMMERCE_CART_EMPTY`              | 409    | There is no cart, or nothing in it                     |
+| `COMMERCE_QUOTE_CHANGED`           | 409    | The cart or a price changed since the quote            |
+| `COMMERCE_OUT_OF_STOCK`            | 409    | An item no longer has the stock asked for              |
+| `COMMERCE_NOTHING_TO_PAY`          | 409    | The total is nothing; free orders cannot be placed yet |
+| `COMMERCE_JOBS_NOT_RUNNING`        | 503    | Commerce's jobs have not run recently, or ever         |
+| `COMMERCE_PAYMENTS_NOT_CONFIGURED` | 500    | The store has no `payments` provider                   |

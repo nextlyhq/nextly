@@ -54,7 +54,9 @@ export type CommerceErrorCode =
   /** A checkout of a cart that has nothing in it, or no cart at all. */
   | "COMMERCE_CART_EMPTY"
   /** A checkout whose quote no longer matches the cart: a price, a quantity or the cart itself changed. */
-  | "COMMERCE_QUOTE_CHANGED";
+  | "COMMERCE_QUOTE_CHANGED"
+  /** A checkout whose total is nothing: a payment is a positive amount, and free orders are not taken yet. */
+  | "COMMERCE_NOTHING_TO_PAY";
 
 /**
  * Raise a commerce error.
@@ -110,6 +112,8 @@ const PUBLIC_MESSAGES: Record<CommerceErrorCode, string> = {
   COMMERCE_CART_EMPTY: "The cart is empty.",
   COMMERCE_QUOTE_CHANGED:
     "The cart or its prices changed; review the new total before paying.",
+  COMMERCE_NOTHING_TO_PAY:
+    "This order has nothing to pay, and free orders cannot be placed yet.",
 };
 
 // A provider's broken answer is the server's fault, not the caller's, so it
@@ -154,4 +158,5 @@ const STATUS_CODES: Record<CommerceErrorCode, number> = {
   COMMERCE_PAYMENTS_NOT_CONFIGURED: 500,
   COMMERCE_CART_EMPTY: 409,
   COMMERCE_QUOTE_CHANGED: 409,
+  COMMERCE_NOTHING_TO_PAY: 409,
 };

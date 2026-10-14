@@ -174,6 +174,13 @@ describe("a provider's answer", () => {
         operation: "read",
       }).amountCaptured.amount
     ).toBe(1000);
+    expect(
+      parseProviderAnswer(
+        providerPaymentSchema,
+        { ...valid, providerReference: "p".repeat(255) },
+        { provider: "x", operation: "read" }
+      ).providerReference
+    ).toHaveLength(255);
     const nothingCaptured = { amount: 0, currency: "USD" };
     for (const status of ["pending", "authorised", "failed"] as const) {
       expect(
@@ -205,6 +212,9 @@ describe("a provider's answer", () => {
           "cancelled",
         ] as const
       ).map(status => ({ ...valid, status })),
+      // Identifiers longer than commerce's columns hold on every dialect.
+      { ...valid, providerReference: "p".repeat(256) },
+      { ...valid, failureCode: "f".repeat(256) },
       // A payment is for a positive amount; no provider holds one for nothing.
       {
         ...valid,

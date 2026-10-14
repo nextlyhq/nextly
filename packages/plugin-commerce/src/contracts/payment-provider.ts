@@ -339,6 +339,18 @@ export function paymentAmountRefusal(
 }
 
 /**
+ * Whether a payment can be started for `amount`: a payment is a positive
+ * amount. The start's own input is held to this, and checkout asks it before
+ * an order is placed, so an order that could never start its payment is
+ * never made.
+ *
+ * @experimental
+ */
+export function isPayableAmount(amount: Money): boolean {
+  return amount.amount > 0;
+}
+
+/**
  * Refuse a payment the provider cannot take, before anything is sent.
  *
  * @experimental
@@ -484,6 +496,13 @@ const statusSchema = z.enum([
 ]);
 
 /**
+ * A provider's own identifier or code, as commerce stores it: at most 255
+ * characters, the most its columns hold on every dialect. Longer is refused
+ * here, as a broken answer, rather than by one database alone.
+ */
+const providerStringSchema = z.string().min(1).max(255);
+
+/**
  * A provider's payment as commerce accepts it: every amount valid and in one
  * currency, nothing refunded beyond what was captured, nor captured beyond
  * the amount, and money captured exactly when the payment is paid.
@@ -492,14 +511,14 @@ const statusSchema = z.enum([
  */
 export const providerPaymentSchema = z
   .strictObject({
-    providerReference: z.string().min(1),
+    providerReference: providerStringSchema,
     reference: z.string().min(1),
     status: statusSchema,
     amount: moneySchema,
     amountCaptured: moneySchema,
     amountRefunded: moneySchema,
     clientData: z.record(z.string(), z.string()).optional(),
-    failureCode: z.string().optional(),
+    failureCode: z.string().max(255).optional(),
   })
   .refine(
     p =>
@@ -524,8 +543,8 @@ export const providerPaymentSchema = z
 
 /** @experimental */
 export const providerRefundSchema = z.strictObject({
-  providerRefundReference: z.string().min(1),
-  providerReference: z.string().min(1),
+  providerRefundReference: providerStringSchema,
+  providerReference: providerStringSchema,
   reference: z.string().min(1),
   amount: moneySchema.refine(m => m.amount > 0, {
     message: "a refund is a positive amount",
@@ -542,7 +561,7 @@ export const providerWebhookEventSchema = z.strictObject({
     "dispute.updated",
     "other",
   ]),
-  providerReference: z.string().min(1).nullable(),
+  providerReference: providerStringSchema.nullable(),
   occurredAt: z.iso.datetime({ offset: true }),
 });
 
@@ -577,7 +596,7 @@ export function parseProviderAnswer<S extends z.ZodType>(
 export const startPaymentInputSchema = z.strictObject({
   operationId: operationIdSchema,
   reference: z.string().min(1).max(255),
-  amount: moneySchema.refine(m => m.amount > 0, {
+  amount: moneySchema.refine(isPayableAmount, {
     message: "a payment is a positive amount",
   }),
   capture: z.enum(["now", "later"]),

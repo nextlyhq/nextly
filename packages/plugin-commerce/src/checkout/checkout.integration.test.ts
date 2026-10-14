@@ -24,6 +24,7 @@ import type { PaymentProvider } from "../contracts/payment-provider";
 import { money } from "../money/money";
 import { commerce } from "../plugin";
 import {
+  carts,
   orderLines,
   orderNumbers,
   orders,
@@ -357,7 +358,7 @@ describe.each(getConfiguredTestDialects())(
       expect(again.payment.clientData).not.toBeNull();
     });
 
-    it("numbers orders in sequence, no two alike, when many checkouts commit at once", async () => {
+    it("numbers orders from 1, no two alike and none skipped, when many checkouts commit at once", async () => {
       const { ctx, checkout, cart } = await setup();
       const tokens = [];
       for (let i = 0; i < 6; i++)
@@ -374,6 +375,9 @@ describe.each(getConfiguredTestDialects())(
           });
         })
       );
+      // Which checkout gets which number is not promised, only that the
+      // numbers count up from 1 with none shared and, when every checkout
+      // commits, none skipped.
       const numbers = placed.map(p => p.order.number).sort((a, b) => a - b);
       expect(numbers).toEqual([1, 2, 3, 4, 5, 6]);
       expect(await ctx.db.select(orderNumbers).all()).toHaveLength(6);
@@ -780,6 +784,276 @@ describe.each(getConfiguredTestDialects())(
       const other = await shopper(cart, [["drill", 1]]);
       const [line] = (await cart.get({ token: other })).cart.lines;
       expect(line?.availability).toEqual({ kind: "in-stock", available: 1 });
+    });
+
+    /** A source over the suite's items whose `price` can be made to stall or fail. */
+    function stallingSource(onPrice: () => void): CatalogueSource {
+      const memory = createInMemoryCatalogueSource({
+        currency: "USD",
+        items: ITEMS,
+      }).source;
+      const price = memory.price.bind(memory);
+      return {
+        ...memory,
+        find: memory.find.bind(memory),
+        price: async input => {
+          onPrice();
+          return price(input);
+        },
+      };
+    }
+
+    it("places an order only while its cart is live at that moment, and dates its deadline from then", async () => {
+      const clock = { now: new Date("2026-10-14T05:00:00.000Z") };
+      let stall = 0;
+      const source = stallingSource(() => {
+        clock.now = new Date(clock.now.getTime() + stall);
+      });
+      const { ctx, checkout, cart } = await setup({ source, clock });
+      const input = async (token: string) => ({
+        token,
+        quoteKey: (await checkout().quote({ token })).quoteKey,
+        email: "ada@example.com",
+        addresses: ADDRESSES,
+      });
+
+      // The source answers a minute late: the order is placed, and its
+      // deadline runs from when it was, not from before the source was asked.
+      const late = await shopper(cart, [["bolt", 1]]);
+      const lateInput = await input(late);
+      stall = MINUTE;
+      const placed = await checkout().complete(lateInput);
+      expect(placed.order.expiresAt).toBe(
+        new Date(clock.now.getTime() + 30 * MINUTE).toISOString()
+      );
+
+      // The source answers after the cart's own deadline: no order.
+      stall = 0;
+      const expiring = await shopper(cart, [["bolt", 1]]);
+      const expiringInput = await input(expiring);
+      stall = 31 * 24 * 60 * MINUTE;
+      expect(await codeOf(() => checkout().complete(expiringInput))).toBe(
+        "COMMERCE_CART_EMPTY"
+      );
+      expect(await ctx.db.select(orders).all()).toHaveLength(1);
+    });
+
+    it("calls a source that fails to price unavailable, at quote and at completion, and creates nothing", async () => {
+      let down = false;
+      const source = stallingSource(() => {
+        if (down) throw new TypeError("fetch failed");
+      });
+      const { ctx, checkout, cart } = await setup({ source });
+      const token = await shopper(cart, [["bolt", 1]]);
+      const { quoteKey } = await checkout().quote({ token });
+      down = true;
+      expect(await codeOf(() => checkout().quote({ token }))).toBe(
+        "COMMERCE_CATALOGUE_UNAVAILABLE"
+      );
+      expect(
+        await codeOf(() =>
+          checkout().complete({
+            token,
+            quoteKey,
+            email: "ada@example.com",
+            addresses: ADDRESSES,
+          })
+        )
+      ).toBe("COMMERCE_CATALOGUE_UNAVAILABLE");
+      expect(await ctx.db.select(orders).all()).toEqual([]);
+    });
+
+    it("refuses a free order before anything is written", async () => {
+      const free = createInMemoryCatalogueSource({
+        currency: "USD",
+        items: [
+          {
+            reference: "sample",
+            name: "Free sample",
+            price: { kind: "listed", unitPrice: money(0, "USD") },
+            stock: { kind: "counted", available: 3 },
+          },
+        ],
+      });
+      const { ctx, checkout, cart } = await setup({ source: free.source });
+      const token = await shopper(cart, [["sample", 1]]);
+      const { quoteKey } = await checkout().quote({ token });
+      expect(
+        await codeOf(() =>
+          checkout().complete({
+            token,
+            quoteKey,
+            email: "ada@example.com",
+            addresses: ADDRESSES,
+          })
+        )
+      ).toBe("COMMERCE_NOTHING_TO_PAY");
+      expect(await ctx.db.select(orders).all()).toEqual([]);
+      expect(await ctx.db.select(stockHolds).all()).toEqual([]);
+      expect(await ctx.db.select(work).all()).toEqual([]);
+      expect(await ctx.db.select(carts).all()).toMatchObject([
+        { checkedOutAt: null },
+      ]);
+    });
+
+    it("answers an order already placed when the jobs have since stopped, and refuses only a new one", async () => {
+      const { ctx, checkout, cart, clock, alerts } = await setup();
+      const token = await shopper(cart, [["bolt", 1]]);
+      const service = checkout();
+      const input = {
+        token,
+        quoteKey: (await service.quote({ token })).quoteKey,
+        email: "ada@example.com",
+        addresses: ADDRESSES,
+      };
+      const first = await service.complete(input);
+
+      // The jobs stop: no run for longer than the store allows.
+      clock.now = new Date(clock.now.getTime() + 16 * MINUTE);
+      const again = await service.complete(input);
+      expect(again.order.number).toBe(first.order.number);
+      expect(alerts.jobsRefused).toBe(0);
+
+      const other = await shopper(cart, [["bolt", 1]]);
+      expect(
+        await codeOf(async () =>
+          service.complete({
+            ...input,
+            token: other,
+            quoteKey: (await service.quote({ token: other })).quoteKey,
+          })
+        )
+      ).toBe("COMMERCE_JOBS_NOT_RUNNING");
+      expect(alerts.jobsRefused).toBe(1);
+      expect(await ctx.db.select(orders).all()).toHaveLength(1);
+    });
+
+    it("starts the payment on the first attempt however short the provider's key lifetime", async () => {
+      const test = createTestPaymentProvider();
+      // Under a second: the first attempt's moment is stored to the second,
+      // so it can read as older than the lifetime before any call is made.
+      const brief: PaymentProvider = {
+        ...test.provider,
+        capabilities: {
+          ...test.provider.capabilities,
+          operationKeyLifetimeMs: 500,
+        },
+      };
+      const clock = { now: new Date("2026-10-14T05:00:00.900Z") };
+      const { ctx, checkout, cart } = await setup({ provider: brief, clock });
+      const token = await shopper(cart, [["bolt", 1]]);
+      const done = await checkout().complete({
+        token,
+        quoteKey: (await checkout().quote({ token })).quoteKey,
+        email: "ada@example.com",
+        addresses: ADDRESSES,
+      });
+      expect(test.control.payments()).toHaveLength(1);
+      expect(done.payment.status).toBe("pending");
+      expect(await ctx.db.select(payments).all()).toMatchObject([
+        { status: "pending", providerReference: expect.any(String) },
+      ]);
+    });
+
+    it("holds the provider's read of a started payment to that payment before passing its data on", async () => {
+      const test = createTestPaymentProvider();
+      let mode: "as-is" | "another" | "malformed" | "down" = "as-is";
+      const provider: PaymentProvider = {
+        ...test.provider,
+        read: async input => {
+          if (mode === "down") throw new Error("connect ECONNREFUSED");
+          const real = await test.provider.read(input);
+          if (mode === "another") return { ...real, reference: "pay_other" };
+          // Well typed, outside the contract: more captured than the payment.
+          if (mode === "malformed")
+            return {
+              ...real,
+              amountCaptured: money(
+                real.amount.amount + 1,
+                real.amount.currency
+              ),
+            };
+          return real;
+        },
+      };
+      const { checkout, cart } = await setup({ provider });
+      const token = await shopper(cart, [["bolt", 1]]);
+      const service = checkout();
+      const input = {
+        token,
+        quoteKey: (await service.quote({ token })).quoteKey,
+        email: "ada@example.com",
+        addresses: ADDRESSES,
+      };
+      const first = await service.complete(input);
+
+      // A repeated completion reads the payment back from the provider.
+      expect((await service.complete(input)).payment.clientData).toEqual(
+        first.payment.clientData
+      );
+      for (const broken of ["another", "malformed"] as const) {
+        mode = broken;
+        expect(await codeOf(() => service.complete(input)), broken).toBe(
+          "COMMERCE_PROVIDER_CONTRACT"
+        );
+      }
+      // A provider that cannot be reached leaves the order answered without
+      // its form data.
+      mode = "down";
+      const offline = await service.complete(input);
+      expect(offline.order.number).toBe(first.order.number);
+      expect(offline.payment.clientData).toBeNull();
+    });
+
+    it("keeps a long catalogue name and SKU whole in the order, on every dialect", async () => {
+      const long = createInMemoryCatalogueSource({
+        currency: "USD",
+        items: [
+          {
+            reference: "rig",
+            name: "Rig ".repeat(100),
+            sku: "SKU-".repeat(100),
+            price: { kind: "listed", unitPrice: money(1_000, "USD") },
+            stock: { kind: "untracked" },
+          },
+        ],
+      });
+      const { ctx, checkout, cart } = await setup({ source: long.source });
+      const token = await shopper(cart, [["rig", 1]]);
+      const done = await checkout().complete({
+        token,
+        quoteKey: (await checkout().quote({ token })).quoteKey,
+        email: "ada@example.com",
+        addresses: ADDRESSES,
+      });
+      expect(done.order.lines[0]?.name).toBe("Rig ".repeat(100));
+      const [line] = await ctx.db.select(orderLines).all();
+      expect(line?.sku).toBe("SKU-".repeat(100));
+    });
+
+    it("refuses an argument it cannot parse as a validation error, before any work", async () => {
+      const { ctx, checkout } = await setup();
+      const service = checkout();
+      // A method's parameter is compared both ways, so either method fits here.
+      interface Untyped {
+        call(input: unknown): Promise<unknown>;
+      }
+      const methods: Record<string, Untyped> = {
+        quote: { call: service.quote },
+        complete: { call: service.complete },
+      };
+      for (const [name, method] of Object.entries(methods)) {
+        expect(await codeOf(() => method.call(null)), `${name}(null)`).toBe(
+          "VALIDATION_ERROR"
+        );
+        expect(
+          await codeOf(() =>
+            method.call({ token: null, cartId: "someone-elses-cart" })
+          ),
+          `${name} with a key it does not know`
+        ).toBe("VALIDATION_ERROR");
+      }
+      expect(await ctx.db.select(orders).all()).toEqual([]);
     });
   }
 );

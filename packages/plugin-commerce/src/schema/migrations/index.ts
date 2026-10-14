@@ -4,6 +4,6 @@
  * changes nothing.
  */
 import migration0 from "./20261014_081712_081_create_carts";
-import migration1 from "./20261014_091130_639_create_orders";
+import migration1 from "./20261014_095849_966_create_orders";
 
 export const migrations = [migration0, migration1];

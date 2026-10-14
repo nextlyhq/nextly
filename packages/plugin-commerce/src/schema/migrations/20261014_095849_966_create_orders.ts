@@ -8,9 +8,9 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  name: "20261014_091130_639_create_orders",
+  name: "20261014_095849_966_create_orders",
   schemaVersion: 2,
-  checksum: "6a98c4110474592c142ae0481f08f79a79ea82772ab65885ba31a6a9b071dd63",
+  checksum: "856bed6140700d718650be1584fa2542a59ce5dc23d06b395cbe12421952af7b",
   dialects: {
     postgresql: {
       up: [
@@ -40,7 +40,7 @@ export default {
       up: [
         "CREATE TABLE `commerce__job_health` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `job` varchar(128) NOT NULL,\n  `last_run_at` timestamp NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\nCREATE UNIQUE INDEX `uq_commerce__job_health_job` ON `commerce__job_health` (`job`)",
         "CREATE TABLE `commerce__orders` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `number` int NOT NULL,\n  `checkout_key` varchar(36) NOT NULL,\n  `status` varchar(255) NOT NULL,\n  `currency` char(3) NOT NULL,\n  `subtotal_amount` bigint NOT NULL,\n  `subtotal_currency` char(3) NOT NULL,\n  `total_amount` bigint NOT NULL,\n  `total_currency` char(3) NOT NULL,\n  `email` varchar(320) NOT NULL,\n  `addresses` json NOT NULL,\n  `customer_kind` varchar(64),\n  `customer_id` varchar(255),\n  `version` int NOT NULL DEFAULT 0,\n  `expires_at` timestamp NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  CONSTRAINT `ck_commerce__orders_status_enum` CHECK (`status` IN ('awaiting_payment', 'placed', 'completed', 'cancelled', 'expired'))\n);\nCREATE UNIQUE INDEX `uq_commerce__orders_checkout_key` ON `commerce__orders` (`checkout_key`);\nCREATE UNIQUE INDEX `uq_commerce__orders_number` ON `commerce__orders` (`number`);\nCREATE INDEX `idx_commerce__orders_status_expires_at_045wesp` ON `commerce__orders` (`status`, `expires_at`)",
-        "CREATE TABLE `commerce__order_lines` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `order_id` varchar(36) NOT NULL,\n  `position` int NOT NULL,\n  `reference` varchar(255) NOT NULL,\n  `reference_key` char(64) NOT NULL,\n  `name` varchar(255) NOT NULL,\n  `sku` varchar(255),\n  `quantity` int NOT NULL,\n  `unit_price_amount` bigint NOT NULL,\n  `unit_price_currency` char(3) NOT NULL,\n  `line_total_amount` bigint NOT NULL,\n  `line_total_currency` char(3) NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  CONSTRAINT `ck_commerce__order_lines_order_line_quantity_positive` CHECK (quantity > 0),\n  CONSTRAINT `fk_commerce__order_lines_order_id` FOREIGN KEY (`order_id`) REFERENCES `commerce__orders` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE UNIQUE INDEX `uq_commerce__order_lines_order_id_reference_key_0537j6o` ON `commerce__order_lines` (`order_id`, `reference_key`)",
+        "CREATE TABLE `commerce__order_lines` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `order_id` varchar(36) NOT NULL,\n  `position` int NOT NULL,\n  `reference` varchar(255) NOT NULL,\n  `reference_key` char(64) NOT NULL,\n  `name` text NOT NULL,\n  `sku` text,\n  `quantity` int NOT NULL,\n  `unit_price_amount` bigint NOT NULL,\n  `unit_price_currency` char(3) NOT NULL,\n  `line_total_amount` bigint NOT NULL,\n  `line_total_currency` char(3) NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  CONSTRAINT `ck_commerce__order_lines_order_line_quantity_positive` CHECK (quantity > 0),\n  CONSTRAINT `fk_commerce__order_lines_order_id` FOREIGN KEY (`order_id`) REFERENCES `commerce__orders` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE UNIQUE INDEX `uq_commerce__order_lines_order_id_reference_key_0537j6o` ON `commerce__order_lines` (`order_id`, `reference_key`)",
         "CREATE TABLE `commerce__order_numbers` (\n  `number` int NOT NULL AUTO_INCREMENT PRIMARY KEY,\n  `checkout_key` varchar(36) NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\nCREATE UNIQUE INDEX `uq_commerce__order_numbers_checkout_key` ON `commerce__order_numbers` (`checkout_key`)",
         "CREATE TABLE `commerce__payments` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `order_id` varchar(36) NOT NULL,\n  `reference` varchar(64) NOT NULL,\n  `provider` varchar(64) NOT NULL,\n  `provider_reference` varchar(255),\n  `status` varchar(255) NOT NULL,\n  `charge_amount` bigint NOT NULL,\n  `charge_currency` char(3) NOT NULL,\n  `start_operation_id` varchar(255) NOT NULL,\n  `failure_code` varchar(255),\n  `version` int NOT NULL DEFAULT 0,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  CONSTRAINT `ck_commerce__payments_status_enum` CHECK (`status` IN ('pending', 'requires_action', 'processing', 'authorised', 'paid', 'failed', 'cancelled')),\n  CONSTRAINT `fk_commerce__payments_order_id` FOREIGN KEY (`order_id`) REFERENCES `commerce__orders` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE UNIQUE INDEX `uq_commerce__payments_reference` ON `commerce__payments` (`reference`);\nCREATE UNIQUE INDEX `uq_commerce__payments_start_operation_id` ON `commerce__payments` (`start_operation_id`);\nCREATE UNIQUE INDEX `uq_commerce__payments_provider_provider_reference_0s0x4mn` ON `commerce__payments` (`provider`, `provider_reference`);\nCREATE INDEX `idx_commerce__payments_order_id` ON `commerce__payments` (`order_id`)",
         "CREATE TABLE `commerce__stock_holds` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `order_id` varchar(36) NOT NULL,\n  `reference` varchar(255) NOT NULL,\n  `reference_key` char(64) NOT NULL,\n  `quantity` int NOT NULL,\n  `state` varchar(255) NOT NULL,\n  `expires_at` timestamp NOT NULL,\n  `confirmed_at` timestamp,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  CONSTRAINT `ck_commerce__stock_holds_hold_quantity_positive` CHECK (quantity > 0),\n  CONSTRAINT `ck_commerce__stock_holds_state_enum` CHECK (`state` IN ('active', 'released', 'sold')),\n  CONSTRAINT `fk_commerce__stock_holds_order_id` FOREIGN KEY (`order_id`) REFERENCES `commerce__orders` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE UNIQUE INDEX `uq_commerce__stock_holds_order_id_reference_key_0537j6o` ON `commerce__stock_holds` (`order_id`, `reference_key`);\nCREATE INDEX `idx_commerce__stock_holds_reference_key_state_1lm5eqf` ON `commerce__stock_holds` (`reference_key`, `state`)",
@@ -1254,12 +1254,12 @@ export default {
             },
             {
               name: "name",
-              type: "varchar(255)",
+              type: "text",
               nullable: false,
             },
             {
               name: "sku",
-              type: "varchar(255)",
+              type: "text",
               nullable: true,
             },
             {

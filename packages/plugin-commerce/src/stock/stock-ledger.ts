@@ -171,9 +171,14 @@ export async function holdStock(
   }
 ): Promise<readonly HeldLine[]> {
   const held: HeldLine[] = [];
+  // Every counted line's record in one read; each write below still checks
+  // its row by compare-and-set, which is what catches another checkout.
+  const records = await stockRecords(
+    tx,
+    hold.lines.filter(line => isCounted(line.stock)).map(l => l.reference)
+  );
   for (const line of hold.lines) {
     if (!isCounted(line.stock)) continue;
-    const records = await stockRecords(tx, [line.reference]);
     const record = records.get(line.reference);
     const available = availableUnits(line.stock.available, record);
     if (available < line.quantity) {

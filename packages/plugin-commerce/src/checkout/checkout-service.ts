@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { asc, eq } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
@@ -13,13 +14,15 @@ import {
   readCartLines,
   type LiveCart,
 } from "../cart/cart-store";
-import { findItems } from "../cart/catalogue-read";
-import {
-  pricedLineSchema,
-  type CatalogueSource,
-  type CatalogueStock,
+import { findItems, priceItems } from "../cart/catalogue-read";
+import type {
+  CatalogueSource,
+  CatalogueStock,
 } from "../contracts/catalogue-source";
 import {
+  isPayableAmount,
+  parseProviderAnswer,
+  providerPaymentSchema,
   requirePaymentAmount,
   type PaymentProvider,
   type ProviderPayment,
@@ -165,11 +168,74 @@ export interface CheckoutServiceOptions {
  */
 const MAX_ATTEMPTS = 8;
 
+// Each function parses its whole input as passed: server code calls them
+// directly, so a missing argument or a key the schema does not know is a
+// validation error rather than a crash or a key silently dropped. The cart
+// token's own shape is judged when it is looked up.
+const tokenSchema = z.string().nullable();
+const quoteSchema = z.strictObject({ token: tokenSchema });
 const completeSchema = z.strictObject({
+  token: tokenSchema,
   quoteKey: z.string().regex(/^[0-9a-f]{64}$/),
   email: z.email().max(320),
   addresses: checkoutAddressesSchema,
 });
+
+/** A payment as it is stored, as far as reading it back needs. */
+interface StoredPayment {
+  readonly reference: string;
+  readonly providerReference: string | null;
+  readonly chargeAmount: number;
+  readonly chargeCurrency: string;
+}
+
+/** Whether a provider's answer is for this payment: its references and amount. */
+function describesPayment(read: ProviderPayment, payment: StoredPayment) {
+  return (
+    read.providerReference === payment.providerReference &&
+    read.reference === payment.reference &&
+    read.amount.amount === payment.chargeAmount &&
+    read.amount.currency === payment.chargeCurrency
+  );
+}
+
+const unreachable = Symbol("unreachable");
+
+/**
+ * A provider call whose failure to answer is not an error here: it answers
+ * `unreachable` instead. A commerce or core error still throws, as raised.
+ */
+async function reachProvider(call: () => Promise<unknown>): Promise<unknown> {
+  try {
+    return await call();
+  } catch (error) {
+    if (NextlyError.is(error)) throw error;
+    return unreachable;
+  }
+}
+
+/**
+ * Refuse an order that cannot be placed as quoted, before anything is
+ * written: an empty cart, a summary other than the one the buyer was shown,
+ * a total no payment can be started for (an order that could never start one
+ * would hold its stock with nothing to finish it), or one the provider cannot
+ * take.
+ */
+function assertPlaceable(
+  summary: { readonly quoteKey: string; readonly total: Money },
+  lineCount: number,
+  quoteKey: string,
+  provider: PaymentProvider
+): void {
+  if (lineCount === 0) throw commerceError("COMMERCE_CART_EMPTY");
+  if (summary.quoteKey !== quoteKey) {
+    throw commerceError("COMMERCE_QUOTE_CHANGED");
+  }
+  if (!isPayableAmount(summary.total)) {
+    throw commerceError("COMMERCE_NOTHING_TO_PAY");
+  }
+  requirePaymentAmount(provider, summary.total);
+}
 
 /** A priced cart line, with what checkout needs to snapshot and hold it. */
 interface PricedCartLine extends CheckoutSummaryLine {
@@ -262,31 +328,16 @@ export function createCheckoutService(
     };
   }
 
+  // Through the catalogue boundary, as every source call is: a source that
+  // fails to answer is an outage, and an answer outside the contract is
+  // refused before anything reads it.
   async function priceLines(
     asked: readonly { reference: string; quantity: number }[]
   ) {
-    if (asked.length === 0) return [];
-    const answer = await source.price({ currency, lines: asked });
-    if (!Array.isArray(answer) || answer.length !== asked.length) {
-      throw commerceError("COMMERCE_PROVIDER_CONTRACT", {
-        source: source.id,
-        reason: "price did not answer one line per line asked",
-      });
-    }
+    const answer = await priceItems(source, currency, asked);
     return asked.map((line, index) => {
-      const parsed = pricedLineSchema.safeParse(answer[index]);
-      if (
-        !parsed.success ||
-        parsed.data.reference !== line.reference ||
-        parsed.data.quantity !== line.quantity
-      ) {
-        throw commerceError("COMMERCE_PROVIDER_CONTRACT", {
-          source: source.id,
-          reason: "price answered a line outside the contract, or out of order",
-        });
-      }
-      const priced = parsed.data;
-      if (!priced.found) {
+      const priced = answer[index];
+      if (!priced?.found) {
         throw commerceError("COMMERCE_ITEM_NOT_FOUND", {
           reference: line.reference,
         });
@@ -294,12 +345,6 @@ export function createCheckoutService(
       if (priced.price.kind !== "listed") {
         throw commerceError("COMMERCE_PRICE_ON_REQUEST", {
           reference: line.reference,
-        });
-      }
-      if (priced.price.unitPrice.currency !== currency) {
-        throw commerceError("COMMERCE_PROVIDER_CONTRACT", {
-          source: source.id,
-          reason: "price answered another currency",
         });
       }
       return {
@@ -365,19 +410,10 @@ export function createCheckoutService(
     if (!payment) {
       throw commerceError("COMMERCE_CART_BUSY", { reason: "payment missing" });
     }
-    let clientData = heard.get(payment.id)?.clientData ?? null;
-    if (
-      clientData === null &&
-      payment.providerReference !== null &&
-      options.payments
-    ) {
-      clientData =
-        (
-          await options.payments.read({
-            providerReference: payment.providerReference,
-          })
-        ).clientData ?? null;
-    }
+    const clientData =
+      heard.get(payment.id)?.clientData ??
+      (await readClientData(payment)) ??
+      null;
     return {
       order: {
         number: order.number,
@@ -404,9 +440,40 @@ export function createCheckoutService(
     };
   }
 
+  /**
+   * The provider's browser data for a payment started earlier, read back
+   * since it is never stored. The answer is held to the contract and to this
+   * payment, its references and amount, before any of it is passed on: data
+   * for another payment would hand one buyer's payment form to another. A
+   * provider that cannot be reached leaves the order answered without it,
+   * and asking again reads it.
+   */
+  async function readClientData(
+    payment: StoredPayment
+  ): Promise<ProviderPayment["clientData"] | null> {
+    const provider = options.payments;
+    const providerReference = payment.providerReference;
+    if (providerReference === null || !provider) return null;
+    const raw = await reachProvider(() => provider.read({ providerReference }));
+    if (raw === unreachable) return null;
+    const read = parseProviderAnswer(providerPaymentSchema, raw, {
+      provider: provider.id,
+      operation: "read",
+    });
+    if (!describesPayment(read, payment)) {
+      throw commerceError("COMMERCE_PROVIDER_CONTRACT", {
+        provider: provider.id,
+        operation: "read",
+        reason: "the provider answered for another payment",
+      });
+    }
+    return read.clientData ?? null;
+  }
+
   return {
     async quote(input) {
-      const cart = await findLiveCart(db, input.token, currency, clock());
+      const { token } = parseRequest(quoteSchema, input);
+      const cart = await findLiveCart(db, token, currency, clock());
       // A cart that has become an order has nothing left to quote.
       if (!cart || cart.checkedOut) throw commerceError("COMMERCE_CART_EMPTY");
       const { summary } = await summarize(cart);
@@ -416,26 +483,12 @@ export function createCheckoutService(
     },
 
     async complete(input) {
-      const request = parseRequest(completeSchema, {
-        quoteKey: input.quoteKey,
-        email: input.email,
-        addresses: input.addresses,
-      });
-      // Preconditions, before anything is written: money is never taken
-      // while the work that must follow it cannot run, nor by a store with
-      // no way to take it.
-      await assertJobsRunning({
-        db,
-        job: WORK_JOB,
-        now: clock(),
-        staleAfterMs: options.jobsStaleAfterMs,
-        alert: lastRunAt => options.alerts.jobsNotRunning(lastRunAt),
-      });
+      const request = parseRequest(completeSchema, input);
       const provider = options.payments;
       if (!provider) throw commerceError("COMMERCE_PAYMENTS_NOT_CONFIGURED");
 
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        const done = await attemptCompletion(input.token, request, provider);
+        const done = await attemptCompletion(request, provider);
         if (done) return done;
       }
       throw commerceError("COMMERCE_CART_BUSY", { attempts: MAX_ATTEMPTS });
@@ -448,22 +501,27 @@ export function createCheckoutService(
    * read and it must start again.
    */
   async function attemptCompletion(
-    token: string | null,
     request: z.infer<typeof completeSchema>,
     provider: PaymentProvider
   ): Promise<CompletedCheckout | null> {
-    const now = clock();
-    const cart = await findLiveCart(db, token, currency, now);
+    const cart = await findLiveCart(db, request.token, currency, clock());
     if (!cart) throw commerceError("COMMERCE_CART_EMPTY");
+    // A cart already placed answers its order, whatever else holds now: a
+    // repeated completion creates nothing, so nothing below guards it.
     const placed = await orderFor(cart.id);
     if (placed) return answer(placed.id);
 
+    // Preconditions of a new order, before anything is written: money is
+    // never taken while the work that must follow it cannot run.
+    await assertJobsRunning({
+      db,
+      job: WORK_JOB,
+      now: clock(),
+      staleAfterMs: options.jobsStaleAfterMs,
+      alert: lastRunAt => options.alerts.jobsNotRunning(lastRunAt),
+    });
     const { summary, lines } = await summarize(cart);
-    if (lines.length === 0) throw commerceError("COMMERCE_CART_EMPTY");
-    if (summary.quoteKey !== request.quoteKey) {
-      throw commerceError("COMMERCE_QUOTE_CHANGED");
-    }
-    requirePaymentAmount(provider, summary.total);
+    assertPlaceable(summary, lines.length, request.quoteKey, provider);
 
     try {
       const orderId = await placeOrder({
@@ -473,7 +531,10 @@ export function createCheckoutService(
         email: request.email,
         addresses: request.addresses,
         provider,
-        now,
+        // The order's own moment, taken after the catalogue was read: a cart
+        // that expired while a slow source answered is not checked out, and
+        // the order's deadline runs from when it is placed.
+        now: clock(),
       });
       return await answer(orderId);
     } catch (error) {

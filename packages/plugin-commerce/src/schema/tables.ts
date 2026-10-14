@@ -175,8 +175,11 @@ export const orderLines = defineTable(
     // differing only in case stay apart on every dialect (see
     // `referenceKey`).
     referenceKey: col.char(64),
-    name: col.text(),
-    sku: col.varchar(255, { nullable: true }),
+    // Unbounded on every dialect, as the catalogue contract leaves them: a
+    // `text` column is `varchar(255)` on MySQL alone, where a longer name
+    // would fail an order the other dialects take.
+    name: col.longText(),
+    sku: col.longText({ nullable: true }),
     quantity: col.integer(),
     unitPriceAmount: col.bigint(),
     unitPriceCurrency: col.char(3),
