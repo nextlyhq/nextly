@@ -337,6 +337,7 @@ export function createTestPaymentProvider(
   }
 
   function refund(input: RefundPaymentInput): ProviderRefund {
+    requireRefundReference(input.reference);
     const p = record(input.providerReference);
     requireStatus(p, ["paid"], "refund");
     assertSameCurrency(input.amount, money(0, p.currency));
@@ -512,6 +513,25 @@ export function createTestPaymentProvider(
   // override that makes it so fails here rather than in the test using it.
   assertPaymentProvider(provider);
   return { provider, control };
+}
+
+/**
+ * Refuse a refund without commerce's reference, before anything changes: the
+ * refund could never be found again by it, and the contract's refund answer
+ * requires one.
+ */
+function requireRefundReference(reference: string): void {
+  if (reference.length === 0 || reference.length > 255) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "reference",
+          code: "INVALID",
+          message: "A refund needs commerce's reference, up to 255 characters.",
+        },
+      ],
+    });
+  }
 }
 
 /**

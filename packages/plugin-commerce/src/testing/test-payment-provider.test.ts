@@ -257,6 +257,25 @@ describe("the test payment provider", () => {
     ).toBe("COMMERCE_PAYMENT_STATE");
   });
 
+  it("refuses a refund with an empty reference before anything changes", async () => {
+    const { provider, control } = createTestPaymentProvider();
+    const { providerReference } = await confirmed(provider, 1000);
+    expect(
+      await codeOf(() =>
+        present(provider.refund)({
+          operationId: "op-3",
+          providerReference,
+          reference: "",
+          amount: money(400, "USD"),
+        })
+      )
+    ).toBe("VALIDATION_ERROR");
+    expect(
+      (await provider.read({ providerReference })).amountRefunded.amount
+    ).toBe(0);
+    expect(control.refunds()).toHaveLength(0);
+  });
+
   it("refuses a partial refund when it does not offer them", async () => {
     const { provider } = createTestPaymentProvider({
       capabilities: { partialRefund: false },
