@@ -1007,3 +1007,123 @@ describe("an owner's password field", () => {
     expect(refused?.message).toContain('"pin"');
   });
 });
+
+describe("free-form settings that loop back on themselves", () => {
+  it("do not stop a transform from running", () => {
+    // `custom` is the author's own metadata, and may share or loop back to an
+    // object; the ledger walks it for functions without following a loop.
+    const custom: Record<string, unknown> = { label: "orders" };
+    custom.self = custom;
+    const orders = ordersOf([
+      plugin("shop", { collections: [ordersCollection({ custom })] }),
+      changing("reviews", entity => ({ ...entity, admin: { group: "Sales" } })),
+    ]);
+
+    expect(orders.admin).toEqual({ group: "Sales" });
+  });
+});
+
+describe("a field another plugin nested in a container", () => {
+  it("keeps its container's type, even against the container's declarer", () => {
+    // `badges` declares the group with `extend`, `reviews` nests a field in
+    // it, and `badges`' own transform, running after, turns the group into a
+    // repeater: every stored object would be read as an array.
+    const refused = refusalOf(() =>
+      fold([
+        shop(),
+        changing("reviews", entity => ({
+          ...entity,
+          fields: replacing(fieldsOf(entity), "extras", f => ({
+            ...f,
+            fields: [...(f.fields as Fields), { name: "note", type: "text" }],
+          })),
+        })),
+        plugin("badges", {
+          dependsOn: ["shop"],
+          extend: [
+            {
+              target: "orders",
+              fields: [
+                {
+                  name: "extras",
+                  type: "group",
+                  fields: [{ name: "colour", type: "text" }],
+                },
+              ],
+            },
+          ],
+          transforms: [
+            {
+              target: "orders",
+              transform: entity => ({
+                ...entity,
+                fields: replacing(fieldsOf(entity), "extras", f => ({
+                  ...f,
+                  type: "repeater",
+                })),
+              }),
+            },
+          ],
+        }),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_FIELD_PROTECTED");
+    expect(refused?.message).toContain('"extras.note"');
+  });
+});
+
+describe("a refusal the entity already carried", () => {
+  /** `shop`'s raw orders, whose `status` select has no options. */
+  const invalidOrders = () =>
+    plugin("shop", {
+      collections: [
+        ordersCollection({
+          fields: [
+            { name: "title", type: "text" },
+            { name: "state", type: "select" },
+          ],
+        }),
+      ],
+    });
+
+  it("is not laid at the door of a transform that inserts a field before it", () => {
+    const orders = ordersOf([
+      invalidOrders(),
+      changing("reviews", entity => ({
+        ...entity,
+        fields: [{ name: "rating", type: "number" }, ...fieldsOf(entity)],
+      })),
+    ]);
+
+    expect(fieldsOf(orders).map(f => f.name)).toEqual([
+      "rating",
+      "title",
+      "state",
+    ]);
+  });
+
+  it("is laid at its door when the transform moves it onto another field", () => {
+    // Repairing `state` while adding `stage` with the same refusal: the code
+    // and message are the same, the field is not.
+    const refused = refusalOf(() =>
+      fold([
+        invalidOrders(),
+        changing("reviews", entity => ({
+          ...entity,
+          fields: [
+            ...replacing(fieldsOf(entity), "state", f => ({
+              ...f,
+              options: [{ label: "Open", value: "open" }],
+            })),
+            { name: "stage", type: "select" },
+          ],
+        })),
+      ])
+    );
+
+    expect(refused?.message).toContain(
+      'Plugin "reviews" makes "orders" invalid'
+    );
+  });
+});

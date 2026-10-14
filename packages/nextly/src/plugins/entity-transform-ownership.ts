@@ -41,6 +41,7 @@ import {
 import { NextlyError } from "../errors/nextly-error";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import { validateFieldGroupConfig } from "../field-groups/config/validate-field-group";
+import { isPlainObject } from "../shared/lib/plain-copy";
 import type { SingleConfig } from "../singles/config/types";
 import { validateSingleConfig } from "../singles/config/validate-single";
 
@@ -97,6 +98,11 @@ interface PlacedField {
   field: Record<string, unknown>;
   /** Inside a group or repeater, whose value is stored in its parent's. */
   nested: boolean;
+  /**
+   * The types of the fields holding it, outermost first: whether its value
+   * sits in an object or in each element of an array is theirs to decide.
+   */
+  within: readonly unknown[];
 }
 
 const DIALECTS: readonly SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
@@ -110,14 +116,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * positions, so a field inserted before another leaves the other's identity
  * alone.
  */
-function placedFields(fields: unknown, prefix = ""): PlacedField[] {
+function placedFields(
+  fields: unknown,
+  prefix = "",
+  within: readonly unknown[] = []
+): PlacedField[] {
   if (!Array.isArray(fields)) return [];
   return fields.flatMap(field => {
     if (!isRecord(field) || typeof field.name !== "string") return [];
     const path = prefix === "" ? field.name : `${prefix}.${field.name}`;
     return [
-      { path, field, nested: prefix !== "" },
-      ...placedFields(field.fields, path),
+      { path, field, nested: prefix !== "", within },
+      ...placedFields(field.fields, path, [...within, field.type]),
     ];
   });
 }
@@ -142,16 +152,23 @@ const READ_APART: ReadonlySet<string> = new Set([
  * by its path: a nested setting such as `preview.url` runs as surely as a
  * top-level validator does.
  */
-function functionsIn(value: unknown, key: string): Behaviour[] {
+function functionsIn(
+  value: unknown,
+  key: string,
+  // Containers already walked: free-form settings such as `custom` may share
+  // or loop back to an object, which the copy a transform receives keeps.
+  seen: WeakSet<object> = new WeakSet()
+): Behaviour[] {
   if (typeof value === "function") return [{ key, value }];
-  if (Array.isArray(value)) {
-    return value.flatMap((item, index) =>
-      functionsIn(item, `${key}.${String(index)}`)
-    );
-  }
-  if (!isRecord(value)) return [];
-  return Object.entries(value).flatMap(([name, item]) =>
-    functionsIn(item, `${key}.${name}`)
+  // Plain objects and arrays only: a class instance is a value, not settings.
+  if (!Array.isArray(value) && !isPlainObject(value)) return [];
+  if (seen.has(value)) return [];
+  seen.add(value);
+  const entries: [string, unknown][] = Array.isArray(value)
+    ? value.map((item, index) => [String(index), item])
+    : Object.entries(value);
+  return entries.flatMap(([name, item]) =>
+    functionsIn(item, `${key}.${name}`, seen)
   );
 }
 
@@ -313,6 +330,10 @@ function storageOf(
   );
   return {
     columns,
+    // A field's value is read through every container holding it, so the
+    // owner of a group turning it into a repeater reshapes the values of a
+    // field another plugin nested inside it.
+    within: placed.within,
     typeByName:
       storedAsJson || field.type === "password" || !builtIn.includes(field.type)
         ? field.type
@@ -568,9 +589,31 @@ function definitionErrors(
  * a collection `db.idType` of `"serial"`. Only refusals the transform
  * introduced count against it: an entity a plugin assembled without
  * `defineCollection` may already carry one, and that is not this plugin's
- * doing. Compared by code and message, not path, because a transform that
- * inserts a field moves every later field's path.
+ * doing. Each is matched by `errorIdentity`.
  */
+/**
+ * A refusal's identity across a transform: its code, message and path, with
+ * each `fields[<index>]` in the path read as the name of the field there. A
+ * transform that inserts a field moves every later field's index but not its
+ * name, and one that moves a refusal onto another field changes the name.
+ */
+function errorIdentity(
+  error: { path: string; code: string; message: string },
+  definition: Record<string, unknown>
+): string {
+  let fields: unknown = definition.fields;
+  const path = error.path.replace(/fields\[(\d+)\]/g, (segment, index) => {
+    const field: unknown = Array.isArray(fields)
+      ? fields[Number(index)]
+      : undefined;
+    fields = isRecord(field) ? field.fields : undefined;
+    return isRecord(field) && typeof field.name === "string"
+      ? `fields.${field.name}`
+      : segment;
+  });
+  return `${error.code}\u0000${path}\u0000${error.message}`;
+}
+
 function assertStillValid(
   slug: string,
   kind: EntityKind,
@@ -578,11 +621,11 @@ function assertStillValid(
   after: Record<string, unknown>,
   plugin: TransformingPlugin
 ): void {
-  const existing = definitionErrors(kind, before).map(
-    error => `${error.code}\u0000${error.message}`
+  const existing = definitionErrors(kind, before).map(error =>
+    errorIdentity(error, before)
   );
   const introduced = definitionErrors(kind, after).filter(error => {
-    const index = existing.indexOf(`${error.code}\u0000${error.message}`);
+    const index = existing.indexOf(errorIdentity(error, after));
     if (index === -1) return true;
     existing.splice(index, 1);
     return false;
