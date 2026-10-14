@@ -33,6 +33,7 @@ const dana = {
   name: "Dana Reyes",
   address: "dana@example.com",
   password: "a long passphrase",
+  client: "203.0.113.9" as string | null,
 };
 const MINUTE = 60_000;
 

@@ -25,6 +25,7 @@ const dana = {
   name: "Dana Reyes",
   address: "Dana@Example.com",
   password: "a long passphrase",
+  client: "203.0.113.9" as string | null,
 };
 
 /** The value, or a failure naming what was missing. */
@@ -279,6 +280,87 @@ describe.each(getConfiguredTestDialects())(
         "sign-up-taken",
         "verify-address",
       ]);
+    });
+
+    it("refuses a fourth sign-up for one address in 15 minutes, however it is cased, with its wait", async () => {
+      const { deps, core } = await boot();
+      for (const address of [
+        "dana@example.com",
+        "DANA@example.com",
+        " Dana@Example.com ",
+      ]) {
+        accepted(
+          await signUp(deps, {
+            ...dana,
+            address,
+            client: `198.51.100.${address.length}`,
+          })
+        );
+      }
+
+      const refused = await signUp(deps, { ...dana, client: "198.51.100.200" });
+      expect(refused).toMatchObject({
+        status: "refused",
+        reason: "too-many-requests",
+      });
+      expect(
+        refused.status === "refused" && "retryAfterMs" in refused
+          ? refused.retryAfterMs
+          : 0
+      ).toBeGreaterThan(0);
+      core.clock.advance(15 * 60_000);
+      accepted(await signUp(deps, { ...dana, client: "198.51.100.200" }));
+    });
+
+    it("refuses a client's twenty-first sign-up in 15 minutes, whatever addresses it names", async () => {
+      const { deps } = await boot();
+      for (let n = 0; n < 20; n += 1) {
+        accepted(
+          await signUp(deps, { ...dana, address: `visitor${n}@example.com` })
+        );
+      }
+
+      expect(
+        await signUp(deps, { ...dana, address: "another@example.com" })
+      ).toMatchObject({
+        status: "refused",
+        reason: "too-many-requests",
+      });
+    });
+
+    it("holds a client whose address cannot be read to the address's limit alone", async () => {
+      const { deps } = await boot();
+      for (let n = 0; n < 25; n += 1) {
+        accepted(
+          await signUp(deps, {
+            ...dana,
+            address: `visitor${n}@example.com`,
+            client: null,
+          })
+        );
+      }
+    });
+
+    it("makes nothing and sends nothing while the limit store does not answer", async () => {
+      const { ctx, deps, core, mail } = await boot();
+      core.limits.available = false;
+
+      expect(await signUp(deps, dana)).toEqual({
+        status: "refused",
+        reason: "try-again",
+      });
+      expect(await accountByAddress(ctx.db, dana.address)).toBeNull();
+      expect(mail.queued).toEqual([]);
+    });
+
+    it("counts no request for a password the local rules refuse", async () => {
+      const { deps } = await boot();
+      for (let n = 0; n < 5; n += 1) {
+        expect(
+          await signUp(deps, { ...dana, password: "short" })
+        ).toMatchObject({ reason: "too-short" });
+      }
+      accepted(await signUp(deps, dana));
     });
 
     it("builds every link on the configured origin and pages", async () => {

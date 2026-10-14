@@ -1,24 +1,30 @@
 import { randomUUID } from "node:crypto";
 
-import { z } from "zod";
-
-import type { PasswordCheck } from "../core/ports";
+import { LIMIT_RULES } from "../core/limit-rules";
 import {
   accountByAddress,
   createAccount,
+  normaliseAddress,
   type AccountRow,
-  type AccountsDb,
 } from "../storage/accounts";
 
-import { HOUR, MINUTE, type FlowDeps } from "./deps";
+import { HOUR, type FlowDeps } from "./deps";
+import { reserveEmailRequest, type EmailRequestVerdict } from "./email-limits";
+import { ADDRESS, NAME } from "./input";
 import { pageLink } from "./links";
+import {
+  breachedPasswordRefusal,
+  localPasswordRefusal,
+  type NewPasswordRefusal,
+} from "./new-password";
 import { PURPOSES } from "./purposes";
+import { mintVerification, queueVerification } from "./verification-email";
 
 /** Why a sign-up was refused, said to the visitor. */
 export type SignUpRefusal =
   | "invalid-name"
   | "invalid-address"
-  | Extract<PasswordCheck, { ok: false }>["reason"];
+  | NewPasswordRefusal;
 
 /**
  * The answer to a sign-up. A free address and a taken one both answer
@@ -27,7 +33,8 @@ export type SignUpRefusal =
  */
 export type SignUpResult =
   | { status: "accepted"; browserToken: string; browserTokenExpiresAt: Date }
-  | { status: "refused"; reason: SignUpRefusal };
+  | { status: "refused"; reason: SignUpRefusal }
+  | Extract<EmailRequestVerdict, { status: "refused" }>;
 
 export interface SignUpInput {
   name: string;
@@ -35,10 +42,9 @@ export interface SignUpInput {
   password: string;
   /** The sign-up browser token this browser already holds, if any. */
   browserToken?: string;
+  /** The client's key (core's `clientKey`), or null when its network address cannot be read. */
+  client: string | null;
 }
-
-const NAME = z.string().trim().min(1).max(255);
-const ADDRESS = z.string().trim().pipe(z.email().max(320));
 
 /** Thrown inside the sign-up's transaction to roll it back when the address is taken. */
 class AddressTaken extends Error {}
@@ -61,19 +67,21 @@ export async function signUp(
   const address = ADDRESS.safeParse(input.address);
   if (!address.success) return { status: "refused", reason: "invalid-address" };
 
-  const { core, settings } = deps;
-  const check = await core.passwords.check(input.password, {
-    minLength: settings.passwordMinLength,
-    breached: settings.breachedPasswordCheck,
+  const local = await localPasswordRefusal(deps, input.password);
+  if (local !== null) return { status: "refused", reason: local };
+  // Counted before the breached-password lookup and the hash, the work a
+  // flood of sign-ups would make the site do.
+  const verdict = await reserveEmailRequest(deps, {
+    rule: LIMIT_RULES.signUpAddress,
+    addressKey: normaliseAddress(address.data),
+    client: input.client,
   });
-  if (!check.ok) return { status: "refused", reason: check.reason };
-  if (check.breachedCheck === "unavailable") {
-    deps.logger.warn(
-      "[accounts] a new password went unchecked: the breached-password source did not answer"
-    );
-  }
+  if (verdict.status === "refused") return verdict;
+  const breached = await breachedPasswordRefusal(deps, input.password);
+  if (breached !== null) return { status: "refused", reason: breached };
+
   // Hashed on both paths, so a taken address costs what a free one does.
-  const passwordHash = await core.passwords.hash(input.password);
+  const passwordHash = await deps.core.passwords.hash(input.password);
 
   try {
     return await createAndMint(deps, {
@@ -159,58 +167,6 @@ async function answerTaken(
   return accepted(browser);
 }
 
-interface MintedVerification {
-  link: { token: string };
-  code: { code: string };
-  notMe: { token: string };
-}
-
-/** A verification email's secrets: its link, its code (voiding any earlier code) and its "this wasn't me" link. */
-async function mintVerification(
-  deps: FlowDeps,
-  tx: AccountsDb,
-  subject: string
-): Promise<MintedVerification> {
-  const { core, settings } = deps;
-  const linkMs = settings.verification.linkHours * HOUR;
-  const link = await core.secrets.mintToken(
-    { purpose: PURPOSES.verifyLink, subject, expiresInMs: linkMs },
-    { tx }
-  );
-  const code = await core.secrets.mintCode(
-    {
-      purpose: PURPOSES.verifyCode,
-      subject,
-      expiresInMs: settings.verification.codeMinutes * MINUTE,
-      digits: codeDigits(settings.verification.codeDigits),
-      maxWrongTries: settings.verification.codeTries,
-    },
-    { tx }
-  );
-  const notMe = await core.secrets.mintToken(
-    { purpose: PURPOSES.notMe, subject, expiresInMs: linkMs },
-    { tx }
-  );
-
-  return { link, code, notMe };
-}
-
-async function queueVerification(
-  deps: FlowDeps,
-  account: Pick<AccountRow, "id" | "address" | "name">,
-  minted: MintedVerification
-): Promise<void> {
-  await deps.mail.queue({
-    kind: "verify-address",
-    accountId: account.id,
-    to: account.address,
-    name: account.name,
-    link: pageLink(deps.settings, "verify", minted.link.token),
-    code: minted.code.code,
-    notMeLink: pageLink(deps.settings, "notMe", minted.notMe.token),
-  });
-}
-
 async function keptBinding(
   deps: FlowDeps,
   existing: AccountRow | null,
@@ -238,13 +194,4 @@ function accepted(browser: { token: string; expiresAt: Date }): SignUpResult {
     browserToken: browser.token,
     browserTokenExpiresAt: browser.expiresAt,
   };
-}
-
-/**
- * The settings bound the digits to 6 to 8, which core's helper takes as a
- * literal; anything else is a setting that skipped its bounds, refused here.
- */
-function codeDigits(digits: number): 6 | 7 | 8 {
-  if (digits === 6 || digits === 7 || digits === 8) return digits;
-  throw new RangeError(`A code of ${digits} digits is outside 6 to 8.`);
 }
