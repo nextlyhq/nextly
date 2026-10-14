@@ -31,11 +31,17 @@ export interface FlowDeps {
 export interface AccountsEventPayloads {
   /** An account is gone: other plugins remove or anonymise what they hold for it. */
   "nextlyhq-plugin-accounts.account.deleted": { accountId: string };
+  /** Staff deactivated an account: it signs in nowhere until reactivated. */
+  "nextlyhq-plugin-accounts.account.deactivated": { accountId: string };
+  /** Staff reactivated a deactivated account. */
+  "nextlyhq-plugin-accounts.account.reactivated": { accountId: string };
 }
 
 /** The events the plugin declares, one per name it emits. */
 export const ACCOUNTS_EVENTS = [
   "nextlyhq-plugin-accounts.account.deleted",
+  "nextlyhq-plugin-accounts.account.deactivated",
+  "nextlyhq-plugin-accounts.account.reactivated",
 ] as const satisfies ReadonlyArray<keyof AccountsEventPayloads>;
 
 export interface AccountsEvents {

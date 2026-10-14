@@ -67,7 +67,7 @@ describe.each(getConfiguredTestDialects())(
       return captured;
     }
 
-    it("boots with its templates, its event and its jobs accepted", async () => {
+    it("boots with its templates, its events and its jobs accepted", async () => {
       await boot();
       const plugin = accounts({ origin: TEST_ORIGIN });
 
@@ -77,6 +77,8 @@ describe.each(getConfiguredTestDialects())(
       ]);
       expect(plugin.contributes?.events).toEqual([
         { name: "nextlyhq-plugin-accounts.account.deleted" },
+        { name: "nextlyhq-plugin-accounts.account.deactivated" },
+        { name: "nextlyhq-plugin-accounts.account.reactivated" },
       ]);
       expect(plugin.contributes?.emailTemplates?.length).toBeGreaterThan(0);
     });

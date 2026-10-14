@@ -1,6 +1,7 @@
 import {
   accountById,
   writeAtVersion,
+  type AccountChange,
   type AccountRow,
   type AccountsDb,
 } from "../storage/accounts";
@@ -93,14 +94,17 @@ export async function signOutEverywhere(
 
 /**
  * Ends an account's sessions, voids its secrets and cancels its pending
- * address change, at the version read; false when another change moved it.
+ * address change, at the version read, writing `change` with them; false
+ * when another change moved the version. Signing out everywhere and a
+ * deactivation both end this much.
  */
-async function endEverything(
-  deps: FlowDeps,
+export async function endEverything(
+  deps: Pick<FlowDeps, "core">,
   tx: AccountsDb,
-  account: AccountRow
+  account: AccountRow,
+  change: AccountChange = {}
 ): Promise<boolean> {
-  if (!(await writeAtVersion(tx, account, {}, { endsSessions: true })))
+  if (!(await writeAtVersion(tx, account, change, { endsSessions: true })))
     return false;
   await endAccountSessions(tx, account.id);
   await deps.core.secrets.voidFor({ subject: account.id }, { tx });
