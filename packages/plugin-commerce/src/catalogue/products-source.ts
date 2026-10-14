@@ -182,7 +182,22 @@ const listInputSchema = z.object({
   search: z.string().optional(),
 });
 
-const optionsSchema = z.object({ slug: z.string().min(1) });
+// The whole options object is parsed before any field is read: server code
+// can call this without types, and a missing object, a missing service or a
+// key the schema does not know is then a validation error, not a crash. The
+// currency is held to a sales currency after, under its own error.
+const optionsSchema = z.strictObject({
+  collections: z.custom<ProductsSourceOptions["collections"]>(
+    value =>
+      typeof value === "object" &&
+      value !== null &&
+      "listEntries" in value &&
+      typeof value.listEntries === "function",
+    "Expected the collection service."
+  ),
+  slug: z.string().min(1),
+  currency: z.string(),
+});
 
 /** Parse what a caller handed the source, refusing it as a validation error. */
 function parseInput<T>(
@@ -239,15 +254,19 @@ function entryId(entry: unknown): unknown {
  * Build the products source over the products collection.
  *
  * @experimental
- * @throws `COMMERCE_UNKNOWN_CURRENCY` for a store currency that is not a
- *   sales currency, and `VALIDATION_ERROR` for an empty slug.
+ * @throws `VALIDATION_ERROR` for options it cannot parse, an empty slug
+ *   among them, and `COMMERCE_UNKNOWN_CURRENCY` for a store currency that is
+ *   not a sales currency.
  */
 export function createProductsSource(
   options: ProductsSourceOptions
 ): CatalogueSource {
-  assertCurrency(options.currency);
-  const { slug } = parseInput(optionsSchema, options, "create");
-  const { collections, currency } = options;
+  const { collections, slug, currency } = parseInput(
+    optionsSchema,
+    options,
+    "create"
+  );
+  assertCurrency(currency);
 
   /**
    * Refuse a stored entry the catalogue cannot carry. The store's own data is

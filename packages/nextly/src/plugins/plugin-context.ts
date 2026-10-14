@@ -76,6 +76,8 @@ import { createPluginSettings } from "./plugin-settings-provider";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
 import { isInPluginNamespace } from "./plugin-slug";
+import { createPluginPrincipals } from "./principals/api";
+import type { PluginPrincipalsApi } from "./principals/types";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
 import { methodFacade } from "./service-facade";
@@ -607,6 +609,18 @@ export interface PluginContext {
    * stored would be the worse outcome.
    */
   audit?: PluginAuditApi;
+
+  /**
+   * @experimental Recognising a person of this plugin's own kinds of
+   * signed-in person on a request.
+   *
+   * Present only when the plugin registers a kind in
+   * `contributes.principals`. Shares the request's answer with every other
+   * entry point asking for the same kind, so the kind's resolver runs at most
+   * once per request. A write from another site gets nobody, as
+   * `auth.currentUser` gives it no user.
+   */
+  principals?: PluginPrincipalsApi;
 }
 
 /** @experimental Writing one plugin's declared audit events. */
@@ -1847,6 +1861,7 @@ export function createPluginContext(
   // Built once per context rather than per call: it closes over the
   // allowlist, and nothing about it changes between requests.
   const pluginFetch = plugin ? createPluginFetchFor(plugin) : undefined;
+  const pluginPrincipals = plugin ? createPluginPrincipals(plugin) : undefined;
 
   const filterRegistry = getFilterRegistry();
   filterRegistry.setLogger(logger);
@@ -1973,5 +1988,9 @@ export function createPluginContext(
       : {}),
     ...(pluginFetch ? { fetch: pluginFetch } : {}),
     ...(plugin?.contributes?.audit ? { audit: createPluginAudit(plugin) } : {}),
+    // Only for a plugin that registers kinds: a context with nothing of its
+    // own to recognise has no use for it, as one with no settings has none
+    // for `settings`.
+    ...(pluginPrincipals ? { principals: pluginPrincipals } : {}),
   };
 }

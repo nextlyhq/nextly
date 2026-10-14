@@ -100,3 +100,46 @@ describe("the cart's rate limit", () => {
     expect(read.status).toBe(200);
   });
 });
+
+describe("the checkout's rate limit", () => {
+  it("lets a client complete at most 10 checkouts a minute", async () => {
+    current = await createTestNextly({
+      plugins: [commerce({ currency: "USD" })],
+    });
+    const handlers = createDynamicHandlers();
+    const statuses: number[] = [];
+    for (let i = 0; i < 11; i++) {
+      // No cart: each is refused by the handler, after the limit has
+      // counted it, which is what the eleventh meets.
+      const response = await handlers.POST(
+        new Request(
+          `${ORIGIN}/api/plugins/@nextlyhq/plugin-commerce/checkout/complete`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              cookie: `nextly_csrf=${CSRF}`,
+              "x-csrf-token": CSRF,
+              origin: ORIGIN,
+            },
+            body: "{}",
+          }
+        ),
+        {
+          params: Promise.resolve({
+            params: [
+              "plugins",
+              "@nextlyhq",
+              "plugin-commerce",
+              "checkout",
+              "complete",
+            ],
+          }),
+        }
+      );
+      statuses.push(response.status);
+    }
+    expect(statuses.slice(0, 10).every(status => status !== 429)).toBe(true);
+    expect(statuses[10]).toBe(429);
+  });
+});

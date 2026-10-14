@@ -32,10 +32,11 @@ export interface CatalogueSourceContractOptions {
     /** A reference the source does not know. */
     readonly unknown: string;
     /**
-     * A counted or one-off item with stock left, whose figure goes down when a
-     * sale is reported. Required when the source hears stock reports: it is
-     * how the suite sees a repeated report applied once, which the
-     * listener's own confirmation cannot show.
+     * A counted item with at least two units left, whose figure goes down
+     * when a sale is reported. Required when the source hears stock reports:
+     * it is how the suite sees a repeated report applied once, which the
+     * listener's own confirmation cannot show. Two units at least, because
+     * with one a sale applied twice stops at zero just as one sale does.
      */
     readonly soldFrom?: string;
     /**
@@ -47,6 +48,21 @@ export interface CatalogueSourceContractOptions {
     readonly toOrder?: {
       readonly reference: string;
       readonly maxPerLine: number;
+    };
+    /**
+     * Every reference the source holds, for a source that lists. Given, the
+     * listing must hold exactly these; left out, the listing case checks only
+     * that the named fixtures are listed, and is named for that.
+     */
+    readonly catalogue?: readonly string[];
+    /**
+     * A search the listing narrows by: a query that finds one item and leaves
+     * out another. Required when the source lists, so its search is exercised.
+     */
+    readonly search?: {
+      readonly query: string;
+      readonly finds: string;
+      readonly skips: string;
     };
   };
 }
@@ -66,7 +82,8 @@ export interface CatalogueSourceContractOptions {
  *
  * @experimental
  * @throws `ContractViolation` for a source that hears stock reports when
- *   `fixtures.soldFrom` is not given.
+ *   `fixtures.soldFrom` is not given, or that lists when `fixtures.search` is
+ *   not given.
  */
 export async function catalogueSourceContract(
   options: CatalogueSourceContractOptions
@@ -123,12 +140,15 @@ export async function catalogueSourceContract(
   add(
     "prices lines for checkout, one answer per line in the order asked",
     async source => {
+      // The listed item is asked for twice, with different quantities: two
+      // lines of one cart, each answered in its own place.
       const lines = [
         { reference: fixtures.unknown, quantity: 1 },
         { reference: fixtures.listed, quantity: 2 },
         ...(fixtures.onRequest
           ? [{ reference: fixtures.onRequest, quantity: 1 }]
           : []),
+        { reference: fixtures.listed, quantity: 3 },
       ];
       const priced = (
         await source.price({ currency: options.currency, lines })
@@ -145,16 +165,17 @@ export async function catalogueSourceContract(
         priced[0].found === false,
         "an unknown reference is answered as not found"
       );
-      const listed = priced[1];
-      expectContract(
-        listed.found && listed.price.kind === "listed",
-        "a listed item has its price"
-      );
-      if (listed.found && listed.price.kind === "listed") {
+      for (const listed of [priced[1], priced[priced.length - 1]]) {
         expectContract(
-          listed.price.unitPrice.currency === options.currency,
-          "a price is in the store's currency"
+          listed.found && listed.price.kind === "listed",
+          "a listed item has its price, on each line that asks for it"
         );
+        if (listed.found && listed.price.kind === "listed") {
+          expectContract(
+            listed.price.unitPrice.currency === options.currency,
+            "a price is in the store's currency"
+          );
+        }
       }
       if (fixtures.onRequest) {
         const onRequest = priced[2];
@@ -206,48 +227,49 @@ export async function catalogueSourceContract(
   const probe = await options.create();
 
   if (probe.list) {
-    add("lists every item a page at a time, each once", async source => {
-      const list = source.list?.bind(source);
-      expectContract(list !== undefined, "the source lists");
-      const seen = new Set<string>();
-      const cursors = new Set<string>();
-      let cursor: string | null = null;
-      // No bound on the number of pages, so a catalogue of any size passes.
-      // The listing still always ends or fails: every page but the last adds
-      // an item never listed before, and a cursor handed out twice is a loop.
-      do {
-        const answer = await list({ limit: 2, cursor });
-        expectContract(
-          answer.items.length <= 2,
-          "a page holds at most the limit"
-        );
-        for (const item of answer.items.map(asItem)) {
+    const search = fixtures.search;
+    if (search === undefined) {
+      throw new ContractViolation(
+        "a source that lists needs fixtures.search, a query that finds one item and leaves out another"
+      );
+    }
+    const catalogue = fixtures.catalogue;
+    add(
+      catalogue !== undefined
+        ? "lists every item a page at a time, each once"
+        : "lists the named fixtures a page at a time, each once",
+      async source => {
+        const seen = await listAll(source, 2);
+        if (catalogue !== undefined) expectSameReferences(seen, catalogue);
+        // Every named fixture is listed either way, the item sold to order
+        // among them, so a source that lists only some kinds of item fails
+        // however the whole catalogue was given, or if it was not.
+        const named = [
+          fixtures.listed,
+          fixtures.onRequest,
+          fixtures.soldFrom,
+          fixtures.toOrder?.reference,
+        ];
+        for (const reference of named) {
+          if (reference === undefined) continue;
           expectContract(
-            !seen.has(item.reference),
-            `${item.reference} is listed once`
+            seen.has(reference),
+            `the listing includes ${reference}`
           );
-          seen.add(item.reference);
         }
-        cursor = answer.nextCursor;
-        if (cursor === null) break;
-        expectContract(
-          answer.items.length > 0,
-          "a page before the last holds at least one item"
-        );
-        expectContract(
-          !cursors.has(cursor),
-          "a cursor is handed out once, so the listing moves forward"
-        );
-        cursors.add(cursor);
-      } while (cursor !== null);
-      const known = [fixtures.listed, fixtures.onRequest, fixtures.soldFrom];
-      for (const reference of known) {
-        if (reference === undefined) continue;
-        expectContract(
-          seen.has(reference),
-          `the listing includes ${reference}`
-        );
       }
+    );
+    add("narrows the listing to a search, a page at a time", async source => {
+      // One item a page, so a search that matches more than one pages too.
+      const found = await listAll(source, 1, search.query);
+      expectContract(
+        found.has(search.finds),
+        `the search "${search.query}" finds ${search.finds}`
+      );
+      expectContract(
+        !found.has(search.skips),
+        `the search "${search.query}" leaves out ${search.skips}`
+      );
     });
   }
 
@@ -265,8 +287,8 @@ export async function catalogueSourceContract(
         expectContract(stock !== undefined, "the source hears stock reports");
         const before = await available(source, soldFrom);
         expectContract(
-          before > 0,
-          `the fixture item ${soldFrom} has stock left`
+          before >= 2,
+          `the fixture item ${soldFrom} holds at least two units, so one sale and two differ (it holds ${before})`
         );
         const report = {
           operationId: unique("op"),
@@ -387,6 +409,70 @@ export async function catalogueSourceContract(
   }
 
   return cases;
+}
+
+/**
+ * Every reference a listing hands out, read page by page until the last and
+ * held to the listing's rules on the way: a page holds at most the limit,
+ * each item is listed once, every page before the last holds an item, and a
+ * cursor is handed out once. No bound on the number of pages, so a catalogue
+ * of any size passes; the listing still always ends or fails, since every
+ * page but the last adds an item never listed before and a cursor handed out
+ * twice is a loop.
+ */
+async function listAll(
+  source: CatalogueSource,
+  limit: number,
+  search?: string
+): Promise<Set<string>> {
+  const list = source.list?.bind(source);
+  expectContract(list !== undefined, "the source lists");
+  const seen = new Set<string>();
+  const cursors = new Set<string>();
+  let cursor: string | null = null;
+  do {
+    const answer = await list({ limit, cursor, ...(search ? { search } : {}) });
+    expectContract(
+      answer.items.length <= limit,
+      "a page holds at most the limit"
+    );
+    for (const item of answer.items.map(asItem)) {
+      expectContract(
+        !seen.has(item.reference),
+        `${item.reference} is listed once`
+      );
+      seen.add(item.reference);
+    }
+    cursor = answer.nextCursor;
+    if (cursor === null) break;
+    expectContract(
+      answer.items.length > 0,
+      "a page before the last holds at least one item"
+    );
+    expectContract(
+      !cursors.has(cursor),
+      "a cursor is handed out once, so the listing moves forward"
+    );
+    cursors.add(cursor);
+  } while (cursor !== null);
+  return seen;
+}
+
+/** The listing holds exactly the catalogue given: none left out, none extra. */
+function expectSameReferences(
+  seen: ReadonlySet<string>,
+  catalogue: readonly string[]
+): void {
+  const expected = new Set(catalogue);
+  for (const reference of expected) {
+    expectContract(seen.has(reference), `the listing includes ${reference}`);
+  }
+  for (const reference of seen) {
+    expectContract(
+      expected.has(reference),
+      `the listing holds only the catalogue's items, not ${reference}`
+    );
+  }
 }
 
 async function available(

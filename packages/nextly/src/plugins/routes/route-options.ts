@@ -25,6 +25,7 @@ import {
 } from "../../auth/csrf/validate";
 import { ipv6PrefixHex } from "../../auth/session/refresh-binding";
 import { isReadOperation } from "../../middleware/rate-limit";
+import { isPlainObject } from "../../shared/lib/plain-copy";
 
 import type { PluginRoute, RouteMethod } from "./route-types";
 
@@ -217,6 +218,46 @@ const ROUTE_METHODS: Record<RouteMethod, true> = {
   DELETE: true,
 };
 
+/** Why a declared `principal` is not `{ kind, required? }`, or null. */
+function principalShapeProblem(principal: unknown): string | null {
+  if (!isPlainObject(principal)) {
+    return `principal must be { kind, required? }, not ${JSON.stringify(principal)}`;
+  }
+  const { kind, required, ...rest } = principal;
+  if (typeof kind !== "string" || Object.keys(rest).length > 0) {
+    return `principal must be { kind, required? } with kind a string, not ${JSON.stringify(principal)}`;
+  }
+  if (required !== undefined && typeof required !== "boolean") {
+    return `principal.required must be true or false, not ${JSON.stringify(required)}`;
+  }
+  return null;
+}
+
+/**
+ * Why a route's `principal` cannot be served, or null when it can or the
+ * route has none.
+ *
+ * The shape is checked as `rateLimit`'s is, for a JavaScript plugin with no
+ * type to hold it. The two pairs are refused because each would hand the
+ * route someone the option promises it never sees: a public route
+ * authenticates nobody, and a permission is something only staff and API
+ * keys hold, so the route would admit the staff it was declared to keep out.
+ * Whether a plugin registers the kind is asked where routes are collected,
+ * which has every plugin's kinds in hand.
+ */
+function principalOptionProblem(route: PluginRoute): string | null {
+  if (route.principal === undefined) return null;
+  const shapeProblem = principalShapeProblem(route.principal);
+  if (shapeProblem !== null) return shapeProblem;
+  if (route.public === true) {
+    return "principal cannot be combined with public: true; a route that asks for a signed-in person is not public";
+  }
+  if (route.requiredPermission !== undefined) {
+    return "principal cannot be combined with requiredPermission; a plugin's signed-in person holds no permission, so the route would admit staff instead";
+  }
+  return null;
+}
+
 /** Why a route's declared options are invalid, or null when they are fine. */
 export function validateRouteOptions(route: PluginRoute): string | null {
   // As with `rateLimit` below, the union binds only TypeScript: a JavaScript
@@ -239,6 +280,8 @@ export function validateRouteOptions(route: PluginRoute): string | null {
   if (route.public === true && route.csrf === false) {
     return "csrf: false cannot be combined with public: true; declare csrf: true if the handler acts on the signed-in user, or leave csrf unset";
   }
+  const principalProblem = principalOptionProblem(route);
+  if (principalProblem !== null) return principalProblem;
   // The union is a TYPESCRIPT guarantee, and an unchecked JavaScript plugin
   // has none: a typo like "authn" parsed happily, made `rateLimitKey` answer
   // null, and the route then ran with no limiter at all — silently losing the

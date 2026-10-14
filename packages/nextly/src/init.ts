@@ -174,6 +174,9 @@ function buildNextlyInstance(
     // `await getNextly()` path.
     jobs: directAPI.jobs,
 
+    // Plugin-defined signed-in people. Forwarded for the reason stated above.
+    principals: directAPI.principals,
+
     // Content releases. Forwarded for the reason stated above: a namespace that
     // stops at the class is absent from the documented `await getNextly()`
     // path, which is the one the REST handlers use.
