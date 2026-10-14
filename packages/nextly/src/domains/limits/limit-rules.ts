@@ -15,7 +15,7 @@
  * @experimental
  * @module domains/limits/limit-rules
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 /** A rule a plugin declares, by name, in `contributes.limits`. @experimental */
 export type LimitRule =
@@ -144,9 +144,10 @@ export function limitRuleProblem(
 
 /**
  * How many given-back reservations an entry remembers, so a release retried
- * after its answer was lost gives nothing more back.
+ * after its answer was lost gives nothing more back. As many as fit beside
+ * four windows' buckets in a value of 4 KB; past them, see `releasedThrough`.
  */
-const REMEMBERED_RELEASES = 32;
+const REMEMBERED_RELEASES = 48;
 
 /**
  * How many counted reservations a backoff entry remembers in order, to tell
@@ -169,13 +170,22 @@ interface StateBase {
   /** The fingerprint of the rule the entry was written under. */
   rule: string;
   /**
-   * When the entry began counting. A reservation counted before it counted
-   * on an entry since reset, forgotten or written under another rule, so it
-   * has nothing here to give back.
+   * A random name for this run of the entry, from its first count until it
+   * is reset, forgotten or rewritten under another rule. A reservation
+   * carries the epoch each of its entries counted under, and gives back only
+   * to that same run: a reset and a new count in one millisecond start a new
+   * epoch, where a time could not tell them apart.
    */
-  since: number;
-  /** The most recent reservations given back here. */
-  released: string[];
+  epoch: string;
+  /** Reservations given back here, and when each was counted, oldest first. */
+  released: Array<[string, number]>;
+  /**
+   * Reservations counted at or before this time give nothing back: release
+   * markers this old were let go to keep the entry within its size. Failing
+   * closed, a client then waits out a count it might have had back, and never
+   * gets one back twice. 0 while every marker is kept.
+   */
+  releasedThrough: number;
 }
 
 /** A window rule's entry. */
@@ -233,9 +243,14 @@ function ruleFingerprint(rule: LimitRule): string {
   return fingerprint;
 }
 
-/** An entry under `rule` that has counted nothing, beginning at `now`. */
-function emptyState(rule: LimitRule, now: number): RuleState {
-  const base = { rule: ruleFingerprint(rule), since: now, released: [] };
+/** An entry under `rule` that has counted nothing, in an epoch of its own. */
+function emptyState(rule: LimitRule): RuleState {
+  const base = {
+    rule: ruleFingerprint(rule),
+    epoch: randomBytes(6).toString("base64url"),
+    released: [],
+    releasedThrough: 0,
+  };
   return rule.type === "window"
     ? {
         ...base,
@@ -267,7 +282,7 @@ export function readRuleState(
 ): RuleState {
   const state = stored as Partial<RuleState> | undefined;
   if (state?.kind !== rule.type || state.rule !== ruleFingerprint(rule)) {
-    return emptyState(rule, now);
+    return emptyState(rule);
   }
   if (rule.type === "window") {
     const window = state as WindowState;
@@ -281,7 +296,7 @@ export function readRuleState(
   const backoff = state as BackoffState;
   const forgotten =
     now - backoff.lastCounted >= rule.forgetAfterMs && now >= backoff.waitUntil;
-  return forgotten ? emptyState(rule, now) : backoff;
+  return forgotten ? emptyState(rule) : backoff;
 }
 
 /** The buckets of one window still inside it at `now`. */
@@ -430,11 +445,12 @@ export function countAttempt(
 }
 
 /**
- * The entry once reservation `id`, counted at `at`, is given back, or
- * undefined when it holds no such count: counted before the entry began
- * counting (it was reset, forgotten or written under another rule since),
- * given back already, or for a window, counted in buckets that have all left
- * their windows.
+ * The entry once reservation `id`, counted at `at` in epoch `epoch`, is given
+ * back, or undefined when it holds no such count: counted in an earlier run
+ * of the entry (it was reset, forgotten or written under another rule since),
+ * given back already, counted no later than the release markers the entry
+ * has let go, or for a window, counted in buckets that have all left their
+ * windows.
  *
  * Nothing needs the entry to remember what it counted, so a reservation is
  * given back however many others were counted after it: a window takes one
@@ -450,10 +466,17 @@ export function releaseAttempt(
   rule: LimitRule,
   state: RuleState,
   id: string,
-  at: number
+  at: number,
+  epoch: string
 ): RuleState | undefined {
-  if (at < state.since || state.released.includes(id)) return undefined;
-  const released = [...state.released, id].slice(-REMEMBERED_RELEASES);
+  if (
+    epoch !== state.epoch ||
+    at <= state.releasedThrough ||
+    state.released.some(([released]) => released === id)
+  ) {
+    return undefined;
+  }
+  const { released, releasedThrough } = remembered(state, id, at);
   if (rule.type === "window" && state.kind === "window") {
     const windows = state.windows.map((counts, index) =>
       takeFromWindow(counts, rule.windows[index]?.perMs ?? 1, at)
@@ -461,7 +484,7 @@ export function releaseAttempt(
     const took = windows.some(
       (counts, index) => total(counts) < total(state.windows[index] ?? counts)
     );
-    return took ? { ...state, windows, released } : undefined;
+    return took ? { ...state, windows, released, releasedThrough } : undefined;
   }
   if (rule.type === "backoff" && state.kind === "backoff") {
     if (state.count === 0) return undefined;
@@ -473,9 +496,33 @@ export function releaseAttempt(
       waitSetBy: lifts ? null : state.waitSetBy,
       recent: state.recent.filter(reservation => reservation !== id),
       released,
+      releasedThrough,
     };
   }
   return undefined;
+}
+
+/**
+ * The release markers once `id`, counted at `at`, is added: oldest first,
+ * and at most {@link REMEMBERED_RELEASES}. Markers let go past that raise
+ * `releasedThrough` to the latest time they held, so a reservation they
+ * covered is refused rather than given back again.
+ */
+function remembered(
+  state: RuleState,
+  id: string,
+  at: number
+): Pick<StateBase, "released" | "releasedThrough"> {
+  const released: Array<[string, number]> = [
+    ...state.released,
+    [id, at] as [string, number],
+  ].sort(([, a], [, b]) => a - b);
+  let releasedThrough = state.releasedThrough;
+  while (released.length > REMEMBERED_RELEASES) {
+    const [, dropped] = released.shift() ?? ["", 0];
+    releasedThrough = Math.max(releasedThrough, dropped);
+  }
+  return { released, releasedThrough };
 }
 
 /**

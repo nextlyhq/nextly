@@ -89,6 +89,12 @@ export interface AdmittedReservation {
   readonly at: number;
   /** Per entry, in the order given: an `enforce: false` entry may have had no room. */
   readonly entries: readonly EntryVerdict[];
+  /**
+   * Per entry, in the same order, which run of that entry it was counted in
+   * (empty where it was not counted), so a release gives back to that run
+   * only, never to one begun since by a reset. Opaque.
+   */
+  readonly epochs: readonly string[];
 }
 
 /**
@@ -374,7 +380,14 @@ export function createPluginLimiter(deps: PluginLimiterDeps): PluginLimiter {
                 write,
                 result: {
                   status: "admitted",
-                  reservation: { id, at: now, entries: verdicts },
+                  reservation: {
+                    id,
+                    at: now,
+                    entries: verdicts,
+                    epochs: verdicts.map((verdict, index) =>
+                      verdict.counted ? (after[index]?.epoch ?? "") : ""
+                    ),
+                  },
                 },
               };
             }
@@ -403,12 +416,27 @@ export function createPluginLimiter(deps: PluginLimiterDeps): PluginLimiter {
     async release(reservation, options) {
       const named = options?.rules;
       const done = givenBack.get(reservation);
-      const targets = reservation.entries.filter(
-        entry =>
-          entry.counted &&
-          (named === undefined || named.includes(entry.rule)) &&
-          !done?.has(entry.rule)
-      );
+      if (
+        !Array.isArray(reservation.epochs) ||
+        reservation.epochs.length !== reservation.entries.length
+      ) {
+        throw misuse(
+          plugin,
+          "a released reservation must be one `reserve` admitted."
+        );
+      }
+      const chosen = reservation.entries
+        .map((entry, index) => ({
+          entry,
+          epoch: reservation.epochs[index] ?? "",
+        }))
+        .filter(
+          ({ entry }) =>
+            entry.counted &&
+            (named === undefined || named.includes(entry.rule)) &&
+            !done?.has(entry.rule)
+        );
+      const targets = chosen.map(({ entry }) => entry);
       if (targets.length === 0) return { status: "done" };
       const checked = checkTargets(targets);
       if (!Number.isFinite(reservation.at)) {
@@ -423,7 +451,7 @@ export function createPluginLimiter(deps: PluginLimiterDeps): PluginLimiter {
           checked.map(entry => entry.key),
           (current, now) => {
             const write = new Map<string, StoredLimit | null>();
-            for (const entry of checked) {
+            for (const [index, entry] of checked.entries()) {
               const state = readRuleState(
                 entry.rule,
                 current.get(entry.key)?.value,
@@ -434,7 +462,8 @@ export function createPluginLimiter(deps: PluginLimiterDeps): PluginLimiter {
                 entry.rule,
                 state,
                 reservation.id,
-                reservation.at
+                reservation.at,
+                chosen[index]?.epoch ?? ""
               );
               if (released)
                 write.set(entry.key, stored(entry.rule, released, now));

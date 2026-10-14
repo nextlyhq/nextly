@@ -8,8 +8,15 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { setNextlyLogger } from "../../../observability/logger";
-import { limitStoreContract } from "../limit-store-contract";
-import { limitStoreUnavailableReason, type StoredLimit } from "../limit-store";
+import {
+  limitStoreContract,
+  LimitStoreContractViolation,
+} from "../limit-store-contract";
+import {
+  limitStoreUnavailableReason,
+  type LimitStore,
+  type StoredLimit,
+} from "../limit-store";
 import { createMemoryLimitStore } from "../memory-limit-store";
 
 /** Every line logged while a test runs, by level. */
@@ -46,6 +53,48 @@ describe("the memory store keeps the limit store contract", () => {
       contractCase.run({ first: store, second: store })
     );
   }
+});
+
+describe("the contract, for a store each instance holds its own of", () => {
+  // Two instances, each with its own memory store, as a site of two
+  // instances on the default store has them: `shared: false` promises
+  // nothing across instances, so the cases that span them hold within one.
+  const first = createMemoryLimitStore();
+  const second = createMemoryLimitStore();
+  for (const contractCase of limitStoreContract) {
+    it(contractCase.name, () => contractCase.run({ first, second }));
+  }
+});
+
+describe("the contract's sweep case", () => {
+  it("fails a store that reports what expired but removes none of it", async () => {
+    const memory = createMemoryLimitStore();
+    // Says how many entries have expired, and leaves every one in place.
+    const reportsOnly: LimitStore = {
+      shared: false,
+      update: (keys, apply) => memory.update(keys, apply),
+      read: keys => memory.read(keys),
+      sweep: async () => {
+        const all = await memory.read(sweptKeys);
+        return sweptKeys.length - all.size;
+      },
+    };
+    const sweptKeys: string[] = [];
+    const tracking: LimitStore = {
+      ...reportsOnly,
+      update: (keys, apply) => {
+        sweptKeys.push(...keys);
+        return reportsOnly.update(keys, apply);
+      },
+    };
+    const sweepCase = limitStoreContract.find(contractCase =>
+      contractCase.name.startsWith("a sweep removes")
+    );
+
+    await expect(
+      sweepCase?.run({ first: tracking, second: tracking })
+    ).rejects.toBeInstanceOf(LimitStoreContractViolation);
+  });
 });
 
 describe("the memory store's bound", () => {
