@@ -538,12 +538,19 @@ export function createOneTimeSecrets(
       assertNoOpenTransaction(adapter, "secrets.consumeCode");
       const liveKey = liveKeyFor(purpose, subject);
 
+      // The live code this attempt is judged against: the first one read. A
+      // retry that finds another in its place lost to a replacing mint, and
+      // the submitted code answered the earlier code, not this one: it is
+      // neither accepted nor charged against the replacement.
+      let judged: string | undefined;
       for (let attempt = 0; attempt < 32; attempt++) {
         const at = now();
         const [row] = await adapter.select<SecretRow>(ONE_TIME_SECRETS_TABLE, {
           where: { and: [{ column: "liveKey", op: "=", value: liveKey }] },
         });
         if (row === undefined) return { ok: false, reason: await noLiveCode() };
+        judged ??= row.id;
+        if (row.id !== judged) return { ok: false, reason: "none" };
         if (row.expiresAt.getTime() <= at.getTime()) {
           return { ok: false, reason: "expired" };
         }
