@@ -618,6 +618,18 @@ export class PostgresAdapter extends DrizzleAdapter {
     callback: (ctx: TransactionContext) => Promise<T>,
     options?: TransactionOptions
   ): Promise<T> {
+    // The calling flow's open transaction from BEGIN until COMMIT or ROLLBACK
+    // has run, for `transactionOpenInFlow`.
+    return this.runInFlowTransaction(() =>
+      this.runTransactionAttempts(callback, options)
+    );
+  }
+
+  /** The attempts `transaction` makes, each on a connection of its own. */
+  private async runTransactionAttempts<T>(
+    callback: (ctx: TransactionContext) => Promise<T>,
+    options?: TransactionOptions
+  ): Promise<T> {
     const pool = this.ensurePool();
     const maxAttempts = (options?.retryCount ?? 0) + 1;
     const retryDelayMs = options?.retryDelayMs ?? 100;
@@ -847,12 +859,15 @@ export class PostgresAdapter extends DrizzleAdapter {
     // registry) is what powers db.query in v1; a bare instance serves the
     // select-builder CRUD paths.
     if (!relations) {
-      this.drizzleBare ??= drizzle({ client: pool });
+      // Its `transaction` counts for `transactionOpenInFlow`, as the adapter's does.
+      this.drizzleBare ??= this.trackFlowTransactions(
+        drizzle({ client: pool })
+      );
       return this.drizzleBare as T;
     }
     let cached = this.drizzleByRelations.get(relations);
     if (!cached) {
-      cached = drizzle({ client: pool, relations });
+      cached = this.trackFlowTransactions(drizzle({ client: pool, relations }));
       this.drizzleByRelations.set(relations, cached);
     }
     return cached as T;

@@ -15,6 +15,8 @@ import {
   clearCartCookieHeader,
   readCartToken,
 } from "../cart/token";
+import { checkoutAddressesSchema } from "../checkout/addresses";
+import type { CheckoutService } from "../checkout/checkout-service";
 import { parseRequest, readJsonBody } from "../request-input";
 
 import {
@@ -32,6 +34,7 @@ export interface StorefrontRuntime {
   readonly writeLimit: { readonly max: number; readonly windowMs: number };
   cart(ctx: PluginContext): CartService;
   catalogue(ctx: PluginContext): CatalogueService;
+  checkout(ctx: PluginContext): CheckoutService;
 }
 
 /**
@@ -51,6 +54,19 @@ const lineBody = z.object({
   reference: z.string(),
   quantity: z.number(),
 });
+
+// The fields completion takes; anything else a page sends is dropped here.
+const completeBody = z.object({
+  quoteKey: z.string(),
+  email: z.string(),
+  addresses: checkoutAddressesSchema,
+});
+
+/**
+ * How often one client may complete a checkout: each completion can create
+ * an order and start a payment, so the allowance is a tight one.
+ */
+const COMPLETE_LIMIT = { max: 10, windowMs: 60_000 };
 
 /**
  * The storefront's REST routes, mirroring the typed server functions.
@@ -193,6 +209,42 @@ export function storefrontRoutes(runtime: StorefrontRuntime): PluginRoute[] {
       },
     },
   ];
+
+  routes.push(
+    {
+      method: "POST",
+      path: "/checkout/quote",
+      public: true,
+      noStore: true,
+      rateLimit: { ...runtime.writeLimit },
+      handler: async (req, ctx) => {
+        await assertSameSiteWrite(req, ctx);
+        return respondDoc(
+          await runtime
+            .checkout(ctx)
+            .quote({ token: readCartToken(req, secure) })
+        );
+      },
+    },
+    {
+      method: "POST",
+      path: "/checkout/complete",
+      public: true,
+      noStore: true,
+      rateLimit: COMPLETE_LIMIT,
+      handler: async (req, ctx) => {
+        await assertSameSiteWrite(req, ctx);
+        const body = parseRequest(completeBody, await readJsonBody(req));
+        const completed = await runtime.checkout(ctx).complete({
+          token: readCartToken(req, secure),
+          quoteKey: body.quoteKey,
+          email: body.email,
+          addresses: body.addresses,
+        });
+        return respondMutation("Order placed.", completed);
+      },
+    }
+  );
 
   if (runtime.listable) {
     routes.push({

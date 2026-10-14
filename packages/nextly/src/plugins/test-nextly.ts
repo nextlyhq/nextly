@@ -27,6 +27,7 @@ import {
 import {
   clearServices,
   getService,
+  type NextlyServiceConfig,
   registerServices,
   shutdownServices,
 } from "../di/register";
@@ -294,10 +295,7 @@ export interface CreateTestNextlyOptions {
   /** The app's `security` block, as `nextly.config.ts` would give it. */
   security?: SecurityConfig;
   /** An app's password hasher, as `getNextly()` takes it. */
-  passwordHasher?: {
-    hash(password: string): Promise<string>;
-    verify(password: string, hash: string): Promise<boolean>;
-  };
+  passwordHasher?: NextlyServiceConfig["passwordHasher"];
 }
 
 export interface TestNextly {

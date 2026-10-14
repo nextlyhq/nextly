@@ -583,4 +583,32 @@ describe("the products source", () => {
     }
     expect(NextlyError.isCode(error, "COMMERCE_UNKNOWN_CURRENCY")).toBe(true);
   });
+
+  it("refuses options it cannot parse as a validation error, never a crash", () => {
+    const { collections } = fakeCollections([]);
+    // Reached as server code without types would call it.
+    const create: { call(options: unknown): unknown } = {
+      call: createProductsSource,
+    };
+    for (const options of [
+      null,
+      { slug: "products", currency: "USD" },
+      { collections, slug: "", currency: "USD" },
+      { collections, slug: "products", currency: "USD", cache: true },
+    ]) {
+      let error: unknown;
+      try {
+        create.call(options);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(
+        NextlyError.isCode(error, "VALIDATION_ERROR"),
+        JSON.stringify(options)
+      ).toBe(true);
+    }
+    expect(
+      create.call({ collections, slug: "products", currency: "USD" })
+    ).toMatchObject({ id: expect.any(String) });
+  });
 });

@@ -79,6 +79,10 @@ export default definePlugin({
   verify against each other's hash, and a composed and a decomposed form of the
   same text verify alike. Compatibility-distinct characters stay distinct: a
   full-width letter is not its ordinary form.
+- **Well-formed Unicode only.** A password holding a lone surrogate, as JSON
+  can carry one, is refused by `hash` and `check` with a validation error and
+  never verifies: encoded to UTF-8, every lone surrogate becomes the same
+  character, so two different passwords would otherwise hash alike.
 - **A ceiling, never a cut.** A password longer than `ceiling` (256 code points)
   throws `PasswordTooLongError`, and `verify` answers false for one; neither ever
   cuts a password to fit.
@@ -152,11 +156,18 @@ security: {
   prefix and answers with the suffixes it knows.
 
 Only the first 5 hex digits (20 bits) of the password's SHA-1 ever leave the
-process. A range service is asked for padded answers, so the size of the answer
+process. A range service is asked with a user agent naming Nextly, as Have I
+Been Pwned asks of every client, and for padded answers, so the size of the answer
 says nothing about the prefix. When the source fails, answers with an error, or
-does not answer within `timeoutMs`, the password is accepted with
+does not answer within `timeoutMs` (1 to 60,000 ms; another value is named at boot and replaced by the default of 2,000), or answers with anything that is not a list of suffixes, the password is accepted with
 `breachedCheck: "unavailable"`: a source that is down neither locks people out
 nor pretends to have checked. Decide what your plugin does with an unchecked
 password; asking again on the next sign-in is a reasonable choice.
+
+### Building a context by hand
+
+`ctx.security` is a required member of `PluginContext`. A context from
+`createTestNextly` (`@nextlyhq/plugin-sdk/testing`) has the real helpers; a
+test double you build yourself needs a `security` member of its own.
 
 See also: [Plugin security](/docs/plugins/security) · [Auth extensibility](/docs/plugins/auth) · [API stability](/docs/plugins/stability).

@@ -185,7 +185,7 @@ import {
   validateCrossPluginRelations,
 } from "../plugins/schema/validate-relations";
 import { extendTargetUnknownError } from "../plugins/schema-error";
-import { breachedPasswordsSourceWarning } from "../plugins/security/breached-passwords";
+import { breachedPasswordsWarnings } from "../plugins/security/breached-passwords";
 import {
   clearPluginServices,
   registerPluginService,
@@ -2372,14 +2372,6 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
   )) {
     (config.logger ?? consoleLogger).warn(warning);
   }
-  // A breached-password source that will never be asked says so here, once,
-  // rather than leaving every plugin's check to answer "unchecked" in silence.
-  const breachedSourceWarning = breachedPasswordsSourceWarning(
-    config.security?.breachedPasswords
-  );
-  if (breachedSourceWarning) {
-    (config.logger ?? consoleLogger).warn(breachedSourceWarning);
-  }
   const resolvedConfig = setupTransformerInput(config, resolvedPlugins);
 
   // ----------------------------------------
@@ -2391,6 +2383,15 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
     config,
     await applyPluginConfigTransformers(resolvedConfig)
   );
+  // A breached-password configuration the check cannot honour says so here,
+  // once, rather than leaving every plugin's check to answer "unchecked" in
+  // silence. Read from the transformed config, which is the one the plugin
+  // contexts receive: a `setup` transformer may have set it.
+  for (const warning of breachedPasswordsWarnings(
+    setupConfig.security?.breachedPasswords
+  )) {
+    (config.logger ?? consoleLogger).warn(warning);
+  }
 
   // RE-RESOLVED in full, not merely re-checked. A `setup` transformer may
   // add, rename or replace entries in `plugins`, and the rest of the boot

@@ -164,3 +164,125 @@ describe("collectPluginRoutes", () => {
     ).toEqual([]);
   });
 });
+
+describe("a route asking for a plugin's kind of signed-in person", () => {
+  /** A plugin registering `accounts:account`, with one route to judge. */
+  function accounts(
+    route: Record<string, unknown>,
+    enabled?: boolean
+  ): PluginDefinition {
+    return {
+      name: "accounts",
+      version: "1.0.0",
+      nextly: ">=0.0.1",
+      ...(enabled === undefined ? {} : { enabled }),
+      contributes: {
+        principals: [
+          { name: "account", attributes: {}, resolve: async () => null },
+        ],
+        routes: [{ method: "POST", path: "/cart", handler: h, ...route }],
+      },
+    } as unknown as PluginDefinition;
+  }
+
+  /** Why collection refused, or that it did not. */
+  function refusal(plugins: PluginDefinition[]): string {
+    try {
+      collectPluginRoutes(plugins);
+    } catch (e) {
+      return (e as NextlyError).logMessage ?? "";
+    }
+    return "collected";
+  }
+
+  it("is collected when a plugin registers the kind", () => {
+    // The control for every refusal below.
+    expect(
+      refusal([accounts({ principal: { kind: "accounts:account" } })])
+    ).toBe("collected");
+  });
+
+  it("is collected when it asks for another plugin's kind", () => {
+    const shop = {
+      name: "shop",
+      version: "1.0.0",
+      nextly: ">=0.0.1",
+      contributes: {
+        routes: [
+          {
+            method: "GET",
+            path: "/orders",
+            handler: h,
+            principal: { kind: "accounts:account" },
+          },
+        ],
+      },
+    } as unknown as PluginDefinition;
+    expect(refusal([accounts({}), shop])).toBe("collected");
+  });
+
+  it("is refused when it is also public", () => {
+    expect(
+      refusal([
+        accounts({ principal: { kind: "accounts:account" }, public: true }),
+      ])
+    ).toMatch(/principal cannot be combined with public: true/);
+  });
+
+  it.each([
+    ["a fixed slug", "update-carts"],
+    ["a resolver", () => "update-carts"],
+  ])("is refused when it also names a permission, as %s", (_l, permission) => {
+    expect(
+      refusal([
+        accounts({
+          principal: { kind: "accounts:account" },
+          requiredPermission: permission,
+        }),
+      ])
+    ).toMatch(/principal cannot be combined with requiredPermission/);
+  });
+
+  it("is refused when no plugin registers the kind", () => {
+    expect(
+      refusal([accounts({ principal: { kind: "accounts:acount" } })])
+    ).toMatch(/"accounts:acount", which no enabled plugin registers/);
+  });
+
+  it("is refused when only a disabled plugin registers the kind", () => {
+    const disabledAccounts = {
+      ...accounts({}, false),
+      name: "accounts",
+    } as PluginDefinition;
+    const shop = {
+      name: "shop",
+      version: "1.0.0",
+      nextly: ">=0.0.1",
+      contributes: {
+        routes: [
+          {
+            method: "GET",
+            path: "/orders",
+            handler: h,
+            principal: { kind: "accounts:account" },
+          },
+        ],
+      },
+    } as unknown as PluginDefinition;
+    expect(refusal([disabledAccounts, shop])).toMatch(
+      /which no enabled plugin registers/
+    );
+  });
+
+  it.each([
+    ["a bare string", "accounts:account"],
+    ["an unknown key", { kind: "accounts:account", optional: true }],
+    [
+      "a required that is not a boolean",
+      { kind: "accounts:account", required: "no" },
+    ],
+  ])("is refused when principal is %s", (_l, principal) => {
+    expect(refusal([accounts({ principal })])).toMatch(/principal/);
+    expect(refusal([accounts({ principal })])).not.toBe("collected");
+  });
+});

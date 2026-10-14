@@ -57,6 +57,13 @@ export interface TestPaymentProviderOptions {
   readonly webhookSecret?: string;
   /** The clock, in milliseconds. Defaults to `Date.now`. */
   readonly now?: () => number;
+  /**
+   * How a refund is answered: `succeeded` at once (the default), or `pending`,
+   * as a provider whose refunds settle later answers. A pending refund holds
+   * its amount back from what is left to refund, but is not yet in the
+   * payment's refunded amount.
+   */
+  readonly refundStatus?: "succeeded" | "pending";
 }
 
 /**
@@ -112,6 +119,8 @@ interface PaymentRecord {
   amount: number;
   captured: number;
   refunded: number;
+  /** Refunds answered as pending: held back, not yet refunded. */
+  refundsPending: number;
   capture: "now" | "later";
   clientSecret: string;
   failureCode?: string;
@@ -255,6 +264,7 @@ export function createTestPaymentProvider(
       amount: input.amount.amount,
       captured: 0,
       refunded: 0,
+      refundsPending: 0,
       capture: input.capture,
       clientSecret: `${providerReference}_secret_${randomBytes(8).toString("hex")}`,
     };
@@ -319,18 +329,25 @@ export function createTestPaymentProvider(
     return view(p);
   }
 
+  // Every status before paid can be cancelled, as the cancel capability
+  // promises for a payment not yet paid: a bank debit still processing too.
   function cancel(input: PaymentOperationInput): ProviderPayment {
     const p = record(input.providerReference);
-    requireStatus(p, ["pending", "requires_action", "authorised"], "cancel");
+    requireStatus(
+      p,
+      ["pending", "requires_action", "processing", "authorised"],
+      "cancel"
+    );
     p.status = "cancelled";
     return view(p);
   }
 
   function refund(input: RefundPaymentInput): ProviderRefund {
+    requireRefundReference(input.reference);
     const p = record(input.providerReference);
     requireStatus(p, ["paid"], "refund");
     assertSameCurrency(input.amount, money(0, p.currency));
-    const refundable = p.captured - p.refunded;
+    const refundable = p.captured - p.refunded - p.refundsPending;
     if (input.amount.amount <= 0 || input.amount.amount > refundable) {
       throw commerceError("COMMERCE_PAYMENT_STATE", {
         provider: id,
@@ -344,13 +361,15 @@ export function createTestPaymentProvider(
         operation: "partial refund",
       });
     }
-    p.refunded += input.amount.amount;
+    const status = options.refundStatus ?? "succeeded";
+    if (status === "pending") p.refundsPending += input.amount.amount;
+    else p.refunded += input.amount.amount;
     const r: ProviderRefund = {
       providerRefundReference: nextId("ref"),
       providerReference: p.providerReference,
       reference: input.reference,
       amount: money(input.amount.amount, p.currency),
-      status: "succeeded",
+      status,
     };
     refunds.set(r.providerRefundReference, r);
     return r;
@@ -500,6 +519,25 @@ export function createTestPaymentProvider(
   // override that makes it so fails here rather than in the test using it.
   assertPaymentProvider(provider);
   return { provider, control };
+}
+
+/**
+ * Refuse a refund without commerce's reference, before anything changes: the
+ * refund could never be found again by it, and the contract's refund answer
+ * requires one.
+ */
+function requireRefundReference(reference: string): void {
+  if (reference.length === 0 || reference.length > 255) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "reference",
+          code: "INVALID",
+          message: "A refund needs commerce's reference, up to 255 characters.",
+        },
+      ],
+    });
+  }
 }
 
 /**

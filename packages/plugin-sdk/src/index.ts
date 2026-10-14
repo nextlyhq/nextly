@@ -170,6 +170,34 @@ export type {
 } from "nextly";
 
 /**
+ * Kinds of signed-in person a plugin defines: a shop's customers, a site's
+ * members, anyone who signs in without being staff.
+ * @experimental `PrincipalKindDefinition` and `PrincipalKindContribution`
+ *   (`contributes.principals`) with their attribute and record types; `PluginRoutePrincipal` (a route's
+ *   `principal`); `Principal`, the person core hands to `ctx.principal`;
+ *   `PrincipalRef`, a person named by kind and id; `PluginPrincipalsApi`
+ *   (`ctx.principals`) and `NextlyPrincipals` (`nextly.principals`). Meant to
+ *   become stable once the feature is complete (see STABILITY.md).
+ */
+export type {
+  NextlyPrincipals,
+  PluginPrincipalsApi,
+  PluginRoutePrincipal,
+  Principal,
+  PrincipalAnswer,
+  PrincipalAttributeDescriptors,
+  PrincipalAttributes,
+  PrincipalAttributesOf,
+  PrincipalAttributeType,
+  PrincipalAttributeTypeOf,
+  PrincipalAttributeValue,
+  PrincipalKindContribution,
+  PrincipalKindDefinition,
+  PrincipalRecord,
+  PrincipalRef,
+} from "nextly";
+
+/**
  * Core's security helpers, lent to a plugin for the people it signs in itself.
  * @experimental `PluginSecurityApi` (`ctx.security`); `PasswordHelper`
  *   (`ctx.security.passwords`) with `PasswordRules`, `PasswordCheck` and

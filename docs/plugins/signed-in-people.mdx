@@ -1,0 +1,161 @@
+---
+title: Signed-in people of your own kind
+description: Let people who are not staff sign in through your plugin — a shop's customers, a site's members — without ever reaching the admin.
+---
+
+> **Alpha (`0.x`) — `@experimental`.** Plugin-defined kinds of signed-in person are
+> new. Recognising a person on a request works today; access rules, the Direct
+> API acting as a person, and audit records naming one are still to come. Pin your
+> versions.
+
+Nextly's own sign-in is for staff: the people who use the admin. A plugin that
+signs in anyone else — a shop's customers, a site's members — registers its own
+**kind** of signed-in person. Your plugin owns everything about that kind's
+sessions: sign-up, sign-in, cookies, password resets. Core only asks your plugin
+who is signed in, and only where your code asks for that kind.
+
+Such a person:
+
+- never reaches the admin, core's REST API, or any route that does not ask for
+  their kind;
+- holds no role and no permission, and cannot be given one;
+- is never taken for a staff user, even when their id matches one.
+
+## Register a kind
+
+```ts
+import { definePlugin, type PrincipalKindDefinition } from "@nextlyhq/plugin-sdk";
+
+type Account = { verified: boolean; plan: string | null };
+
+const account: PrincipalKindDefinition<Account> = {
+  name: "account",
+  attributes: { verified: "boolean", plan: "string" },
+  async resolve(request) {
+    const session = await readMySession(request); // your plugin's own session
+    if (!session) return null;
+    return {
+      id: session.accountId,
+      attributes: { verified: session.verified, plan: session.plan },
+    };
+  },
+};
+
+export default definePlugin({
+  name: "@acme/accounts",
+  // ...
+  contributes: { principals: [account] },
+});
+```
+
+Core names the kind `<plugin>:<name>`, where `<plugin>` is your plugin's slug:
+`@acme/accounts` registers `acme-accounts:account`. That full name is how a
+route and server code ask for it.
+
+| Field | Rules |
+|---|---|
+| `name` | A lowercase letter, then up to 31 lowercase letters, digits or dashes. |
+| `attributes` | Every attribute the kind exposes, with its type: `"boolean"`, `"string"` or `"number"`. Typed from your attribute type, so `verified: "string"` does not compile for a boolean. |
+| `resolve(request)` | Who of this kind is signed in on the request, or `null`. |
+| `lookup(id)` | Optional. The person with this id, for running as them without a request. |
+
+The app refuses to start on a kind whose name, attributes or resolver cannot be
+used, or whose full name another plugin's kind already holds.
+
+### What `resolve` must answer
+
+- **`null` for nobody.** A resolver that throws also counts as nobody. The throw is
+  logged with the error's name only, never its message, because a message can
+  quote the token it failed to read.
+- **An id** that is a non-empty string of at most 128 characters, unique within
+  the kind, and never reused once the person is deleted. An id outside those
+  bounds counts as nobody, and a warning says why.
+- **Every declared attribute**, each with a value of its declared type or `null`
+  for "not known". A missing attribute or a value of the wrong type counts as
+  nobody. An attribute you did not declare is dropped.
+
+`resolve` reads cookies and headers. It is handed the request without its body,
+so reading the body there cannot take it from your handler.
+
+Core calls `resolve` only where an entry point asks for the kind, and at most
+once per request, whoever asks: the route, its handler and any server code
+asking again all see one answer. No staff path ever calls it.
+
+## Serve the person from a route
+
+Add `principal` to a route:
+
+```ts
+{
+  method: "GET",
+  path: "/me",
+  principal: { kind: "acme-accounts:account" },
+  handler: async (req, ctx) => {
+    // ctx.principal is the signed-in account; ctx.user and ctx.caller are null.
+    return Response.json({ id: ctx.principal?.id });
+  },
+}
+```
+
+A route that asks for a kind reads neither the staff session nor an API key. Its
+handler sees the person or nobody, never staff, even in a browser that is signed in
+to the admin as well. `ctx.auth.currentUser` answers `null` there too.
+
+- With `required` left at its default (`true`), a request with no such person is
+  refused with `401 AUTH_REQUIRED`, the same answer any route gives an
+  unauthenticated caller.
+- With `required: false`, the handler runs, and `ctx.principal` is `null` when
+  nobody is signed in.
+- `principal` cannot be combined with `public` or `requiredPermission`: the app
+  refuses to start on either pair, and on a kind no plugin registers.
+
+### Writes from another site
+
+A person's writes take the route's [cross-site check](/docs/plugins/security#route-protections)
+exactly as a staff session cookie's do: the origin by default, a token with
+`csrf: true`, and a refusal with `csrf: false`. A request carrying an
+`Authorization: Bearer` header is exempt, because a page on another site cannot
+make a browser send one.
+
+**Leave `csrf` at its default for routes your site's pages call.** `csrf: true`
+asks for core's admin token, whose cookie lives on `/admin`, so a page outside the
+admin cannot send it. If your plugin wants a token on its own forms, mint and
+check one in the handler.
+
+## Ask from server code
+
+From your plugin's own code, `ctx.principals` reaches your own kinds by the name
+you gave them. It is present when your plugin registers a kind:
+
+```ts
+const account = await ctx.principals?.fromRequest(request, "account");
+```
+
+From the app's own server code, `nextly.principals` takes the full kind:
+
+```ts
+const nextly = await getNextly({ config });
+const account = await nextly.principals.fromRequest(request, "acme-accounts:account");
+```
+
+Both share the request's answer with every other entry point asking for the same
+kind. Both answer `null` to a write from another site, as `ctx.auth.currentUser`
+does, unless the request carries a `Bearer` token. Asking for a kind nobody
+registered throws, rather than answering nobody.
+
+## A person is not a staff user
+
+A person's id never goes where a staff user's id goes. Do not pass it as a
+`userId`, an `actorUserId`, or to `ctx.auth.completeLogin`: `completeLogin` signs
+in a **staff** account, and a person's id there names whichever staff user happens
+to hold the same id. Keep your people in your own collections, keyed by the
+person's kind and id.
+
+## Stability
+
+Everything here is `@experimental` until the feature is complete. These are meant
+to become stable: a definition's fields and their meaning, the `<plugin>:<name>`
+naming, what `resolve` must answer, the id bounds, a route's `principal` with
+`required`, `ctx.principal`, `fromRequest`, `Principal` and `PrincipalRef`. The
+`contributes.principals` key, where `nextly.principals` hangs, and the spelling of
+a route's `principal` may still change.

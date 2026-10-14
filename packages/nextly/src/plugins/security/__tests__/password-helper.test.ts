@@ -173,7 +173,11 @@ describe("hashes from other settings and formats", () => {
     expect(warn).toHaveBeenCalledTimes(4);
     const logged = JSON.stringify(warn.mock.calls);
     expect(logged).not.toContain(password);
-    expect(logged).not.toContain(BCRYPT_HASH);
+    // Every stored value, not only the bcrypt one, so a log that redacts one
+    // kind of hash and prints the others is caught.
+    for (const stored of [BCRYPT_HASH, "$scrypt$ln=15", unbounded]) {
+      expect(logged).not.toContain(stored);
+    }
     expect(logged).not.toContain("R9h/cIPz0gi");
   });
 
@@ -198,6 +202,28 @@ describe("hashes from other settings and formats", () => {
       0.35 * median(real)
     );
     expect(await passwords.verify("a guess at a password", null)).toBe(false);
+  });
+});
+
+describe("ill-formed Unicode", () => {
+  // JSON can carry a lone surrogate as an escape. UTF-8 encoding replaces each
+  // with U+FFFD, so two different passwords would hash alike.
+  const lone = `${"x".repeat(10)}\ud800`;
+  const replaced = `${"x".repeat(10)}\ufffd`;
+
+  it("is refused by hash and check with a validation error", async () => {
+    const passwords = helper();
+    for (const attempt of [passwords.hash(lone), passwords.check(lone)]) {
+      const error = await attempt.catch((caught: unknown) => caught);
+      expect(JSON.stringify(error)).toMatch(/not well-formed Unicode/);
+    }
+  });
+
+  it("never verifies against the hash of the character it would collapse to", async () => {
+    const passwords = helper();
+    const hash = await passwords.hash(replaced);
+    expect(await passwords.verify(replaced, hash)).toBe(true);
+    expect(await passwords.verify(lone, hash)).toBe(false);
   });
 });
 

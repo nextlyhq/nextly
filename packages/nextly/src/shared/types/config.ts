@@ -469,7 +469,8 @@ export interface BreachedPasswordsConfig {
     | { range(prefix: string): Promise<readonly string[]> };
   /**
    * How long a check waits for the source before it answers that the
-   * password went unchecked.
+   * password went unchecked: a whole number of milliseconds from 1 to 60000.
+   * Any other value is named at boot and replaced by the default.
    *
    * @default 2000
    */

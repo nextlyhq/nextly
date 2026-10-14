@@ -62,6 +62,8 @@ import { RoleService } from "../domains/auth/services/role-service";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import { NextlyError } from "../errors/nextly-error";
 import { assertBootMigrationsSettled } from "../init/boot-migrations-gate";
+import { createNextlyPrincipals } from "../plugins/principals/api";
+import type { NextlyPrincipals } from "../plugins/principals/types";
 import { buildPluginServicesNamespace } from "../plugins/services/plugin-services-registry";
 import type { CollectionsHandler } from "../services/collections-handler";
 import type { EmailProviderService } from "../services/email/email-provider-service";
@@ -263,6 +265,8 @@ export class Nextly implements NextlyContext {
   public readonly apiKeys: ApiKeysNamespace;
   public readonly jobs: JobsNamespace;
   public readonly releases: ReleasesNamespace;
+  /** @experimental Recognising a plugin's kind of signed-in person. */
+  public readonly principals: NextlyPrincipals;
 
   /**
    * Create a new Nextly instance.
@@ -289,6 +293,7 @@ export class Nextly implements NextlyContext {
     this.apiKeys = createApiKeysNamespace(this);
     this.jobs = createJobsNamespace();
     this.releases = createReleasesNamespace(this);
+    this.principals = createNextlyPrincipals();
   }
 
   /**
@@ -840,6 +845,11 @@ export const nextly = {
   jobs: {
     queue: <TTask extends JobSlug>(args: QueueJobArgs<TTask>) =>
       requireNextly().jobs.queue(args),
+  },
+
+  principals: {
+    fromRequest: (request: Request, kind: string) =>
+      requireNextly().principals.fromRequest(request, kind),
   },
 
   releases: {

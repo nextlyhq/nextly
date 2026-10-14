@@ -3,6 +3,7 @@ import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { AuthUser } from "../../types/auth";
 import type { PermissionSlug } from "../contributions";
 import type { PluginContext } from "../plugin-context";
+import type { Principal, PluginRoutePrincipal } from "../principals/types";
 
 import type { PluginRoutePermissionResolver } from "./route-permission";
 
@@ -20,6 +21,7 @@ export type RouteMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 export interface PluginRouteContext extends PluginContext {
   /**
    * The authenticated user, or `null` for a `public` route reached without a
+   * session and for a route that asks for a `principal`, which reads no staff
    * session. Pass it to secure-by-default services as `{ as: 'user', user }`.
    */
   user: AuthUser | null;
@@ -38,7 +40,8 @@ export interface PluginRouteContext extends PluginContext {
   authenticatedScope?: AuthenticatedScope;
   /**
    * What the caller may DO, as opposed to who they are. `null` on a `public`
-   * route reached without a session, exactly like `user`.
+   * route reached without a session and on a route that asks for a
+   * `principal`, exactly like `user`.
    *
    * Distinct from `authenticatedScope` above, which is the raw grant an API key
    * arrived with and is `undefined` for a session — correctly, since a session's
@@ -53,6 +56,12 @@ export interface PluginRouteContext extends PluginContext {
    * of those sites, which is the shape that goes missing without failing.
    */
   caller: PluginRouteCaller | null;
+  /**
+   * @experimental The signed-in person of the kind the route asks for in
+   * `principal`, or `null`: on a route that asks for none, and on one whose
+   * `principal` is not `required` when nobody of that kind is signed in.
+   */
+  principal: Principal | null;
   /** Path parameters captured from `:param` segments in the route's path. */
   params: Record<string, string>;
 }
@@ -196,6 +205,22 @@ export interface PluginRoute {
   requiredPermission?: PermissionSlug | PluginRoutePermissionResolver;
   /** Opt out of auth — the route is publicly callable. */
   public?: boolean;
+  /**
+   * @experimental Serve a plugin's kind of signed-in person instead of staff.
+   *
+   * The route reads neither the staff session nor an API key: its handler
+   * receives the person as `ctx.principal`, with `user` and `caller` null,
+   * however the browser is signed in to the admin. With `required` left at
+   * its default, a request with no such person is refused as any route
+   * refuses an unauthenticated one. A person's writes take the route's
+   * `csrf` check as a session cookie's do, unless the request carries a
+   * `Bearer` token.
+   *
+   * Cannot be combined with `public` or `requiredPermission`: a person holds
+   * no permission, and a public route authenticates nobody. Either pair, or
+   * a kind no plugin registers, stops the app from starting.
+   */
+  principal?: PluginRoutePrincipal;
   /**
    * @experimental Apply a per-IP rate limit, counted for THIS route alone.
    *

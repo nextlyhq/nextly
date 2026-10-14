@@ -625,6 +625,22 @@ export class SqliteAdapter extends DrizzleAdapter {
   }
 
   /**
+   * Whether the calling async flow is inside a transaction that has not
+   * finished, judged from the transaction this flow was started inside,
+   * never from the connection: another request's open transaction answers
+   * false here, where its own `transaction()` queues behind that one.
+   *
+   * A flow started inside a transaction, even inside a savepoint that has
+   * since released, stays inside it until its outermost transaction has
+   * committed or rolled back: until then whatever it writes on the one
+   * connection lands in that transaction.
+   */
+  override transactionOpenInFlow(): boolean {
+    const own = this.transactionScope.getStore();
+    return own !== undefined && !outermost(own).finished;
+  }
+
+  /**
    * The scope a `transaction()` call made here nests in, or none when it
    * opens a transaction of its own.
    *
