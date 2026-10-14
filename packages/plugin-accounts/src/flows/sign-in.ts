@@ -1,28 +1,21 @@
-import { LIMIT_RULES } from "../core/limit-rules";
-import type { AdmittedReservation, LimitEntry } from "../core/ports";
 import {
   accountByAddress,
-  claimResetRequiredEmail,
   normaliseAddress,
-  recordFailedPassword,
   writeAtVersion,
   type AccountRow,
 } from "../storage/accounts";
-import {
-  cappedUntil,
-  chargeKnownBrowser,
-  knownBrowserById,
-  recordFailedCheck,
-  rememberBrowser,
-  type KnownBrowserRow,
-} from "../storage/known-browsers";
+import { rememberBrowser } from "../storage/known-browsers";
 import { startSession } from "../storage/sessions";
 
-import { MINUTE, sessionLimits, type FlowDeps } from "./deps";
+import { sessionLimits, type FlowDeps } from "./deps";
 import { ADDRESS } from "./input";
-import { validTokens } from "./known-tokens";
-import { pageLink } from "./links";
-import { PURPOSES } from "./purposes";
+import {
+  attemptPassword,
+  attemptSucceeded,
+  WRONG,
+  type AttemptRefusal,
+  type CarriedToken,
+} from "./password-attempt";
 import type { StartedSession } from "./verify";
 
 export interface SignInInput {
@@ -37,39 +30,20 @@ export interface SignInInput {
 export type SignInResult =
   /** Signed in: the session's token, and the token that marks this browser known to the account. */
   | { status: "signed-in"; session: StartedSession; knownBrowserToken: string }
-  /** The address or the password is wrong, or a refusal that must look like it. */
-  | { status: "refused"; reason: "wrong-credentials" }
-  | { status: "refused"; reason: "wait"; retryAfterMs: number }
+  | AttemptRefusal
   /** Said only once the password is proven. */
-  | { status: "refused"; reason: "deactivated" | "unverified" }
-  | { status: "refused"; reason: "try-again" };
-
-const WRONG: SignInResult = { status: "refused", reason: "wrong-credentials" };
-
-interface CarriedToken {
-  token: string;
-  row: KnownBrowserRow;
-  /** Whether this attempt took one of the token's slots under its cap. */
-  underCap: boolean;
-}
+  | { status: "refused"; reason: "deactivated" | "unverified" };
 
 /** Ends the sign-in's transaction with "try again", rolling it back. */
 class VersionMoved extends Error {}
 
 /**
- * Signs an account in. Every known-browser token the attempt carries is
- * charged before it starts, whatever address it names. The attempt then
- * takes its place in the address's count and the client's, before any
- * password check, so a burst on any number of instances starts no more
- * checks than the waits allow: the address is counted only when neither it
- * nor the client is waiting as the attempt starts, and the client always.
- * The account's own token, under its cap, skips both waits.
- *
- * A wait refusing an attempt that carries a valid token is answered as a
- * wrong password, in a check's time but computing nothing, so no answer
- * shows whose a token is. The password is checked through core, against a
- * decoy for an address with no account. A deactivated or, where required,
- * unverified account is told so only once its password is proven.
+ * Signs an account in: the password attempt is counted and checked as
+ * `attemptPassword` says, so no answer shows whose a known browser is. A
+ * deactivated or, where required, unverified account is told so only once
+ * its password is proven, and past its failures in a row only a known
+ * browser signs in. A sign-in ends the address's waits and is given back
+ * to the client.
  */
 export async function signIn(
   deps: FlowDeps,
@@ -81,155 +55,30 @@ export async function signIn(
     return WRONG;
   }
   const now = deps.now();
-  const addressKey = normaliseAddress(address.data);
   const account = await accountByAddress(deps.db, address.data);
-
-  const carried = await chargeCarriedTokens(deps, input.knownTokens ?? [], now);
-  const own =
-    account === null
-      ? undefined
-      : carried.find(token => token.row.accountId === account.id);
-  const known = own?.underCap === true;
-
-  const reservation = await reserveAttempt(deps, {
-    addressKey,
+  const attempt = await attemptPassword(deps, {
+    account,
+    addressKey: normaliseAddress(address.data),
+    password: input.password,
     client: input.client,
-    known,
+    knownTokens: input.knownTokens ?? [],
+    now,
   });
-  if (reservation.status === "unavailable")
-    return { status: "refused", reason: "try-again" };
-  if (reservation.status === "refused") {
-    return refuseWaiting(deps, carried.length > 0, reservation.retryAfterMs);
-  }
-  const ownWait = await cappedTokenWait(deps, own, now);
-  if (ownWait !== null) return refuseWaiting(deps, true, ownWait);
-
-  if (
-    account === null ||
-    !(await passwordProven(deps, {
-      account,
-      own,
-      password: input.password,
-      now,
-    }))
-  ) {
-    if (account === null) await deps.pacer.verify(input.password, null);
-    return WRONG;
-  }
-  const refusal = accountRefusal(deps, account, known);
+  if (attempt.status === "refused") return attempt.refusal;
+  // A proven password means the account exists.
+  if (account === null) return WRONG;
+  const refusal = accountRefusal(deps, account, attempt.known);
   if (refusal !== null) return refusal;
 
-  return completeSignIn(deps, {
+  const result = await completeSignIn(deps, {
     account,
     password: input.password,
-    own,
-    addressKey,
-    reservation: reservation.reservation,
+    own: attempt.own,
     now,
   });
-}
+  if (result.status === "signed-in") await attemptSucceeded(deps, attempt);
 
-/**
- * The attempt's place in the address's count and the client's, before any
- * password check. The address is counted only when neither it nor the
- * client is waiting as the attempt starts, and the client always; the
- * account's own token, under its cap, enforces neither.
- */
-function reserveAttempt(
-  deps: FlowDeps,
-  input: { addressKey: string; client: string | null; known: boolean }
-): ReturnType<FlowDeps["core"]["limits"]["reserve"]> {
-  const entries: LimitEntry[] = [
-    {
-      rule: LIMIT_RULES.signInAddress,
-      key: input.addressKey,
-      count: "unanimous",
-      enforce: !input.known,
-    },
-  ];
-  if (input.client !== null) {
-    entries.push({
-      rule: LIMIT_RULES.signInClient,
-      key: input.client,
-      count: "always",
-      enforce: !input.known,
-    });
-  }
-
-  return deps.core.limits.reserve(entries);
-}
-
-/**
- * The time left on the account's own token's wait, once that token is past
- * its cap: null when it is under its cap, absent, or its wait has run.
- */
-async function cappedTokenWait(
-  deps: FlowDeps,
-  own: CarriedToken | undefined,
-  now: Date
-): Promise<number | null> {
-  if (own === undefined || own.underCap) return null;
-  const row = await knownBrowserById(deps.db, own.row.id);
-  const until = row === null ? null : cappedUntil(row);
-
-  return until !== null && now < until ? until.getTime() - now.getTime() : null;
-}
-
-/**
- * Checks the account's password through core. A wrong one counts toward
- * the account's failures in a row and, through the account's own token,
- * toward that token's last failed check.
- */
-async function passwordProven(
-  deps: FlowDeps,
-  input: {
-    account: AccountRow;
-    own: CarriedToken | undefined;
-    password: string;
-    now: Date;
-  }
-): Promise<boolean> {
-  const { account, own, now } = input;
-  if (await deps.pacer.verify(input.password, account.passwordHash))
-    return true;
-  const counted = await recordFailedPassword(
-    deps.db,
-    account.id,
-    now,
-    deps.settings.failuresBeforeReset
-  );
-  if (own !== undefined) await recordFailedCheck(deps.db, own.row.id, now);
-  if (counted?.resetRequired === true)
-    await emailResetRequired(deps, account, now);
-
-  return false;
-}
-
-/**
- * Emails the holder of an account that needs a reset a reset link, at most
- * once a day and never for a deactivated account.
- */
-async function emailResetRequired(
-  deps: FlowDeps,
-  account: AccountRow,
-  now: Date
-): Promise<void> {
-  if (
-    account.deactivatedAt !== null ||
-    !(await claimResetRequiredEmail(deps.db, account.id, now))
-  )
-    return;
-  const { token } = await deps.core.secrets.mintToken({
-    purpose: PURPOSES.reset,
-    subject: account.id,
-    expiresInMs: deps.settings.resetLinkMinutes * MINUTE,
-  });
-  await deps.mail.queue({
-    kind: "reset-required",
-    accountId: account.id,
-    to: account.address,
-    link: pageLink(deps.settings, "reset", token),
-  });
+  return result;
 }
 
 /**
@@ -253,45 +102,10 @@ function accountRefusal(
 }
 
 /**
- * The valid known browsers the cookie names, each charged with this
- * attempt before it starts.
- */
-async function chargeCarriedTokens(
-  deps: FlowDeps,
-  tokens: readonly string[],
-  now: Date
-): Promise<CarriedToken[]> {
-  const valid = await validTokens(deps, tokens, now);
-
-  return Promise.all(
-    valid.map(async ({ token, row }) => ({
-      token,
-      row,
-      underCap: await chargeKnownBrowser(deps.db, row.id, now),
-    }))
-  );
-}
-
-/**
- * A wait's refusal: as a wrong password, in a check's time, for an attempt
- * that carries a valid token; with the time to wait for any other.
- */
-async function refuseWaiting(
-  deps: FlowDeps,
-  carriesToken: boolean,
-  retryAfterMs: number
-): Promise<SignInResult> {
-  if (!carriesToken) return { status: "refused", reason: "wait", retryAfterMs };
-  await deps.pacer.waitAsLongAsACheck();
-  return WRONG;
-}
-
-/**
  * Starts the session, in one transaction that writes only at the account's
  * security version: the sign-in recorded, its failures in a row started
  * again, a hash at an older setting replaced, and the browser marked known
- * with its count started again. Then the address's waits end and the
- * client's count is given this attempt back.
+ * with its count started again.
  */
 async function completeSignIn(
   deps: FlowDeps,
@@ -299,8 +113,6 @@ async function completeSignIn(
     account: AccountRow;
     password: string;
     own: CarriedToken | undefined;
-    addressKey: string;
-    reservation: AdmittedReservation;
     now: Date;
   }
 ): Promise<SignInResult> {
@@ -343,14 +155,6 @@ async function completeSignIn(
       return { status: "refused", reason: "try-again" };
     throw error;
   }
-
-  await core.limits.reset({
-    rule: LIMIT_RULES.signInAddress,
-    key: input.addressKey,
-  });
-  await core.limits.release(input.reservation, {
-    rules: [LIMIT_RULES.signInClient],
-  });
 
   return {
     status: "signed-in",
