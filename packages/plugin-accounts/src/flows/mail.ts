@@ -39,6 +39,35 @@ export type AccountsEmail =
       link: string;
     }
   | {
+      /** To the old address: a change of address was asked for, with a link that cancels it. */
+      kind: "address-change-asked";
+      accountId: string;
+      to: string;
+      newAddress: string;
+      cancelLink: string;
+    }
+  | {
+      /** To a free new address: its link and code, which confirm the change inside the holder's session. */
+      kind: "confirm-new-address";
+      accountId: string;
+      to: string;
+      link: string;
+      code: string;
+    }
+  | {
+      /** To a new address that is another account's: someone tried to use it. */
+      kind: "address-in-use";
+      accountId: string;
+      to: string;
+    }
+  | {
+      /** To the old address: the account's address changed. */
+      kind: "address-changed";
+      accountId: string;
+      to: string;
+      newAddress: string;
+    }
+  | {
       /** The account's password changed, by a reset or by its holder. */
       kind: "password-changed";
       accountId: string;

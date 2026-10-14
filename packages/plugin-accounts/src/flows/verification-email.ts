@@ -60,7 +60,7 @@ export async function queueVerification(
  * The settings bound the digits to 6 to 8, which core's helper takes as a
  * literal; anything else is a setting that skipped its bounds, refused here.
  */
-function codeDigits(digits: number): 6 | 7 | 8 {
+export function codeDigits(digits: number): 6 | 7 | 8 {
   if (digits === 6 || digits === 7 || digits === 8) return digits;
   throw new RangeError(`A code of ${digits} digits is outside 6 to 8.`);
 }

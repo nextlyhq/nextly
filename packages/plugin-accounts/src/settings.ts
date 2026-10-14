@@ -32,6 +32,8 @@ const DEFAULT_PAGES = {
   notMe: "/account/not-me",
   signIn: "/account/sign-in",
   reset: "/account/reset",
+  confirmAddress: "/account/address",
+  cancelAddressChange: "/account/address/cancel",
 };
 
 const accountsOptionsSchema = z
@@ -52,6 +54,12 @@ const accountsOptionsSchema = z
         signIn: sitePath.default(DEFAULT_PAGES.signIn),
         /** Where a reset link lands. */
         reset: sitePath.default(DEFAULT_PAGES.reset),
+        /** Where a new address's confirmation link lands, inside a signed-in session. */
+        confirmAddress: sitePath.default(DEFAULT_PAGES.confirmAddress),
+        /** Where the old address's link to cancel a change lands. */
+        cancelAddressChange: sitePath.default(
+          DEFAULT_PAGES.cancelAddressChange
+        ),
       })
       .default(DEFAULT_PAGES),
     /** Whether an address must be verified before its account signs in. */

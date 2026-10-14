@@ -19,6 +19,10 @@ export const LIMIT_RULES = {
   resetAddress: "reset-address",
   /** Reset requests per known-browser token a request carries. */
   resetToken: "reset-token",
+  /** Address changes asked for per account. */
+  addressChangeAccount: "address-change-account",
+  /** Address changes asked for per new address. */
+  addressChangeNew: "address-change-new",
   /** Requests that send an email, of every kind together, per client. */
   emailClient: "email-client",
   /** Failed sign-ins per address. */
@@ -77,6 +81,19 @@ export function accountsLimitRules(
     [LIMIT_RULES.resendToken]: PER_ADDRESS,
     [LIMIT_RULES.resetAddress]: PER_ADDRESS,
     [LIMIT_RULES.resetToken]: PER_ADDRESS,
+    // Address changes: 3 an hour and 10 a day per account, 3 a day per new
+    // address, so nobody can use the site to mail strangers.
+    [LIMIT_RULES.addressChangeAccount]: {
+      type: "window",
+      windows: [
+        { max: 3, perMs: 60 * MINUTE_MS },
+        { max: 10, perMs: DAY_MS },
+      ],
+    },
+    [LIMIT_RULES.addressChangeNew]: {
+      type: "window",
+      windows: [{ max: 3, perMs: DAY_MS }],
+    },
     [LIMIT_RULES.emailClient]: PER_CLIENT,
     // 5 failures in a row for an address run free, then the waits, until a
     // sign-in succeeds, a reset completes, or 24 hours pass without one.

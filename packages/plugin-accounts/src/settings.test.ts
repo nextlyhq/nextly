@@ -32,6 +32,8 @@ describe("resolveAccountsSettings", () => {
         notMe: "/account/not-me",
         signIn: "/account/sign-in",
         reset: "/account/reset",
+        confirmAddress: "/account/address",
+        cancelAddressChange: "/account/address/cancel",
       },
       verificationRequired: true,
       session: { idleHours: 336, absoluteDays: 30, perAccount: 20 },

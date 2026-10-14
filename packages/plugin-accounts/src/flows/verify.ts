@@ -1,4 +1,3 @@
-import { LIMIT_RULES } from "../core/limit-rules";
 import {
   accountByAddress,
   writeAtVersion,
@@ -10,6 +9,7 @@ import { startSession, type SessionRow } from "../storage/sessions";
 import { sessionLimits, type FlowDeps } from "./deps";
 import { linkedAccount } from "./linked-account";
 import { PURPOSES } from "./purposes";
+import { spendCode } from "./spend-code";
 
 /** The secrets a verification spends or voids: every one tied to verifying this address. */
 const VERIFICATION_PURPOSES = [
@@ -79,7 +79,6 @@ export async function verifyByCode(
   deps: FlowDeps,
   input: { address: string; code: string; browserToken?: string }
 ): Promise<VerifyResult> {
-  const { core } = deps;
   const account = await accountByAddress(deps.db, input.address);
   if (
     account === null ||
@@ -88,34 +87,13 @@ export async function verifyByCode(
     return { status: "sign-in-needed" };
   }
 
-  const reservation = await core.limits.reserve([
-    { rule: LIMIT_RULES.codeTries, key: account.addressNormalised },
-  ]);
-  if (reservation.status === "unavailable")
-    return { status: "refused", reason: "try-again" };
-  if (reservation.status === "refused") {
-    return {
-      status: "refused",
-      reason: "too-many-tries",
-      retryAfterMs: reservation.retryAfterMs,
-    };
-  }
-
-  const spent = await core.secrets.consumeCode({
+  const spent = await spendCode(deps, {
+    addressKey: account.addressNormalised,
     purpose: PURPOSES.verifyCode,
     subject: account.id,
     code: input.code,
   });
-  if (!spent.ok) {
-    return spent.reason === "wrong"
-      ? { status: "refused", reason: "wrong-code", triesLeft: spent.triesLeft }
-      : {
-          status: "refused",
-          reason: spent.reason === "none" ? "invalid" : spent.reason,
-        };
-  }
-  // A right code's try is given back, whatever the verification does next.
-  await core.limits.release(reservation.reservation);
+  if (spent.status === "refused") return spent;
 
   return completeVerification(deps, account, "code");
 }

@@ -109,6 +109,43 @@ export async function writeAtVersion(
   change: AccountChange,
   options: { endsSessions?: boolean } = {}
 ): Promise<boolean> {
+  return updateAtVersion(db, account, change, options.endsSessions === true);
+}
+
+/**
+ * Moves the account to a new address, only at the version its flow read,
+ * moving the version on, since a change of address ends the account's other
+ * sessions. `taken` when the address has come to belong to another account,
+ * which the unique normalised address decides even against a race; on
+ * PostgreSQL that refusal aborts the transaction, so the caller ends it.
+ */
+export async function changeAddressAtVersion(
+  db: AccountsDb,
+  dialect: PluginContext["dialect"],
+  account: Pick<AccountRow, "id" | "securityVersion">,
+  address: string
+): Promise<"changed" | "moved" | "taken"> {
+  try {
+    const written = await updateAtVersion(
+      db,
+      account,
+      { address: address.trim(), addressNormalised: normaliseAddress(address) },
+      true
+    );
+    return written ? "changed" : "moved";
+  } catch (error) {
+    if (isUniqueViolation(dialect, error)) return "taken";
+    throw error;
+  }
+}
+
+/** The one guarded update both writes go through. */
+async function updateAtVersion(
+  db: AccountsDb,
+  account: Pick<AccountRow, "id" | "securityVersion">,
+  set: Partial<InferInsert<typeof accounts>>,
+  endsSessions: boolean
+): Promise<boolean> {
   const columns = db.table(accounts);
   const atVersion = and(
     eq(columns.id, account.id),
@@ -121,10 +158,8 @@ export async function writeAtVersion(
   }
   const written = await db
     .update(accounts, {
-      ...change,
-      ...(options.endsSessions === true
-        ? { securityVersion: account.securityVersion + 1 }
-        : {}),
+      ...set,
+      ...(endsSessions ? { securityVersion: account.securityVersion + 1 } : {}),
     })
     .where(atVersion);
 

@@ -14,4 +14,10 @@ export const PURPOSES = {
   signUpBrowser: "sign-up-browser",
   /** The link in a reset email. */
   reset: "reset",
+  /** The link to a new address that confirms a change to it. */
+  addressChangeLink: "address-change-link",
+  /** The code to type from that email. */
+  addressChangeCode: "address-change-code",
+  /** The old address's link that cancels the change. */
+  addressChangeCancel: "address-change-cancel",
 } as const;

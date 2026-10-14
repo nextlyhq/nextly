@@ -4,17 +4,13 @@ import { cancelPendingAddressChange } from "../storage/pending-changes";
 import { endAccountSessions } from "../storage/sessions";
 
 import type { FlowDeps } from "./deps";
-import { sessionHolder } from "./holder";
+import { provenHolder } from "./holder";
 import {
   breachedPasswordRefusal,
   localPasswordRefusal,
   type NewPasswordRefusal,
 } from "./new-password";
-import {
-  attemptPassword,
-  attemptSucceeded,
-  type AttemptRefusal,
-} from "./password-attempt";
+import { attemptSucceeded, type AttemptRefusal } from "./password-attempt";
 
 export type ChangePasswordResult =
   | { status: "changed" }
@@ -45,20 +41,12 @@ export async function changePassword(
     knownTokens?: readonly string[];
   }
 ): Promise<ChangePasswordResult> {
-  const holder = await sessionHolder(deps, input.sessionToken);
-  if (holder === null) return { status: "signed-out" };
-  const { account, session } = holder;
-  const now = deps.now();
-
-  const attempt = await attemptPassword(deps, {
-    account,
-    addressKey: account.addressNormalised,
+  const proven = await provenHolder(deps, {
+    ...input,
     password: input.currentPassword,
-    client: input.client,
-    knownTokens: input.knownTokens ?? [],
-    now,
   });
-  if (attempt.status === "refused") return attempt.refusal;
+  if (proven.status !== "proven") return proven;
+  const { account, session, attempt, now } = proven;
 
   const refusal =
     (await localPasswordRefusal(deps, input.newPassword)) ??
