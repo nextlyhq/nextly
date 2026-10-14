@@ -114,6 +114,17 @@ describe("a Direct API call made as a person", () => {
     expect(seen?.principal).toBeNull();
   });
 
+  it("runs an operation that cannot run as a person as no person, even inside a person's call", async () => {
+    // A hook's call to `forms` inside a person's operation reaches the same
+    // collection service, and must not be judged as the person there: the
+    // operation cannot be made as one.
+    await runAsPrincipal(person, () =>
+      nextly.forms.findBySlug({ slug: "contact", disableErrors: true })
+    );
+    expect(mocks.collectionsHandler.listEntries).toHaveBeenCalled();
+    expect(seen?.principal).toBeNull();
+  });
+
   it.each([
     ["sets overrideAccess: true", { overrideAccess: true }],
     ["sets trusted", { trusted: () => true }],
