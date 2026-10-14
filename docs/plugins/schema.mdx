@@ -117,10 +117,14 @@ entity there and refuses, at boot, a change that isn't the transforming plugin's
 - **A plugin's entity keeps its slug and its tables.** A transform can't rename it,
   delete it, move it to another `dbName`, or change its `status` or `localized`
   setting, which add the status column and the translations table its owner's data
-  sits in, or remove a unique compound index from its `indexes`.
+  sits in, or remove a unique compound index from its `indexes`. While another plugin
+  has added a field to an entity, not even its owner's transform, nor a transform of
+  the app's entity, may change its `dbName`, `status` or `localized`: that plugin's
+  stored values live there too.
 - **A field keeps its storage unless its declarer changes it.** Removing a field, or
   changing how it's stored (its type, column, size, whether it's `required` or
-  `unique`, its relation target, whether it's translated, or, for a field stored as
+  `unique`, whether it holds one value or a list (`hasMany`, a field group's
+  `repeatable`), its relation target, whether it's translated, or, for a field stored as
   JSON such as a group or repeater, or a `password` field, its type), is refused for a
   field
   another plugin declared:
