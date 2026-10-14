@@ -265,8 +265,10 @@ grep("no RQB callback where-filters", "where:\\s*\\(", {
     // two parameters, the second being the operator bag. Zero-param
     // `where: () => chain` is a select-builder method stub on a mock, and
     // single-param `where: (cond: unknown) => {...}` is a TYPE declaration
-    // of the builder's where method — both fine.
-    return /where:\s*(?:async\s*)?\(\s*[A-Za-z_$][\w$]*\s*,\s*[{A-Za-z_$]/.test(
+    // of the builder's where method — both fine. `where` must begin its
+    // key: a key that only ends in it, such as `signOutEverywhere:`, names
+    // something else.
+    return /(?<![\w$])where:\s*(?:async\s*)?\(\s*[A-Za-z_$][\w$]*\s*,\s*[{A-Za-z_$]/.test(
       code
     );
   },
