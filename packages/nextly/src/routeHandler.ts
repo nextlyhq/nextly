@@ -17,6 +17,8 @@
  */
 
 import {
+  authorizeCaller,
+  authorizeCallerForAny,
   requireAuthentication,
   requirePermission,
   requireAnyPermission,
@@ -935,6 +937,11 @@ async function resolveAuthorization(
     // migrations or start plugins, which is why the dispatch path keeps
     // authorization ahead of boot too. Authentication itself needs no booted
     // service; only the permission it is then judged by does.
+    //
+    // The permission is judged on that same caller rather than by
+    // authenticating the request again: each authentication of an API key
+    // spends a slot of its rate limit, so a second one counted every settings
+    // request twice and refused a key with one request left.
     const caller = await requireAuthentication(req);
     if (isErrorResponse(caller)) return caller;
     await ensureServicesInitialized();
@@ -945,7 +952,7 @@ async function resolveAuthorization(
     if (httpMethod === "GET") {
       // Whoever may change the settings may also read them: a grant of the
       // plugin's permission alone would otherwise open a page that cannot load.
-      return requireAnyPermission(req, [
+      return authorizeCallerForAny(caller, [
         { action: "read", resource: "settings" },
         { action: "manage", resource: "settings" },
         write,
@@ -955,7 +962,7 @@ async function resolveAuthorization(
     // the same permission a settings change takes anywhere else, unless the
     // plugin named its own: then that one alone, so `manage-settings` does
     // not reach settings the plugin kept to a narrower role.
-    return requirePermission(req, write.action, write.resource);
+    return authorizeCaller(caller, write.action, write.resource);
   }
 
   // --- Email providers → manage-email-providers ---
