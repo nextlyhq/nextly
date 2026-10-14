@@ -31,13 +31,17 @@ const cfg = (partial: Partial<NextlyServiceConfig>): NextlyServiceConfig =>
 const plugin = (
   name: string,
   contributes: PluginContributions,
-  enabled = true
+  enabled = true,
+  dependsOn: string[] = []
 ): PluginDefinition => ({
   name,
   version: "1.0.0",
   nextly: ">=0.0.0",
   enabled,
   contributes,
+  ...(dependsOn.length > 0
+    ? { dependsOn: Object.fromEntries(dependsOn.map(on => [on, "*"])) }
+    : {}),
 });
 
 const slugs = (entities: { slug: string }[] | undefined): string[] =>
@@ -724,14 +728,19 @@ describe("applyPluginSchemaContributions (transforms — C11)", () => {
     const config = cfg({ collections: [] });
     const plugins = [
       plugin("plugin-a", { collections: [coll("a-forms")] }),
-      plugin("plugin-b", {
-        transforms: [
-          {
-            target: "a-forms",
-            transform: entity => ({ ...entity, internal: true }),
-          },
-        ],
-      }),
+      plugin(
+        "plugin-b",
+        {
+          transforms: [
+            {
+              target: "a-forms",
+              transform: entity => ({ ...entity, internal: true }),
+            },
+          ],
+        },
+        true,
+        ["plugin-a"]
+      ),
     ];
 
     const result = applyPluginSchemaContributions(config, plugins);
@@ -764,17 +773,22 @@ describe("applyPluginSchemaContributions (transforms — C11)", () => {
     let frozen: boolean | undefined;
     const plugins = [
       plugin("plugin-a", { collections: [coll("a-forms")] }),
-      plugin("plugin-b", {
-        transforms: [
-          {
-            target: "a-forms",
-            transform: entity => {
-              frozen = Object.isFrozen(entity);
-              return { ...entity };
+      plugin(
+        "plugin-b",
+        {
+          transforms: [
+            {
+              target: "a-forms",
+              transform: entity => {
+                frozen = Object.isFrozen(entity);
+                return { ...entity };
+              },
             },
-          },
-        ],
-      }),
+          ],
+        },
+        true,
+        ["plugin-a"]
+      ),
     ];
 
     applyPluginSchemaContributions(cfg({ collections: [] }), plugins);
@@ -835,7 +849,8 @@ describe("applyPluginSchemaContributions (a disabled plugin's transforms)", () =
           },
         ],
       },
-      enabled
+      enabled,
+      ["plugin-a"]
     );
 
   const formsOf = (enabled: boolean) =>
@@ -890,7 +905,8 @@ describe("applyPluginSchemaContributions (behaviour a disabled plugin's transfor
       plugin(
         "plugin-b",
         { transforms: [{ target: "a-forms", transform: change }] },
-        false
+        false,
+        ["plugin-a"]
       ),
     ]).collections?.[0] as unknown as {
       hooks?: { beforeChange?: unknown[] };
@@ -950,7 +966,8 @@ describe("applyPluginSchemaContributions (behaviour a disabled plugin's transfor
             },
           ],
         },
-        false
+        false,
+        ["plugin-a"]
       ),
     ]).collections?.[0] as unknown as {
       admin: { components: unknown };

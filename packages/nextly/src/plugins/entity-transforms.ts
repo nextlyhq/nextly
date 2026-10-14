@@ -47,6 +47,14 @@
 import { NextlyError } from "../errors/nextly-error";
 import { copyPlainValues } from "../shared/lib/plain-copy";
 
+import {
+  assertMayTransform,
+  openLedger,
+  settleTransform,
+  type OwnershipLedger,
+  type TransformingPlugin,
+} from "./entity-transform-ownership";
+
 export type EntityKind = "collection" | "single" | "component";
 
 export interface EntityTransform {
@@ -64,6 +72,14 @@ export interface EntityTransform {
 export interface TransformContribution {
   /** `plugin:<name>`, for attribution when one throws. */
   source: string;
+  /** The plugin's name, which what its transforms add is recorded under. */
+  name: string;
+  /**
+   * The plugins it declares in `dependsOn`: the owners whose entities it may
+   * transform, and the contributors whose rules it may replace. See
+   * `entity-transform-ownership`.
+   */
+  dependsOn?: readonly string[];
   transforms: readonly EntityTransform[];
   /**
    * The contributing plugin is disabled: its transforms keep their storage
@@ -76,6 +92,10 @@ export interface TransformableEntity {
   slug: string;
   kind: EntityKind;
   definition: Record<string, unknown>;
+  /** The plugin that declared the entity; absent for the app's own. */
+  owner?: string;
+  /** Top-level field name → the plugin that added it with `extend`. */
+  extendedBy?: ReadonlyMap<string, string>;
 }
 
 function targets(transform: EntityTransform): string[] {
@@ -101,11 +121,16 @@ export function runEntityTransforms(
       { ...entity },
     ])
   );
+  // Who put each part of each entity there, carried from one transform to
+  // the next so a later transform is judged by what earlier ones added.
+  const ledgers = new Map(
+    [...bySlug].map(([key, entity]) => [key, openLedger(entity)])
+  );
 
   for (const contribution of contributions) {
     for (const [position, transform] of contribution.transforms.entries()) {
       for (const slug of targets(transform)) {
-        applyOne(bySlug, contribution, transform, slug, position);
+        applyOne(bySlug, ledgers, contribution, transform, slug, position);
       }
     }
   }
@@ -252,13 +277,27 @@ function assertSlugKept(
   });
 }
 
+/** The contributing plugin, as the ownership ledger judges it. */
+function transformingPlugin(
+  contribution: TransformContribution,
+  position: number
+): TransformingPlugin {
+  return {
+    name: contribution.name,
+    dependsOn: new Set(contribution.dependsOn ?? []),
+    path: `${contribution.source}.transform[${String(position)}]`,
+  };
+}
+
 function applyOne(
   bySlug: Map<string, TransformableEntity>,
+  ledgers: Map<string, OwnershipLedger>,
   contribution: TransformContribution,
   transform: EntityTransform,
   slug: string,
   position: number
 ): void {
+  const plugin = transformingPlugin(contribution, position);
   for (const [key, entity] of matchesFor(
     bySlug,
     contribution,
@@ -266,6 +305,10 @@ function applyOne(
     slug,
     position
   )) {
+    const ledger = ledgers.get(key) ?? openLedger(entity);
+    // Before the transform runs: a plugin without the dependency has no
+    // business running code over the entity at all.
+    assertMayTransform(entity.slug, ledger, plugin);
     const transformed = transformOne(
       entity,
       contribution,
@@ -273,13 +316,17 @@ function applyOne(
       slug,
       position
     );
-    bySlug.set(key, {
-      ...entity,
-      definition:
-        contribution.disabled === true
-          ? withBehaviourOf(entity.definition, transformed)
-          : transformed,
-    });
+    const definition =
+      contribution.disabled === true
+        ? withBehaviourOf(entity.definition, transformed)
+        : transformed;
+    // Judged on what will be registered, so a disabled plugin's result is
+    // judged after its behaviour has been put back.
+    ledgers.set(
+      key,
+      settleTransform(entity, ledger, entity.definition, definition, plugin)
+    );
+    bySlug.set(key, { ...entity, definition });
   }
 }
 
