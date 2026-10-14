@@ -55,10 +55,11 @@ expectTypeOf<
 const member: PrincipalKindDefinition<Member> = {
   name: "member",
   attributes: { verified: "boolean", plan: "string", visits: "number" },
-  resolve: async () => ({
-    id: "m1",
-    attributes: { verified: true, plan: null, visits: 0 },
-  }),
+  resolve: () =>
+    Promise.resolve({
+      id: "m1",
+      attributes: { verified: true, plan: null, visits: 0 },
+    }),
 };
 definePlugin({
   name: "@acme/members",
