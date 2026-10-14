@@ -215,10 +215,11 @@ export async function ordersOf(account: Principal) {
 A plugin's own service call takes the same option:
 `ctx.services.collections.createEntry("orders", data, { principal: account })`.
 
-The call is refused, and runs nothing, when it also sets `overrideAccess: true` or
-`trusted`, names a `user` or an API key, or names a person core did not make. Only
-collection and Single operations can run as a person; any other operation refuses
-the option. Hooks for the operation receive the person as `principal`, with no
+The call is refused, and runs nothing, when it also sets `overrideAccess: true`,
+`trusted` or `frameworkFilter`, names a `user` or an API key, or names a person core
+did not make. Only collection and Single operations can run as a person; any other
+operation refuses the option. `findSingles` made as a person lists, and counts,
+only the Singles the person may read. Hooks for the operation receive the person as `principal`, with no
 `user`. A document created as a person has no owner, because the owner column
 names staff users; an update made as one leaves the owner as it was.
 
