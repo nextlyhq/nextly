@@ -27,6 +27,25 @@ async function codeOf(
   return undefined;
 }
 
+/** A payment of `amount` cents, confirmed with `method`. */
+async function confirmed(
+  provider: ReturnType<typeof createTestPaymentProvider>["provider"],
+  amount: number,
+  method: string = TEST_PAYMENT_METHODS.succeeds
+) {
+  const { providerReference } = await provider.start({
+    operationId: "op-start",
+    reference: "p-1",
+    amount: money(amount, "USD"),
+    capture: "now",
+  });
+  return provider.confirm({
+    operationId: "op-confirm",
+    providerReference,
+    paymentMethod: method,
+  });
+}
+
 function syncCodeOf(body: () => unknown): string | undefined {
   try {
     body();
@@ -209,6 +228,68 @@ describe("the test payment provider", () => {
         })
       )
     ).toBe("COMMERCE_PAYMENT_STATE");
+  });
+
+  it("answers a refund as pending when asked to, holding its amount back without counting it refunded", async () => {
+    const { provider } = createTestPaymentProvider({ refundStatus: "pending" });
+    const { providerReference } = await confirmed(provider, 1000);
+    const refund = present(provider.refund);
+    const pending = await refund({
+      operationId: "op-3",
+      providerReference,
+      reference: "r-1",
+      amount: money(600, "USD"),
+    });
+    expect(pending.status).toBe("pending");
+    expect(
+      (await provider.read({ providerReference })).amountRefunded.amount
+    ).toBe(0);
+    // Held back: 400 is left to refund, so another 600 is refused.
+    expect(
+      await codeOf(() =>
+        refund({
+          operationId: "op-4",
+          providerReference,
+          reference: "r-2",
+          amount: money(600, "USD"),
+        })
+      )
+    ).toBe("COMMERCE_PAYMENT_STATE");
+  });
+
+  it("refuses a refund with an empty reference before anything changes", async () => {
+    const { provider, control } = createTestPaymentProvider();
+    const { providerReference } = await confirmed(provider, 1000);
+    expect(
+      await codeOf(() =>
+        present(provider.refund)({
+          operationId: "op-3",
+          providerReference,
+          reference: "",
+          amount: money(400, "USD"),
+        })
+      )
+    ).toBe("VALIDATION_ERROR");
+    expect(
+      (await provider.read({ providerReference })).amountRefunded.amount
+    ).toBe(0);
+    expect(control.refunds()).toHaveLength(0);
+  });
+
+  it("cancels a payment still processing, as its cancel capability promises for an unpaid one", async () => {
+    const { provider } = createTestPaymentProvider();
+    const processing = await confirmed(
+      provider,
+      1000,
+      TEST_PAYMENT_METHODS.processing
+    );
+    expect(processing.status).toBe("processing");
+    const cancelled = await present(provider.cancel)({
+      operationId: "op-3",
+      providerReference: processing.providerReference,
+    });
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.amountCaptured.amount).toBe(0);
   });
 
   it("refuses a partial refund when it does not offer them", async () => {

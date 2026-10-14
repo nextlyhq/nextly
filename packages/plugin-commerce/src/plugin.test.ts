@@ -76,7 +76,7 @@ describe("commerce()", () => {
   it("applies the site's cart write limit to every cart write, and 60 a minute otherwise", () => {
     const writes = (plugin: ReturnType<typeof commerce>) =>
       (plugin.contributes?.routes ?? [])
-        .filter(r => r.method !== "GET")
+        .filter(r => r.method !== "GET" && r.path.startsWith("/cart"))
         .map(r => r.rateLimit);
     expect(writes(commerce({ currency: "USD" }))).toEqual(
       Array(4).fill({ max: 60, windowMs: 60_000 })
