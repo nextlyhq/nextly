@@ -8,7 +8,14 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
  */
 export type AccountsErrorCode =
   /** A plugin option outside the bounds the plugin keeps it within. */
-  "ACCOUNTS_INVALID_OPTIONS";
+  | "ACCOUNTS_INVALID_OPTIONS"
+  /** The running core does not lend the helpers the plugin is built on. */
+  | "ACCOUNTS_CORE_MISSING"
+  /**
+   * In production, the limiter's counts are kept by one instance alone and
+   * the site has not said it runs only one.
+   */
+  | "ACCOUNTS_LIMITS_NOT_SHARED";
 
 /**
  * Raise an accounts error.
@@ -33,9 +40,16 @@ export function accountsError(
 
 const PUBLIC_MESSAGES: Record<AccountsErrorCode, string> = {
   ACCOUNTS_INVALID_OPTIONS: "The accounts plugin is not configured correctly.",
+  ACCOUNTS_CORE_MISSING:
+    "The accounts plugin cannot start on this version of Nextly.",
+  ACCOUNTS_LIMITS_NOT_SHARED:
+    "The accounts plugin is not configured correctly.",
 };
 
-// A site's own configuration is the server's fault, never a visitor's: 500.
+// A site's own configuration, or the core it runs, is the server's fault,
+// never a visitor's: 500.
 const STATUS_CODES: Record<AccountsErrorCode, number> = {
   ACCOUNTS_INVALID_OPTIONS: 500,
+  ACCOUNTS_CORE_MISSING: 500,
+  ACCOUNTS_LIMITS_NOT_SHARED: 500,
 };
