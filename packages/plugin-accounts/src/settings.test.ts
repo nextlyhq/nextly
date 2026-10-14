@@ -41,7 +41,6 @@ describe("resolveAccountsSettings", () => {
       knownBrowsers: { days: 90, perAccount: 10 },
       passwordMinLength: 8,
       breachedPasswordCheck: false,
-      singleInstance: false,
     });
   });
 

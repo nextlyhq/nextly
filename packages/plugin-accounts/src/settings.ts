@@ -61,8 +61,8 @@ const accountsOptionsSchema = z
     passwordMinLength: whole(8, 64).default(8),
     /** Whether new passwords are checked against known breached passwords. */
     breachedPasswordCheck: z.boolean().default(false),
-    /** The site runs a single instance, so no shared limit store is needed in production. */
-    singleInstance: z.boolean().default(false),
+    // No option of its own for a site that runs one instance: the plugin
+    // reads core's `rateLimit.singleInstance`, through the limiter's store.
   })
   // A session's idle expiry cannot outlast its absolute lifetime.
   .refine(
