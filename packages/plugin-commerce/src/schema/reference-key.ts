@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 
 /**
- * The key a stored catalogue reference is found and kept unique by: the
- * reference's SHA-256, in hex.
+ * The key a stored outside identifier (a catalogue's reference, a payment
+ * provider's own reference) is found and kept unique by: its SHA-256, in hex.
  *
  * A database compares text by its collation, and MySQL's default collation
  * takes two strings that differ only in case, in accents or in trailing

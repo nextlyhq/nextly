@@ -173,8 +173,11 @@ const stockSchema = z.discriminatedUnion("kind", [
 /** @experimental */
 export const catalogueItemSchema = z.strictObject({
   reference: z.string().min(1).max(255),
-  name: z.string().min(1),
-  sku: z.string().min(1).optional(),
+  // Bounded so every dialect stores an order's snapshot of them whole: past
+  // 255 characters is a broken answer everywhere, not a failed order on one
+  // database alone.
+  name: z.string().min(1).max(255),
+  sku: z.string().min(1).max(255).optional(),
   price: priceSchema,
   stock: stockSchema,
 });
