@@ -13,6 +13,7 @@
  */
 import { genericPublicMessage } from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
+import { isWellFormed } from "../../plugins/security/well-formed";
 
 /** One stored entry: what a limit keeps for one key, and when it lapses. */
 export interface StoredLimit {
@@ -157,6 +158,11 @@ export function checkLimitKeys(keys: readonly string[]): string[] {
         length: typeof key === "string" ? key.length : undefined,
         max: LIMIT_STORE_MAX_KEY_LENGTH,
       });
+    }
+    // A lone surrogate encodes to UTF-8 as the replacement character, so two
+    // different keys would be stored, and counted, as one.
+    if (!isWellFormed(key)) {
+      throw misuse("A limit store key must be well-formed Unicode.", {});
     }
   }
   return distinct;

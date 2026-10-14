@@ -6,6 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, count, eq, notLike } from "drizzle-orm";
 import {
   afterAll,
@@ -212,6 +213,48 @@ describeEachDialect("the database limit store", dialect => {
       "limit-store-filling",
       "limit-store-full",
     ]);
+  });
+
+  it("tells its watch only what committed: an update that would fill it and rolls back warns of nothing", async () => {
+    const lines = captureLog();
+    const generation = freshGeneration();
+    // The adapter, but its next transaction fails once its work has run: a
+    // failed commit, as far as the store can tell.
+    let failNext = false;
+    const failing = new Proxy(current.adapter, {
+      get(target, property, receiver) {
+        if (property === "transaction") {
+          return (work: (context: TransactionContext) => Promise<unknown>) =>
+            target.transaction(async (context: TransactionContext) => {
+              const result = await work(context);
+              if (failNext) {
+                failNext = false;
+                throw new Error("the commit failed");
+              }
+              return result;
+            });
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const store = open(failing, generation, 10);
+    for (let index = 0; index < 7; index += 1) {
+      await store.update([`commit-${index}`], count1(`commit-${index}`));
+    }
+
+    // The eighth entry would reach the warning threshold, but rolls back.
+    failNext = true;
+    await rejectionOf(store.update(["commit-7"], count1("commit-7")));
+    expect(
+      lines.filter(line => line.kind === "limit-store-filling")
+    ).toHaveLength(0);
+
+    // Committed this time: the warning comes now, once.
+    await store.update(["commit-7"], count1("commit-7"));
+    expect(
+      lines.filter(line => line.kind === "limit-store-filling")
+    ).toHaveLength(1);
   });
 
   it("holds the bound against a burst of new keys on two instances", async () => {

@@ -365,6 +365,20 @@ describe("a reservation", () => {
     });
   });
 
+  it("refuses a key holding a lone surrogate, which would hash like another, and accepts a pair", async () => {
+    const { limits } = setup();
+    // "\ud800" and "\ud801" both encode to U+FFFD: two keys that would
+    // count as one.
+    for (const key of ["\ud800", "a\udc00b"]) {
+      await expect(
+        limits.reserve([{ rule: "window", key }])
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    }
+    expect(
+      (await limits.reserve([{ rule: "window", key: "\ud83d\ude00" }])).status
+    ).toBe("admitted");
+  });
+
   it("refuses with each rule kind's own time", async () => {
     const { limits } = setup();
     await limits.reserve([{ rule: "backoff", key: "k" }]);

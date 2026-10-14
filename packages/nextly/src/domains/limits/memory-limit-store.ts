@@ -110,6 +110,10 @@ export function createMemoryLimitStore(
         removed += 1;
       }
     }
+    // The watch judges its warning by the size left, whichever caller swept:
+    // an update that refills the store past the threshold in one step would
+    // otherwise find the warning still latched from before the sweep.
+    if (removed > 0) watch.observe(entries.size);
     return removed;
   };
 

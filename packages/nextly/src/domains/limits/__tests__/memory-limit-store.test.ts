@@ -126,6 +126,42 @@ describe("the memory store's bound", () => {
     expect(lines.filter(line => line.level === "warn")).toHaveLength(2);
   });
 
+  it("warns again after a sweep empties it and it fills once more", async () => {
+    const lines = captureLog();
+    let now = 1_700_000_000_000;
+    const store = createMemoryLimitStore({ maxEntries: 10, clock: () => now });
+    for (let index = 0; index < 8; index += 1) {
+      await store.update([`k${index}`], count(`k${index}`));
+    }
+    expect(lines.filter(line => line.level === "warn")).toHaveLength(1);
+
+    // Past every entry's hour: the sweep alone empties the store. Then one
+    // update fills it past the threshold again, so no update in between
+    // ever shows the watch an emptied store.
+    now += 3_600_001;
+    expect(await store.sweep()).toBe(8);
+    const again = Array.from({ length: 8 }, (_, index) => `again${index}`);
+    await store.update(again, (_current, at) => ({
+      write: new Map(
+        again.map(key => [key, { value: { n: 1 }, expiresAt: at + 3_600_000 }])
+      ),
+      result: undefined,
+    }));
+
+    expect(lines.filter(line => line.level === "warn")).toHaveLength(2);
+  });
+
+  it("refuses a key holding a lone surrogate, which would encode like another, as the caller's mistake", async () => {
+    const store = createMemoryLimitStore();
+
+    await expect(
+      store.update(["\ud800"], count("\ud800"))
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    await expect(store.read(["\udc00"])).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+    });
+  });
+
   it("refuses a value that has no JSON form, such as a cycle, as the caller's mistake", async () => {
     const store = createMemoryLimitStore();
     const cycle: Record<string, unknown> = {};

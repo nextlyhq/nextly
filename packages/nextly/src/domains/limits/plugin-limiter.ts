@@ -23,6 +23,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { genericPublicMessage } from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
+import { isWellFormed } from "../../plugins/security/well-formed";
 import {
   assertNoOpenTransaction,
   type OpenTransactionProbe,
@@ -227,11 +228,14 @@ export function createPluginLimiter(deps: PluginLimiterDeps): PluginLimiter {
     if (
       typeof target.key !== "string" ||
       target.key.length === 0 ||
-      target.key.length > LIMIT_KEY_MAX_LENGTH
+      target.key.length > LIMIT_KEY_MAX_LENGTH ||
+      // A lone surrogate encodes to UTF-8 as the replacement character, so
+      // two different keys would hash, and count, as one.
+      !isWellFormed(target.key)
     ) {
       throw misuse(
         plugin,
-        `a limit key must be a non-empty string of at most ${LIMIT_KEY_MAX_LENGTH} characters.`,
+        `a limit key must be a non-empty, well-formed string of at most ${LIMIT_KEY_MAX_LENGTH} characters.`,
         { rule: target.rule }
       );
     }
