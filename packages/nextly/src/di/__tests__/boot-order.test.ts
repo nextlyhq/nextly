@@ -77,10 +77,26 @@ describe("the boot sequence in registerServices", () => {
    * tables it declares created.
    */
   const beforePlugins = [
+    "await assertBootPluginInstallStates(",
     "await runBootMigrations(",
     "await assertBootPluginSchemaVersions(",
     "await prepareExtensionTablesForInit(",
   ];
+
+  /**
+   * A plugin that is not installed, or whose uninstall stopped part way, is
+   * refused before boot migrations: after them, a refused plugin's modules,
+   * or a half-uninstalled one's rolled-back modules, would already be
+   * applied again.
+   */
+  it("judges install state before the boot migrations, through the gate", () => {
+    const gate = boot.indexOf("await assertBootPluginInstallStates(");
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(boot.indexOf("await runBootMigrations("));
+    expect(bodyOf("assertBootPluginInstallStates")).toContain(
+      "await assertBootPluginsInstalled("
+    );
+  });
 
   it("runs the boot migrations inside the migration phase", () => {
     expect(bodyOf("runBootMigrations")).toContain(
