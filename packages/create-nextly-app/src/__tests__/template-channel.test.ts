@@ -89,7 +89,9 @@ describe("content-template dist-tag pinning", () => {
     );
     expect(pkg.devDependencies["@nextlyhq/eslint-plugin"]).toBe("alpha");
     expect(pkg.devDependencies["nextly"]).toBe("alpha");
-    expect(pkg.peerDependencies["nextly"]).toBe("alpha");
+    // A peer cannot take the tag: pnpm rejects it there
+    // (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION), so it gets the open range.
+    expect(pkg.peerDependencies["nextly"]).toBe(">=0.0.0");
   });
 
   it("pins the blank scaffold's nextly to the latest channel", async () => {

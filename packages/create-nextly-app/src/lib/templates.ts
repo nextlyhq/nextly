@@ -96,3 +96,35 @@ export function getDefaultApproach(name: string): ProjectApproach {
   const template = getTemplate(name);
   return template?.defaultApproach ?? "code-first";
 }
+
+/**
+ * Templates whose files ship inside the CLI package itself (tsup.config.ts
+ * copies them in at build time). Content templates (blog) are download-only.
+ */
+const BUNDLED_TEMPLATES: ReadonlySet<string> = new Set(["blank", "plugin"]);
+
+/**
+ * Whether a scaffold should copy the template bundled in the CLI rather than
+ * resolve one from GitHub or a local path.
+ *
+ * The bundled copy works offline and matches the package versions this CLI
+ * release installs, where a template downloaded from GitHub `main` can already
+ * use APIs those packages do not have. An explicit source (--local-template,
+ * --use-yalc, or a --branch other than main) still resolves live, because the
+ * bundled copy would quietly ignore what was asked for.
+ */
+export function shouldUseBundledTemplate(
+  projectType: string,
+  options: {
+    localTemplatePath?: string;
+    useYalc?: boolean;
+    branch?: string;
+  }
+): boolean {
+  return (
+    BUNDLED_TEMPLATES.has(projectType) &&
+    !options.localTemplatePath &&
+    !options.useYalc &&
+    (options.branch ?? "main") === "main"
+  );
+}

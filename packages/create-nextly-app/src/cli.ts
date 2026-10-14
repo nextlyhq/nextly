@@ -3,8 +3,13 @@
 import * as telemetry from "@nextlyhq/telemetry";
 import { Command } from "commander";
 
-import { resolveProjectArg, validateProjectName } from "./cli-args";
+import {
+  resolveProjectArg,
+  validateProjectName,
+  validateTemplateName,
+} from "./cli-args";
 import { createNextly } from "./create-nextly";
+import { getAvailableTemplateNames } from "./lib/templates";
 import type { DatabaseType, ProjectApproach, ProjectType } from "./types";
 
 // Static require for package.json. Works because tsup adds the createRequire
@@ -33,11 +38,12 @@ program
     "-y, --yes",
     "Skip prompts and use defaults (blank template, SQLite, local storage)"
   )
-  .option("-t, --template <template>", "Project template (blank, blog)")
   .option(
-    "-a, --approach <approach>",
-    "Schema approach (code-first, visual)"
+    "-t, --template <template>",
+    // From the registry, so --help names every template the flag accepts.
+    `Project template (${getAvailableTemplateNames().join(", ")})`
   )
+  .option("-a, --approach <approach>", "Schema approach (code-first, visual)")
   .option("-d, --database <db>", "Database type (sqlite, postgresql, mysql)")
   .option("-b, --branch <branch>", "Git branch for template download", "main")
   .option(
@@ -93,19 +99,22 @@ Examples:
         if (projectName) {
           const nameError = validateProjectName(projectName);
           if (nameError) {
-            console.error(`Error: Invalid project name '${projectName}'. ${nameError}.`);
+            console.error(
+              `Error: Invalid project name '${projectName}'. ${nameError}.`
+            );
             process.exit(1);
           }
         }
 
         const projectType = options.template as ProjectType | undefined;
 
-        // Validate --template flag
-        const validTypes = ["blank", "blog"];
-        if (projectType && !validTypes.includes(projectType)) {
-          console.error(
-            `Error: Template '${projectType}' is not available. Use: ${validTypes.join(", ")}`
-          );
+        // Validate --template flag against the template registry, which is
+        // also what the interactive prompt offers.
+        const templateError = projectType
+          ? validateTemplateName(projectType)
+          : undefined;
+        if (templateError) {
+          console.error(`Error: ${templateError}`);
           process.exit(1);
         }
 

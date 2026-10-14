@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import fs from "fs-extra";
 
 import { buildNextConfigTemplate } from "../generators/next-config";
+import { getAvailableTemplateNames } from "../lib/templates";
 import type {
   DatabaseConfig,
   PackageManager,
@@ -1283,6 +1284,12 @@ export async function generatePackageJson(
 }
 
 /**
+ * A caret range over one complete version, as {@link fetchLatestVersion} builds
+ * from the registry: `^1.2.3` or `^0.0.2-alpha.66`.
+ */
+const CARET_VERSION = /^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/**
  * Resolve the `nextly` compat range a scaffolded plugin declares + uses to fill
  * `{{nextlyRange}}`. Uses the latest published `nextly` (`^x.y.z`); falls back to
  * an open range when offline / using yalc.
@@ -1330,15 +1337,28 @@ async function generatePluginPackageJson(
    */
   const range = (pkg: string): string => versions[pkg] ?? channel;
 
+  /*
+   * A peer takes a semver range, never a dist-tag: pnpm 11 rejects a tag there
+   * (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION) and then refuses to run any
+   * script in the scaffold, `pnpm dev` included. The tag is what `range` falls
+   * back to offline, after a failed registry lookup and under --use-yalc, so a
+   * peer accepts only a resolved caret version and otherwise declares the open
+   * range. Dev dependencies keep the tag, which is valid for an install.
+   */
+  const peerRange = (pkg: string): string => {
+    const v = range(pkg);
+    return CARET_VERSION.test(v) ? v : ">=0.0.0";
+  };
+
   const peerDependencies: Record<string, string> = {
-    nextly: range("nextly"),
-    "@nextlyhq/admin": range("@nextlyhq/admin"),
-    "@nextlyhq/plugin-sdk": range("@nextlyhq/plugin-sdk"),
+    nextly: peerRange("nextly"),
+    "@nextlyhq/admin": peerRange("@nextlyhq/admin"),
+    "@nextlyhq/plugin-sdk": peerRange("@nextlyhq/plugin-sdk"),
     // The UI kit is supplied by the host admin at run time, so a plugin must
     // declare it rather than carry a copy. As a devDependency alone, tsup
     // treats it as bundleable and inlines the whole kit into the published
     // plugin — first-party plugins declare it as a peer for this reason.
-    "@nextlyhq/ui": range("@nextlyhq/ui"),
+    "@nextlyhq/ui": peerRange("@nextlyhq/ui"),
     react: PINNED_VERSIONS.react,
     "react-dom": PINNED_VERSIONS["react-dom"],
   };
@@ -1723,7 +1743,9 @@ export async function copyTemplate(
 
   if (!(await fs.pathExists(typeDir))) {
     throw new Error(
-      `Template "${projectType}" not found at ${typeDir}. Available templates: blank, blog.`
+      // From the registry, so the list cannot fall behind the templates
+      // that exist.
+      `Template "${projectType}" not found at ${typeDir}. Available templates: ${getAvailableTemplateNames().join(", ")}.`
     );
   }
 
@@ -1890,8 +1912,9 @@ export async function copyTemplate(
 
 /**
  * Copy the plugin template (D44/D45): the whole tree (src/ + embedded dev/ +
- * tsconfig/tsup/vitest/eslint), a generated plugin package.json, then fill
- * `{{pluginName}}` / `{{nextlyRange}}`. No app base, next.config, or .env.
+ * tsconfig/tsup/vitest/eslint), a generated plugin package.json, the dev/
+ * playground's .env, then fill `{{pluginName}}` / `{{nextlyRange}}`. No app
+ * base, next.config, or root .env.
  */
 async function copyPluginTemplate(opts: {
   projectName: string;
@@ -1929,6 +1952,17 @@ async function copyPluginTemplate(opts: {
     packageJsonContent,
     "utf-8"
   );
+
+  // Give the dev/ playground its env, so the first `pnpm dev` boots on SQLite.
+  // Without dev/.env there is no DB_DIALECT, the playground falls back to
+  // PostgreSQL and stops at start-up asking for DATABASE_URL. `overwrite:
+  // false` keeps a dev/.env the developer already has in the target.
+  const devEnvExample = path.join(targetDir, "dev", ".env.example");
+  if (await fs.pathExists(devEnvExample)) {
+    await fs.copy(devEnvExample, path.join(targetDir, "dev", ".env"), {
+      overwrite: false,
+    });
+  }
 
   // Write pnpm-workspace.yaml carrying the native-dependency build allowlist.
   // pnpm 11 ignores the package.json `pnpm` field, and the embedded dev/

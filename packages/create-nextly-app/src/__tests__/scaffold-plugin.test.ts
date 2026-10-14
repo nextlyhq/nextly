@@ -1,4 +1,12 @@
-import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -211,6 +219,98 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     );
     expect(devConfig).toContain('"@acme/nextly-plugin-test"');
     expect(devConfig).not.toMatch(/\{\{\s*\w+\s*\}\}/);
+  });
+
+  it("keeps a dev/.env the developer already has", async () => {
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-plugin-env-"));
+    target = path.join(workdir, "my-plugin");
+    await mkdir(path.join(target, "dev"), { recursive: true });
+    await writeFile(path.join(target, "dev/.env"), "DATABASE_URL=mine\n");
+
+    await copyTemplate({
+      projectName: "my-plugin",
+      projectType: "plugin",
+      targetDir: target,
+      database: { type: "sqlite" } as unknown as DatabaseConfig,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "plugin"),
+      },
+      allowExistingTarget: true,
+    });
+
+    expect(await readFile(path.join(target, "dev/.env"), "utf-8")).toBe(
+      "DATABASE_URL=mine\n"
+    );
+  });
+});
+
+/*
+ * What the first `pnpm dev` and `pnpm test` in a new plugin depend on. Each is
+ * its own case so that every property is seen failing on its own: in one case
+ * the first failed assertion would hide the rest.
+ */
+describe("a plugin scaffold runs as created", () => {
+  let scaffoldRoot: string;
+  let project: string;
+  const read = (rel: string): Promise<string> =>
+    readFile(path.join(project, rel), "utf-8");
+
+  beforeAll(async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline test")));
+    scaffoldRoot = await mkdtemp(path.join(tmpdir(), "nextly-plugin-runs-"));
+    project = path.join(scaffoldRoot, "my-plugin");
+    await copyTemplate({
+      projectName: "my-plugin",
+      projectType: "plugin",
+      targetDir: project,
+      database: { type: "sqlite" } as unknown as DatabaseConfig,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "plugin"),
+      },
+    });
+  });
+  afterAll(async () => {
+    vi.unstubAllGlobals();
+    await rm(scaffoldRoot, { recursive: true, force: true });
+  });
+
+  // Without dev/.env the playground has no DB_DIALECT, falls back to
+  // PostgreSQL and stops asking for DATABASE_URL on the first `pnpm dev`.
+  it("writes the playground's dev/.env from its example", async () => {
+    expect(await read("dev/.env")).toBe(await read("dev/.env.example"));
+  });
+
+  // The admin's data hooks read their client from QueryProvider; a bare
+  // RootLayout renders /admin as a 500 ("No QueryClient set").
+  it("mounts the admin inside the providers its hooks need", async () => {
+    const adminPage = await read("dev/src/app/admin/[[...params]]/page.tsx");
+    expect(adminPage).toContain("<QueryProvider>");
+    expect(adminPage).toContain("<ErrorBoundary");
+  });
+
+  // The Direct API takes one argument object and spells the lookup findByID;
+  // the positional form fails before the first assertion runs.
+  it("generates a test written against the current Direct API", async () => {
+    const suite = await read("src/plugin.test.ts");
+    expect(suite).toMatch(/\.create\(\{\s*collection: "examples"/);
+    expect(suite).toMatch(/\.findByID\(\{\s*collection: "examples"/);
+    expect(suite).not.toMatch(/\.create\("examples"/);
+    expect(suite).not.toContain(".findById(");
+  });
+
+  // devAutoLogin only signs in a user that exists, so the playground seeds the
+  // one dev/nextly.config.ts names, and only under `next dev`.
+  it("seeds the auto-login user under next dev only", async () => {
+    const instrumentation = await read("dev/instrumentation.ts");
+    const devConfig = await read("dev/nextly.config.ts");
+    expect(instrumentation).toContain("seedSuperAdmin");
+    expect(instrumentation).toContain('process.env.NODE_ENV === "development"');
+    for (const credential of ['"dev@nextly.local"', '"DevPassword123!"']) {
+      expect(instrumentation).toContain(credential);
+      expect(devConfig).toContain(credential);
+    }
   });
 });
 
