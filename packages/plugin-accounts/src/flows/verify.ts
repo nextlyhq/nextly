@@ -1,7 +1,6 @@
 import { LIMIT_RULES } from "../core/limit-rules";
 import {
   accountByAddress,
-  accountById,
   writeAtVersion,
   type AccountRow,
   type AccountsDb,
@@ -9,6 +8,7 @@ import {
 import { startSession, type SessionRow } from "../storage/sessions";
 
 import { sessionLimits, type FlowDeps } from "./deps";
+import { linkedAccount } from "./linked-account";
 import { PURPOSES } from "./purposes";
 
 /** The secrets a verification spends or voids: every one tied to verifying this address. */
@@ -53,13 +53,9 @@ export async function verifyByLink(
   input: { token: string; browserToken?: string }
 ): Promise<VerifyResult> {
   const { core } = deps;
-  const peeked = await core.secrets.peekToken({
-    purpose: PURPOSES.verifyLink,
-    token: input.token,
-  });
-  if (!peeked.ok) return { status: "refused", reason: peeked.reason };
-  const account = await accountById(deps.db, peeked.subject);
-  if (account === null) return { status: "refused", reason: "invalid" };
+  const linked = await linkedAccount(deps, PURPOSES.verifyLink, input.token);
+  if (linked.status === "refused") return linked;
+  const { account } = linked;
   if (!(await signedUpHere(deps, account, input.browserToken)))
     return { status: "sign-in-needed" };
 
